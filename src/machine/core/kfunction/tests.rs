@@ -72,7 +72,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
 
 /// `<verb:Identifier> <args:KExpression>` picked against `myFn (x: 1)` returns
 /// `ref_name_indices = [0]`: the Identifier slot is a literal-name reference and
-/// the function has no `binder_name`, so replay-park checks whether `myFn`
+/// the function is not binder-shaped (`binder == false`), so replay-park checks whether `myFn`
 /// resolves to a placeholder.
 #[test]
 fn classify_returns_ref_name_indices_for_non_binder_function() {
@@ -109,7 +109,7 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
     assert!(!pick.picked_has_binder_name);
 }
 
-/// LET has `binder_name = Some(_)`, so its Identifier name slot is a *declaration*,
+/// LET is binder-shaped (`binder == true`), so its Identifier name slot is a *declaration*,
 /// not a reference, and `classify_for_pick` must exclude it from `ref_name_indices`.
 #[test]
 fn classify_skips_ref_name_indices_for_binder_function() {

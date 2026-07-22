@@ -17,7 +17,7 @@ use super::KFunction;
 /// - `wrap_indices`: bare-Identifier / bare-Type parts in non-literal-name slots to
 ///   auto-wrap as sub-Dispatches.
 /// - `ref_name_indices`: bare-Identifier / bare-Type parts in literal-name slots
-///   (`KType::Identifier` / `KType::OfKind(KKind::ProperType)`) of a non-`binder_name` function; candidates
+///   (`KType::Identifier` / `KType::OfKind(KKind::ProperType)`) of a non-binder function; candidates
 ///   for replay-park.
 ///
 /// `picked_has_binder_name` distinguishes binder-shaped expressions (literal-name slots are

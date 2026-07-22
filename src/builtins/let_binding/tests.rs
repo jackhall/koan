@@ -10,8 +10,8 @@ fn binder_name_extracts_let_name() {
     assert_eq!(name.as_deref(), Some("hello"));
 }
 
-/// End-to-end install-then-clear: the binder_name hook installs a placeholder
-/// before the body runs; `bind_value` clears it on finalize.
+/// End-to-end install-then-clear: statement submission installs the placeholder from the
+/// cached binder plan before the body runs; `bind_value` clears it on finalize.
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::builtins::test_support::TestRun;

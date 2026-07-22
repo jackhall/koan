@@ -83,8 +83,8 @@ pub enum ExpressionPart<'a> {
     /// [design/typing/type-language-via-dispatch.md](../../../design/typing/type-language-via-dispatch.md).
     SigiledTypeExpr(Box<KExpression<'a>>),
     /// First-class record type `:{x :Number, y :Str}`. The boxed `KExpression` is the
-    /// field-list `(x :Number, y :Str)` — the same `<name> :<Type>` pair shape STRUCT /
-    /// UNION / FN parameter lists use. Unlike `SigiledTypeExpr`, this is matched
+    /// field-list `(x :Number, y :Str)` — the same `<name> :<Type>` pair shape a SIG member
+    /// or FN parameter list uses. Unlike `SigiledTypeExpr`, this is matched
     /// structurally (the elaborator folds it straight to `KType::Record`); there is no
     /// internal type-constructor builtin behind it. See
     /// [design/typing/type-language-via-dispatch.md](../../../design/typing/type-language-via-dispatch.md).
@@ -561,7 +561,7 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
 /// True iff `parts` is the `Slot (Keyword Slot)+` chainable-operator shape: odd
 /// length ≥ 5 (slot, keyword, slot, …), every odd index a `Keyword`, every even
 /// index a non-keyword slot, with ≥2 keyword positions. The first keyword sits at
-/// index 1, so no builtin (`STRUCT …`, keyword-led) collides with it.
+/// index 1, so no keyword-led builtin (`LET …`) collides with it.
 fn is_operator_chain_shape(parts: &[Spanned<ExpressionPart<'_>>]) -> bool {
     // Need slot, keyword, slot, keyword, slot — at least 5 parts (2 keywords).
     if parts.len() < 5 || parts.len().is_multiple_of(2) {
@@ -772,7 +772,7 @@ impl<'a> KExpression<'a> {
         self.untyped_key.clone()
     }
 
-    /// Dispatch-time placeholder extractor for typed-binder builtins (`STRUCT <Name> = …`):
+    /// Binder-name extractor for typed-binder builtins (`SIG <Name> = …`, `UNION <Name> = …`):
     /// if `parts[1]` is a single `Type(t)`, returns its bare name; `None` on shape
     /// mismatch. The builtin body surfaces the structured error.
     pub fn binder_name_from_type_part(&self) -> Option<String> {

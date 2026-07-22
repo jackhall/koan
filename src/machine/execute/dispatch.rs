@@ -395,7 +395,7 @@ pub(super) fn stage_all_eager_parts<'step>(
 // ---------- Resume closure ----------
 
 /// A dispatch slot's decide — the `SchedulerView -> Outcome` closure a dispatch [`NodeWork`](super::nodes::NodeWork) runs.
-/// A birth decide classifies the carried `expr` (+ `pre_subs`) and routes; a park's resume re-runs
+/// A birth decide classifies the carried `expr` and routes; a park's resume re-runs
 /// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
 /// blind to which family it is — every `Wait` wakes through `run_step` uniformly.
 pub(in crate::machine::execute) type ResumeFn<'step> =

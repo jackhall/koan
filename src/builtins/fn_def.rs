@@ -189,17 +189,17 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // admits only against `ProperType`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //
-    // FN supplies only `binder_bucket` (no `binder_name`): sibling FN overloads
-    // sharing one bucket each install their own per-bucket entry, and consumers
-    // pick the earliest-index visible entry to park on. A `binder_name` install
-    // would Rebind on the second sibling sharing a head keyword (two `PICK`
-    // overloads both claiming `placeholders[PICK]`), collapsing the overload set.
-    // LET / STRUCT / UNION / SIG / MODULE keep `binder_name` because they bind
-    // exactly one name to a value-side carrier; sibling collisions there are
-    // real Rebind errors, not overload patterns.
+    // The three keyworded overloads are binder-shaped (`binder: true`): a named `FN` installs a
+    // pending-overload *bucket* entry so a forward sibling reference parks. FN's spec-table
+    // extractor is `Bucket`, not `Name` — sibling FN overloads share one bucket and each installs
+    // its own per-bucket entry, and consumers park on the earliest-index visible entry. A
+    // single-name install (LET / UNION / SIG / MODULE, via `Name` extractors) would Rebind on the
+    // second sibling sharing a head keyword (two `PICK` overloads both claiming `placeholders[PICK]`),
+    // collapsing the overload set — right for a one-name-to-one-value binder, wrong for an overload
+    // family.
     //
-    // The final `false` is the nominal-binder flag: FN is value-side gated, so
-    // `LET f = (FN ...)` does not register a sibling-visible nominal identity.
+    // The record-schema overload is not binder-shaped (`binder: false`): a `:{…}` record signature
+    // is anonymous, so `FN :{…}` installs nothing and stays legal in a value position.
     // `:ProperType`-return keyworded overload (`-> Number` / `-> er`).
     let typeexpr_sig = || {
         sig(
@@ -252,7 +252,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Anonymous overload: a `:{…}` record-schema operand is a `RecordType` part, which the two
     // `KExpression`-signature overloads above reject and only this `ProperType`-signature overload
     // admits (it sub-dispatches to a resolved record-type `KType`). Selection is unambiguous by operand
-    // part-kind, so it needs no `binder_bucket` park-guard.
+    // part-kind, so it needs no bucket park-guard.
     let record_sig = || {
         sig(
             KType::ANY,

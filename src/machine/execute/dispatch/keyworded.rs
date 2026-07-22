@@ -81,8 +81,8 @@ pub(super) fn initial<'step>(
 /// Shared [`DispatchOutcome::Resolved`] tail for [`initial`] and [`finish`]: run [`part_walk`]
 /// over the pick's classified slots, then route the result. A walk that leaned on a
 /// still-finalizing bare-name producer parks through `park` — each caller resumes *itself*
-/// against the partly-spliced expression, taking back the `pre_subs` the walk did not consume —
-/// and drops any staged subs on the floor (park precedence: the wake re-runs the caller's
+/// against the partly-spliced expression and drops any staged subs on the floor (park
+/// precedence: the wake re-runs the caller's
 /// resolve, which re-stages them). A walk that staged eager subs installs them, discarding the
 /// speculative pick — the post-subs re-resolve ([`finish`]) picks again against the spliced
 /// expression. Otherwise this is the synchronous call, the common path for builtins and simple

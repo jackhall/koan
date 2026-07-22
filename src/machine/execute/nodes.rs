@@ -178,8 +178,7 @@ impl ChainOp {
 /// slot from naming `'run` in its node-stored scope state.
 ///
 /// `Copy` because both arms are trivially copyable ([`SealedExtern<ScopeRefFamily>`] is `Copy` — a
-/// thin `&Scope` — or a unit) and submission threads the handle through `pre_subs` recursion without
-/// re-deriving it.
+/// thin `&Scope` — or a unit), so the handle threads through a dispatch step without re-deriving it.
 #[derive(Clone, Copy)]
 pub(super) enum NodeScope {
     YokedChild(SealedExtern<ScopeRefFamily>),
