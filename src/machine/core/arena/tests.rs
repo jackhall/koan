@@ -1067,6 +1067,86 @@ fn object_field_reach_fold_survives_producer_frame_free() {
     );
 }
 
+/// FROM's own construction shape — [`record_projection::body`](crate::builtins::record_projection)
+/// narrows a record's carried type by sharing its substrate borrow whole, built at the fold brand
+/// from the delivered `record` operand's view (`alloc_carried_with`). This mirrors
+/// `object_field_reach_fold_survives_producer_frame_free`'s `KFunction` shape one level up: the
+/// substrate stays in the *producer's* region (never copied — `record_with_type` swaps only the
+/// type handle), and the fold's reach union is what keeps that region alive once every producer
+/// handle drops. A regression that copied the substrate instead of sharing it would still pass
+/// (a copy is also readable); the pointer-identity assertion is what actually pins "shares, never
+/// copies," while Miri is what catches a dangling read if the reach fold is skipped.
+#[test]
+fn record_retype_shares_substrate_across_producer_frame_free() {
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
+
+    // Producer: a plain-data record resident in its own frame's region, born through the fold
+    // door — the exact shape FROM's `record` operand arrives as. Allocated through the frame's own
+    // brand (not a transient `with_scope` sub-brand), so the reference escapes at the frame's own
+    // lifetime.
+    let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+        producer_frame.brand().handle(),
+    ));
+    let fields = Record::from_pairs(vec![
+        ("x".to_string(), Held::Object(KObject::Number(1.0))),
+        ("y".to_string(), Held::Object(KObject::Number(2.0))),
+    ]);
+    let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
+    // `RecordSubstrate` is invariant in its lifetime, so the comparison casts through `usize` (see
+    // `Residence::owns_record`'s identical cast) rather than keeping a lifetime-parameterized raw
+    // pointer type alive across the fold below.
+    let expected_addr = match obj {
+        KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
+        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+    };
+    let dep: DeliveredCarried = Delivered::seal(
+        Witnessed::from_erased(
+            Erased::erase(Carried::Object(obj)),
+            CarrierWitness::default(),
+        ),
+        producer_frame.storage_rc(),
+    );
+
+    // Consumer: a different frame — FROM's own step surface, narrowing to just `{x}`.
+    let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
+    let narrowed_type = types.record(Record::from_pairs([("x".to_string(), KType::NUMBER)]));
+    let sealed: StepCarried = ctx.alloc_carried_with(&[&dep], move |b, views| {
+        let substrate = match views[0] {
+            Carried::Object(KObject::Record(substrate, _)) => substrate,
+            _ => panic!("expected a Record dep view"),
+        };
+        Carried::Object(b.alloc_object_folded(KObject::record_with_type(substrate, narrowed_type)))
+    });
+
+    // Drop the dep envelope and every frame shell: only the fold's minted reach (through the
+    // retained consumer storage) keeps the producer's region alive.
+    let consumer_storage = consumer_frame.storage_rc();
+    drop(dep);
+    drop(producer_frame);
+    drop(consumer_frame);
+
+    let read_addr = sealed.inspect_pinned(&consumer_storage, |c| match c.object() {
+        KObject::Record(substrate, record_type) => {
+            assert_eq!(
+                *record_type, narrowed_type,
+                "narrowed to the FROM-selected type"
+            );
+            *substrate as *const RecordSubstrate<'_> as usize
+        }
+        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+    });
+    assert_eq!(
+        read_addr, expected_addr,
+        "the narrowed record shares the exact same substrate borrow — never copies — read back \
+         after the producer frame freed"
+    );
+}
+
 // `RegionSet::mint` — the witness-set hosting substrate (design/witness-hosting.md § Composition).
 // Each test below pins one rule of the mint's composition (home-omission, borrows-host
 // materialization, outer-chain subsumption, precise reads, teardown release).
@@ -1258,37 +1338,35 @@ fn spliced_expression_is_rejected_by_the_checked_object_seal() {
     );
 }
 
-/// Test-only family wrapping a stored `&RecordSubstrate` reference. The value channel does not
-/// carry a `RecordSubstrate` yet (the variant flip is a later phase), so the door test below
-/// threads it through this minimal reference family instead of `CarriedFamily`.
-struct RecordRefFamily;
-crate::witnessed::reattachable!(RecordRefFamily => &'r RecordSubstrate<'r>);
-
-/// `FoldingBrand::alloc_record_folded` stores a `RecordSubstrate` into its own brand's region —
-/// the record door's write half. The stored address is a hit for both the bare
-/// `KoanRegionExt::owns_record` query and `Residence::owns_record`'s dest-only case, the read
-/// halves the door's store makes true.
+/// `KObject::record_of_held` — the record door's read half — stores a fresh `RecordSubstrate`
+/// through `FoldingBrand::alloc_record_folded` into its own brand's region. The stored address is
+/// a hit for both the bare `KoanRegionExt::owns_record` query and `Residence::owns_record`'s
+/// dest-only case, the read halves the door's store makes true.
 #[test]
 fn alloc_record_folded_stores_and_owns_a_record_substrate() {
     let frame = run_root_storage();
+    let types = TypeRegistry::new();
     let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&frame), |region| {
             (region.handle(), Vec::new())
         });
-    let stored: Witnessed<RecordRefFamily, CarrierWitness> =
+    let stored: Witnessed<CarriedFamily, CarrierWitness> =
         acc0.map_pinned(&frame, |(region, _cells), _token| {
             let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
             let fields =
                 Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
-            door.alloc_record_folded(RecordSubstrate::new(fields, false))
+            Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, &types)))
         });
-    let (owns_bare, owns_via_residence) = stored.with_pinned(&frame, |substrate| {
-        let region = frame.region();
-        let ptr = *substrate as *const RecordSubstrate<'_>;
-        (
-            region.owns_record(ptr),
-            super::Residence::dest_only(region).owns_record(substrate),
-        )
+    let (owns_bare, owns_via_residence) = stored.with_pinned(&frame, |c| match c.object() {
+        KObject::Record(substrate, _) => {
+            let region = frame.region();
+            let ptr = *substrate as *const RecordSubstrate<'_>;
+            (
+                region.owns_record(ptr),
+                super::Residence::dest_only(region).owns_record(substrate),
+            )
+        }
+        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
     });
     assert!(
         owns_bare,
@@ -1297,5 +1375,73 @@ fn alloc_record_folded_stores_and_owns_a_record_substrate() {
     assert!(
         owns_via_residence,
         "Residence::owns_record's dest-only case hits the same store"
+    );
+}
+
+/// `resident_in_visiting`'s `Record` arm — `residence.owns_record(substrate)` — is reached only
+/// when a record rides inside a still-`Rc` container (`List`/`Dict`/`Tagged`/`Wrapped`) crossing
+/// the checked tier: a bare top-level record never routes this walk (born resident by
+/// construction through the fold door). This drives a `List` embedding a `Record` through
+/// `Scope::alloc_object_delivered` twice — once with evidence naming the record's home region
+/// (must pass, reading the address table, never the record's fields) and once without (must
+/// reject) — proving the arm is a genuine O(1) membership check, not an always-true stand-in.
+#[test]
+fn record_nested_in_list_crosses_checked_tier_via_owns_record_membership() {
+    let producer = run_root_storage();
+    let types = TypeRegistry::new();
+
+    let list_obj: KObject = {
+        let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+            producer.brand().handle(),
+        ));
+        let fields =
+            Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
+        let record = KObject::record_of_held(door, fields, &types);
+        KObject::list_of_held(vec![Held::Object(record)], &types)
+    };
+
+    let consumer_storage = run_root_storage();
+    let consumer_scope = run_root_bare(&consumer_storage);
+
+    // Covered: evidence names `producer`'s region — the nested record's home.
+    let covering = FrameSet::singleton(Rc::clone(&producer));
+    let covering_evidence = StoredReach::for_test(Some(&covering), false);
+    let moved = consumer_scope
+        .alloc_object_delivered(
+            list_obj.deep_clone(),
+            std::slice::from_ref(&covering_evidence),
+            &types,
+        )
+        .expect("evidence naming the record's home region covers it via owns_record membership");
+    match moved {
+        KObject::List(items, _) => match items[0].object() {
+            KObject::Record(substrate, _) => {
+                match substrate.fields().get("x").map(|h| h.object()) {
+                    Some(KObject::Number(n)) => {
+                        assert_eq!(*n, 1.0, "the nested record reads back unchanged")
+                    }
+                    _ => panic!("expected field x: Number"),
+                }
+            }
+            other => panic!(
+                "expected a Record element, got {}",
+                other.ktype().name(&types)
+            ),
+        },
+        other => panic!("expected a List, got {}", other.ktype().name(&types)),
+    }
+
+    // Uncovered: no evidence names the record's home region, and it is foreign to `consumer`'s
+    // own region too — the audit must reject rather than silently accept.
+    let uncovered = FrameSet::empty();
+    let no_evidence = StoredReach::for_test(Some(&uncovered), false);
+    let rejected = consumer_scope.alloc_object_delivered(
+        list_obj.deep_clone(),
+        std::slice::from_ref(&no_evidence),
+        &types,
+    );
+    assert!(
+        rejected.is_err(),
+        "a nested record foreign to dest and evidence must be rejected, not silently accepted"
     );
 }

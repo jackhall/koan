@@ -223,6 +223,59 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
     );
 }
 
+/// Escape with **copy** (`Residence::Released`): a plain-data record threading the same list-literal
+/// `Residence::Copied` seam as the scalar aggregate above is instead totally rebuilt at the
+/// destination (`copy_object_into`, via `fold_cells`'s per-cell seam selection) — and because no
+/// field borrows anything, `record_still_borrows_host` answers false, so every producer frame
+/// releases exactly like the scalar case, not conservatively pinned by the record's own carrier bit.
+#[test]
+fn aggregate_of_plain_record_results_releases_every_producer_frame() {
+    FRAME_CENSUS.with(|census| census.borrow_mut().clear());
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    register_probe(scope, &test_run.types);
+    test_run.run("FN (GETREC) -> :{acc :Number, tag :Number} = ({acc = 1, tag = (PROBE)})");
+
+    const DEPTH: usize = 5;
+    let calls = ["(GETREC)"; DEPTH].join(" ");
+    test_run.run(&format!("LET results = [{calls}]"));
+
+    let results = test_run.run_one(parse_one("results"));
+    match results {
+        KObject::List(items, _) => {
+            assert_eq!(items.len(), DEPTH, "all records retained");
+            for item in items.iter() {
+                match item.object() {
+                    KObject::Record(substrate, _) => {
+                        match substrate.fields().get("acc").map(|h| h.object()) {
+                            Some(KObject::Number(n)) => {
+                                assert_eq!(*n, 1.0, "the acc field survives the total copy")
+                            }
+                            _ => panic!("expected field acc: Number"),
+                        }
+                    }
+                    other => panic!(
+                        "expected a Record element, got {}",
+                        other.ktype().name(&test_run.types)
+                    ),
+                }
+            }
+        }
+        other => panic!(
+            "expected a {DEPTH}-element List, got {}",
+            other.ktype().name(&test_run.types)
+        ),
+    }
+    let total = FRAME_CENSUS.with(|census| census.borrow().len());
+    assert_eq!(total, DEPTH, "each call captured its own producer frame");
+    assert_eq!(
+        live_frames(),
+        0,
+        "a plain-data record's total copy releases every producer arena — escape-with-copy"
+    );
+}
+
 /// `Scope::adopt_sealed` on a delivered object: the value rides its retention hold (the envelope's
 /// host) across the producer shell's drop, and the copy-free adoption materializes that host into
 /// the consumer's arena — so after the envelope itself drops, the consumer's minted set is the

@@ -101,7 +101,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-36 tests, grouped by the unsafe site each pins down. Names below are the exact
+43 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 21 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -122,6 +122,24 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 - `call_frame_scope_survives_subsequent_alloc`
 - `call_frame_chained_outer_frame_walkable`
 - `with_scope_relocates_seed_value_into_brand`
+
+**Record substrate door — construction, O(1) ownership, fold-shared retype** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+— `FoldingBrand::alloc_record_folded` (the sole `RecordSubstrate` mint, routed through by
+`KObject::record_of_held`) stores the substrate into its own brand's region exactly like
+`alloc_object_folded`, so it carries no `unsafe` of its own beyond the `reattachable!`-generated
+layout-invariance audit in `witnessed.rs`. One test pins the store landing in the brand's own
+region, a hit for both the bare `KoanRegionExt::owns_record` address query and
+`Residence::owns_record`'s dest-only case. A second pins `alloc_carried_with`'s fold-brand
+construction one level up for a `Record` specifically — mirroring
+`object_field_reach_fold_survives_producer_frame_free`'s `KFunction` shape, but for
+`KObject::record_with_type` (FROM's own construction): the narrowed record shares the exact same
+substrate pointer (never copies) built from a delivered `record` operand's view in a *different*
+frame, and the fold's reach union is what keeps the producer's region alive once every producer
+handle drops — the shape `record_projection::body`'s `alloc_carried_with(&[lhs], …)` call takes in
+production.
+
+- `alloc_record_folded_stores_and_owns_a_record_substrate`
+- `record_retype_shares_substrate_across_producer_frame_free`
 
 **`Region` alloc engine under live borrows** ([workgraph/src/witnessed/region.rs](../workgraph/src/witnessed/region.rs)) — the
 single `store` path erases the value to `'static` (the move-through-union `erase_store`), writes it to
@@ -194,6 +212,19 @@ cross-region store this seam and its siblings exercise.
 
 - `envelope_transfer_folds_an_independent_foreign_value`
 - `pass_through_duplicate_keeps_reach_pointer_and_mints_nothing`
+
+**Record substrate — checked-tier O(1) membership** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
+— `resident_in_visiting`'s `Record` arm (`residence.owns_record(substrate)` in
+[kobject.rs](../src/machine/model/values/kobject.rs)) is reached only when a record rides inside a
+still-`Rc` container (`List`/`Dict`/`Tagged`/`Wrapped`) crossing the checked tier
+(`Scope::alloc_object_delivered`) — a bare top-level record never routes this walk (born resident
+by construction through the fold door). This test drives a `List` embedding a `Record` through the
+checked tier twice: once with evidence naming the record's home region (must pass, reading the
+address table, never the record's fields — the O(1) membership check), once without (must reject),
+proving the arm is a genuine membership check rather than an always-true stand-in. The `unsafe`
+routed is the same four `unsafe impl AuditedStored` family audits the group above exercises.
+
+- `record_nested_in_list_crosses_checked_tier_via_owns_record_membership`
 
 **Witness-set hosting — mint self-cycle / teardown** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — `RegionSet::mint` (mechanism in
@@ -344,9 +375,17 @@ interior borrows are re-pinned by the adopted-reach mint before the copy's `&'a`
 a residence-only host (`borrows_host` unset) is left unminted and released with the retiring hold —
 so the retiring region frees strictly after the adoption copy reads it. The test rebuilds an aggregate from the previous hop's own
 carried value at every hop, so the spliced carrier genuinely pins the retiring region across the hop;
-tree borrows catches a use-after-free if the free ever reorders before the adoption read.
+tree borrows catches a use-after-free if the free ever reorders before the adoption read. A second
+test drives the record-embedding twin of this same adoption path — `Scope::copy_delivered_record`
+([scope/reach.rs](../src/machine/core/scope/reach.rs))'s `embeds_record` branch, taken instead of the
+plain deep-clone arm whenever the loop-carried argument is (or embeds) a `Record`: each hop threads a
+fresh `{acc = …}` record argument through `THREAD`'s `it`-bind, which the seam copy verb totally
+rebuilds into the callee's per-call region and — because the record borrows nothing — releases
+(`Residence::Released`) the retiring incarnation, so the region count stays depth-independent (`O(1)`)
+rather than chaining one region per hop the way a conservative pin would.
 
 - `loop_carried_aggregate_survives_tail_hop_adoption`
+- `tail_recursive_record_thread_stays_o1_in_regions`
 
 **TRY-WITH inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — same
 `CallFrame::with_scope` seed relocation + bind as MATCH for the per-branch frame; the
@@ -495,6 +534,29 @@ surviving the run that built it.
 
 - `functor_application_is_generative`
 
+**Record escape seam — copy (`Released`) vs pin (`Copied`)** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
+— `copied_seam_mode` picks the per-cell `Residence` a `Residence::Copied` crossing takes for a
+top-level `Record`: `Released` when `record_still_borrows_host`
+([kobject.rs](../src/machine/model/values/kobject.rs)) finds no surviving borrow leaf into the
+cell's own producer host (the record is totally rebuilt via `copy_object_into` and the producer
+frees), `Copied` when it does (the producer materializes into the aggregate's reach and stays
+pinned) — Ruling 4's escape policy. Two unit tests mirror `dispatch::literal::fold_cells`'s exact
+aggregate loop (`copied_seam_mode` + `transfer_into_placing` + `copy_held_from_carried`) directly
+for five independent producers apiece: one where every record cell is plain data (asserts
+`Released`, drops every producer first, then reads every cell back), one where every record cell
+embeds a closure captured in that same producer (asserts `Copied`, drops every producer first,
+then reads every closure's captured scope back) — a regression in either direction (wrongly
+releasing a still-borrowing record, or wrongly pinning a plain one) either dangles under tree
+borrows or leaks. A third, end-to-end test drives the identical `Released` shape through the real
+scheduler and parser — a 5-element list literal of user-FN calls each returning a plain-data
+record — corroborating that `fold_cells` is wired to the real per-call producer frames, not just
+reachable in isolation. The `unsafe` routed is the shared `retype` in `witnessed.rs`; `lift.rs`
+carries none of its own (see the file's stale-group whitelist entry).
+
+- `plain_record_cells_select_released_and_survive_every_producer_free`
+- `closure_embedding_record_cells_select_copied_and_pin_every_producer`
+- `aggregate_of_plain_record_results_releases_every_producer_frame`
+
 ## Adding tests to the slate
 
 Add a test to the slate when a new unsafe site lands — a transmute, raw-pointer
@@ -515,9 +577,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-22: 629s — 43 tests, 0 leaks, 0 UB
 - 2026-07-22: 475s — 36 tests, 0 leaks, 0 UB
 - 2026-07-20: 466s — 36 tests, 0 leaks, 0 UB
 - 2026-07-20: 579s — 36 tests, 0 leaks, 0 UB
 - 2026-07-18: 614s — 36 tests, 0 leaks, 0 UB
-- 2026-07-18: 722s — 36 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

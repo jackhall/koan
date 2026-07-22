@@ -6,13 +6,18 @@
 
 use super::*;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{run_root_storage, FoldingBrand, KoanRegionExt};
+use crate::machine::core::{
+    force_record_borrows_host, run_root_storage, FoldingBrand, KoanRegion, KoanRegionExt,
+    KoanStorageProfile,
+};
 use crate::machine::model::Held;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
-use crate::witnessed::FoldedPlacement;
+use crate::machine::CarrierWitness;
+use crate::witnessed::{reattachable, Delivered, Erased, FoldedPlacement, RegionHandle, Witnessed};
 use std::rc::Rc;
 
 /// A `KFunction` allocated into `home`'s region (its captured scope lives there), for the
@@ -331,4 +336,204 @@ fn type_recursive_member_relocates_and_navigates() {
         }
         Carried::Object(_) => panic!("expected a Type carrier"),
     }
+}
+
+/// Build-time accumulator for the aggregate-fold mirrors below: the destination region plus the
+/// partial cell vector — a local twin of `dispatch::literal::AggBuildFamily` (private to that
+/// module), reattached here so the tests can drive `fold_cells`'s own mechanism
+/// (`copied_seam_mode` + `transfer_into_placing` + `copy_held_from_carried`) directly.
+struct RecordAggFamily;
+reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
+
+/// A `KFunction` allocated into `home`'s region wrapped in a `Record` field, both born through
+/// `home`'s own brand (not a transient `with_scope` sub-brand) so the reference escapes at `home`'s
+/// own lifetime — the shape a list-literal cell born from `({f = (FN …)})` takes.
+fn alloc_home_closure_record<'run>(
+    home: &'run Rc<CallFrame>,
+    types: &TypeRegistry,
+) -> &'run KObject<'run> {
+    let kf = alloc_local_kf(home);
+    let door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+    let fields = Record::from_pairs(vec![(
+        "f".to_string(),
+        Held::Object(KObject::KFunction(kf)),
+    )]);
+    door.alloc_object_folded(KObject::record_of_held(door, fields, types))
+}
+
+/// Escape with **copy**: `fold_cells`'s exact aggregate loop (`copied_seam_mode` +
+/// `transfer_into_placing` + `copy_held_from_carried`), mirrored here for `DEPTH` independent
+/// producers each contributing a plain-data record — no field borrows anything, so
+/// `record_still_borrows_host` answers false and every cell selects `Residence::Released`: the
+/// record is totally rebuilt into the aggregate's own region and every producer frame is dropped
+/// *before* the read, proving the seam genuinely releases rather than conservatively pinning.
+#[test]
+fn plain_record_cells_select_released_and_survive_every_producer_free() {
+    const DEPTH: usize = 5;
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+    let dest_storage = dest_frame.storage_rc();
+
+    let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
+    let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+        (region.handle(), Vec::with_capacity(DEPTH))
+    });
+    let acc_final = (0..DEPTH).fold(acc0, |acc, i| {
+        let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+            producer.brand().handle(),
+        ));
+        let fields = Record::from_pairs(vec![(
+            "acc".to_string(),
+            Held::Object(KObject::Number(i as f64)),
+        )]);
+        let obj: &KObject<'_> =
+            door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
+        // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
+        // conservatively forces `borrows_host = true` at construction, regardless of its own
+        // contents — `copied_seam_mode`'s exact `record_still_borrows_host` answer is what
+        // actually decides Released vs. Copied below; the seal bit only matters if `Copied` wins.
+        let sealed = force_record_borrows_host(
+            Witnessed::from_erased(
+                Erased::erase(Carried::Object(obj)),
+                CarrierWitness::default(),
+            ),
+            &producer.storage_rc(),
+        );
+        let dep: DeliveredCarried = Delivered::seal(sealed, producer.storage_rc());
+        let mode = copied_seam_mode(&dep);
+        assert!(
+            matches!(mode, Residence::Released),
+            "a plain-data record cell must select Released"
+        );
+        producers.push(producer);
+        dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
+            acc,
+            mode,
+            |value, (region, mut cells), placement| {
+                cells.push(copy_held_from_carried(
+                    value,
+                    FoldingBrand::in_fold_closure(placement),
+                ));
+                (region, cells)
+            },
+        )
+    });
+
+    for producer in producers.drain(..) {
+        drop(producer);
+    }
+
+    let values: Vec<f64> = acc_final.with_pinned(&dest_storage, |(_region, cells)| {
+        cells
+            .iter()
+            .map(|h| match h.object() {
+                KObject::Record(substrate, _) => {
+                    match substrate.fields().get("acc").map(|h| h.object()) {
+                        Some(KObject::Number(n)) => *n,
+                        _ => panic!("expected field acc: Number"),
+                    }
+                }
+                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+            })
+            .collect()
+    });
+    assert_eq!(
+        values,
+        (0..DEPTH).map(|i| i as f64).collect::<Vec<_>>(),
+        "every record cell reads back unchanged after its producer frame freed"
+    );
+}
+
+/// Escape with **pin**: the same `fold_cells` mechanism, but each of the `DEPTH` producers
+/// contributes a record whose field is a genuine borrow leaf into its own producer (a closure
+/// captured in that same frame) — `record_still_borrows_host` answers true (the leaf's home IS the
+/// delivered cell's own host), so every cell selects `Residence::Copied` and its producer
+/// materializes into the aggregate's reach. Dropping every producer shell and reading each
+/// closure's captured scope back is the no-use-after-free check under tree borrows; a regression
+/// that instead released these producers (mistaking the record for plain data) would dangle here.
+#[test]
+fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
+    const DEPTH: usize = 5;
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+    let dest_storage = dest_frame.storage_rc();
+
+    let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
+    let mut expected_ids = Vec::with_capacity(DEPTH);
+    let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+        (region.handle(), Vec::with_capacity(DEPTH))
+    });
+    let acc_final = (0..DEPTH).fold(acc0, |acc, _| {
+        let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let obj = alloc_home_closure_record(&producer, &types);
+        expected_ids.push(match obj {
+            KObject::Record(substrate, _) => {
+                match substrate.fields().get("f").map(|h| h.object()) {
+                    Some(KObject::KFunction(f)) => f.captured_scope().id,
+                    _ => panic!("expected field f: KFunction"),
+                }
+            }
+            other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+        });
+        // The seal chokepoint (Ruling 5): every record's carrier conservatively forces
+        // `borrows_host = true` at construction — without it, `Residence::Copied`'s
+        // `materialize_hosts` arm (`iff borrows_host`) would skip materializing the producer even
+        // though `copied_seam_mode` below correctly selects `Copied`, dangling the read at the end.
+        let sealed = force_record_borrows_host(
+            Witnessed::from_erased(
+                Erased::erase(Carried::Object(obj)),
+                CarrierWitness::default(),
+            ),
+            &producer.storage_rc(),
+        );
+        let dep: DeliveredCarried = Delivered::seal(sealed, producer.storage_rc());
+        let mode = copied_seam_mode(&dep);
+        assert!(
+            matches!(mode, Residence::Copied),
+            "a closure-embedding record cell must select Copied"
+        );
+        producers.push(producer);
+        dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
+            acc,
+            mode,
+            |value, (region, mut cells), placement| {
+                cells.push(copy_held_from_carried(
+                    value,
+                    FoldingBrand::in_fold_closure(placement),
+                ));
+                (region, cells)
+            },
+        )
+    });
+
+    for producer in producers.drain(..) {
+        drop(producer);
+    }
+
+    let read_ids: Vec<_> = acc_final.with_pinned(&dest_storage, |(_region, cells)| {
+        cells
+            .iter()
+            .map(|h| match h.object() {
+                KObject::Record(substrate, _) => {
+                    match substrate.fields().get("f").map(|h| h.object()) {
+                        Some(KObject::KFunction(f)) => f.captured_scope().id,
+                        _ => panic!("expected field f: KFunction"),
+                    }
+                }
+                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+            })
+            .collect()
+    });
+    assert_eq!(
+        read_ids, expected_ids,
+        "every closure's captured scope reads back unchanged after its producer frame freed"
+    );
 }
