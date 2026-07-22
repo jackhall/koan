@@ -23,20 +23,25 @@ cost exists to price such a copy against the pin.
 - The relocation seam chooses per value in O(1) from the memoized copy cost and the
   region's allocated total: **copy** — a total rebuild of the value's reachable
   structure at the destination brand, releasing the producer pin — when
-  `copy_cost < α × region_allocated` and the contains-borrows bit permits it;
-  **pin** otherwise. No partial spine copy exists — a partial copy would pay the
-  copy *and* keep the pin.
+  `copy_cost < α × region_allocated` (a set contains-borrows bit discounts the
+  payoff); **pin** otherwise. No partial spine copy exists — a partial copy would
+  pay the copy *and* keep the pin.
 - The policy is semantically invisible: a program's observable behavior is identical
   under forced-copy and forced-pin.
 - The Miri audit slate exercises both verbs at the seam.
 
 **Directions.**
 
-- *Where the memo rides — open.* A carrier field beside the memoized `KType` versus
-  a substrate arena header word; carriers are size-sensitive.
-- *Contains-borrows treatment — open.* A set bit favors pin (the borrow is likely
-  into the birth region, so a copy would not release it); whether the bit forces
-  pin outright or only weights the ratio is unpinned.
+- *Where the memo rides — decided.* On the substrate wrapper, beside the
+  contains-borrows bit ([region-store-records](region-store-records.md) sets the
+  pattern); carriers stay lean.
+- *Contains-borrows treatment — decided* per
+  [design/value-substrates.md § Cost-driven copy](../../design/value-substrates.md#cost-driven-copy-the-optimization):
+  the bit is an optimization gate, never a soundness input — the copy pass computes
+  exact release per retiring host via address-table checks on surviving borrow
+  leaves, so a foreign-leaf value still releases its home.
+- *Set-bit weighting — open.* Whether a set bit skips the copy attempt outright or
+  only discounts the ratio; pick from measurement once the ratio exists.
 - *α — open.* A tuning constant of the seam, not observable in language semantics;
   pick from measurement once both verbs exist.
 

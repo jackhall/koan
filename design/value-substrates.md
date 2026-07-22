@@ -50,10 +50,10 @@ just enough to read the policy.
 Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
 **region-allocated substrate**, borrowed by the value carrier:
 
-- `List(&'a [Held<'a>], KType)` — an arena slice.
-- `Dict(&'a <frozen map>, KType)` — an arena-frozen immutable map (layout free:
-  a sorted-pair slice or a hash table frozen at construction).
-- `Record(&'a Record<Held<'a>>, KType)` — the field record in the arena.
+- `List(&'a ListSubstrate<'a>, KType)` — the element slice in the arena.
+- `Dict(&'a DictSubstrate<'a>, KType)` — an arena-frozen immutable map (layout
+  free: a sorted-pair slice or a hash table frozen at construction).
+- `Record(&'a RecordSubstrate<'a>, KType)` — the field record in the arena.
 - `Tagged { value: &'a KObject<'a>, .. }` — the payload is an ordinary
   object-family slot; no dedicated payload type.
 - `Wrapped { inner: &'a KObject<'a>, .. }` — same; the peel (re-tag collapses
@@ -64,6 +64,12 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
 - Scalars (`Number`, `Bool`, `Null`) are owned leaves. `KString` rides an
   arena `&'a str`, and `KExpression`'s part vectors are arena slices
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
+
+Each cell-bearing substrate (`*Substrate` above) is a **wrapper struct**: the
+stored cells beside the substrate memos of
+[§ Construction](#construction-witnessed-doors-only) — the copy cost and the
+contains-borrows bit ride the substrate; the type handle rides the value
+carrier.
 
 Three consequences define the regime:
 
@@ -146,10 +152,18 @@ The rule is a **scale-free ratio**, not an absolute threshold: copy when
 `copy_cost < α × region_allocated` — "this value is a small fraction of what
 the pin would retain." A value that is most of its region pins (retention
 barely exceeds the value; the copy would be pure CPU); a small result escaping
-a fat frame copies and releases it. A set contains-borrows bit leans the
-decision toward pin: the borrow is likely into the birth region, so a copy
-would not release it. α is a tuning constant of the seam, not observable in
-language semantics.
+a fat frame copies and releases it. α is a tuning constant of the seam, not
+observable in language semantics.
+
+The contains-borrows bit is an **optimization gate, never a soundness input**:
+a borrow leaf pins its *defining* region, which need not be the birth region.
+Bit clear, a copy releases the retiring host unconditionally — no borrow
+survives the rebuild. Bit set, the copy pass itself computes exact release:
+each surviving borrow leaf is checked against the retiring host's address
+tables, so a value whose leaves all point into foreign regions (their reaches
+ride the witness in either verb) still releases its home. A set bit only
+discounts the copy's payoff in the ratio — the rebuild might not release the
+host — it never forces pin.
 
 The policy is **semantically invisible**: koan values are immutable and
 identity-free, so nothing in the language can distinguish a copied result from

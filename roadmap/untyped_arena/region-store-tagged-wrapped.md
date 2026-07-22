@@ -18,8 +18,10 @@ second ownership channel beside the region for a payload that is an ordinary val
 - Peel (a re-tag collapses one `Wrapped` layer) and hold (a construction preserves
   every layer) are door verbs allocating through the enclosing fold, not payload
   wrapper constructors.
-- An escaping tagged or wrapped value pins its birth region by the frame-retention
-  hold; `deep_clone` is a pointer copy for both arms.
+- An escaping tagged or wrapped value routes the seam verbs established by
+  [region-store-records](region-store-records.md): total copy with exact host
+  release at `Residence::Copied`, unconditional host pin on `Residence::Kept`;
+  `deep_clone` is a pointer copy for both arms.
 - No runtime residence walk survives on the tagged or wrapped paths.
 - The Miri audit slate is green with region-resident tagged and wrapped values
   exercised.

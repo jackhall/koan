@@ -12,12 +12,15 @@ value that is frozen at construction and never written again.
 
 **Acceptance criteria.**
 
-- `KObject::Dict` carries a borrow of an arena-resident immutable map frozen at
-  construction, beside the memoized `KType`; no `Rc` in the payload.
-- Dicts are born only through branded doors; the retype path shares the map borrow
-  and swaps only the memoized `KType`.
-- An escaping dict pins its birth region by the frame-retention hold; `deep_clone`
-  is a pointer copy for the `Dict` arm.
+- `KObject::Dict` carries `&'a DictSubstrate<'a>` — a borrow of a region-allocated
+  substrate wrapper holding an immutable map frozen at construction and its
+  construction memos — beside the memoized `KType`; no `Rc` in the payload.
+- Dicts are born only through branded doors; the retype path shares the substrate
+  borrow and swaps only the memoized `KType`.
+- An escaping dict routes the seam verbs established by
+  [region-store-records](region-store-records.md): total copy with exact host
+  release at `Residence::Copied`, unconditional host pin on `Residence::Kept`;
+  `deep_clone` is a pointer copy for the `Dict` arm.
 - No runtime residence walk survives on the dict path.
 - The Miri audit slate is green with region-resident dicts exercised.
 
