@@ -1,4 +1,5 @@
 pub mod ast;
+pub(crate) mod binder;
 pub mod operators;
 pub(crate) mod types;
 pub(crate) mod values;
@@ -17,6 +18,11 @@ pub use values::{Carried, Held, KKey, KObject, ValueEqualityError};
 pub(crate) use ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier,
 };
+pub(crate) use binder::{
+    identifier_part_binder_name, symbol_from_parts, symbol_from_quote_body, type_part_binder_name,
+    BinderKey,
+};
+pub use binder::{BindKind, BinderBucketFn, BinderNameFn};
 pub(crate) use types::{
     constructor_param_names, declarator_window, elaborate_type_identifier, finalize_nominal_member,
     pair_list_names, parse_typed_field_list_via_elaborator, sig_subtype, substitute_sig_members,

@@ -29,7 +29,7 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{ExpressionSignature, KKind, UntypedKey};
+use crate::machine::model::{ExpressionSignature, KKind};
 use crate::machine::model::{KObject, KType};
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
@@ -60,14 +60,6 @@ const OPERANDS: &str = "operands";
 const OPERAND_SLOT: &str = "OP operand type";
 const RESULT_SLOT: &str = "OP result type";
 
-/// Symbols the `OP` / `GROUP` surface spells with, plus the two ascription sigils. Declaring an
-/// operator under one of these would make its own declaration form unreadable. Every other
-/// keyword-classified token is a legal operator symbol, including an all-caps alphabetic name
-/// (`OP #(MAX) OVER Number` is fine).
-const RESERVED_SYMBOLS: [&str; 12] = [
-    "OP", "UNARY", "OVER", "GROUP", "FOLD", "PAIRWISE", "LEFT", "RIGHT", "=", "->", ":|", ":!",
-];
-
 /// Which surface declared the operator — the one axis the shared body branches on.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OpKind {
@@ -77,32 +69,16 @@ enum OpKind {
     Unary,
 }
 
-// ---------- symbol extraction (shared by the body and the binder hook) ----------
+// ---------- symbol extraction ----------
+//
+// The statement-side symbol reader and the OP bucket extractor live in
+// [`crate::machine::model::binder`] (the single source of truth for binder discovery). They are
+// re-imported here for the registration sites and re-exported for `GROUP`, which reads its member
+// operators the same way.
 
-/// The operator symbol a quote body carries: exactly one `Keyword` part. The `symbol` slot is
-/// typed `:KExpression`, so a `QuotedExpression` part arrives raw and un-dispatched (it makes the
-/// declaration a lazy candidate) and its body is read here as data. A multi-part body, a
-/// non-keyword token, or a reserved symbol is a shape error.
-fn symbol_from_quote_body(inner: &KExpression<'_>) -> Result<String, KError> {
-    let [part] = inner.parts.as_slice() else {
-        return Err(symbol_shape_error());
-    };
-    let ExpressionPart::Keyword(sym) = &part.value else {
-        return Err(symbol_shape_error());
-    };
-    if RESERVED_SYMBOLS.contains(&sym.as_str()) {
-        return Err(KError::new(KErrorKind::ShapeError(format!(
-            "`{sym}` is reserved by the operator-declaration surface and cannot name an operator",
-        ))));
-    }
-    Ok(sym.clone())
-}
-
-fn symbol_shape_error() -> KError {
-    KError::new(KErrorKind::ShapeError(
-        "operator symbol must be one quoted token: `OP #(+) OVER Number = (…)`".to_string(),
-    ))
-}
+use crate::machine::model::binder::op_def_binder_bucket as binder_bucket;
+pub(super) use crate::machine::model::symbol_from_parts;
+use crate::machine::model::symbol_from_quote_body;
 
 /// Body-side symbol read: a quoted slot's raw `KObject::KExpression` is the quote body. Shared with
 /// `GROUP`, whose pairwise `combiner` slot names an operator the same way (`super::group_def`).
@@ -113,43 +89,6 @@ pub(super) fn symbol_from_slot(
 ) -> Result<String, KError> {
     let quoted = require_kexpression(args, builtin, slot)?;
     symbol_from_quote_body(&quoted)
-}
-
-/// Statement-side symbol read: the declaration's first `QuotedExpression` part. `GROUP` scans its
-/// unevaluated body block with this to collect its members; the binder hook uses it to decide
-/// whether to install park edges (discarding the diagnostic — the body's own extraction surfaces
-/// it).
-pub(super) fn symbol_from_parts(expr: &KExpression<'_>) -> Result<String, KError> {
-    let quoted = expr
-        .parts
-        .iter()
-        .find_map(|part| match &part.value {
-            ExpressionPart::QuotedExpression(inner) => Some(inner.as_ref()),
-            _ => None,
-        })
-        .ok_or_else(symbol_shape_error)?;
-    symbol_from_quote_body(quoted)
-}
-
-/// True iff the declaration leads with `UNARY`.
-fn is_unary_form(expr: &KExpression<'_>) -> bool {
-    matches!(
-        expr.parts.first().map(|p| &p.value),
-        Some(ExpressionPart::Keyword(k)) if k == "UNARY",
-    )
-}
-
-/// Submission-time park keys: every bucket this declaration's body registers an overload under, so
-/// a later sibling statement using the operator parks on the `OP` slot instead of failing dispatch
-/// while the declaration is still finalizing. A `UNARY OP` registers two bodies, so it names two
-/// keys.
-fn binder_bucket(expr: &KExpression<'_>) -> Option<Vec<UntypedKey>> {
-    let sym = symbol_from_parts(expr).ok()?;
-    if is_unary_form(expr) {
-        Some(vec![unary_key(&sym), binary_key(&sym)])
-    } else {
-        Some(vec![binary_key(&sym)])
-    }
 }
 
 // ---------- type slots ----------

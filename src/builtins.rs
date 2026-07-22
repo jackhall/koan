@@ -67,28 +67,10 @@ pub(crate) fn sig<'a>(
     }
 }
 
-/// Shared [`BinderNameFn`] for typed-binder builtins (SIG / UNION / RECURSIVE TYPES / NEWTYPE):
-/// the binder name is `parts[1]`'s `Type(t)` token. A free function (not the
-/// `KExpression::binder_name_from_type_part` method reference) so the signature is higher-ranked
-/// over the expression lifetime, as `BinderNameFn` requires.
-pub(crate) fn type_part_binder_name(
-    expr: &crate::machine::model::KExpression<'_>,
-) -> Option<String> {
-    expr.binder_name_from_type_part()
-}
-
-/// Shared [`BinderNameFn`] for value-binder builtins (`LET <name> = …`, `MODULE <name> = …`): the
-/// binder name is `parts[1]`'s `Identifier` token. The Identifier-part twin of
-/// [`type_part_binder_name`], so each overload's extractor matches exactly its own name-part kind
-/// and the submit-time placeholder is tagged `Value` xor `Type` to match where the bind lands.
-pub(crate) fn identifier_part_binder_name(
-    expr: &crate::machine::model::KExpression<'_>,
-) -> Option<String> {
-    match &expr.parts.get(1)?.value {
-        crate::machine::model::ExpressionPart::Identifier(s) => Some(s.clone()),
-        _ => None,
-    }
-}
+/// The shared binder-name extractors live in [`crate::machine::model::binder`] (the single
+/// source of truth for binder discovery); re-exported here so the registration sites and the
+/// per-builtin tests keep their existing paths.
+pub(crate) use crate::machine::model::{identifier_part_binder_name, type_part_binder_name};
 
 /// Full-form builtin registration with both binder hooks. The `body` is
 /// an [`ActionFn`](crate::machine::ActionFn) (`fn(&BodyCtx) -> Action`) installed

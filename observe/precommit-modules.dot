@@ -95,6 +95,7 @@ digraph {
     "koan::machine::execute::step_carried" [label="koan::machine::execute::step_carried"];
     "koan::machine::model" [label="koan::machine::model"];
     "koan::machine::model::ast" [label="koan::machine::model::ast"];
+    "koan::machine::model::binder" [label="koan::machine::model::binder"];
     "koan::machine::model::operators" [label="koan::machine::model::operators"];
     "koan::machine::model::types" [label="koan::machine::model::types"];
     "koan::machine::model::types::kkind" [label="koan::machine::model::types::kkind"];
@@ -228,6 +229,7 @@ digraph {
     "koan::machine::execute::runtime" -> "koan::machine::execute::runtime::interpret" [label="owns", style="solid"];
     "koan::machine::execute::runtime" -> "koan::machine::execute::runtime::submit" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::ast" [label="owns", style="solid"];
+    "koan::machine::model" -> "koan::machine::model::binder" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::operators" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::types" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::values" [label="owns", style="solid"];
@@ -318,6 +320,7 @@ digraph {
     "koan::builtins::fn_def::return_type" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::fn_def::signature" -> "koan::machine::model::binder" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::source" [label="uses", style="dashed"];
     "koan::builtins::group_def" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::group_def" -> "koan::builtins::op_def" [label="uses", style="dashed"];
@@ -355,6 +358,7 @@ digraph {
     "koan::builtins::op_def" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::op_def" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::op_def" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::model::binder" [label="uses", style="dashed"];
     "koan::builtins::op_def" -> "koan::source" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::builtins::test_support" [label="uses", style="dashed"];
@@ -398,6 +402,7 @@ digraph {
     "koan::builtins::type_decl" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::type_decl" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::type_decl" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::type_decl" -> "koan::machine::model::binder" [label="uses", style="dashed"];
     "koan::builtins::type_decl" -> "koan::parse" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::machine" [label="uses", style="dashed"];
@@ -767,6 +772,11 @@ digraph {
     "koan::machine::model::ast" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::parse" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::ktraits" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::core" [label="uses", style="dashed"];

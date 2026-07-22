@@ -383,11 +383,7 @@ impl<'a> Scope<'a> {
 
     /// Builtin type registration: [`Self::register_type`] at [`DeclarationSite::BUILTIN`], same
     /// infallible contract.
-    pub(crate) fn register_builtin_type(
-        &self,
-        name: String,
-        ktype: crate::machine::model::KType,
-    ) {
+    pub(crate) fn register_builtin_type(&self, name: String, ktype: crate::machine::model::KType) {
         self.register_type(name, ktype, DeclarationSite::BUILTIN);
     }
 

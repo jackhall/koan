@@ -4,9 +4,7 @@ use std::rc::Rc;
 use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{
-    pair_list_names, FieldNameKind, RecursiveGroupWindow, RelativeSchema,
-};
+use crate::machine::model::{pair_list_names, FieldNameKind, RecursiveGroupWindow, RelativeSchema};
 use crate::machine::FinishCtx;
 use crate::machine::{seal_type_identity, StepCarried};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};

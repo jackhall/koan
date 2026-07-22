@@ -8,7 +8,6 @@ use crate::machine::model::{ExpressionPart, KExpression};
 
 use crate::machine::core::{FrameStorage, RegionBrand, Scope};
 use crate::machine::model::KType;
-use crate::machine::model::UntypedKey;
 use crate::scheduler::Sealed;
 use crate::witnessed::reattachable;
 
@@ -100,12 +99,7 @@ pub type SealedContract = Sealed<ContractFamily, crate::machine::FrameSet>;
 /// element. The runtime's `InScope` body fan-out (`KoanRuntime::apply_outcome`) routes through
 /// here before `enter_block`, so the scheduler never inspects AST shape itself.
 pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {
-    let is_multi = body.parts.len() >= 2
-        && body
-            .parts
-            .iter()
-            .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
-    if is_multi {
+    if body.is_statement_block() {
         body.parts
             .into_iter()
             .filter_map(|p| match p.value {
@@ -126,12 +120,7 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
 pub(crate) fn body_statement_refs<'ast, 'a>(
     body: &'ast KExpression<'a>,
 ) -> Vec<&'ast KExpression<'a>> {
-    let is_multi = body.parts.len() >= 2
-        && body
-            .parts
-            .iter()
-            .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
-    if is_multi {
+    if body.is_statement_block() {
         body.parts
             .iter()
             .filter_map(|p| match &p.value {
@@ -144,25 +133,7 @@ pub(crate) fn body_statement_refs<'ast, 'a>(
     }
 }
 
-/// Dispatch-time name extractor for a binder builtin. Returning `Some(name)` installs
-/// `placeholders[name] = NodeId(this_slot)` so a sibling looking up `name` while the
-/// body is in flight parks on this slot (see [`crate::machine::core::Scope::resolve`]).
-pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<String>;
-
-/// Dispatch-time bucket-key extractor for a binder that registers a callable
-/// (`FN`, `OP`). Returns every `UntypedKey` a *call* to the to-be-registered
-/// overloads would compute (e.g. `(MAKESET er :Ordered)` → one key
-/// `[Keyword("MAKESET"), Slot]`; a `UNARY OP` → both the keyword-first list key
-/// `[Keyword(sym), Slot]` and the binary bridge key `[Slot, Keyword(sym), Slot]`);
-/// the driver installs each in `bindings.pending_overloads` so a sibling call form
-/// parks on the producer instead of failing dispatch.
-///
-/// Separate from [`BinderNameFn`] because the two key different resolvers:
-/// `BinderNameFn` for `Scope::resolve`, `BinderBucketFn` for the no-bucket fallback
-/// in `resolve_dispatch`. Keying on the full bucket (not just the lead keyword)
-/// keeps overloads sharing a head keyword but differing in later keywords
-/// (`MAKESET _` vs `MAKESET _ USING _`) from colliding on the park edge.
-pub type BinderBucketFn = for<'a> fn(&KExpression<'a>) -> Option<Vec<UntypedKey>>;
+pub use crate::machine::model::{BinderBucketFn, BinderNameFn};
 
 /// Enum (not `Box<dyn Fn>`) so `UserDefined` stays introspectable — TCO and
 /// error-frame attribution walk into the captured expression.

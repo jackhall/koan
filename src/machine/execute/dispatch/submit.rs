@@ -10,12 +10,10 @@
 //! [design/execution/README.md § Submission-time binder install and recursive
 //! sub-Dispatch](../../../../design/execution/name-placeholders.md#submission-time-binder-install-and-recursive-sub-dispatch).
 
-use crate::machine::model::UntypedKey;
+use crate::machine::model::BinderKey;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, SignatureElement};
-use crate::machine::{
-    BindKind, BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope,
-};
+use crate::machine::{BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope};
 
 use super::super::nodes::{NodeScope, SlotFrame};
 use super::super::runtime::KoanRuntime;
@@ -25,13 +23,6 @@ use super::super::runtime::KoanRuntime;
 struct BinderInstall {
     key: BinderKey,
     eager_slot_mask: Vec<bool>,
-}
-
-/// The two install channels a binder may use, mutually exclusive per binder. `Bucket` carries
-/// every key the binder's body registers an overload under — a `UNARY OP` declares two.
-enum BinderKey {
-    Name(String, BindKind),
-    Bucket(Vec<UntypedKey>),
 }
 
 /// Find the binder overload (if any) the dispatching scope's chain declares for `expr`, and the

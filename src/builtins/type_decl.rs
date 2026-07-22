@@ -137,19 +137,10 @@ pub(crate) fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(Vec<String>, Stri
     Ok((param_names, member_name))
 }
 
-/// Dispatch-time placeholder extractor covering both overloads: the bare form's name is the
-/// `Type` part at `parts[1]`; the higher-kinded form's name is the *last* inner part of the
-/// parenthesized `(Param AS Name)` expression.
-pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
-    match &expr.parts.get(1)?.value {
-        ExpressionPart::Type(t) => Some(t.render()),
-        ExpressionPart::Expression(inner) => match &inner.parts.last()?.value {
-            ExpressionPart::Type(t) => Some(t.render()),
-            _ => None,
-        },
-        _ => None,
-    }
-}
+/// The placeholder extractor covering both `TYPE` overloads lives in
+/// [`crate::machine::model::binder`]; re-exported here so the registration sites (and
+/// `newtype_def`'s constructor-family overload) keep their existing paths.
+pub(crate) use crate::machine::model::binder::type_decl_binder_name as binder_name;
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let bare_signature = sig(

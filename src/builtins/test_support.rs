@@ -21,11 +21,11 @@ use crate::machine::model::{Carried, ExpressionPart, KObject};
 use crate::machine::FrameStorageExt;
 use crate::machine::KoanRuntime;
 #[cfg(test)]
+use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
+#[cfg(test)]
 use crate::machine::{DeliveredCarried, KFunction};
 use crate::machine::{FrameStorage, KError, Scope};
 use crate::parse::parse;
-#[cfg(test)]
-use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
 #[cfg(test)]
 use crate::scheduler::NodeId;
 #[cfg(test)]

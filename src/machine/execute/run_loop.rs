@@ -12,7 +12,9 @@ use std::rc::Rc;
 use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
-use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, NodeHandle, NodeId};
+use crate::machine::{
+    CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, NodeHandle, NodeId,
+};
 use crate::witnessed::{
     erase_to_static, reattachable, RegionHandleFamily, SealedExtern, Witnessed,
 };

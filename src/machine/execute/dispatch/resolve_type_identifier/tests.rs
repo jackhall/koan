@@ -194,7 +194,11 @@ mod bare_leaf_resolution {
             .expect("the only member's fill seals the window");
         drop(pending_guard);
         scope
-            .register_nominal_upsert("Node".into(), sealed.members[0], mock_declaration_site(7, 0))
+            .register_nominal_upsert(
+                "Node".into(),
+                sealed.members[0],
+                mock_declaration_site(7, 0),
+            )
             .expect("install the sealed identity");
 
         match scope.resolve_type_identifier(&leaf, None, &types) {

@@ -79,7 +79,12 @@ impl<'a> PendingQueue<'a> {
         });
     }
 
-    pub fn defer_type(&self, name: String, kt: crate::machine::model::KType, site: DeclarationSite) {
+    pub fn defer_type(
+        &self,
+        name: String,
+        kt: crate::machine::model::KType,
+        site: DeclarationSite,
+    ) {
         self.pending
             .borrow_mut()
             .push(PendingWrite::Type { name, kt, site });

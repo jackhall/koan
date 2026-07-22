@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use crate::source::{FileId, Span, Spanned};
 
 use crate::machine::model::{
-    Carried, Held, KKey, KObject, Parseable, Record, UntypedElement, UntypedKey,
+    BinderKey, Carried, Held, KKey, KObject, Parseable, Record, UntypedElement, UntypedKey,
 };
 use crate::witnessed::reattachable;
 
@@ -417,9 +417,20 @@ impl<'a> Clone for KExpression<'a> {
             untyped_key: self.untyped_key.clone(),
             shape: self.shape,
             operator_probe: self.operator_probe.clone(),
+            binder_plan: self.binder_plan.clone(),
+            binder_installs: self.binder_installs.clone(),
             _marker: PhantomData,
         }
     }
+}
+
+/// The parse-time binder plan for a node that is *itself* a binder: the channel it installs
+/// ([`BinderKey`]) and the chain-slot mask marking which of its slots carry nested binders
+/// forward. Cached on [`KExpression`] beside [`DispatchShape`]; `None` for a non-binder node.
+#[derive(Clone, Debug)]
+pub struct BinderPlan {
+    pub key: BinderKey,
+    pub chain_slot_mask: &'static [bool],
 }
 
 /// Pure-structural classification of a `KExpression` into the no-keyword fast-lane
@@ -600,6 +611,16 @@ pub struct KExpression<'a> {
     untyped_key: UntypedKey,
     shape: DispatchShape,
     operator_probe: Option<String>,
+    /// This node's own binder plan: `Some` iff this node is itself a binder (see [`BinderPlan`]).
+    /// Boxed because a binder is a rare node shape, so the common non-binder node pays one pointer
+    /// rather than the whole plan inline.
+    binder_plan: Option<Box<BinderPlan>>,
+    /// Everything this node's subtree installs into the enclosing scope, per the position rule:
+    /// this node's own key (when a binder) plus, transitively, the installs of its chain-slot
+    /// children and of a redundant single-`Expression` paren wrapper. Read once, at statement
+    /// submission, before any splice — a post-splice rebuild recomputes a smaller aggregate that is
+    /// never consulted, mirroring the structural cache's invariance-under-splice note above.
+    binder_installs: Vec<BinderKey>,
     /// `KExpression` owns every byte of its parts — keywords, identifiers, literals, boxed
     /// sub-expressions, and each splice's lifetime-free `Sealed` carrier cell — so no field
     /// concretely borrows `'a`. The parameter is retained as a phantom so the family stays a
@@ -637,6 +658,8 @@ impl<'a> KExpression<'a> {
             untyped_key: Vec::new(),
             shape: DispatchShape::Keyworded,
             operator_probe: None,
+            binder_plan: None,
+            binder_installs: Vec::new(),
             _marker: PhantomData,
         };
         expr.fill_cache();
@@ -665,6 +688,70 @@ impl<'a> KExpression<'a> {
             .collect();
         self.shape = classify_dispatch_shape(self);
         self.operator_probe = operator_probe_for(&self.parts, self.shape);
+        self.binder_plan = crate::machine::model::binder::binder_plan_for(self, &self.untyped_key)
+            .map(|(key, chain_slot_mask)| {
+                Box::new(BinderPlan {
+                    key,
+                    chain_slot_mask,
+                })
+            });
+        self.binder_installs = self.compute_binder_installs();
+    }
+
+    /// Aggregate the binder installs of this node's subtree. Children are always built before
+    /// parents (parse and every constructor build bottom-up), so each child's cache is already
+    /// filled and this is a plain read. Aggregation never crosses keyword/identifier/type/literal
+    /// parts, quotes, sigils, list/dict/record literals, lazy (`:KExpression`) slots, or
+    /// block-shaped children.
+    fn compute_binder_installs(&self) -> Vec<BinderKey> {
+        let mut installs: Vec<BinderKey> = Vec::new();
+        if let Some(plan) = &self.binder_plan {
+            installs.push(plan.key.clone());
+            for (index, part) in self.parts.iter().enumerate() {
+                if !plan.chain_slot_mask.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
+                if let ExpressionPart::Expression(child) = &part.value {
+                    if !child.is_statement_block() {
+                        installs.extend(child.binder_installs.iter().cloned());
+                    }
+                }
+            }
+        }
+        // Redundant single-`Expression` paren wrapper (`((…))`) passes its child's aggregate
+        // straight through. A binder is always keyword-led, so this never co-occurs with the
+        // binder-plan branch above.
+        if let [only] = self.parts.as_slice() {
+            if let ExpressionPart::Expression(child) = &only.value {
+                installs = child.binder_installs.clone();
+            }
+        }
+        installs
+    }
+
+    /// This node's own binder plan — `Some` iff this node is itself a binder.
+    pub fn binder_plan(&self) -> Option<&BinderPlan> {
+        self.binder_plan.as_deref()
+    }
+
+    /// Everything this node's subtree installs into the enclosing scope (see the field docs).
+    pub fn binder_installs(&self) -> &[BinderKey] {
+        &self.binder_installs
+    }
+
+    /// True when this expression is a statement block: two or more parts, all of them
+    /// `Expression`. The single definition the body splitters ([`split_body_statements`] /
+    /// [`body_statement_refs`]) and the binder-install aggregation share, so the multi-statement
+    /// cutoff is stated once.
+    ///
+    /// [`split_body_statements`]: crate::machine::split_body_statements
+    /// [`body_statement_refs`]: crate::machine::body_statement_refs
+    pub fn is_statement_block(&self) -> bool {
+        self.parts.len() >= 2
+            && self
+                .parts
+                .iter()
+                .all(|part| matches!(part.value, ExpressionPart::Expression(_)))
     }
 
     /// Cached dispatch shape (see [`classify_dispatch_shape`]).
@@ -712,6 +799,9 @@ impl<'a> KExpression<'a> {
     /// Consuming right-fold counterpart of [`Self::borrow_inner_expressions`]: returns
     /// `(preceding, last)` with both unwrapped from `ExpressionPart::Expression`. On any
     /// shape mismatch returns `self` back so the caller can pass through.
+    // The `Err` arm hands the whole `KExpression` back for a pass-through, not a diagnostic, so its
+    // size is the node's own — expected, like the other owned-`KExpression` returns in the tree.
+    #[allow(clippy::result_large_err)]
     pub fn try_take_inner_expressions_split(
         self,
     ) -> Result<(Vec<KExpression<'a>>, KExpression<'a>), Self> {

@@ -46,16 +46,7 @@ use crate::machine::model::{KType, UntypedKey};
 
 use super::kerror::{KError, KErrorKind};
 
-/// Whether a binding — committed or an in-flight placeholder — lives in the value
-/// language or the type language. The `data`/`types` partition is mutually exclusive
-/// (a name is one xor the other; see the cross-kind check in the write paths), and a
-/// forward-reference placeholder is tagged with its kind so a type placeholder is
-/// never satisfied by a value bind, nor the reverse.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-pub enum BindKind {
-    Value,
-    Type,
-}
+pub use crate::machine::model::BindKind;
 
 /// Outcome of a single-scope name lookup: the name is `Bound` to a `T`, or `Parked` on the
 /// producer `NodeId` of an earlier still-finalizing binder the consumer waits on. A miss is the
