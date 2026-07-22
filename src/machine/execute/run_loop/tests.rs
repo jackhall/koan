@@ -20,6 +20,7 @@ mod index_gated;
 mod lexical_provenance;
 mod nested_binder_submission;
 mod reclaim;
+mod statement_binder_install;
 mod unified_walk;
 
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
