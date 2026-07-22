@@ -3,7 +3,10 @@
 Every `KObject` lives in a [`KoanRegion`](../src/machine/core/arena.rs). Top-level
 work allocates into the **run-root region**; each user-fn call gets its own
 **per-call `KoanRegion`** owned by [`CallFrame`](../src/machine/core/arena.rs),
-freed when the call's slot finalizes.
+freed when the call's slot finalizes. The target storage model for composite
+value substrates — region-resident payloads, witnessed-only construction, the
+pin-versus-copy escape policy — is pinned in
+[value-substrates.md](value-substrates.md).
 
 ## Storage shape: a graph of region slots
 

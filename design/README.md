@@ -25,6 +25,10 @@ Root concerns:
 - [memory-model.md](memory-model.md) — value ownership through
   `KoanRegion` / `CallFrame`, the storage shape, lexical scoping,
   region lifetime erasure, and the re-entrant-scope-write protocol.
+- [value-substrates.md](value-substrates.md) — the target storage model
+  for composite values: region-allocated substrates carried as borrows,
+  witnessed-only construction doors, pin-by-default escape with a
+  cost-driven copy, and the Drop-free untyped-arena end state.
 - [per-node-memory.md](per-node-memory.md) — the generic `witnessed`
   substrate beneath the memory model: the erase-store bump allocator,
   the liveness witness, the `yoke` / `merge` / `map` construction

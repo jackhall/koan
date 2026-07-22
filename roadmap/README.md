@@ -16,6 +16,7 @@ buys the language and listing its ready-to-start items:
 [predicate_typing/](predicate_typing/README.md), [libraries/](libraries/README.md),
 [metaprogramming/](metaprogramming/README.md), [type_language/](type_language/README.md),
 [editor_tooling/](editor_tooling/README.md), [refactor/](refactor/README.md),
+[untyped_arena/](untyped_arena/README.md),
 [compile_safety/](compile_safety/README.md), and
 [scheduler_library/](scheduler_library/README.md).
 
@@ -43,7 +44,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Fold the USING-window write forwarding](refactor/fold-using-window-write-forwarding.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Region-store record values](refactor/region-store-records.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
 - [Region debug audits](scheduler_library/region-debug-audits.md)
@@ -52,7 +52,9 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
-- [Bare parenthesized return annotations](type_language/function-typed-return-annotations.md)
+- [Record-typed parameter list in the FN type constructor](type_language/fn-type-record-parameter-list.md)
 - [Module element-type join](type_language/module-element-type-join.md)
+- [Union-typed carrier slots for builtin signatures](type_language/union-carrier-slots.md)
 - [USING surfaces module type members](type_language/using-type-members.md)
+- [Region-store record values](untyped_arena/region-store-records.md)
 
