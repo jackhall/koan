@@ -82,31 +82,46 @@ impl<'a> Scope<'a> {
     }
 
     /// Fused value bind: derive the bound value's stored reach off the delivered `cell` (copied
-    /// mode — the value is deep-cloned into this scope's own region), deep-copy the `project`ed
-    /// value in under that derived evidence, bind it, and return the resident reference paired with
-    /// the same token (the caller seals its terminal carrier from it via
-    /// [`Self::resident_value_carrier`]). The mint runs *before* the copy — the copy's own residence
-    /// audit sees the evidence — exactly as the alloc-then-bind adjacency it fuses did. `project`
+    /// mode — the value is copied into this scope's own region), copy the `project`ed value in under
+    /// that derived evidence, bind it, and return the resident reference paired with the same token
+    /// (the caller seals its terminal carrier from it via [`Self::resident_value_carrier`]). `project`
     /// selects what to copy out of the delivered value (identity for a whole-value bind, the Ok/Err
-    /// payload for TRY) under the envelope's own pin. The bind itself preserves
-    /// [`Self::bind_value`]'s USING-window forwarding and conditional-defer behavior.
+    /// payload for TRY) under the envelope's own pin. The bind itself preserves [`Self::bind_value`]'s
+    /// USING-window forwarding and conditional-defer behavior.
+    ///
+    /// A projection that **embeds a record** (a bare record, or one behind a `Tagged`/`Wrapped`
+    /// spine) takes the seam copy verb ([`Self::copy_delivered_record`]) — the record's substrate is
+    /// region-resident and cannot be pointer-copied past the checked audit, so the value is totally
+    /// rebuilt into this scope's region through the record door, at its own release-exact seam mode.
+    /// Every other projection deep-clones its top node under the cell's copied-mode reach — the mint
+    /// runs *before* the copy so the copy's own residence audit sees the evidence.
     pub(crate) fn bind_delivered(
         &self,
         name: String,
         cell: &DeliveredCarried,
         index: BindingIndex,
-        project: impl for<'b> FnOnce(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+        project: impl for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
         types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
-        let stored = self.adopted_reach_of(cell);
-        let allocated = cell.open(|live| {
-            let projected = project(&live)?;
-            self.alloc_object_delivered(
-                projected.deep_clone(),
-                std::slice::from_ref(&stored),
-                types,
-            )
-        })?;
+        let projected_embeds_record = cell.open(|live| {
+            project(&live)
+                .map(|object| object.embeds_record())
+                .unwrap_or(false)
+        });
+        let (allocated, stored) = if projected_embeds_record {
+            self.copy_delivered_record(cell, project, types)?
+        } else {
+            let stored = self.adopted_reach_of(cell);
+            let allocated = cell.open(|live| {
+                let projected = project(&live)?;
+                self.alloc_object_delivered(
+                    projected.deep_clone(),
+                    std::slice::from_ref(&stored),
+                    types,
+                )
+            })?;
+            (allocated, stored)
+        };
         self.bind_value(name, allocated, index, stored)?;
         Ok((allocated, stored))
     }

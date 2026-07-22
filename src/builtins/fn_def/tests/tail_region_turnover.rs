@@ -91,6 +91,59 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
     );
 }
 
+/// A deep tail loop threading a **plain-data record** stays `O(1)` in live regions: each hop binds a
+/// fresh `{acc = …}` record argument, which the seam copy verb totally rebuilds into the callee's
+/// frame region and — because the record borrows nothing — releases (`Residence::Released`) its
+/// producer, so the retiring incarnation's region frees instead of riding every successor's binding.
+/// A conservative pin of the record would chain one region per hop (`O(depth)`); depth-independence
+/// is what proves the record path releases. Mirrors `tail_recursive_countdown_stays_o1_in_regions`.
+#[test]
+fn tail_recursive_record_thread_stays_o1_in_regions() {
+    reset_region_metrics();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+
+    const DEPTH: usize = 20;
+    let mut source = String::from(
+        "UNION Nat = (Zero :Null Succ :Nat)\n\
+         FN (THREAD n :Nat rec :{acc :Number}) -> Str = (MATCH (n) -> :Str WITH (\
+             Zero -> (\"done\")\
+             Succ -> (THREAD it {acc = 0})\
+         ))\n\
+         LET n0 = (Nat (Zero null))\n",
+    );
+    for i in 1..=DEPTH {
+        source.push_str(&format!("LET n{i} = (Nat (Succ n{}))\n", i - 1));
+    }
+    test_run.run(&source);
+    test_run.reset_slots();
+
+    let baseline = region_metrics().peak;
+
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one(&format!("THREAD n{DEPTH} {{acc = 0}}")), scope);
+    test_run
+        .runtime
+        .execute()
+        .expect("the record-threading loop should run to completion");
+    assert!(
+        test_run.runtime.result_error(id).is_ok(),
+        "record-threading loop should complete without error: {:?}",
+        test_run.runtime.result_error(id).err(),
+    );
+
+    // Depth-independent: a MATCH-mediated tail hop holds a small constant of live per-call regions
+    // (the same ceiling `tail_recursive_countdown_stays_o1_in_regions` documents), never one per hop.
+    let peak = region_metrics().peak;
+    assert!(
+        peak <= baseline + 3,
+        "a record-threading tail loop must hold O(1) (<= 3 transiently) live regions regardless of \
+         depth; baseline {baseline}, peak {peak}",
+    );
+}
+
 /// The no-mint incarnation categories from
 /// [tail-call-optimization.md § Region liveness by node lifetime](../../../../design/tail-call-optimization.md#region-liveness-by-node-lifetime)
 /// — a parenthesized syntactic reduction, a bare-name forward, a `USING` overlay entry, and a

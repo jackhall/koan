@@ -179,36 +179,60 @@ fn dict_length_mismatch_is_false() {
 
 // --- records ----------------------------------------------------------------------
 
-fn record(pairs: Vec<(&str, KObject<'static>)>, types: &TypeRegistry) -> KObject<'static> {
+fn record<'a>(
+    door: crate::machine::core::FoldingBrand<'a>,
+    pairs: Vec<(&str, KObject<'a>)>,
+    types: &TypeRegistry,
+) -> KObject<'a> {
     KObject::record(
+        door,
         Record::from_pairs(pairs.into_iter().map(|(k, v)| (k.to_string(), v))),
         types,
     )
 }
 
+/// Mint the zero-dep fold door a record test needs, over a fresh root region, as two `let`
+/// bindings in the caller's own scope: `forge_for_test` is the sanctioned test-only placement
+/// mint (no enclosing fold engine required). A statement macro (not a function returning the
+/// pair) so `door`'s borrow of `storage` lives in the same frame it was minted in, never crossing
+/// a return.
+macro_rules! record_door {
+    ($storage:ident, $door:ident) => {
+        use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+        use crate::witnessed::FoldedPlacement;
+        let $storage = run_root_storage();
+        let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+            $storage.brand().handle(),
+        ));
+    };
+}
+
 #[test]
 fn record_field_order_blind_equality() {
     let types = TypeRegistry::new();
-    let a = record(vec![("x", num(1.0)), ("y", num(2.0))], &types);
-    let b = record(vec![("y", num(2.0)), ("x", num(1.0))], &types);
+    record_door!(_storage, door);
+    let a = record(door, vec![("x", num(1.0)), ("y", num(2.0))], &types);
+    let b = record(door, vec![("y", num(2.0)), ("x", num(1.0))], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
 }
 
 #[test]
 fn record_width_mismatch_comparable_but_unequal() {
     let types = TypeRegistry::new();
+    record_door!(_storage, door);
     // `{x:Number}` and `{x:Number, y:Number}` are related by record subtyping (gate open),
     // but the field sets differ → unequal.
-    let narrow = record(vec![("x", num(1.0))], &types);
-    let wide = record(vec![("x", num(1.0)), ("y", num(2.0))], &types);
+    let narrow = record(door, vec![("x", num(1.0))], &types);
+    let wide = record(door, vec![("x", num(1.0)), ("y", num(2.0))], &types);
     assert_eq!(narrow.value_equal(&wide, &types), Ok(false));
 }
 
 #[test]
 fn record_field_value_differs() {
     let types = TypeRegistry::new();
-    let a = record(vec![("x", num(1.0))], &types);
-    let b = record(vec![("x", num(2.0))], &types);
+    record_door!(_storage, door);
+    let a = record(door, vec![("x", num(1.0))], &types);
+    let b = record(door, vec![("x", num(2.0))], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(false));
 }
 

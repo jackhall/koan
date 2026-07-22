@@ -283,7 +283,6 @@ impl<'d> Residence<'d> {
     /// [`RegionSet::any_member_region`](crate::witnessed::RegionSet::any_member_region), the
     /// production-safe per-member query that answers the address check without enumerating members
     /// out to the caller.
-    #[allow(dead_code)]
     pub(crate) fn owns_record(&self, substrate: &RecordSubstrate<'_>) -> bool {
         self.note_region_pointer();
         let ptr = substrate as *const RecordSubstrate<'_>;

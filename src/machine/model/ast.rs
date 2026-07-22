@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use crate::source::{FileId, Span, Spanned};
 
 use crate::machine::model::{
-    BinderKey, Carried, Held, KKey, KObject, Parseable, Record, UntypedElement, UntypedKey,
+    BinderKey, Carried, Held, KKey, KObject, Parseable, UntypedElement, UntypedKey,
 };
 use crate::witnessed::reattachable;
 
@@ -326,12 +326,18 @@ impl<'a> ExpressionPart<'a> {
                 }
                 KObject::dict(map, types)
             }
-            ExpressionPart::RecordLiteral(pairs) => {
-                let fields: Record<KObject<'a>> = pairs
-                    .iter()
-                    .map(|(name, v)| (name.clone(), v.resolve(types)))
-                    .collect();
-                KObject::record(fields, types)
+            // A record's substrate is born only through the fold door, which `resolve()` has no
+            // brand to reach — and it never needs one: eager staging
+            // (`eager_shape`/`stage_eager_part`, `dispatch.rs`) routes every `RecordLiteral` part
+            // through the scheduled path (`schedule_record_literal`) before any resolve site
+            // reaches it, replacing it with a `Spliced` cell first. `resolve_for`'s fallback and
+            // the bare-literal fast lane (`exec.rs`) each only ever hand a `RecordLiteral` part to
+            // `stage_eager_part`, never to `resolve()`.
+            ExpressionPart::RecordLiteral(_) => {
+                unreachable!(
+                    "a RecordLiteral part is always staged (schedule_record_literal) before any \
+                     resolve() site reaches it"
+                )
             }
             // A spliced cell is opened / adopted at the consuming scope's brand before resolution, so
             // its value never reaches the region-less `resolve()`. The container arms above recurse

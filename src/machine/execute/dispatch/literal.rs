@@ -6,11 +6,13 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
 use crate::machine::{
-    CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, NodeId, TraceFrame,
+    force_record_borrows_host, CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion,
+    NodeId, TraceFrame,
 };
 use crate::source::Spanned;
-use crate::witnessed::{reattachable, Delivered, RegionHandle, Residence, Witnessed};
+use crate::witnessed::{reattachable, Delivered, RegionHandle, Witnessed};
 
+use super::super::lift::{copied_seam_mode, copy_held_from_carried};
 use super::super::outcome::DepTerminal;
 use super::super::runtime::KoanRuntime;
 use super::super::{StepCarried, WitnessedDepFinish};
@@ -62,12 +64,12 @@ fn cell_carrier(slot: Slot, terminals: DepResults<'_, &DepTerminal<'_>>) -> Deli
 
 /// Fold a sequence of cell envelopes into a witnessed `(region, Vec<Held>)` accumulator over the
 /// consumer scope's region: `yoke` an empty accumulator under the consumer frame, then
-/// `transfer_into` each envelope at [`Residence::Copied`] — [`Held::from_carried`] deep-clones each
-/// cell into the aggregate, so the producer host materializes as a member of the minted set only
-/// when the copy's borrows genuinely reach it (a closure's captured environment), the same
-/// copied-adoption rule the param binds apply; a residence-only producer releases at retention
-/// discharge instead of riding the aggregate. The final aggregate shape (`list_of_held` /
-/// `dict_of_held` / `record_of_held`) is built by the caller's pinned map.
+/// `transfer_into_placing` each envelope at its own [`copied_seam_mode`] — [`copy_held_from_carried`]
+/// relocates each cell into the aggregate region (a top-level record totally rebuilt through the
+/// record door so its substrate is container-resident), so a plain-data record cell releases its
+/// producer while a cell that still borrows its producer (a closure's captured environment)
+/// materializes the host — the same copied-adoption rule the param binds apply. The final aggregate
+/// shape (`list_of_held` / `dict_of_held` / `record_of_held`) is built by the caller's pinned map.
 fn fold_cells(
     view: &SchedulerView<'_, '_>,
     cells: impl Iterator<Item = DeliveredCarried>,
@@ -78,11 +80,15 @@ fn fold_cells(
         (region.handle(), Vec::with_capacity(capacity))
     });
     cells.fold(acc0, |acc, cell| {
-        cell.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+        let mode = copied_seam_mode(&cell);
+        cell.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
             acc,
-            Residence::Copied,
-            |cell, (region, mut cells), _brand| {
-                cells.push(Held::from_carried(cell));
+            mode,
+            |value, (region, mut cells), placement| {
+                cells.push(copy_held_from_carried(
+                    value,
+                    FoldingBrand::in_fold_closure(placement),
+                ));
                 (region, cells)
             },
         )
@@ -121,8 +127,12 @@ struct AggRow {
 
 /// Finish-side assemble hook: the resolved keys (empty unless the rows carry key slots) and the folded
 /// value cells become the aggregate object. Boxed higher-ranked so the record variant captures its
-/// field names and each shape builds its own `KObject` at the fold brand.
-type AggAssemble = Box<dyn for<'r> FnOnce(Vec<KKey>, Vec<Held<'r>>, &TypeRegistry) -> KObject<'r>>;
+/// field names and each shape builds its own `KObject` at the fold brand. Every shape receives the
+/// fold's own `FoldingBrand` — list/dict ignore it (their substrates stay `Rc` this phase); record
+/// threads it into `KObject::record_of_held`, the door its substrate is born through.
+type AggAssemble = Box<
+    dyn for<'r> FnOnce(FoldingBrand<'r>, Vec<KKey>, Vec<Held<'r>>, &TypeRegistry) -> KObject<'r>,
+>;
 
 impl<'step> KoanRuntime<'step> {
     /// The one scheduling path behind the three aggregate literals: park a witnessed dep-finish on
@@ -157,19 +167,24 @@ impl<'step> KoanRuntime<'step> {
             // it every producer the accumulated `Held` views point into.
             let dest_frame = view.dest_frame();
             let types = view.types();
-            Ok(StepCarried::born(
-                acc.map_pinned_placing::<CarriedFamily, KoanStorageProfile, _>(
-                    &dest_frame,
-                    move |(_region, value_helds), placement| {
-                        let region = FoldingBrand::in_fold_closure(placement);
-                        Carried::Object(region.alloc_object_folded(assemble(
-                            keys,
-                            value_helds,
-                            types,
-                        )))
-                    },
-                ),
-            ))
+            let witnessed = acc.map_pinned_placing::<CarriedFamily, KoanStorageProfile, _>(
+                &dest_frame,
+                move |(_region, value_helds), placement| {
+                    let region = FoldingBrand::in_fold_closure(placement);
+                    Carried::Object(region.alloc_object_folded(assemble(
+                        region,
+                        keys,
+                        value_helds,
+                        types,
+                    )))
+                },
+            );
+            // Step-terminal seal: a record literal's fresh substrate always borrows into this
+            // same `dest_frame` it was just built into — the fold above composes the witness
+            // from the accumulator alone, blind to that fact, so force it here rather than
+            // under-report the value's own self-borrow.
+            let witnessed = force_record_borrows_host(witnessed, &dest_frame);
+            Ok(StepCarried::born(witnessed))
         });
         self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
     }
@@ -190,7 +205,7 @@ impl<'step> KoanRuntime<'step> {
         self.schedule_aggregate(
             deps,
             rows,
-            Box::new(|_keys, cells, types| KObject::list_of_held(cells, types)),
+            Box::new(|_door, _keys, cells, types| KObject::list_of_held(cells, types)),
         )
     }
 
@@ -214,7 +229,7 @@ impl<'step> KoanRuntime<'step> {
         self.schedule_aggregate(
             deps,
             rows,
-            Box::new(|keys, value_helds, types| {
+            Box::new(|_door, keys, value_helds, types| {
                 let map: HashMap<KKey, Held<'_>> = keys.into_iter().zip(value_helds).collect();
                 KObject::dict_of_held(map, types)
             }),
@@ -239,9 +254,9 @@ impl<'step> KoanRuntime<'step> {
         self.schedule_aggregate(
             deps,
             rows,
-            Box::new(move |_keys, value_helds, types| {
+            Box::new(move |door, _keys, value_helds, types| {
                 let record: Record<Held<'_>> = names.into_iter().zip(value_helds).collect();
-                KObject::record_of_held(record, types)
+                KObject::record_of_held(door, record, types)
             }),
         )
     }

@@ -12,8 +12,9 @@ use super::KFunction;
 
 /// Per-slot classification produced by [`KFunction::classify_for_pick`]:
 /// - `eager_indices`: `Some(indices)` when the picked function is a *lazy candidate* — the
-///   carried indices are the eager `Expression` parts in *non*-`KExpression` slots. `None`
-///   when not a lazy candidate, so every eager-shaped part schedules as its own sub-Dispatch.
+///   carried indices are the eager `Expression` / `ListLiteral` / `DictLiteral` / `RecordLiteral`
+///   parts in *non*-`KExpression` slots. `None` when not a lazy candidate, so every eager-shaped
+///   part schedules as its own sub-Dispatch.
 /// - `wrap_indices`: bare-Identifier / bare-Type parts in non-literal-name slots to
 ///   auto-wrap as sub-Dispatches.
 /// - `ref_name_indices`: bare-Identifier / bare-Type parts in literal-name slots
@@ -81,10 +82,21 @@ impl<'a> KFunction<'a> {
                     (KType::RECORD_TYPE, _) => return None,
                     (_, ExpressionPart::Expression(_))
                     | (_, ExpressionPart::SigiledTypeExpr(_))
-                    | (_, ExpressionPart::RecordType(_)) => {
+                    | (_, ExpressionPart::RecordType(_))
+                    | (_, ExpressionPart::ListLiteral(_))
+                    | (_, ExpressionPart::DictLiteral(_))
+                    | (_, ExpressionPart::RecordLiteral(_)) => {
                         // Speculative: assume the eager-evaluated result will type-match
                         // at late dispatch. SigiledTypeExpr / RecordType ride the Expression
                         // path — sub-dispatch produces a type-side Spliced the slot validates.
+                        // A container literal (List/Dict/Record) in a non-`:KExpression` slot is
+                        // reached here only after the `arg.ktype` match above has ruled out
+                        // `KEXPRESSION` (whose own List-literal arm — the unary-operator-run raw
+                        // case — and Record/Dict slot-typed siblings are handled above): its
+                        // substrate (a `Record`'s, once other containers convert) is born only
+                        // through the fold door, which no slot but the scheduled dep-finish path
+                        // reaches, so it must stage the same as an `Expression` part rather than
+                        // fall through unstaged to `resolve()`.
                         eager_indices.push(i);
                     }
                     (_, other) => {

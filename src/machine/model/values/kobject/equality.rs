@@ -95,7 +95,8 @@ impl<'a> KObject<'a> {
                 Ok(true)
             }
 
-            (KObject::Record(fields_a, type_a), KObject::Record(fields_b, type_b)) => {
+            (KObject::Record(substrate_a, type_a), KObject::Record(substrate_b, type_b)) => {
+                let (fields_a, fields_b) = (substrate_a.fields(), substrate_b.fields());
                 if !types_related(*type_a, *type_b, types) || fields_a.len() != fields_b.len() {
                     return Ok(false);
                 }

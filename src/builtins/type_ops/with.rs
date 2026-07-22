@@ -47,7 +47,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         _ => return done_err(mismatch(sig_handle.name(ctx.types))),
     };
     let fields = match arg_object(ctx.args, "bindings") {
-        Some(KObject::Record(fields, _types)) => fields,
+        Some(KObject::Record(substrate, _types)) => substrate.fields(),
         _ => {
             return done_err(KError::new(KErrorKind::ShapeError(
                 "WITH bindings must be a record literal `{Slot = Type, …}`".to_string(),

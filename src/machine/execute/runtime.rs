@@ -31,7 +31,7 @@ use crate::witnessed::SealedExtern;
 
 use super::dispatch::{BodyPlacement, DepRequest, SchedulerView, SubmitContext};
 use super::finalize::check_spliced_return;
-use super::lift::copy_carried;
+use super::lift::{copied_seam_mode, copy_carried};
 use super::nodes::{ChainOp, NodeStep, NodeWork};
 use super::obligation::{with_obligation, ReturnObligation};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
@@ -154,11 +154,15 @@ impl<'run> KoanRuntime<'run> {
     /// re-sealing it under the composed carrier that names everything it reaches from `dest` — the
     /// relocation re-anchors under the retained producer-frame pin (the envelope host), with **no
     /// fabricated lifetime** at this call site. The spine is copied into `dest` natively at the
-    /// merge brand (`Residence::Copied`: the producer materializes as a reach member only when the
-    /// value's borrows genuinely reach it); the surviving closure / module borrows ride the
+    /// merge brand; the surviving closure / module borrows ride the
     /// producer's reach, minted into `dest`'s arena. `dest` arrives as a witnessed carrier over the
     /// destination brand — its backing is the consuming slot's live frame for a `Forward`-ready
     /// pull, or the externally pinned run region a drained root re-homes into.
+    ///
+    /// The seam mode is [`copied_seam_mode`]: a top-level record whose total copy no longer borrows
+    /// its producer is `Released` (the producer frees at retention discharge); a record that still
+    /// borrows the producer, or any non-record value, keeps `Copied`, materializing the producer as a
+    /// reach member only when the value's borrows genuinely reach it.
     ///
     /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as a re-sealed
     /// [`Witnessed`], not at a step brand. The consumer-pull dep slice does not route this — it opens
@@ -170,10 +174,11 @@ impl<'run> KoanRuntime<'run> {
         dest: Witnessed<DestHandleFamily, CarrierWitness>,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
+        let mode = copied_seam_mode(&delivered);
         Ok(
             delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
                 dest,
-                crate::witnessed::Residence::Copied,
+                mode,
                 |value, _region, placement| {
                     copy_carried(value, FoldingBrand::in_fold_closure(placement))
                 },

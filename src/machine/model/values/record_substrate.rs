@@ -26,11 +26,6 @@ impl<'a> RecordSubstrate<'a> {
     /// Build from a fields record and its precomputed contains-borrows bit. The join pass that
     /// derives `contains_borrows` from `fields` lives at the construction site, not here — this is
     /// the door's own plain constructor.
-    ///
-    /// `#[allow(dead_code)]`: no production construction site calls this yet (the variant flip is
-    /// a later phase); only `arena::tests`'s door test does, so the plain `--lib` build sees no
-    /// caller.
-    #[allow(dead_code)]
     pub(crate) fn new(fields: Record<Held<'a>>, contains_borrows: bool) -> Self {
         RecordSubstrate {
             fields,

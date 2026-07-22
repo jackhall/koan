@@ -10,7 +10,7 @@ use std::rc::Rc;
 use crate::machine::model::{KObject, KType, Record};
 use crate::machine::Scope;
 use crate::machine::StepCarried;
-use crate::machine::{kerror_ktype, KoanRegionExt, KoanStorageProfile};
+use crate::machine::{force_record_borrows_host, kerror_ktype};
 
 use super::{arg, kw, sig};
 
@@ -45,8 +45,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use crate::machine::model::Carried;
     use crate::machine::model::CarriedFamily;
     use crate::machine::FoldingBrand;
+    use crate::machine::RegionTypeFamily;
     use crate::machine::{require_kexpression, Action, CatchContinue, DepPlacement, DepRequest};
-    use crate::machine::{KoanRegion, RegionTypeFamily};
     use crate::witnessed::Residence;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
@@ -57,7 +57,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     };
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // Wrap `payload` as a `Result` `Tagged` at the build brand `'x`. A free fn (no captured
-        // lifetime) so both the `Ok` `transfer_into` and the `Err` `merge` brand closures can call it.
+        // lifetime) so both branches' `transfer_into_placing` brand closures can call it.
         fn build_result<'x>(tag: &str, identity: KType, payload: KObject<'x>) -> KObject<'x> {
             KObject::Tagged {
                 tag: tag.to_string(),
@@ -71,48 +71,34 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // an asserted singleton; the handle itself borrows no region.
         let frame = fctx.ctx.frame();
         let home = build_type_operand(fctx.scope, Rc::clone(&frame), result_member);
-        let witnessed = match result {
-            // The watched carrier folds onto the result: `transfer_into` relocates the value into the
-            // consumer region and unions its reach onto the `Ok` carrier.
-            Ok(carrier) => carrier.transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
-                home,
-                Residence::Copied,
-                |value, (_region, identity), placement| {
-                    let region = FoldingBrand::in_fold_closure(placement);
-                    Carried::Object(region.alloc_object_folded(build_result(
-                        "Ok",
-                        identity,
-                        value.object().deep_clone(),
-                    )))
-                },
-            ),
-            // The error payload is built region-pure into the scope region (it reaches no foreign
-            // region); `yoke` it, then `merge` the identity operand to wrap it as `Result::Error`.
+        // Both arms fold a delivery envelope into `home` at `Residence::Copied` — the watched
+        // carrier for `Ok`, `to_tagged`'s freshly-born envelope (its record substrate can only be
+        // built through a fold door, so it is sealed as a delivered carrier rather than routed
+        // through the checked/audited move-in tier) for `Err` — so the two arms share one shape.
+        let tagged_envelope;
+        let carrier = match &result {
+            Ok(carrier) => carrier,
             Err(e) => {
-                let payload = KoanRegion::alloc_witnessed(Rc::clone(&frame), |region| {
-                    Carried::Object(
-                        region
-                            .alloc_object_checked(e.to_tagged(fctx.types), fctx.types)
-                            .expect("a freshly-built KError payload is always resident-in-self"),
-                    )
-                });
-                // The pinned merge: `frame` covers the freshly-built payload (it lives in that
-                // frame's own region); the identity operand's backing is the live scope.
-                payload
-                    .merge_pinned_placing::<RegionTypeFamily, CarriedFamily, KoanStorageProfile, _>(
-                        home,
-                        &frame,
-                        |payload, (_region, identity), placement| {
-                            let region = FoldingBrand::in_fold_closure(placement);
-                            Carried::Object(region.alloc_object_folded(build_result(
-                                "Error",
-                                identity,
-                                payload.object().deep_clone(),
-                            )))
-                        },
-                    )
+                tagged_envelope = e.to_tagged_delivered(fctx.scope, fctx.types);
+                &tagged_envelope
             }
         };
+        let tag = if result.is_ok() { "Ok" } else { "Error" };
+        let witnessed = carrier.transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
+            home,
+            Residence::Copied,
+            |value, (_region, identity), placement| {
+                let region = FoldingBrand::in_fold_closure(placement);
+                Carried::Object(region.alloc_object_folded(build_result(
+                    tag,
+                    identity,
+                    value.object().deep_clone(),
+                )))
+            },
+        );
+        // Step-terminal seal: either arm's payload may be (or embed) a fresh record — force the
+        // bit rather than trust the fold's operand-only compose.
+        let witnessed = force_record_borrows_host(witnessed, &frame);
         Action::Done(Ok(StepCarried::born(witnessed)))
     });
     Action::Catch {

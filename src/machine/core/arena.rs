@@ -323,11 +323,6 @@ impl<'a> FoldingBrand<'a> {
     /// same rank-2 fold-brand argument as [`Self::alloc_object_folded`]. No audit: `substrate` is
     /// typed at the brand lifetime, so an ambient-lifetime capture is a compile error at this
     /// signature, discharging the store's residence obligation at compile time.
-    ///
-    /// `#[allow(dead_code)]`: no production birth site calls through this door yet (the `Record`
-    /// variant payload is still the `Rc` it will stop being once the value-channel flip lands), so
-    /// the plain `--lib` build sees no caller — only `arena::tests` does.
-    #[allow(dead_code)]
     pub(crate) fn alloc_record_folded(
         self,
         substrate: RecordSubstrate<'a>,
@@ -498,7 +493,6 @@ pub(crate) trait KoanRegionExt {
     /// same shape as [`Self::owns_function`] but with no scope-region shortcut: a `RecordSubstrate`
     /// carries no borrow naming its own home region, so the residence walk widens this with a
     /// per-reach-member check rather than a single `covers_region` call.
-    #[allow(dead_code)]
     fn owns_record<'a>(&self, ptr: *const RecordSubstrate<'a>) -> bool;
 }
 

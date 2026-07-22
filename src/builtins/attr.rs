@@ -262,7 +262,7 @@ fn wrapped_field<'v, 'w>(
 ) -> Result<&'v Held<'w>, KError> {
     match target {
         KObject::Wrapped { inner, type_id } => match inner.get() {
-            KObject::Record(values, _) => match values.get(field) {
+            KObject::Record(substrate, _) => match substrate.fields().get(field) {
                 Some(held) => Ok(held),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",

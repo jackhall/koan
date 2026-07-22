@@ -222,8 +222,9 @@ impl KType {
             // Every slot field must be present in the value and match (depth). Extra value
             // fields are fine — a wider record value is more specific than a narrower slot.
             TypeNode::Record { fields } => match obj {
-                KObject::Record(values, _) => fields.iter().all(|(name, field_type)| {
-                    values
+                KObject::Record(substrate, _) => fields.iter().all(|(name, field_type)| {
+                    substrate
+                        .fields()
                         .get(name)
                         .map(|v| field_type.matches_held(v, types))
                         .unwrap_or(false)

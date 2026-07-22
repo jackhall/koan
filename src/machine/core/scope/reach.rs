@@ -6,10 +6,15 @@
 use std::rc::Rc;
 
 use super::Scope;
-use crate::machine::core::{FrameSet, FrameStorage, KoanRegion, StoredReach};
-use crate::machine::model::{Carried, CarriedFamily, KObject, KType, TypeIdentifier, TypeRegistry};
-use crate::machine::{CarrierWitness, DeliveredCarried};
-use crate::witnessed::{Delivered, Reattachable, Residence, Witnessed};
+use crate::machine::core::{
+    FoldingBrand, FrameSet, FrameStorage, KoanRegion, KoanStorageProfile, StoredReach,
+};
+use crate::machine::model::{
+    copy_object_into, record_still_borrows_host, Carried, CarriedFamily, KObject, KType,
+    TypeIdentifier, TypeRegistry,
+};
+use crate::machine::{CarrierWitness, DeliveredCarried, KError};
+use crate::witnessed::{Delivered, Reattachable, RegionHandleFamily, Residence, Sealed, Witnessed};
 
 impl<'a> Scope<'a> {
     /// Whether any scope on this scope's lexical `outer` chain (including `self`) lives in `region` —
@@ -202,6 +207,12 @@ impl<'a> Scope<'a> {
     /// ([`Delivered::open`]) — so the source backing stays live for the read; a resident-sealed
     /// envelope, or a frameless / run producer whose backing already outlives the read, reads under
     /// the carrier's bundled witness instead (the `None`-host arm of the envelope's open).
+    ///
+    /// A value that **embeds a record** (a bare record, or one behind a `Tagged`/`Wrapped` spine)
+    /// takes the seam copy verb ([`Self::copy_delivered_record`]) rather than the pointer-copy arm:
+    /// the record's substrate is region-resident and cannot cross the checked audit by a `deep_clone`
+    /// (which leaves the substrate in the retiring producer, uncovered when its home is only ambiently
+    /// covered), so the value is totally rebuilt into this scope's region through the record door.
     pub(crate) fn adopt_sealed_copied(
         &self,
         cell: &DeliveredCarried,
@@ -210,6 +221,13 @@ impl<'a> Scope<'a> {
         let is_object = cell.open(|live| matches!(live, Carried::Object(_)));
         if !is_object {
             return self.adopt_sealed(cell);
+        }
+        let embeds_record = cell.open(|live| live.as_object().is_some_and(|o| o.embeds_record()));
+        if embeds_record {
+            let (object, _stored) = self
+                .copy_delivered_record(cell, |carried| Ok(carried.object()), types)
+                .expect("a whole-value record adoption's copy is infallible");
+            return Carried::Object(object);
         }
         // Mint FIRST: pin every region the copy still reaches (interior borrows survive
         // `deep_clone`) into this scope's arena before the copy's `&'a` is fabricated. Copied mode:
@@ -227,6 +245,73 @@ impl<'a> Scope<'a> {
                 .expect("a deep copy's own residence must be covered by its own reach evidence"),
             )
         })
+    }
+
+    /// Rebuild a delivered value's record-embedding **projection** into this scope's region through
+    /// the record door — the seam copy verb for a region-resident record substrate, which cannot be
+    /// pointer-copied past the checked residence audit. `project` selects what to copy (identity for a
+    /// whole-value bind, a `Tagged`/`Wrapped` payload for a MATCH/TRY `it`); the caller vets that it
+    /// yields a value embedding a record (a bare record, or one behind a `Tagged`/`Wrapped` spine —
+    /// [`copy_object_into`] rebuilds the whole spine). The value is relocated at the record's own seam
+    /// mode —
+    /// a plain-data record `Residence::Released` (the retiring producer frees), a record still
+    /// borrowing its producer `Residence::Copied` and pinned — with the copy's foreign reach minted
+    /// into this scope's arena for liveness. The top node is then re-boxed through the checked door
+    /// to recover the `&'a` reference; its O(1) `owns_record` membership passes because the rebuilt
+    /// substrate is scope-resident, so no reach evidence is needed. Returns the resident reference
+    /// paired with the binding's stored reach (minted at the same mode), the same pair
+    /// [`Self::bind_delivered`] / a caller's terminal seal consume.
+    pub(crate) fn copy_delivered_record<P>(
+        &self,
+        cell: &DeliveredCarried,
+        project: P,
+        types: &TypeRegistry,
+    ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError>
+    where
+        P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+    {
+        let host_region = cell.host().region();
+        let mode = cell.open(|live| match project(&live) {
+            Ok(record) if record_still_borrows_host(record, host_region) => Residence::Copied,
+            Ok(_) => Residence::Released,
+            Err(_) => Residence::Copied,
+        });
+        // The binding's stored reach, minted at the copy's own mode: a `Released` plain-data record
+        // materializes no producer host, so a tail loop's retiring frame does not ride this binding.
+        let stored = self.envelope_reach_of(cell, mode);
+        let dest = Witnessed::<RegionHandleFamily<KoanStorageProfile>, CarrierWitness>::resident(
+            self.brand().handle(),
+        );
+        let mut projection_error: Option<KError> = None;
+        let copied = cell
+            .transfer_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+                dest,
+                mode,
+                |value, _handle, placement| {
+                    let door = FoldingBrand::in_fold_closure(placement);
+                    match project(&value) {
+                        Ok(record) => {
+                            Carried::Object(door.alloc_object_folded(copy_object_into(record, door)))
+                        }
+                        Err(error) => {
+                            projection_error = Some(error);
+                            Carried::Object(door.alloc_object_folded(KObject::Null))
+                        }
+                    }
+                },
+            );
+        if let Some(error) = projection_error {
+            return Err(error);
+        }
+        let pin = self
+            .region_owner()
+            .upgrade()
+            .expect("the adopting scope's region owner is held while copying a delivered record");
+        let object = Sealed::seal(copied).open_with(&pin, |live| {
+            self.alloc_object_delivered(live.object().deep_clone(), &[], types)
+                .expect("a rebuilt record's substrate is resident in the adopting scope's region")
+        });
+        Ok((object, stored))
     }
 
     /// Build the terminal carrier for a type living **in this scope's region** — the type-channel

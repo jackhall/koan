@@ -14,7 +14,7 @@ use crate::machine::model::TypeRegistry;
 
 use crate::machine::model::KKind;
 
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::branch_walk::find_branch_body_by_tag;
@@ -34,8 +34,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let body_scope: &'a Scope<'a> = ctx.scope.brand().alloc_scope(Scope::child_under(ctx.scope));
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // On success `it` is the watched value, adopted from its sealed carrier at bind time. On
-        // error `it` is the per-variant payload unwrapped from `KError::to_tagged`; that Tagged is
-        // region-pure, so its reach is the empty set.
+        // error `it` is the per-variant payload unwrapped from `KError::to_tagged` — that `Tagged`
+        // now carries a fresh `Record` substrate (born through a fold door), so it travels as a
+        // delivered carrier and adopts through the same copied-adoption tier the success arm's
+        // watched value already uses, rather than the region-pure `ItSource::Pure` tier.
         let (tag, it_source, original_error): (String, ItSource<'a>, Option<KError>) = match result
         {
             Ok(carrier) => (
@@ -44,12 +46,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 None,
             ),
             Err(e) => {
-                let tagged: KObject<'a> = e.to_tagged(fctx.types);
-                let (tag, payload) = match tagged {
-                    KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
+                let envelope = e.to_tagged_delivered(fctx.scope, fctx.types);
+                let tag = envelope.open(|carried| match carried {
+                    Carried::Object(KObject::Tagged { tag, .. }) => tag.clone(),
                     _ => unreachable!("KError::to_tagged always returns Tagged"),
-                };
-                (tag, ItSource::Pure(payload), Some(e))
+                });
+                (
+                    tag,
+                    ItSource::Carrier(envelope, ItProjection::Payload),
+                    Some(e),
+                )
             }
         };
         let body_expr = match find_branch_body_by_tag(&branches_expr, &tag, true) {

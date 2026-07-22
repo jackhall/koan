@@ -5,8 +5,9 @@ use crate::machine::core::{FoldingBrand, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{Carried, KType, TypeNode, TypeRegistry};
 use crate::machine::{CarrierWitness, DeliveredCarried, FrameSet, KError, KErrorKind};
-use crate::witnessed::{reattachable, RegionHandle, Residence, Sealed, SealedExtern, Witnessed};
+use crate::witnessed::{reattachable, RegionHandle, Sealed, SealedExtern, Witnessed};
 
+use super::lift::{copied_seam_mode, relocate_object_into};
 use super::obligation::ReturnObligation;
 use super::runtime::KoanRuntime;
 
@@ -86,21 +87,26 @@ impl NodeFinalize for KoanRuntime<'_> {
             if is_object {
                 let mut mismatch: Option<KError> = None;
                 // The **object** channel coarsens/re-stamps into the home region: a genuine
-                // relocation, run through the envelope transfer at `Residence::Copied` — the value's
-                // reach is minted into the home arena, and the dying producer materializes as a
-                // member only when the value's borrows genuinely reach it (`borrows_host`); a
+                // relocation, run through the envelope transfer at its own [`copied_seam_mode`] — the
+                // value's reach is minted into the home arena, and the dying producer materializes as
+                // a member only when the value's borrows genuinely reach it (a top-level record whose
+                // total copy no longer borrows the producer is `Released`, its conservative seal bit
+                // overridden; a still-borrowing record or any non-record keeps `Copied`); a
                 // region-pure result leaves the producer to retention alone, releasing it at
-                // pull-count zero. The home-region operand rides `resident` (the empty carrier): its
-                // backing — the home region and the declared type in it — stays live across the call
-                // via the obligation's cell pin. Accepted residual: a failed type check still leaves
-                // its minted set in the home arena — the value was genuinely relocated before the
-                // check failed, and the path returns the `Err` terminal.
+                // pull-count zero. A top-level record is totally rebuilt into the home region
+                // ([`relocate_object_into`]) so its substrate is home-resident; every other value
+                // rides the pointer-copy `deep_clone`. The home-region operand rides `resident` (the
+                // empty carrier): its backing — the home region and the declared type in it — stays
+                // live across the call via the obligation's cell pin. Accepted residual: a failed type
+                // check still leaves its minted set in the home arena — the value was genuinely
+                // relocated before the check failed, and the path returns the `Err` terminal.
                 let home_operand: Witnessed<ContractHomeFamily, CarrierWitness> =
                     Witnessed::resident((home.handle(), declared));
+                let mode = copied_seam_mode(&envelope);
                 let checked = envelope
                     .transfer_into_placing::<ContractHomeFamily, CarriedFamily, _>(
                         home_operand,
-                        Residence::Copied,
+                        mode,
                         |value, (_home_region, declared_type), placement| {
                             let home_region = FoldingBrand::in_fold_closure(placement);
                             let object = value.object();
@@ -112,21 +118,24 @@ impl NodeFinalize for KoanRuntime<'_> {
                                     object.ktype().name(types),
                                     types,
                                 ));
-                                return Carried::Object(
-                                    home_region.alloc_object_folded(object.deep_clone()),
-                                );
+                                return Carried::Object(home_region.alloc_object_folded(
+                                    relocate_object_into(object, home_region),
+                                ));
                             }
                             // A declared union return checks (above) but never re-tags: the value keeps
                             // its own runtime type, which is what union elimination dispatches on. Every
                             // other declared return re-stamps the value into the declared type.
                             if matches!(types.node(declared_type), TypeNode::Union { .. }) {
-                                return Carried::Object(
-                                    home_region.alloc_object_folded(object.deep_clone()),
-                                );
+                                return Carried::Object(home_region.alloc_object_folded(
+                                    relocate_object_into(object, home_region),
+                                ));
                             }
-                            Carried::Object(home_region.alloc_object_folded(
-                                object.deep_clone().stamp_type(declared_type, types),
-                            ))
+                            Carried::Object(
+                                home_region.alloc_object_folded(
+                                    relocate_object_into(object, home_region)
+                                        .stamp_type(declared_type, types),
+                                ),
+                            )
                         },
                     );
                 return match mismatch {

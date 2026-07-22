@@ -127,22 +127,10 @@ pub(crate) fn extract_terminal<'a>(
     let delivered = runtime
         .dep_delivered(id)
         .expect("terminal should be a value, not an error");
-    let reach = scope.adopted_reach_of(&delivered);
-    runtime
-        .read_result_with(id, |live| match live {
-            Carried::Object(obj) => Carried::Object(
-                scope
-                    .alloc_object_delivered(obj.deep_clone(), std::slice::from_ref(&reach), types)
-                    .expect("terminal object must be covered by its own stored reach"),
-            ),
-            // A type is a `Copy` handle: it rides across into `scope`'s region by value, naming no
-            // reach. An unlowered type name crosses by clone through the single storage door.
-            Carried::Type(kt) => Carried::Type(kt),
-            Carried::UnresolvedType(ti) => {
-                Carried::UnresolvedType(scope.brand().alloc_type_identifier(ti.clone()))
-            }
-        })
-        .expect("terminal should be a value, not an error")
+    // Reuse the production copy-then-audit adoption: a top-level record is totally rebuilt into
+    // `scope`'s region through the seam copy verb (never pointer-copied past the checked audit), an
+    // object deep-clones under its own minted reach, a type crosses by handle / clone.
+    scope.adopt_sealed_copied(&delivered, types)
 }
 
 /// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read it back.

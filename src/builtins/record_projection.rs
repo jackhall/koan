@@ -1,6 +1,6 @@
 //! `FROM` — caller-side record projection. `(x y) FROM r` re-types the record
 //! value `r` to carry only fields `x` and `y`, narrowing the carried per-field
-//! type record while `Rc`-sharing the backing value record whole. The dropped
+//! type record while sharing the backing substrate borrow whole. The dropped
 //! fields stay physically present but invisible through the narrowed type — the
 //! same re-tag a typed `LET narrowed :{x,y} = r` ascription performs, except FROM
 //! reads the kept fields' types off the record's own carrier, so the caller writes
@@ -12,7 +12,6 @@
 //! [design/typing/ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance).
 
 use crate::machine::model::TypeRegistry;
-use std::rc::Rc;
 
 use crate::machine::model::Carried;
 use crate::machine::model::ExpressionPart;
@@ -118,9 +117,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             &resident
         }
     };
-    // The projection `Rc`-shares the record's backing field values, so it reaches whatever the
+    // The projection shares the record's backing substrate borrow, so it reaches whatever the
     // `record` operand reaches. Built at the fold brand from the operand's own view — the narrowed
-    // type map re-read from the view, the backing fields `Rc`-shared whole — so the result's witness
+    // type map re-read from the view, the backing substrate shared whole — so the result's witness
     // names the read-site home frame plus that reach by construction.
     Action::Done(Ok(ctx.ctx.alloc_carried_with(&[lhs], move |b, views| {
         let record = match views[0] {
@@ -129,13 +128,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 unreachable!("the `record` slot shape-gates to records")
             }
         };
-        let fields = match record {
-            KObject::Record(fields, _) => fields,
+        let substrate = match record {
+            KObject::Record(substrate, _) => *substrate,
             _ => unreachable!("the `record` slot shape-gates to records"),
         };
-        Carried::Object(
-            b.alloc_object_folded(KObject::record_with_type(Rc::clone(fields), narrowed_type)),
-        )
+        Carried::Object(b.alloc_object_folded(KObject::record_with_type(substrate, narrowed_type)))
     })))
 }
 
@@ -168,7 +165,8 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let result = test_run.run_one(parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
-            KObject::Record(fields, record_type) => {
+            KObject::Record(substrate, record_type) => {
+                let fields = substrate.fields();
                 assert_eq!(fields.len(), 3);
                 assert!(fields.get("z").is_some());
                 let field_types = match test_run.types().node(*record_type) {
@@ -193,7 +191,8 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let result = test_run.run_one(parse_one("(x) FROM {x = 1, y = 2}"));
         match result {
-            KObject::Record(fields, record_type) => {
+            KObject::Record(substrate, record_type) => {
+                let fields = substrate.fields();
                 assert_eq!(fields.len(), 2);
                 let field_types = match test_run.types().node(*record_type) {
                     TypeNode::Record { fields } => fields,
@@ -213,7 +212,8 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let result = test_run.run_one(parse_one("() FROM {x = 1}"));
         match result {
-            KObject::Record(fields, record_type) => {
+            KObject::Record(substrate, record_type) => {
+                let fields = substrate.fields();
                 assert_eq!(fields.len(), 1);
                 let field_types = match test_run.types().node(*record_type) {
                     TypeNode::Record { fields } => fields,

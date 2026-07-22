@@ -965,12 +965,11 @@ fn multi_region_record_of_closures_survives_frame_free() {
     let record: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_storage, |(region, cells), _token| {
             let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
-            Carried::Object(
-                region.alloc_object_folded(KObject::record_of_held(
-                    Record::from_pairs(cells),
-                    &types,
-                )),
-            )
+            Carried::Object(region.alloc_object_folded(KObject::record_of_held(
+                region,
+                Record::from_pairs(cells),
+                &types,
+            )))
         });
 
     drop(frame_a);
@@ -980,7 +979,8 @@ fn multi_region_record_of_closures_survives_frame_free() {
     // Read each field's closure back, dereferencing its captured scope — a use-after-free if either
     // field's region were dropped from the minted set (the retained dest storage pins the rest).
     let ids: Vec<_> = record.with_pinned(&dest_storage, |c| match c.object() {
-        KObject::Record(fields, _) => fields
+        KObject::Record(substrate, _) => substrate
+            .fields()
             .values()
             .map(|h| match h.object() {
                 KObject::KFunction(f) => f.captured_scope().id,

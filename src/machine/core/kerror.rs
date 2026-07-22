@@ -3,11 +3,15 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::KExpression;
+use crate::machine::model::{Carried, CarriedFamily, KObject, WrappedPayload};
 use crate::machine::model::{
     KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
 };
-use crate::machine::model::{KObject, WrappedPayload};
 use crate::source::{self, FileId, SourceLoc, Span};
+use crate::witnessed::RegionHandleFamily;
+
+use super::{force_record_borrows_host, DeliveredCarried, FoldingBrand, KoanRegion, KoanRegionExt};
+use super::{scope_frame, KoanStorageProfile, Scope};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -174,7 +178,10 @@ impl KError {
     /// `"KError"`) because TRY's branch walker reads `tag` and `value` directly without going
     /// through dispatch — these carriers never need real nominal identity. They intern like any
     /// other member, so two errors of one variant carry one handle.
-    pub fn to_tagged<'a>(&self, types: &TypeRegistry) -> KObject<'a> {
+    ///
+    /// `door` is the fold brand the payload's `Record` substrate is born through — a caller with
+    /// no fold in hand mints a zero-dep one (see [`Self::to_tagged_delivered`]).
+    pub fn to_tagged<'a>(&self, door: FoldingBrand<'a>, types: &TypeRegistry) -> KObject<'a> {
         let (name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
             self.frames
@@ -194,7 +201,7 @@ impl KError {
         );
         let mut pairs: Vec<(String, KObject<'a>)> = fields;
         pairs.push(("frames".to_string(), frames_list));
-        let record = KObject::record(Record::from_pairs(pairs), types);
+        let record = KObject::record(door, Record::from_pairs(pairs), types);
         let payload = KObject::Wrapped {
             inner: WrappedPayload::peel(&record),
             type_id: synthetic_singleton(name.clone(), KKind::NewType, types),
@@ -204,6 +211,35 @@ impl KError {
             value: Rc::new(payload),
             identity: synthetic_singleton("KError".to_string(), KKind::TypeConstructor, types),
         }
+    }
+
+    /// [`Self::to_tagged`] built directly resident in `scope`'s own region and sealed as a
+    /// delivered carrier — the shape a caller with no fold already in hand needs: the payload's
+    /// `Record` substrate can only be born through a fold door, so this mints a zero-dep one over
+    /// `scope`'s frame (a `yoke_branded` accumulator handed to `map_pinned_placing`, mirroring
+    /// `dispatch::literal`'s aggregate builders) rather than routing the record through the
+    /// checked/audited move-in tier `alloc_object_checked` would need. Forces the step-terminal
+    /// seal's variant bit (the payload is always a `Wrapped` over a fresh `Record`), so a consumer
+    /// adopting this envelope under `Residence::Copied` correctly retains `scope`'s frame.
+    pub fn to_tagged_delivered<'a>(
+        &self,
+        scope: &'a Scope<'a>,
+        types: &TypeRegistry,
+    ) -> DeliveredCarried {
+        let frame = scope_frame(scope);
+        let acc = KoanRegion::yoke_branded::<RegionHandleFamily<KoanStorageProfile>, _>(
+            Rc::clone(&frame),
+            |region| region.handle(),
+        );
+        let witnessed = acc.map_pinned_placing::<CarriedFamily, KoanStorageProfile, _>(
+            &frame,
+            |_handle, placement| {
+                let door = FoldingBrand::in_fold_closure(placement);
+                Carried::Object(door.alloc_object_folded(self.to_tagged(door, types)))
+            },
+        );
+        let witnessed = force_record_borrows_host(witnessed, &frame);
+        scope.seal_resident_delivered(witnessed)
     }
 }
 

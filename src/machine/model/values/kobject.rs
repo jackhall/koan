@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::KFunction;
-use crate::machine::core::{FrameSet, KoanRegion, Residence};
+use crate::machine::core::{FoldingBrand, FrameSet, KoanRegion, KoanRegionExt, Residence};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 
-use super::{Held, KKey, Module};
+use super::{Held, KKey, Module, RecordSubstrate};
 
 mod equality;
 pub use equality::ValueEqualityError;
@@ -39,6 +39,13 @@ impl<'a> WrappedPayload<'a> {
     /// `Wrapped` payload, so a union variant over another variant keeps every layer.
     pub fn hold(value: &KObject<'a>) -> Self {
         Self(Rc::new(value.deep_clone()))
+    }
+
+    /// Wrap an already-owned value, boxing it into the `Rc` spine with no further copy — the seam
+    /// copy verb's `Wrapped` arm, where the inner value is a freshly-rebuilt copy already homed at
+    /// the destination brand.
+    pub fn from_owned(value: KObject<'a>) -> Self {
+        Self(Rc::new(value))
     }
 
     pub fn get(&self) -> &KObject<'a> {
@@ -83,15 +90,17 @@ pub enum KObject<'a> {
         value: Rc<KObject<'a>>,
         identity: KType,
     },
-    /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is the
-    /// `Rc`-shared field record (identifier-keyed, declaration-ordered, order-blind
-    /// equality); the second is the value's own type handle — the interned `Record` over
-    /// each field's `ktype()` at fresh construction, re-stamped to a declared record type at
-    /// an annotated boundary (mirrors `List` / `Dict`). Construct via [`KObject::record`] /
-    /// [`KObject::record_with_type`]. Distinct from the nominal `Struct`: a record carries no
-    /// `(name, scope_id)` identity, only its structure. Each field value is a [`Held`] (an
-    /// object or a first-class type).
-    Record(Rc<Record<Held<'a>>>, KType),
+    /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is a region
+    /// borrow of the record's [`RecordSubstrate`] — the field record plus its memoized
+    /// contains-borrows bit (identifier-keyed, declaration-ordered, order-blind equality); the
+    /// second is the value's own type handle — the interned `Record` over each field's
+    /// `ktype()` at fresh construction, re-stamped to a declared record type at an annotated
+    /// boundary (mirrors `List` / `Dict`). Construct via [`KObject::record`] /
+    /// [`KObject::record_with_type`] — never the tuple directly, and never `Rc::new`: the
+    /// substrate is born only through [`FoldingBrand::alloc_record_folded`]. Distinct from the
+    /// nominal `Struct`: a record carries no `(name, scope_id)` identity, only its structure.
+    /// Each field value is a [`Held`] (an object or a first-class type).
+    Record(&'a RecordSubstrate<'a>, KType),
     /// NEWTYPE identity-wrapper carrier (and the ATTR abstract-type re-tag carrier): tags a
     /// representation value with a type identity. (A user-`UNION` variant value is a
     /// [`Self::Tagged`], not a `Wrapped` — ruling 13.) A re-tag collapses one wrapper layer
@@ -165,26 +174,58 @@ impl<'a> KObject<'a> {
 
     /// Fresh `Record` carrier: memoizes the per-field type record as each field's
     /// `ktype()`. Field order follows declaration; equality is order-blind per the
-    /// `Record` substrate.
-    pub fn record(fields: Record<KObject<'a>>, types: &TypeRegistry) -> KObject<'a> {
+    /// `Record` substrate. `door` is the fold brand the substrate is born through — see
+    /// [`Self::record_of_held`].
+    pub fn record(
+        door: FoldingBrand<'a>,
+        fields: Record<KObject<'a>>,
+        types: &TypeRegistry,
+    ) -> KObject<'a> {
         KObject::record_of_held(
+            door,
             Record::from_pairs(fields.into_pairs().map(|(k, v)| (k, Held::Object(v)))),
             types,
         )
     }
 
     /// Fresh `Record` carrier over [`Held`] field cells — the type-aware path (a field
-    /// value may be a first-class type).
-    pub fn record_of_held(fields: Record<Held<'a>>, types: &TypeRegistry) -> KObject<'a> {
+    /// value may be a first-class type). One pass over `fields` computes both the memoized
+    /// field-type join (this carrier's own `ktype()`) and the substrate's contains-borrows
+    /// bit (see [`RecordSubstrate`]'s doc for the per-cell rule), then allocates the
+    /// substrate through `door` — the record door's sole construction site.
+    pub fn record_of_held(
+        door: FoldingBrand<'a>,
+        fields: Record<Held<'a>>,
+        types: &TypeRegistry,
+    ) -> KObject<'a> {
         let field_types = fields.map(|v| v.ktype(types));
-        KObject::Record(Rc::new(fields), types.record(field_types))
+        let contains_borrows = fields.values().any(held_contains_borrows);
+        let substrate = door.alloc_record_folded(RecordSubstrate::new(fields, contains_borrows));
+        KObject::Record(substrate, types.record(field_types))
     }
 
     /// `Record` carrier with an explicitly supplied **record type** — the whole interned
     /// record-type handle — for ascription stamping (re-tag to the declared field types,
-    /// coarsening included). See [`Self::list_with_type`].
-    pub fn record_with_type(fields: Rc<Record<Held<'a>>>, record_type: KType) -> KObject<'a> {
-        KObject::Record(fields, record_type)
+    /// coarsening included). Shares the substrate borrow verbatim — the substrate is immutable
+    /// after construction, so retype never touches cells. See [`Self::list_with_type`].
+    pub fn record_with_type(substrate: &'a RecordSubstrate<'a>, record_type: KType) -> KObject<'a> {
+        KObject::Record(substrate, record_type)
+    }
+
+    /// Re-home an already-relocated field record into `door`'s region under the value's existing
+    /// memoized record type — the seam copy verb's record arm (`copy_object_into`, in
+    /// `machine::execute::lift`). Relocation preserves every
+    /// field's `ktype()`, so the field-type join is unchanged and `record_type` rides verbatim; only
+    /// the contains-borrows bit is recomputed (leaves ride the rebuild, so the bit can only stay or
+    /// clear). The substrate is born through `door` — the record door's sole construction site.
+    pub fn record_rehomed(
+        door: FoldingBrand<'a>,
+        fields: Record<Held<'a>>,
+        record_type: KType,
+    ) -> KObject<'a> {
+        let contains_borrows = fields.values().any(held_contains_borrows);
+        let substrate = door.alloc_record_folded(RecordSubstrate::new(fields, contains_borrows));
+        KObject::Record(substrate, record_type)
     }
 
     /// Ascription stamping at an annotated boundary (FN return type, argument slot,
@@ -203,8 +244,8 @@ impl<'a> KObject<'a> {
         match (self, types.node(declared)) {
             (KObject::List(items, _), TypeNode::List { .. }) => KObject::List(items, declared),
             (KObject::Dict(map, _), TypeNode::Dict { .. }) => KObject::Dict(map, declared),
-            (KObject::Record(fields, _), TypeNode::Record { .. }) => {
-                KObject::Record(fields, declared)
+            (KObject::Record(substrate, _), TypeNode::Record { .. }) => {
+                KObject::Record(substrate, declared)
             }
             (KObject::Tagged { tag, value, .. }, TypeNode::ConstructorApply { .. }) => {
                 KObject::Tagged {
@@ -249,10 +290,11 @@ impl<'a> KObject<'a> {
     }
 
     /// True when every region borrow in `self` points into `dest`. Only value-channel borrows
-    /// are walked: `KFunction`, `Module`, `KExpression` splices, and the [`Held`] cells of the
-    /// composite carriers. The `KType` tags (`List`/`Dict`/`Record` memos, `Tagged { identity }`,
-    /// `Wrapped { type_id }`) are not walked — a handle is one `u128` naming registry-owned
-    /// content, so it borrows no region at all.
+    /// are walked: `KFunction`, `Module`, `KExpression` splices, a `Record`'s substrate address
+    /// (O(1), never its fields), and the [`Held`] cells of the still-`Rc` composite carriers.
+    /// The `KType` tags (`List`/`Dict`/`Record` memos, `Tagged { identity }`, `Wrapped { type_id
+    /// }`) are not walked — a handle is one `u128` naming registry-owned content, so it borrows
+    /// no region at all.
     pub(crate) fn resident_in(&self, dest: &KoanRegion) -> bool {
         self.resident_in_visiting(&Residence::dest_only(dest))
     }
@@ -273,9 +315,11 @@ impl<'a> KObject<'a> {
             KObject::KExpression(e) => e.is_splice_free(),
             KObject::List(items, _) => items.iter().all(|h| held_resident_in(h, residence)),
             KObject::Dict(map, _) => map.values().all(|h| held_resident_in(h, residence)),
-            KObject::Record(fields, _) => {
-                fields.iter().all(|(_, h)| held_resident_in(h, residence))
-            }
+            // O(1) address-membership check — never a field walk. Reached only when a record
+            // rides inside a still-`Rc` container (`Tagged`/`Wrapped`/`List`/`Dict`) being
+            // audited; a bare top-level record never routes this walk at all (it is born
+            // resident by construction through the fold door).
+            KObject::Record(substrate, _) => residence.owns_record(substrate),
             KObject::Tagged { value, .. } => value.resident_in_visiting(residence),
             KObject::Wrapped { inner, .. } => inner.get().resident_in_visiting(residence),
             KObject::Module(m) => residence.owns_module(m),
@@ -324,9 +368,8 @@ impl<'a> KObject<'a> {
                 value: Rc::clone(value),
                 identity: *identity,
             },
-            KObject::Record(fields, record_type) => {
-                KObject::Record(Rc::clone(fields), *record_type)
-            }
+            // A pointer copy: the substrate borrow copies (`Copy`), never rebuilding the fields.
+            KObject::Record(substrate, record_type) => KObject::Record(substrate, *record_type),
             KObject::Wrapped { inner, type_id } => KObject::Wrapped {
                 inner: inner.clone(),
                 type_id: *type_id,
@@ -355,6 +398,45 @@ impl<'a> KObject<'a> {
             _ => None,
         }
     }
+
+    /// Whether `self` is, or (through a still-`Rc` `Tagged`/`Wrapped` spine) transitively
+    /// contains, a `Record`. Purely structural — unlike [`Self::resident_in_visiting`], no
+    /// residence is checked here. A record's substrate is always a genuine region borrow into
+    /// its own home (Ruling 5, design/value-substrates.md), which the fold engines that build a
+    /// fresh `Tagged`/`Wrapped` around one cannot see (composing a witness only ever consults the
+    /// fold's *other* operands, never the value its own closure just built) — so a step-terminal
+    /// seal uses this predicate to force the carrier's `borrows_host` bit conservatively true
+    /// rather than under-reporting it. `List`/`Dict` are not walked: no current birth site nests
+    /// a fresh record inside a fresh list/dict at a fold's own top level.
+    pub(crate) fn embeds_record(&self) -> bool {
+        match self {
+            KObject::Record(..) => true,
+            KObject::Tagged { value, .. } => value.embeds_record(),
+            KObject::Wrapped { inner, .. } => inner.get().embeds_record(),
+            _ => false,
+        }
+    }
+}
+
+/// [`KObject::record_of_held`]'s per-cell contains-borrows rule (see [`RecordSubstrate`]'s doc):
+/// a type-channel cell never borrows a region; a scalar owns its data outright; `KFunction` /
+/// `Module` are borrow leaves; a `KExpression` borrows iff it carries a splice; a nested
+/// `Record` contributes its own memoized bit (never re-walked); every other still-`Rc` composite
+/// is conservative `true` until it, too, converts to a substrate.
+fn held_contains_borrows(h: &Held<'_>) -> bool {
+    match h {
+        Held::Type(_) | Held::UnresolvedType(_) => false,
+        Held::Object(o) => match o {
+            KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
+            KObject::KFunction(_) | KObject::Module(_) => true,
+            KObject::KExpression(e) => !e.is_splice_free(),
+            KObject::Record(substrate, _) => substrate.contains_borrows(),
+            KObject::List(..)
+            | KObject::Dict(..)
+            | KObject::Tagged { .. }
+            | KObject::Wrapped { .. } => true,
+        },
+    }
 }
 
 /// [`KObject::resident_in`]/[`KObject::resident_in_delivered`]'s cell-wise dispatch for a
@@ -363,6 +445,103 @@ fn held_resident_in(h: &Held<'_>, residence: &Residence<'_>) -> bool {
     match h {
         Held::Object(o) => o.resident_in_visiting(residence),
         Held::Type(_) | Held::UnresolvedType(_) => true,
+    }
+}
+
+/// The seam copy verb's total rebuild: reconstruct `value`'s entire reachable structure at `dest`'s
+/// brand. A `Record` rebuilds each field cell recursively and allocates a fresh substrate at `dest`
+/// through the record door (the contains-borrows memo recomputes — leaves ride the rebuild, so the
+/// bit can only stay or clear); a still-`Rc` composite (`List` / `Dict` / `Tagged` / `Wrapped`)
+/// rebuilds its `Rc` spine with recursively-copied cells; a scalar rebuilds owned; a `KFunction` /
+/// `Module` borrow rides verbatim (its own reach rides the transfer witness); a `KExpression` clones.
+/// Total or not at all — a partial spine copy would pay the copy *and* keep the pin. See
+/// [design/value-substrates.md § Escape](../../../../design/value-substrates.md#escape-pin-by-default).
+pub(crate) fn copy_object_into<'b>(value: &KObject<'b>, dest: FoldingBrand<'b>) -> KObject<'b> {
+    match value {
+        KObject::Number(n) => KObject::Number(*n),
+        KObject::KString(s) => KObject::KString(s.clone()),
+        KObject::Bool(b) => KObject::Bool(*b),
+        KObject::Null => KObject::Null,
+        KObject::KExpression(e) => KObject::KExpression(e.clone()),
+        KObject::KFunction(f) => KObject::KFunction(f),
+        KObject::Module(m) => KObject::Module(m),
+        KObject::Record(substrate, record_type) => {
+            let fields: Record<Held<'b>> =
+                substrate.fields().map(|cell| copy_held_into(cell, dest));
+            KObject::record_rehomed(dest, fields, *record_type)
+        }
+        KObject::List(items, list_type) => {
+            let rebuilt: Vec<Held<'b>> = items
+                .iter()
+                .map(|cell| copy_held_into(cell, dest))
+                .collect();
+            KObject::list_with_type(Rc::new(rebuilt), *list_type)
+        }
+        KObject::Dict(map, dict_type) => {
+            let rebuilt: HashMap<KKey, Held<'b>> = map
+                .iter()
+                .map(|(key, cell)| (key.clone(), copy_held_into(cell, dest)))
+                .collect();
+            KObject::dict_with_type(Rc::new(rebuilt), *dict_type)
+        }
+        KObject::Tagged {
+            tag,
+            value,
+            identity,
+        } => KObject::Tagged {
+            tag: tag.clone(),
+            value: Rc::new(copy_object_into(value, dest)),
+            identity: *identity,
+        },
+        KObject::Wrapped { inner, type_id } => KObject::Wrapped {
+            inner: WrappedPayload::from_owned(copy_object_into(inner.get(), dest)),
+            type_id: *type_id,
+        },
+    }
+}
+
+/// [`copy_object_into`]'s per-cell dispatch for a [`Held`] field / element: an object rebuilds
+/// recursively, a type-channel cell is owned data copied verbatim.
+fn copy_held_into<'b>(cell: &Held<'b>, dest: FoldingBrand<'b>) -> Held<'b> {
+    match cell {
+        Held::Object(o) => Held::Object(copy_object_into(o, dest)),
+        Held::Type(t) => Held::Type(*t),
+        Held::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
+    }
+}
+
+/// Exact host-release probe, run only when a record's contains-borrows memo is set: does any
+/// surviving borrow leaf of `value` point into `host`? A `KFunction` / `Module` leaf checks `host`'s
+/// own address tables; a non-splice-free `KExpression` answers conservatively `true`; a nested
+/// `Record` short-circuits on its own clear memo (the copy releases it), else recurses its fields; a
+/// still-`Rc` composite recurses its spine. A memo-clear record answers `false` outright — the copy
+/// releases every host it retired. Read-only; borrows nothing.
+pub(crate) fn record_still_borrows_host(value: &KObject<'_>, host: &KoanRegion) -> bool {
+    match value {
+        KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
+        KObject::KFunction(f) => host.owns_function(*f as *const _),
+        KObject::Module(m) => host.owns_module(*m as *const _),
+        KObject::KExpression(e) => !e.is_splice_free(),
+        KObject::Record(substrate, _) => {
+            substrate.contains_borrows()
+                && substrate
+                    .fields()
+                    .values()
+                    .any(|cell| held_borrows_host(cell, host))
+        }
+        KObject::List(items, _) => items.iter().any(|cell| held_borrows_host(cell, host)),
+        KObject::Dict(map, _) => map.values().any(|cell| held_borrows_host(cell, host)),
+        KObject::Tagged { value, .. } => record_still_borrows_host(value, host),
+        KObject::Wrapped { inner, .. } => record_still_borrows_host(inner.get(), host),
+    }
+}
+
+/// [`record_still_borrows_host`]'s per-cell dispatch: an object recurses, a type-channel cell owns
+/// its data and borrows no region.
+fn held_borrows_host(cell: &Held<'_>, host: &KoanRegion) -> bool {
+    match cell {
+        Held::Object(o) => record_still_borrows_host(o, host),
+        Held::Type(_) | Held::UnresolvedType(_) => false,
     }
 }
 
@@ -395,8 +574,9 @@ impl<'a> KObject<'a> {
             KObject::Tagged { tag, value, .. } => {
                 format!("{}({})", tag, value.summarize(types))
             }
-            KObject::Record(fields, _) => {
-                let parts: Vec<String> = fields
+            KObject::Record(substrate, _) => {
+                let parts: Vec<String> = substrate
+                    .fields()
                     .iter()
                     .map(|(field, value)| format!("{} = {}", field, value.summarize(types)))
                     .collect();

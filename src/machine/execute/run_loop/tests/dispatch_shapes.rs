@@ -383,7 +383,8 @@ fn fast_lane_on_newtype_record_type_constructs() {
         KObject::Wrapped { inner, type_id } => {
             assert_eq!(type_id.name(&test_run.types), "Pt");
             match inner.get() {
-                KObject::Record(values, _) => {
+                KObject::Record(substrate, _) => {
+                    let values = substrate.fields();
                     assert!(
                         matches!(values.get("x"), Some(Held::Object(KObject::Number(n))) if *n == 3.0)
                     );

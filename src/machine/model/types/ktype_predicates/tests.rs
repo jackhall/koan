@@ -252,10 +252,13 @@ fn spliced_cell_classifies_by_opening() {
 #[test]
 fn record_value_admission_and_matches() {
     let types = TypeRegistry::new();
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+    use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
     let region = storage.brand();
-    let value: &KObject<'_> = region.alloc_object(KObject::record(
+    let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region.handle()));
+    let value: &KObject<'_> = door.alloc_object_folded(KObject::record(
+        door,
         Record::from_pairs(vec![
             ("x".to_string(), KObject::Number(1.0)),
             ("y".to_string(), KObject::KString("a".into())),

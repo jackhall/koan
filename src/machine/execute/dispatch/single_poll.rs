@@ -13,7 +13,7 @@ use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
-use super::super::lift::copy_carried;
+use super::super::lift::{copied_seam_mode, copy_carried};
 use super::super::run_loop::{dest_brand, DestHandleFamily};
 use super::super::StepCarried;
 use super::super::WitnessedDepFinish;
@@ -25,7 +25,6 @@ use super::{
 };
 use crate::machine::model::CarriedFamily;
 use crate::scheduler::Deps;
-use crate::witnessed::Residence;
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
@@ -175,16 +174,16 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         // The dest brand is `yoke`d into the frame that owns the consumer scope's region, witnessed by
         // it — co-located by construction rather than paired with an asserted singleton.
         let dest = dest_brand(view.dest_frame());
+        let delivered = &deps.owned(0).delivered;
+        let mode = copied_seam_mode(delivered);
         Ok(StepCarried::born(
-            deps.owned(0)
-                .delivered
-                .transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
-                    dest,
-                    Residence::Copied,
-                    |value, _region, placement| {
-                        copy_carried(value, FoldingBrand::in_fold_closure(placement))
-                    },
-                ),
+            delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
+                dest,
+                mode,
+                |value, _region, placement| {
+                    copy_carried(value, FoldingBrand::in_fold_closure(placement))
+                },
+            ),
         ))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)

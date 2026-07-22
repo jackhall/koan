@@ -17,7 +17,10 @@ use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{CarriedFamily, WrappedPayload};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
-use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, RegionTypeFamily};
+use crate::machine::{
+    force_record_borrows_host, CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion,
+    RegionTypeFamily,
+};
 use crate::source::Spanned;
 use crate::witnessed::Residence;
 use crate::witnessed::{reattachable, RegionHandle, Witnessed};
@@ -198,6 +201,45 @@ fn check_newtype_repr<'a>(
     Ok(collapse)
 }
 
+/// Record-shaped twin of [`check_newtype_repr`] for [`CtorKind::RecordNewType`]: checks the
+/// assembled field values against the newtype's declared record repr directly, field by field —
+/// never building a probe `KObject::Record` to run [`KType::matches_value`] against, since a
+/// record's substrate is now born only through the fold door, and this ambient check runs before
+/// any brand is in hand. A record-repr newtype's collapse question never arises (a bare field
+/// record is never itself a `Wrapped`), so this returns no collapse bit.
+fn check_record_newtype_repr(
+    identity: KType,
+    fields: &Record<KObject<'_>>,
+    types: &TypeRegistry,
+) -> Result<(), KError> {
+    let repr = match types.node(identity) {
+        TypeNode::SetMember {
+            schema: NodeSchema::NewType(repr),
+            ..
+        } => repr,
+        _ => unreachable!("newtype construct ran on a non-NewType member"),
+    };
+    let matches = match types.node(repr) {
+        TypeNode::Record {
+            fields: repr_fields,
+        } => repr_fields.iter().all(|(name, field_type)| {
+            fields
+                .get(name)
+                .map(|v| field_type.matches_value(v, types))
+                .unwrap_or(false)
+        }),
+        _ => false,
+    };
+    if !matches {
+        return Err(KError::new(KErrorKind::TypeMismatch {
+            arg: "value".to_string(),
+            expected: repr.name(types),
+            got: types.record(fields.map(|v| v.ktype())).name(types),
+        }));
+    }
+    Ok(())
+}
+
 /// Construct an identity-wrapper value over a `NEWTYPE (Type AS Wrapper)`-declared constructor
 /// family. `value_parts` collapses to one value cell via [`single_value_cell`], the same shape
 /// [`dispatch_construct_newtype`] uses. The finish ([`finish_witnessed`]'s `ApplyConstructor`
@@ -363,20 +405,17 @@ fn finish_witnessed<'step>(
             identity,
             field_names,
         } => {
-            // Check the assembled record against the newtype repr first (read out of the carriers),
-            // then fold the field carriers into the witnessed record and wrap it.
+            // Check the assembled record's field values against the newtype repr first (read out
+            // of the carriers, no probe `KObject::Record` built — see
+            // `check_record_newtype_repr`'s doc), then fold the field carriers into the witnessed
+            // record and wrap it.
             let probe = Record::from_pairs(
                 field_names
                     .iter()
                     .cloned()
                     .zip(terminals.iter().map(|t| t.value.object().deep_clone())),
             );
-            // A record probe is never a `Wrapped`, so the repr check never asks to collapse.
-            check_newtype_repr(
-                *identity,
-                &KObject::record(probe, view.types()),
-                view.types(),
-            )?;
+            check_record_newtype_repr(*identity, &probe, view.types())?;
             // The fold accumulator is yoked into the dest frame's own region up front (mirroring
             // `dispatch::literal`'s `AggBuildFamily`), so each field's `transfer_into` composes by
             // minting that field's reach into the accumulator's own arena rather than by plain union.
@@ -403,7 +442,7 @@ fn finish_witnessed<'step>(
             // The pin: the destination frame, whose arena holds the sets the field folds minted.
             let dest_frame = view.dest_frame();
             let types = view.types();
-            Ok(fields
+            let witnessed = fields
                 .merge_pinned_placing::<RegionTypeFamily, CarriedFamily, KoanStorageProfile, _>(
                     home,
                     &dest_frame,
@@ -411,11 +450,14 @@ fn finish_witnessed<'step>(
                         let region = FoldingBrand::in_fold_closure(placement);
                         let record = Record::from_pairs(fields);
                         Carried::Object(region.alloc_object_folded(KObject::Wrapped {
-                            inner: WrappedPayload::hold(&KObject::record(record, types)),
+                            inner: WrappedPayload::hold(&KObject::record(region, record, types)),
                             type_id: identity_ty,
                         }))
                     },
-                ))
+                );
+            // Step-terminal seal: the fresh record's substrate always borrows into this same
+            // `dest_frame` — force the bit rather than trust the merge's operand-only compose.
+            Ok(force_record_borrows_host(witnessed, &dest_frame))
         }
         CtorKind::Tagged {
             schema,

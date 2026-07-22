@@ -480,8 +480,10 @@ digraph {
     "koan::machine::core::bindings" -> "koan::machine::core::kerror" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::carrier_witness" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::kerror" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -647,6 +649,7 @@ digraph {
     "koan::machine::execute::dispatch::literal" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::execute::dispatch::ctx" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::literal" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -686,6 +689,7 @@ digraph {
     "koan::machine::execute::finalize" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute" [label="uses", style="dashed"];
+    "koan::machine::execute::finalize" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -893,6 +897,7 @@ digraph {
     "koan::machine::model::values::kobject" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject::equality" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject::equality" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject::equality" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject::equality" -> "koan::machine::core" [label="uses", style="dashed"];
