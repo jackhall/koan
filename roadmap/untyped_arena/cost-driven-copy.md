@@ -33,7 +33,8 @@ cost exists to price such a copy against the pin.
 **Directions.**
 
 - *Where the memo rides — decided.* On the substrate wrapper, beside the
-  contains-borrows bit ([region-store-records](region-store-records.md) sets the
+  contains-borrows bit (the
+  [`RecordSubstrate`](../../src/machine/model/values/record_substrate.rs) sets the
   pattern); carriers stay lean.
 - *Contains-borrows treatment — decided* per
   [design/value-substrates.md § Cost-driven copy](../../design/value-substrates.md#cost-driven-copy-the-optimization):
@@ -49,8 +50,6 @@ cost exists to price such a copy against the pin.
 
 **Requires:**
 
-- [Region-store record values](region-store-records.md) — the first pinned
-  substrate; the memo lands in its construction pass.
 
 **Unblocks:**
 

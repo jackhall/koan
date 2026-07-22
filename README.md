@@ -203,6 +203,7 @@ src/
     │   ├── values.rs
     │   └── values/
     │       ├── kobject.rs         runtime value type
+    │       ├── record_substrate.rs  RecordSubstrate — the region-resident field substrate behind a record value (fields + contains-borrows memo)
     │       ├── carried.rs         Carried — the scheduler's value currency (Object | Type)
     │       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
     │       ├── named_pairs.rs     shared (name, value) ordered-list helper

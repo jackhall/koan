@@ -203,8 +203,6 @@ permanently; "as much storage as possible" means the value substrates.
 The [untyped_arena](../roadmap/untyped_arena/README.md) roadmap project carries
 the conversion slate; its `Requires` chain encodes the order:
 
-- [Region-store record values](../roadmap/untyped_arena/region-store-records.md) —
-  the first substrate conversion and the door/pin pathfinder.
 - [Region-store list values](../roadmap/untyped_arena/region-store-lists.md)
 - [Region-store dict values](../roadmap/untyped_arena/region-store-dicts.md)
 - [Region-store tagged and wrapped payloads](../roadmap/untyped_arena/region-store-tagged-wrapped.md)
