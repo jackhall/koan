@@ -147,11 +147,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         "MODULE",
         module_sig(KType::IDENTIFIER),
         body,
-        Some((
-            super::identifier_part_binder_name,
-            crate::machine::BindKind::Value,
-        )),
-        None,
+        true,
         types,
     );
     crate::builtins::register_builtin_full(
@@ -159,8 +155,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         "MODULE",
         module_sig(KType::of_kind(KKind::ProperType)),
         body_type_named,
-        None,
-        None,
+        false,
         types,
     );
 }
@@ -179,7 +174,7 @@ mod tests {
     #[test]
     fn binder_name_extracts_module_name() {
         let expr = parse_one("MODULE foo = (LET x = 1)");
-        let name = crate::builtins::identifier_part_binder_name(&expr);
+        let name = crate::machine::model::binder::identifier_part_binder_name(&expr);
         assert_eq!(name.as_deref(), Some("foo"));
     }
 

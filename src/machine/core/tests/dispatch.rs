@@ -131,17 +131,15 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     }
 }
 
-/// A binder_name-bearing overload populates `placeholder` from its extractor.
+/// A binder overload (the `binder` bool) is classified as a binder pick, so its literal-name slot is
+/// a declaration (never a replay-park reference). The name/bucket a binder installs is parse-static
+/// (the `BINDER_SPECS` table) and installed once at statement submission — the aggregation is pinned
+/// in `machine::model::binder::tests`, and program-level install-then-resolve in the run-loop tests;
+/// here we pin only the surviving dispatch-side classification bit.
 #[test]
-fn resolve_carries_placeholder_name_for_binder_function() {
+fn resolve_marks_binder_pick_for_binder_function() {
     let types = TypeRegistry::new();
     use crate::builtins::register_builtin_full;
-    fn name_extractor(expr: &KExpression<'_>) -> Option<String> {
-        match expr.parts.get(1).map(|p| &p.value) {
-            Some(ExpressionPart::Identifier(n)) => Some(n.clone()),
-            _ => None,
-        }
-    }
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
@@ -159,15 +157,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
             }),
         ],
     };
-    register_builtin_full(
-        scope,
-        "LETLIKE",
-        sig,
-        body_a,
-        Some((name_extractor, crate::machine::BindKind::Value)),
-        None,
-        &types,
-    );
+    register_builtin_full(scope, "LETLIKE", sig, body_a, true, &types);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
         Spanned::bare(ExpressionPart::Identifier("foo".into())),
@@ -177,10 +167,12 @@ fn resolve_carries_placeholder_name_for_binder_function() {
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Resolved(r) => {
-            assert_eq!(r.placeholder.as_ref().map(|(n, _)| n.as_str()), Some("foo"));
-            assert!(r.slots.picked_has_binder_name);
+            assert!(
+                r.slots.picked_has_binder_name,
+                "a `binder: true` overload's literal-name slot is a declaration, not a reference"
+            );
         }
-        _ => panic!("expected Resolved with placeholder"),
+        _ => panic!("expected Resolved for the binder overload"),
     }
 }
 
@@ -457,8 +449,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         pick_num,
         Body::Builtin(body_a),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let pick_num_obj = region
@@ -512,8 +503,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         pick_str,
         Body::Builtin(super::body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let sibling_obj = region

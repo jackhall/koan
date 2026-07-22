@@ -2,8 +2,8 @@ use crate::machine::model::KKind;
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
-use crate::machine::{BinderNameFn, Body, KFunction};
 use crate::machine::{BindingIndex, FrameStorageExt, Scope};
+use crate::machine::{Body, KFunction};
 
 pub(crate) mod arithmetic;
 mod ascribe;
@@ -67,22 +67,17 @@ pub(crate) fn sig<'a>(
     }
 }
 
-/// The shared binder-name extractors live in [`crate::machine::model::binder`] (the single
-/// source of truth for binder discovery); re-exported here so the registration sites and the
-/// per-builtin tests keep their existing paths.
-pub(crate) use crate::machine::model::{identifier_part_binder_name, type_part_binder_name};
-
-/// Full-form builtin registration with both binder hooks. The `body` is
+/// Full-form builtin registration marking whether the builtin introduces a binder. The `body` is
 /// an [`ActionFn`](crate::machine::ActionFn) (`fn(&BodyCtx) -> Action`) installed
-/// as [`Body::Builtin`] — the builtin runs through `machine::execute::runtime::run_action`.
-/// `binder_bucket` lets FN key pending-overload entries by inner-call bucket.
+/// as [`Body::Builtin`] — the builtin runs through `machine::execute::runtime::run_action`. The
+/// binder's name/bucket extractors and chain-slot mask are the static spec table's business
+/// ([`crate::machine::model::binder`]); `binder` is only the classification bit dispatch reads.
 pub(crate) fn register_builtin_full<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
     body: crate::machine::ActionFn,
-    binder_name: Option<(BinderNameFn, crate::machine::BindKind)>,
-    binder_bucket: Option<crate::machine::BinderBucketFn>,
+    binder: bool,
     types: &TypeRegistry,
 ) {
     let region = scope.brand();
@@ -90,8 +85,7 @@ pub(crate) fn register_builtin_full<'a>(
         signature,
         Body::Builtin(body),
         scope,
-        binder_name,
-        binder_bucket,
+        binder,
         types,
     ));
     let obj: &'a KObject<'a> = region
@@ -100,7 +94,7 @@ pub(crate) fn register_builtin_full<'a>(
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
-/// Common-case [`register_builtin_full`]: no binder hooks.
+/// Common-case [`register_builtin_full`]: not a binder builtin.
 pub(crate) fn register_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,
@@ -108,7 +102,7 @@ pub(crate) fn register_builtin<'a>(
     body: crate::machine::ActionFn,
     types: &TypeRegistry,
 ) {
-    register_builtin_full(scope, name, signature, body, None, None, types);
+    register_builtin_full(scope, name, signature, body, false, types);
 }
 
 /// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
@@ -129,8 +123,7 @@ pub(crate) fn register_overload_at<'a>(
         signature,
         Body::Builtin(body),
         scope,
-        None,
-        None,
+        false,
         types,
     ));
     let obj: &'a KObject<'a> = region

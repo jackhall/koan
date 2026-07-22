@@ -187,7 +187,3 @@ pub(crate) fn parse_fn_param_list<'a>(
     }
     ParamListOutcome::Done(elements)
 }
-
-/// The FN bucket-key extractor lives in [`crate::machine::model::binder`]; re-exported here so
-/// `fn_def`'s registration sites keep their existing path.
-pub(crate) use crate::machine::model::binder::fn_def_binder_bucket as binder_bucket;

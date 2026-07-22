@@ -19,10 +19,9 @@ struct LiveBucket {
     recomputed_mask: Option<Vec<bool>>,
 }
 
-/// Phase 3: `KFunction` replaces the `binder_name` / `binder_bucket` hook fields with a `binder`
-/// bool. When it does, this predicate reads that bool instead.
+/// Whether an overload is a binder-introducing builtin — the `binder` bool `KFunction` carries.
 fn overload_has_hook(f: &crate::machine::KFunction<'_>) -> bool {
-    f.binder_name.is_some() || f.binder_bucket.is_some()
+    f.binder
 }
 
 /// The per-overload eager-slot mask: an `Argument` slot is `true` iff its ktype is not

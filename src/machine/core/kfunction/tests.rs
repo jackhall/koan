@@ -182,7 +182,7 @@ fn function_value_ktype_projects_kfunction() {
             }),
         ],
     };
-    let f = KFunction::new(sig, Body::Builtin(body_any), scope, None, None, &types);
+    let f = KFunction::new(sig, Body::Builtin(body_any), scope, false, &types);
     let obj = KObject::KFunction(region.brand().alloc_function(f));
     match types.node(obj.ktype()) {
         TypeNode::KFunction { params, ret } => {

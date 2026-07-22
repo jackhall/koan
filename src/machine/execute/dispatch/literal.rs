@@ -16,6 +16,7 @@ use super::super::runtime::KoanRuntime;
 use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::{current_dest_frame, with_current_node_scope, SchedulerView};
 use super::stage_eager_part;
+use super::SubmitContext;
 use super::{resolve_bare_carrier, BareCarrier};
 use crate::scheduler::{DepResults, ResolvedDeps};
 
@@ -264,7 +265,15 @@ impl<'step> KoanRuntime<'step> {
                 // `KObject::KExpression` is invariant in its region lifetime with no `'static`
                 // rebuild, so `resolve_region_pure` cannot build it at the `yoke` brand below.
                 let wrapped = crate::machine::model::KExpression::new(vec![Spanned::bare(part)]);
-                Slot::owned(deps, self.dispatch_in_own_scope(wrapped))
+                Slot::owned(
+                    deps,
+                    self.dispatch_in_own_scope(
+                        wrapped,
+                        SubmitContext::SubDispatch {
+                            binder_covered: false,
+                        },
+                    ),
+                )
             }
             ref p @ ExpressionPart::Identifier(_) => self.resolve_aggregate_bare_name(p, deps),
             ref p @ ExpressionPart::Type(_) => self.resolve_aggregate_bare_name(p, deps),
@@ -313,7 +322,15 @@ impl<'step> KoanRuntime<'step> {
             Ok(BareCarrier::Unbound(_)) | Err(_) => {
                 let expr =
                     crate::machine::model::KExpression::new(vec![Spanned::bare(part.clone())]);
-                Slot::owned(deps, self.dispatch_in_own_scope(expr))
+                Slot::owned(
+                    deps,
+                    self.dispatch_in_own_scope(
+                        expr,
+                        SubmitContext::SubDispatch {
+                            binder_covered: false,
+                        },
+                    ),
+                )
             }
         }
     }

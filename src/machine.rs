@@ -17,18 +17,17 @@ pub(crate) use core::KoanRegionTestExt;
 pub(crate) use core::{
     arg_held, arg_object, arg_type, arg_unresolved_type, body_statement_refs, kerror_ktype,
     require_bare_type_name, require_identifier_name, require_kexpression, require_ktype,
-    split_body_statements, Action, ActionFn, AwaitContinue, BinderBucketFn, BinderNameFn,
-    BlockEntry, BodyCtx, CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx,
-    FoldingBrand, FramePlacement, FrameStorageExt, KoanRegionExt, KoanStorageProfile,
-    OwnedDispatch, ReturnContract, StepAllocator, StoredReach, TailContract,
+    split_body_statements, Action, ActionFn, AwaitContinue, BlockEntry, BodyCtx, CatchContinue,
+    DepPlacement, DepRequest, DepTerminal, FinishCtx, FoldingBrand, FramePlacement,
+    FrameStorageExt, KoanRegionExt, KoanStorageProfile, OwnedDispatch, ReturnContract,
+    StepAllocator, StoredReach, TailContract,
 };
 pub use core::{
     run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, Scope, ScopeId,
 };
 pub(crate) use core::{
-    BindKind, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameSet, FunctionLookup,
-    KoanRegion, LexicalFrame, MemberResolution, NameLookup, NodeHandle, RegionTypeFamily, RunId,
-    TraceFrame,
+    BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameSet, KoanRegion, LexicalFrame,
+    MemberResolution, NameLookup, NodeHandle, RegionTypeFamily, RunId, TraceFrame,
 };
 pub(crate) use execute::{
     build_type_operand, seal_type_identity, BrandCompose, DispatchOutcome, FieldListDeferral,

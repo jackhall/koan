@@ -18,10 +18,7 @@ pub use values::{Carried, Held, KKey, KObject, ValueEqualityError};
 pub(crate) use ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier,
 };
-pub(crate) use binder::{
-    identifier_part_binder_name, symbol_from_parts, symbol_from_quote_body, type_part_binder_name,
-    BinderKey,
-};
+pub(crate) use binder::{symbol_from_parts, symbol_from_quote_body, BinderKey};
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn};
 pub(crate) use types::{
     constructor_param_names, declarator_window, elaborate_type_identifier, finalize_nominal_member,

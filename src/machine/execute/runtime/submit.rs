@@ -12,7 +12,7 @@ use crate::machine::model::KExpression;
 use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
 use crate::witnessed::SealedExtern;
 
-use super::super::dispatch::with_node_scope;
+use super::super::dispatch::{with_node_scope, SubmitContext};
 
 /// Pointer equality of two scopes (identity, not structural).
 fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
@@ -163,7 +163,9 @@ impl<'run> KoanRuntime<'run> {
     ) -> NodeId {
         self.ensure_run_frame(scope);
         let node_scope = self.resolve_node_scope(scope);
-        self.submit_expression(expr, scope, node_scope, chain)
+        // Every caller (top-level `enter_block`, `dispatch_in_scope`, an `InScope` dep's fresh block)
+        // is a statement position, so a binder installs its aggregate here.
+        self.submit_expression(expr, scope, node_scope, chain, SubmitContext::Statement)
     }
 
     /// Dispatch `expr` as a `Yoked` sub-slot of the currently-active per-call frame. The caller must
@@ -173,22 +175,25 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         expr: KExpression<'a>,
         chain: Option<Rc<LexicalFrame>>,
+        ctx: SubmitContext,
     ) -> NodeId {
         let frame = self
             .current_frame()
             .expect("in-frame dispatch requires an active frame");
         // Re-project the scope from the frame cart at a `for<'b>` brand confined to the
         // `submit_expression` call, so no borrow rides up the `&mut self` path.
-        frame.with_scope(|scope| self.submit_expression(expr, scope, NodeScope::Yoked, chain))
+        frame.with_scope(|scope| self.submit_expression(expr, scope, NodeScope::Yoked, chain, ctx))
     }
 
     /// Dispatch `expr` against the executing slot's own scope handle (the `OwnScope` dep placement).
     /// A `YokedChild` slot reuses its erased cart-ancestor pointer; a `Yoked` slot re-projects via
-    /// [`Self::dispatch_in_active_frame`]. Both route through [`Self::submit_expression`], so a binder
-    /// spliced here still installs its placeholder.
+    /// [`Self::dispatch_in_active_frame`]. Both route through [`Self::submit_expression`] as a
+    /// [`SubmitContext::SubDispatch`]: `binder_covered` says whether the staged dep is a binder pick's
+    /// own declaration slot, so a nested binder outside one is rejected.
     pub(in crate::machine::execute) fn dispatch_in_own_scope<'a>(
         &mut self,
         expr: KExpression<'a>,
+        ctx: SubmitContext,
     ) -> NodeId {
         let node_scope = self
             .active_payload()
@@ -202,10 +207,10 @@ impl<'run> KoanRuntime<'run> {
                 // `YokedChild` pointer at a `for<'b>` brand, so no borrow escapes the call.
                 let cart = self.active_frame_ref().cloned();
                 with_node_scope(&node_scope, cart.as_ref(), |scope| {
-                    self.submit_expression(expr, scope, node_scope, chain)
+                    self.submit_expression(expr, scope, node_scope, chain, ctx)
                 })
             }
-            NodeScope::Yoked => self.dispatch_in_active_frame(expr, chain),
+            NodeScope::Yoked => self.dispatch_in_active_frame(expr, chain, ctx),
         }
     }
 
@@ -239,7 +244,12 @@ impl<'run> KoanRuntime<'run> {
             // Bracket `frame` as the ambient cart so the sub-slot inherits it (not the caller's),
             // restoring the previous on every exit path.
             let bid = self.with_active_frame(Rc::clone(frame), |rt| {
-                rt.dispatch_in_active_frame(statement, Some(statement_chain))
+                // A body's non-tail statements are statement positions in the body scope.
+                rt.dispatch_in_active_frame(
+                    statement,
+                    Some(statement_chain),
+                    SubmitContext::Statement,
+                )
             });
             ids.push(bid);
         }

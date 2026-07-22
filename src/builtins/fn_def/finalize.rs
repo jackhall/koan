@@ -245,8 +245,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         user_sig,
         Body::UserDefined(body_expr),
         scope,
-        None,
-        None,
+        false,
         types,
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this

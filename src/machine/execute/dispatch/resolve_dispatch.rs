@@ -12,8 +12,8 @@
 //! dead lean must not pre-empt an outer scope that could strict-pick the bare
 //! name as an `:Identifier` / `:Any` slot.
 
-use crate::machine::core::{BindKind, FunctionLookup, LexicalFrame, Scope};
 use crate::machine::core::{ClassifiedSlots, KFunction};
+use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
 use crate::machine::model::Carried;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
@@ -56,14 +56,6 @@ pub fn reset_resolve_dispatch_entry_count() {
 /// [`crate::machine::core::ClassifiedSlots`].
 pub struct Resolved<'step> {
     pub function: &'step KFunction<'step>,
-    /// The forward-reference name a binder declares, with the language it binds in, so the
-    /// dispatch driver installs a kind-tagged placeholder. `None` for a non-binder pick.
-    pub placeholder: Option<(String, BindKind)>,
-    /// Non-empty only for binder builtins whose body registers a callable
-    /// function (`FN`, `OP`): holds the inner-call bucket key of every overload the
-    /// body will register, so a sibling call form parks on this slot rather than
-    /// failing dispatch.
-    pub pending_overload_buckets: Vec<crate::machine::model::UntypedKey>,
     pub slots: ClassifiedSlots,
 }
 
@@ -506,13 +498,6 @@ fn build_resolved<'step, 'e>(
 ) -> Resolved<'step> {
     Resolved {
         function: picked,
-        placeholder: picked
-            .binder_name
-            .and_then(|(extractor, kind)| extractor(expr).map(|name| (name, kind))),
-        pending_overload_buckets: picked
-            .binder_bucket
-            .and_then(|extractor| extractor(expr))
-            .unwrap_or_default(),
         slots: picked.classify_for_pick(expr, types),
     }
 }

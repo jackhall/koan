@@ -36,7 +36,7 @@ fn nested_binder_installs_inner_placeholder_at_outer_submission() {
     ];
     assert!(
         pending.contains_key(&helper_bucket),
-        "inner FN (pre-submitted as a sub-Dispatch of LET) should install \
+        "inner FN (aggregated into the LET statement's install list) should install \
          pending-overload bucket [HELPER, Slot] at submission; \
          pending_overloads = {:?}",
         pending.keys().collect::<Vec<_>>(),

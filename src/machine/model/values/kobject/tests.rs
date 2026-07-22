@@ -274,8 +274,7 @@ fn resident_in_true_for_same_region_kfunction() {
         sig,
         Body::UserDefined(KExpression::new(Vec::new())),
         scope,
-        None,
-        None,
+        false,
         &test_run.types,
     ));
     let o = KObject::KFunction(f);
@@ -306,8 +305,7 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
         sig,
         Body::UserDefined(KExpression::new(Vec::new())),
         foreign_scope,
-        None,
-        None,
+        false,
         &foreign_test_run.types,
     ));
     let o = KObject::KFunction(f);

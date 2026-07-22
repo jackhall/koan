@@ -29,7 +29,7 @@ use crate::machine::model::KExpression;
 use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId, RunId};
 use crate::witnessed::SealedExtern;
 
-use super::dispatch::{BodyPlacement, DepRequest, SchedulerView};
+use super::dispatch::{BodyPlacement, DepRequest, SchedulerView, SubmitContext};
 use super::finalize::check_spliced_return;
 use super::lift::copy_carried;
 use super::nodes::{ChainOp, NodeStep, NodeWork};
@@ -423,9 +423,12 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         expr: KExpression<'a>,
         placement: DepPlacement<'a>,
+        binder_covered: bool,
     ) -> NodeId {
         match placement {
-            DepPlacement::OwnScope => self.dispatch_in_own_scope(expr),
+            DepPlacement::OwnScope => {
+                self.dispatch_in_own_scope(expr, SubmitContext::SubDispatch { binder_covered })
+            }
             DepPlacement::InScope(scope) => self
                 .enter_block(scope.id, vec![expr], scope)
                 .into_iter()
@@ -442,7 +445,11 @@ impl<'run> KoanRuntime<'run> {
         dep: DepRequest<'a>,
     ) -> NodeId {
         match dep {
-            DepRequest::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
+            DepRequest::Dispatch {
+                expr,
+                placement,
+                binder_covered,
+            } => self.realize_dispatch(expr, placement, binder_covered),
             DepRequest::ListLit(items) => self.schedule_list_literal(items),
             DepRequest::DictLit(pairs) => self.schedule_dict_literal(pairs),
             DepRequest::RecordLit(fields) => self.schedule_record_literal(fields),
@@ -459,7 +466,11 @@ impl<'run> KoanRuntime<'run> {
     fn realize_catch_dep<'a>(&mut self, dep: DepRequest<'a>) -> NodeId {
         match dep {
             DepRequest::Existing(id) => id,
-            DepRequest::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
+            DepRequest::Dispatch {
+                expr,
+                placement,
+                binder_covered,
+            } => self.realize_dispatch(expr, placement, binder_covered),
             DepRequest::ListLit(_)
             | DepRequest::DictLit(_)
             | DepRequest::RecordLit(_)
@@ -572,6 +583,7 @@ impl<'run> KoanRuntime<'run> {
                         DepRequest::Dispatch {
                             expr,
                             placement: DepPlacement::InScope(scope),
+                            ..
                         } => {
                             let statements = split_body_statements(expr);
                             for id in self.enter_block(scope.id, statements, scope) {

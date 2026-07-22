@@ -6,7 +6,7 @@ fn binder_name_extracts_let_name() {
     use crate::parse::parse;
     let mut exprs = parse("LET hello = 1").expect("parse should succeed");
     let expr = exprs.remove(0);
-    let name = super::binder_name(&expr);
+    let name = crate::machine::model::binder::identifier_part_binder_name(&expr);
     assert_eq!(name.as_deref(), Some("hello"));
 }
 

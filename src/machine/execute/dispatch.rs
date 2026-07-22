@@ -53,6 +53,7 @@ pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_identifier;
 pub(in crate::machine::execute) mod single_poll;
 mod submit;
+pub(in crate::machine::execute) use submit::SubmitContext;
 
 #[cfg(test)]
 mod tests;
@@ -190,6 +191,8 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
             Ok(DepRequest::Dispatch {
                 expr: *boxed,
                 placement: DepPlacement::OwnScope,
+                // Default uncovered; the keyworded walk marks a binder's own chain slots after staging.
+                binder_covered: false,
             })
         }
         Some(EagerShape::TypeExpression) => Ok(DepRequest::Dispatch {
@@ -197,6 +200,7 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
             // builds, equivalent to the destructure-and-rewrap the walks did.
             expr: KExpression::new(vec![Spanned::bare(part)]),
             placement: DepPlacement::OwnScope,
+            binder_covered: false,
         }),
         Some(EagerShape::ListLiteral) => {
             let ExpressionPart::ListLiteral(items) = part else {
@@ -370,6 +374,8 @@ pub(super) fn stage_all_eager_parts<'step>(
                 DepRequest::Dispatch {
                     expr: wrapped,
                     placement: DepPlacement::OwnScope,
+                    // Bare-name value slot: a resolved name, never a nested binder.
+                    binder_covered: false,
                 },
             ));
             new_parts.push(staged_slot_placeholder());
@@ -397,37 +403,38 @@ pub(in crate::machine::execute) type ResumeFn<'step> =
 
 // ---------- Cross-shape driver ----------
 
-/// Build a birth dispatch [`NodeWork`](super::nodes::NodeWork) for `expr` with empty `pre_subs`, wrapping the
-/// birth-dispatch continuation with the tail chain's declared-return `obligation` when one is
-/// present (via [`with_obligation`], so the replacement step re-deposits the checker into the
-/// ambient slot-step state before classifying — the keep-first capture that carries the first
-/// caller's declared return down the chain). Pass `None` for a plain birth dispatch that carries no
-/// inherited obligation.
+/// Build a birth dispatch [`NodeWork`](super::nodes::NodeWork) for `expr`, wrapping the birth-dispatch
+/// continuation with the tail chain's declared-return `obligation` when one is present (via
+/// [`with_obligation`], so the replacement step re-deposits the checker into the ambient slot-step
+/// state before classifying — the keep-first capture that carries the first caller's declared return
+/// down the chain). Pass `None` for a plain birth dispatch that carries no inherited obligation.
 pub(in crate::machine::execute) fn decide_tail<'step>(
     expr: KExpression<'step>,
-    obligation: Option<ReturnObligation>,
-) -> NodeWork<KoanWorkload> {
-    decide_with_presubs(expr, Vec::new(), obligation)
-}
-
-/// Birth dispatch [`NodeWork`](super::nodes::NodeWork) carrying the dispatch layer's pre-submitted nested sub-Dispatches
-/// (computed by [`submit_expression`]). `obligation` wraps the birth-dispatch continuation before it
-/// is boxed (the live wrap that must precede the [`NodeWork::new`] erase) so a tail replacement
-/// carries its declared-return checker.
-pub(in crate::machine::execute) fn decide_with_presubs<'step>(
-    expr: KExpression<'step>,
-    pre_subs: Vec<(usize, NodeId)>,
     obligation: Option<ReturnObligation>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = expr.summarize();
     // A birth decide waits on no deps: it runs on first poll, classifies, and routes.
     let continuation = ignore_results(Box::new(move |view, idx| {
-        classify_dispatch(view, expr, pre_subs, idx)
+        classify_dispatch(view, expr, idx)
     }));
     let continuation = match obligation {
         Some(obligation) => with_obligation(obligation, continuation),
         None => continuation,
     };
+    NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier))
+}
+
+/// Build a [`NodeWork`](super::nodes::NodeWork) that fails on its first poll with `error`. Used by
+/// submission to pre-error a nested binder in an eager sub-dispatch position: the node is slot-terminal
+/// (TRY-catchable) and propagates through its dep like any other failed dep. `carrier` renders the
+/// offending expression for the deadlock report.
+pub(in crate::machine::execute) fn decide_error(
+    error: KError,
+    carrier: String,
+) -> NodeWork<KoanWorkload> {
+    let continuation = ignore_results(Box::new(move |_view: &SchedulerView<'_, '_>, _idx| {
+        Outcome::Done(Err(error))
+    }));
     NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier))
 }
 
@@ -438,12 +445,10 @@ pub(in crate::machine::execute) fn decide_with_presubs<'step>(
 fn classify_dispatch<'step>(
     view: &SchedulerView<'step, '_>,
     expr: KExpression<'step>,
-    pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
 ) -> Outcome<'step> {
     match expr.shape() {
         DispatchShape::BareTypeLeaf => {
-            debug_assert!(pre_subs.is_empty());
             let t = match &expr.parts[0].value {
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
@@ -451,29 +456,16 @@ fn classify_dispatch<'step>(
             view.with_current_scope(|s| single_poll::bare_type_leaf(view, s, &t))
         }
         DispatchShape::BareIdentifier => {
-            debug_assert!(pre_subs.is_empty());
             let name = match &expr.parts[0].value {
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
             view.with_current_scope(|s| single_poll::bare_identifier(view, s, name))
         }
-        DispatchShape::FunctionValueCall => {
-            debug_assert!(pre_subs.is_empty());
-            fn_value::initial(view, expr)
-        }
-        DispatchShape::TypeCall => {
-            debug_assert!(pre_subs.is_empty());
-            single_poll::type_call(view, expr)
-        }
-        DispatchShape::HeadDeferred => {
-            debug_assert!(pre_subs.is_empty());
-            head_deferred::initial_expr(expr)
-        }
-        DispatchShape::TypeHeadDeferred => {
-            debug_assert!(pre_subs.is_empty());
-            head_deferred::initial_type(expr)
-        }
+        DispatchShape::FunctionValueCall => fn_value::initial(view, expr),
+        DispatchShape::TypeCall => single_poll::type_call(view, expr),
+        DispatchShape::HeadDeferred => head_deferred::initial_expr(expr),
+        DispatchShape::TypeHeadDeferred => head_deferred::initial_type(expr),
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
         DispatchShape::NonCallableHead => {
@@ -489,21 +481,11 @@ fn classify_dispatch<'step>(
             })))
         }
         DispatchShape::OperatorChain => {
-            debug_assert!(pre_subs.is_empty());
             view.with_current_scope(|s| operator_chain::run(view, s, &expr, idx))
         }
-        DispatchShape::Keyworded => keyworded::initial(view, expr, pre_subs, idx),
-        DispatchShape::SigiledTypeExpr => {
-            debug_assert!(pre_subs.is_empty());
-            single_poll::sigiled_type_expr(view, expr)
-        }
-        DispatchShape::RecordType => {
-            debug_assert!(pre_subs.is_empty());
-            single_poll::record_type(view, expr)
-        }
-        DispatchShape::LiteralPassThrough => {
-            debug_assert!(pre_subs.is_empty());
-            single_poll::literal_pass_through(view, expr)
-        }
+        DispatchShape::Keyworded => keyworded::initial(view, expr, idx),
+        DispatchShape::SigiledTypeExpr => single_poll::sigiled_type_expr(view, expr),
+        DispatchShape::RecordType => single_poll::record_type(view, expr),
+        DispatchShape::LiteralPassThrough => single_poll::literal_pass_through(view, expr),
     }
 }

@@ -25,8 +25,8 @@ pub use arena::{
 };
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
 pub use bindings::{
-    BindKind, BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution,
-    NameLookup, NodeHandle, PendingBinderGuard, StoredReach,
+    BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
+    NodeHandle, PendingBinderGuard, StoredReach,
 };
 pub use carrier_witness::{CarrierWitness, DeliveredCarried};
 pub(crate) use kerror::kerror_ktype;
@@ -41,9 +41,7 @@ pub(crate) use kfunction::body::{
     body_statement_refs, split_body_statements, ReturnContract, SealedContract,
 };
 pub(crate) use kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
-pub(crate) use kfunction::{
-    ActionFn, BinderBucketFn, BinderNameFn, Body, ClassifiedSlots, KFunction, NodeId,
-};
+pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction, NodeId};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
 pub use run_id::RunId;
 pub use scope::Scope;

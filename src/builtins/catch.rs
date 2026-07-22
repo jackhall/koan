@@ -119,6 +119,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         watched: DepRequest::Dispatch {
             expr: expr_inner,
             placement: DepPlacement::OwnScope,
+            binder_covered: false,
         },
         finish,
     }

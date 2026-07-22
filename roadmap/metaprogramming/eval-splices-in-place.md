@@ -35,6 +35,15 @@ replacement semantics: splice in place, sequenced by a block barrier.
   operand remains a structured `TypeMismatch`.
 - `EVAL` has one semantics in every position — module body, nested argument,
   `FN` body, `GROUP` body — with no statement/expression distinction.
+- Splices obey the nested-binder position rule exactly as hand-written source
+  does: a spliced binder in an eagerly evaluated value position raises the
+  same structured `NestedBinder` error, so "`EVAL q` is exactly as powerful as
+  writing `q`'s content in place" holds — both sides reject alike. (The
+  pre-splice-in-place frame-local behavior is pinned by
+  [`eval.rs`](../../src/builtins/eval.rs) tests
+  `eval_spliced_let_is_frame_local` /
+  `eval_spliced_let_in_argument_position_runs_frame_local`, which this item
+  supersedes.)
 
 **Directions.**
 

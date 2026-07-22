@@ -63,8 +63,7 @@ fn drain_debug_asserts_on_invariant_violation() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj1 = region
@@ -75,8 +74,7 @@ fn drain_debug_asserts_on_invariant_violation() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj2 = region
@@ -112,8 +110,7 @@ fn register_function_defers_and_drains_through_function_arm() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj = region
@@ -172,8 +169,7 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj = region
@@ -224,8 +220,7 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj1 = region
@@ -236,8 +231,7 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj2 = region

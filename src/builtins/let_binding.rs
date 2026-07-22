@@ -207,15 +207,6 @@ fn capitalize_identifier(name: &str) -> String {
     }
 }
 
-/// Dispatch-time placeholder extractor for the value-binding `LET <name> = …` overload: the shared
-/// [`identifier_part_binder_name`](crate::builtins::identifier_part_binder_name). The type-alias
-/// overload (`LET <Type> = …`) uses [`type_part_binder_name`](crate::builtins::type_part_binder_name)
-/// instead, so each overload's extractor matches exactly its own name-part kind. This keeps the
-/// submit-time binder pick ([`extract_binder_install`]) selecting the correctly-classified
-/// overload (the value extractor misses a `Type` part, and vice versa), so the placeholder is
-/// tagged `Value` xor `Type` to match where the bind lands.
-pub(crate) use crate::builtins::identifier_part_binder_name as binder_name;
-
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let identifier_sig = || {
         sig(
@@ -239,24 +230,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             ],
         )
     };
-    crate::builtins::register_builtin_full(
-        scope,
-        "LET",
-        identifier_sig(),
-        body,
-        Some((binder_name, crate::machine::BindKind::Value)),
-        None,
-        types,
-    );
-    crate::builtins::register_builtin_full(
-        scope,
-        "LET",
-        type_sig(),
-        body,
-        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
-        None,
-        types,
-    );
+    crate::builtins::register_builtin_full(scope, "LET", identifier_sig(), body, true, types);
+    crate::builtins::register_builtin_full(scope, "LET", type_sig(), body, true, types);
 }
 
 #[cfg(test)]

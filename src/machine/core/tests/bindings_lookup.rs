@@ -76,7 +76,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
             "placeholder".to_string(),
             NodeId(2),
             BindingIndex::value(5),
-            crate::machine::BindKind::Value,
+            crate::machine::model::BindKind::Value,
         )
         .unwrap();
     assert!(scope
@@ -118,8 +118,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj = region
@@ -169,16 +168,14 @@ fn lookup_function_filters_per_overload_visibility() {
         sig_num,
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let f_late = region.brand().alloc_function(KFunction::new(
         sig_str,
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj_early = region
@@ -240,8 +237,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj = region
@@ -271,8 +267,7 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj = region

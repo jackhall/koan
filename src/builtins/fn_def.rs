@@ -16,8 +16,6 @@ use finalize::{classify, finalize_fn_with_kind, fn_action, FnKind, FnPlan, Param
 use return_type::classify_return_type;
 use signature::ParamListOutcome;
 
-pub(crate) use signature::binder_bucket;
-
 /// Shared FN elaboration: extract the `signature` / return / `body` slots from
 /// `BodyCtx::args`, collect param names, classify the return type, parse the param
 /// list, and route to [`finalize_fn_with_kind`] (synchronous, via `Action::Done`) or
@@ -269,42 +267,17 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         )
     };
     use crate::builtins::register_builtin_full;
-    register_builtin_full(
-        scope,
-        "FN",
-        typeexpr_sig(),
-        body,
-        None,
-        Some(binder_bucket),
-        types,
-    );
-    register_builtin_full(
-        scope,
-        "FN",
-        sigil_sig(),
-        body,
-        None,
-        Some(binder_bucket),
-        types,
-    );
+    register_builtin_full(scope, "FN", typeexpr_sig(), body, true, types);
+    register_builtin_full(scope, "FN", sigil_sig(), body, true, types);
     register_builtin_full(
         scope,
         "FN",
         value_named_return_sig(),
         body_value_named_return,
-        None,
-        Some(binder_bucket),
+        true,
         types,
     );
-    register_builtin_full(
-        scope,
-        "FN",
-        record_sig(),
-        body_record_schema,
-        None,
-        None,
-        types,
-    );
+    register_builtin_full(scope, "FN", record_sig(), body_record_schema, false, types);
 }
 
 #[cfg(test)]

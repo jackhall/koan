@@ -83,8 +83,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
         sig,
         crate::machine::core::Body::Builtin(body_identity),
         scope,
-        None,
-        None,
+        false,
         types,
     ));
     let obj = scope
@@ -489,12 +488,13 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
 /// returns a `List` holding an inner `KFunction` whose captured scope lived in `MAKE`'s now-freed
 /// call region. The closure rides a bare `&KFunction` borrow into that region; the result
 /// carrier's witness set keeps the region alive, so reading the element does not dangle. (Under
-/// Miri this is the load-bearing no-use-after-free check.)
+/// Miri this is the load-bearing no-use-after-free check.) The inner closure uses the anonymous
+/// `FN :{…}` form — a named `FN` is a binder and cannot appear in a list element.
 #[test]
 fn fast_lane_list_of_closures_escapes_outer_call() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
-    test_run.run("FN (MAKE) -> List = ([(FN (ECHO x :Number) -> Number = (x))])");
+    test_run.run("FN (MAKE) -> List = ([(FN :{x :Number} -> Number = (x))])");
     let result = test_run.run_one(parse_one("(MAKE)"));
     let items = match result {
         KObject::List(items, _) => items,
@@ -543,7 +543,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             "f".to_string(),
             producer,
             BindingIndex::BUILTIN,
-            crate::machine::BindKind::Value,
+            crate::machine::model::BindKind::Value,
         )
         .expect("install_placeholder should succeed");
 

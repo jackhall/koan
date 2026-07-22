@@ -111,6 +111,33 @@ mod tests {
         assert_eq!(bytes, b"1\n1\n");
     }
 
+    /// A spliced `LET` runs inside `EVAL`'s fresh frame and never reaches the
+    /// enclosing scope — statement position or not, nothing installs outside.
+    /// [roadmap/metaprogramming/eval-splices-in-place.md] owns the gap to the
+    /// designed splice-in-place semantics.
+    #[test]
+    fn eval_spliced_let_is_frame_local() {
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("$(#(LET x = 5))");
+        assert!(
+            test_run.scope.lookup("x").is_none(),
+            "a spliced LET must not bind in the scope enclosing the EVAL",
+        );
+    }
+
+    /// A spliced `LET` in an eager argument position runs frame-local and yields
+    /// its value — it does not hit the `NestedBinder` position check, because
+    /// `EVAL` evaluates through its own frame, not through sub-dispatch
+    /// submission. When [roadmap/metaprogramming/eval-splices-in-place.md] routes
+    /// splices through submission, this position must error like hand-written
+    /// source; this test pins the pre-splice-in-place behavior.
+    #[test]
+    fn eval_spliced_let_in_argument_position_runs_frame_local() {
+        let bytes = run_program("PRINT $(#(LET x = 5))");
+        assert_eq!(bytes, b"5\n");
+    }
+
     #[test]
     fn recursive_eval_no_uaf() {
         // Without chaining the call-site frame's Rc onto the new frame, dropping the

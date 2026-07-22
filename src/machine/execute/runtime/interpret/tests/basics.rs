@@ -67,22 +67,23 @@ fn match_unmatched_branch_skips_let_side_effect() {
     assert_eq!(captured.borrow().as_slice(), b"after\n");
 }
 
+/// A `LET` in an eagerly-evaluated argument position is a `NestedBinder` error — a binder
+/// must be a statement, a body, or nested in another binder's declaration slot.
 #[test]
-fn interprets_nested_expression() {
-    let region = run_root_storage();
-    let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run(
+fn nested_let_in_print_argument_is_a_nested_binder_error() {
+    use crate::machine::execute::interpret_with_writer;
+    use crate::machine::KErrorKind;
+    let result = interpret_with_writer(
         r#"(PRINT (LET msg = "hello world!"))"#,
-        &region,
-        captured.clone(),
+        Box::new(std::io::sink()),
     );
-    let scope = test_run.scope;
-
-    assert_eq!(captured.borrow().as_slice(), b"hello world!\n");
-    let data = scope.bindings().data();
-    assert!(
-        matches!(data.get("msg").map(|(o, _, _)| *o), Some(KObject::KString(s)) if *s == "hello world!")
-    );
+    match result {
+        Err(e) => assert!(
+            matches!(&e.kind, KErrorKind::NestedBinder { .. }),
+            "expected NestedBinder on LET in argument position, got {e}",
+        ),
+        Ok(()) => panic!("expected NestedBinder error for LET in PRINT argument"),
+    }
 }
 
 #[test]
@@ -148,7 +149,7 @@ fn let_binds_an_empty_list_literal_errors() {
 fn list_literal_with_subexpression_element_evaluates_eagerly() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run("LET xs = [1 (LET y = 7) 3]\n", &region, captured);
+    let test_run = run("LET xs = [1 (2 + 5) 3]\n", &region, captured);
     let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
@@ -160,7 +161,21 @@ fn list_literal_with_subexpression_element_evaluates_eagerly() {
         }
         _ => panic!("expected `xs` bound to a List"),
     }
-    assert!(matches!(data.get("y").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0));
+}
+
+/// A `LET` in a list-literal element is an eager value position — `NestedBinder` error.
+#[test]
+fn list_literal_let_element_is_a_nested_binder_error() {
+    use crate::machine::execute::interpret_with_writer;
+    use crate::machine::KErrorKind;
+    let result = interpret_with_writer("LET xs = [1 (LET y = 7) 3]\n", Box::new(std::io::sink()));
+    match result {
+        Err(e) => assert!(
+            matches!(&e.kind, KErrorKind::NestedBinder { .. }),
+            "expected NestedBinder on LET in list element, got {e}",
+        ),
+        Ok(()) => panic!("expected NestedBinder error for LET in list element"),
+    }
 }
 
 #[test]

@@ -168,7 +168,7 @@ mod bare_leaf_resolution {
                 "Node".into(),
                 NodeId(7),
                 BindingIndex::value(0),
-                crate::machine::BindKind::Type,
+                crate::machine::model::BindKind::Type,
             )
             .expect("placeholder install");
 
@@ -237,7 +237,7 @@ mod bare_leaf_resolution {
                 "Node".into(),
                 NodeId(11),
                 BindingIndex::value(0),
-                crate::machine::BindKind::Type,
+                crate::machine::model::BindKind::Type,
             )
             .expect("placeholder install");
 

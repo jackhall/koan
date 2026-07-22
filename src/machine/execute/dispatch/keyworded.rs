@@ -3,9 +3,7 @@
 
 use crate::machine::core::{BlockEntry, FramePlacement};
 use crate::machine::model::KExpression;
-use crate::machine::{
-    BindingIndex, DispatchOutcome, KError, KErrorKind, NameOutcome, NodeId, TraceFrame,
-};
+use crate::machine::{DispatchOutcome, KError, KErrorKind, NameOutcome, NodeId, TraceFrame};
 
 use super::super::ignore_results;
 use super::super::nodes::{ChainOp, NodeWork};
@@ -24,7 +22,6 @@ use crate::scheduler::ResolvedDeps;
 pub(super) fn initial<'step>(
     ctx: &SchedulerView<'step, '_>,
     expr: KExpression<'step>,
-    pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
 ) -> Outcome<'step> {
     let bare_outcomes = match ctx.build_bare_outcomes(&expr.parts) {
@@ -61,37 +58,20 @@ pub(super) fn initial<'step>(
             return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))));
         }
         DispatchOutcome::Deferred => {
-            debug_assert!(
-                pre_subs.is_empty(),
-                "Deferred resolve_dispatch implies no binder pick at submit time; \
-                 `pre_subs` must be empty here",
-            );
             return install_eager_only(ctx, expr);
         }
         DispatchOutcome::ParkOnProducers(producers) => {
-            return install_overload_park(ctx, producers, expr, pre_subs, idx);
+            return install_overload_park(ctx, producers, expr, idx);
         }
     };
-    let lex_index = ctx
-        .active_chain()
-        .expect("dispatching slot must have an active chain")
-        .index;
-    let bind_index = BindingIndex::value(lex_index);
-    if let Some((name, kind)) = resolved.placeholder.as_ref() {
-        if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx), bind_index, *kind) {
-            return Outcome::Done(Err(e));
-        }
-    }
-    for bucket in resolved.pending_overload_buckets.iter() {
-        if let Err(e) = scope.install_pending_overload(bucket.clone(), NodeId(idx), bind_index) {
-            return Outcome::Done(Err(e));
-        }
-    }
+    // Binder placeholders / pending-overload entries were installed at statement submission from the
+    // enclosing statement's parse-time aggregate (see `submit_expression`); nothing installs here.
+    let covered_mask = expr.binder_plan().map(|plan| plan.chain_slot_mask);
     walk_and_invoke(
         ctx,
         resolved,
         expr.parts,
-        pre_subs,
+        covered_mask,
         &bare_outcomes,
         idx,
         install_bare_name_park,
@@ -113,12 +93,19 @@ fn walk_and_invoke<'step>(
     ctx: &SchedulerView<'step, '_>,
     resolved: Resolved<'step>,
     parts: Vec<crate::source::Spanned<crate::machine::model::ExpressionPart<'step>>>,
-    pre_subs: Vec<(usize, NodeId)>,
+    covered_mask: Option<&'static [bool]>,
     bare_outcomes: &[Option<NameOutcome<'step>>],
     idx: usize,
-    park: impl FnOnce(Vec<NodeId>, KExpression<'step>, Vec<(usize, NodeId)>) -> Outcome<'step>,
+    park: impl FnOnce(Vec<NodeId>, KExpression<'step>) -> Outcome<'step>,
 ) -> Outcome<'step> {
-    let walk = match part_walk(ctx, parts, &pre_subs, bare_outcomes, &resolved.slots, idx) {
+    let walk = match part_walk(
+        ctx,
+        parts,
+        covered_mask,
+        bare_outcomes,
+        &resolved.slots,
+        idx,
+    ) {
         Ok(w) => w,
         Err(e) => return Outcome::Done(Err(e)),
     };
@@ -130,7 +117,7 @@ fn walk_and_invoke<'step>(
     let new_expr = KExpression::new(new_parts);
     if !producers_to_wait.is_empty() {
         let _ = staged_subs;
-        return park(producers_to_wait, new_expr, pre_subs);
+        return park(producers_to_wait, new_expr);
     }
     if staged_subs.is_empty() {
         return super::exec::invoke_continue(ctx, resolved.function, new_expr);
@@ -170,15 +157,18 @@ pub(super) fn finish<'step>(
         &bare_outcomes,
         ctx.types(),
     ) {
-        DispatchOutcome::Resolved(r) => walk_and_invoke(
-            ctx,
-            r,
-            working_expr.parts,
-            Vec::new(),
-            &bare_outcomes,
-            idx,
-            |producers, new_expr, _pre_subs| park_finish(producers, new_expr),
-        ),
+        DispatchOutcome::Resolved(r) => {
+            let covered_mask = working_expr.binder_plan().map(|plan| plan.chain_slot_mask);
+            walk_and_invoke(
+                ctx,
+                r,
+                working_expr.parts,
+                covered_mask,
+                &bare_outcomes,
+                idx,
+                park_finish,
+            )
+        }
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
         DispatchOutcome::Ambiguous(n) => {
@@ -194,7 +184,7 @@ pub(super) fn finish<'step>(
             })))
         }
         DispatchOutcome::ParkOnProducers(producers) => {
-            install_overload_park(ctx, producers, working_expr, Vec::new(), idx)
+            install_overload_park(ctx, producers, working_expr, idx)
         }
         DispatchOutcome::UnboundName(name) => {
             Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
@@ -245,7 +235,6 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     ctx: &SchedulerView<'step, '_>,
     producers: Vec<NodeId>,
     expr: KExpression<'step>,
-    pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
 ) -> Outcome<'step> {
     // Classify each candidate through the shared park ladder; a ready-errored producer short-circuits,
@@ -276,7 +265,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     park_resume(
         to_wait.parks().to_vec(),
         Some(carrier),
-        Box::new(move |ctx, idx| initial(ctx, expr, pre_subs, idx)),
+        Box::new(move |ctx, idx| initial(ctx, expr, idx)),
     )
 }
 
@@ -288,7 +277,9 @@ fn install_eager_only<'step>(
 ) -> Outcome<'step> {
     // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
     // bare-name slots to pre-resolve here.
-    let (new_parts, staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);
+    let covered_mask = expr.binder_plan().map(|plan| plan.chain_slot_mask);
+    let (new_parts, mut staged_subs) = super::stage_all_eager_parts(expr.parts, &[]);
+    mark_covered_subs(&mut staged_subs, covered_mask);
     debug_assert!(
         !staged_subs.is_empty(),
         "install_eager_only invoked from Deferred arm; \
@@ -299,19 +290,36 @@ fn install_eager_only<'step>(
     install_eager_subs_track(ctx, new_expr, staged_subs)
 }
 
+/// Mark every staged `Dispatch` at a covered chain-slot index as `binder_covered`, so a binder in a
+/// binder's own eager declaration slot (`LET f = (FN …)`) rides through submission rather than being
+/// rejected as an eager-position nested binder. Indices outside the mask (or all-`false` masks) leave
+/// the deps uncovered. `covered_mask` is the working expression's `binder_plan().chain_slot_mask`.
+fn mark_covered_subs(
+    staged_subs: &mut [(usize, DepRequest<'_>)],
+    covered_mask: Option<&'static [bool]>,
+) {
+    let Some(mask) = covered_mask else { return };
+    for (index, dep) in staged_subs.iter_mut() {
+        if mask.get(*index).copied().unwrap_or(false) {
+            if let DepRequest::Dispatch { binder_covered, .. } = dep {
+                *binder_covered = true;
+            }
+        }
+    }
+}
+
 /// Park on bare-name forward-reference producers. `working_expr` is partly spliced — Resolved wrap
 /// slots already substituted for `Spliced(obj)`; Parked wrap and ref-name slots keep their original
 /// bare-name token — so on wake `resume` re-runs [`initial`] against it.
 fn install_bare_name_park<'step>(
     producers: Vec<NodeId>,
     working_expr: KExpression<'step>,
-    pre_subs: Vec<(usize, NodeId)>,
 ) -> Outcome<'step> {
     let carrier = working_expr.summarize();
     park_resume(
         producers,
         Some(carrier),
-        Box::new(move |ctx, idx| initial(ctx, working_expr, pre_subs, idx)),
+        Box::new(move |ctx, idx| initial(ctx, working_expr, idx)),
     )
 }
 
@@ -358,7 +366,7 @@ fn park_walk_producer(
 fn part_walk<'step>(
     ctx: &SchedulerView<'step, '_>,
     parts: Vec<crate::source::Spanned<crate::machine::model::ExpressionPart<'step>>>,
-    pre_subs: &[(usize, NodeId)],
+    covered_mask: Option<&'static [bool]>,
     bare_outcomes: &[Option<NameOutcome<'step>>],
     slots: &crate::machine::core::ClassifiedSlots,
     idx: usize,
@@ -374,11 +382,6 @@ fn part_walk<'step>(
     let mut staged_subs: Vec<(usize, DepRequest<'step>)> = Vec::new();
     for (i, part) in parts.into_iter().enumerate() {
         let span = part.span;
-        if let Some(&(_, sub_id)) = pre_subs.iter().find(|(j, _)| *j == i) {
-            staged_subs.push((i, DepRequest::Existing(sub_id)));
-            new_parts.push(staged_slot_placeholder());
-            continue;
-        }
         if wrap_set.contains(&i) {
             if !matches!(
                 &part.value,
@@ -432,7 +435,15 @@ fn part_walk<'step>(
         let in_eager_filter = eager_filter.is_none_or(|idxs| idxs.contains(&i));
         if in_eager_filter {
             match stage_eager_part(part.value) {
-                Ok(dep) => {
+                Ok(mut dep) => {
+                    // A binder's own eager chain slot (this expr's `binder_plan().chain_slot_mask`) is
+                    // covered: the enclosing statement already installed its aggregate, so the nested
+                    // binder rides through submission instead of being rejected as an eager position.
+                    if covered_mask.is_some_and(|m| m.get(i).copied().unwrap_or(false)) {
+                        if let DepRequest::Dispatch { binder_covered, .. } = &mut dep {
+                            *binder_covered = true;
+                        }
+                    }
                     staged_subs.push((i, dep));
                     new_parts.push(staged_slot_placeholder());
                     continue;

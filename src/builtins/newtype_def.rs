@@ -302,35 +302,16 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         )
     };
     use crate::builtins::register_builtin_full;
-    let binder: crate::machine::BinderNameFn = super::type_part_binder_name;
-    let binder_kind = crate::machine::BindKind::Type;
     // Scalar / bare-leaf repr (`= Number`, `= Foo`) and non-record sigil repr (`= :(LIST OF T)`)
     // share `body`; the record repr (`= :{…}`) routes to `body_record_repr`.
-    register_builtin_full(
-        scope,
-        "NEWTYPE",
-        scalar_sig(),
-        body,
-        Some((binder, binder_kind)),
-        None,
-        types,
-    );
-    register_builtin_full(
-        scope,
-        "NEWTYPE",
-        sigil_sig(),
-        body,
-        Some((binder, binder_kind)),
-        None,
-        types,
-    );
+    register_builtin_full(scope, "NEWTYPE", scalar_sig(), body, true, types);
+    register_builtin_full(scope, "NEWTYPE", sigil_sig(), body, true, types);
     register_builtin_full(
         scope,
         "NEWTYPE",
         record_sig(),
         body_record_repr,
-        Some((binder, binder_kind)),
-        None,
+        true,
         types,
     );
     // Constructor-family declarator `NEWTYPE (Type AS Wrapper)`. Its keyword set is `{NEWTYPE}`
@@ -346,11 +327,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         "NEWTYPE",
         constructor_family_sig,
         body_constructor_family,
-        Some((
-            crate::builtins::type_decl::binder_name,
-            crate::machine::BindKind::Type,
-        )),
-        None,
+        true,
         types,
     );
 }

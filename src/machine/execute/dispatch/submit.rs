@@ -1,155 +1,107 @@
 //! Dispatch-layer submission: the one entry point that turns a `KExpression` into a submitted
-//! dispatch slot. It owns the AST-shaped work the scheduler must not — binder-install (which
-//! name/overload a binder-shaped call declares), the recursive pre-submission of eager argument
-//! slots, and the submission-time placeholder install that makes forward references park. The
-//! scheduler exposes only [`Scheduler::alloc_node`] (a generic slot allocator) and the
-//! `Scope::install_*` primitives; this function orchestrates them.
+//! dispatch slot. Binder discovery is parse-static — every node caches the set of binders its subtree
+//! installs into the enclosing scope ([`KExpression::binder_installs`], per the position rule) — so
+//! submission does no AST recursion. It allocates the slot via [`Scheduler::alloc_node`] and, for a
+//! statement submission, stamps each cached binder's placeholder / pending-overload entry on the scope
+//! before the slot is ever popped, so a later sibling parks rather than surfacing `UnboundName` /
+//! `DispatchFailed`.
 //!
-//! Binders can appear as arbitrary nested subexpressions, so this runs on *every* dispatch
-//! submission, not just block statements. See
-//! [design/execution/README.md § Submission-time binder install and recursive
-//! sub-Dispatch](../../../../design/execution/name-placeholders.md#submission-time-binder-install-and-recursive-sub-dispatch).
+//! A submission carries a [`SubmitContext`]: a `Statement` position installs the aggregate; a
+//! `SubDispatch` that is not binder-covered rejects a nested binder with
+//! [`KErrorKind::NestedBinder`](crate::machine::KErrorKind::NestedBinder) (a binder must be a
+//! statement, a body, or nested in another binder's own declaration slot — see
+//! [design/execution/name-placeholders.md](../../../../design/execution/name-placeholders.md)).
 
 use crate::machine::model::BinderKey;
-use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{KType, SignatureElement};
-use crate::machine::{BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope};
+use crate::machine::model::KExpression;
+use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope};
 
 use super::super::nodes::{NodeScope, SlotFrame};
 use super::super::runtime::KoanRuntime;
 
-/// Submission-time binder-install info — see the module docs for the per-bucket eager-slot mask
-/// rules.
-struct BinderInstall {
-    key: BinderKey,
-    eager_slot_mask: Vec<bool>,
-}
-
-/// Find the binder overload (if any) the dispatching scope's chain declares for `expr`, and the
-/// eager-slot mask its bucket admits. Pure dispatch semantics: it reads only the function table
-/// and signatures, never scheduler state.
-fn extract_binder_install<'ast, 'step>(
-    expr: &KExpression<'ast>,
-    scope: &'step Scope<'step>,
-) -> Option<BinderInstall> {
-    let key = expr.untyped_key();
-    // Visibility-unfiltered lookup: this runs before the dispatch's chain is
-    // assembled, so `chain_cutoff = None`.
-    for s in scope.ancestors() {
-        let FunctionLookup { overloads, .. } = s.bindings().lookup_function(&key, None);
-        if overloads.is_empty() {
-            continue;
-        }
-        let bucket_fns = overloads;
-        let picked: Option<(&KFunction<'step>, BinderKey)> = bucket_fns.iter().find_map(|f| {
-            if let Some((name, kind)) = f
-                .binder_name
-                .and_then(|(extractor, kind)| extractor(expr).map(|name| (name, kind)))
-            {
-                Some((*f, BinderKey::Name(name, kind)))
-            } else {
-                f.binder_bucket
-                    .and_then(|extractor| extractor(expr))
-                    .map(|buckets| (*f, BinderKey::Bucket(buckets)))
-            }
-        });
-        let Some((picked_fn, install_key)) = picked else {
-            continue;
-        };
-        // Eager mask: AND across every binder overload in the bucket — a
-        // "binder overload" being any function declaring `binder_name` OR
-        // `binder_bucket`.
-        let mut mask: Vec<bool> = picked_fn
-            .signature
-            .elements
-            .iter()
-            .map(|el| match el {
-                SignatureElement::Argument(arg) => arg.ktype != KType::KEXPRESSION,
-                SignatureElement::Keyword(_) => false,
-            })
-            .collect();
-        for other in bucket_fns.iter() {
-            if other.binder_name.is_none() && other.binder_bucket.is_none() {
-                continue;
-            }
-            for (i, el) in other.signature.elements.iter().enumerate() {
-                if i >= mask.len() {
-                    break;
-                }
-                if let SignatureElement::Argument(arg) = el {
-                    if arg.ktype == KType::KEXPRESSION {
-                        mask[i] = false;
-                    }
-                }
-            }
-        }
-        return Some(BinderInstall {
-            key: install_key,
-            eager_slot_mask: mask,
-        });
-    }
-    None
+/// Where a [`KoanRuntime::submit_expression`] lands, deciding how its cached binder aggregate is
+/// treated.
+#[derive(Clone, Copy)]
+pub(in crate::machine::execute) enum SubmitContext {
+    /// A statement position (top level, a block/body statement, or a fresh single-statement block):
+    /// the expression's cached binder aggregate installs on the scope at the freshly allocated node.
+    Statement,
+    /// An eagerly-evaluated sub-dispatch (dep realization). A nested binder here is a slot-terminal
+    /// [`KErrorKind::NestedBinder`] unless `binder_covered` — the dep staged a binder pick's own
+    /// declaration slot, whose aggregate the enclosing statement already installed.
+    SubDispatch { binder_covered: bool },
 }
 
 impl<'run> KoanRuntime<'run> {
     /// Submit `expr` as a dispatch slot against `scope` (with handle `node_scope` and
-    /// `explicit_chain`, resolved by the calling submission wrapper). Computes binder-install,
-    /// pre-submits the eager argument slots as sub-dispatches (so a nested binder's placeholder
-    /// installs at the same outermost step), allocates the slot via [`Scheduler::alloc_node`], then
-    /// stamps the binder's placeholder on the scope — before the slot is ever popped, so a later
-    /// sibling parks rather than surfacing `UnboundName` / `DispatchFailed`.
+    /// `explicit_chain`, resolved by the calling submission wrapper). For a [`SubmitContext::Statement`]
+    /// submission, installs the parse-time binder aggregate ([`KExpression::binder_installs`]) on the
+    /// scope with this slot's freshly allocated node id — before the slot is ever popped, so a later
+    /// sibling parks rather than failing. A [`SubmitContext::SubDispatch`] that is not binder-covered
+    /// pre-errors the node when the aggregate is non-empty (an eager-position nested binder).
     pub(in crate::machine::execute) fn submit_expression<'ast, 'step>(
         &mut self,
         expr: KExpression<'ast>,
         scope: &'step Scope<'step>,
         node_scope: NodeScope,
         explicit_chain: Option<std::rc::Rc<LexicalFrame>>,
+        ctx: SubmitContext,
     ) -> NodeId {
-        // Resolve the chain once so the recursive pre-subs inherit the parent's lexical chain (and
-        // therefore its visibility index); pass it back to `alloc_node` explicitly so it does not
-        // re-derive a detached one.
         let chain = explicit_chain
         .or_else(|| self.active_payload().map(|p| p.chain.clone()))
         .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
-        let install = extract_binder_install(&expr, scope);
-        let pre_subs: Vec<(usize, NodeId)> = match &install {
-            Some(install) => {
-                let mut subs = Vec::new();
-                for (i, part) in expr.parts.iter().enumerate() {
-                    if !install.eager_slot_mask.get(i).copied().unwrap_or(false) {
-                        continue;
-                    }
-                    let ExpressionPart::Expression(boxed) = &part.value else {
-                        continue;
-                    };
-                    let sub_expr = (**boxed).clone();
-                    let sub_id =
-                        self.submit_expression(sub_expr, scope, node_scope, Some(chain.clone()));
-                    subs.push((i, sub_id));
-                }
-                subs
+
+        // Eager-position nested binder: pre-error the slot. Slot-terminal (TRY-catchable), propagates
+        // through the dep like any failed dep. Every binder form is rejected here — name-installing
+        // declarations (LET, TYPE, MODULE, SIG, UNION, NEWTYPE, GROUP, RECURSIVE TYPES) and named
+        // `FN` / `OP` definitions alike: an eager sub-dispatch cannot install into the enclosing scope
+        // soundly, and a definition whose registration silently vanished would be worse than an error.
+        // Value positions take the anonymous form (`FN :{…} -> T = (…)`, which installs nothing) or a
+        // name bound through a legal binder chain (`LET f = (FN …)`).
+        if matches!(
+            ctx,
+            SubmitContext::SubDispatch {
+                binder_covered: false
             }
-            None => Vec::new(),
+        ) && !expr.binder_installs().is_empty()
+        {
+            let carrier = expr.summarize();
+            let error = KError::new(KErrorKind::NestedBinder {
+                expr: carrier.clone(),
+            });
+            let (cart, framed) = self.submission_cart();
+            let anchor = SlotFrame::new(cart, node_scope, chain);
+            return self
+                .sched
+                .alloc_node(super::decide_error(error, carrier), anchor, framed);
+        }
+
+        // Read the aggregate before `expr` moves into the node work; only a statement installs.
+        let installs: Vec<BinderKey> = match ctx {
+            SubmitContext::Statement => expr.binder_installs().to_vec(),
+            SubmitContext::SubDispatch { .. } => Vec::new(),
         };
+
         let (cart, framed) = self.submission_cart();
         let anchor = SlotFrame::new(cart, node_scope, chain.clone());
-        let id = self.sched.alloc_node(
-            super::decide_with_presubs(expr, pre_subs, None),
-            anchor,
-            framed,
-        );
-        if let Some(install) = install {
-            // Stamp the placeholder at the binder's lexical position — the SAME `BindingIndex` the
-            // eventual `register_*` call at finalize installs. Installs are best-effort: lenient when
-            // `data[name]` is already a KFunction or the same slot re-installs.
+        let id = self
+            .sched
+            .alloc_node(super::decide_tail(expr, None), anchor, framed);
+
+        // Stamp each cached binder's placeholder at the enclosing statement's lexical position — the
+        // SAME `BindingIndex` the eventual `register_*` call at finalize installs. Installs are
+        // best-effort: lenient when `data[name]` is already a KFunction or the same slot re-installs.
+        if !installs.is_empty() {
             let bind_index = BindingIndex::value(chain.index);
-            match install.key {
-                BinderKey::Name(name, kind) => {
-                    let _ = scope.install_placeholder(name, id, bind_index, kind);
-                }
-                BinderKey::Bucket(buckets) => {
-                    for bucket in buckets {
-                        let _ = scope.install_pending_overload(bucket, id, bind_index);
+            for key in installs {
+                match key {
+                    BinderKey::Name(name, kind) => {
+                        let _ = scope.install_placeholder(name, id, bind_index, kind);
+                    }
+                    BinderKey::Bucket(buckets) => {
+                        for bucket in buckets {
+                            let _ = scope.install_pending_overload(bucket, id, bind_index);
+                        }
                     }
                 }
             }

@@ -164,15 +164,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("body", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin_full(
-        scope,
-        "RECURSIVE TYPES",
-        signature,
-        body,
-        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
-        None,
-        types,
-    );
+    crate::builtins::register_builtin_full(scope, "RECURSIVE TYPES", signature, body, true, types);
 }
 
 #[cfg(test)]

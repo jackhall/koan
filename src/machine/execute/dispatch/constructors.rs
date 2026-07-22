@@ -265,6 +265,7 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind) -> Out
         .map(|part| DepRequest::Dispatch {
             expr: KExpression::new(vec![Spanned::bare(part)]),
             placement: DepPlacement::OwnScope,
+            binder_covered: false,
         })
         .collect();
     let combine_finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {

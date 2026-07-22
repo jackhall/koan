@@ -136,8 +136,7 @@ fn register_function_dedupes_exact_signature() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj1 = region
@@ -151,8 +150,7 @@ fn register_function_dedupes_exact_signature() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj2 = region
@@ -180,8 +178,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj1 = region
@@ -195,8 +192,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj2 = region
@@ -229,8 +225,7 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj1 = region
@@ -288,16 +283,14 @@ fn register_function_allows_overload_with_different_arg_types() {
         sig_num,
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let f2 = region.brand().alloc_function(KFunction::new(
         sig_str,
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj1 = region
@@ -336,8 +329,7 @@ fn register_function_coexists_with_same_name_value() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj = region
@@ -372,8 +364,7 @@ fn register_function_coexists_with_same_name_type() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
-        None,
-        None,
+        false,
         &types,
     ));
     let obj = region
@@ -432,7 +423,7 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
             "x".to_string(),
             NodeId(7),
             BindingIndex::BUILTIN,
-            crate::machine::BindKind::Value,
+            crate::machine::model::BindKind::Value,
         )
         .unwrap();
     match scope.resolve("x") {
@@ -460,7 +451,7 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
             "x".to_string(),
             NodeId(3),
             BindingIndex::BUILTIN,
-            crate::machine::BindKind::Value,
+            crate::machine::model::BindKind::Value,
         )
         .unwrap();
     match inner.resolve("x") {
@@ -485,7 +476,7 @@ fn bind_value_clears_own_placeholder() {
             "x".to_string(),
             NodeId(2),
             BindingIndex::BUILTIN,
-            crate::machine::BindKind::Value,
+            crate::machine::model::BindKind::Value,
         )
         .unwrap();
     let v = region.brand().alloc_object(KObject::Number(42.0));
@@ -607,7 +598,7 @@ fn visibility_placeholder_filtered_same_as_value() {
             "ph".to_string(),
             NodeId(2),
             BindingIndex::value(5),
-            crate::machine::BindKind::Value,
+            crate::machine::model::BindKind::Value,
         )
         .unwrap();
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);

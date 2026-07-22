@@ -60,19 +60,21 @@ error: unbound name 'mystery'
 An expression is a sequence of *parts*: keywords, names, literals, and nested
 sub-expressions. Parentheses group a run of parts into a nested expression
 that runs on its own, with its result handed back to the enclosing
-expression. So the inner `LET` here runs first, and its value becomes what
+expression. So the inner addition here runs first, and its sum becomes what
 `PRINT` receives:
 
 ```koan
-PRINT (LET greeting = "hi")
+PRINT (1 + 2)
 ```
 
 ```text
-hi
+3
 ```
 
-That program also leaves `greeting` bound for later lines, because the binding
-happened in the surrounding scope.
+Declarations are the exception: a form that binds a name, like `LET`, stands
+as its own line rather than riding inside another expression's arguments —
+[chapter 3](03-names-and-dispatch.md) covers exactly where declarations may
+appear.
 
 ### Indentation is grouping
 
@@ -80,15 +82,15 @@ Two-space indentation under a line means the same thing as wrapping the
 indented part in parentheses. These two programs are identical:
 
 ```koan
-PRINT (LET greeting = "hi")
+PRINT (1 + 2)
 ```
 
 ```koan
 PRINT
-  LET greeting = "hi"
+  1 + 2
 ```
 
-Both print `hi`. The indentation rules are strict and small:
+Both print `3`. The indentation rules are strict and small:
 
 - Indent in multiples of two spaces. Odd indentation is rejected.
 - Tabs are not allowed.

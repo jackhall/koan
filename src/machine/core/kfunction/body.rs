@@ -133,8 +133,6 @@ pub(crate) fn body_statement_refs<'ast, 'a>(
     }
 }
 
-pub use crate::machine::model::{BinderBucketFn, BinderNameFn};
-
 /// Enum (not `Box<dyn Fn>`) so `UserDefined` stays introspectable — TCO and
 /// error-frame attribution walk into the captured expression.
 pub enum Body<'a> {

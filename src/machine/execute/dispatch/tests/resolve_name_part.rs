@@ -77,7 +77,7 @@ fn resolve_name_part_parked() {
             "fwd".to_string(),
             producer,
             BindingIndex::BUILTIN,
-            crate::machine::BindKind::Value,
+            crate::machine::model::BindKind::Value,
         )
         .unwrap();
     let part = ExpressionPart::Identifier("fwd".to_string());

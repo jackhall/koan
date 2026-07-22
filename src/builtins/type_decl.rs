@@ -137,38 +137,17 @@ pub(crate) fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(Vec<String>, Stri
     Ok((param_names, member_name))
 }
 
-/// The placeholder extractor covering both `TYPE` overloads lives in
-/// [`crate::machine::model::binder`]; re-exported here so the registration sites (and
-/// `newtype_def`'s constructor-family overload) keep their existing paths.
-pub(crate) use crate::machine::model::binder::type_decl_binder_name as binder_name;
-
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let bare_signature = sig(
         KType::ANY,
         vec![kw("TYPE"), arg("name", KType::of_kind(KKind::ProperType))],
     );
-    crate::builtins::register_builtin_full(
-        scope,
-        "TYPE",
-        bare_signature,
-        body_bare,
-        Some((binder_name, crate::machine::BindKind::Type)),
-        None,
-        types,
-    );
+    crate::builtins::register_builtin_full(scope, "TYPE", bare_signature, body_bare, true, types);
     let hk_signature = sig(
         KType::ANY,
         vec![kw("TYPE"), arg("decl", KType::KEXPRESSION)],
     );
-    crate::builtins::register_builtin_full(
-        scope,
-        "TYPE",
-        hk_signature,
-        body_hk,
-        Some((binder_name, crate::machine::BindKind::Type)),
-        None,
-        types,
-    );
+    crate::builtins::register_builtin_full(scope, "TYPE", hk_signature, body_hk, true, types);
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
-use crate::machine::core::{BindKind, KError, KErrorKind, Scope};
+use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, Record, SignatureElement};
 use crate::machine::model::{Held, NamedPairs};
@@ -20,7 +20,7 @@ pub mod pick;
 
 pub use crate::scheduler::NodeId;
 pub use action::ActionFn;
-pub use body::{BinderBucketFn, BinderNameFn, Body};
+pub use body::Body;
 pub use pick::ClassifiedSlots;
 
 /// SAFETY: the captured scope is allocated in a `KoanRegion` that outlives this
@@ -40,19 +40,16 @@ pub struct KFunction<'a> {
     /// **Variance-load-bearing.** `&'a Scope<'a>` is invariant in `'a` (`Scope<'a>` holds `RefCell`s),
     /// so `captured` keeps `KFunction<'a>` invariant in `'a`.
     captured: &'a Scope<'a>,
-    /// `Some((extractor, kind))` for name-binding declarators (LET, VAL, UNION, SIG,
-    /// MODULE, NEWTYPE, RECURSIVE). `extractor` pulls the bound name out of the binder
-    /// expression; `kind` records whether the binding lands in the value or the type
-    /// language, so the forward-reference placeholder the dispatch driver installs is
-    /// tagged and a value bind never satisfies a type placeholder (or the reverse). `FN`
-    /// carries `binder_bucket` instead and installs no name placeholder.
-    pub binder_name: Option<(BinderNameFn, BindKind)>,
-    /// `Some(_)` for binder builtins whose body registers a callable function (`FN`).
-    /// Returns the *inner-call* bucket key (e.g. `(MAKESET _)`) so the
-    /// dispatch driver installs an entry in `bindings.pending_overloads` and a
-    /// sibling bare-arg call form like `(MAKESET int_ord)` parks on the binder slot
-    /// instead of surfacing `DispatchFailed` before finalize.
-    pub binder_bucket: Option<BinderBucketFn>,
+    /// True for binder-introducing builtins (LET, VAL, FN, OP, TYPE, MODULE, SIG, UNION, NEWTYPE,
+    /// GROUP, RECURSIVE TYPES). The structural detail of *what* a binder declares — the name or the
+    /// inner-call bucket key it installs, and which of its slots carry nested binders forward — lives
+    /// once in [`crate::machine::model::binder`] (the [`BINDER_SPECS`](crate::machine::model::binder::BINDER_SPECS)
+    /// table), keyed by untyped signature shape. This flag is only the classification bit dispatch
+    /// reads (a binder's literal-name slots are declarations, not references, so they must not
+    /// replay-park on their own placeholder); the spec⟺registration consistency test pins the flag
+    /// against the table. User `FN` construction and user `OP` registration are not binder builtins,
+    /// so they carry `false`.
+    pub binder: bool,
     /// The function *value*'s own type: the `(params) -> ret` handle interned once, here at
     /// definition, from the normalized signature. `KObject::KFunction(f).ktype()` copies it, so
     /// the value layer never rebuilds a parameter record per dispatch check (ruling 4).
@@ -64,8 +61,7 @@ impl<'a> KFunction<'a> {
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,
-        binder_name: Option<(BinderNameFn, BindKind)>,
-        binder_bucket: Option<BinderBucketFn>,
+        binder: bool,
         types: &TypeRegistry,
     ) -> Self {
         signature.normalize();
@@ -74,8 +70,7 @@ impl<'a> KFunction<'a> {
             signature,
             body,
             captured,
-            binder_name,
-            binder_bucket,
+            binder,
             value_ktype,
         }
     }

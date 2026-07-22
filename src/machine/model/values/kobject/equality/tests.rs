@@ -419,8 +419,7 @@ fn a_function<'a>(
         sig,
         Body::UserDefined(KExpression::new(Vec::new())),
         scope,
-        None,
-        None,
+        false,
         types,
     ));
     KObject::KFunction(f)

@@ -74,6 +74,8 @@ fn park_on_head<'step>(
     Await::on(Deps::from_owned([DepRequest::Dispatch {
         expr: head,
         placement: DepPlacement::OwnScope,
+        // A deferred head is an eager position: a binder head is a slot-terminal NestedBinder.
+        binder_covered: false,
     }]))
     .finish_terminal(finish)
 }

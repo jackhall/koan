@@ -76,7 +76,6 @@ enum OpKind {
 // re-imported here for the registration sites and re-exported for `GROUP`, which reads its member
 // operators the same way.
 
-use crate::machine::model::binder::op_def_binder_bucket as binder_bucket;
 pub(super) use crate::machine::model::symbol_from_parts;
 use crate::machine::model::symbol_from_quote_body;
 
@@ -484,7 +483,7 @@ fn register_body<'a>(
 ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
     let f: &'a KFunction<'a> = scope
         .brand()
-        .alloc_function(KFunction::new(signature, body, scope, None, None, types));
+        .alloc_function(KFunction::new(signature, body, scope, false, types));
     let (obj, stored) = scope
         .alloc_object_checked_stored(KObject::KFunction(f), types)
         .expect("f was just allocated into scope's own region");
@@ -615,22 +614,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     };
 
     for operand in type_carriers() {
-        register_builtin_full(
-            scope,
-            "OP",
-            binary(operand),
-            body_binary,
-            None,
-            Some(binder_bucket),
-            types,
-        );
+        register_builtin_full(scope, "OP", binary(operand), body_binary, true, types);
         register_builtin_full(
             scope,
             "OP",
             unary_missing_result(operand),
             body_unary_missing_result,
-            None,
-            None,
+            false,
             types,
         );
         for result in type_carriers() {
@@ -639,19 +629,10 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
                 "OP",
                 binary_with_result(operand, result),
                 body_binary,
-                None,
-                Some(binder_bucket),
+                true,
                 types,
             );
-            register_builtin_full(
-                scope,
-                "OP",
-                unary(operand, result),
-                body_unary,
-                None,
-                Some(binder_bucket),
-                types,
-            );
+            register_builtin_full(scope, "OP", unary(operand, result), body_unary, true, types);
         }
     }
 }

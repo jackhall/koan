@@ -123,7 +123,7 @@ impl<'a> KFunction<'a> {
         let eager_indices = self.lazy_eager_indices(expr, types);
         let mut wrap_indices: Vec<usize> = Vec::new();
         let mut ref_name_indices: Vec<usize> = Vec::new();
-        let picked_has_binder_name = self.binder_name.is_some();
+        let picked_has_binder_name = self.binder;
         for (i, (el, part)) in self
             .signature
             .elements

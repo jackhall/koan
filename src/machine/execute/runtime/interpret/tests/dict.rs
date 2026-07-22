@@ -143,7 +143,7 @@ fn bare_identifier_key_is_looked_up() {
 fn sub_expression_as_value_evaluates_eagerly() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run(r#"LET d = {"a": (LET y = 7)}"#, &region, captured);
+    let test_run = run(r#"LET d = {"a": (2 + 5)}"#, &region, captured);
     let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
@@ -154,7 +154,21 @@ fn sub_expression_as_value_evaluates_eagerly() {
         }
         _ => panic!("expected `d` bound to a Dict"),
     }
-    assert!(matches!(data.get("y").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0));
+}
+
+/// A `LET` in a dict-literal value is an eager value position — `NestedBinder` error.
+#[test]
+fn dict_value_let_is_a_nested_binder_error() {
+    use crate::machine::execute::interpret_with_writer;
+    use crate::machine::KErrorKind;
+    let result = interpret_with_writer(r#"LET d = {"a": (LET y = 7)}"#, Box::new(std::io::sink()));
+    match result {
+        Err(e) => assert!(
+            matches!(&e.kind, KErrorKind::NestedBinder { .. }),
+            "expected NestedBinder on LET in dict value, got {e}",
+        ),
+        Ok(()) => panic!("expected NestedBinder error for LET in dict value"),
+    }
 }
 
 #[test]

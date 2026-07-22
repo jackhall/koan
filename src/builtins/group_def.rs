@@ -211,15 +211,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         )
     };
 
-    // The group's module value binds value-side, so the submit-time placeholder a forward reference
-    // parks on is tagged `Value` — the same hook MODULE installs.
-    let value_binder = || {
-        Some((
-            super::identifier_part_binder_name as crate::machine::BinderNameFn,
-            crate::machine::BindKind::Value,
-        ))
-    };
-
     for (direction, fold_body, pairwise_body) in [
         (
             "LEFT",
@@ -228,13 +219,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         ),
         ("RIGHT", body_fold_right, body_pairwise_right),
     ] {
+        // The identifier-named overloads bind a group module value-side (like MODULE); the
+        // type-named overloads carry no binder.
         register_builtin_full(
             scope,
             "GROUP",
             fold(KType::IDENTIFIER, direction),
             fold_body,
-            value_binder(),
-            None,
+            true,
             types,
         );
         register_builtin_full(
@@ -242,8 +234,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             "GROUP",
             pairwise(KType::IDENTIFIER, direction),
             pairwise_body,
-            value_binder(),
-            None,
+            true,
             types,
         );
         register_builtin_full(
@@ -251,8 +242,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             "GROUP",
             fold(KType::of_kind(KKind::ProperType), direction),
             super::module_def::body_type_named,
-            None,
-            None,
+            false,
             types,
         );
         register_builtin_full(
@@ -260,8 +250,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             "GROUP",
             pairwise(KType::of_kind(KKind::ProperType), direction),
             super::module_def::body_type_named,
-            None,
-            None,
+            false,
             types,
         );
     }

@@ -320,7 +320,6 @@ digraph {
     "koan::builtins::fn_def::return_type" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::fn_def::signature" -> "koan::machine::model::binder" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::source" [label="uses", style="dashed"];
     "koan::builtins::group_def" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::group_def" -> "koan::builtins::op_def" [label="uses", style="dashed"];
@@ -358,7 +357,6 @@ digraph {
     "koan::builtins::op_def" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::op_def" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::op_def" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::op_def" -> "koan::machine::model::binder" [label="uses", style="dashed"];
     "koan::builtins::op_def" -> "koan::source" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::builtins::test_support" [label="uses", style="dashed"];
@@ -402,7 +400,6 @@ digraph {
     "koan::builtins::type_decl" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::type_decl" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::type_decl" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::type_decl" -> "koan::machine::model::binder" [label="uses", style="dashed"];
     "koan::builtins::type_decl" -> "koan::parse" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::machine" [label="uses", style="dashed"];

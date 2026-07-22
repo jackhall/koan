@@ -202,6 +202,7 @@ fn apply_named_type_args<'step>(
         .map(|part| DepRequest::Dispatch {
             expr: KExpression::new(vec![Spanned::bare(part)]),
             placement: DepPlacement::OwnScope,
+            binder_covered: false,
         })
         .collect();
     let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {

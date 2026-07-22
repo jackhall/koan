@@ -170,12 +170,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("ty", KType::of_kind(KKind::ProperType)),
         ],
     );
-    crate::builtins::register_builtin_full(
-        scope, "VAL", signature, body,
-        // VAL installs no dispatch-time placeholder: it records into the decl scope's slot
-        // collector, not into a binding map any name lookup or forward-reference walk can see.
-        None, None, types,
-    );
+    // VAL installs nothing: it records into the decl scope's slot collector, not into a binding map
+    // any name lookup or forward-reference walk can see. Its `BINDER_SPECS` entry has empty
+    // extractors, so `binder` is `false` — the flag drives dispatch's declaration-vs-reference
+    // classification, and VAL declares no callable name to replay-park on.
+    crate::builtins::register_builtin_full(scope, "VAL", signature, body, false, types);
 }
 
 #[cfg(test)]

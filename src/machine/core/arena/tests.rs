@@ -685,8 +685,7 @@ fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
             ))
         }),
         captured,
-        None,
-        None,
+        false,
         &types,
     )
 }

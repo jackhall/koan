@@ -39,6 +39,14 @@ pub enum KErrorKind {
         expr: String,
         reason: String,
     },
+    /// A binder-introducing form (LET, FN, OP, TYPE, …) appeared in an eagerly evaluated
+    /// sub-expression — a user-call or builtin argument, an operator operand, a literal element, or a
+    /// deferred head — where a parse-time install aggregate cannot be sound. Slot-terminal and
+    /// TRY-catchable, like [`DispatchFailed`](KErrorKind::DispatchFailed). `expr` is the offending
+    /// sub-expression's rendered form.
+    NestedBinder {
+        expr: String,
+    },
     /// A builtin's structural assumption about an argument's shape didn't hold.
     ShapeError(String),
     ParseError {
@@ -271,6 +279,10 @@ impl KErrorKind {
                     ("reason".to_string(), KObject::KString(reason.clone())),
                 ],
             ),
+            KErrorKind::NestedBinder { expr } => (
+                "NestedBinder".to_string(),
+                vec![("expr".to_string(), KObject::KString(expr.clone()))],
+            ),
             KErrorKind::ShapeError(msg) => (
                 "ShapeError".to_string(),
                 vec![("message".to_string(), KObject::KString(msg.clone()))],
@@ -382,6 +394,11 @@ impl fmt::Display for KErrorKind {
             KErrorKind::DispatchFailed { expr, reason } => {
                 write!(f, "dispatch failed for {expr}: {reason}")
             }
+            KErrorKind::NestedBinder { expr } => write!(
+                f,
+                "binder declaration in an eagerly evaluated sub-expression `{expr}`; a binder must \
+                 be a statement, a body, or nested in another binder's declaration slot"
+            ),
             KErrorKind::ShapeError(reason) => write!(f, "shape error: {reason}"),
             KErrorKind::ParseError {
                 message,

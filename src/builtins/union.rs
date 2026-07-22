@@ -116,15 +116,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("schema", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin_full(
-        scope,
-        "UNION",
-        signature,
-        body,
-        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
-        None,
-        types,
-    );
+    crate::builtins::register_builtin_full(scope, "UNION", signature, body, true, types);
 }
 
 #[cfg(test)]
