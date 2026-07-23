@@ -1,7 +1,7 @@
 # Region-store list values
 
 Follows the door and pin pattern the record substrate established
-([src/machine/model/values/record_substrate.rs](../../src/machine/model/values/record_substrate.rs)); terms of art are defined in
+([src/machine/model/values/container_substrate.rs](../../src/machine/model/values/container_substrate.rs)); terms of art are defined in
 [design/value-substrates.md § Vocabulary](../../design/value-substrates.md#vocabulary).
 
 **Problem.** A list value's element substrate rides the heap as an `Rc`:

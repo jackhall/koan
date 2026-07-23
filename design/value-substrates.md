@@ -65,11 +65,17 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   arena `&'a str`, and `KExpression`'s part vectors are arena slices
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
 
-Each cell-bearing substrate (`*Substrate` above) is a **wrapper struct**: the
-stored cells beside the substrate memos of
-[§ Construction](#construction-witnessed-doors-only) — the copy cost and the
-contains-borrows bit ride the substrate; the type handle rides the value
-carrier.
+Each cell-bearing substrate is one payload-generic **wrapper struct**,
+[`ContainerSubstrate<C>`](../src/machine/model/values/container_substrate.rs):
+the stored cells (`C`) beside a single `SubstrateMemos` value bundling the
+substrate memos of [§ Construction](#construction-witnessed-doors-only) — the
+copy cost, the contains-borrows bit, and the borrows-home bit ride the
+substrate; the type handle rides the value carrier. The per-container names
+above are aliases of that one wrapper: `RecordSubstrate` is
+`ContainerSubstrate<Record<Held>>`, and each later conversion instantiates the
+same wrapper over its own payload (`ContainerSubstrate<Vec<Held>>` for a list,
+a frozen map for a dict) rather than re-deriving a parallel struct and memo
+trio.
 
 Three consequences define the regime:
 

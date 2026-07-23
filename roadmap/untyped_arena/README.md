@@ -13,9 +13,10 @@ Read the design doc first: it pins the whole model and its
 [§ Vocabulary](../../design/value-substrates.md#vocabulary) defines the terms
 every item here uses (region, substrate, door, brand, witness, reach, pin,
 seam, Drop-free). The items form one conversion slate whose `Requires` chain
-encodes the order; the record substrate
-([src/machine/model/values/record_substrate.rs](../../src/machine/model/values/record_substrate.rs))
-is the shipped pathfinder — the door and pin pattern realized there is the
+encodes the order; the record substrate — the `RecordSubstrate` instantiation
+of the payload-generic `ContainerSubstrate<C>`
+([src/machine/model/values/container_substrate.rs](../../src/machine/model/values/container_substrate.rs))
+— is the shipped pathfinder — the door and pin pattern realized there is the
 pattern every later conversion copies.
 
 ## Next items

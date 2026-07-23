@@ -124,12 +124,12 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 - `with_scope_relocates_seed_value_into_brand`
 
 **Record substrate door — construction, O(1) ownership, fold-shared retype** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
-— `FoldingBrand::alloc_record_folded` (the sole `RecordSubstrate` mint, routed through by
+— `FoldingBrand::alloc_substrate_folded` (the sole `RecordSubstrate` mint, routed through by
 `KObject::record_of_held`) stores the substrate into its own brand's region exactly like
 `alloc_object_folded`, so it carries no `unsafe` of its own beyond the `reattachable!`-generated
 layout-invariance audit in `witnessed.rs`. One test pins the store landing in the brand's own
-region, a hit for both the bare `KoanRegionExt::owns_record` address query and
-`Residence::owns_record`'s dest-only case. A second pins `alloc_carried_with`'s fold-brand
+region, a hit for both the bare `KoanRegionExt::owns_substrate` address query and
+`Residence::owns_substrate`'s dest-only case. A second pins `alloc_carried_with`'s fold-brand
 construction one level up for a `Record` specifically — mirroring
 `object_field_reach_fold_survives_producer_frame_free`'s `KFunction` shape, but for
 `KObject::record_with_type` (FROM's own construction): the narrowed record shares the exact same
@@ -138,7 +138,7 @@ frame, and the fold's reach union is what keeps the producer's region alive once
 handle drops — the shape `record_projection::body`'s `alloc_carried_with(&[lhs], …)` call takes in
 production.
 
-- `alloc_record_folded_stores_and_owns_a_record_substrate`
+- `alloc_substrate_folded_stores_and_owns_a_record_substrate`
 - `record_retype_shares_substrate_across_producer_frame_free`
 
 **`Region` alloc engine under live borrows** ([workgraph/src/witnessed/region.rs](../workgraph/src/witnessed/region.rs)) — the
@@ -214,7 +214,7 @@ cross-region store this seam and its siblings exercise.
 - `pass_through_duplicate_keeps_reach_pointer_and_mints_nothing`
 
 **Record substrate — checked-tier O(1) membership** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
-— `resident_in_visiting`'s `Record` arm (`residence.owns_record(substrate)` in
+— `resident_in_visiting`'s `Record` arm (`residence.owns_substrate(substrate)` in
 [kobject.rs](../src/machine/model/values/kobject.rs)) is reached only when a record rides inside a
 still-`Rc` container (`List`/`Dict`/`Tagged`/`Wrapped`) crossing the checked tier
 (`Scope::alloc_object_delivered`) — a bare top-level record never routes this walk (born resident
@@ -224,7 +224,7 @@ address table, never the record's fields — the O(1) membership check), once wi
 proving the arm is a genuine membership check rather than an always-true stand-in. The `unsafe`
 routed is the same four `unsafe impl AuditedStored` family audits the group above exercises.
 
-- `record_nested_in_list_crosses_checked_tier_via_owns_record_membership`
+- `record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership`
 
 **Witness-set hosting — mint self-cycle / teardown** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — `RegionSet::mint` (mechanism in
@@ -538,7 +538,7 @@ surviving the run that built it.
 — two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The
 **container-cell** seam (`copied_seam_mode`, Ruling 4: fresh containers stay self-contained) picks
 the per-cell `Residence` a `Residence::Copied` crossing takes: `Released` when
-`record_still_borrows_host` ([kobject.rs](../src/machine/model/values/kobject.rs)) finds no surviving
+`still_borrows_host` ([kobject.rs](../src/machine/model/values/kobject.rs)) finds no surviving
 borrow leaf into the cell's own producer host (the record is totally rebuilt via `copy_object_into`
 and the producer frees), `Copied` when it does (the producer materializes into the aggregate's reach
 and stays pinned). Two unit tests mirror `dispatch::literal::fold_cells`'s exact aggregate loop
@@ -549,12 +549,12 @@ captured in that same producer (asserts `Copied`, drops every producer first, th
 closure's captured scope back) — a regression in either direction (wrongly releasing a
 still-borrowing record, or wrongly pinning a plain one) either dangles under tree borrows or leaks.
 
-The **value-level** escape seam (`seam_verb` → `record_seam_verb`
+The **value-level** escape seam (`seam_verb` → `copy_or_pin`
 ([kobject.rs](../src/machine/model/values/kobject.rs)), the cost chooser at `relocate_terminal` /
-`single_poll` / `finalize`) picks the whole record's `SeamVerb` in O(1) from its memoized copy cost
+`single_poll` / `finalize`) picks the whole record's `RegionEscape` in O(1) from its memoized copy cost
 and borrows-home bit: a **released copy** (`Copy { released: true }` → `Residence::Copied` at the
 finalize aggregate) when a priceable plain record is a small fraction of the host's allocated total,
-and a **pin** (`SeamVerb::Pin` → `Residence::Kept` + `copy_carried`) when a leaf borrows home — the
+and a **pin** (`RegionEscape::Pin` → `Residence::Kept` + `copy_carried`) when a leaf borrows home — the
 record's region-resident substrate rides **shared** (a pointer-copy, never rebuilt), covered by the
 Kept-minted producer reach. One end-to-end test drives the released-copy shape through the real
 scheduler and parser — a 5-element list literal of user-FN calls each returning a plain-data record
