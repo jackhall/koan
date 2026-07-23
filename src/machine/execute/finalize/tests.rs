@@ -226,7 +226,7 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
 /// Escape with **copy** (`Residence::Released`): a plain-data record threading the same list-literal
 /// `Residence::Copied` seam as the scalar aggregate above is instead totally rebuilt at the
 /// destination (`copy_object_into`, via `fold_cells`'s per-cell seam selection) — and because no
-/// field borrows anything, `record_still_borrows_host` answers false, so every producer frame
+/// field borrows anything, `still_borrows_host` answers false, so every producer frame
 /// releases exactly like the scalar case, not conservatively pinned by the record's own carrier bit.
 // Pins the copy/release mechanism; the `seam-force-pin` build pins the record and retains the frames,
 // so this cannot hold there. The equivalence battery proves language-output invisibility separately.

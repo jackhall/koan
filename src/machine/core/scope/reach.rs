@@ -10,8 +10,8 @@ use crate::machine::core::{
     FoldingBrand, FrameSet, FrameStorage, KoanRegion, KoanStorageProfile, StoredReach,
 };
 use crate::machine::model::{
-    copy_object_into, record_seam_verb, record_still_borrows_host, Carried, CarriedFamily, KObject,
-    KType, SeamVerb, TypeIdentifier, TypeRegistry,
+    copy_object_into, copy_or_pin, still_borrows_host, Carried, CarriedFamily, KObject, KType,
+    RegionEscape, TypeIdentifier, TypeRegistry,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, KError};
 use crate::witnessed::{Delivered, Reattachable, RegionHandleFamily, Residence, Sealed, Witnessed};
@@ -274,7 +274,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Bind a delivered value's record-embedding **projection** into this scope, routing the
-    /// escape-seam cost chooser ([`record_seam_verb`]) over the projected record. `project` selects
+    /// escape-seam cost chooser ([`copy_or_pin`]) over the projected record. `project` selects
     /// what to bind (identity for a whole-value bind, a `Tagged`/`Wrapped` payload for a MATCH/TRY
     /// `it`); the caller vets that it yields a value embedding a record (a bare record, or one behind
     /// a `Tagged`/`Wrapped` spine). The verb decides copy vs pin:
@@ -309,24 +309,24 @@ impl<'a> Scope<'a> {
         let host_region = cell.host().region();
         let verb = cell.open(|live| match project(&live) {
             Ok(record) => match record {
-                KObject::Record(substrate, _) => record_seam_verb(substrate, record, host_region),
+                KObject::Record(substrate, _) => copy_or_pin(substrate, record, host_region),
                 // A projection embedding a record behind a `Tagged`/`Wrapped` spine is unpriceable at
                 // the top (still-`Rc`): copy with a probe-derived release bit.
-                _ => SeamVerb::Copy {
-                    released: !record_still_borrows_host(record, host_region),
+                _ => RegionEscape::Copy {
+                    released: !still_borrows_host(record, host_region),
                 },
             },
-            Err(_) => SeamVerb::Copy { released: false },
+            Err(_) => RegionEscape::Copy { released: false },
         });
 
         match verb {
-            SeamVerb::Copy { .. } => self.rebuild_delivered_record(cell, project, types),
+            RegionEscape::Copy { .. } => self.rebuild_delivered_record(cell, project, types),
             // Pin: the record stays in its producer region; the projection is pointer-copied and
             // moved in under the non-omitting `Kept` stored reach ([`Self::pinned_reach_of`]), whose
             // explicitly named producer region covers the foreign substrate on the audit's
             // `any_member_region` reach-member path. The reach is the pin's liveness — the caller
             // ([`Self::bind_delivered`]) stores it on the binding.
-            SeamVerb::Pin => {
+            RegionEscape::Pin => {
                 let stored = self.pinned_reach_of(cell);
                 let allocated = cell.open(|live| {
                     let projected = project(&live)?;
@@ -370,7 +370,7 @@ impl<'a> Scope<'a> {
     {
         let host_region = cell.host().region();
         let mode = cell.open(|live| match project(&live) {
-            Ok(record) if record_still_borrows_host(record, host_region) => Residence::Copied,
+            Ok(record) if still_borrows_host(record, host_region) => Residence::Copied,
             Ok(_) => Residence::Released,
             Err(_) => Residence::Copied,
         });

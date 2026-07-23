@@ -1,15 +1,15 @@
 //! The witnessed-transfer copy hooks: the [`copy_carried`] relocate callback, the value-level
 //! [`relocate_object_into`] / cell-level [`copy_held_from_carried`] copies, the value-level escape
 //! seam's [`seam_verb`] chooser, and the container-cell seam's [`copied_seam_mode`] selection. The
-//! cost decision itself ([`record_seam_verb`](crate::machine::model::record_seam_verb)), the
+//! cost decision itself ([`copy_or_pin`](crate::machine::model::copy_or_pin)), the
 //! total-rebuild verb ([`copy_object_into`](crate::machine::model::copy_object_into)), and the
-//! host-release probe ([`record_still_borrows_host`](crate::machine::model::record_still_borrows_host))
+//! host-release probe ([`still_borrows_host`](crate::machine::model::still_borrows_host))
 //! live in the value model, shared with the core binding seams. See
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
 use crate::machine::core::FoldingBrand;
 use crate::machine::model::{
-    copy_object_into, record_seam_verb, record_still_borrows_host, Carried, Held, KObject, SeamVerb,
+    copy_object_into, copy_or_pin, still_borrows_host, Carried, Held, KObject, RegionEscape,
 };
 use crate::machine::DeliveredCarried;
 use crate::witnessed::Residence;
@@ -29,7 +29,7 @@ use crate::witnessed::Residence;
 /// it.
 pub(in crate::machine::execute) fn copy_carried<'b>(
     value: Carried<'b>,
-    verb: SeamVerb,
+    verb: RegionEscape,
     dest: FoldingBrand<'b>,
 ) -> Carried<'b> {
     match value {
@@ -43,7 +43,7 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
     }
 }
 
-/// Relocate one value into `dest` under the chosen [`SeamVerb`]: a top-level `Record` under a `Copy`
+/// Relocate one value into `dest` under the chosen [`RegionEscape`]: a top-level `Record` under a `Copy`
 /// verb is totally rebuilt at the door
 /// ([`copy_object_into`](crate::machine::model::copy_object_into)) so its substrate lands in `dest`,
 /// while under `Pin` it pointer-copies (its region-resident substrate borrow rides, covered by the
@@ -53,16 +53,16 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
 /// hooks ([`copy_carried`], the return-contract relocation).
 pub(in crate::machine::execute) fn relocate_object_into<'b>(
     value: &KObject<'b>,
-    verb: SeamVerb,
+    verb: RegionEscape,
     dest: FoldingBrand<'b>,
 ) -> KObject<'b> {
     match value {
         KObject::Record(..) => match verb {
             // Pin: pointer-copy the record — its region-resident substrate borrow rides, covered by
             // the Kept-minted producer reach at the enclosing transfer.
-            SeamVerb::Pin => value.deep_clone(),
+            RegionEscape::Pin => value.deep_clone(),
             // Copy: total rebuild at the door so the substrate lands in `dest`.
-            SeamVerb::Copy { .. } => copy_object_into(value, dest),
+            RegionEscape::Copy { .. } => copy_object_into(value, dest),
         },
         _ => value.deep_clone(),
     }
@@ -79,7 +79,7 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
     match carried {
         Carried::Object(o) => Held::Object(relocate_object_into(
             o,
-            SeamVerb::Copy { released: false },
+            RegionEscape::Copy { released: false },
             dest,
         )),
         Carried::Type(t) => Held::Type(t),
@@ -87,18 +87,18 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
     }
 }
 
-/// The [`SeamVerb`] for relocating `delivered` across a value-level escape seam. A top-level record
-/// routes the cost chooser ([`record_seam_verb`](crate::machine::model::record_seam_verb)); every
+/// The [`RegionEscape`] for relocating `delivered` across a value-level escape seam. A top-level record
+/// routes the cost chooser ([`copy_or_pin`](crate::machine::model::copy_or_pin)); every
 /// other value copies unconditionally (`Copy { released: false }` → `Residence::Copied`, today's
 /// behavior for non-records).
-pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> SeamVerb {
+pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> RegionEscape {
     let host = delivered.host().region();
     delivered.open(|carried| match carried {
         Carried::Object(value) => match value {
-            KObject::Record(substrate, _) => record_seam_verb(substrate, value, host),
-            _ => SeamVerb::Copy { released: false },
+            KObject::Record(substrate, _) => copy_or_pin(substrate, value, host),
+            _ => RegionEscape::Copy { released: false },
         },
-        _ => SeamVerb::Copy { released: false },
+        _ => RegionEscape::Copy { released: false },
     })
 }
 
@@ -114,7 +114,7 @@ pub(in crate::machine::execute) fn copied_seam_mode(delivered: &DeliveredCarried
     let host = delivered.host().region();
     delivered.open(|carried| match carried {
         Carried::Object(value) if matches!(value, KObject::Record(..)) => {
-            if record_still_borrows_host(value, host) {
+            if still_borrows_host(value, host) {
                 Residence::Copied
             } else {
                 Residence::Released

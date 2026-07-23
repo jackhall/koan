@@ -16,7 +16,7 @@ pub use carried::{Carried, CarriedFamily, Held};
 pub(crate) use container_substrate::RecordSubstrate;
 pub use container_substrate::{ContainerSubstrate, SubstrateMemos};
 pub use kkey::KKey;
-pub(crate) use kobject::{copy_object_into, record_seam_verb, record_still_borrows_host, SeamVerb};
+pub(crate) use kobject::{copy_object_into, copy_or_pin, still_borrows_host, RegionEscape};
 pub use kobject::{KObject, ValueEqualityError, WrappedPayload};
 pub use module::Module;
 pub use named_pairs::NamedPairs;

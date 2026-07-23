@@ -534,7 +534,7 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: FoldingBrand<'b>) -> Held<'b> {
 /// `Record` short-circuits on its own clear memo (the copy releases it), else recurses its fields; a
 /// still-`Rc` composite recurses its spine. A memo-clear record answers `false` outright — the copy
 /// releases every host it retired. Read-only; borrows nothing.
-pub(crate) fn record_still_borrows_host(value: &KObject<'_>, host: &KoanRegion) -> bool {
+pub(crate) fn still_borrows_host(value: &KObject<'_>, host: &KoanRegion) -> bool {
     match value {
         KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
         KObject::KFunction(f) => host.owns_function(*f as *const _),
@@ -549,24 +549,24 @@ pub(crate) fn record_still_borrows_host(value: &KObject<'_>, host: &KoanRegion) 
         }
         KObject::List(items, _) => items.iter().any(|cell| held_borrows_host(cell, host)),
         KObject::Dict(map, _) => map.values().any(|cell| held_borrows_host(cell, host)),
-        KObject::Tagged { value, .. } => record_still_borrows_host(value, host),
-        KObject::Wrapped { inner, .. } => record_still_borrows_host(inner.get(), host),
+        KObject::Tagged { value, .. } => still_borrows_host(value, host),
+        KObject::Wrapped { inner, .. } => still_borrows_host(inner.get(), host),
     }
 }
 
-/// [`record_still_borrows_host`]'s per-cell dispatch: an object recurses, a type-channel cell owns
+/// [`still_borrows_host`]'s per-cell dispatch: an object recurses, a type-channel cell owns
 /// its data and borrows no region.
 fn held_borrows_host(cell: &Held<'_>, host: &KoanRegion) -> bool {
     match cell {
-        Held::Object(o) => record_still_borrows_host(o, host),
+        Held::Object(o) => still_borrows_host(o, host),
         Held::Type(_) | Held::UnresolvedType(_) => false,
     }
 }
 
-/// The escape-seam verb for a top-level record, chosen per value in O(1) from its memos and the
+/// The [`RegionEscape`] verb for a top-level record, chosen per value in O(1) from its memos and the
 /// producer host's allocated total. Non-record values never reach this — they always copy.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum SeamVerb {
+pub(crate) enum RegionEscape {
     /// Borrow rides, the producer region transfers by hold (`Residence::Kept`); the relocate hook
     /// pointer-copies the record (its substrate borrow rides, covered by the Kept-minted reach).
     Pin,
@@ -576,16 +576,16 @@ pub(crate) enum SeamVerb {
     Copy { released: bool },
 }
 
-impl SeamVerb {
+impl RegionEscape {
     /// The residence mode this verb transfers under: `Pin` keeps the producer region (the substrate
     /// borrow rides its unconditionally-minted reach); a released copy frees the retiring host; an
     /// unreleased copy leaves the host to its conservative materialization.
     pub(crate) fn residence(self) -> crate::witnessed::Residence {
         use crate::witnessed::Residence as SeamResidence;
         match self {
-            SeamVerb::Pin => SeamResidence::Kept,
-            SeamVerb::Copy { released: true } => SeamResidence::Released,
-            SeamVerb::Copy { released: false } => SeamResidence::Copied,
+            RegionEscape::Pin => SeamResidence::Kept,
+            RegionEscape::Copy { released: true } => SeamResidence::Released,
+            RegionEscape::Copy { released: false } => SeamResidence::Copied,
         }
     }
 }
@@ -595,22 +595,23 @@ impl SeamVerb {
 /// observable in language semantics; provisional pending measurement.
 const ALPHA_DIVISOR: u64 = 4;
 
-/// The escape-seam copy-vs-pin decision for a top-level record `value` (whose field substrate is
+/// The escape-seam copy-vs-pin decision for a top-level container `value` (whose cell substrate is
 /// `substrate`) crossing out of producer `host`. O(1) but for the one address-table membership scan
-/// (`owns_substrate`) and, on the unpriceable path only, the exact host-release probe. See
+/// (`owns_substrate`) and, on the unpriceable path only, the exact host-release probe. Generic over
+/// the substrate's cell payload `C`; only records instantiate it today. See
 /// design/value-substrates.md § Cost-driven copy.
-pub(crate) fn record_seam_verb(
-    substrate: &RecordSubstrate<'_>,
+pub(crate) fn copy_or_pin<C>(
+    substrate: &ContainerSubstrate<C>,
     value: &KObject<'_>,
     host: &KoanRegion,
-) -> SeamVerb {
+) -> RegionEscape {
     // Forced verification builds override the table for top-level records; `released` is
     // probe-derived so a forced copy is sound at either crossing.
     match SEAM_POLICY {
-        SeamPolicy::ForcePin => return SeamVerb::Pin,
+        SeamPolicy::ForcePin => return RegionEscape::Pin,
         SeamPolicy::ForceCopy => {
-            return SeamVerb::Copy {
-                released: !record_still_borrows_host(value, host),
+            return RegionEscape::Copy {
+                released: !still_borrows_host(value, host),
             }
         }
         SeamPolicy::CostDriven => {}
@@ -618,29 +619,29 @@ pub(crate) fn record_seam_verb(
 
     // Unpriceable: keep today's unconditional total copy, `released` from the exact probe.
     if substrate.copy_cost() == u64::MAX {
-        return SeamVerb::Copy {
-            released: !record_still_borrows_host(value, host),
+        return RegionEscape::Copy {
+            released: !still_borrows_host(value, host),
         };
     }
 
     let home_crossing = host.owns_substrate(substrate);
     if !home_crossing {
         // Foreign crossing: pricing a copy-out at an intermediate host is region evacuation's job.
-        return SeamVerb::Pin;
+        return RegionEscape::Pin;
     }
 
     // Priceable home crossing.
     if substrate.borrows_home() {
         // A leaf provably points into the home region: a copy would pay the rebuild AND keep the
         // pin, so pin outright (exact, no probe).
-        return SeamVerb::Pin;
+        return RegionEscape::Pin;
     }
     // Clear borrows-home bit is exact for a priceable record: no leaf borrows home, so the rebuild
     // frees the host. Copy when the value is a small fraction of what the pin would retain.
     if substrate.copy_cost() < host.allocated_total() / ALPHA_DIVISOR {
-        SeamVerb::Copy { released: true }
+        RegionEscape::Copy { released: true }
     } else {
-        SeamVerb::Pin
+        RegionEscape::Pin
     }
 }
 

@@ -62,7 +62,7 @@ fn object_top_node_relocates_into_dest() {
     let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
     let relocated = copy_carried(
         Carried::Object(obj),
-        SeamVerb::Copy { released: false },
+        RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -107,7 +107,7 @@ fn list_relocation_shares_inner_rc() {
 
     let relocated = copy_carried(
         Carried::Object(list),
-        SeamVerb::Copy { released: false },
+        RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -156,7 +156,7 @@ fn dict_relocation_shares_inner_rc() {
 
     let relocated = copy_carried(
         Carried::Object(dict),
-        SeamVerb::Copy { released: false },
+        RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -213,7 +213,7 @@ fn tagged_relocation_shares_value_and_identity() {
 
     let relocated = copy_carried(
         Carried::Object(tagged),
-        SeamVerb::Copy { released: false },
+        RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -260,7 +260,7 @@ fn kfunction_borrow_preserved_verbatim() {
 
     let relocated = copy_carried(
         Carried::Object(obj),
-        SeamVerb::Copy { released: false },
+        RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -308,7 +308,7 @@ fn type_recursive_member_relocates_and_navigates() {
 
     let relocated = copy_carried(
         Carried::Type(type_value),
-        SeamVerb::Copy { released: false },
+        RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -353,7 +353,7 @@ reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held
 
 /// Accumulator twin for the value-level-seam pin mirror below: the destination region plus the
 /// relocated `Carried` cells [`copy_carried`] produces (the value-level relocate that honors the
-/// [`SeamVerb`], unlike the container-cell [`copy_held_from_carried`] which always rebuilds). Used
+/// [`RegionEscape`], unlike the container-cell [`copy_held_from_carried`] which always rebuilds). Used
 /// only by the pin mirror, which is gated out of the `seam-force-copy` build.
 #[cfg(not(feature = "seam-force-copy"))]
 struct PinAggFamily;
@@ -380,7 +380,7 @@ fn alloc_home_closure_record<'run>(
 /// Escape with **copy**: `fold_cells`'s exact aggregate loop (`copied_seam_mode` +
 /// `transfer_into_placing` + `copy_held_from_carried`), mirrored here for `DEPTH` independent
 /// producers each contributing a plain-data record — no field borrows anything, so
-/// `record_still_borrows_host` answers false and every cell selects `Residence::Released`: the
+/// `still_borrows_host` answers false and every cell selects `Residence::Released`: the
 /// record is totally rebuilt into the aggregate's own region and every producer frame is dropped
 /// *before* the read, proving the seam genuinely releases rather than conservatively pinning.
 #[test]
@@ -410,7 +410,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
             door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
         // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
         // conservatively forces `borrows_host = true` at construction, regardless of its own
-        // contents — `copied_seam_mode`'s exact `record_still_borrows_host` answer is what
+        // contents — `copied_seam_mode`'s exact `still_borrows_host` answer is what
         // actually decides Released vs. Copied below; the seal bit only matters if `Copied` wins.
         let sealed = force_record_borrows_host(
             Witnessed::from_erased(
@@ -466,7 +466,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
 
 /// Escape with **pin**: the same `fold_cells` mechanism, but each of the `DEPTH` producers
 /// contributes a record whose field is a genuine borrow leaf into its own producer (a closure
-/// captured in that same frame) — `record_still_borrows_host` answers true (the leaf's home IS the
+/// captured in that same frame) — `still_borrows_host` answers true (the leaf's home IS the
 /// delivered cell's own host), so every cell selects `Residence::Copied` and its producer
 /// materializes into the aggregate's reach. Dropping every producer shell and reading each
 /// closure's captured scope back is the no-use-after-free check under tree borrows; a regression
@@ -554,7 +554,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
 }
 
 /// Escape with the **cost-chooser-selected pin** verb at the value-level seam (`seam_verb` →
-/// [`SeamVerb::Pin`] → `Residence::Kept` + [`copy_carried`]), the shape `relocate_terminal` /
+/// [`RegionEscape::Pin`] → `Residence::Kept` + [`copy_carried`]), the shape `relocate_terminal` /
 /// `single_poll` / `finalize` take for a top-level record — distinct from the two container-cell
 /// cases above, which route `copied_seam_mode` (never a pin). Each of the `DEPTH` producers
 /// contributes a record whose only field is a closure captured in that same frame: priceable (the
@@ -599,7 +599,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
         let dep: DeliveredCarried = Delivered::seal(sealed, producer.storage_rc());
         let verb = seam_verb(&dep);
         assert!(
-            matches!(verb, SeamVerb::Pin),
+            matches!(verb, RegionEscape::Pin),
             "a priceable home-borrowing record must select the Pin verb at the value-level seam"
         );
         producers.push(producer);
@@ -819,7 +819,7 @@ fn substrate_memo_list_cell_saturates_and_forces_home() {
     );
 }
 
-// Phase-3 escape-seam chooser ([`record_seam_verb`]): each test builds a record homed in `home`'s
+// Phase-3 escape-seam chooser ([`copy_or_pin`]): each test builds a record homed in `home`'s
 // region, then reads the verb the CostDriven table selects for it at a home or foreign crossing.
 // Gated to the default build (`SEAM_POLICY == CostDriven`): the two forced policies override the
 // table, so these table assertions apply only to the cost-driven build; the forced-policy
@@ -864,8 +864,8 @@ mod seam_verb_table {
         let value = build_record(&home, fields, &types);
 
         assert_eq!(
-            record_seam_verb(substrate_of(value), value, home.region()),
-            SeamVerb::Copy { released: true },
+            copy_or_pin(substrate_of(value), value, home.region()),
+            RegionEscape::Copy { released: true },
             "an unpriceable plain-data record copies and the probe frees the host"
         );
     }
@@ -886,8 +886,8 @@ mod seam_verb_table {
         assert!(substrate_of(value).borrows_home(), "precondition: bit set");
 
         assert_eq!(
-            record_seam_verb(substrate_of(value), value, home.region()),
-            SeamVerb::Pin,
+            copy_or_pin(substrate_of(value), value, home.region()),
+            RegionEscape::Pin,
             "a set borrows-home bit forces a pin exactly"
         );
     }
@@ -917,8 +917,8 @@ mod seam_verb_table {
         );
 
         assert_eq!(
-            record_seam_verb(substrate_of(value), value, home.region()),
-            SeamVerb::Copy { released: true },
+            copy_or_pin(substrate_of(value), value, home.region()),
+            RegionEscape::Copy { released: true },
             "a small priceable record against a fat host copies and releases"
         );
     }
@@ -945,8 +945,8 @@ mod seam_verb_table {
         );
 
         assert_eq!(
-            record_seam_verb(substrate_of(value), value, home.region()),
-            SeamVerb::Pin,
+            copy_or_pin(substrate_of(value), value, home.region()),
+            RegionEscape::Pin,
             "a costly record against a tiny host pins"
         );
     }
@@ -972,8 +972,8 @@ mod seam_verb_table {
         );
 
         assert_eq!(
-            record_seam_verb(substrate_of(value), value, foreign.region()),
-            SeamVerb::Pin,
+            copy_or_pin(substrate_of(value), value, foreign.region()),
+            RegionEscape::Pin,
             "a foreign crossing pins"
         );
     }

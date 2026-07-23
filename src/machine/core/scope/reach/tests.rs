@@ -1,5 +1,5 @@
 //! Unit coverage for [`Scope::copy_delivered_record`]'s pin branch. A bound record whose cost
-//! chooser selects [`SeamVerb::Pin`] — a home-borrowing record crossing out of its producer — rides
+//! chooser selects [`RegionEscape::Pin`] — a home-borrowing record crossing out of its producer — rides
 //! the producer region by hold: the projection is pointer-copied (sharing the producer-resident
 //! substrate) and moved in under the binding's `Kept`-minted stored reach, whose named producer
 //! region carries the foreign substrate past the residence audit on its `any_member_region` path.
@@ -91,8 +91,8 @@ fn copy_delivered_record_pins_a_home_borrowing_record() {
         "precondition: the record's borrows-home bit is set"
     );
     assert_eq!(
-        record_seam_verb(substrate, record, producer.region()),
-        SeamVerb::Pin,
+        copy_or_pin(substrate, record, producer.region()),
+        RegionEscape::Pin,
         "a home-crossing, borrows-home record must select Pin"
     );
 
