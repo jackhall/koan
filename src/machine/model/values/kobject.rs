@@ -6,7 +6,7 @@ use crate::machine::core::{FoldingBrand, FrameSet, KoanRegion, KoanRegionExt, Re
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 
-use super::{Held, KKey, Module, RecordSubstrate};
+use super::{ContainerSubstrate, Held, KKey, Module, RecordSubstrate, SubstrateMemos};
 
 mod equality;
 pub use equality::ValueEqualityError;
@@ -232,17 +232,8 @@ impl<'a> KObject<'a> {
     ) -> KObject<'a> {
         let field_types = fields.map(|v| v.ktype(types));
         let home = door.region();
-        let contains_borrows = fields.values().any(held_contains_borrows);
-        let copy_cost = fields.values().fold(0u64, |acc, cell| {
-            acc.saturating_add(held_copy_cost(cell, home))
-        });
-        let borrows_home = fields.values().any(|cell| held_borrows_home(cell, home));
-        let substrate = door.alloc_record_folded(RecordSubstrate::new(
-            fields,
-            contains_borrows,
-            copy_cost,
-            borrows_home,
-        ));
+        let memos = SubstrateMemos::compute(fields.values(), home);
+        let substrate = door.alloc_record_folded(ContainerSubstrate::new(fields, memos));
         KObject::Record(substrate, types.record(field_types))
     }
 
@@ -267,17 +258,8 @@ impl<'a> KObject<'a> {
         record_type: KType,
     ) -> KObject<'a> {
         let home = door.region();
-        let contains_borrows = fields.values().any(held_contains_borrows);
-        let copy_cost = fields.values().fold(0u64, |acc, cell| {
-            acc.saturating_add(held_copy_cost(cell, home))
-        });
-        let borrows_home = fields.values().any(|cell| held_borrows_home(cell, home));
-        let substrate = door.alloc_record_folded(RecordSubstrate::new(
-            fields,
-            contains_borrows,
-            copy_cost,
-            borrows_home,
-        ));
+        let memos = SubstrateMemos::compute(fields.values(), home);
+        let substrate = door.alloc_record_folded(ContainerSubstrate::new(fields, memos));
         KObject::Record(substrate, record_type)
     }
 
@@ -468,79 +450,6 @@ impl<'a> KObject<'a> {
             KObject::Wrapped { inner, .. } => inner.get().embeds_record(),
             _ => false,
         }
-    }
-}
-
-/// [`KObject::record_of_held`]'s per-cell contains-borrows rule (see [`RecordSubstrate`]'s doc):
-/// a type-channel cell never borrows a region; a scalar owns its data outright; `KFunction` /
-/// `Module` are borrow leaves; a `KExpression` borrows iff it carries a splice; a nested
-/// `Record` contributes its own memoized bit (never re-walked); every other still-`Rc` composite
-/// is conservative `true` until it, too, converts to a substrate.
-fn held_contains_borrows(h: &Held<'_>) -> bool {
-    match h {
-        Held::Type(_) | Held::UnresolvedType(_) => false,
-        Held::Object(o) => match o {
-            KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
-            KObject::KFunction(_) | KObject::Module(_) => true,
-            KObject::KExpression(e) => !e.is_splice_free(),
-            KObject::Record(substrate, _) => substrate.contains_borrows(),
-            KObject::List(..)
-            | KObject::Dict(..)
-            | KObject::Tagged { .. }
-            | KObject::Wrapped { .. } => true,
-        },
-    }
-}
-
-/// One [`Held`] cell's flat size in bytes — the [`Held`] discriminant plus its owned payload,
-/// counted for a cost memo. `Held` is invariant in its lifetime, so its size is lifetime-independent.
-fn held_flat_size() -> u64 {
-    std::mem::size_of::<Held<'static>>() as u64
-}
-
-/// [`KObject::record_of_held`]'s per-cell copy-cost rule (see [`RecordSubstrate`]'s doc): a cell
-/// contributes the bytes of totally rebuilding it at a destination brand. A type cell or a scalar
-/// costs one flat [`Held`]; a `KString` adds its byte length; a `KFunction` / `Module` is a borrow
-/// leaf that rides the transfer and rebuilds nothing (**0**); a nested `Record` contributes its own
-/// memoized cost; a `KExpression` and every still-`Rc` composite are unpriceable (`u64::MAX`),
-/// carrying no cost memo of their own until each converts to a substrate.
-fn held_copy_cost(h: &Held<'_>, _home: &KoanRegion) -> u64 {
-    match h {
-        Held::Type(_) | Held::UnresolvedType(_) => held_flat_size(),
-        Held::Object(o) => match o {
-            KObject::Number(_) | KObject::Bool(_) | KObject::Null => held_flat_size(),
-            KObject::KString(s) => held_flat_size().saturating_add(s.len() as u64),
-            KObject::KFunction(_) | KObject::Module(_) => 0,
-            KObject::Record(substrate, _) => substrate.copy_cost(),
-            KObject::KExpression(_)
-            | KObject::List(..)
-            | KObject::Dict(..)
-            | KObject::Tagged { .. }
-            | KObject::Wrapped { .. } => u64::MAX,
-        },
-    }
-}
-
-/// [`KObject::record_of_held`]'s per-cell borrows-home rule (see [`RecordSubstrate`]'s doc): whether
-/// this cell's transitive borrow leaf points into `home`, the substrate's own region. A type cell
-/// and a scalar borrow nothing (false); a `KFunction` / `Module` leaf borrows home iff its captured
-/// scope's region is `home` (an O(1) region read); a nested `Record` composes its own memoized bit
-/// (co-resident by construction); a `KExpression` is conservative on a carried splice; every
-/// still-`Rc` composite is conservatively `true` until it, too, converts to a substrate.
-fn held_borrows_home(h: &Held<'_>, home: &KoanRegion) -> bool {
-    match h {
-        Held::Type(_) | Held::UnresolvedType(_) => false,
-        Held::Object(o) => match o {
-            KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
-            KObject::KFunction(f) => std::ptr::eq(f.captured_scope().region(), home),
-            KObject::Module(m) => std::ptr::eq(m.child_scope().region(), home),
-            KObject::Record(substrate, _) => substrate.borrows_home(),
-            KObject::KExpression(e) => !e.is_splice_free(),
-            KObject::List(..)
-            | KObject::Dict(..)
-            | KObject::Tagged { .. }
-            | KObject::Wrapped { .. } => true,
-        },
     }
 }
 
