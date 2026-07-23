@@ -91,8 +91,9 @@ pub enum KObject<'a> {
         identity: KType,
     },
     /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is a region
-    /// borrow of the record's [`RecordSubstrate`] — the field record plus its memoized
-    /// contains-borrows bit (identifier-keyed, declaration-ordered, order-blind equality); the
+    /// borrow of the record's [`RecordSubstrate`] — the field record plus its three construction
+    /// memos, contains-borrows / copy-cost / borrows-home (identifier-keyed, declaration-ordered,
+    /// order-blind equality); the
     /// second is the value's own type handle — the interned `Record` over each field's
     /// `ktype()` at fresh construction, re-stamped to a declared record type at an annotated
     /// boundary (mirrors `List` / `Dict`). Construct via [`KObject::record`] /
@@ -189,18 +190,29 @@ impl<'a> KObject<'a> {
     }
 
     /// Fresh `Record` carrier over [`Held`] field cells — the type-aware path (a field
-    /// value may be a first-class type). One pass over `fields` computes both the memoized
-    /// field-type join (this carrier's own `ktype()`) and the substrate's contains-borrows
-    /// bit (see [`RecordSubstrate`]'s doc for the per-cell rule), then allocates the
-    /// substrate through `door` — the record door's sole construction site.
+    /// value may be a first-class type). One pass over `fields` computes the memoized
+    /// field-type join (this carrier's own `ktype()`) and the substrate's three memos —
+    /// contains-borrows, copy-cost, borrows-home (see [`RecordSubstrate`]'s doc for the per-cell
+    /// rules; the leaf checks read `door`'s own region as home) — then allocates the substrate
+    /// through `door` — the record door's sole construction site.
     pub fn record_of_held(
         door: FoldingBrand<'a>,
         fields: Record<Held<'a>>,
         types: &TypeRegistry,
     ) -> KObject<'a> {
         let field_types = fields.map(|v| v.ktype(types));
+        let home = door.region();
         let contains_borrows = fields.values().any(held_contains_borrows);
-        let substrate = door.alloc_record_folded(RecordSubstrate::new(fields, contains_borrows));
+        let copy_cost = fields.values().fold(0u64, |acc, cell| {
+            acc.saturating_add(held_copy_cost(cell, home))
+        });
+        let borrows_home = fields.values().any(|cell| held_borrows_home(cell, home));
+        let substrate = door.alloc_record_folded(RecordSubstrate::new(
+            fields,
+            contains_borrows,
+            copy_cost,
+            borrows_home,
+        ));
         KObject::Record(substrate, types.record(field_types))
     }
 
@@ -214,17 +226,28 @@ impl<'a> KObject<'a> {
 
     /// Re-home an already-relocated field record into `door`'s region under the value's existing
     /// memoized record type — the seam copy verb's record arm (`copy_object_into`, in
-    /// `machine::execute::lift`). Relocation preserves every
-    /// field's `ktype()`, so the field-type join is unchanged and `record_type` rides verbatim; only
-    /// the contains-borrows bit is recomputed (leaves ride the rebuild, so the bit can only stay or
-    /// clear). The substrate is born through `door` — the record door's sole construction site.
+    /// `machine::execute::lift`). Relocation preserves every field's `ktype()`, so the field-type
+    /// join is unchanged and `record_type` rides verbatim; the three memos — contains-borrows,
+    /// copy-cost, borrows-home — recompute relative to the new home (`door`'s own region): a bit may
+    /// set, stay, or clear there. The substrate is born through `door` — the record door's sole
+    /// construction site.
     pub fn record_rehomed(
         door: FoldingBrand<'a>,
         fields: Record<Held<'a>>,
         record_type: KType,
     ) -> KObject<'a> {
+        let home = door.region();
         let contains_borrows = fields.values().any(held_contains_borrows);
-        let substrate = door.alloc_record_folded(RecordSubstrate::new(fields, contains_borrows));
+        let copy_cost = fields.values().fold(0u64, |acc, cell| {
+            acc.saturating_add(held_copy_cost(cell, home))
+        });
+        let borrows_home = fields.values().any(|cell| held_borrows_home(cell, home));
+        let substrate = door.alloc_record_folded(RecordSubstrate::new(
+            fields,
+            contains_borrows,
+            copy_cost,
+            borrows_home,
+        ));
         KObject::Record(substrate, record_type)
     }
 
@@ -431,6 +454,58 @@ fn held_contains_borrows(h: &Held<'_>) -> bool {
             KObject::KFunction(_) | KObject::Module(_) => true,
             KObject::KExpression(e) => !e.is_splice_free(),
             KObject::Record(substrate, _) => substrate.contains_borrows(),
+            KObject::List(..)
+            | KObject::Dict(..)
+            | KObject::Tagged { .. }
+            | KObject::Wrapped { .. } => true,
+        },
+    }
+}
+
+/// One [`Held`] cell's flat size in bytes — the [`Held`] discriminant plus its owned payload,
+/// counted for a cost memo. `Held` is invariant in its lifetime, so its size is lifetime-independent.
+fn held_flat_size() -> u64 {
+    std::mem::size_of::<Held<'static>>() as u64
+}
+
+/// [`KObject::record_of_held`]'s per-cell copy-cost rule (see [`RecordSubstrate`]'s doc): a cell
+/// contributes the bytes of totally rebuilding it at a destination brand. A type cell or a scalar
+/// costs one flat [`Held`]; a `KString` adds its byte length; a `KFunction` / `Module` is a borrow
+/// leaf that rides the transfer and rebuilds nothing (**0**); a nested `Record` contributes its own
+/// memoized cost; a `KExpression` and every still-`Rc` composite are unpriceable (`u64::MAX`),
+/// carrying no cost memo of their own until each converts to a substrate.
+fn held_copy_cost(h: &Held<'_>, _home: &KoanRegion) -> u64 {
+    match h {
+        Held::Type(_) | Held::UnresolvedType(_) => held_flat_size(),
+        Held::Object(o) => match o {
+            KObject::Number(_) | KObject::Bool(_) | KObject::Null => held_flat_size(),
+            KObject::KString(s) => held_flat_size().saturating_add(s.len() as u64),
+            KObject::KFunction(_) | KObject::Module(_) => 0,
+            KObject::Record(substrate, _) => substrate.copy_cost(),
+            KObject::KExpression(_)
+            | KObject::List(..)
+            | KObject::Dict(..)
+            | KObject::Tagged { .. }
+            | KObject::Wrapped { .. } => u64::MAX,
+        },
+    }
+}
+
+/// [`KObject::record_of_held`]'s per-cell borrows-home rule (see [`RecordSubstrate`]'s doc): whether
+/// this cell's transitive borrow leaf points into `home`, the substrate's own region. A type cell
+/// and a scalar borrow nothing (false); a `KFunction` / `Module` leaf borrows home iff its captured
+/// scope's region is `home` (an O(1) region read); a nested `Record` composes its own memoized bit
+/// (co-resident by construction); a `KExpression` is conservative on a carried splice; every
+/// still-`Rc` composite is conservatively `true` until it, too, converts to a substrate.
+fn held_borrows_home(h: &Held<'_>, home: &KoanRegion) -> bool {
+    match h {
+        Held::Type(_) | Held::UnresolvedType(_) => false,
+        Held::Object(o) => match o {
+            KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
+            KObject::KFunction(f) => std::ptr::eq(f.captured_scope().region(), home),
+            KObject::Module(m) => std::ptr::eq(m.child_scope().region(), home),
+            KObject::Record(substrate, _) => substrate.borrows_home(),
+            KObject::KExpression(e) => !e.is_splice_free(),
             KObject::List(..)
             | KObject::Dict(..)
             | KObject::Tagged { .. }

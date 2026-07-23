@@ -537,3 +537,181 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         "every closure's captured scope reads back unchanged after its producer frame freed"
     );
 }
+
+// Phase-1 substrate cost memos ([`RecordSubstrate::copy_cost`] / [`RecordSubstrate::borrows_home`]):
+// each test drives `record_of_held` through a fold door and reads the memos the same construction
+// pass computed, per the per-cell table in the substrate's doc.
+
+/// One flat `Held` cell's byte width — the unit a type cell or a scalar contributes to a record's
+/// copy cost. `Held` is invariant in its lifetime, so the width is lifetime-independent.
+fn held_flat() -> u64 {
+    std::mem::size_of::<Held<'static>>() as u64
+}
+
+/// Build a record homed in `home`'s region from `fields` and return its
+/// `(copy_cost, borrows_home)` memos.
+fn record_memos<'run>(
+    home: &'run Rc<CallFrame>,
+    fields: Record<Held<'run>>,
+    types: &TypeRegistry,
+) -> (u64, bool) {
+    let door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+    match door.alloc_object_folded(KObject::record_of_held(door, fields, types)) {
+        KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
+        other => panic!("expected a Record, got {}", other.ktype().name(types)),
+    }
+}
+
+/// A scalar-only record is priceable at one flat `Held` per cell and borrows nothing home.
+#[test]
+fn substrate_memo_scalar_record_is_priceable_and_home_free() {
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let home = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+
+    let fields = Record::from_pairs(vec![
+        ("a".to_string(), Held::Object(KObject::Number(1.0))),
+        ("b".to_string(), Held::Object(KObject::Bool(true))),
+    ]);
+    let (cost, borrows_home) = record_memos(&home, fields, &types);
+    assert_eq!(cost, 2 * held_flat(), "two scalar cells cost two flat Held");
+    assert!(!borrows_home, "no borrow leaf leaves borrows_home clear");
+}
+
+/// A `KString` cell adds its byte length to the flat `Held` width.
+#[test]
+fn substrate_memo_string_cell_adds_its_length() {
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let home = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+
+    let fields = Record::from_pairs(vec![(
+        "s".to_string(),
+        Held::Object(KObject::KString("hello".into())),
+    )]);
+    let (cost, borrows_home) = record_memos(&home, fields, &types);
+    assert_eq!(
+        cost,
+        held_flat() + 5,
+        "a five-byte string adds five to the flat Held width"
+    );
+    assert!(!borrows_home);
+}
+
+/// A home-captured closure is a 0-weight borrow leaf: it adds no rebuild bytes yet sets
+/// `borrows_home`. A foreign-captured closure is equally weightless but leaves the bit clear.
+#[test]
+fn substrate_memo_home_vs_foreign_closure_leaf() {
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let home = CallFrame::new(scope);
+    let foreign = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+
+    let base = Record::from_pairs(vec![("n".to_string(), Held::Object(KObject::Number(0.0)))]);
+    let (base_cost, base_home) = record_memos(&home, base, &types);
+    assert_eq!(base_cost, held_flat());
+    assert!(!base_home);
+
+    let home_kf = alloc_local_kf(&home);
+    let with_home = Record::from_pairs(vec![
+        ("n".to_string(), Held::Object(KObject::Number(0.0))),
+        ("f".to_string(), Held::Object(KObject::KFunction(home_kf))),
+    ]);
+    let (home_cost, home_bit) = record_memos(&home, with_home, &types);
+    assert_eq!(
+        home_cost, base_cost,
+        "the 0-weight closure leaf adds no rebuild bytes"
+    );
+    assert!(home_bit, "a home-captured closure sets borrows_home");
+
+    let foreign_kf = alloc_local_kf(&foreign);
+    let with_foreign = Record::from_pairs(vec![
+        ("n".to_string(), Held::Object(KObject::Number(0.0))),
+        (
+            "f".to_string(),
+            Held::Object(KObject::KFunction(foreign_kf)),
+        ),
+    ]);
+    let (foreign_cost, foreign_bit) = record_memos(&home, with_foreign, &types);
+    assert_eq!(
+        foreign_cost, base_cost,
+        "a foreign closure leaf is equally weightless"
+    );
+    assert!(
+        !foreign_bit,
+        "a foreign-captured closure leaves borrows_home clear"
+    );
+}
+
+/// A nested record cell contributes exactly its own memoized `copy_cost` and `borrows_home` —
+/// composed from the memo, never re-walked. The inner record here holds a string and a home-captured
+/// closure, so both bits are non-trivial and must ride up to the outer substrate.
+#[test]
+fn substrate_memo_nested_record_composes_by_memo() {
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let home = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+
+    let inner_kf = alloc_local_kf(&home);
+    let inner_fields = Record::from_pairs(vec![
+        ("x".to_string(), Held::Object(KObject::KString("ab".into()))),
+        ("f".to_string(), Held::Object(KObject::KFunction(inner_kf))),
+    ]);
+    let door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+    let inner = door.alloc_object_folded(KObject::record_of_held(door, inner_fields, &types));
+    let (inner_cost, inner_home) = match inner {
+        KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
+        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+    };
+    assert_eq!(
+        inner_cost,
+        held_flat() + 2,
+        "string cell plus 0-weight closure"
+    );
+    assert!(inner_home, "inner holds a home closure");
+
+    let outer_fields = Record::from_pairs(vec![(
+        "inner".to_string(),
+        Held::Object(inner.deep_clone()),
+    )]);
+    let (cost, borrows_home) = record_memos(&home, outer_fields, &types);
+    assert_eq!(
+        cost, inner_cost,
+        "the nested record contributes its own memoized copy_cost"
+    );
+    assert_eq!(
+        borrows_home, inner_home,
+        "the nested record contributes its own memoized borrows_home"
+    );
+}
+
+/// A still-`Rc` composite cell (here a `List`) is unpriceable: the whole record's cost saturates to
+/// `u64::MAX` and its `borrows_home` is conservatively set.
+#[test]
+fn substrate_memo_list_cell_saturates_and_forces_home() {
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let home = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+
+    let items = Rc::new(vec![Held::Object(KObject::Number(1.0))]);
+    let list = KObject::list_with_type(items, KType::LIST_OF_ANY);
+    let fields = Record::from_pairs(vec![("l".to_string(), Held::Object(list))]);
+    let (cost, borrows_home) = record_memos(&home, fields, &types);
+    assert_eq!(cost, u64::MAX, "a still-Rc composite cell is unpriceable");
+    assert!(
+        borrows_home,
+        "an unpriceable cell forces borrows_home conservatively true"
+    );
+}

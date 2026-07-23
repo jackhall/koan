@@ -1445,3 +1445,22 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_record_membership() {
         "a nested record foreign to dest and evidence must be rejected, not silently accepted"
     );
 }
+
+/// [`KoanRegionExt::allocated_total`] weights each family by the flat size of its stored form:
+/// three fresh `KObject` allocations raise the total by exactly three `KObject` widths.
+#[test]
+fn allocated_total_weights_families_by_size() {
+    let storage = run_root_storage();
+    let before = storage.region().allocated_total();
+
+    for n in 0..3 {
+        storage.brand().alloc_object(KObject::Number(n as f64));
+    }
+
+    let after = storage.region().allocated_total();
+    assert_eq!(
+        after - before,
+        3 * std::mem::size_of::<KObject<'static>>() as u64,
+        "three KObject allocations add three KObject widths"
+    );
+}

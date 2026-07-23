@@ -494,6 +494,15 @@ pub(crate) trait KoanRegionExt {
     /// carries no borrow naming its own home region, so the residence walk widens this with a
     /// per-reach-member check rather than a single `covers_region` call.
     fn owns_record<'a>(&self, ptr: *const RecordSubstrate<'a>) -> bool;
+
+    /// Total bytes allocated across this region's nine Koan families — each family's live count
+    /// weighted by the flat size of its stored `'static` form. Prices the host region only, not the
+    /// `outer` chain its `Rc<FrameStorage>` also retains (a documented approximation): the cost-copy
+    /// seam reads this as the denominator of the payoff ratio, where the host's own footprint is the
+    /// relevant scale. `#[allow(dead_code)]` for the same reason as [`Self::owns_object`]: the plain
+    /// `--lib` build (no `cfg(test)`) can't see its consumer.
+    #[allow(dead_code)]
+    fn allocated_total(&self) -> u64;
 }
 
 impl KoanRegionExt for KoanRegion {
@@ -554,6 +563,21 @@ impl KoanRegionExt for KoanRegion {
         #[allow(clippy::unnecessary_cast)]
         let target = ptr as *const RecordSubstrate<'static> as usize;
         self.owns_addr(target)
+    }
+
+    fn allocated_total(&self) -> u64 {
+        fn weigh<K: Stored<KoanStorageProfile>>(region: &KoanRegion) -> u64 {
+            region.family_len::<K>() as u64 * std::mem::size_of::<K>() as u64
+        }
+        weigh::<KObject<'static>>(self)
+            + weigh::<KFunction<'static>>(self)
+            + weigh::<Scope<'static>>(self)
+            + weigh::<Module<'static>>(self)
+            + weigh::<KType>(self)
+            + weigh::<OperatorGroup>(self)
+            + weigh::<FrameSet>(self)
+            + weigh::<TypeIdentifier>(self)
+            + weigh::<RecordSubstrate<'static>>(self)
     }
 }
 
