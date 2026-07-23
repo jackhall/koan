@@ -9,17 +9,39 @@ fn newtype_singleton(name: &str, repr: KType, types: &TypeRegistry) -> KType {
     RecursiveGroupWindow::seal_singleton(name.into(), RelativeSchema::NewType(repr), None, types)
 }
 
+/// Mint the zero-dep fold door a container test needs, over a fresh root region, as two `let`
+/// bindings in the caller's own scope: `forge_for_test` is the sanctioned test-only placement mint
+/// (no enclosing fold engine required). A statement macro (not a function returning the pair) so
+/// `door`'s borrow of `storage` lives in the same frame it was minted in, never crossing a return.
+macro_rules! container_door {
+    ($storage:ident, $door:ident) => {
+        use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+        use crate::witnessed::FoldedPlacement;
+        let $storage = run_root_storage();
+        let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+            $storage.brand().handle(),
+        ));
+    };
+}
+
 #[test]
 fn ktype_of_homogeneous_number_list() {
     let types = TypeRegistry::new();
-    let l: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)], &types);
+    container_door!(_storage, door);
+    let l: KObject<'_> = KObject::list(
+        door,
+        vec![KObject::Number(1.0), KObject::Number(2.0)],
+        &types,
+    );
     assert_eq!(l.ktype(), types.list(KType::NUMBER));
 }
 
 #[test]
 fn ktype_of_mixed_list_is_list_any() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let l: KObject<'_> = KObject::list(
+        door,
         vec![KObject::Number(1.0), KObject::KString("x".into())],
         &types,
     );
@@ -29,15 +51,17 @@ fn ktype_of_mixed_list_is_list_any() {
 #[test]
 fn ktype_of_empty_list_is_list_any() {
     let types = TypeRegistry::new();
-    let l: KObject<'_> = KObject::list(vec![], &types);
+    container_door!(_storage, door);
+    let l: KObject<'_> = KObject::list(door, vec![], &types);
     assert_eq!(l.ktype(), types.list(KType::ANY));
 }
 
 #[test]
 fn ktype_of_nested_list() {
     let types = TypeRegistry::new();
-    let inner: KObject<'_> = KObject::list(vec![KObject::Number(1.0)], &types);
-    let outer: KObject<'_> = KObject::list(vec![inner], &types);
+    container_door!(_storage, door);
+    let inner: KObject<'_> = KObject::list(door, vec![KObject::Number(1.0)], &types);
+    let outer: KObject<'_> = KObject::list(door, vec![inner], &types);
     assert_eq!(outer.ktype(), types.list(types.list(KType::NUMBER)));
 }
 
@@ -62,8 +86,10 @@ fn ktype_of_empty_dict_is_dict_any_any() {
 #[test]
 fn matches_value_list_number_rejects_string_element() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let t = types.list(KType::NUMBER);
     let bad: KObject<'_> = KObject::list(
+        door,
         vec![KObject::Number(1.0), KObject::KString("x".into())],
         &types,
     );
@@ -73,16 +99,23 @@ fn matches_value_list_number_rejects_string_element() {
 #[test]
 fn matches_value_list_number_accepts_all_numbers() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let t = types.list(KType::NUMBER);
-    let good: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)], &types);
+    let good: KObject<'_> = KObject::list(
+        door,
+        vec![KObject::Number(1.0), KObject::Number(2.0)],
+        &types,
+    );
     assert!(t.matches_value(&good, &types));
 }
 
 #[test]
 fn matches_value_list_any_accepts_any_list() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let t = types.list(KType::ANY);
     let mixed: KObject<'_> = KObject::list(
+        door,
         vec![KObject::Number(1.0), KObject::KString("x".into())],
         &types,
     );
@@ -93,15 +126,16 @@ fn matches_value_list_any_accepts_any_list() {
 /// even when contents would join to `Number`.
 #[test]
 fn list_with_type_carrier_is_authoritative_for_ktype() {
-    use crate::machine::model::values::Held;
-    use std::rc::Rc;
     let types = TypeRegistry::new();
-    let items = Rc::new(vec![
-        Held::Object(KObject::Number(1.0)),
-        Held::Object(KObject::Number(2.0)),
-    ]);
+    container_door!(_storage, door);
     let list_any = types.list(KType::ANY);
-    let stamped = KObject::list_with_type(items, list_any);
+    // Contents join to `Number`; the stamp re-tags the shared substrate to `List<Any>`.
+    let stamped = KObject::list(
+        door,
+        vec![KObject::Number(1.0), KObject::Number(2.0)],
+        &types,
+    )
+    .stamp_type(list_any, &types);
     assert_eq!(stamped.ktype(), list_any);
 }
 
@@ -154,7 +188,8 @@ fn type_constructor_ktype_erased_vs_applied() {
 #[test]
 fn stamp_type_coarsens_list_carrier() {
     let types = TypeRegistry::new();
-    let value = KObject::list(vec![KObject::Number(1.0)], &types);
+    container_door!(_storage, door);
+    let value = KObject::list(door, vec![KObject::Number(1.0)], &types);
     assert_eq!(value.ktype(), types.list(KType::NUMBER));
     let list_any = types.list(KType::ANY);
     let stamped = value.stamp_type(list_any, &types);
@@ -164,12 +199,13 @@ fn stamp_type_coarsens_list_carrier() {
 #[test]
 fn unstamped_empty_container_detection() {
     use std::collections::HashMap;
-    use std::rc::Rc;
     let types = TypeRegistry::new();
-    assert!(KObject::list(vec![], &types).is_unstamped_empty_container());
-    let stamped = KObject::list_with_type(Rc::new(vec![]), types.list(KType::NUMBER));
+    container_door!(_storage, door);
+    assert!(KObject::list(door, vec![], &types).is_unstamped_empty_container());
+    let stamped = KObject::list(door, vec![], &types).stamp_type(types.list(KType::NUMBER), &types);
     assert!(!stamped.is_unstamped_empty_container());
     let hetero = KObject::list(
+        door,
         vec![KObject::Number(1.0), KObject::KString("x".into())],
         &types,
     );
@@ -320,13 +356,21 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     assert!(o.resident_in_delivered(dest.region(), &[&foreign_reach]));
 }
 
-/// A `List` of owned scalars is resident in any `dest` — no borrow to answer for.
+/// A `List` born in `dest`'s region is resident there: its element substrate lives in `dest`, so
+/// the `owns_substrate` membership check passes (a list is now a region-resident substrate, like a
+/// record — residence is home-region membership, not an element walk).
 #[test]
 fn resident_in_true_for_owned_list() {
-    use crate::machine::core::run_root_storage;
-
+    use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+    use crate::witnessed::FoldedPlacement;
     let types = TypeRegistry::new();
-    let o = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)], &types);
     let dest = run_root_storage();
+    let door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()));
+    let o = KObject::list(
+        door,
+        vec![KObject::Number(1.0), KObject::Number(2.0)],
+        &types,
+    );
     assert!(o.resident_in(dest.region()));
 }

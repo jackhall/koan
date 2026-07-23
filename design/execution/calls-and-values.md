@@ -45,7 +45,7 @@ read the concrete runtime shape directly:
 Indirecting these through a trait, an opaque handle, a generic
 parameter, or a model/runtime split each fail the same way: the
 recursive composite variants (`Tagged.value: Rc<KObject>`,
-`List.items: Rc<Vec<KObject>>`, `ExpressionPart::Future(&'a KObject)`)
+`List(&'a ListSubstrate<'a>)`, `ExpressionPart::Future(&'a KObject)`)
 re-form the union at every nesting level, and the hot consumers
 need the concrete region/scope/path identity that the abstraction
 would have to expose anyway. The cleanest available shape is the

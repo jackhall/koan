@@ -4,7 +4,6 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::Carried;
 use crate::machine::model::Record;
-use std::rc::Rc;
 
 /// A singleton newtype member handle for a record-repr newtype (an ex-struct) named `name`
 /// (empty record repr is fine — the predicates key on the sealed member's `(component digest,
@@ -760,12 +759,15 @@ fn union_admits_member_typed_value() {
 #[test]
 fn union_honors_memoized_list_element_type() {
     let types = TypeRegistry::new();
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+    use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
-    let region = storage.brand();
-    let list_value: &KObject<'_> = region.alloc_object(KObject::list_with_type(
-        Rc::new(vec![Held::Object(KObject::Number(1.0))]),
-        types.list(KType::NUMBER),
+    let door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage.brand().handle()));
+    let list_value: &KObject<'_> = door.alloc_object_folded(KObject::list_of_held(
+        door,
+        vec![Held::Object(KObject::Number(1.0))],
+        &types,
     ));
 
     let with_list = types.union_of(vec![types.list(KType::NUMBER), KType::STR]);

@@ -7,7 +7,7 @@
 use super::*;
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{
-    force_record_borrows_host, run_root_storage, FoldingBrand, KoanRegion, KoanRegionExt,
+    force_substrate_borrows_host, run_root_storage, FoldingBrand, KoanRegion, KoanRegionExt,
     KoanStorageProfile,
 };
 use crate::machine::model::Held;
@@ -81,10 +81,11 @@ fn object_top_node_relocates_into_dest() {
     }
 }
 
-/// A `List`'s inner `Rc<Vec<_>>` spine is shared, not deep-copied: relocating copies only the top
-/// node, so the relocated list points at the same items allocation.
+/// A `List` relocated under a `Copy` verb is totally rebuilt at the destination brand: the rebuilt
+/// element substrate lives in `dest`'s region, not the source's — a list is a region-resident
+/// substrate, not a shared `Rc` spine.
 #[test]
-fn list_relocation_shares_inner_rc() {
+fn list_relocation_rebuilds_substrate_into_dest() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
@@ -92,18 +93,16 @@ fn list_relocation_shares_inner_rc() {
     let dest = CallFrame::new(scope);
     let types = test_run.types.clone();
 
-    let items = Rc::new(vec![
-        Held::Object(KObject::Number(1.0)),
-        Held::Object(KObject::Number(2.0)),
-    ]);
-    let list: &KObject = source
-        .brand()
-        .alloc_object_checked(
-            KObject::list_with_type(Rc::clone(&items), KType::LIST_OF_ANY),
-            &types,
-        )
-        .expect("a fresh owned List is always resident-in-self");
-    let before = Rc::strong_count(&items);
+    let source_door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()));
+    let list: &KObject = source_door.alloc_object_folded(KObject::list_of_held(
+        source_door,
+        vec![
+            Held::Object(KObject::Number(1.0)),
+            Held::Object(KObject::Number(2.0)),
+        ],
+        &types,
+    ));
 
     let relocated = copy_carried(
         Carried::Object(list),
@@ -117,18 +116,17 @@ fn list_relocation_shares_inner_rc() {
                 "relocated list node lives in dest"
             );
             assert!(
-                Rc::ptr_eq(out, &items),
-                "the items spine is shared, not copied"
+                dest.region().owns_substrate(*out),
+                "the rebuilt element substrate lives in dest"
+            );
+            assert!(
+                !source.region().owns_substrate(*out),
+                "the source no longer owns the rebuilt substrate"
             );
         }
         Carried::Object(other) => panic!("expected a List, got {:?}", other.ktype()),
         Carried::Type(_) | Carried::UnresolvedType(_) => panic!("expected an Object carrier"),
     }
-    assert_eq!(
-        Rc::strong_count(&items),
-        before + 1,
-        "sharing bumps the Rc by one"
-    );
 }
 
 /// A `Dict`'s inner `Rc<HashMap<_>>` is likewise shared through relocation.
@@ -412,7 +410,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
         // conservatively forces `borrows_host = true` at construction, regardless of its own
         // contents — `copied_seam_mode`'s exact `still_borrows_host` answer is what
         // actually decides Released vs. Copied below; the seal bit only matters if `Copied` wins.
-        let sealed = force_record_borrows_host(
+        let sealed = force_substrate_borrows_host(
             Witnessed::from_erased(
                 Erased::erase(Carried::Object(obj)),
                 CarrierWitness::default(),
@@ -502,7 +500,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         // `borrows_host = true` at construction — without it, `Residence::Copied`'s
         // `materialize_hosts` arm (`iff borrows_host`) would skip materializing the producer even
         // though `copied_seam_mode` below correctly selects `Copied`, dangling the read at the end.
-        let sealed = force_record_borrows_host(
+        let sealed = force_substrate_borrows_host(
             Witnessed::from_erased(
                 Erased::erase(Carried::Object(obj)),
                 CarrierWitness::default(),
@@ -798,25 +796,29 @@ fn substrate_memo_nested_record_composes_by_memo() {
     );
 }
 
-/// A still-`Rc` composite cell (here a `List`) is unpriceable: the whole record's cost saturates to
-/// `u64::MAX` and its `borrows_home` is conservatively set.
+/// A plain-data `List` cell is a substrate now, so it is **priceable**: it contributes its own
+/// element substrate's cost, and the enclosing record stays priceable and borrows nothing home.
 #[test]
-fn substrate_memo_list_cell_saturates_and_forces_home() {
+fn substrate_memo_list_cell_is_priceable_and_home_free() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
     let types = TypeRegistry::new();
 
-    let items = Rc::new(vec![Held::Object(KObject::Number(1.0))]);
-    let list = KObject::list_with_type(items, KType::LIST_OF_ANY);
+    // The list cell is itself born through a door homed in `home`; its one scalar element costs one
+    // flat `Held`, which the enclosing record's memo pass reads back through the list's own memo.
+    let list_door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+    let list = KObject::list_of_held(list_door, vec![Held::Object(KObject::Number(1.0))], &types);
     let fields = Record::from_pairs(vec![("l".to_string(), Held::Object(list))]);
     let (cost, borrows_home) = record_memos(&home, fields, &types);
-    assert_eq!(cost, u64::MAX, "a still-Rc composite cell is unpriceable");
-    assert!(
-        borrows_home,
-        "an unpriceable cell forces borrows_home conservatively true"
+    assert_eq!(
+        cost,
+        held_flat(),
+        "the list cell contributes its own element substrate's cost (one scalar)"
     );
+    assert!(!borrows_home, "a plain-data list borrows nothing home");
 }
 
 // Phase-3 escape-seam chooser ([`copy_or_pin`]): each test builds a record homed in `home`'s
@@ -848,19 +850,22 @@ mod seam_verb_table {
         }
     }
 
-    /// An **unpriceable** record (holds a still-`Rc` `List` cell of plain data) copies, and its
+    /// An **unpriceable** record (holds a still-`Rc` `Dict` cell of plain data) copies, and its
     /// `released` bit tracks the exact probe: no borrow leaf survives, so the copy frees the host.
     #[test]
     fn seam_verb_unpriceable_plain_data_copies_released() {
+        use crate::machine::model::KKey;
+        use std::collections::HashMap;
         let root = run_root_storage();
         let test_run = TestRun::silent(&root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
         let types = TypeRegistry::new();
 
-        let items = Rc::new(vec![Held::Object(KObject::Number(1.0))]);
-        let list = KObject::list_with_type(items, KType::LIST_OF_ANY);
-        let fields = Record::from_pairs(vec![("l".to_string(), Held::Object(list))]);
+        let mut map: HashMap<KKey, Held> = HashMap::new();
+        map.insert(KKey::String("k".into()), Held::Object(KObject::Number(1.0)));
+        let dict = KObject::dict_with_type(Rc::new(map), KType::DICT_ANY_ANY);
+        let fields = Record::from_pairs(vec![("d".to_string(), Held::Object(dict))]);
         let value = build_record(&home, fields, &types);
 
         assert_eq!(

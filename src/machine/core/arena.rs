@@ -22,7 +22,8 @@ use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::{
-    Carried, CarriedFamily, ContainerSubstrate, Held, KObject, Module, Record, RecordSubstrate,
+    Carried, CarriedFamily, ContainerSubstrate, Held, KObject, ListSubstrate, Module, Record,
+    RecordSubstrate,
 };
 use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
@@ -61,7 +62,13 @@ impl StorageProfile for KoanStorageProfile {
                         KType,
                         (
                             OperatorGroup,
-                            (FrameSet, (TypeIdentifier, (RecordSubstrate<'static>, ()))),
+                            (
+                                FrameSet,
+                                (
+                                    TypeIdentifier,
+                                    (RecordSubstrate<'static>, (ListSubstrate<'static>, ())),
+                                ),
+                            ),
                         ),
                     ),
                 ),
@@ -326,8 +333,9 @@ impl<'a> FoldingBrand<'a> {
     /// fold-brand argument as [`Self::alloc_object_folded`]: `substrate` is typed at the brand
     /// lifetime, so an ambient-lifetime capture is a compile error at this signature, discharging the
     /// store's residence obligation at compile time. Each `ContainerSubstrate<C>` family lands in its
-    /// own sub-arena slot (its [`Stored`] impl); a future macro lifts this per-family entry once a
-    /// second container instantiates it.
+    /// own sub-arena slot (its [`Stored`] impl) — the record and list substrates hand-add their
+    /// entries; a macro lifts the per-family boilerplate at the third instantiation (the dict
+    /// conversion).
     pub(crate) fn alloc_substrate_folded<K: Stored<KoanStorageProfile>>(
         self,
         substrate: K::At<'a>,
@@ -351,6 +359,7 @@ reattachable! {
     OperatorGroup => OperatorGroup,
     TypeIdentifier => TypeIdentifier,
     ContainerSubstrate<Record<Held<'static>>> => ContainerSubstrate<Record<Held<'r>>>,
+    ContainerSubstrate<Vec<Held<'static>>> => ContainerSubstrate<Vec<Held<'r>>>,
 }
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
@@ -436,6 +445,15 @@ impl Stored<KoanStorageProfile> for ContainerSubstrate<Record<Held<'static>>> {
     }
 }
 
+impl Stored<KoanStorageProfile> for ContainerSubstrate<Vec<Held<'static>>> {
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.1 .1 .1 .1 .1 .1 .1 .1 .1 .0
+    }
+    fn record_local(frame: &KoanRegion, stored: &ContainerSubstrate<Vec<Held<'static>>>) {
+        frame.record_addr(stored as *const _ as usize);
+    }
+}
+
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
 /// Every co-located `alloc_*` lives on [`RegionBrand`] (minted via [`FrameStorage::brand`]); a bare
@@ -499,7 +517,7 @@ pub(crate) trait KoanRegionExt {
     /// widens this with a per-reach-member check rather than a single `covers_region` call.
     fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<C>) -> bool;
 
-    /// Total bytes allocated across this region's nine Koan families — each family's live count
+    /// Total bytes allocated across this region's ten Koan families — each family's live count
     /// weighted by the flat size of its stored `'static` form. Prices the host region only, not the
     /// `outer` chain its `Rc<FrameStorage>` also retains (a documented approximation): the cost-copy
     /// seam reads this as the denominator of the payoff ratio, where the host's own footprint is the
@@ -579,6 +597,7 @@ impl KoanRegionExt for KoanRegion {
             + weigh::<FrameSet>(self)
             + weigh::<TypeIdentifier>(self)
             + weigh::<RecordSubstrate<'static>>(self)
+            + weigh::<ListSubstrate<'static>>(self)
     }
 }
 
@@ -586,7 +605,7 @@ impl KoanRegionExt for KoanRegion {
 /// reason as [`KoanRegionExt`].
 #[cfg(test)]
 pub(crate) trait KoanRegionTestExt {
-    /// Total number of values stored across all eight sub-arenas. Each `alloc_*` writes to
+    /// Total number of values stored across the counted sub-arenas. Each `alloc_*` writes to
     /// exactly one sub-arena, so this is the precise allocation count without double-counting.
     fn alloc_count(&self) -> usize;
 }
@@ -602,6 +621,7 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<OperatorGroup>()
             + self.family_len::<FrameSet>()
             + self.family_len::<RecordSubstrate<'static>>()
+            + self.family_len::<ListSubstrate<'static>>()
     }
 }
 

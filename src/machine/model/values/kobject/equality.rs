@@ -70,7 +70,8 @@ impl<'a> KObject<'a> {
             (KObject::Bool(a), KObject::Bool(b)) => Ok(a == b),
             (KObject::Null, KObject::Null) => Ok(true),
 
-            (KObject::List(items_a, type_a), KObject::List(items_b, type_b)) => {
+            (KObject::List(substrate_a, type_a), KObject::List(substrate_b, type_b)) => {
+                let (items_a, items_b) = (substrate_a.elements(), substrate_b.elements());
                 if !types_related(*type_a, *type_b, types) || items_a.len() != items_b.len() {
                     return Ok(false);
                 }

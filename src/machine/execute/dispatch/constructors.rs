@@ -18,7 +18,7 @@ use crate::machine::model::{CarriedFamily, WrappedPayload};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{
-    force_record_borrows_host, CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion,
+    force_substrate_borrows_host, CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion,
     RegionTypeFamily,
 };
 use crate::source::Spanned;
@@ -457,7 +457,7 @@ fn finish_witnessed<'step>(
                 );
             // Step-terminal seal: the fresh record's substrate always borrows into this same
             // `dest_frame` — force the bit rather than trust the merge's operand-only compose.
-            Ok(force_record_borrows_host(witnessed, &dest_frame))
+            Ok(force_substrate_borrows_host(witnessed, &dest_frame))
         }
         CtorKind::Tagged {
             schema,

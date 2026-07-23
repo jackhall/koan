@@ -234,11 +234,11 @@ impl<'a> Scope<'a> {
     ///
     /// A value that **embeds a record** (a bare record, or one behind a `Tagged`/`Wrapped` spine)
     /// is totally rebuilt into this scope's region through the record door
-    /// ([`Self::rebuild_delivered_record`]) rather than taking the pointer-copy arm: the record's
+    /// ([`Self::rebuild_delivered_substrate`]) rather than taking the pointer-copy arm: the record's
     /// substrate is region-resident and cannot cross the checked audit by a `deep_clone` (which leaves
     /// the substrate in the retiring producer, uncovered when its home is only ambiently covered). This
     /// path re-homes the value and discards its reach, so it always copies — the bind seam's pin verb
-    /// ([`Self::copy_delivered_record`]) is reachable only where the binding retains the reach.
+    /// ([`Self::copy_delivered_substrate`]) is reachable only where the binding retains the reach.
     pub(crate) fn adopt_sealed_copied(
         &self,
         cell: &DeliveredCarried,
@@ -248,10 +248,11 @@ impl<'a> Scope<'a> {
         if !is_object {
             return self.adopt_sealed(cell);
         }
-        let embeds_record = cell.open(|live| live.as_object().is_some_and(|o| o.embeds_record()));
-        if embeds_record {
+        let embeds_substrate =
+            cell.open(|live| live.as_object().is_some_and(|o| o.embeds_substrate()));
+        if embeds_substrate {
             let (object, _stored) = self
-                .rebuild_delivered_record(cell, |carried| Ok(carried.object()), types)
+                .rebuild_delivered_substrate(cell, |carried| Ok(carried.object()), types)
                 .expect("a whole-value record adoption's copy is infallible");
             return Carried::Object(object);
         }
@@ -283,7 +284,7 @@ impl<'a> Scope<'a> {
     ///   (copied out and released, the retiring producer frees), plus every unpriceable record and
     ///   any projection whose top is a `Tagged`/`Wrapped` spine embedding a record (still-`Rc` at the
     ///   top, unpriceable there): the value is totally rebuilt into this scope's region through the
-    ///   record door ([`Self::rebuild_delivered_record`]).
+    ///   record door ([`Self::rebuild_delivered_substrate`]).
     /// - **Pin** — a record that borrows its home region, a small home-crossing pin, or a foreign
     ///   (producer-resident) crossing: the projection is pointer-copied ([`KObject::deep_clone`], a
     ///   pointer copy for a record sharing the producer-region substrate) and moved in under the
@@ -297,7 +298,7 @@ impl<'a> Scope<'a> {
     ///
     /// Returns the resident reference paired with the binding's stored reach (minted at the verb's
     /// residence mode), the same pair [`Self::bind_delivered`] / a caller's terminal seal consume.
-    pub(crate) fn copy_delivered_record<P>(
+    pub(crate) fn copy_delivered_substrate<P>(
         &self,
         cell: &DeliveredCarried,
         project: P,
@@ -320,7 +321,7 @@ impl<'a> Scope<'a> {
         });
 
         match verb {
-            RegionEscape::Copy { .. } => self.rebuild_delivered_record(cell, project, types),
+            RegionEscape::Copy { .. } => self.rebuild_delivered_substrate(cell, project, types),
             // Pin: the record stays in its producer region; the projection is pointer-copied and
             // moved in under the non-omitting `Kept` stored reach ([`Self::pinned_reach_of`]), whose
             // explicitly named producer region covers the foreign substrate on the audit's
@@ -354,12 +355,12 @@ impl<'a> Scope<'a> {
     /// passes because the rebuilt substrate is scope-resident, so no reach evidence is needed. Returns
     /// the resident reference paired with the binding's stored reach (minted at the same mode).
     ///
-    /// This is the unconditional-copy half of [`Self::copy_delivered_record`]'s chooser: the argument
+    /// This is the unconditional-copy half of [`Self::copy_delivered_substrate`]'s chooser: the argument
     /// re-home ([`Self::adopt_sealed_copied`]) calls it directly, and the chooser's `Copy` verb
     /// delegates here (a `Copy` verb's residence is exactly this release-exact mode — a clear
     /// borrows-home bit at a home crossing agrees with the probe, and the unpriceable / embedded-spine
     /// verbs read the probe directly).
-    fn rebuild_delivered_record<P>(
+    fn rebuild_delivered_substrate<P>(
         &self,
         cell: &DeliveredCarried,
         project: P,

@@ -33,25 +33,25 @@ pub type DeliveredCarried =
 
 /// The step-terminal seal's variant bit (design/value-substrates.md § Escape): force
 /// `borrows_host = true` on `witnessed` when its carried value is, or (through a still-`Rc`
-/// `Tagged`/`Wrapped` spine) embeds, a top-level `Record` — see
-/// [`KObject::embeds_record`](crate::machine::model::KObject::embeds_record).
+/// `Tagged`/`Wrapped` spine) embeds, a top-level substrate carrier (`Record` / `List`) — see
+/// [`KObject::embeds_substrate`](crate::machine::model::KObject::embeds_substrate).
 ///
 /// Every fold engine that builds `witnessed` (`map_pinned_placing`, `merge_pinned_placing`,
 /// `transfer_into_placing`) composes its witness from the fold's *other* operands alone — it is
-/// structurally blind to the value the closure just built — so a freshly-born record's own
-/// self-borrow into its birth region is otherwise under-reported: a later `Residence::Copied`
+/// structurally blind to the value the closure just built — so a freshly-born substrate carrier's
+/// own self-borrow into its birth region is otherwise under-reported: a later `Residence::Copied`
 /// crossing would read `borrows_host = false` and release the producer while the copy (still a
 /// pointer, per Ruling 4) keeps pointing into it. Rebuilding with an empty reach loses nothing:
-/// every current birth site's non-record fold operand is reach-free (a bare type-channel
+/// every current birth site's non-substrate fold operand is reach-free (a bare type-channel
 /// handle), so the composed reach a correctly-derived witness would have carried was already
 /// empty in every case this forces. `pin` is the frame the value was just built into (its
 /// producer's own retained owner).
-pub(crate) fn force_record_borrows_host(
+pub(crate) fn force_substrate_borrows_host(
     witnessed: Witnessed<CarriedFamily, CarrierWitness>,
     pin: &Rc<FrameStorage>,
 ) -> Witnessed<CarriedFamily, CarrierWitness> {
     let forced = witnessed.with_pinned(pin, |carried: &Carried<'_>| match carried {
-        Carried::Object(o) if o.embeds_record() => Some(Erased::erase(*carried)),
+        Carried::Object(o) if o.embeds_substrate() => Some(Erased::erase(*carried)),
         _ => None,
     });
     match forced {

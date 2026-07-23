@@ -217,9 +217,13 @@ fn loop_carried_aggregate_survives_tail_hop_adoption() {
     loop {
         match current {
             KObject::List(items, _) => {
-                assert_eq!(items.len(), 1, "each wrap is a single-element list");
+                assert_eq!(
+                    items.elements().len(),
+                    1,
+                    "each wrap is a single-element list"
+                );
                 depth += 1;
-                current = match &items[0] {
+                current = match &items.elements()[0] {
                     Held::Object(obj) => obj,
                     Held::Type(_) | Held::UnresolvedType(_) => {
                         panic!("expected an object element, got a type")

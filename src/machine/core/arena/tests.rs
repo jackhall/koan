@@ -517,7 +517,9 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     let list: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_frame, |(region, cells), _token| {
             let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
-            Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells, &types)))
+            Carried::Object(
+                region.alloc_object_folded(KObject::list_of_held(region, cells, &types)),
+            )
         });
     // Drop the producer handles: the dest arena's minted set solely owns both foreign regions; the
     // dest region itself rides the held `dest_frame` (the retention stand-in), which the read names.
@@ -525,6 +527,7 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     drop(frame_b);
     let got = list.with_pinned(&dest_frame, |c| match c.object() {
         KObject::List(items, _) => items
+            .elements()
             .iter()
             .map(|h| match h.object() {
                 KObject::Number(n) => *n,
@@ -796,7 +799,9 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let list: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_storage, |(region, cells), _token| {
             let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
-            Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells, &types)))
+            Carried::Object(
+                region.alloc_object_folded(KObject::list_of_held(region, cells, &types)),
+            )
         });
 
     // Free every home and reader shell: the dest arena's minted set (the unioned closure homes plus
@@ -812,6 +817,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
     // mint-only-pinned) region.
     let ids: Vec<_> = list.with_pinned(&dest_storage, |c| match c.object() {
         KObject::List(items, _) => items
+            .elements()
             .iter()
             .map(|h| match h.object() {
                 KObject::KFunction(f) => f.captured_scope().id,
@@ -881,7 +887,8 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
         |outer_v, (_region, cells), placement| {
             let region = FoldingBrand::in_fold_closure(placement);
             if let KObject::KFunction(kf) = outer_v.object() {
-                let list_obj = region.alloc_object_folded(KObject::list_of_held(cells, &types));
+                let list_obj =
+                    region.alloc_object_folded(KObject::list_of_held(region, cells, &types));
                 kf.captured_scope()
                     .bind_value(
                         "inners".to_string(),
@@ -905,6 +912,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
     let ids: Vec<_> = captured.with_pinned(&outer_storage, |c| match c.object() {
         KObject::KFunction(outer) => match outer.captured_scope().lookup("inners") {
             Some(KObject::List(items, _)) => items
+                .elements()
                 .iter()
                 .map(|h| match h.object() {
                     KObject::KFunction(f) => f.captured_scope().id,
@@ -1038,7 +1046,7 @@ fn object_field_reach_fold_survives_producer_frame_free() {
     // region, which is exactly what the fold has to keep alive.
     let sealed: StepCarried = ctx.alloc_carried_with(&[&dep], |b, views| {
         let cells = vec![Held::from_carried(views[0])];
-        Carried::Object(b.alloc_object_folded(KObject::list_of_held(cells, &types)))
+        Carried::Object(b.alloc_object_folded(KObject::list_of_held(b, cells, &types)))
     });
 
     // Drop the dep envelope and every frame shell: only the fold (if it happened) keeps the
@@ -1052,7 +1060,7 @@ fn object_field_reach_fold_survives_producer_frame_free() {
     // Read back through the sealed carrier's arena reference — the captured-scope read is what
     // dangles if the producer region was freed.
     let read = sealed.inspect_pinned(&consumer_storage, |c| match c.object() {
-        KObject::List(items, _) => match items[0].object() {
+        KObject::List(items, _) => match items.elements()[0].object() {
             KObject::KFunction(f) => f.captured_scope().id,
             other => panic!(
                 "expected a KFunction element, got {}",
@@ -1397,7 +1405,7 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
         let fields =
             Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
         let record = KObject::record_of_held(door, fields, &types);
-        KObject::list_of_held(vec![Held::Object(record)], &types)
+        KObject::list_of_held(door, vec![Held::Object(record)], &types)
     };
 
     let consumer_storage = run_root_storage();
@@ -1414,7 +1422,7 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
         )
         .expect("evidence naming the record's home region covers it via owns_substrate membership");
     match moved {
-        KObject::List(items, _) => match items[0].object() {
+        KObject::List(items, _) => match items.elements()[0].object() {
             KObject::Record(substrate, _) => {
                 match substrate.fields().get("x").map(|h| h.object()) {
                     Some(KObject::Number(n)) => {

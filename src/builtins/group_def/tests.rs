@@ -16,6 +16,7 @@ use crate::machine::KErrorKind;
 fn list_numbers(object: &KObject<'_>, types: &TypeRegistry) -> Vec<f64> {
     match object {
         KObject::List(items, _) => items
+            .elements()
             .iter()
             .map(|item| match item {
                 Held::Object(KObject::Number(n)) => *n,

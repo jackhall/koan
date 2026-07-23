@@ -90,7 +90,7 @@ impl<'a> Scope<'a> {
     /// USING-window forwarding and conditional-defer behavior.
     ///
     /// A projection that **embeds a record** (a bare record, or one behind a `Tagged`/`Wrapped`
-    /// spine) routes the escape-seam cost chooser through [`Self::copy_delivered_record`]. A rebuilt
+    /// spine) routes the escape-seam cost chooser through [`Self::copy_delivered_substrate`]. A rebuilt
     /// record lands in this scope's region through the record door at its release-exact seam mode; a
     /// projection the chooser selects to **pin** instead rides the producer region by hold (its
     /// pointer-copied substrate covered by the binding's `Kept`-minted stored reach), the copy-free
@@ -105,13 +105,13 @@ impl<'a> Scope<'a> {
         project: impl for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
         types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
-        let projected_embeds_record = cell.open(|live| {
+        let projected_embeds_substrate = cell.open(|live| {
             project(&live)
-                .map(|object| object.embeds_record())
+                .map(|object| object.embeds_substrate())
                 .unwrap_or(false)
         });
-        let (allocated, stored) = if projected_embeds_record {
-            self.copy_delivered_record(cell, project, types)?
+        let (allocated, stored) = if projected_embeds_substrate {
+            self.copy_delivered_substrate(cell, project, types)?
         } else {
             let stored = self.adopted_reach_of(cell);
             let allocated = cell.open(|live| {

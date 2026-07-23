@@ -440,9 +440,14 @@ fn let_bound_list_reaching_two_call_regions_keeps_both_live() {
     let result = test_run.run_one(parse_one("holders"));
     match result {
         KObject::List(items, _) => {
-            assert_eq!(items.len(), 2, "list should hold both holder closures");
+            assert_eq!(
+                items.elements().len(),
+                2,
+                "list should hold both holder closures"
+            );
             assert!(
                 items
+                    .elements()
                     .iter()
                     .all(|h| matches!(h, Held::Object(KObject::KFunction(_)))),
                 "both list elements must be intact closures after their call regions retired",

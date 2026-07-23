@@ -1,8 +1,9 @@
 //! [`ContainerSubstrate<C>`] — a region-resident container payload `C` plus its [`SubstrateMemos`]:
 //! the three construction-time memos (contains-borrows, copy-cost, borrows-home) every container
-//! carries. [`RecordSubstrate`] is its `C = Record<Held>` instantiation — the field substrate behind
-//! a record value. The wrapper is the pattern every later container conversion in this project
-//! copies; see [design/value-substrates.md](../../../../design/value-substrates.md).
+//! carries. [`RecordSubstrate`] (`C = Record<Held>`) is the field substrate behind a record value;
+//! [`ListSubstrate`] (`C = Vec<Held>`) is the element substrate behind a list value. The wrapper is
+//! the pattern every later container conversion in this project copies; see
+//! [design/value-substrates.md](../../../../design/value-substrates.md).
 
 use crate::machine::core::KoanRegion;
 use crate::machine::model::types::Record;
@@ -14,14 +15,15 @@ use super::{Held, KObject};
 /// relative to their own cells.
 pub struct SubstrateMemos {
     /// Set iff some transitive cell is a region-borrow leaf (closure, module, non-splice-free
-    /// expression) or a still-`Rc` composite (list/dict/tagged/wrapped — carrying no memo of its
-    /// own to consult, so the bit is conservative there until each container converts).
-    /// Memoized in the same pass that computes the field-type join; never recomputed by a walk.
+    /// expression) or a still-`Rc` composite (dict/tagged/wrapped — carrying no memo of its own to
+    /// consult, so the bit is conservative there until each container converts). A nested `Record`
+    /// or `List` contributes its own memoized bit. Memoized in the same pass that computes the
+    /// element/field-type join; never recomputed by a walk.
     contains_borrows: bool,
     /// Exact cost in bytes of totally rebuilding this container's reachable structure at a
     /// destination brand. `u64::MAX` (saturated): unpriceable — some transitive cell is a
-    /// still-`Rc` composite (list/dict/tagged/wrapped) or a `KExpression`, which carry no memo of
-    /// their own until their conversions ship.
+    /// still-`Rc` composite (dict/tagged/wrapped) or a `KExpression`, which carry no memo of their
+    /// own until their conversions ship. A nested `Record` or `List` contributes its own cost.
     copy_cost: u64,
     /// Whether some transitive borrow leaf points into this container's own home region. Exact when
     /// `copy_cost` is priced (leaf regions are O(1) reads at construction; nested records compose
@@ -142,11 +144,23 @@ impl<'a> ContainerSubstrate<Record<Held<'a>>> {
     }
 }
 
-/// [`KObject::record_of_held`]'s per-cell contains-borrows rule (see [`RecordSubstrate`]'s doc):
-/// a type-channel cell never borrows a region; a scalar owns its data outright; `KFunction` /
-/// `Module` are borrow leaves; a `KExpression` borrows iff it carries a splice; a nested
-/// `Record` contributes its own memoized bit (never re-walked); every other still-`Rc` composite
-/// is conservative `true` until it, too, converts to a substrate.
+/// The element substrate a list value borrows — [`ContainerSubstrate<C>`] at `C = Vec<Held>`.
+/// A list is positional, so the payload is a bare `Vec` (unlike [`RecordSubstrate`]'s order-blind
+/// [`Record`]).
+pub(crate) type ListSubstrate<'a> = ContainerSubstrate<Vec<Held<'a>>>;
+
+impl<'a> ContainerSubstrate<Vec<Held<'a>>> {
+    /// The element slice — positional, index-ordered.
+    pub fn elements(&self) -> &Vec<Held<'a>> {
+        self.cells()
+    }
+}
+
+/// The per-cell contains-borrows rule shared by every substrate constructor (see
+/// [`RecordSubstrate`] / [`ListSubstrate`]): a type-channel cell never borrows a region; a scalar
+/// owns its data outright; `KFunction` / `Module` are borrow leaves; a `KExpression` borrows iff it
+/// carries a splice; a nested `Record` or `List` contributes its own memoized bit (never re-walked);
+/// every other still-`Rc` composite is conservative `true` until it, too, converts to a substrate.
 fn held_contains_borrows(h: &Held<'_>) -> bool {
     match h {
         Held::Type(_) | Held::UnresolvedType(_) => false,
@@ -155,10 +169,8 @@ fn held_contains_borrows(h: &Held<'_>) -> bool {
             KObject::KFunction(_) | KObject::Module(_) => true,
             KObject::KExpression(e) => !e.is_splice_free(),
             KObject::Record(substrate, _) => substrate.contains_borrows(),
-            KObject::List(..)
-            | KObject::Dict(..)
-            | KObject::Tagged { .. }
-            | KObject::Wrapped { .. } => true,
+            KObject::List(substrate, _) => substrate.contains_borrows(),
+            KObject::Dict(..) | KObject::Tagged { .. } | KObject::Wrapped { .. } => true,
         },
     }
 }
@@ -169,12 +181,12 @@ fn held_flat_size() -> u64 {
     std::mem::size_of::<Held<'static>>() as u64
 }
 
-/// [`KObject::record_of_held`]'s per-cell copy-cost rule (see [`RecordSubstrate`]'s doc): a cell
-/// contributes the bytes of totally rebuilding it at a destination brand. A type cell or a scalar
-/// costs one flat [`Held`]; a `KString` adds its byte length; a `KFunction` / `Module` is a borrow
-/// leaf that rides the transfer and rebuilds nothing (**0**); a nested `Record` contributes its own
-/// memoized cost; a `KExpression` and every still-`Rc` composite are unpriceable (`u64::MAX`),
-/// carrying no cost memo of their own until each converts to a substrate.
+/// The per-cell copy-cost rule shared by every substrate constructor (see [`RecordSubstrate`] /
+/// [`ListSubstrate`]): a cell contributes the bytes of totally rebuilding it at a destination brand.
+/// A type cell or a scalar costs one flat [`Held`]; a `KString` adds its byte length; a `KFunction` /
+/// `Module` is a borrow leaf that rides the transfer and rebuilds nothing (**0**); a nested `Record`
+/// or `List` contributes its own memoized cost; a `KExpression` and every still-`Rc` composite are
+/// unpriceable (`u64::MAX`), carrying no cost memo of their own until each converts to a substrate.
 fn held_copy_cost(h: &Held<'_>, _home: &KoanRegion) -> u64 {
     match h {
         Held::Type(_) | Held::UnresolvedType(_) => held_flat_size(),
@@ -183,8 +195,8 @@ fn held_copy_cost(h: &Held<'_>, _home: &KoanRegion) -> u64 {
             KObject::KString(s) => held_flat_size().saturating_add(s.len() as u64),
             KObject::KFunction(_) | KObject::Module(_) => 0,
             KObject::Record(substrate, _) => substrate.copy_cost(),
+            KObject::List(substrate, _) => substrate.copy_cost(),
             KObject::KExpression(_)
-            | KObject::List(..)
             | KObject::Dict(..)
             | KObject::Tagged { .. }
             | KObject::Wrapped { .. } => u64::MAX,
@@ -192,12 +204,13 @@ fn held_copy_cost(h: &Held<'_>, _home: &KoanRegion) -> u64 {
     }
 }
 
-/// [`KObject::record_of_held`]'s per-cell borrows-home rule (see [`RecordSubstrate`]'s doc): whether
-/// this cell's transitive borrow leaf points into `home`, the substrate's own region. A type cell
-/// and a scalar borrow nothing (false); a `KFunction` / `Module` leaf borrows home iff its captured
-/// scope's region is `home` (an O(1) region read); a nested `Record` composes its own memoized bit
-/// (co-resident by construction); a `KExpression` is conservative on a carried splice; every
-/// still-`Rc` composite is conservatively `true` until it, too, converts to a substrate.
+/// The per-cell borrows-home rule shared by every substrate constructor (see [`RecordSubstrate`] /
+/// [`ListSubstrate`]): whether this cell's transitive borrow leaf points into `home`, the
+/// substrate's own region. A type cell and a scalar borrow nothing (false); a `KFunction` / `Module`
+/// leaf borrows home iff its captured scope's region is `home` (an O(1) region read); a nested
+/// `Record` or `List` composes its own memoized bit (co-resident by construction); a `KExpression`
+/// is conservative on a carried splice; every still-`Rc` composite is conservatively `true` until it,
+/// too, converts to a substrate.
 fn held_borrows_home(h: &Held<'_>, home: &KoanRegion) -> bool {
     match h {
         Held::Type(_) | Held::UnresolvedType(_) => false,
@@ -206,11 +219,9 @@ fn held_borrows_home(h: &Held<'_>, home: &KoanRegion) -> bool {
             KObject::KFunction(f) => std::ptr::eq(f.captured_scope().region(), home),
             KObject::Module(m) => std::ptr::eq(m.child_scope().region(), home),
             KObject::Record(substrate, _) => substrate.borrows_home(),
+            KObject::List(substrate, _) => substrate.borrows_home(),
             KObject::KExpression(e) => !e.is_splice_free(),
-            KObject::List(..)
-            | KObject::Dict(..)
-            | KObject::Tagged { .. }
-            | KObject::Wrapped { .. } => true,
+            KObject::Dict(..) | KObject::Tagged { .. } | KObject::Wrapped { .. } => true,
         },
     }
 }

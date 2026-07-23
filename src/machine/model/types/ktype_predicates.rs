@@ -210,7 +210,10 @@ impl KType {
         match types.node(self) {
             TypeNode::Any => true,
             TypeNode::List { element } => match obj {
-                KObject::List(items, _) => items.iter().all(|x| element.matches_held(x, types)),
+                KObject::List(substrate, _) => substrate
+                    .elements()
+                    .iter()
+                    .all(|x| element.matches_held(x, types)),
                 _ => false,
             },
             TypeNode::Dict { key, value } => match obj {

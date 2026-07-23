@@ -31,8 +31,6 @@ untyped-arena move for the whole family.
 
 **Requires:**
 
-- [Region-store list values](region-store-lists.md) — project conversion order:
-  strings convert after the composite payloads.
 - [Region-store dict values](region-store-dicts.md) — same ordering, and dict keys
   are a string carrier.
 - [Region-store tagged and wrapped payloads](region-store-tagged-wrapped.md) — same

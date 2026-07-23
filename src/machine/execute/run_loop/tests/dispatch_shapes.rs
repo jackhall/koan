@@ -429,7 +429,7 @@ fn literal_pass_through_routes_list_literal_via_fast_lane() {
     assert_eq!(resolve_dispatch_entry_count(), 0);
     match result {
         KObject::List(items, _) => {
-            assert_eq!(items.len(), 3);
+            assert_eq!(items.elements().len(), 3);
         }
         other => panic!("expected List, got {:?}", other.ktype()),
     }
@@ -504,9 +504,13 @@ fn fast_lane_list_of_closures_escapes_outer_call() {
             other.summarize(&test_run.types)
         ),
     };
-    assert_eq!(items.len(), 1, "list should hold the single inner closure");
+    assert_eq!(
+        items.elements().len(),
+        1,
+        "list should hold the single inner closure"
+    );
     assert!(
-        matches!(&items[0], Held::Object(KObject::KFunction(_))),
+        matches!(&items.elements()[0], Held::Object(KObject::KFunction(_))),
         "list element should be the escaped inner closure, intact after its call region freed",
     );
 }

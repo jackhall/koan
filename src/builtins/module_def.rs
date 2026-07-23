@@ -283,9 +283,9 @@ mod tests {
                     ":(LIST OF SIG (compare: Number))",
                     "the memoized element type is the module self-sig"
                 );
-                assert_eq!(items.len(), 2);
+                assert_eq!(items.elements().len(), 2);
                 assert!(
-                    items.iter().all(
+                    items.elements().iter().all(
                         |i| matches!(i, Held::Object(KObject::Module(m)) if m.path == "int_ord")
                     ),
                     "each element is the Object-arm module value",
@@ -318,9 +318,9 @@ mod tests {
                     ":(LIST OF SIG (compare: Number))",
                     "element memoizes to the module self-sig"
                 );
-                assert_eq!(items.len(), 1);
+                assert_eq!(items.elements().len(), 1);
                 assert!(
-                    matches!(&items[0], Held::Object(KObject::Module(m)) if m.path == "int_ord"),
+                    matches!(&items.elements()[0], Held::Object(KObject::Module(m)) if m.path == "int_ord"),
                     "the list element is the Object-arm module value",
                 );
             }

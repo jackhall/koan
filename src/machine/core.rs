@@ -28,7 +28,7 @@ pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
     NodeHandle, PendingBinderGuard, StoredReach,
 };
-pub(crate) use carrier_witness::force_record_borrows_host;
+pub(crate) use carrier_witness::force_substrate_borrows_host;
 pub use carrier_witness::{CarrierWitness, DeliveredCarried};
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};

@@ -19,6 +19,22 @@ fn newtype_singleton(name: &str, repr: KType, types: &TypeRegistry) -> KType {
     RecursiveGroupWindow::seal_singleton(name.into(), RelativeSchema::NewType(repr), None, types)
 }
 
+/// Mint the zero-dep fold door a container test needs, over a fresh root region, as two `let`
+/// bindings in the caller's own scope: `forge_for_test` is the sanctioned test-only placement
+/// mint (no enclosing fold engine required). A statement macro (not a function returning the
+/// pair) so `door`'s borrow of `storage` lives in the same frame it was minted in, never crossing
+/// a return.
+macro_rules! container_door {
+    ($storage:ident, $door:ident) => {
+        use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+        use crate::witnessed::FoldedPlacement;
+        let $storage = run_root_storage();
+        let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+            $storage.brand().handle(),
+        ));
+    };
+}
+
 // --- scalars ----------------------------------------------------------------------
 
 #[test]
@@ -74,10 +90,11 @@ fn cross_variant_scalars_are_unequal() {
 #[test]
 fn list_element_and_length() {
     let types = TypeRegistry::new();
-    let a = KObject::list(vec![num(1.0), num(2.0)], &types);
-    let b = KObject::list(vec![num(1.0), num(2.0)], &types);
-    let c = KObject::list(vec![num(1.0), num(3.0)], &types);
-    let short = KObject::list(vec![num(1.0)], &types);
+    container_door!(_storage, door);
+    let a = KObject::list(door, vec![num(1.0), num(2.0)], &types);
+    let b = KObject::list(door, vec![num(1.0), num(2.0)], &types);
+    let c = KObject::list(door, vec![num(1.0), num(3.0)], &types);
+    let short = KObject::list(door, vec![num(1.0)], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&c, &types), Ok(false));
     assert_eq!(a.value_equal(&short, &types), Ok(false));
@@ -86,18 +103,21 @@ fn list_element_and_length() {
 #[test]
 fn list_nan_self_compare_is_false() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     // No Rc-ptr fast path: a self-comparison of a NaN-holding list is element-wise false.
-    let l = KObject::list(vec![num(f64::NAN)], &types);
+    let l = KObject::list(door, vec![num(f64::NAN)], &types);
     assert_eq!(l.value_equal(&l, &types), Ok(false));
 }
 
 #[test]
 fn list_comparability_gate_is_intransitive() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     // `[]:Number` == `[]:Any` == `[]:Str`, but the outer two are unrelated → unequal.
-    let empty_number = KObject::list_with_type(Rc::new(vec![]), types.list(KType::NUMBER));
-    let empty_any = KObject::list_with_type(Rc::new(vec![]), types.list(KType::ANY));
-    let empty_str = KObject::list_with_type(Rc::new(vec![]), types.list(KType::STR));
+    let empty_number =
+        KObject::list(door, vec![], &types).stamp_type(types.list(KType::NUMBER), &types);
+    let empty_any = KObject::list(door, vec![], &types).stamp_type(types.list(KType::ANY), &types);
+    let empty_str = KObject::list(door, vec![], &types).stamp_type(types.list(KType::STR), &types);
     assert_eq!(empty_number.value_equal(&empty_any, &types), Ok(true));
     assert_eq!(empty_any.value_equal(&empty_str, &types), Ok(true));
     // Number and Str are unrelated → gate closes, no descent.
@@ -107,9 +127,10 @@ fn list_comparability_gate_is_intransitive() {
 #[test]
 fn list_of_types_compares_by_digest() {
     let types = TypeRegistry::new();
-    let a = KObject::list_of_held(vec![Held::Type(KType::NUMBER)], &types);
-    let b = KObject::list_of_held(vec![Held::Type(KType::NUMBER)], &types);
-    let c = KObject::list_of_held(vec![Held::Type(KType::STR)], &types);
+    container_door!(_storage, door);
+    let a = KObject::list_of_held(door, vec![Held::Type(KType::NUMBER)], &types);
+    let b = KObject::list_of_held(door, vec![Held::Type(KType::NUMBER)], &types);
+    let c = KObject::list_of_held(door, vec![Held::Type(KType::STR)], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     // Different element type parameters (a `Type OF Number` vs `Type OF Str` list) close the gate.
     assert_eq!(a.value_equal(&c, &types), Ok(false));
@@ -191,26 +212,10 @@ fn record<'a>(
     )
 }
 
-/// Mint the zero-dep fold door a record test needs, over a fresh root region, as two `let`
-/// bindings in the caller's own scope: `forge_for_test` is the sanctioned test-only placement
-/// mint (no enclosing fold engine required). A statement macro (not a function returning the
-/// pair) so `door`'s borrow of `storage` lives in the same frame it was minted in, never crossing
-/// a return.
-macro_rules! record_door {
-    ($storage:ident, $door:ident) => {
-        use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
-        use crate::witnessed::FoldedPlacement;
-        let $storage = run_root_storage();
-        let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
-            $storage.brand().handle(),
-        ));
-    };
-}
-
 #[test]
 fn record_field_order_blind_equality() {
     let types = TypeRegistry::new();
-    record_door!(_storage, door);
+    container_door!(_storage, door);
     let a = record(door, vec![("x", num(1.0)), ("y", num(2.0))], &types);
     let b = record(door, vec![("y", num(2.0)), ("x", num(1.0))], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
@@ -219,7 +224,7 @@ fn record_field_order_blind_equality() {
 #[test]
 fn record_width_mismatch_comparable_but_unequal() {
     let types = TypeRegistry::new();
-    record_door!(_storage, door);
+    container_door!(_storage, door);
     // `{x:Number}` and `{x:Number, y:Number}` are related by record subtyping (gate open),
     // but the field sets differ → unequal.
     let narrow = record(door, vec![("x", num(1.0))], &types);
@@ -230,7 +235,7 @@ fn record_width_mismatch_comparable_but_unequal() {
 #[test]
 fn record_field_value_differs() {
     let types = TypeRegistry::new();
-    record_door!(_storage, door);
+    container_door!(_storage, door);
     let a = record(door, vec![("x", num(1.0))], &types);
     let b = record(door, vec![("x", num(2.0))], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(false));
@@ -468,13 +473,20 @@ fn function_operand_is_error_at_any_position() {
     // Nested: a function inside a list propagates the error.
     let storage2 = run_root_storage();
     let second_run = TestRun::silent(&storage2);
+    let door = {
+        use crate::machine::core::{FoldingBrand, FrameStorageExt};
+        use crate::witnessed::FoldedPlacement;
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage2.brand().handle()))
+    };
     let list_f = KObject::list_of_held(
+        door,
         vec![Held::Object(
             a_function(&storage2, second_run.scope, &second_run.types).deep_clone(),
         )],
         &types,
     );
     let list_g = KObject::list_of_held(
+        door,
         vec![Held::Object(
             a_function(&storage2, second_run.scope, &second_run.types).deep_clone(),
         )],
@@ -495,13 +507,19 @@ fn length_mismatch_short_circuits_before_banned_cell() {
     let storage = run_root_storage();
     let test_run = TestRun::silent(&storage);
     let types = test_run.types.clone();
+    let door = {
+        use crate::machine::core::{FoldingBrand, FrameStorageExt};
+        use crate::witnessed::FoldedPlacement;
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage.brand().handle()))
+    };
     let list_f = KObject::list_of_held(
+        door,
         vec![Held::Object(
             a_function(&storage, test_run.scope, &types).deep_clone(),
         )],
         &types,
     );
-    let empty = KObject::list(vec![], &types);
+    let empty = KObject::list(door, vec![], &types);
     assert_eq!(list_f.value_equal(&empty, &types), Ok(false));
 }
 

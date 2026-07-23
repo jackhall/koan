@@ -220,8 +220,8 @@ fn nested_dict_in_list_binds_correctly() {
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(KObject::List(outer, _)) => {
-            assert_eq!(outer.len(), 2);
-            match &outer[0] {
+            assert_eq!(outer.elements().len(), 2);
+            match &outer.elements()[0] {
                 Held::Object(KObject::Dict(d, _)) => assert!(matches!(
                     lookup_string_key(d, "a"),
                     Some(KObject::Number(n)) if *n == 1.0,

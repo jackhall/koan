@@ -6,7 +6,7 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
 use crate::machine::{
-    force_record_borrows_host, CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion,
+    force_substrate_borrows_host, CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion,
     NodeId, TraceFrame,
 };
 use crate::source::Spanned;
@@ -183,7 +183,7 @@ impl<'step> KoanRuntime<'step> {
             // same `dest_frame` it was just built into — the fold above composes the witness
             // from the accumulator alone, blind to that fact, so force it here rather than
             // under-report the value's own self-borrow.
-            let witnessed = force_record_borrows_host(witnessed, &dest_frame);
+            let witnessed = force_substrate_borrows_host(witnessed, &dest_frame);
             Ok(StepCarried::born(witnessed))
         });
         self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
@@ -205,7 +205,7 @@ impl<'step> KoanRuntime<'step> {
         self.schedule_aggregate(
             deps,
             rows,
-            Box::new(|_door, _keys, cells, types| KObject::list_of_held(cells, types)),
+            Box::new(|door, _keys, cells, types| KObject::list_of_held(door, cells, types)),
         )
     }
 

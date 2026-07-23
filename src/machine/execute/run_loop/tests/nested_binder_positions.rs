@@ -96,7 +96,11 @@ fn anonymous_fn_in_list_element_is_legal() {
     test_run.run("LET xs = [(FN :{x :Number} -> Number = (x))]");
     match test_run.scope.lookup("xs") {
         Some(KObject::List(items, _)) => {
-            assert_eq!(items.len(), 1, "list should hold the anonymous closure");
+            assert_eq!(
+                items.elements().len(),
+                1,
+                "list should hold the anonymous closure"
+            );
         }
         other => panic!(
             "expected `xs` bound to a List, got {:?}",

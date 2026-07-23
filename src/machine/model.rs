@@ -27,6 +27,6 @@ pub(crate) use types::{
     ResultFeed, SealOutcome, SigSchema, TypeDigest, TypeResolution,
 };
 pub(crate) use values::{
-    copy_object_into, copy_or_pin, still_borrows_host, CarriedFamily, Module, NamedPairs,
-    RecordSubstrate, RegionEscape, WrappedPayload,
+    copy_object_into, copy_or_pin, still_borrows_host, CarriedFamily, ListSubstrate, Module,
+    NamedPairs, RecordSubstrate, RegionEscape, WrappedPayload,
 };

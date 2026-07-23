@@ -16,7 +16,7 @@ pub use core::kfunction::{KFunction, NodeId};
 pub(crate) use core::KoanRegionTestExt;
 pub(crate) use core::{
     arg_held, arg_object, arg_type, arg_unresolved_type, body_statement_refs,
-    force_record_borrows_host, kerror_ktype, require_bare_type_name, require_identifier_name,
+    force_substrate_borrows_host, kerror_ktype, require_bare_type_name, require_identifier_name,
     require_kexpression, require_ktype, split_body_statements, Action, ActionFn, AwaitContinue,
     BlockEntry, BodyCtx, CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx,
     FoldingBrand, FramePlacement, FrameStorageExt, OwnedDispatch, ReturnContract, StepAllocator,

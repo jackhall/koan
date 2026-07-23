@@ -58,6 +58,5 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [USING surfaces module type members](type_language/using-type-members.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 - [Region-store dict values](untyped_arena/region-store-dicts.md)
-- [Region-store list values](untyped_arena/region-store-lists.md)
 - [Region-store tagged and wrapped payloads](untyped_arena/region-store-tagged-wrapped.md)
 

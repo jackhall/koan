@@ -95,9 +95,9 @@ fn let_binds_a_list_literal_of_numbers() {
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(KObject::List(items, _)) => {
-            assert_eq!(items.len(), 3);
-            assert!(matches!(items[0], Held::Object(KObject::Number(n)) if n == 1.0));
-            assert!(matches!(items[2], Held::Object(KObject::Number(n)) if n == 3.0));
+            assert_eq!(items.elements().len(), 3);
+            assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0));
+            assert!(matches!(items.elements()[2], Held::Object(KObject::Number(n)) if n == 3.0));
         }
         _ => panic!("expected `xs` bound to a List"),
     }
@@ -119,7 +119,7 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(obj @ KObject::List(items, _)) => {
-            assert!(items.is_empty());
+            assert!(items.elements().is_empty());
             assert_eq!(
                 obj.ktype(),
                 test_run.types.list(crate::machine::model::KType::NUMBER),
@@ -154,10 +154,10 @@ fn list_literal_with_subexpression_element_evaluates_eagerly() {
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(KObject::List(items, _)) => {
-            assert_eq!(items.len(), 3);
-            assert!(matches!(items[0], Held::Object(KObject::Number(n)) if n == 1.0));
-            assert!(matches!(items[1], Held::Object(KObject::Number(n)) if n == 7.0));
-            assert!(matches!(items[2], Held::Object(KObject::Number(n)) if n == 3.0));
+            assert_eq!(items.elements().len(), 3);
+            assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0));
+            assert!(matches!(items.elements()[1], Held::Object(KObject::Number(n)) if n == 7.0));
+            assert!(matches!(items.elements()[2], Held::Object(KObject::Number(n)) if n == 3.0));
         }
         _ => panic!("expected `xs` bound to a List"),
     }
@@ -187,9 +187,9 @@ fn multiline_list_literal_binds_correctly() {
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(KObject::List(items, _)) => {
-            assert_eq!(items.len(), 3);
-            assert!(matches!(items[0], Held::Object(KObject::Number(n)) if n == 1.0));
-            assert!(matches!(items[2], Held::Object(KObject::Number(n)) if n == 3.0));
+            assert_eq!(items.elements().len(), 3);
+            assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0));
+            assert!(matches!(items.elements()[2], Held::Object(KObject::Number(n)) if n == 3.0));
         }
         _ => panic!("expected `xs` bound to a List"),
     }
@@ -204,11 +204,13 @@ fn nested_list_literal_produces_list_of_lists() {
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(KObject::List(outer, _)) => {
-            assert_eq!(outer.len(), 2);
-            match &outer[0] {
+            assert_eq!(outer.elements().len(), 2);
+            match &outer.elements()[0] {
                 Held::Object(KObject::List(inner, _)) => {
-                    assert_eq!(inner.len(), 2);
-                    assert!(matches!(inner[0], Held::Object(KObject::Number(n)) if n == 1.0));
+                    assert_eq!(inner.elements().len(), 2);
+                    assert!(
+                        matches!(inner.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0)
+                    );
                 }
                 _ => panic!("inner[0] should be a List"),
             }

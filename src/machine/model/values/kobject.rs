@@ -6,7 +6,9 @@ use crate::machine::core::{FoldingBrand, FrameSet, KoanRegion, KoanRegionExt, Re
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 
-use super::{ContainerSubstrate, Held, KKey, Module, RecordSubstrate, SubstrateMemos};
+use super::{
+    ContainerSubstrate, Held, KKey, ListSubstrate, Module, RecordSubstrate, SubstrateMemos,
+};
 
 mod equality;
 pub use equality::ValueEqualityError;
@@ -96,12 +98,16 @@ pub enum KObject<'a> {
     Number(f64),
     KString(String),
     Bool(bool),
-    /// List value. The second field is the value's **own type handle** — the interned
-    /// `List<element>` — memoized at construction from the join (LUB) of the contents under
-    /// the immutable-`Rc` contract, or re-stamped at an annotated boundary to the declared
-    /// list type (coarsening included). Construct via [`KObject::list`] /
-    /// [`KObject::list_with_type`]; never the tuple directly outside this module.
-    List(Rc<Vec<Held<'a>>>, KType),
+    /// List value. The first field is a region borrow of the list's [`ListSubstrate`] — the element
+    /// slice plus its three construction memos, contains-borrows / copy-cost / borrows-home
+    /// (positional, index-ordered). The second is the value's **own type handle** — the interned
+    /// `List<element>` — memoized at construction from the join (LUB) of the contents, or re-stamped
+    /// at an annotated boundary to the declared list type (coarsening included). Construct via
+    /// [`KObject::list`] / [`KObject::list_with_type`] — never the tuple directly outside this
+    /// module, and never `Rc::new`: the substrate is born only through
+    /// [`FoldingBrand::alloc_substrate_folded`]. Each element is a [`Held`] (an object or a
+    /// first-class type).
+    List(&'a ListSubstrate<'a>, KType),
     /// Dict value. Each value cell is a [`Held`] (an object or a first-class type); keys
     /// are the concrete scalar [`KKey`]. The second field is the value's own type handle —
     /// the interned `Dict<key, value>` over the join of the keys / values, or the declared
@@ -161,24 +167,62 @@ pub enum KObject<'a> {
 impl<'a> KObject<'a> {
     /// Fresh `List` carrier: memoizes the element type as the join (LUB) of contents.
     /// Empty list memoizes `Any` (the join's identity); the empty-container *error*
-    /// rule lives at the untyped-resolution boundary, not here.
-    pub fn list(items: Vec<KObject<'a>>, types: &TypeRegistry) -> KObject<'a> {
-        KObject::list_of_held(items.into_iter().map(Held::Object).collect(), types)
+    /// rule lives at the untyped-resolution boundary, not here. `door` is the fold brand the
+    /// substrate is born through — see [`Self::list_of_held`].
+    pub fn list(
+        door: FoldingBrand<'a>,
+        items: Vec<KObject<'a>>,
+        types: &TypeRegistry,
+    ) -> KObject<'a> {
+        KObject::list_of_held(door, items.into_iter().map(Held::Object).collect(), types)
     }
 
     /// Fresh `List` carrier over [`Held`] cells — the type-aware path (a list element may be
-    /// a first-class type). Memoizes the element type as the join (LUB) of the cells.
-    pub fn list_of_held(items: Vec<Held<'a>>, types: &TypeRegistry) -> KObject<'a> {
+    /// a first-class type). One pass over `items` computes the memoized element-type join (this
+    /// carrier's own `ktype()`) and the substrate's three memos — contains-borrows, copy-cost,
+    /// borrows-home (see [`ListSubstrate`]'s doc for the per-cell rules; the leaf checks read
+    /// `door`'s own region as home) — then allocates the substrate through `door` — the list door's
+    /// sole construction site.
+    pub fn list_of_held(
+        door: FoldingBrand<'a>,
+        items: Vec<Held<'a>>,
+        types: &TypeRegistry,
+    ) -> KObject<'a> {
         let element = types.join_iter(items.iter().map(|i| i.ktype(types)));
-        KObject::List(Rc::new(items), types.list(element))
+        let home = door.region();
+        let memos = SubstrateMemos::compute(items.iter(), home);
+        let substrate = door.alloc_substrate_folded::<ListSubstrate<'static>>(
+            ContainerSubstrate::new(items, memos),
+        );
+        KObject::List(substrate, types.list(element))
     }
 
-    /// `List` carrier with an explicitly supplied **list type** — for lift (preserve the
-    /// memoized type across a region-anchor rebuild) and ascription stamping (re-tag to
-    /// the declared list type, coarsening included). `list_type` is the whole `List<element>`
-    /// handle, already interned, not the element type.
-    pub fn list_with_type(items: Rc<Vec<Held<'a>>>, list_type: KType) -> KObject<'a> {
-        KObject::List(items, list_type)
+    /// `List` carrier with an explicitly supplied **list type** — for ascription stamping (re-tag to
+    /// the declared list type, coarsening included). Shares the substrate borrow verbatim — the
+    /// substrate is immutable after construction, so retype never touches cells. `list_type` is the
+    /// whole `List<element>` handle, already interned, not the element type. See
+    /// [`Self::record_with_type`].
+    pub fn list_with_type(substrate: &'a ListSubstrate<'a>, list_type: KType) -> KObject<'a> {
+        KObject::List(substrate, list_type)
+    }
+
+    /// Re-home an already-relocated element slice into `door`'s region under the value's existing
+    /// memoized list type — the seam copy verb's list arm ([`copy_object_into`]). Relocation
+    /// preserves every element's `ktype()`, so the element-type join is unchanged and `list_type`
+    /// rides verbatim; the three memos recompute relative to the new home (`door`'s own region). The
+    /// substrate is born through `door` — the list door's sole construction site. See
+    /// [`Self::record_rehomed`].
+    pub fn list_rehomed(
+        door: FoldingBrand<'a>,
+        items: Vec<Held<'a>>,
+        list_type: KType,
+    ) -> KObject<'a> {
+        let home = door.region();
+        let memos = SubstrateMemos::compute(items.iter(), home);
+        let substrate = door.alloc_substrate_folded::<ListSubstrate<'static>>(
+            ContainerSubstrate::new(items, memos),
+        );
+        KObject::List(substrate, list_type)
     }
 
     /// Fresh `Dict` carrier: memoizes key + value types as the join of the keys / values.
@@ -281,7 +325,9 @@ impl<'a> KObject<'a> {
     /// wholesale supplies exactly the declared arguments.
     pub fn stamp_type(self, declared: KType, types: &TypeRegistry) -> KObject<'a> {
         match (self, types.node(declared)) {
-            (KObject::List(items, _), TypeNode::List { .. }) => KObject::List(items, declared),
+            (KObject::List(substrate, _), TypeNode::List { .. }) => {
+                KObject::List(substrate, declared)
+            }
             (KObject::Dict(map, _), TypeNode::Dict { .. }) => KObject::Dict(map, declared),
             (KObject::Record(substrate, _), TypeNode::Record { .. }) => {
                 KObject::Record(substrate, declared)
@@ -308,7 +354,9 @@ impl<'a> KObject<'a> {
     /// information and is legal where `:(LIST OF Any)` is declared).
     pub fn is_unstamped_empty_container(&self) -> bool {
         match self {
-            KObject::List(items, list_type) => items.is_empty() && *list_type == KType::LIST_OF_ANY,
+            KObject::List(substrate, list_type) => {
+                substrate.elements().is_empty() && *list_type == KType::LIST_OF_ANY
+            }
             KObject::Dict(map, dict_type) => map.is_empty() && *dict_type == KType::DICT_ANY_ANY,
             _ => false,
         }
@@ -352,10 +400,14 @@ impl<'a> KObject<'a> {
             KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => true,
             KObject::KFunction(f) => residence.owns_function(f),
             KObject::KExpression(e) => e.is_splice_free(),
-            KObject::List(items, _) => items.iter().all(|h| held_resident_in(h, residence)),
+            // O(1) address-membership check — never an element walk. Reached only when a list
+            // rides inside a still-`Rc` container (`Tagged`/`Wrapped`/`Dict`) being audited; a bare
+            // top-level list never routes this walk at all (it is born resident by construction
+            // through the fold door).
+            KObject::List(substrate, _) => residence.owns_substrate(substrate),
             KObject::Dict(map, _) => map.values().all(|h| held_resident_in(h, residence)),
             // O(1) address-membership check — never a field walk. Reached only when a record
-            // rides inside a still-`Rc` container (`Tagged`/`Wrapped`/`List`/`Dict`) being
+            // rides inside a still-`Rc` container (`Tagged`/`Wrapped`/`Dict`) being
             // audited; a bare top-level record never routes this walk at all (it is born
             // resident by construction through the fold door).
             KObject::Record(substrate, _) => residence.owns_substrate(substrate),
@@ -394,7 +446,8 @@ impl<'a> KObject<'a> {
             KObject::KString(s) => KObject::KString(s.clone()),
             KObject::Bool(b) => KObject::Bool(*b),
             KObject::Null => KObject::Null,
-            KObject::List(items, list_type) => KObject::List(Rc::clone(items), *list_type),
+            // A pointer copy: the substrate borrow copies (`Copy`), never rebuilding the elements.
+            KObject::List(substrate, list_type) => KObject::List(substrate, *list_type),
             KObject::Dict(entries, dict_type) => KObject::Dict(Rc::clone(entries), *dict_type),
             KObject::KExpression(e) => KObject::KExpression(e.clone()),
             KObject::KFunction(f) => KObject::KFunction(f),
@@ -439,19 +492,20 @@ impl<'a> KObject<'a> {
     }
 
     /// Whether `self` is, or (through a still-`Rc` `Tagged`/`Wrapped` spine) transitively
-    /// contains, a `Record`. Purely structural — unlike [`Self::resident_in_visiting`], no
-    /// residence is checked here. A record's substrate is always a genuine region borrow into
-    /// its own home (Ruling 5, design/value-substrates.md), which the fold engines that build a
-    /// fresh `Tagged`/`Wrapped` around one cannot see (composing a witness only ever consults the
-    /// fold's *other* operands, never the value its own closure just built) — so a step-terminal
-    /// seal uses this predicate to force the carrier's `borrows_host` bit conservatively true
-    /// rather than under-reporting it. `List`/`Dict` are not walked: no current birth site nests
-    /// a fresh record inside a fresh list/dict at a fold's own top level.
-    pub(crate) fn embeds_record(&self) -> bool {
+    /// contains, a substrate carrier (`Record` or `List`). Purely structural — unlike
+    /// [`Self::resident_in_visiting`], no residence is checked here. A substrate is always a genuine
+    /// region borrow into its own home (Ruling 5, design/value-substrates.md), which the fold engines
+    /// that build a fresh `Tagged`/`Wrapped` around one cannot see (composing a witness only ever
+    /// consults the fold's *other* operands, never the value its own closure just built) — so a
+    /// step-terminal seal uses this predicate to force the carrier's `borrows_host` bit conservatively
+    /// true rather than under-reporting it. `Dict` is not walked: it carries no substrate of its own
+    /// (its cells still ride an `Rc`), so a fresh dict at a fold's top level borrows nothing the fold
+    /// can't already see.
+    pub(crate) fn embeds_substrate(&self) -> bool {
         match self {
-            KObject::Record(..) => true,
-            KObject::Tagged { value, .. } => value.embeds_record(),
-            KObject::Wrapped { inner, .. } => inner.get().embeds_record(),
+            KObject::Record(..) | KObject::List(..) => true,
+            KObject::Tagged { value, .. } => value.embeds_substrate(),
+            KObject::Wrapped { inner, .. } => inner.get().embeds_substrate(),
             _ => false,
         }
     }
@@ -488,12 +542,13 @@ pub(crate) fn copy_object_into<'b>(value: &KObject<'b>, dest: FoldingBrand<'b>) 
                 substrate.fields().map(|cell| copy_held_into(cell, dest));
             KObject::record_rehomed(dest, fields, *record_type)
         }
-        KObject::List(items, list_type) => {
-            let rebuilt: Vec<Held<'b>> = items
+        KObject::List(substrate, list_type) => {
+            let rebuilt: Vec<Held<'b>> = substrate
+                .elements()
                 .iter()
                 .map(|cell| copy_held_into(cell, dest))
                 .collect();
-            KObject::list_with_type(Rc::new(rebuilt), *list_type)
+            KObject::list_rehomed(dest, rebuilt, *list_type)
         }
         KObject::Dict(map, dict_type) => {
             let rebuilt: HashMap<KKey, Held<'b>> = map
@@ -547,7 +602,13 @@ pub(crate) fn still_borrows_host(value: &KObject<'_>, host: &KoanRegion) -> bool
                     .values()
                     .any(|cell| held_borrows_host(cell, host))
         }
-        KObject::List(items, _) => items.iter().any(|cell| held_borrows_host(cell, host)),
+        KObject::List(substrate, _) => {
+            substrate.contains_borrows()
+                && substrate
+                    .elements()
+                    .iter()
+                    .any(|cell| held_borrows_host(cell, host))
+        }
         KObject::Dict(map, _) => map.values().any(|cell| held_borrows_host(cell, host)),
         KObject::Tagged { value, .. } => still_borrows_host(value, host),
         KObject::Wrapped { inner, .. } => still_borrows_host(inner.get(), host),
@@ -658,8 +719,12 @@ impl<'a> KObject<'a> {
             KObject::Number(n) => n.to_string(),
             KObject::KString(s) => s.clone(),
             KObject::Bool(b) => b.to_string(),
-            KObject::List(items, _) => {
-                let parts: Vec<String> = items.iter().map(|i| i.summarize(types)).collect();
+            KObject::List(substrate, _) => {
+                let parts: Vec<String> = substrate
+                    .elements()
+                    .iter()
+                    .map(|i| i.summarize(types))
+                    .collect();
                 format!("[{}]", parts.join(", "))
             }
             KObject::Dict(entries, _) => {

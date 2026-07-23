@@ -310,8 +310,16 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::RecordType(_) => {
                 unreachable!("RecordType only valid in type-context dispatch")
             }
-            ExpressionPart::ListLiteral(items) => {
-                KObject::list(items.iter().map(|p| p.resolve(types)).collect(), types)
+            // A list's substrate is born only through the fold door, which `resolve()` has no brand
+            // to reach — and it never needs one: eager staging (`eager_shape`/`stage_eager_part`,
+            // `dispatch.rs`) routes every `ListLiteral` part through the scheduled path
+            // (`schedule_list_literal`) before any resolve site reaches it, replacing it with a
+            // `Spliced` cell first — the same coverage the `RecordLiteral` arm below relies on.
+            ExpressionPart::ListLiteral(_) => {
+                unreachable!(
+                    "a ListLiteral part is always staged (schedule_list_literal) before any \
+                     resolve() site reaches it"
+                )
             }
             // Non-scalar keys reaching here are a scheduler bug — it must surface them as
             // a structured `ShapeError` before resolve.

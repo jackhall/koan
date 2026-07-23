@@ -210,7 +210,9 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
     // The aggregate is live and complete...
     let results = test_run.run_one(parse_one("results"));
     match results {
-        KObject::List(items, _) => assert_eq!(items.len(), 100, "all 100 results retained"),
+        KObject::List(items, _) => {
+            assert_eq!(items.elements().len(), 100, "all 100 results retained")
+        }
         other => panic!("expected a 100-element List, got {:?}", other.ktype()),
     }
     // ...while every producer frame the 100 calls minted has dropped.
@@ -247,8 +249,8 @@ fn aggregate_of_plain_record_results_releases_every_producer_frame() {
     let results = test_run.run_one(parse_one("results"));
     match results {
         KObject::List(items, _) => {
-            assert_eq!(items.len(), DEPTH, "all records retained");
-            for item in items.iter() {
+            assert_eq!(items.elements().len(), DEPTH, "all records retained");
+            for item in items.elements().iter() {
                 match item.object() {
                     KObject::Record(substrate, _) => {
                         match substrate.fields().get("acc").map(|h| h.object()) {

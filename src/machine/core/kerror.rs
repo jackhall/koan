@@ -10,7 +10,9 @@ use crate::machine::model::{
 use crate::source::{self, FileId, SourceLoc, Span};
 use crate::witnessed::RegionHandleFamily;
 
-use super::{force_record_borrows_host, DeliveredCarried, FoldingBrand, KoanRegion, KoanRegionExt};
+use super::{
+    force_substrate_borrows_host, DeliveredCarried, FoldingBrand, KoanRegion, KoanRegionExt,
+};
 use super::{scope_frame, KoanStorageProfile, Scope};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
@@ -184,6 +186,7 @@ impl KError {
     pub fn to_tagged<'a>(&self, door: FoldingBrand<'a>, types: &TypeRegistry) -> KObject<'a> {
         let (name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
+            door,
             self.frames
                 .iter()
                 .map(|f| {
@@ -238,7 +241,7 @@ impl KError {
                 Carried::Object(door.alloc_object_folded(self.to_tagged(door, types)))
             },
         );
-        let witnessed = force_record_borrows_host(witnessed, &frame);
+        let witnessed = force_substrate_borrows_host(witnessed, &frame);
         scope.seal_resident_delivered(witnessed)
     }
 }

@@ -10,7 +10,7 @@ use std::rc::Rc;
 use crate::machine::model::{KObject, KType, Record};
 use crate::machine::Scope;
 use crate::machine::StepCarried;
-use crate::machine::{force_record_borrows_host, kerror_ktype};
+use crate::machine::{force_substrate_borrows_host, kerror_ktype};
 
 use super::{arg, kw, sig};
 
@@ -98,7 +98,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         );
         // Step-terminal seal: either arm's payload may be (or embed) a fresh record — force the
         // bit rather than trust the fold's operand-only compose.
-        let witnessed = force_record_borrows_host(witnessed, &frame);
+        let witnessed = force_substrate_borrows_host(witnessed, &frame);
         Action::Done(Ok(StepCarried::born(witnessed)))
     });
     Action::Catch {
