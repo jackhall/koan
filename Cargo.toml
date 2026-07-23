@@ -16,6 +16,14 @@ path = "src/lib.rs"
 name = "koan"
 path = "src/main.rs"
 
+[features]
+# Escape-seam verification builds — mutually exclusive (a `compile_error!` guards the pair).
+# Force every record escape seam to a single verb so the output-asserting suite becomes an
+# equivalence battery: identical hardcoded expectations under each prove the policy is
+# semantically invisible.
+seam-force-copy = []   # escape seam always copies records
+seam-force-pin  = []   # escape seam always pins records
+
 [dependencies]
 regex = "1.12.3"
 indexmap = "2"

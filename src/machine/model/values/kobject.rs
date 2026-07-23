@@ -14,6 +14,36 @@ pub use equality::ValueEqualityError;
 #[cfg(test)]
 mod tests;
 
+/// Which verb the escape seam selects for a top-level record. `CostDriven` is the production
+/// policy (the ratio decision from the memos); the two forced variants exist only under their
+/// verification-build cfg features, making the output-asserting suite an equivalence battery.
+///
+/// `#[allow(dead_code)]`: the forced variants are constructed only under their cfg features, so the
+/// default build sees them unused; `SEAM_POLICY` itself has no consumer until the chooser lands.
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SeamPolicy {
+    CostDriven,
+    ForceCopy,
+    ForcePin,
+}
+
+// Verification builds force a single verb; the two features are mutually exclusive.
+#[cfg(all(feature = "seam-force-copy", feature = "seam-force-pin"))]
+compile_error!("features `seam-force-copy` and `seam-force-pin` are mutually exclusive");
+
+#[cfg(all(feature = "seam-force-copy", not(feature = "seam-force-pin")))]
+#[allow(dead_code)]
+pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::ForceCopy;
+
+#[cfg(all(feature = "seam-force-pin", not(feature = "seam-force-copy")))]
+#[allow(dead_code)]
+pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::ForcePin;
+
+#[cfg(not(any(feature = "seam-force-copy", feature = "seam-force-pin")))]
+#[allow(dead_code)]
+pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::CostDriven;
+
 /// An [`Rc`]-shared [`KObject::Wrapped`] payload. Two constructors record the wrapper's intent:
 /// [`Self::peel`] collapses one `Wrapped` layer (a re-tag replaces the value's identity, so
 /// identities never stack), while [`Self::hold`] preserves the value as-is (genuine
