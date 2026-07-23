@@ -35,6 +35,12 @@ blake3 = "1.8.5"
 # feature swaps the default shared pointer to an atomic one, and the registry is single-threaded
 # per run frame, so it instantiates the map over `archery::RcK` instead.
 imbl = "7"
+# Frozen entry table behind a `KObject::Dict` value. Chosen over `std` for its stable custom-
+# allocator seam (`allocator-api2`, default-on): the region-resident dict substrate stores a
+# `Global`-allocated table today, and the future untyped-bump-arena `Allocator` swaps to
+# `HashMap::new_in(region_alloc)` with zero payload churn. Default features supply the
+# `DefaultHashBuilder` hasher over `KKey`'s manual `Hash`.
+hashbrown = "0.17"
 
 [dev-dependencies]
 workgraph = { path = "workgraph", features = ["test-hooks"] }

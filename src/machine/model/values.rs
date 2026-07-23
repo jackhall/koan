@@ -14,7 +14,7 @@ mod named_pairs;
 
 pub use carried::{Carried, CarriedFamily, Held};
 pub use container_substrate::{ContainerSubstrate, SubstrateMemos};
-pub(crate) use container_substrate::{ListSubstrate, RecordSubstrate};
+pub(crate) use container_substrate::{DictSubstrate, ListSubstrate, RecordSubstrate};
 pub use kkey::KKey;
 pub(crate) use kobject::{copy_object_into, copy_or_pin, still_borrows_host, RegionEscape};
 pub use kobject::{KObject, ValueEqualityError, WrappedPayload};

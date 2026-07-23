@@ -1,14 +1,17 @@
 //! [`ContainerSubstrate<C>`] — a region-resident container payload `C` plus its [`SubstrateMemos`]:
 //! the three construction-time memos (contains-borrows, copy-cost, borrows-home) every container
 //! carries. [`RecordSubstrate`] (`C = Record<Held>`) is the field substrate behind a record value;
-//! [`ListSubstrate`] (`C = Vec<Held>`) is the element substrate behind a list value. The wrapper is
-//! the pattern every later container conversion in this project copies; see
+//! [`ListSubstrate`] (`C = Vec<Held>`) is the element substrate behind a list value;
+//! [`DictSubstrate`] (`C = hashbrown::HashMap<KKey, Held>`) is the entry substrate behind a dict
+//! value. The wrapper is the pattern every later container conversion in this project copies; see
 //! [design/value-substrates.md](../../../../design/value-substrates.md).
+
+use hashbrown::HashMap;
 
 use crate::machine::core::KoanRegion;
 use crate::machine::model::types::Record;
 
-use super::{Held, KObject};
+use super::{Held, KKey, KObject};
 
 /// A container payload's three construction-time memos — computed once, in the same pass, and never
 /// recomputed by a walk. Rides with the payload it summarizes, so the memos can never go stale
@@ -152,6 +155,22 @@ pub(crate) type ListSubstrate<'a> = ContainerSubstrate<Vec<Held<'a>>>;
 impl<'a> ContainerSubstrate<Vec<Held<'a>>> {
     /// The element slice — positional, index-ordered.
     pub fn elements(&self) -> &Vec<Held<'a>> {
+        self.cells()
+    }
+}
+
+/// The entry substrate a dict value borrows — [`ContainerSubstrate<C>`] at
+/// `C = hashbrown::HashMap<KKey, Held>`. Keys are the concrete scalar [`KKey`]; values are [`Held`]
+/// cells (an object or a first-class type). The table is frozen at construction (last-wins dedup
+/// happens in the transient construction map) and never written again; iteration order is arbitrary
+/// (unspecified, as the prior `Rc<HashMap>` layout was). The block is a default-`Global` heap
+/// allocation the wrapper owns and drops at region death — a `hashbrown` table so a future
+/// region-`Allocator` swap is a zero-payload-churn change.
+pub(crate) type DictSubstrate<'a> = ContainerSubstrate<HashMap<KKey, Held<'a>>>;
+
+impl<'a> ContainerSubstrate<HashMap<KKey, Held<'a>>> {
+    /// The entry table — arbitrary iteration order; look up by key with `entries().get(key)`.
+    pub fn entries(&self) -> &HashMap<KKey, Held<'a>> {
         self.cells()
     }
 }

@@ -22,8 +22,8 @@ use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::{
-    Carried, CarriedFamily, ContainerSubstrate, Held, KObject, ListSubstrate, Module, Record,
-    RecordSubstrate,
+    Carried, CarriedFamily, ContainerSubstrate, DictSubstrate, Held, KObject, ListSubstrate,
+    Module, Record, RecordSubstrate,
 };
 use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
@@ -66,7 +66,10 @@ impl StorageProfile for KoanStorageProfile {
                                 FrameSet,
                                 (
                                     TypeIdentifier,
-                                    (RecordSubstrate<'static>, (ListSubstrate<'static>, ())),
+                                    (
+                                        RecordSubstrate<'static>,
+                                        (ListSubstrate<'static>, (DictSubstrate<'static>, ())),
+                                    ),
                                 ),
                             ),
                         ),
@@ -333,9 +336,8 @@ impl<'a> FoldingBrand<'a> {
     /// fold-brand argument as [`Self::alloc_object_folded`]: `substrate` is typed at the brand
     /// lifetime, so an ambient-lifetime capture is a compile error at this signature, discharging the
     /// store's residence obligation at compile time. Each `ContainerSubstrate<C>` family lands in its
-    /// own sub-arena slot (its [`Stored`] impl) — the record and list substrates hand-add their
-    /// entries; a macro lifts the per-family boilerplate at the third instantiation (the dict
-    /// conversion).
+    /// own sub-arena slot (its [`Stored`] impl); the three substrate families (record / list / dict)
+    /// share the `koan_substrate_family!` macro that generates that impl from a cell path.
     pub(crate) fn alloc_substrate_folded<K: Stored<KoanStorageProfile>>(
         self,
         substrate: K::At<'a>,
@@ -360,6 +362,7 @@ reattachable! {
     TypeIdentifier => TypeIdentifier,
     ContainerSubstrate<Record<Held<'static>>> => ContainerSubstrate<Record<Held<'r>>>,
     ContainerSubstrate<Vec<Held<'static>>> => ContainerSubstrate<Vec<Held<'r>>>,
+    DictSubstrate<'static> => DictSubstrate<'r>,
 }
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
@@ -436,23 +439,28 @@ impl Stored<KoanStorageProfile> for TypeIdentifier {
     }
 }
 
-impl Stored<KoanStorageProfile> for ContainerSubstrate<Record<Held<'static>>> {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .1 .1 .1 .0
-    }
-    fn record_local(frame: &KoanRegion, stored: &ContainerSubstrate<Record<Held<'static>>>) {
-        frame.record_addr(stored as *const _ as usize);
-    }
+/// Generate the [`Stored`] policy for a `ContainerSubstrate<C>` family from its sub-arena cell path.
+/// The three substrate families (record / list / dict) share this: each lands in its own tuple slot
+/// and records its allocation address so [`KoanRegionExt::owns_substrate`] can answer the
+/// home-crossing membership check. The cell path is written explicitly per family (the `Families`
+/// nested-tuple position is not macro-derivable); the repeated impl body — the `record_addr` hook —
+/// is generated once here rather than hand-copied three times.
+macro_rules! koan_substrate_family {
+    ($family:ty, $($cell:tt)+) => {
+        impl Stored<KoanStorageProfile> for $family {
+            fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+                &s $($cell)+
+            }
+            fn record_local(frame: &KoanRegion, stored: &$family) {
+                frame.record_addr(stored as *const _ as usize);
+            }
+        }
+    };
 }
 
-impl Stored<KoanStorageProfile> for ContainerSubstrate<Vec<Held<'static>>> {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .1 .1 .1 .1 .0
-    }
-    fn record_local(frame: &KoanRegion, stored: &ContainerSubstrate<Vec<Held<'static>>>) {
-        frame.record_addr(stored as *const _ as usize);
-    }
-}
+koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
 
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
@@ -517,7 +525,7 @@ pub(crate) trait KoanRegionExt {
     /// widens this with a per-reach-member check rather than a single `covers_region` call.
     fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<C>) -> bool;
 
-    /// Total bytes allocated across this region's ten Koan families — each family's live count
+    /// Total bytes allocated across this region's eleven Koan families — each family's live count
     /// weighted by the flat size of its stored `'static` form. Prices the host region only, not the
     /// `outer` chain its `Rc<FrameStorage>` also retains (a documented approximation): the cost-copy
     /// seam reads this as the denominator of the payoff ratio, where the host's own footprint is the
@@ -598,6 +606,7 @@ impl KoanRegionExt for KoanRegion {
             + weigh::<TypeIdentifier>(self)
             + weigh::<RecordSubstrate<'static>>(self)
             + weigh::<ListSubstrate<'static>>(self)
+            + weigh::<DictSubstrate<'static>>(self)
     }
 }
 
@@ -622,6 +631,7 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<FrameSet>()
             + self.family_len::<RecordSubstrate<'static>>()
             + self.family_len::<ListSubstrate<'static>>()
+            + self.family_len::<DictSubstrate<'static>>()
     }
 }
 
