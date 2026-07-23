@@ -21,7 +21,9 @@ use crate::machine::execute::StepCarried;
 use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::OperatorGroup;
-use crate::machine::model::{Carried, CarriedFamily, KObject, Module, RecordSubstrate};
+use crate::machine::model::{
+    Carried, CarriedFamily, ContainerSubstrate, Held, KObject, Module, Record, RecordSubstrate,
+};
 use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
@@ -319,16 +321,18 @@ impl<'a> FoldingBrand<'a> {
         self.placement.alloc_resident_folded::<KObject<'static>>(o)
     }
 
-    /// Store a record substrate built at this fold's own brand — the record door, sound by the
-    /// same rank-2 fold-brand argument as [`Self::alloc_object_folded`]. No audit: `substrate` is
-    /// typed at the brand lifetime, so an ambient-lifetime capture is a compile error at this
-    /// signature, discharging the store's residence obligation at compile time.
-    pub(crate) fn alloc_record_folded(
+    /// Store a container substrate built at this fold's own brand — the container door, generic over
+    /// the substrate payload family `K` (its `'static` [`Stored`] form). Sound by the same rank-2
+    /// fold-brand argument as [`Self::alloc_object_folded`]: `substrate` is typed at the brand
+    /// lifetime, so an ambient-lifetime capture is a compile error at this signature, discharging the
+    /// store's residence obligation at compile time. Each `ContainerSubstrate<C>` family lands in its
+    /// own sub-arena slot (its [`Stored`] impl); a future macro lifts this per-family entry once a
+    /// second container instantiates it.
+    pub(crate) fn alloc_substrate_folded<K: Stored<KoanStorageProfile>>(
         self,
-        substrate: RecordSubstrate<'a>,
-    ) -> &'a RecordSubstrate<'a> {
-        self.placement
-            .alloc_resident_folded::<RecordSubstrate<'static>>(substrate)
+        substrate: K::At<'a>,
+    ) -> &'a K::At<'a> {
+        self.placement.alloc_resident_folded::<K>(substrate)
     }
 }
 
@@ -346,7 +350,7 @@ reattachable! {
     Module<'static> => Module<'r>,
     OperatorGroup => OperatorGroup,
     TypeIdentifier => TypeIdentifier,
-    RecordSubstrate<'static> => RecordSubstrate<'r>,
+    ContainerSubstrate<Record<Held<'static>>> => ContainerSubstrate<Record<Held<'r>>>,
 }
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
@@ -423,11 +427,11 @@ impl Stored<KoanStorageProfile> for TypeIdentifier {
     }
 }
 
-impl Stored<KoanStorageProfile> for RecordSubstrate<'static> {
+impl Stored<KoanStorageProfile> for ContainerSubstrate<Record<Held<'static>>> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
         &s.1 .1 .1 .1 .1 .1 .1 .1 .0
     }
-    fn record_local(frame: &KoanRegion, stored: &RecordSubstrate<'static>) {
+    fn record_local(frame: &KoanRegion, stored: &ContainerSubstrate<Record<Held<'static>>>) {
         frame.record_addr(stored as *const _ as usize);
     }
 }
@@ -488,12 +492,12 @@ pub(crate) trait KoanRegionExt {
     /// audit's check for a `KObject::KFunction` payload.
     fn owns_function<'a>(&self, ptr: *const KFunction<'a>) -> bool;
 
-    /// Whether `ptr` was returned by a prior `alloc_record_folded` on this region —
-    /// [`Residence::owns_record`](super::Residence::owns_record)'s single-region address check, the
-    /// same shape as [`Self::owns_function`] but with no scope-region shortcut: a `RecordSubstrate`
-    /// carries no borrow naming its own home region, so the residence walk widens this with a
-    /// per-reach-member check rather than a single `covers_region` call.
-    fn owns_record<'a>(&self, ptr: *const RecordSubstrate<'a>) -> bool;
+    /// Whether `ptr` was returned by a prior `alloc_substrate_folded` on this region —
+    /// [`Residence::owns_substrate`](super::Residence::owns_substrate)'s single-region address
+    /// check, the same shape as [`Self::owns_function`] but with no scope-region shortcut: a
+    /// `ContainerSubstrate<C>` carries no borrow naming its own home region, so the residence walk
+    /// widens this with a per-reach-member check rather than a single `covers_region` call.
+    fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<C>) -> bool;
 
     /// Total bytes allocated across this region's nine Koan families — each family's live count
     /// weighted by the flat size of its stored `'static` form. Prices the host region only, not the
@@ -557,11 +561,8 @@ impl KoanRegionExt for KoanRegion {
         self.owns_addr(target)
     }
 
-    fn owns_record<'a>(&self, ptr: *const RecordSubstrate<'a>) -> bool {
-        // `RecordSubstrate` is invariant in `'a`, so the through-`'static` cast is required despite
-        // clippy's complaint.
-        #[allow(clippy::unnecessary_cast)]
-        let target = ptr as *const RecordSubstrate<'static> as usize;
+    fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<C>) -> bool {
+        let target = ptr as usize;
         self.owns_addr(target)
     }
 

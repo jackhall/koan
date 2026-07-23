@@ -128,7 +128,7 @@ pub enum KObject<'a> {
     /// `ktype()` at fresh construction, re-stamped to a declared record type at an annotated
     /// boundary (mirrors `List` / `Dict`). Construct via [`KObject::record`] /
     /// [`KObject::record_with_type`] — never the tuple directly, and never `Rc::new`: the
-    /// substrate is born only through [`FoldingBrand::alloc_record_folded`]. Distinct from the
+    /// substrate is born only through [`FoldingBrand::alloc_substrate_folded`]. Distinct from the
     /// nominal `Struct`: a record carries no `(name, scope_id)` identity, only its structure.
     /// Each field value is a [`Held`] (an object or a first-class type).
     Record(&'a RecordSubstrate<'a>, KType),
@@ -233,7 +233,9 @@ impl<'a> KObject<'a> {
         let field_types = fields.map(|v| v.ktype(types));
         let home = door.region();
         let memos = SubstrateMemos::compute(fields.values(), home);
-        let substrate = door.alloc_record_folded(ContainerSubstrate::new(fields, memos));
+        let substrate = door.alloc_substrate_folded::<RecordSubstrate<'static>>(
+            ContainerSubstrate::new(fields, memos),
+        );
         KObject::Record(substrate, types.record(field_types))
     }
 
@@ -259,7 +261,9 @@ impl<'a> KObject<'a> {
     ) -> KObject<'a> {
         let home = door.region();
         let memos = SubstrateMemos::compute(fields.values(), home);
-        let substrate = door.alloc_record_folded(ContainerSubstrate::new(fields, memos));
+        let substrate = door.alloc_substrate_folded::<RecordSubstrate<'static>>(
+            ContainerSubstrate::new(fields, memos),
+        );
         KObject::Record(substrate, record_type)
     }
 
@@ -354,7 +358,7 @@ impl<'a> KObject<'a> {
             // rides inside a still-`Rc` container (`Tagged`/`Wrapped`/`List`/`Dict`) being
             // audited; a bare top-level record never routes this walk at all (it is born
             // resident by construction through the fold door).
-            KObject::Record(substrate, _) => residence.owns_record(substrate),
+            KObject::Record(substrate, _) => residence.owns_substrate(substrate),
             KObject::Tagged { value, .. } => value.resident_in_visiting(residence),
             KObject::Wrapped { inner, .. } => inner.get().resident_in_visiting(residence),
             KObject::Module(m) => residence.owns_module(m),
@@ -593,7 +597,7 @@ const ALPHA_DIVISOR: u64 = 4;
 
 /// The escape-seam copy-vs-pin decision for a top-level record `value` (whose field substrate is
 /// `substrate`) crossing out of producer `host`. O(1) but for the one address-table membership scan
-/// (`owns_record`) and, on the unpriceable path only, the exact host-release probe. See
+/// (`owns_substrate`) and, on the unpriceable path only, the exact host-release probe. See
 /// design/value-substrates.md § Cost-driven copy.
 pub(crate) fn record_seam_verb(
     substrate: &RecordSubstrate<'_>,
@@ -619,7 +623,7 @@ pub(crate) fn record_seam_verb(
         };
     }
 
-    let home_crossing = host.owns_record(substrate);
+    let home_crossing = host.owns_substrate(substrate);
     if !home_crossing {
         // Foreign crossing: pricing a copy-out at an intermediate host is region evacuation's job.
         return SeamVerb::Pin;

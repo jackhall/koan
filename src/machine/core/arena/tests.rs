@@ -1097,7 +1097,7 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
     ]);
     let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
     // `RecordSubstrate` is invariant in its lifetime, so the comparison casts through `usize` (see
-    // `Residence::owns_record`'s identical cast) rather than keeping a lifetime-parameterized raw
+    // `Residence::owns_substrate`'s identical cast) rather than keeping a lifetime-parameterized raw
     // pointer type alive across the fold below.
     let expected_addr = match obj {
         KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
@@ -1339,11 +1339,11 @@ fn spliced_expression_is_rejected_by_the_checked_object_seal() {
 }
 
 /// `KObject::record_of_held` — the record door's read half — stores a fresh `RecordSubstrate`
-/// through `FoldingBrand::alloc_record_folded` into its own brand's region. The stored address is
-/// a hit for both the bare `KoanRegionExt::owns_record` query and `Residence::owns_record`'s
+/// through `FoldingBrand::alloc_substrate_folded` into its own brand's region. The stored address is
+/// a hit for both the bare `KoanRegionExt::owns_substrate` query and `Residence::owns_substrate`'s
 /// dest-only case, the read halves the door's store makes true.
 #[test]
-fn alloc_record_folded_stores_and_owns_a_record_substrate() {
+fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
     let frame = run_root_storage();
     let types = TypeRegistry::new();
     let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
@@ -1362,23 +1362,23 @@ fn alloc_record_folded_stores_and_owns_a_record_substrate() {
             let region = frame.region();
             let ptr = *substrate as *const RecordSubstrate<'_>;
             (
-                region.owns_record(ptr),
-                super::Residence::dest_only(region).owns_record(substrate),
+                region.owns_substrate(ptr),
+                super::Residence::dest_only(region).owns_substrate(substrate),
             )
         }
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
     });
     assert!(
         owns_bare,
-        "alloc_record_folded stores into its own brand's region"
+        "alloc_substrate_folded stores into its own brand's region"
     );
     assert!(
         owns_via_residence,
-        "Residence::owns_record's dest-only case hits the same store"
+        "Residence::owns_substrate's dest-only case hits the same store"
     );
 }
 
-/// `resident_in_visiting`'s `Record` arm — `residence.owns_record(substrate)` — is reached only
+/// `resident_in_visiting`'s `Record` arm — `residence.owns_substrate(substrate)` — is reached only
 /// when a record rides inside a still-`Rc` container (`List`/`Dict`/`Tagged`/`Wrapped`) crossing
 /// the checked tier: a bare top-level record never routes this walk (born resident by
 /// construction through the fold door). This drives a `List` embedding a `Record` through
@@ -1386,7 +1386,7 @@ fn alloc_record_folded_stores_and_owns_a_record_substrate() {
 /// (must pass, reading the address table, never the record's fields) and once without (must
 /// reject) — proving the arm is a genuine O(1) membership check, not an always-true stand-in.
 #[test]
-fn record_nested_in_list_crosses_checked_tier_via_owns_record_membership() {
+fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
     let producer = run_root_storage();
     let types = TypeRegistry::new();
 
@@ -1412,7 +1412,7 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_record_membership() {
             std::slice::from_ref(&covering_evidence),
             &types,
         )
-        .expect("evidence naming the record's home region covers it via owns_record membership");
+        .expect("evidence naming the record's home region covers it via owns_substrate membership");
     match moved {
         KObject::List(items, _) => match items[0].object() {
             KObject::Record(substrate, _) => {

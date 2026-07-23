@@ -87,7 +87,7 @@ impl SubstrateMemos {
 /// over them at construction. Immutable after construction — no interior cell writes exist anywhere
 /// in the runtime, so a region-resident substrate needs no mutation story. Born only through the
 /// branded door
-/// ([`FoldingBrand::alloc_record_folded`](crate::machine::core::FoldingBrand::alloc_record_folded)),
+/// ([`FoldingBrand::alloc_substrate_folded`](crate::machine::core::FoldingBrand::alloc_substrate_folded)),
 /// which stores the substrate and hands back a co-located borrow — the cells and the memoized bits
 /// ride together, so the memos can never go stale relative to their own cells.
 pub struct ContainerSubstrate<C> {

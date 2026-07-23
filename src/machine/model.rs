@@ -13,7 +13,7 @@ pub use types::{
     KType, NodeSchema, Parseable, PendingMember, Record, RecursiveGroupWindow, RelativeSchema,
     ReturnType, SealedGroup, SignatureElement, TypeNode, UntypedElement, UntypedKey,
 };
-pub use values::{Carried, Held, KKey, KObject, ValueEqualityError};
+pub use values::{Carried, ContainerSubstrate, Held, KKey, KObject, ValueEqualityError};
 
 pub(crate) use ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier,

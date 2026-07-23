@@ -89,7 +89,7 @@ impl<'a> Scope<'a> {
 
     /// Mint a delivered value's reach for a **record pin**, naming every region it borrows —
     /// including a producer host the binding scope would otherwise cover ambiently. A pinned record's
-    /// substrate carries no home-naming borrow, so [`Residence::owns_record`] can only evidence it via
+    /// substrate carries no home-naming borrow, so [`Residence::owns_substrate`] can only evidence it via
     /// a reach-set member; the non-omitting mint (`|_| false`) puts the host in `foreign` so the
     /// audit's `any_member_region` arm accepts the foreign substrate. Retention is the point of the
     /// pin, and the host is already ambiently rooted for the binding's life, so naming it explicitly
@@ -290,7 +290,7 @@ impl<'a> Scope<'a> {
     ///   binding's non-omitting `Kept` stored reach ([`Self::pinned_reach_of`]). A record substrate
     ///   carries no home-naming borrow, so that reach names the producer host explicitly — never
     ///   omitting it under ambient coverage — and the residence audit evidences the foreign substrate
-    ///   through the `any_member_region` reach-member path rather than the dest-resident `owns_record`
+    ///   through the `any_member_region` reach-member path rather than the dest-resident `owns_substrate`
     ///   check. The reach is the pin's liveness, so this verb is confined to the bind seam, where
     ///   [`Self::bind_delivered`] stores the reach on the binding entry — never the argument re-home
     ///   ([`Self::adopt_sealed_copied`]), which discards it and copies unconditionally.
@@ -350,7 +350,7 @@ impl<'a> Scope<'a> {
     /// release-exact seam mode — a plain-data record `Residence::Released` (the retiring producer
     /// frees), a record still borrowing its producer `Residence::Copied` and pinned — with the copy's
     /// foreign reach minted into this scope's arena for liveness. The top node is then re-boxed
-    /// through the checked door to recover the `&'a` reference; its O(1) `owns_record` membership
+    /// through the checked door to recover the `&'a` reference; its O(1) `owns_substrate` membership
     /// passes because the rebuilt substrate is scope-resident, so no reach evidence is needed. Returns
     /// the resident reference paired with the binding's stored reach (minted at the same mode).
     ///

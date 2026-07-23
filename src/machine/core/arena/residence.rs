@@ -9,7 +9,7 @@ use std::cell::Cell;
 
 use super::{FrameSet, KoanRegion, KoanRegionExt, KoanStorageProfile};
 use crate::machine::core::{KError, KErrorKind, KFunction, Scope, StoredReach};
-use crate::machine::model::{CarriedFamily, KObject, Module, RecordSubstrate, TypeRegistry};
+use crate::machine::model::{CarriedFamily, ContainerSubstrate, KObject, Module, TypeRegistry};
 use crate::machine::CarrierWitness;
 use crate::witnessed::{AuditedStored, Witnessed};
 
@@ -277,20 +277,20 @@ impl<'d> Residence<'d> {
 
     /// Whether `substrate`'s own storage is `dest`-resident (the address side-table check) or some
     /// `reach` member's own region owns it. Unlike [`Self::owns_module`]/[`Self::owns_function`], a
-    /// `RecordSubstrate` carries no borrow naming its own home region — there is no
+    /// `ContainerSubstrate<C>` carries no borrow naming its own home region — there is no
     /// scope/captured-scope shortcut to widen through [`Self::covers_region`] — so this walks
     /// `reach`'s members directly via
     /// [`RegionSet::any_member_region`](crate::witnessed::RegionSet::any_member_region), the
     /// production-safe per-member query that answers the address check without enumerating members
     /// out to the caller.
-    pub(crate) fn owns_record(&self, substrate: &RecordSubstrate<'_>) -> bool {
+    pub(crate) fn owns_substrate<C>(&self, substrate: &ContainerSubstrate<C>) -> bool {
         self.note_region_pointer();
-        let ptr = substrate as *const RecordSubstrate<'_>;
-        self.dest.owns_record(ptr)
+        let ptr = substrate as *const ContainerSubstrate<C>;
+        self.dest.owns_substrate(ptr)
             || self
                 .reach
                 .iter()
-                .any(|fs| fs.any_member_region(|region| region.owns_record(ptr)))
+                .any(|fs| fs.any_member_region(|region| region.owns_substrate(ptr)))
     }
 }
 

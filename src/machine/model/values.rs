@@ -6,17 +6,17 @@
 //! [`crate::machine::execute::dispatch::constructors`].
 
 mod carried;
+mod container_substrate;
 mod kkey;
 mod kobject;
 mod module;
-mod container_substrate;
 mod named_pairs;
 
 pub use carried::{Carried, CarriedFamily, Held};
+pub(crate) use container_substrate::RecordSubstrate;
+pub use container_substrate::{ContainerSubstrate, SubstrateMemos};
 pub use kkey::KKey;
 pub(crate) use kobject::{copy_object_into, record_seam_verb, record_still_borrows_host, SeamVerb};
 pub use kobject::{KObject, ValueEqualityError, WrappedPayload};
 pub use module::Module;
-pub use container_substrate::{ContainerSubstrate, SubstrateMemos};
-pub(crate) use container_substrate::RecordSubstrate;
 pub use named_pairs::NamedPairs;

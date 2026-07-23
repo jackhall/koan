@@ -829,7 +829,7 @@ mod seam_verb_table {
     use super::*;
 
     /// Build a record homed in `home`'s region from `fields`, returning the whole `&KObject::Record` (its
-    /// substrate address lives in `home`, so `home.region().owns_record` reports a home crossing).
+    /// substrate address lives in `home`, so `home.region().owns_substrate` reports a home crossing).
     fn build_record<'run>(
         home: &'run Rc<CallFrame>,
         fields: Record<Held<'run>>,
@@ -967,7 +967,7 @@ mod seam_verb_table {
             Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
         let value = build_record(&home, fields, &types);
         assert!(
-            !foreign.region().owns_record(substrate_of(value)),
+            !foreign.region().owns_substrate(substrate_of(value)),
             "precondition: foreign host does not own the substrate"
         );
 
