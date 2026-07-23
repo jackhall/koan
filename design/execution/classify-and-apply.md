@@ -159,7 +159,7 @@ The rails the dispatch driver feeds:
     directly. The call shape admits iff `expr.parts[1..]` is exactly one
     nested-parens part (the *only* call shape — koan has no `f 1 2`
     positional call syntax for function values, so the named-arg shape
-    is the whole user-facing surface). A `KFunction(f, _)` head resolves to a
+    is the whole user-facing surface). A `KFunction(f)` head resolves to a
     `ResolvedCallable::Function` and a `SetMember` handle head in the value channel's
     `Type` arm — the identity a value-classified alias of a constructible type
     surfaces (`LET outcome = Outcome` then `(outcome (Err "x"))`) — to a

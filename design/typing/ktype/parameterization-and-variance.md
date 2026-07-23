@@ -140,12 +140,13 @@ USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (width drop: a unar
 [`KType::join_iter`](../../../src/machine/model/types/ktype_resolution.rs), computed
 **once at construction** and memoized on the value's carrier: `[1, 2, 3]` →
 `List<Number>`, `[1, "x"]` → `List<Any>`. `KObject::List` and `KObject::Dict`
-each carry their element types directly (`List(Rc<Vec<…>>, Box<KType>)`,
-`Dict(…, Box<KType>, Box<KType>)`), so
+each carry their element types directly (`List(&ListSubstrate, KType)` — a
+region-resident element substrate plus a plain `Copy` `KType` handle — and
+`Dict(Rc<HashMap<…>>, KType)`, the single interned `Dict<key, value>` handle), so
 [`KObject::ktype`](../../../src/machine/model/values/kobject.rs) reads the carried
 type in O(1) rather than re-walking the contents on every call. Values are
-immutable `Rc`, so the join is sound to compute exactly once. Functions project
-their declared signature (`KObject::KFunction(f, _)` → `KFunction { params, ret }`,
+immutable after construction, so the join is sound to compute exactly once. Functions project
+their declared signature (`KObject::KFunction(f)` → `KFunction { params, ret }`,
 the parameter record read off `f.signature`'s named slots). `KType::join` joins
 two same-shape `KFunction`s name-keyed, coarsening a
 mismatched parameter-name set to `Any`.
