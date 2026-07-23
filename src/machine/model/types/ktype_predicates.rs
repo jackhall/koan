@@ -217,7 +217,7 @@ impl KType {
                 _ => false,
             },
             TypeNode::Dict { key, value } => match obj {
-                KObject::Dict(map, _) => map.iter().all(|(map_key, held)| {
+                KObject::Dict(substrate, _) => substrate.entries().iter().all(|(map_key, held)| {
                     (key == KType::ANY || key == map_key.ktype()) && value.matches_held(held, types)
                 }),
                 _ => false,

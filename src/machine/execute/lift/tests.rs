@@ -129,9 +129,11 @@ fn list_relocation_rebuilds_substrate_into_dest() {
     }
 }
 
-/// A `Dict`'s inner `Rc<HashMap<_>>` is likewise shared through relocation.
+/// A `Dict` relocated under a `Copy` verb is totally rebuilt at the destination brand: the rebuilt
+/// entry substrate lives in `dest`'s region, not the source's — a dict is a region-resident
+/// substrate, not a shared `Rc` spine.
 #[test]
-fn dict_relocation_shares_inner_rc() {
+fn dict_relocation_rebuilds_substrate_into_dest() {
     use crate::machine::model::KKey;
     use std::collections::HashMap;
     let root = run_root_storage();
@@ -141,16 +143,12 @@ fn dict_relocation_shares_inner_rc() {
     let dest = CallFrame::new(scope);
     let types = test_run.types.clone();
 
+    let source_door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()));
     let mut map: HashMap<KKey, Held> = HashMap::new();
     map.insert(KKey::String("a".into()), Held::Object(KObject::Number(1.0)));
-    let entries = Rc::new(map);
-    let dict: &KObject = source
-        .brand()
-        .alloc_object_checked(
-            KObject::dict_with_type(Rc::clone(&entries), KType::DICT_ANY_ANY),
-            &types,
-        )
-        .expect("a fresh owned Dict is always resident-in-self");
+    let dict: &KObject =
+        source_door.alloc_object_folded(KObject::dict_of_held(source_door, map, &types));
 
     let relocated = copy_carried(
         Carried::Object(dict),
@@ -164,8 +162,12 @@ fn dict_relocation_shares_inner_rc() {
                 "relocated dict node lives in dest"
             );
             assert!(
-                Rc::ptr_eq(out, &entries),
-                "the entries map is shared, not copied"
+                dest.region().owns_substrate(*out),
+                "the rebuilt entry substrate lives in dest"
+            );
+            assert!(
+                !source.region().owns_substrate(*out),
+                "the source no longer owns the rebuilt substrate"
             );
         }
         Carried::Object(other) => panic!("expected a Dict, got {:?}", other.ktype()),
@@ -850,22 +852,20 @@ mod seam_verb_table {
         }
     }
 
-    /// An **unpriceable** record (holds a still-`Rc` `Dict` cell of plain data) copies, and its
-    /// `released` bit tracks the exact probe: no borrow leaf survives, so the copy frees the host.
+    /// An **unpriceable** record (holds a splice-free `KExpression` cell — unpriceable, but plain
+    /// data with no borrow leaf) copies, and its `released` bit tracks the exact probe: no borrow
+    /// leaf survives, so the copy frees the host.
     #[test]
     fn seam_verb_unpriceable_plain_data_copies_released() {
-        use crate::machine::model::KKey;
-        use std::collections::HashMap;
+        use crate::machine::model::ast::KExpression;
         let root = run_root_storage();
         let test_run = TestRun::silent(&root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
         let types = TypeRegistry::new();
 
-        let mut map: HashMap<KKey, Held> = HashMap::new();
-        map.insert(KKey::String("k".into()), Held::Object(KObject::Number(1.0)));
-        let dict = KObject::dict_with_type(Rc::new(map), KType::DICT_ANY_ANY);
-        let fields = Record::from_pairs(vec![("d".to_string(), Held::Object(dict))]);
+        let expr = KObject::KExpression(KExpression::new(Vec::new()));
+        let fields = Record::from_pairs(vec![("e".to_string(), Held::Object(expr))]);
         let value = build_record(&home, fields, &types);
 
         assert_eq!(

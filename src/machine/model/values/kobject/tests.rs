@@ -68,18 +68,20 @@ fn ktype_of_nested_list() {
 #[test]
 fn ktype_of_dict_string_number() {
     let types = TypeRegistry::new();
-    let mut map: HashMap<KKey, KObject<'static>> = HashMap::new();
+    container_door!(_storage, door);
+    let mut map: HashMap<KKey, KObject<'_>> = HashMap::new();
     map.insert(KKey::String("a".into()), KObject::Number(1.0));
     map.insert(KKey::String("b".into()), KObject::Number(2.0));
-    let d: KObject<'_> = KObject::dict(map, &types);
+    let d: KObject<'_> = KObject::dict(door, map, &types);
     assert_eq!(d.ktype(), types.dict(KType::STR, KType::NUMBER));
 }
 
 #[test]
 fn ktype_of_empty_dict_is_dict_any_any() {
     let types = TypeRegistry::new();
-    let map: HashMap<KKey, KObject<'static>> = HashMap::new();
-    let d: KObject<'_> = KObject::dict(map, &types);
+    container_door!(_storage, door);
+    let map: HashMap<KKey, KObject<'_>> = HashMap::new();
+    let d: KObject<'_> = KObject::dict(door, map, &types);
     assert_eq!(d.ktype(), types.dict(KType::ANY, KType::ANY));
 }
 
@@ -210,8 +212,8 @@ fn unstamped_empty_container_detection() {
         &types,
     );
     assert!(!hetero.is_unstamped_empty_container());
-    let map: HashMap<KKey, KObject<'static>> = HashMap::new();
-    assert!(KObject::dict(map, &types).is_unstamped_empty_container());
+    let map: HashMap<KKey, KObject<'_>> = HashMap::new();
+    assert!(KObject::dict(door, map, &types).is_unstamped_empty_container());
 }
 
 /// `Wrapped.ktype()` reports a copy of the member-handle identity the dispatcher reads for

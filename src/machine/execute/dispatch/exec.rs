@@ -293,7 +293,7 @@ fn extract_carried_args<'step>(
                 let object = view
                     .current_scope()
                     .brand()
-                    .alloc_object_checked(part.value.resolve(view.types()), view.types())
+                    .alloc_object_checked(part.value.resolve(), view.types())
                     .expect("a resolved literal or quoted expression is owned and splice-free");
                 args.push(Carried::Object(object));
             }

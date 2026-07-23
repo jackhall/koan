@@ -83,7 +83,8 @@ impl<'a> KObject<'a> {
                 Ok(true)
             }
 
-            (KObject::Dict(map_a, type_a), KObject::Dict(map_b, type_b)) => {
+            (KObject::Dict(substrate_a, type_a), KObject::Dict(substrate_b, type_b)) => {
+                let (map_a, map_b) = (substrate_a.entries(), substrate_b.entries());
                 if !types_related(*type_a, *type_b, types) || map_a.len() != map_b.len() {
                     return Ok(false);
                 }

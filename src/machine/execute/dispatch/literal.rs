@@ -127,9 +127,9 @@ struct AggRow {
 
 /// Finish-side assemble hook: the resolved keys (empty unless the rows carry key slots) and the folded
 /// value cells become the aggregate object. Boxed higher-ranked so the record variant captures its
-/// field names and each shape builds its own `KObject` at the fold brand. Every shape receives the
-/// fold's own `FoldingBrand` — list/dict ignore it (their substrates stay `Rc` this phase); record
-/// threads it into `KObject::record_of_held`, the door its substrate is born through.
+/// field names and each shape builds its own `KObject` at the fold brand. Every shape threads the
+/// fold's own `FoldingBrand` into its `*_of_held` constructor — the door each substrate (record,
+/// list, dict) is born through.
 type AggAssemble = Box<
     dyn for<'r> FnOnce(FoldingBrand<'r>, Vec<KKey>, Vec<Held<'r>>, &TypeRegistry) -> KObject<'r>,
 >;
@@ -229,9 +229,9 @@ impl<'step> KoanRuntime<'step> {
         self.schedule_aggregate(
             deps,
             rows,
-            Box::new(|_door, keys, value_helds, types| {
+            Box::new(|door, keys, value_helds, types| {
                 let map: HashMap<KKey, Held<'_>> = keys.into_iter().zip(value_helds).collect();
-                KObject::dict_of_held(map, types)
+                KObject::dict_of_held(door, map, types)
             }),
         )
     }

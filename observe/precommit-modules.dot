@@ -700,6 +700,7 @@ digraph {
     "koan::machine::execute::lift" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::lift" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine" [label="uses", style="dashed"];

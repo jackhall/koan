@@ -138,18 +138,24 @@ fn list_of_types_compares_by_digest() {
 
 // --- dicts ------------------------------------------------------------------------
 
-fn dict(pairs: Vec<(KKey, KObject<'static>)>, types: &TypeRegistry) -> KObject<'static> {
-    let mut map: HashMap<KKey, KObject<'static>> = HashMap::new();
+fn dict<'a>(
+    door: crate::machine::core::FoldingBrand<'a>,
+    pairs: Vec<(KKey, KObject<'a>)>,
+    types: &TypeRegistry,
+) -> KObject<'a> {
+    let mut map: HashMap<KKey, KObject<'a>> = HashMap::new();
     for (k, v) in pairs {
         map.insert(k, v);
     }
-    KObject::dict(map, types)
+    KObject::dict(door, map, types)
 }
 
 #[test]
 fn dict_key_and_value_equality() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let a = dict(
+        door,
         vec![
             (KKey::String("x".into()), num(1.0)),
             (KKey::String("y".into()), num(2.0)),
@@ -157,6 +163,7 @@ fn dict_key_and_value_equality() {
         &types,
     );
     let b = dict(
+        door,
         vec![
             (KKey::String("y".into()), num(2.0)),
             (KKey::String("x".into()), num(1.0)),
@@ -166,6 +173,7 @@ fn dict_key_and_value_equality() {
     assert_eq!(a.value_equal(&b, &types), Ok(true));
 
     let missing_key = dict(
+        door,
         vec![
             (KKey::String("x".into()), num(1.0)),
             (KKey::String("z".into()), num(2.0)),
@@ -175,6 +183,7 @@ fn dict_key_and_value_equality() {
     assert_eq!(a.value_equal(&missing_key, &types), Ok(false));
 
     let diff_value = dict(
+        door,
         vec![
             (KKey::String("x".into()), num(1.0)),
             (KKey::String("y".into()), num(9.0)),
@@ -187,8 +196,10 @@ fn dict_key_and_value_equality() {
 #[test]
 fn dict_length_mismatch_is_false() {
     let types = TypeRegistry::new();
-    let a = dict(vec![(KKey::String("x".into()), num(1.0))], &types);
+    container_door!(_storage, door);
+    let a = dict(door, vec![(KKey::String("x".into()), num(1.0))], &types);
     let b = dict(
+        door,
         vec![
             (KKey::String("x".into()), num(1.0)),
             (KKey::String("y".into()), num(2.0)),

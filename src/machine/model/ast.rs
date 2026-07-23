@@ -1,13 +1,12 @@
 //! AST node types shared across the parse module.
 
 use crate::machine::DeliveredCarried;
-use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use crate::source::{FileId, Span, Spanned};
 
 use crate::machine::model::{
-    BinderKey, Carried, Held, KKey, KObject, Parseable, UntypedElement, UntypedKey,
+    BinderKey, Carried, Held, KObject, Parseable, UntypedElement, UntypedKey,
 };
 use crate::witnessed::reattachable;
 
@@ -284,10 +283,10 @@ impl<'a> ExpressionPart<'a> {
             let parts = items.iter().cloned().map(Spanned::bare).collect();
             return Held::Object(KObject::KExpression(KExpression::new(parts)));
         }
-        Held::Object(self.resolve(types))
+        Held::Object(self.resolve())
     }
 
-    pub fn resolve(&self, types: &crate::machine::model::types::TypeRegistry) -> KObject<'a> {
+    pub fn resolve(&self) -> KObject<'a> {
         match self {
             ExpressionPart::Keyword(s) => KObject::KString(s.clone()),
             ExpressionPart::Identifier(s) => KObject::KString(s.clone()),
@@ -321,18 +320,18 @@ impl<'a> ExpressionPart<'a> {
                      resolve() site reaches it"
                 )
             }
-            // Non-scalar keys reaching here are a scheduler bug — it must surface them as
-            // a structured `ShapeError` before resolve.
-            ExpressionPart::DictLiteral(pairs) => {
-                let mut map: HashMap<KKey, KObject<'a>> = HashMap::new();
-                for (k, v) in pairs {
-                    let key_obj = k.resolve(types);
-                    let kkey = KKey::try_from_kobject(&key_obj, types).unwrap_or_else(|e| {
-                        panic!("DictLiteral::resolve = non-scalar key reached resolve(): {e}")
-                    });
-                    map.insert(kkey, v.resolve(types));
-                }
-                KObject::dict(map, types)
+            // A dict's substrate is born only through the fold door, which `resolve()` has no brand
+            // to reach — and it never needs one: eager staging (`eager_shape`/`stage_eager_part`,
+            // `dispatch.rs`) routes every `DictLiteral` part through the scheduled path
+            // (`schedule_dict_literal`) before any resolve site reaches it, replacing it with a
+            // `Spliced` cell first — the same coverage the `ListLiteral` / `RecordLiteral` arms rely
+            // on. Non-scalar keys are surfaced as a structured `ShapeError` on that scheduled path,
+            // never here.
+            ExpressionPart::DictLiteral(_) => {
+                unreachable!(
+                    "a DictLiteral part is always staged (schedule_dict_literal) before any \
+                     resolve() site reaches it"
+                )
             }
             // A record's substrate is born only through the fold door, which `resolve()` has no
             // brand to reach — and it never needs one: eager staging
