@@ -10,11 +10,14 @@ use crate::machine::core::{
     FoldingBrand, FrameSet, FrameStorage, KoanRegion, KoanStorageProfile, StoredReach,
 };
 use crate::machine::model::{
-    copy_object_into, record_still_borrows_host, Carried, CarriedFamily, KObject, KType,
-    TypeIdentifier, TypeRegistry,
+    copy_object_into, record_seam_verb, record_still_borrows_host, Carried, CarriedFamily, KObject,
+    KType, SeamVerb, TypeIdentifier, TypeRegistry,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, KError};
 use crate::witnessed::{Delivered, Reattachable, RegionHandleFamily, Residence, Sealed, Witnessed};
+
+#[cfg(test)]
+mod tests;
 
 impl<'a> Scope<'a> {
     /// Whether any scope on this scope's lexical `outer` chain (including `self`) lives in `region` —
@@ -75,6 +78,24 @@ impl<'a> Scope<'a> {
         let (foreign, borrows_into_home) = cell.mint_reach(self.brand().handle(), mode, |region| {
             self.covers_region_ambiently(region)
         });
+        StoredReach {
+            foreign,
+            borrows_into_home,
+        }
+    }
+
+    /// Mint a delivered value's reach for a **record pin**, naming every region it borrows —
+    /// including a producer host the binding scope would otherwise cover ambiently. A pinned record's
+    /// substrate carries no home-naming borrow, so [`Residence::owns_record`] can only evidence it via
+    /// a reach-set member; the non-omitting mint (`|_| false`) puts the host in `foreign` so the
+    /// audit's `any_member_region` arm accepts the foreign substrate. Retention is the point of the
+    /// pin, and the host is already ambiently rooted for the binding's life, so naming it explicitly
+    /// adds no over-retention beyond the pin's own semantics. `Residence::Kept` materializes the host
+    /// unconditionally; the library's `mint` excludes `dest`'s own region from `foreign` (that home
+    /// borrow rides `borrows_into_home`), so this names only the foreign producer host.
+    fn pinned_reach_of(&self, cell: &DeliveredCarried) -> StoredReach<'a> {
+        let (foreign, borrows_into_home) =
+            cell.mint_reach(self.brand().handle(), Residence::Kept, |_region| false);
         StoredReach {
             foreign,
             borrows_into_home,
@@ -209,10 +230,12 @@ impl<'a> Scope<'a> {
     /// the carrier's bundled witness instead (the `None`-host arm of the envelope's open).
     ///
     /// A value that **embeds a record** (a bare record, or one behind a `Tagged`/`Wrapped` spine)
-    /// takes the seam copy verb ([`Self::copy_delivered_record`]) rather than the pointer-copy arm:
-    /// the record's substrate is region-resident and cannot cross the checked audit by a `deep_clone`
-    /// (which leaves the substrate in the retiring producer, uncovered when its home is only ambiently
-    /// covered), so the value is totally rebuilt into this scope's region through the record door.
+    /// is totally rebuilt into this scope's region through the record door
+    /// ([`Self::rebuild_delivered_record`]) rather than taking the pointer-copy arm: the record's
+    /// substrate is region-resident and cannot cross the checked audit by a `deep_clone` (which leaves
+    /// the substrate in the retiring producer, uncovered when its home is only ambiently covered). This
+    /// path re-homes the value and discards its reach, so it always copies — the bind seam's pin verb
+    /// ([`Self::copy_delivered_record`]) is reachable only where the binding retains the reach.
     pub(crate) fn adopt_sealed_copied(
         &self,
         cell: &DeliveredCarried,
@@ -225,7 +248,7 @@ impl<'a> Scope<'a> {
         let embeds_record = cell.open(|live| live.as_object().is_some_and(|o| o.embeds_record()));
         if embeds_record {
             let (object, _stored) = self
-                .copy_delivered_record(cell, |carried| Ok(carried.object()), types)
+                .rebuild_delivered_record(cell, |carried| Ok(carried.object()), types)
                 .expect("a whole-value record adoption's copy is infallible");
             return Carried::Object(object);
         }
@@ -247,21 +270,93 @@ impl<'a> Scope<'a> {
         })
     }
 
+    /// Bind a delivered value's record-embedding **projection** into this scope, routing the
+    /// escape-seam cost chooser ([`record_seam_verb`]) over the projected record. `project` selects
+    /// what to bind (identity for a whole-value bind, a `Tagged`/`Wrapped` payload for a MATCH/TRY
+    /// `it`); the caller vets that it yields a value embedding a record (a bare record, or one behind
+    /// a `Tagged`/`Wrapped` spine). The verb decides copy vs pin:
+    ///
+    /// - **Copy** — a priceable home-crossing record with a clear borrows-home bit and small cost
+    ///   (copied out and released, the retiring producer frees), plus every unpriceable record and
+    ///   any projection whose top is a `Tagged`/`Wrapped` spine embedding a record (still-`Rc` at the
+    ///   top, unpriceable there): the value is totally rebuilt into this scope's region through the
+    ///   record door ([`Self::rebuild_delivered_record`]).
+    /// - **Pin** — a record that borrows its home region, a small home-crossing pin, or a foreign
+    ///   (producer-resident) crossing: the projection is pointer-copied ([`KObject::deep_clone`], a
+    ///   pointer copy for a record sharing the producer-region substrate) and moved in under the
+    ///   binding's non-omitting `Kept` stored reach ([`Self::pinned_reach_of`]). A record substrate
+    ///   carries no home-naming borrow, so that reach names the producer host explicitly — never
+    ///   omitting it under ambient coverage — and the residence audit evidences the foreign substrate
+    ///   through the `any_member_region` reach-member path rather than the dest-resident `owns_record`
+    ///   check. The reach is the pin's liveness, so this verb is confined to the bind seam, where
+    ///   [`Self::bind_delivered`] stores the reach on the binding entry — never the argument re-home
+    ///   ([`Self::adopt_sealed_copied`]), which discards it and copies unconditionally.
+    ///
+    /// Returns the resident reference paired with the binding's stored reach (minted at the verb's
+    /// residence mode), the same pair [`Self::bind_delivered`] / a caller's terminal seal consume.
+    pub(crate) fn copy_delivered_record<P>(
+        &self,
+        cell: &DeliveredCarried,
+        project: P,
+        types: &TypeRegistry,
+    ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError>
+    where
+        P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+    {
+        let host_region = cell.host().region();
+        let verb = cell.open(|live| match project(&live) {
+            Ok(record) => match record {
+                KObject::Record(substrate, _) => record_seam_verb(substrate, record, host_region),
+                // A projection embedding a record behind a `Tagged`/`Wrapped` spine is unpriceable at
+                // the top (still-`Rc`): copy with a probe-derived release bit.
+                _ => SeamVerb::Copy {
+                    released: !record_still_borrows_host(record, host_region),
+                },
+            },
+            Err(_) => SeamVerb::Copy { released: false },
+        });
+
+        match verb {
+            SeamVerb::Copy { .. } => self.rebuild_delivered_record(cell, project, types),
+            // Pin: the record stays in its producer region; the projection is pointer-copied and
+            // moved in under the non-omitting `Kept` stored reach ([`Self::pinned_reach_of`]), whose
+            // explicitly named producer region covers the foreign substrate on the audit's
+            // `any_member_region` reach-member path. The reach is the pin's liveness — the caller
+            // ([`Self::bind_delivered`]) stores it on the binding.
+            SeamVerb::Pin => {
+                let stored = self.pinned_reach_of(cell);
+                let allocated = cell.open(|live| {
+                    let projected = project(&live)?;
+                    self.alloc_object_delivered(
+                        projected.deep_clone(),
+                        std::slice::from_ref(&stored),
+                        types,
+                    )
+                })?;
+                Ok((allocated, stored))
+            }
+        }
+    }
+
     /// Rebuild a delivered value's record-embedding **projection** into this scope's region through
-    /// the record door — the seam copy verb for a region-resident record substrate, which cannot be
+    /// the record door — the copy path for a region-resident record substrate, which cannot be
     /// pointer-copied past the checked residence audit. `project` selects what to copy (identity for a
     /// whole-value bind, a `Tagged`/`Wrapped` payload for a MATCH/TRY `it`); the caller vets that it
     /// yields a value embedding a record (a bare record, or one behind a `Tagged`/`Wrapped` spine —
-    /// [`copy_object_into`] rebuilds the whole spine). The value is relocated at the record's own seam
-    /// mode —
-    /// a plain-data record `Residence::Released` (the retiring producer frees), a record still
-    /// borrowing its producer `Residence::Copied` and pinned — with the copy's foreign reach minted
-    /// into this scope's arena for liveness. The top node is then re-boxed through the checked door
-    /// to recover the `&'a` reference; its O(1) `owns_record` membership passes because the rebuilt
-    /// substrate is scope-resident, so no reach evidence is needed. Returns the resident reference
-    /// paired with the binding's stored reach (minted at the same mode), the same pair
-    /// [`Self::bind_delivered`] / a caller's terminal seal consume.
-    pub(crate) fn copy_delivered_record<P>(
+    /// [`copy_object_into`] rebuilds the whole spine). The value relocates at the record's own
+    /// release-exact seam mode — a plain-data record `Residence::Released` (the retiring producer
+    /// frees), a record still borrowing its producer `Residence::Copied` and pinned — with the copy's
+    /// foreign reach minted into this scope's arena for liveness. The top node is then re-boxed
+    /// through the checked door to recover the `&'a` reference; its O(1) `owns_record` membership
+    /// passes because the rebuilt substrate is scope-resident, so no reach evidence is needed. Returns
+    /// the resident reference paired with the binding's stored reach (minted at the same mode).
+    ///
+    /// This is the unconditional-copy half of [`Self::copy_delivered_record`]'s chooser: the argument
+    /// re-home ([`Self::adopt_sealed_copied`]) calls it directly, and the chooser's `Copy` verb
+    /// delegates here (a `Copy` verb's residence is exactly this release-exact mode — a clear
+    /// borrows-home bit at a home crossing agrees with the probe, and the unpriceable / embedded-spine
+    /// verbs read the probe directly).
+    fn rebuild_delivered_record<P>(
         &self,
         cell: &DeliveredCarried,
         project: P,

@@ -90,11 +90,13 @@ impl<'a> Scope<'a> {
     /// USING-window forwarding and conditional-defer behavior.
     ///
     /// A projection that **embeds a record** (a bare record, or one behind a `Tagged`/`Wrapped`
-    /// spine) takes the seam copy verb ([`Self::copy_delivered_record`]) — the record's substrate is
-    /// region-resident and cannot be pointer-copied past the checked audit, so the value is totally
-    /// rebuilt into this scope's region through the record door, at its own release-exact seam mode.
-    /// Every other projection deep-clones its top node under the cell's copied-mode reach — the mint
-    /// runs *before* the copy so the copy's own residence audit sees the evidence.
+    /// spine) routes the escape-seam cost chooser through [`Self::copy_delivered_record`]. A rebuilt
+    /// record lands in this scope's region through the record door at its release-exact seam mode; a
+    /// projection the chooser selects to **pin** instead rides the producer region by hold (its
+    /// pointer-copied substrate covered by the binding's `Kept`-minted stored reach), the copy-free
+    /// path a bound closure's captured foreign region already takes. Every other projection
+    /// deep-clones its top node under the cell's copied-mode reach — the mint runs *before* the copy
+    /// so the copy's own residence audit sees the evidence.
     pub(crate) fn bind_delivered(
         &self,
         name: String,

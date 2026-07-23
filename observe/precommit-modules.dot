@@ -529,6 +529,7 @@ digraph {
     "koan::machine::core::scope" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::core::scope::reach" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine::core::scope" [label="uses", style="dashed"];
