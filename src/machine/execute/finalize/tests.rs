@@ -228,6 +228,9 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
 /// destination (`copy_object_into`, via `fold_cells`'s per-cell seam selection) — and because no
 /// field borrows anything, `record_still_borrows_host` answers false, so every producer frame
 /// releases exactly like the scalar case, not conservatively pinned by the record's own carrier bit.
+// Pins the copy/release mechanism; the `seam-force-pin` build pins the record and retains the frames,
+// so this cannot hold there. The equivalence battery proves language-output invisibility separately.
+#[cfg(not(feature = "seam-force-pin"))]
 #[test]
 fn aggregate_of_plain_record_results_releases_every_producer_frame() {
     FRAME_CENSUS.with(|census| census.borrow_mut().clear());

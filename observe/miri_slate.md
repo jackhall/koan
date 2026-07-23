@@ -101,7 +101,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-43 tests, grouped by the unsafe site each pins down. Names below are the exact
+44 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 21 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -534,28 +534,42 @@ surviving the run that built it.
 
 - `functor_application_is_generative`
 
-**Record escape seam — copy (`Released`) vs pin (`Copied`)** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
-— `copied_seam_mode` picks the per-cell `Residence` a `Residence::Copied` crossing takes for a
-top-level `Record`: `Released` when `record_still_borrows_host`
-([kobject.rs](../src/machine/model/values/kobject.rs)) finds no surviving borrow leaf into the
-cell's own producer host (the record is totally rebuilt via `copy_object_into` and the producer
-frees), `Copied` when it does (the producer materializes into the aggregate's reach and stays
-pinned) — Ruling 4's escape policy. Two unit tests mirror `dispatch::literal::fold_cells`'s exact
-aggregate loop (`copied_seam_mode` + `transfer_into_placing` + `copy_held_from_carried`) directly
-for five independent producers apiece: one where every record cell is plain data (asserts
-`Released`, drops every producer first, then reads every cell back), one where every record cell
-embeds a closure captured in that same producer (asserts `Copied`, drops every producer first,
-then reads every closure's captured scope back) — a regression in either direction (wrongly
-releasing a still-borrowing record, or wrongly pinning a plain one) either dangles under tree
-borrows or leaks. A third, end-to-end test drives the identical `Released` shape through the real
-scheduler and parser — a 5-element list literal of user-FN calls each returning a plain-data
-record — corroborating that `fold_cells` is wired to the real per-call producer frames, not just
-reachable in isolation. The `unsafe` routed is the shared `retype` in `witnessed.rs`; `lift.rs`
-carries none of its own (see the file's stale-group whitelist entry).
+**Record escape seam — cost-driven copy vs pin** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
+— two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The
+**container-cell** seam (`copied_seam_mode`, Ruling 4: fresh containers stay self-contained) picks
+the per-cell `Residence` a `Residence::Copied` crossing takes: `Released` when
+`record_still_borrows_host` ([kobject.rs](../src/machine/model/values/kobject.rs)) finds no surviving
+borrow leaf into the cell's own producer host (the record is totally rebuilt via `copy_object_into`
+and the producer frees), `Copied` when it does (the producer materializes into the aggregate's reach
+and stays pinned). Two unit tests mirror `dispatch::literal::fold_cells`'s exact aggregate loop
+(`copied_seam_mode` + `transfer_into_placing` + `copy_held_from_carried`) directly for five
+independent producers apiece: one where every record cell is plain data (asserts `Released`, drops
+every producer first, then reads every cell back), one where every record cell embeds a closure
+captured in that same producer (asserts `Copied`, drops every producer first, then reads every
+closure's captured scope back) — a regression in either direction (wrongly releasing a
+still-borrowing record, or wrongly pinning a plain one) either dangles under tree borrows or leaks.
+
+The **value-level** escape seam (`seam_verb` → `record_seam_verb`
+([kobject.rs](../src/machine/model/values/kobject.rs)), the cost chooser at `relocate_terminal` /
+`single_poll` / `finalize`) picks the whole record's `SeamVerb` in O(1) from its memoized copy cost
+and borrows-home bit: a **released copy** (`Copy { released: true }` → `Residence::Copied` at the
+finalize aggregate) when a priceable plain record is a small fraction of the host's allocated total,
+and a **pin** (`SeamVerb::Pin` → `Residence::Kept` + `copy_carried`) when a leaf borrows home — the
+record's region-resident substrate rides **shared** (a pointer-copy, never rebuilt), covered by the
+Kept-minted producer reach. One end-to-end test drives the released-copy shape through the real
+scheduler and parser — a 5-element list literal of user-FN calls each returning a plain-data record
+— corroborating the seam is wired to real per-call producer frames; a minimal-shape twin drives the
+cost-chooser-selected pin for five independent home-borrowing records (asserts `Pin`, drops every
+producer, then reads each closure's captured scope back through the shared substrate), so a
+regression that failed to mint the Kept host — or rebuilt instead of sharing — dangles here. Both
+verbs are thus UB-audited at the seam under the default cost chooser. The `unsafe` routed is the
+shared `retype` in `witnessed.rs`; `lift.rs` carries none of its own (see the file's stale-group
+whitelist entry).
 
 - `plain_record_cells_select_released_and_survive_every_producer_free`
 - `closure_embedding_record_cells_select_copied_and_pin_every_producer`
 - `aggregate_of_plain_record_results_releases_every_producer_frame`
+- `record_seam_pin_verb_shares_substrate_and_survives_producer_free`
 
 ## Adding tests to the slate
 
@@ -577,9 +591,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-23: 979s — 44 tests, 0 leaks, 0 UB
 - 2026-07-22: 629s — 43 tests, 0 leaks, 0 UB
 - 2026-07-22: 475s — 36 tests, 0 leaks, 0 UB
 - 2026-07-20: 466s — 36 tests, 0 leaks, 0 UB
 - 2026-07-20: 579s — 36 tests, 0 leaks, 0 UB
-- 2026-07-18: 614s — 36 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

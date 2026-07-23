@@ -14,6 +14,11 @@
 # Outputs (override paths via env vars):
 #   - DOT graph from cargo-modules → observe/modules.dot   (`KOAN_DOT`)
 #   - llvm-cov lcov report          → observe/coverage.lcov (`KOAN_LCOV`)
+#
+# Not run here (too heavy for the per-commit hook, run on demand / in CI):
+# `tools/seam_equivalence.sh` — the record-escape-seam equivalence battery, which
+# re-runs the suite under `--features seam-force-copy` and `--features seam-force-pin`
+# to prove the cost-driven copy-vs-pin choice is semantically invisible.
 
 set -euo pipefail
 

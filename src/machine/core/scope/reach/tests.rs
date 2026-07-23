@@ -68,6 +68,8 @@ fn substrate_address(value: &KObject<'_>) -> usize {
 /// [`Scope::copy_delivered_record`] pointer-copies the projection (sharing the producer's substrate)
 /// and moves it in under the `Kept`-minted stored reach. The bound value reads its field back
 /// correctly after the producer frame shell drops — the stored reach holds the producer region.
+/// (The enclosing module is gated out of the `seam-force-copy` build, which rebuilds instead of
+/// pinning — see the `mod tests` declaration in the parent.)
 #[test]
 fn copy_delivered_record_pins_a_home_borrowing_record() {
     let root = run_root_storage();

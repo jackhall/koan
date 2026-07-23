@@ -351,6 +351,15 @@ fn type_recursive_member_relocates_and_navigates() {
 struct RecordAggFamily;
 reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
 
+/// Accumulator twin for the value-level-seam pin mirror below: the destination region plus the
+/// relocated `Carried` cells [`copy_carried`] produces (the value-level relocate that honors the
+/// [`SeamVerb`], unlike the container-cell [`copy_held_from_carried`] which always rebuilds). Used
+/// only by the pin mirror, which is gated out of the `seam-force-copy` build.
+#[cfg(not(feature = "seam-force-copy"))]
+struct PinAggFamily;
+#[cfg(not(feature = "seam-force-copy"))]
+reattachable!(PinAggFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Carried<'r>>));
+
 /// A `KFunction` allocated into `home`'s region wrapped in a `Record` field, both born through
 /// `home`'s own brand (not a transient `with_scope` sub-brand) so the reference escapes at `home`'s
 /// own lifetime — the shape a list-literal cell born from `({f = (FN …)})` takes.
@@ -541,6 +550,94 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
     assert_eq!(
         read_ids, expected_ids,
         "every closure's captured scope reads back unchanged after its producer frame freed"
+    );
+}
+
+/// Escape with the **cost-chooser-selected pin** verb at the value-level seam (`seam_verb` →
+/// [`SeamVerb::Pin`] → `Residence::Kept` + [`copy_carried`]), the shape `relocate_terminal` /
+/// `single_poll` / `finalize` take for a top-level record — distinct from the two container-cell
+/// cases above, which route `copied_seam_mode` (never a pin). Each of the `DEPTH` producers
+/// contributes a record whose only field is a closure captured in that same frame: priceable (the
+/// closure leaf costs zero) with `borrows_home` set, so the chooser returns `Pin`. Under the verb's
+/// `Kept` residence the producer host is minted into the destination reach unconditionally, and
+/// `copy_carried` pointer-copies the record — the region-resident substrate borrow **rides shared**,
+/// never rebuilt. Dropping every producer shell and reading each closure's captured scope back
+/// through the shared substrate is the no-use-after-free check under tree borrows; a regression that
+/// failed to mint the Kept host (or rebuilt instead of sharing) would dangle here.
+#[cfg(not(feature = "seam-force-copy"))]
+#[test]
+fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
+    const DEPTH: usize = 5;
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+    let dest_storage = dest_frame.storage_rc();
+
+    let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
+    let mut expected_ids = Vec::with_capacity(DEPTH);
+    let acc0 = KoanRegion::yoke_branded::<PinAggFamily, _>(Rc::clone(&dest_storage), |region| {
+        (region.handle(), Vec::with_capacity(DEPTH))
+    });
+    let acc_final = (0..DEPTH).fold(acc0, |acc, _| {
+        let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let obj = alloc_home_closure_record(&producer, &types);
+        expected_ids.push(match obj {
+            KObject::Record(substrate, _) => {
+                match substrate.fields().get("f").map(|h| h.object()) {
+                    Some(KObject::KFunction(f)) => f.captured_scope().id,
+                    _ => panic!("expected field f: KFunction"),
+                }
+            }
+            other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+        });
+        let sealed = Witnessed::from_erased(
+            Erased::erase(Carried::Object(obj)),
+            CarrierWitness::default(),
+        );
+        let dep: DeliveredCarried = Delivered::seal(sealed, producer.storage_rc());
+        let verb = seam_verb(&dep);
+        assert!(
+            matches!(verb, SeamVerb::Pin),
+            "a priceable home-borrowing record must select the Pin verb at the value-level seam"
+        );
+        producers.push(producer);
+        dep.transfer_into_placing::<PinAggFamily, PinAggFamily, _>(
+            acc,
+            verb.residence(),
+            |value, (region, mut cells), placement| {
+                cells.push(copy_carried(
+                    value,
+                    verb,
+                    FoldingBrand::in_fold_closure(placement),
+                ));
+                (region, cells)
+            },
+        )
+    });
+
+    for producer in producers.drain(..) {
+        drop(producer);
+    }
+
+    let read_ids: Vec<_> = acc_final.with_pinned(&dest_storage, |(_region, cells)| {
+        cells
+            .iter()
+            .map(|carried| match carried.object() {
+                KObject::Record(substrate, _) => {
+                    match substrate.fields().get("f").map(|h| h.object()) {
+                        Some(KObject::KFunction(f)) => f.captured_scope().id,
+                        _ => panic!("expected field f: KFunction"),
+                    }
+                }
+                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+            })
+            .collect()
+    });
+    assert_eq!(
+        read_ids, expected_ids,
+        "every pinned record's shared substrate reads its captured scope back after producer free"
     );
 }
 

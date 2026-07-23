@@ -16,7 +16,10 @@ use crate::machine::model::{
 use crate::machine::{CarrierWitness, DeliveredCarried, KError};
 use crate::witnessed::{Delivered, Reattachable, RegionHandleFamily, Residence, Sealed, Witnessed};
 
-#[cfg(test)]
+// The sole test here pins the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy`
+// build rebuilds the record instead, so the module cannot hold there. The equivalence battery proves
+// language-output invisibility separately.
+#[cfg(all(test, not(feature = "seam-force-copy")))]
 mod tests;
 
 impl<'a> Scope<'a> {

@@ -97,6 +97,9 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
 /// producer, so the retiring incarnation's region frees instead of riding every successor's binding.
 /// A conservative pin of the record would chain one region per hop (`O(depth)`); depth-independence
 /// is what proves the record path releases. Mirrors `tail_recursive_countdown_stays_o1_in_regions`.
+// Pins the copy/release mechanism keeping the tail loop flat; the `seam-force-pin` build pins each
+// producer region for `O(depth)`. The equivalence battery proves language-output invisibility separately.
+#[cfg(not(feature = "seam-force-pin"))]
 #[test]
 fn tail_recursive_record_thread_stays_o1_in_regions() {
     reset_region_metrics();
