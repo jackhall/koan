@@ -19,15 +19,16 @@ compile-enforced (the lower crate names no type from the higher one).
 responsibility and the `workgraph` consumer API; this doc owns the cell
 substrate's contract. [per-node-memory.md](per-node-memory.md) owns the
 witnessed-memory mechanics the substrate is built from;
-[witness-hosting.md](witness-hosting.md) owns reach-set representation and
-the pinning invariant.
+[witness-hosting.md](witness-hosting.md) owns reach representation — the
+description / pin-bundle split — and the holder rule.
 
 ## The two halves
 
 The substrate has a memory half and a cell half.
 
 - **The witnessed memory substrate** — regions, brands, carriers, sealed and
-  externally-witnessed cells, reach sets, the delivery envelope, and the step
+  externally-witnessed cells, reach descriptions and pin bundles, the
+  delivery envelope, and the step
   construction context. This half has no dependency on scheduling of any
   kind: it is the complete answer to "allocate values whose borrows are
   provably live, and move them between holders without a bare pin."
@@ -50,9 +51,9 @@ with it.
   and never calls it. Everything an embedder knows
   about a cell that the substrate does not — its name-resolution state, its
   semantic frame, any output obligation — rides *inside* the continuation's
-  captures. A sealed carrier is a lifetime-free, self-pinning owned value,
-  so a capture that needs a pin independent of the cell's own memory simply
-  carries its own sealed cell.
+  captures. A delivery envelope is a lifetime-free owned value carrying its
+  own pins, so a capture that needs a pin independent of the cell's own
+  memory simply carries its own envelope.
 - **Frame** — the memory anchor. An embedder value the substrate holds per
   cell so the continuation's captures stay live while the cell is dormant,
   and the witness under which the continuation is re-anchored. It *wraps* the
@@ -61,10 +62,11 @@ with it.
   type it retains and drops for delivery-driven retention — and it calls
   nothing else on the anchor.
 - **Value** — what passes between cells. A one-lifetime reattachable family
-  carried as a witnessed/sealed carrier: born co-located with its reach set,
-  duplicated per reader, re-anchored only under a pin. In-flight, a value
-  travels as a delivery envelope — the sealed carrier paired with a retained
-  frame owner — so no holder ever needs a bare pin.
+  carried as a witnessed/sealed carrier: born co-located with its reach
+  description, duplicated per reader, re-anchored only under a pin.
+  In-flight, a value travels as a delivery envelope — the sealed carrier
+  paired with its owned pin bundle, the retained frame owner plus the value's
+  foreign pins — so no holder ever needs a bare pin.
 
 ## What is deliberately absent
 

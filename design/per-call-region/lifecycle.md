@@ -1,6 +1,6 @@
 # Region lifecycle: allocation and lift
 
-Which frame pins a per-call region, the consumer-pull node-output lift, and how a relocated escaping
+Which frame pins a per-call region, the consumer-pull node-output lift, and how an escaping
 value is kept alive. Part of the [per-call region protocol](README.md).
 
 ## Carriers
@@ -18,9 +18,9 @@ KFunction<'a>)` reaches the per-call region that owns its captured
 scope only through that reference, and a `KObject::Module(&'a Module<'a>)` reaches its child
 scope's region
 the same way. None of these carries an owning `Rc<FrameStorage>` on the value. The region such a value
-reaches is kept alive by the value's *carrier* — a producer slot's `FrameSet` witness while the value
-rides the scheduler, and the consumer scope's own arena once the value is bound out of it (below) —
-never by an anchor embedded in the value. Because the in-region value strong-owns no frame, no
+reaches is kept alive by the value's *holder* — a producer slot's `FrameSet` witness while the value
+rides the scheduler, and the binding entry's owned pin bundle once the value is bound out of it
+(below) — never by an anchor embedded in the value. Because the in-region value strong-owns no frame, no
 allocation can close a region↔value cycle, so the allocation engine carries no cycle gate.
 
 `FrameStorage` itself carries `outer: Option<Rc<FrameStorage>>`, which chains the parent per-call
@@ -65,12 +65,12 @@ relocates it across each dep edge — never the producer.
   [`NodeFinalize`](../../src/machine/execute/finalize.rs) workload hook, peer of
   `NodeLift` — run once at producer Done before the pin: it reattaches the
   erased contract against the producer cart, runs the declared-return check, and
-  (only on a coarsening re-tag, e.g. `List<Number>` through `:(LIST OF Any)`)
-  re-allocates the stamped value into the contract's captured-scope region so it
-  outlives the reused/freed producer frame. With no declared return it seals the
+  re-stamps the value **in place**, in the producer's own region (a coarsening
+  re-tag, e.g. `List<Number>` through `:(LIST OF Any)`, re-allocates there too).
+  Declared or not, it seals the
   [`CarrierWitness`](../../src/machine/core/carrier_witness.rs) — the
   reference-only carrier, pinning nothing — **as-is**: there is no Done-boundary
-  sever gate. The producer frame's lifetime is the scheduler's frame-retention
+  relocation or sever gate. The producer frame's lifetime is the scheduler's frame-retention
   hold, seeded at finalize and released once every destination has pulled
   (pull-count zero), so a region-pure and a frame-borrowing terminal alike leave
   the frame to retention. The bare `NodeLift` hook is thereby reusable for any
@@ -98,21 +98,22 @@ its captured scope, and Koan has no reachability mechanic to compute a copy set,
 is *kept alive*, not rebuilt. While the value rides a scheduler slot its producer terminal's `FrameSet`
 witness pins that region; once it is relocated out of the scheduler — bound into a persistent scope,
 spliced into a working expr and re-dispatched, or read out as a top-level result — the producer slot
-is gone, so the *consumer* takes over the pin: the relocated value's own carrier witness, and the
-consumer scope's own arena for a bound value.
+is gone, so the *consumer* takes over the pin: the binding entry's owned pin bundle for a bound
+value, the new envelope's bundle for a re-dispatched or read-out one.
 
 Both channels carry the regions a relocated value reaches on its delivered
 [`Sealed`](../per-node-memory.md#storage-and-access-seal-open-transfer_into) carrier. A **closure /
 future** seals its captured-scope reach at construction; a **module value** seals its child scope's
 home frame and binding-entry reaches the same way, via
 [`Scope::child_module_reach`](../../src/machine/core/scope.rs). The embedding or binding site mints that
-carrier's reach into its own arena — `merge` at an `attr` / `FROM` projection,
+carrier's reach pair — `merge` at an `attr` / `FROM` projection,
 [`Scope::host_reach_of`](../../src/machine/core/scope.rs) at a `let` / user-fn arg / `USING` bind — and
 the [`run_program`](../../src/machine/execute/runtime/interpret.rs) root drain mints the rehomed
-terminal's full witness set into the run-root scope's own arena, so a value reaching several regions (a
+terminal's full reach against the run-root scope, the root binding owning the pins, so a value reaching
+several regions (a
 list of closures, a module over a functor-result region) keeps every one, read straight off its carrier
 rather than reconstructed from the value. The mint is guarded by `pins_region`, so a region the consumer
-or an ancestor already pins is not re-added, and the minted set dedups by region. No cycle forms: a
+or an ancestor already pins is not re-added, and the minted pair dedups by region. No cycle forms: a
 frame's `outer` chain points only toward its lexical ancestor (or `None` at run-root), never back
 toward a descendant, so a minting descendant never strong-refs back into the chain that
 would close a loop.

@@ -56,6 +56,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Module element-type join](type_language/module-element-type-join.md)
 - [Union-typed carrier slots for builtin signatures](type_language/union-carrier-slots.md)
 - [USING surfaces module type members](type_language/using-type-members.md)
-- [Compile-enforced carrier residence pairing](untyped_arena/carrier-residence-pairing.md)
+- [Reach ownership split and the single escape seam](untyped_arena/reach-ownership-split.md)
 - [Region-store string values](untyped_arena/region-store-strings.md)
 

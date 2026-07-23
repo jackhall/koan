@@ -30,10 +30,10 @@ than ownership trees. The structural edges:
   holds a bare value-side reference to a function-region slot and reaches the
   per-call region that owns the function's captured scope only through that
   reference's scope `region_owner`. It carries no per-value liveness anchor:
-  the region an escaping closure reaches is pinned by the carrier's
-  witness [`FrameSet`](../src/machine/core/arena.rs) while it rides a scheduler
-  slot, then carried on the relocated value's own witness and minted into the
-  consumer scope's own arena when the value is bound (see
+  the region an escaping closure reaches is pinned by its envelope's
+  witness [`FrameSet`](../src/machine/core/arena.rs) bundle while it rides a
+  scheduler slot, then minted — description into the consumer region's reach
+  table, pins onto the binding entry — when the value is bound (see
   [§ Region lifetime erasure](#region-lifetime-erasure)).
 - `Module` and `Signature` cache their declaration scopes as a plain
   `&'a Scope<'a>` (heap-pinned by the surrounding region chain), re-anchored with
@@ -44,10 +44,10 @@ slots may point at run-root slots, because the run-root region outlives every
 per-call region by the lexical-scoping invariant. A reference that points
 *outward* — a value referencing a slot in a dying per-call region, the
 canonical case being a closure / module returned from its defining frame —
-keeps that region alive through its carrier's witness, never a per-value anchor
+keeps that region alive through its holder's pins, never a per-value anchor
 on the value itself: a producer slot's `FrameSet` pins it while the value rides
-the scheduler, and the relocated value carries its reach on its own carrier
-witness, minted into the consumer scope's own arena when bound (see
+the scheduler, and a bound value's pins ride its binding entry, minted with the
+reach description when the value is bound (see
 [§ Region lifetime erasure](#region-lifetime-erasure)).
 
 **Why graph rather than tree.** Many-to-one captures and bindings, sibling
@@ -209,11 +209,12 @@ The value channel is borrow-checked end to end. The scheduler stores a finalized
 `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` / `merge_pinned`) and re-anchors
 only through a rank-2 destination verb. `finalize` bundles the erased value under a
 [`CarrierWitness`](../src/machine/core/carrier_witness.rs) — the **reference-only** carrier, a
-`borrows_host` bit plus a reference to the value's foreign reach set, pinning nothing itself — and,
-with no declared return, seals it **as-is**: there is no Done-boundary sever gate. What keeps the
+`borrows_host` bit plus a reference to the value's foreign reach description, pinning nothing itself —
+and seals it **as-is** (a declared return is checked and re-stamped in place first): there is no
+Done-boundary relocation or sever gate. What keeps the
 producer frame alive is the scheduler's **frame-retention hold**, seeded at finalize and released
-once every destination has pulled (pull-count zero); a walking terminal carries that hold as its
-[`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope's host `Rc`. A value read goes
+once every destination has pulled (pull-count zero); a walking terminal carries that hold inside its
+[`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope's pin bundle. A value read goes
 through the envelope's pinned open (`Sealed::open_with` under the retained host — the carrier is not
 a `Witness`, so a bare `open` under it does not compile, and every read names its pin), which copies
 the value out inside a `for<'b>` brand: the fabricated content lifetime is un-nameable, so nothing
@@ -226,8 +227,8 @@ re-anchored reference ride the `&self` borrow up-stack. The continuation and con
 lifetime-free node — re-anchor through the run-loop step's **consuming, externally-witnessed**
 `Sealed::open`: [`run_step`](../src/machine/execute/run_loop.rs) zips the continuation, the contract,
 and the consumer region and opens them at one rank-2 `for<'b>` brand standing in for the step
-lifetime, witnessed by the held start cart `Rc` (whose `outer` chain subsumes the contract's home),
-so the whole tail nests inside the brand and carries no loose witness-borrow reattach. The
+lifetime, witnessed by the held start cart `Rc` and the step's owned pins (the contract is pin-free
+`Copy` registry-handle data), so the whole tail nests inside the brand and carries no loose witness-borrow reattach. The
 consumer-pull lift and the `Outcome::Forward` ready pull re-anchor their reads at a *node* lifetime,
 not a fabricated `'run`: each dep terminal is read out borrow-bounded, erased into one
 `DepResultsFamily` slice carrier, and opened **in-band** at `'b` alongside the continuation. Inside
@@ -240,7 +241,8 @@ relocation allocs at the destination region's own lifetime, so the lift hook is 
 `deep_clone` + `alloc`. The relocation seam
 [`Delivered::transfer_into`](../workgraph/src/witnessed/delivered.rs) wraps this as a mint — the
 relocated value re-sealed with its reach (and, for a value borrowing into the dying producer, that
-producer) minted into `dest`'s arena — and the storage-bound drain / forward path routes it via
+producer) minted against `dest` — description into its reach table, pins to the holder — and the
+storage-bound drain / forward path routes it via
 [`relocate_terminal`](../src/machine/execute/runtime.rs), which pairs the dep's envelope
 (`dep_delivered`) with a `Residence::Copied` transfer. The consumer-less root drain in
 [`run_program`](../src/machine/execute/runtime/interpret.rs) relocates each top-level terminal into the
@@ -254,7 +256,8 @@ child scope's home frame and binding-entry reaches the same way (via
 [`Scope::child_module_reach`](../src/machine/core/scope.rs)). The embedding or binding site mints that
 carrier's reach into its own arena (`transfer_into` at an `attr` / `FROM` projection,
 [`Scope::host_reach_of`](../src/machine/core/scope.rs) at a `let` / user-fn arg / `USING` bind), and the
-root drain mints the rehomed terminal's full witness set into the run-root scope's own arena — so a
+root drain mints the rehomed terminal's full reach against the run-root scope, the root binding
+owning the pins — so a
 multi-region value keeps *every* region it reaches, read straight off its carrier rather than
 reconstructed from the value. No cycle forms: a dispatched frame's `outer` is `None`, so a minting
 descendant never strong-refs back, and the mint omits a region the consumer or an ancestor already
@@ -274,8 +277,8 @@ side carries no `unsafe` at all: forgetting a scope reference's lifetime for sto
 read, both deferring every fabrication hazard to the witnessed retype.
 
 The allocation engine needs **no cycle gate**: a stored value holds no owning `Rc` back to a region —
-a closure / future / module is a bare borrow into its defining region, kept alive by its carrier's
-witness set rather than an embedded anchor — so storing it where requested can never close an
+a closure / future / module is a bare borrow into its defining region, kept alive by its holder's
+pin bundle rather than an embedded anchor — so storing it where requested can never close an
 allocation back-edge. Every family implements the `Stored` trait and routes the one
 [`alloc`](../workgraph/src/witnessed/region.rs) engine, which erases the value to `'static`, stores it in the
 family's sub-arena, and re-anchors the store to `'a`; the engine carries no redirect logic. It stays

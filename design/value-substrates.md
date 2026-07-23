@@ -34,11 +34,13 @@ just enough to read the policy.
   door composes it from the operands' own witnesses
   ([per-node-memory.md](per-node-memory.md)).
 - **Reach** — the set of foreign regions a value's borrows can point into.
-  **Minting** a reach copies those region holds into a consumer scope's own
-  arena, so the consumer keeps the regions alive with no help from the
-  producer ([memory-model.md § Region lifetime erasure](memory-model.md#region-lifetime-erasure)).
+  **Minting** a reach produces a paired non-owning description (into the
+  consumer region's reach table) and owned pin bundle (stored by the
+  consuming holder), so the consumer keeps the regions alive with no help
+  from the producer ([memory-model.md § Region lifetime erasure](memory-model.md#region-lifetime-erasure)).
 - **Pin** — keeping a producer's whole region alive by holding its
-  `Rc<FrameStorage>`; the escape default below.
+  `Rc<FrameStorage>` in the consuming holder's bundle, released when that
+  holder drops; the escape default below.
 - **Seam** — the one relocation choke-point every region crossing routes: the
   [`transfer_into`](../workgraph/src/witnessed/delivered.rs) fold and its
   [`copy_carried`](../src/machine/execute/lift.rs) hook.
@@ -90,7 +92,7 @@ Three consequences define the regime:
 - **No second ownership channel.** No composite payload rides an `Rc`, so no
   value's clone bumps a refcount and no value's drop runs payload `Drop` glue.
   Sharing happens at exactly one granularity: the region
-  (`Rc<FrameStorage>`, held by frames and reach sets).
+  (`Rc<FrameStorage>`, held by frames and pin bundles).
 
 ## Construction: witnessed doors only
 
@@ -123,7 +125,8 @@ pass that computes the type join):
 An escaping value — a return, an argument bind, a root-drain terminal —
 **keeps its borrows and pins its birth region**. The consumer takes the
 producer's frame-retention hold (`Rc<FrameStorage>`) and mints the value's
-reach into its own arena — the same protocol every closure and module already
+reach pair against its own scope — description into the reach table, pins
+onto the binding entry — the same protocol every closure and module already
 rides ([memory-model.md § Region lifetime erasure](memory-model.md#region-lifetime-erasure)).
 Transferring ownership of an arbitrarily large container is therefore one
 refcount bump and one reach mint: **O(1), zero bytes moved**, at region
@@ -131,8 +134,8 @@ granularity.
 
 The price of the pin is retention granularity: the consumer retains the whole
 producer region — the result *and* the call's temporaries — until the
-consumer's own scope releases the reach. The copy optimization below exists to
-bound exactly that cost.
+pinning entry drops (rebind, evacuation, or scope death). The copy
+optimization below exists to bound exactly that cost.
 
 ## Cost-driven copy: the optimization
 
@@ -192,7 +195,7 @@ A **pinned record** shares its producer-resident substrate by a pointer-copy
 naming its *own* home region, the bind seam names the producer region
 **explicitly** in the pinned value's reach — rather than leaning on ambient
 coverage the way a closure's captured region does — so the residence audit can
-evidence the shared substrate through a reach-set member. The explicit naming is
+evidence the shared substrate through a reach-description member. The explicit naming is
 redundant-but-harmless: the producer region is already ambiently rooted for the
 binding's life.
 
@@ -223,8 +226,9 @@ permanently; "as much storage as possible" means the value substrates.
 ## Invariants preserved
 
 - **Cycle-freedom needs no gate.** No stored value owns an `Rc` back to any
-  region — a substrate borrow is a borrow, a reach is minted into an arena the
-  existing omission policy keeps acyclic — so the allocation engine keeps
+  region — a substrate borrow is a borrow, a reach's pins are holder-owned
+  and the existing omission policy keeps ownership acyclic — so the
+  allocation engine keeps
   needing no cycle gate ([memory-model.md](memory-model.md)).
 - **Directionality.** Inward references stay free; outward references exist
   only on the escape path and are always covered by a minted reach. The
@@ -239,6 +243,7 @@ permanently; "as much storage as possible" means the value substrates.
 The [untyped_arena](../roadmap/untyped_arena/README.md) roadmap project carries
 the conversion slate; its `Requires` chain encodes the order:
 
+- [Reach ownership split and the single escape seam](../roadmap/untyped_arena/reach-ownership-split.md)
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
 - [Region-store string values](../roadmap/untyped_arena/region-store-strings.md)
 - [Region-store expression parts](../roadmap/untyped_arena/region-store-expressions.md)

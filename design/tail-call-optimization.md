@@ -160,19 +160,17 @@ the intra-loop argument adoption.
 
 A tail chain checks the value against the **first** caller's declared return, not
 the tail-most callee's, so the reinstalled slot keeps the first contract it entered.
-The contract's declared type points into an *ancestor* region — for a FN/per-call
-contract the callee's captured scope (pinned by the closure value independently of
-the loop), for a MATCH/TRY arm the call-site region. That home region is named by
-the reinstalled node's **reach set**, a witnessed cross-region borrow (a corollary
-of Lemma 3): retention keeps it alive across every hop, and the keep-first rule
-retains the first contract's reach alongside the contract. Nothing pins it through
-the per-call region the loop turns over, so the contract survives the reinstall
-without a raw ancestor-frame reference.
+The declared type is a `Copy` registry handle — types reside in the run-region
+[type registry](typing/type-registry.md), not in any per-call region — and the
+error label is precomputed when the obligation is sealed, so the sealed contract
+is pure `Copy` data: it references no region and pins nothing. It survives every
+hop and the reinstall trivially under the keep-first rule; nothing about the
+contract touches the per-call region the loop turns over.
 
 ## Library boundary
 
 Per [scheduler-library.md](scheduler-library.md): the library owns regions
-wholesale — the arena engine, the witness-set sub-arena, the allocation capability,
+wholesale — the arena engine, the region-owned reach table, the allocation capability,
 and the delivery-driven frame-retention. Koan owns only the *node operation*: it
 reinstalls a slot. Region lifetime falls out of node lifetime — an incarnation's
 region is minted lazily on first allocation and retired when the slot is

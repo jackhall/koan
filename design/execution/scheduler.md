@@ -33,7 +33,7 @@ and names no AST.
   own reach carrier) to a single
   [`TerminalDepFinish`](../../src/machine/execute/outcome.rs) closure — the one
   delivery currency. A value-reading finish writes that shape directly; a value
-  that must outlive the resolving step travels as its sealed carrier, adopted at
+  that must outlive the resolving step travels as its delivery envelope, adopted at
   the consumer's own step brand — every delivery, including the catch channel,
   is carrier-only; no dep ever crosses to a finish as a relocated copy. A
   [`WitnessedDepFinish`](../../src/machine/execute/outcome.rs) (folds terminals
@@ -45,7 +45,7 @@ and names no AST.
 - A **catch** `cont` (built by `catch_cont`) waits on one slot and hands its
   terminal to a [`CatchFinish`](../../src/machine/execute/outcome.rs) closure as a
   `Result<Sealed<CarriedFamily, FrameSet>, KError>` — the watched producer's own
-  sealed carrier, duplicated. Unlike a dep-finish, an errored dep does not
+  sealed carrier, duplicated with its pins. Unlike a dep-finish, an errored dep does not
   short-circuit — the closure always runs and decides whether to recover or
   re-raise. The `TRY-WITH` builtin
   ([`try_with`](../../src/builtins/try_with.rs); see

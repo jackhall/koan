@@ -49,14 +49,14 @@ a concept, not a final identifier.
 - **Carrier** — a stored value bundled with its witness (`Witnessed`), or
   its storable, reopenable form (`Sealed`). A carrier is born at the
   allocation site already naming everything that keeps it alive.
-- **Reach set** — *(working name `RegionSet`)* an **opaque library type**
-  naming the set of regions a stored value's borrows can reach. Only the
-  library mints one — from region handles and carriers — so a reach set
-  always represents the true union; no caller can assert or assemble one by
-  hand. Reach sets are **region-hosted**: each set is stored frozen in a
-  region's witness-set sub-arena and carriers hold references to it, per
-  [witness-hosting.md](witness-hosting.md), which owns the representation,
-  the resident/walking carrier forms, and the pinning invariant.
+- **Reach set** — an **opaque library pair** naming the set of regions a
+  stored value's borrows can reach: a non-owning **description**, stored
+  frozen in a region-owned table with carriers holding references to it, and
+  an owned **pin bundle** carrying the strong region holds. Only the library
+  mints one — from region handles and carriers, always as the pair — so a
+  reach set always represents the true union; no caller can assert or
+  assemble one by hand. [witness-hosting.md](witness-hosting.md) owns the
+  representation, the resident/walking carrier forms, and the holder rule.
 - **Slot / node** — one unit of scheduled work with an identity (`NodeId`),
   dep edges, and eventually a terminal.
 - **Dep** — a producer another slot waits on. **Park** deps are
@@ -65,12 +65,13 @@ a concept, not a final identifier.
 - **Terminal** — a slot's finished result: a sealed carrier, or the
   workload's error.
 - **Delivery envelope** — *(working name `Delivered`)* a walking terminal's
-  sealed carrier paired with the producer's retained frame owner `Rc`. The
-  carrier itself is **reference-only** (pins nothing); the envelope's retained
-  host is what keeps its reach alive in flight, and the only verb that
-  materializes a residence host into a minted set. A consumer receives one
-  through `dep_delivered`; relocations ride it too, so a bare frame pin never
-  escapes the scheduler.
+  sealed carrier paired with its owned pin bundle — the producer's retained
+  frame owner plus the value's foreign pins. The carrier itself is
+  **reference-only** (pins nothing); the envelope's bundle is what keeps its
+  reach alive in flight, and the only verb that materializes a residence host
+  into a minted pair. A consumer receives one through `dep_delivered`;
+  bind-seam copies ride it too, so a bare frame pin never escapes the
+  scheduler.
 - **Finish** — the continuation a consumer runs once its deps resolve.
 - **Workload** — the embedder-facing trait: the cell contract
   ([workcell.md](workcell.md) — the continuation family, the memory anchor
@@ -109,7 +110,7 @@ a concept, not a final identifier.
   `WitnessRegion`).
 - The witnessed substrate ([witnessed.rs](../workgraph/src/witnessed.rs)): brands,
   carriers, erase-store, reattach.
-- The reach set, as an opaque type
+- The reach set, as an opaque description/bundle pair
   ([witnessed/region_set.rs](../workgraph/src/witnessed/region_set.rs); see
   Vocabulary).
 - Terminal storage and delivery: sealing results into slots, handing dep
@@ -145,7 +146,7 @@ by-convention is the point.
    provably alive. *Enforced by:* every read goes through a carrier, and a
    carrier cannot exist without its witness.
 2. **Reach totality.** A reach set always names every region the value's
-   borrows can reach. *Enforced by:* the type is opaque and mintable only
+   borrows can reach. *Enforced by:* the pair is opaque and mintable only
    by the library, from the region handles and carriers involved in the
    allocation itself.
 3. **Co-location.** A carrier is born at its allocation site, already
@@ -306,8 +307,9 @@ picture:
   [await_body.rs](../src/builtins/await_body.rs)). A builtin states *which*
   protocol it is, not the protocol's moving parts.
 - **Scope binding folds reaches through carriers.** Binding a value into a
-  scope takes the value's carrier and unions its reach set into the
-  scope's — policy code composing library values, never inspecting them.
+  scope takes the value's carrier and mints its reach pair against the
+  scope's region — description into the table, pins onto the binding entry —
+  policy code composing library values, never inspecting them.
 
 ## Open work
 

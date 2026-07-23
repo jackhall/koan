@@ -48,10 +48,10 @@ Root concerns:
   long-lived cells — and the three-type cell contract `workgraph` extends
   with its terminal error type.
 - [witness-hosting.md](witness-hosting.md) — the witness-set
-  representation: reach sets stored frozen in per-region sub-arenas,
-  the resident (bare-reference) and walking (host-`Rc` + set-reference)
-  carrier forms, the mint rules for composition, the pinning invariant,
-  and the scope/bindings layers holding no witness state of their own.
+  representation: the split into non-owning reach descriptions (frozen in a
+  region-owned table) and holder-owned pin bundles, the reference-only
+  carrier and its delivery envelope, the paired mint rules for composition,
+  the holder rule, and the single bind-seam escape mechanism.
 - [per-call-region/](per-call-region/README.md) — the
   single owner of the `Rc<CallFrame>` contract: anchor carriers,
   lift-time anchor decision, the `alloc_object` cycle gate, active-frame

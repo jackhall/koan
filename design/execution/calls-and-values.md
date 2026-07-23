@@ -257,10 +257,10 @@ selected arm tail-replaces carrying a
 [`ReturnContract::Arm`](../../src/machine/core/kfunction/body.rs) on the
 slot, and at the slot's Done step the scheduler's contract layer checks it against
 `T` — [`TypeMismatch`](../../src/machine/core/kerror.rs) with a `<return>`
-arg on a miss — then re-tags it to `T` so a downstream consumer dispatches
-on the declared shape regardless of which arm ran. (The re-tag is the one
-contract-driven relocation that survives at Done; the bare per-consumer lift
-is a separate step — see
+arg on a miss — then re-stamps it to `T` **in place**, in the producer's own
+region, so a downstream consumer dispatches on the declared shape regardless
+of which arm ran. (Nothing relocates at Done; the value escapes only at the
+per-consumer bind seam — see
 [per-call-region/lifecycle.md § Consumer-pull node-output lift](../per-call-region/lifecycle.md#consumer-pull-node-output-lift).) Enforcement is runtime
 and per-arm (the arm that runs is the arm that's checked), the same
 discipline FN return types follow — see
