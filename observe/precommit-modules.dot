@@ -890,6 +890,7 @@ digraph {
     "koan::machine::model::values::kkey" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::values::kobject" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::core" [label="uses", style="dashed"];

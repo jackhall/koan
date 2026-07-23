@@ -14,7 +14,7 @@ mod record_substrate;
 
 pub use carried::{Carried, CarriedFamily, Held};
 pub use kkey::KKey;
-pub(crate) use kobject::{copy_object_into, record_still_borrows_host};
+pub(crate) use kobject::{copy_object_into, record_seam_verb, record_still_borrows_host, SeamVerb};
 pub use kobject::{KObject, ValueEqualityError, WrappedPayload};
 pub use module::Module;
 pub use named_pairs::NamedPairs;

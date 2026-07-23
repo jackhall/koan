@@ -650,6 +650,87 @@ fn held_borrows_host(cell: &Held<'_>, host: &KoanRegion) -> bool {
     }
 }
 
+/// The escape-seam verb for a top-level record, chosen per value in O(1) from its memos and the
+/// producer host's allocated total. Non-record values never reach this — they always copy.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SeamVerb {
+    /// Borrow rides, the producer region transfers by hold (`Residence::Kept`); the relocate hook
+    /// pointer-copies the record (its substrate borrow rides, covered by the Kept-minted reach).
+    Pin,
+    /// Total rebuild of the value's reachable structure at the destination brand. `released`: the
+    /// rebuild provably frees the retiring producer host (`Residence::Released` vs
+    /// `Residence::Copied`).
+    Copy { released: bool },
+}
+
+impl SeamVerb {
+    /// The residence mode this verb transfers under: `Pin` keeps the producer region (the substrate
+    /// borrow rides its unconditionally-minted reach); a released copy frees the retiring host; an
+    /// unreleased copy leaves the host to its conservative materialization.
+    pub(crate) fn residence(self) -> crate::witnessed::Residence {
+        use crate::witnessed::Residence as SeamResidence;
+        match self {
+            SeamVerb::Pin => SeamResidence::Kept,
+            SeamVerb::Copy { released: true } => SeamResidence::Released,
+            SeamVerb::Copy { released: false } => SeamResidence::Copied,
+        }
+    }
+}
+
+/// A seam tuning constant: copy a priceable home-crossing record only when its exact rebuild cost
+/// is under 1/`ALPHA_DIVISOR` of what the pin would retain (the host's allocated total). Not
+/// observable in language semantics; provisional pending measurement.
+const ALPHA_DIVISOR: u64 = 4;
+
+/// The escape-seam copy-vs-pin decision for a top-level record `value` (whose field substrate is
+/// `substrate`) crossing out of producer `host`. O(1) but for the one address-table membership scan
+/// (`owns_record`) and, on the unpriceable path only, the exact host-release probe. See
+/// design/value-substrates.md § Cost-driven copy.
+pub(crate) fn record_seam_verb(
+    substrate: &RecordSubstrate<'_>,
+    value: &KObject<'_>,
+    host: &KoanRegion,
+) -> SeamVerb {
+    // Forced verification builds override the table for top-level records; `released` is
+    // probe-derived so a forced copy is sound at either crossing.
+    match SEAM_POLICY {
+        SeamPolicy::ForcePin => return SeamVerb::Pin,
+        SeamPolicy::ForceCopy => {
+            return SeamVerb::Copy {
+                released: !record_still_borrows_host(value, host),
+            }
+        }
+        SeamPolicy::CostDriven => {}
+    }
+
+    // Unpriceable: keep today's unconditional total copy, `released` from the exact probe.
+    if substrate.copy_cost() == u64::MAX {
+        return SeamVerb::Copy {
+            released: !record_still_borrows_host(value, host),
+        };
+    }
+
+    let home_crossing = host.owns_record(substrate);
+    if !home_crossing {
+        // Foreign crossing: pricing a copy-out at an intermediate host is region evacuation's job.
+        return SeamVerb::Pin;
+    }
+
+    // Priceable home crossing.
+    if substrate.borrows_home() {
+        // A leaf provably points into the home region: a copy would pay the rebuild AND keep the
+        // pin, so pin outright (exact, no probe).
+        return SeamVerb::Pin;
+    }
+    // Clear borrows-home bit is exact for a priceable record: no leaf borrows home, so the rebuild
+    // frees the host. Copy when the value is a small fraction of what the pin would retain.
+    if substrate.copy_cost() < host.allocated_total() / ALPHA_DIVISOR {
+        SeamVerb::Copy { released: true }
+    } else {
+        SeamVerb::Pin
+    }
+}
+
 impl<'a> Parseable for KObject<'a> {
     fn ktype(&self) -> KType {
         KObject::ktype(self)

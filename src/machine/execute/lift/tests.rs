@@ -62,6 +62,7 @@ fn object_top_node_relocates_into_dest() {
     let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
     let relocated = copy_carried(
         Carried::Object(obj),
+        SeamVerb::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -106,6 +107,7 @@ fn list_relocation_shares_inner_rc() {
 
     let relocated = copy_carried(
         Carried::Object(list),
+        SeamVerb::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -154,6 +156,7 @@ fn dict_relocation_shares_inner_rc() {
 
     let relocated = copy_carried(
         Carried::Object(dict),
+        SeamVerb::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -210,6 +213,7 @@ fn tagged_relocation_shares_value_and_identity() {
 
     let relocated = copy_carried(
         Carried::Object(tagged),
+        SeamVerb::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -256,6 +260,7 @@ fn kfunction_borrow_preserved_verbatim() {
 
     let relocated = copy_carried(
         Carried::Object(obj),
+        SeamVerb::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -303,6 +308,7 @@ fn type_recursive_member_relocates_and_navigates() {
 
     let relocated = copy_carried(
         Carried::Type(type_value),
+        SeamVerb::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
@@ -714,4 +720,164 @@ fn substrate_memo_list_cell_saturates_and_forces_home() {
         borrows_home,
         "an unpriceable cell forces borrows_home conservatively true"
     );
+}
+
+// Phase-3 escape-seam chooser ([`record_seam_verb`]): each test builds a record homed in `home`'s
+// region, then reads the verb the CostDriven table selects for it at a home or foreign crossing.
+// Gated to the default build (`SEAM_POLICY == CostDriven`): the two forced policies override the
+// table, so these table assertions apply only to the cost-driven build; the forced-policy
+// equivalence battery is phase 5.
+#[cfg(not(any(feature = "seam-force-copy", feature = "seam-force-pin")))]
+mod seam_verb_table {
+    use super::*;
+
+    /// Build a record homed in `home`'s region from `fields`, returning the whole `&KObject::Record` (its
+    /// substrate address lives in `home`, so `home.region().owns_record` reports a home crossing).
+    fn build_record<'run>(
+        home: &'run Rc<CallFrame>,
+        fields: Record<Held<'run>>,
+        types: &TypeRegistry,
+    ) -> &'run KObject<'run> {
+        let door =
+            FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+        door.alloc_object_folded(KObject::record_of_held(door, fields, types))
+    }
+
+    /// The chooser's substrate borrow, extracted from a `&KObject::Record`.
+    fn substrate_of<'a>(value: &KObject<'a>) -> &'a crate::machine::model::RecordSubstrate<'a> {
+        match value {
+            KObject::Record(substrate, _) => substrate,
+            other => panic!("expected a Record, got {:?}", other.ktype()),
+        }
+    }
+
+    /// An **unpriceable** record (holds a still-`Rc` `List` cell of plain data) copies, and its
+    /// `released` bit tracks the exact probe: no borrow leaf survives, so the copy frees the host.
+    #[test]
+    fn seam_verb_unpriceable_plain_data_copies_released() {
+        let root = run_root_storage();
+        let test_run = TestRun::silent(&root);
+        let scope = test_run.scope;
+        let home = CallFrame::new(scope);
+        let types = TypeRegistry::new();
+
+        let items = Rc::new(vec![Held::Object(KObject::Number(1.0))]);
+        let list = KObject::list_with_type(items, KType::LIST_OF_ANY);
+        let fields = Record::from_pairs(vec![("l".to_string(), Held::Object(list))]);
+        let value = build_record(&home, fields, &types);
+
+        assert_eq!(
+            record_seam_verb(substrate_of(value), value, home.region()),
+            SeamVerb::Copy { released: true },
+            "an unpriceable plain-data record copies and the probe frees the host"
+        );
+    }
+
+    /// A **priceable, home-crossing** record whose `borrows_home` bit is **set** (holds a closure
+    /// captured in the home region) pins outright — a copy would pay the rebuild and still keep the pin.
+    #[test]
+    fn seam_verb_priceable_borrows_home_pins() {
+        let root = run_root_storage();
+        let test_run = TestRun::silent(&root);
+        let scope = test_run.scope;
+        let home = CallFrame::new(scope);
+        let types = TypeRegistry::new();
+
+        // `alloc_home_closure_record` builds `{f = <home closure>}` through `home`'s door: priceable
+        // (the closure leaf is 0-weight) with `borrows_home` set.
+        let value = alloc_home_closure_record(&home, &types);
+        assert!(substrate_of(value).borrows_home(), "precondition: bit set");
+
+        assert_eq!(
+            record_seam_verb(substrate_of(value), value, home.region()),
+            SeamVerb::Pin,
+            "a set borrows-home bit forces a pin exactly"
+        );
+    }
+
+    /// A **priceable, home-crossing** record with a **clear** `borrows_home` bit whose exact rebuild cost
+    /// is a small fraction of the fat host's allocated total copies (released) — the payoff clears the
+    /// ratio.
+    #[test]
+    fn seam_verb_priceable_small_cost_vs_fat_host_copies_released() {
+        let root = run_root_storage();
+        let test_run = TestRun::silent(&root);
+        let scope = test_run.scope;
+        let home = CallFrame::new(scope);
+        let types = TypeRegistry::new();
+
+        // Inflate the host's allocated total so a one-scalar record is far under 1/ALPHA_DIVISOR of it.
+        for n in 0..300 {
+            home.brand().alloc_object(KObject::Number(n as f64));
+        }
+
+        let fields =
+            Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
+        let value = build_record(&home, fields, &types);
+        assert!(
+            !substrate_of(value).borrows_home(),
+            "precondition: bit clear"
+        );
+
+        assert_eq!(
+            record_seam_verb(substrate_of(value), value, home.region()),
+            SeamVerb::Copy { released: true },
+            "a small priceable record against a fat host copies and releases"
+        );
+    }
+
+    /// A **priceable, home-crossing** record with a **clear** `borrows_home` bit whose cost is *not* under
+    /// the ratio (a long string against a tiny host) pins — the rebuild is not worth paying.
+    #[test]
+    fn seam_verb_priceable_cost_over_ratio_pins() {
+        let root = run_root_storage();
+        let test_run = TestRun::silent(&root);
+        let scope = test_run.scope;
+        let home = CallFrame::new(scope);
+        let types = TypeRegistry::new();
+
+        // A long string dominates the record's rebuild cost while the host stays tiny (String bytes are
+        // heap, not arena, so the host's allocated total does not grow with the string).
+        let big = "x".repeat(8192);
+        let fields =
+            Record::from_pairs(vec![("s".to_string(), Held::Object(KObject::KString(big)))]);
+        let value = build_record(&home, fields, &types);
+        assert!(
+            !substrate_of(value).borrows_home(),
+            "precondition: bit clear"
+        );
+
+        assert_eq!(
+            record_seam_verb(substrate_of(value), value, home.region()),
+            SeamVerb::Pin,
+            "a costly record against a tiny host pins"
+        );
+    }
+
+    /// A **foreign crossing** (the host passed to the chooser does not own the substrate) pins,
+    /// regardless of the record's own memos — pricing a copy-out at an intermediate host is region
+    /// evacuation's job.
+    #[test]
+    fn seam_verb_foreign_crossing_pins() {
+        let root = run_root_storage();
+        let test_run = TestRun::silent(&root);
+        let scope = test_run.scope;
+        let home = CallFrame::new(scope);
+        let foreign = CallFrame::new(scope);
+        let types = TypeRegistry::new();
+
+        let fields =
+            Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
+        let value = build_record(&home, fields, &types);
+        assert!(
+            !foreign.region().owns_record(substrate_of(value)),
+            "precondition: foreign host does not own the substrate"
+        );
+
+        assert_eq!(
+            record_seam_verb(substrate_of(value), value, foreign.region()),
+            SeamVerb::Pin,
+            "a foreign crossing pins"
+        );
+    }
 }

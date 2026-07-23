@@ -7,7 +7,7 @@ use crate::machine::model::{Carried, KType, TypeNode, TypeRegistry};
 use crate::machine::{CarrierWitness, DeliveredCarried, FrameSet, KError, KErrorKind};
 use crate::witnessed::{reattachable, RegionHandle, Sealed, SealedExtern, Witnessed};
 
-use super::lift::{copied_seam_mode, relocate_object_into};
+use super::lift::{relocate_object_into, seam_verb};
 use super::obligation::ReturnObligation;
 use super::runtime::KoanRuntime;
 
@@ -87,26 +87,28 @@ impl NodeFinalize for KoanRuntime<'_> {
             if is_object {
                 let mut mismatch: Option<KError> = None;
                 // The **object** channel coarsens/re-stamps into the home region: a genuine
-                // relocation, run through the envelope transfer at its own [`copied_seam_mode`] — the
-                // value's reach is minted into the home arena, and the dying producer materializes as
-                // a member only when the value's borrows genuinely reach it (a top-level record whose
-                // total copy no longer borrows the producer is `Released`, its conservative seal bit
-                // overridden; a still-borrowing record or any non-record keeps `Copied`); a
-                // region-pure result leaves the producer to retention alone, releasing it at
-                // pull-count zero. A top-level record is totally rebuilt into the home region
-                // ([`relocate_object_into`]) so its substrate is home-resident; every other value
-                // rides the pointer-copy `deep_clone`. The home-region operand rides `resident` (the
+                // relocation, run through the envelope transfer at its own cost-driven [`seam_verb`] —
+                // the value's reach is minted into the home arena, and the dying producer materializes
+                // per the verb's residence. A priceable top-level record a small fraction of the
+                // producer's allocated total is a released copy (the producer frees at retention
+                // discharge); a record whose pin is cheaper, whose leaf borrows home, or crossing a
+                // foreign host pins (rides under `Kept`, its substrate borrow covered by the producer's
+                // minted reach); an unpriceable record copies at the exact probe's residence; every
+                // non-record value keeps today's `Copied` pointer-copy. A copied top-level record is
+                // totally rebuilt into the home region ([`relocate_object_into`]) so its substrate is
+                // home-resident; a pinned record pointer-copies and every other value rides the
+                // pointer-copy `deep_clone`. The home-region operand rides `resident` (the
                 // empty carrier): its backing — the home region and the declared type in it — stays
                 // live across the call via the obligation's cell pin. Accepted residual: a failed type
                 // check still leaves its minted set in the home arena — the value was genuinely
                 // relocated before the check failed, and the path returns the `Err` terminal.
                 let home_operand: Witnessed<ContractHomeFamily, CarrierWitness> =
                     Witnessed::resident((home.handle(), declared));
-                let mode = copied_seam_mode(&envelope);
+                let verb = seam_verb(&envelope);
                 let checked = envelope
                     .transfer_into_placing::<ContractHomeFamily, CarriedFamily, _>(
                         home_operand,
-                        mode,
+                        verb.residence(),
                         |value, (_home_region, declared_type), placement| {
                             let home_region = FoldingBrand::in_fold_closure(placement);
                             let object = value.object();
@@ -119,7 +121,7 @@ impl NodeFinalize for KoanRuntime<'_> {
                                     types,
                                 ));
                                 return Carried::Object(home_region.alloc_object_folded(
-                                    relocate_object_into(object, home_region),
+                                    relocate_object_into(object, verb, home_region),
                                 ));
                             }
                             // A declared union return checks (above) but never re-tags: the value keeps
@@ -127,12 +129,12 @@ impl NodeFinalize for KoanRuntime<'_> {
                             // other declared return re-stamps the value into the declared type.
                             if matches!(types.node(declared_type), TypeNode::Union { .. }) {
                                 return Carried::Object(home_region.alloc_object_folded(
-                                    relocate_object_into(object, home_region),
+                                    relocate_object_into(object, verb, home_region),
                                 ));
                             }
                             Carried::Object(
                                 home_region.alloc_object_folded(
-                                    relocate_object_into(object, home_region)
+                                    relocate_object_into(object, verb, home_region)
                                         .stamp_type(declared_type, types),
                                 ),
                             )

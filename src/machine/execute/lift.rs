@@ -1,13 +1,16 @@
 //! The witnessed-transfer copy hooks: the [`copy_carried`] relocate callback, the value-level
-//! [`relocate_object_into`] / cell-level [`copy_held_from_carried`] copies, and the per-seam
-//! [`copied_seam_mode`] selection. The total-rebuild verb itself
-//! ([`copy_object_into`](crate::machine::model::copy_object_into)) and its host-release probe
-//! ([`record_still_borrows_host`](crate::machine::model::record_still_borrows_host)) live in the
-//! value model, shared with the core binding seams. See
+//! [`relocate_object_into`] / cell-level [`copy_held_from_carried`] copies, the value-level escape
+//! seam's [`seam_verb`] chooser, and the container-cell seam's [`copied_seam_mode`] selection. The
+//! cost decision itself ([`record_seam_verb`](crate::machine::model::record_seam_verb)), the
+//! total-rebuild verb ([`copy_object_into`](crate::machine::model::copy_object_into)), and the
+//! host-release probe ([`record_still_borrows_host`](crate::machine::model::record_still_borrows_host))
+//! live in the value model, shared with the core binding seams. See
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
 use crate::machine::core::FoldingBrand;
-use crate::machine::model::{copy_object_into, record_still_borrows_host, Carried, Held, KObject};
+use crate::machine::model::{
+    copy_object_into, record_seam_verb, record_still_borrows_host, Carried, Held, KObject, SeamVerb,
+};
 use crate::machine::DeliveredCarried;
 use crate::witnessed::Residence;
 
@@ -26,11 +29,12 @@ use crate::witnessed::Residence;
 /// it.
 pub(in crate::machine::execute) fn copy_carried<'b>(
     value: Carried<'b>,
+    verb: SeamVerb,
     dest: FoldingBrand<'b>,
 ) -> Carried<'b> {
     match value {
         Carried::Object(v) => {
-            Carried::Object(dest.alloc_object_folded(relocate_object_into(v, dest)))
+            Carried::Object(dest.alloc_object_folded(relocate_object_into(v, verb, dest)))
         }
         Carried::Type(t) => Carried::Type(t),
         Carried::UnresolvedType(ti) => {
@@ -39,38 +43,67 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
     }
 }
 
-/// Relocate one value into `dest` at a `Residence::Copied` / `Residence::Released` seam: a top-level
-/// `Record` is totally rebuilt at the door
-/// ([`copy_object_into`](crate::machine::model::copy_object_into)) so its substrate lands in `dest`;
-/// every other value keeps the pointer-copy `deep_clone` (its still-`Rc` spine rides, and a record
-/// nested under that spine stays conservatively pinned via the seal bit until its own container
-/// converts). Shared by the seam hooks ([`copy_carried`], the return-contract relocation).
+/// Relocate one value into `dest` under the chosen [`SeamVerb`]: a top-level `Record` under a `Copy`
+/// verb is totally rebuilt at the door
+/// ([`copy_object_into`](crate::machine::model::copy_object_into)) so its substrate lands in `dest`,
+/// while under `Pin` it pointer-copies (its region-resident substrate borrow rides, covered by the
+/// Kept-minted producer reach at the enclosing transfer). Every other value keeps the pointer-copy
+/// `deep_clone` (its still-`Rc` spine rides, and a record nested under that spine stays
+/// conservatively pinned via the seal bit until its own container converts). Shared by the seam
+/// hooks ([`copy_carried`], the return-contract relocation).
 pub(in crate::machine::execute) fn relocate_object_into<'b>(
     value: &KObject<'b>,
+    verb: SeamVerb,
     dest: FoldingBrand<'b>,
 ) -> KObject<'b> {
     match value {
-        KObject::Record(..) => copy_object_into(value, dest),
+        KObject::Record(..) => match verb {
+            // Pin: pointer-copy the record — its region-resident substrate borrow rides, covered by
+            // the Kept-minted producer reach at the enclosing transfer.
+            SeamVerb::Pin => value.deep_clone(),
+            // Copy: total rebuild at the door so the substrate lands in `dest`.
+            SeamVerb::Copy { .. } => copy_object_into(value, dest),
+        },
         _ => value.deep_clone(),
     }
 }
 
 /// Own a transferred [`Carried`] into an aggregate cell at `dest`, relocating a top-level record
 /// into `dest`'s region ([`relocate_object_into`]) so its substrate is container-resident — the
-/// record-aware twin of [`Held::from_carried`], for the literal fold's per-cell seam.
+/// record-aware twin of [`Held::from_carried`], for the literal fold's per-cell seam. The container
+/// cell always rebuilds a record (Ruling 4: fresh containers stay self-contained), never pins.
 pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
     carried: Carried<'b>,
     dest: FoldingBrand<'b>,
 ) -> Held<'b> {
     match carried {
-        Carried::Object(o) => Held::Object(relocate_object_into(o, dest)),
+        Carried::Object(o) => Held::Object(relocate_object_into(
+            o,
+            SeamVerb::Copy { released: false },
+            dest,
+        )),
         Carried::Type(t) => Held::Type(t),
         Carried::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
     }
 }
 
-/// The [`Residence`] mode for relocating `delivered` across a copy seam whose relocate hook is
-/// [`copy_carried`]. A top-level record whose total copy no longer borrows its producer host is
+/// The [`SeamVerb`] for relocating `delivered` across a value-level escape seam. A top-level record
+/// routes the cost chooser ([`record_seam_verb`](crate::machine::model::record_seam_verb)); every
+/// other value copies unconditionally (`Copy { released: false }` → `Residence::Copied`, today's
+/// behavior for non-records).
+pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> SeamVerb {
+    let host = delivered.host().region();
+    delivered.open(|carried| match carried {
+        Carried::Object(value) => match value {
+            KObject::Record(substrate, _) => record_seam_verb(substrate, value, host),
+            _ => SeamVerb::Copy { released: false },
+        },
+        _ => SeamVerb::Copy { released: false },
+    })
+}
+
+/// The [`Residence`] mode for relocating `delivered` across the container-cell seam whose relocate
+/// hook is [`copy_held_from_carried`]. A top-level record whose total copy no longer borrows its producer host is
 /// [`Residence::Released`] — the retiring producer frees at retention discharge rather than riding
 /// the destination's reach; a record that genuinely still borrows the host, or any non-record value,
 /// keeps [`Residence::Copied`] (the seal bit's conservative pin then materializes the host). This is

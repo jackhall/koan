@@ -31,7 +31,7 @@ use crate::witnessed::SealedExtern;
 
 use super::dispatch::{BodyPlacement, DepRequest, SchedulerView, SubmitContext};
 use super::finalize::check_spliced_return;
-use super::lift::{copied_seam_mode, copy_carried};
+use super::lift::{copy_carried, seam_verb};
 use super::nodes::{ChainOp, NodeStep, NodeWork};
 use super::obligation::{with_obligation, ReturnObligation};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
@@ -159,10 +159,12 @@ impl<'run> KoanRuntime<'run> {
     /// destination brand — its backing is the consuming slot's live frame for a `Forward`-ready
     /// pull, or the externally pinned run region a drained root re-homes into.
     ///
-    /// The seam mode is [`copied_seam_mode`]: a top-level record whose total copy no longer borrows
-    /// its producer is `Released` (the producer frees at retention discharge); a record that still
-    /// borrows the producer, or any non-record value, keeps `Copied`, materializing the producer as a
-    /// reach member only when the value's borrows genuinely reach it.
+    /// The seam verb is the cost-driven [`seam_verb`] decision: a top-level record pins (rides under
+    /// `Kept`, its substrate borrow covered by the producer's minted reach) when the pin is cheaper
+    /// than the rebuild, a leaf borrows home, or the crossing is foreign; a priceable record a small
+    /// fraction of the host's allocated total is a released copy (the producer frees at retention
+    /// discharge); an unpriceable record copies at the exact probe's residence. Every non-record
+    /// value keeps today's `Copied` pointer-copy.
     ///
     /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as a re-sealed
     /// [`Witnessed`], not at a step brand. The consumer-pull dep slice does not route this — it opens
@@ -174,13 +176,13 @@ impl<'run> KoanRuntime<'run> {
         dest: Witnessed<DestHandleFamily, CarrierWitness>,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
-        let mode = copied_seam_mode(&delivered);
+        let verb = seam_verb(&delivered);
         Ok(
             delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
                 dest,
-                mode,
+                verb.residence(),
                 |value, _region, placement| {
-                    copy_carried(value, FoldingBrand::in_fold_closure(placement))
+                    copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
                 },
             ),
         )
