@@ -105,7 +105,11 @@ pass that computes the type join):
 - the value's own **type handle** (the existing memo, [typing/type-registry.md](typing/type-registry.md));
 - its **copy cost** — see [§ Cost-driven copy](#cost-driven-copy-the-optimization);
 - a **contains-borrows bit** — whether any transitive cell is a region-borrow
-  leaf (a closure or module).
+  leaf (a closure or module), into *any* region;
+- a **borrows-home bit** — whether any transitive borrow leaf points into the
+  substrate's *own home region*. The exact, home-relative gate the cost decision
+  reads (see [§ Cost-driven copy](#cost-driven-copy-the-optimization)), distinct
+  from the conservative contains-borrows bit above.
 
 ## Escape: pin by default
 
@@ -137,39 +141,66 @@ forward pulls, seed binds, the root drain), the runtime chooses per value:
   would pay the copy *and* keep the pin.
 - **Pin** — the default above: borrow rides, region transfers by hold.
 
-The decision is **O(1)**, from two numbers that already exist at the seam:
+The core decision is a **scale-free ratio** over two numbers that already exist
+at the seam:
 
 - **`copy_cost`** — memoized on every substrate at construction: leaves
   contribute their weight (cell count as the first cut; byte-weighted where a
   leaf's size varies, a string being the motivating case), nested substrates
-  contribute their own memoized cost, borrow leaves contribute zero. Because
-  substrates are immutable the memo can never go stale, and because the copy
-  verb rebuilds a shared subvalue once per reference, the memoized sum is the
-  copy's *exact* cost — no forwarding map, no walk.
+  contribute their own memoized cost, borrow leaves contribute zero. A cell that
+  is itself still `Rc`-shared (a list, dict, or tagged/wrapped payload not yet
+  converted to a substrate) or a spliced expression is **unpriceable**: it
+  carries no memo of its own, so the whole substrate's cost saturates to a
+  sentinel and the value copies unconditionally (releasing per the exact probe
+  below) until each container conversion ships. Because substrates are immutable
+  the memo can never go stale, and because the copy verb rebuilds a shared
+  subvalue once per reference, a priceable memoized sum is the copy's *exact*
+  cost — no forwarding map, no walk.
 - **the region's allocated total** — its arenas already know their size.
 
-The rule is a **scale-free ratio**, not an absolute threshold: copy when
-`copy_cost < α × region_allocated` — "this value is a small fraction of what
-the pin would retain." A value that is most of its region pins (retention
-barely exceeds the value; the copy would be pure CPU); a small result escaping
-a fat frame copies and releases it. α is a tuning constant of the seam, not
-observable in language semantics.
+For a priceable value crossing out of its **own home region**, the rule is that
+ratio: copy when `copy_cost < α × region_allocated` — "this value is a small
+fraction of what the pin would retain." A value that is most of its region pins
+(retention barely exceeds the value; the copy would be pure CPU); a small result
+escaping a fat frame copies and releases it. α is a tuning constant of the seam,
+not observable in language semantics. A **foreign crossing** — the value is
+resident in a region the producer host does not own — always pins: pricing a
+copy-out at an intermediate host is region evacuation's job, not the
+per-crossing seam's.
 
-The contains-borrows bit is an **optimization gate, never a soundness input**:
-a borrow leaf pins its *defining* region, which need not be the birth region.
-Bit clear, a copy releases the retiring host unconditionally — no borrow
-survives the rebuild. Bit set, the copy pass itself computes exact release:
-each surviving borrow leaf is checked against the retiring host's address
-tables, so a value whose leaves all point into foreign regions (their reaches
-ride the witness in either verb) still releases its home. A set bit only
-discounts the copy's payoff in the ratio — the rebuild might not release the
-host — it never forces pin.
+The ratio is gated by the exact **borrows-home bit**. Set, the value **pins
+outright** — a leaf provably borrows the home region, so a copy would pay the
+rebuild *and* keep the pin; the ratio is never consulted. Clear on a priceable
+value, the copy provably releases the host (no surviving borrow reaches it), so
+the ratio alone decides. This is why borrows-home is a *separate*, sharper memo
+than the conservative contains-borrows bit: contains-borrows asks only whether
+*any* borrow leaf exists into *any* region, and remains the seal/reach
+conservatism input; the copy decision needs the home-relative question, and gets
+an exact answer for a priceable value. On the **unpriceable** path, where no
+home-relative memo is available, release falls back to the copy pass's per-host
+address-table probe: each surviving borrow leaf is checked against the retiring
+host's tables, so a value whose leaves all point into foreign regions still
+releases its home.
+
+A **pinned record** shares its producer-resident substrate by a pointer-copy
+(never a partial rebuild). Because a record's substrate borrow carries no borrow
+naming its *own* home region, the bind seam names the producer region
+**explicitly** in the pinned value's reach — rather than leaning on ambient
+coverage the way a closure's captured region does — so the residence audit can
+evidence the shared substrate through a reach-set member. The explicit naming is
+redundant-but-harmless: the producer region is already ambiently rooted for the
+binding's life.
 
 The policy is **semantically invisible**: koan values are immutable and
-identity-free, so nothing in the language can distinguish a copied result from
-a pinned one. It is also the seam where **region evacuation** becomes a local
-decision: at frame death with escapees, the same two numbers price
-copying-the-survivors-out against transferring-the-region.
+identity-free, so nothing in the language can distinguish a copied result from a
+pinned one. Two mutually-exclusive build features (`seam-force-copy`,
+`seam-force-pin`) force every record escape seam to a single verb, turning the
+whole output-asserting suite into an **equivalence battery** — identical
+hardcoded expectations passing under both prove the choice changes only which
+memory mechanism runs, never observable behavior. This is also the seam where
+**region evacuation** becomes a local decision: at frame death with escapees,
+the same two numbers price copying-the-survivors-out against
+transferring-the-region.
 
 ## Untyped arenas: the Drop-free end state
 
@@ -206,7 +237,6 @@ the conversion slate; its `Requires` chain encodes the order:
 - [Region-store list values](../roadmap/untyped_arena/region-store-lists.md)
 - [Region-store dict values](../roadmap/untyped_arena/region-store-dicts.md)
 - [Region-store tagged and wrapped payloads](../roadmap/untyped_arena/region-store-tagged-wrapped.md)
-- [Cost-driven copy at the escape seam](../roadmap/untyped_arena/cost-driven-copy.md)
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
 - [Region-store string values](../roadmap/untyped_arena/region-store-strings.md)
 - [Region-store expression parts](../roadmap/untyped_arena/region-store-expressions.md)

@@ -1,11 +1,14 @@
 # Region evacuation at frame death
 
-Applies the copy-versus-pin pricing of [cost-driven-copy](cost-driven-copy.md)
+Applies the copy-versus-pin pricing of
+[design/value-substrates.md § Cost-driven copy](../../design/value-substrates.md#cost-driven-copy-the-optimization)
 to a whole region at once; terms of art are defined in
 [design/value-substrates.md § Vocabulary](../../design/value-substrates.md#vocabulary).
 
 **Problem.** The relocation seam prices copy against pin per value, at the moment
-it crosses ([cost-driven-copy](cost-driven-copy.md)): each decision sees one
+it crosses
+([design/value-substrates.md § Cost-driven copy](../../design/value-substrates.md#cost-driven-copy-the-optimization)):
+each decision sees one
 escapee in isolation, against the region's allocated tally *at crossing time*. No
 decision runs at the one point where the full picture exists — frame death, where
 the region's final allocated total and its complete survivor set (every value in
@@ -42,8 +45,5 @@ region — result and temporaries — until its own scope releases the reach.
 
 **Requires:**
 
-- [Cost-driven copy at the escape seam](cost-driven-copy.md) — supplies the copy
-  verb, the memoized costs, and the ratio rule this site applies to the survivor
-  set.
 
 **Unblocks:** none tracked yet.
