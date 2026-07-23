@@ -154,8 +154,8 @@ at the seam:
   contribute their weight (cell count as the first cut; byte-weighted where a
   leaf's size varies, a string being the motivating case), nested substrates
   contribute their own memoized cost, borrow leaves contribute zero. A cell that
-  is itself still `Rc`-shared (a list, dict, or tagged/wrapped payload not yet
-  converted to a substrate) or a spliced expression is **unpriceable**: it
+  is itself still `Rc`-shared (a tagged/wrapped payload not yet converted to a
+  substrate) or a spliced expression is **unpriceable**: it
   carries no memo of its own, so the whole substrate's cost saturates to a
   sentinel and the value copies unconditionally (releasing per the exact probe
   below) until each container conversion ships. Because substrates are immutable
@@ -240,7 +240,6 @@ permanently; "as much storage as possible" means the value substrates.
 The [untyped_arena](../roadmap/untyped_arena/README.md) roadmap project carries
 the conversion slate; its `Requires` chain encodes the order:
 
-- [Region-store dict values](../roadmap/untyped_arena/region-store-dicts.md)
 - [Region-store tagged and wrapped payloads](../roadmap/untyped_arena/region-store-tagged-wrapped.md)
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
 - [Region-store string values](../roadmap/untyped_arena/region-store-strings.md)

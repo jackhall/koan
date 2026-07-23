@@ -142,7 +142,8 @@ USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (width drop: a unar
 `List<Number>`, `[1, "x"]` → `List<Any>`. `KObject::List` and `KObject::Dict`
 each carry their element types directly (`List(&ListSubstrate, KType)` — a
 region-resident element substrate plus a plain `Copy` `KType` handle — and
-`Dict(Rc<HashMap<…>>, KType)`, the single interned `Dict<key, value>` handle), so
+`Dict(&DictSubstrate, KType)`, a region-resident entry substrate plus the single
+interned `Dict<key, value>` handle), so
 [`KObject::ktype`](../../../src/machine/model/values/kobject.rs) reads the carried
 type in O(1) rather than re-walking the contents on every call. Values are
 immutable after construction, so the join is sound to compute exactly once. Functions project
@@ -165,7 +166,7 @@ unaffected — it carries information and is legal where `:(LIST OF Any)` is dec
 `List`, `Dict`, and `Tagged` carry their runtime type arguments on the variant so
 dispatch and slot admission see the full instantiation, not just the outer shape:
 
-- `KObject::List(items, list_type)` / `KObject::Dict(map, dict_type)` memoize the
+- `KObject::List(items, list_type)` / `KObject::Dict(substrate, dict_type)` memoize the
   full interned container type handle at construction (`KObject::list` / `KObject::dict`),
   so `ktype()` is a handle copy.
 - `KObject::Tagged { identity, .. }` carries the value's own type handle. When the
