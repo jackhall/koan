@@ -54,11 +54,11 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
 - `Dict(&'a DictSubstrate<'a>, KType)` — an arena-frozen immutable map (layout
   free: a sorted-pair slice or a hash table frozen at construction).
 - `Record(&'a RecordSubstrate<'a>, KType)` — the field record in the arena.
-- `Tagged { value: &'a KObject<'a>, .. }` — the payload is an ordinary
-  object-family slot; no dedicated payload type.
-- `Wrapped { inner: &'a KObject<'a>, .. }` — same; the peel (re-tag collapses
-  one layer) and hold (construction preserves layers) constructors are door
-  verbs, not a payload wrapper type.
+- `Tagged { value: &'a PayloadSubstrate<'a>, .. }` — the single-cell payload
+  substrate (`PayloadSubstrate = ContainerSubstrate<KObject>`) in the arena.
+- `Wrapped { inner: &'a PayloadSubstrate<'a>, .. }` — the same one-cell payload
+  substrate; the peel (re-tag collapses one layer) and hold (construction
+  preserves layers) constructors are door verbs, not a payload wrapper type.
 - `KFunction(&'a KFunction<'a>)` and `Module(&'a Module<'a>)` — bare borrows
   into their defining regions.
 - Scalars (`Number`, `Bool`, `Null`) are owned leaves. `KString` rides an
@@ -74,8 +74,9 @@ substrate; the type handle rides the value carrier. The per-container names
 above are aliases of that one wrapper: `RecordSubstrate` is
 `ContainerSubstrate<Record<Held>>`, and each later conversion instantiates the
 same wrapper over its own payload (`ContainerSubstrate<Vec<Held>>` for a list,
-a frozen map for a dict) rather than re-deriving a parallel struct and memo
-trio.
+a frozen map for a dict, `ContainerSubstrate<KObject>` — the `PayloadSubstrate`
+alias — for the single payload cell a `Tagged` or `Wrapped` value borrows)
+rather than re-deriving a parallel struct and memo trio.
 
 Three consequences define the regime:
 
@@ -154,11 +155,9 @@ at the seam:
   contribute their weight (cell count as the first cut; byte-weighted where a
   leaf's size varies, a string being the motivating case), nested substrates
   contribute their own memoized cost, borrow leaves contribute zero. A cell that
-  is itself still `Rc`-shared (a tagged/wrapped payload not yet converted to a
-  substrate) or a spliced expression is **unpriceable**: it
-  carries no memo of its own, so the whole substrate's cost saturates to a
-  sentinel and the value copies unconditionally (releasing per the exact probe
-  below) until each container conversion ships. Because substrates are immutable
+  is a spliced expression is **unpriceable**: it carries no memo of its own, so
+  the whole substrate's cost saturates to a sentinel and the value copies
+  unconditionally (releasing per the exact probe below). Because substrates are immutable
   the memo can never go stale, and because the copy verb rebuilds a shared
   subvalue once per reference, a priceable memoized sum is the copy's *exact*
   cost — no forwarding map, no walk.
@@ -240,7 +239,6 @@ permanently; "as much storage as possible" means the value substrates.
 The [untyped_arena](../roadmap/untyped_arena/README.md) roadmap project carries
 the conversion slate; its `Requires` chain encodes the order:
 
-- [Region-store tagged and wrapped payloads](../roadmap/untyped_arena/region-store-tagged-wrapped.md)
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
 - [Region-store string values](../roadmap/untyped_arena/region-store-strings.md)
 - [Region-store expression parts](../roadmap/untyped_arena/region-store-expressions.md)

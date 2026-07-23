@@ -2,8 +2,24 @@ use super::*;
 use crate::builtins::test_support::spliced_part;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
+use crate::machine::core::FoldingBrand;
 use crate::machine::model::Carried;
 use crate::machine::model::Record;
+
+/// Mint the zero-dep fold door a `Tagged`/`Wrapped` test value needs, over a fresh root region, as
+/// two `let` bindings in the caller's own scope (mirrors the `kobject` test macro). `forge_for_test`
+/// is the sanctioned test-only placement mint; a statement macro (not a returning fn) keeps `door`'s
+/// borrow of `storage` in the same frame.
+macro_rules! container_door {
+    ($storage:ident, $door:ident) => {
+        use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+        use crate::witnessed::FoldedPlacement;
+        let $storage = run_root_storage();
+        let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+            $storage.brand().handle(),
+        ));
+    };
+}
 
 /// A singleton newtype member handle for a record-repr newtype (an ex-struct) named `name`
 /// (empty record repr is fine — the predicates key on the sealed member's `(component digest,
@@ -363,9 +379,11 @@ fn of_kind_signature_more_specific_than_any_type() {
 #[test]
 fn of_kind_nominal_is_type_channel_only() {
     let types = TypeRegistry::new();
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+    use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
     let region = storage.brand();
+    let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region.handle()));
     let newtype_ty = KType::of_kind(KKind::NewType);
 
     // The NewType *type value* — admitted in the type channel.
@@ -387,16 +405,8 @@ fn of_kind_nominal_is_type_channel_only() {
     assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Type(ctor_tv)), &types));
 
     // The runtime `Wrapped` *instance* is never matched by a kind slot.
-    let inner: &KObject<'_> = region.alloc_object(KObject::Number(3.0));
-    let w: &KObject<'_> = region
-        .alloc_object_checked(
-            KObject::Wrapped {
-                inner: crate::machine::model::values::WrappedPayload::peel(inner),
-                type_id: newtype_tv,
-            },
-            &types,
-        )
-        .expect("newtype_tv is a registry handle, borrowing no region");
+    let w: &KObject<'_> =
+        door.alloc_object_folded(KObject::wrapped_peel(door, &KObject::Number(3.0), newtype_tv));
     assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Object(w)), &types));
     assert!(!newtype_ty.matches_value(w, &types));
 }
@@ -521,21 +531,18 @@ fn result_args(ok: KType, error: KType) -> Record<KType> {
 /// Build a `Result`-carrier `Tagged` value occupying `tag` with `payload`, identified by the
 /// erased `Result` member handle (no stamped type arguments). The inner `payload` is itself a
 /// `Tagged` carrier identified by the error type's nominal member handle.
-fn result_value<'a>(member: KType, tag: &str, payload: KObject<'a>) -> KObject<'a> {
-    KObject::Tagged {
-        tag: tag.into(),
-        value: std::rc::Rc::new(payload),
-        identity: member,
-    }
+fn result_value<'a>(
+    door: FoldingBrand<'a>,
+    member: KType,
+    tag: &str,
+    payload: &KObject<'a>,
+) -> KObject<'a> {
+    KObject::tagged(door, tag.into(), payload, member)
 }
 
 /// A bare error carrier (`Tagged` identified by `member`) standing in for a caught error value.
-fn error_carrier<'a>(member: KType) -> KObject<'a> {
-    KObject::Tagged {
-        tag: "_".into(),
-        value: std::rc::Rc::new(KObject::Number(0.0)),
-        identity: member,
-    }
+fn error_carrier<'a>(door: FoldingBrand<'a>, member: KType) -> KObject<'a> {
+    KObject::tagged(door, "_".into(), &KObject::Number(0.0), member)
 }
 
 /// A singleton `TypeConstructor`-kind member named `name`, for an error-type identity.
@@ -559,19 +566,20 @@ fn error_type_member(name: &str, types: &TypeRegistry) -> KType {
 #[test]
 fn constructor_apply_result_checks_inhabited_error_param() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
 
     let r_member = result_member(&types);
     let kerror_ty = error_type_member("KError", &types);
     let my_error_ty = error_type_member("MyError", &types);
 
     let slot_my_error = types.constructor_apply(r_member, result_args(KType::ANY, my_error_ty));
-    let caught = result_value(r_member, "Error", error_carrier(kerror_ty));
+    let caught = result_value(door, r_member, "Error", &error_carrier(door, kerror_ty));
     assert!(!slot_my_error.matches_value(&caught, &types));
 
     let slot_kerror = types.constructor_apply(r_member, result_args(KType::ANY, kerror_ty));
     assert!(slot_kerror.matches_value(&caught, &types));
 
-    let my_error = result_value(r_member, "Error", error_carrier(my_error_ty));
+    let my_error = result_value(door, r_member, "Error", &error_carrier(door, my_error_ty));
     assert!(slot_my_error.matches_value(&my_error, &types));
 }
 
@@ -581,9 +589,10 @@ fn constructor_apply_result_checks_inhabited_error_param() {
 #[test]
 fn constructor_apply_result_ok_admits_any_error_param() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let r_member = result_member(&types);
     let my_error_ty = error_type_member("MyError", &types);
-    let ok_value = result_value(r_member, "Ok", KObject::Number(42.0));
+    let ok_value = result_value(door, r_member, "Ok", &KObject::Number(42.0));
     let slot = types.constructor_apply(r_member, result_args(KType::NUMBER, my_error_ty));
     assert!(slot.matches_value(&ok_value, &types));
     let slot_str = types.constructor_apply(r_member, result_args(KType::STR, KType::ANY));
@@ -597,13 +606,15 @@ fn constructor_apply_result_ok_admits_any_error_param() {
 #[test]
 fn constructor_apply_covariant_admission_and_specificity() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let r_member = result_member(&types);
     let my_error = error_type_member("MyError", &types);
-    let stamped = KObject::Tagged {
-        tag: "Ok".into(),
-        value: std::rc::Rc::new(KObject::Number(1.0)),
-        identity: types.constructor_apply(r_member, result_args(KType::NUMBER, my_error)),
-    };
+    let stamped = KObject::tagged(
+        door,
+        "Ok".into(),
+        &KObject::Number(1.0),
+        types.constructor_apply(r_member, result_args(KType::NUMBER, my_error)),
+    );
     let coarse = types.constructor_apply(r_member, result_args(KType::ANY, KType::ANY));
     let refined = types.constructor_apply(r_member, result_args(KType::NUMBER, my_error));
     assert!(coarse.matches_value(&stamped, &types));
@@ -617,12 +628,14 @@ fn constructor_apply_covariant_admission_and_specificity() {
 #[test]
 fn constructor_apply_stamped_type_args_checked_structurally() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let r_member = result_member(&types);
-    let stamped = KObject::Tagged {
-        tag: "Ok".into(),
-        value: std::rc::Rc::new(KObject::Number(1.0)),
-        identity: types.constructor_apply(r_member, result_args(KType::NUMBER, KType::STR)),
-    };
+    let stamped = KObject::tagged(
+        door,
+        "Ok".into(),
+        &KObject::Number(1.0),
+        types.constructor_apply(r_member, result_args(KType::NUMBER, KType::STR)),
+    );
     let slot_ok = types.constructor_apply(r_member, result_args(KType::NUMBER, KType::STR));
     assert!(slot_ok.matches_value(&stamped, &types));
     let slot_any = types.constructor_apply(r_member, result_args(KType::ANY, KType::ANY));

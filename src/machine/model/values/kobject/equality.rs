@@ -130,7 +130,7 @@ impl<'a> KObject<'a> {
                 if identity_a != identity_b {
                     return Ok(false);
                 }
-                value_a.value_equal(value_b, types)
+                value_a.payload().value_equal(value_b.payload(), types)
             }
 
             (
@@ -148,7 +148,7 @@ impl<'a> KObject<'a> {
                 if type_id_a != type_id_b {
                     return Ok(false);
                 }
-                inner_a.get().value_equal(inner_b.get(), types)
+                inner_a.payload().value_equal(inner_b.payload(), types)
             }
 
             (KObject::KExpression(a), KObject::KExpression(b)) => expression_equal(a, b, types),

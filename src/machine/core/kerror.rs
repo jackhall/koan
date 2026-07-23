@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::KExpression;
-use crate::machine::model::{Carried, CarriedFamily, KObject, WrappedPayload};
+use crate::machine::model::{Carried, CarriedFamily, KObject};
 use crate::machine::model::{
     KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
 };
@@ -205,15 +205,17 @@ impl KError {
         let mut pairs: Vec<(String, KObject<'a>)> = fields;
         pairs.push(("frames".to_string(), frames_list));
         let record = KObject::record(door, Record::from_pairs(pairs), types);
-        let payload = KObject::Wrapped {
-            inner: WrappedPayload::peel(&record),
-            type_id: synthetic_singleton(name.clone(), KKind::NewType, types),
-        };
-        KObject::Tagged {
-            tag: name,
-            value: Rc::new(payload),
-            identity: synthetic_singleton("KError".to_string(), KKind::TypeConstructor, types),
-        }
+        let payload = KObject::wrapped_peel(
+            door,
+            &record,
+            synthetic_singleton(name.clone(), KKind::NewType, types),
+        );
+        KObject::tagged(
+            door,
+            name,
+            &payload,
+            synthetic_singleton("KError".to_string(), KKind::TypeConstructor, types),
+        )
     }
 
     /// [`Self::to_tagged`] built directly resident in `scope`'s own region and sealed as a

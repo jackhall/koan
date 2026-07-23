@@ -51,7 +51,7 @@ fn ctor_fast_lane_with_sub_expression_value() {
             identity,
         } => {
             assert_eq!(tag, "Some");
-            assert!(matches!(value.as_ref(), KObject::Number(n) if *n == 7.0));
+            assert!(matches!(value.payload(), KObject::Number(n) if *n == 7.0));
             match test_run.types.node(*identity) {
                 TypeNode::SetMember { name, .. } => assert_eq!(name, "Some"),
                 _ => panic!("expected a member SetMember identity, got {identity:?}"),

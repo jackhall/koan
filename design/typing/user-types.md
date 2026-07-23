@@ -357,22 +357,23 @@ which branches on the resolved member's `kind` — into
 [`newtype_def::newtype_construct`](../../src/builtins/newtype_def.rs), which
 schedules the value sub-expression via `dispatch_in_scope` and waits on it via a
 dep-finish whose finish closure type-checks against `repr` and produces a
-[`KObject::Wrapped { inner: WrappedPayload<'a>, type_id: &'a KType }`](../../src/machine/model/values/kobject.rs)
-carrier.
+[`KObject::Wrapped { inner: &'a PayloadSubstrate<'a>, type_id: KType }`](../../src/machine/model/values/kobject.rs)
+carrier — the `inner` payload is a region-resident single-cell substrate
+(`PayloadSubstrate = ContainerSubstrate<KObject>`) born through the fold door.
 
-**The wrap chooses peel-or-hold by the payload's identity.**
-[`WrappedPayload`](../../src/machine/model/values/kobject.rs) is a copy-newtype
-around `Rc<KObject<'a>>` with two constructors that record the wrapper's intent.
-A **re-tag** — the constructed value's identity is exactly this repr, e.g.
+**The wrap chooses peel-or-hold by the payload's identity.** Two door verbs record
+the wrapper's intent, each allocating the payload substrate through the enclosing
+fold. A **re-tag** — the constructed value's identity is exactly this repr, e.g.
 `Bar(some_foo)` where `some_foo` is already a `Foo` and `NEWTYPE Bar = Foo` — takes
-`WrappedPayload::peel`, collapsing one `Wrapped` layer so identities never stack.
-A **genuine construction** — the payload is a *member* of the type being built, whose
-identity differs from the repr, e.g. a `UNION` variant `Succ :Nat` wrapping another
-`Nat` variant — takes `WrappedPayload::hold`, preserving the payload verbatim so the
-recursion the dissolved-union model needs survives (`Succ (Zero null)` keeps both
-layers). `check_newtype_repr` decides which by comparing the payload's `ktype()` to the
-projected `repr` before the witness build. The choice replaces the older single-layer
-collapse invariant, which peeled unconditionally.
+[`KObject::wrapped_peel`](../../src/machine/model/values/kobject.rs), collapsing one
+`Wrapped` layer so identities never stack (a `Wrapped` payload rides its inner
+substrate borrow verbatim). A **genuine construction** — the payload is a *member* of
+the type being built, whose identity differs from the repr, e.g. a `UNION` variant
+`Succ :Nat` wrapping another `Nat` variant — takes
+[`KObject::wrapped_hold`](../../src/machine/model/values/kobject.rs), preserving the
+payload verbatim so the recursion the dissolved-union model needs survives
+(`Succ (Zero null)` keeps both layers). `check_newtype_repr` decides which by comparing
+the payload's `ktype()` to the projected `repr` before the witness build.
 
 The construction path is driven from the `type_call` fast lane (which resolves the
 verb through `scope.resolve_type_with_chain` first and branches on the resolved

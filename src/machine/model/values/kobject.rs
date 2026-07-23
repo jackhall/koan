@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::machine::core::KFunction;
 use crate::machine::core::{FoldingBrand, FrameSet, KoanRegion, KoanRegionExt, Residence};
@@ -7,8 +6,8 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 
 use super::{
-    ContainerSubstrate, DictSubstrate, Held, KKey, ListSubstrate, Module, RecordSubstrate,
-    SubstrateMemos,
+    ContainerSubstrate, DictSubstrate, Held, KKey, ListSubstrate, Module, PayloadSubstrate,
+    RecordSubstrate, SubstrateMemos,
 };
 
 mod equality;
@@ -47,50 +46,11 @@ pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::ForcePin;
 #[allow(dead_code)]
 pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::CostDriven;
 
-/// An [`Rc`]-shared [`KObject::Wrapped`] payload. Two constructors record the wrapper's intent:
-/// [`Self::peel`] collapses one `Wrapped` layer (a re-tag replaces the value's identity, so
-/// identities never stack), while [`Self::hold`] preserves the value as-is (genuine
-/// construction — a union variant nesting another variant carries a `Wrapped` payload, so
-/// `Succ(Zero(null))` keeps both layers). The payload rides an `Rc` (not a region `&'a`
-/// reference) so a `Wrapped` carrier lifts across a dying frame by `Rc::clone` — the
-/// lift-stability a carrier needs to outlive the frame it was born in.
-#[derive(Clone)]
-pub struct WrappedPayload<'a>(Rc<KObject<'a>>);
-
-impl<'a> WrappedPayload<'a> {
-    /// Wrap `value` for a **re-tag**, collapsing one `Wrapped` layer: a `Wrapped` shares its
-    /// inner `Rc` (the new identity replaces the old), anything else is `Rc`-boxed via an
-    /// independent `deep_clone`.
-    pub fn peel(value: &KObject<'a>) -> Self {
-        match value {
-            KObject::Wrapped { inner, .. } => inner.clone(),
-            _ => Self(Rc::new(value.deep_clone())),
-        }
-    }
-
-    /// Wrap `value` for a **construction**, preserving it verbatim — including a nested
-    /// `Wrapped` payload, so a union variant over another variant keeps every layer.
-    pub fn hold(value: &KObject<'a>) -> Self {
-        Self(Rc::new(value.deep_clone()))
-    }
-
-    /// Wrap an already-owned value, boxing it into the `Rc` spine with no further copy — the seam
-    /// copy verb's `Wrapped` arm, where the inner value is a freshly-rebuilt copy already homed at
-    /// the destination brand.
-    pub fn from_owned(value: KObject<'a>) -> Self {
-        Self(Rc::new(value))
-    }
-
-    pub fn get(&self) -> &KObject<'a> {
-        &self.0
-    }
-}
-
 /// Runtime value: the universal type that `KFunction`s consume and produce.
 ///
-/// Composite payloads are `Rc`-shared under an immutable-value contract; a future
-/// mutable-list builtin would need `Rc::make_mut` at the mutation site. `Struct.fields`
-/// uses `IndexMap` so iteration matches declaration order.
+/// Every composite payload is a region-resident substrate the value borrows (`&'a`), immutable
+/// after construction; a future mutable-list builtin would need a fresh substrate at the mutation
+/// site. `Struct.fields` uses `IndexMap` so iteration matches declaration order.
 ///
 /// A `KFunction` is a bare borrow into its defining region; the regions an escaping
 /// closure reaches are pinned by its carrier's witness set ([`FrameSet`](crate::machine::FrameSet)),
@@ -120,15 +80,19 @@ pub enum KObject<'a> {
     Dict(&'a DictSubstrate<'a>, KType),
     KExpression(KExpression<'a>),
     KFunction(&'a KFunction<'a>),
-    /// Tagged-union value. `identity` is the value's own type handle: the union member's
-    /// `SetMember` handle when the carrier's type arguments are erased, or the
+    /// Tagged-union value. The `value` field is a region borrow of the payload's
+    /// [`PayloadSubstrate`] — the single payload cell plus its three construction memos,
+    /// contains-borrows / copy-cost / borrows-home. `identity` is the value's own type handle: the
+    /// union member's `SetMember` handle when the carrier's type arguments are erased, or the
     /// `ConstructorApply` over that member when an ascription stamped a parameterized union's
     /// arguments in. One handle carries what the member reference and the runtime type
     /// arguments used to carry separately, so `ktype()` is a copy and identity comparison is
-    /// one `u128`.
+    /// one `u128`. Construct via [`KObject::tagged`] — never the struct literal directly outside this
+    /// module, and never `Rc::new`: the substrate is born only through
+    /// [`FoldingBrand::alloc_substrate_folded`].
     Tagged {
         tag: String,
-        value: Rc<KObject<'a>>,
+        value: &'a PayloadSubstrate<'a>,
         identity: KType,
     },
     /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is a region
@@ -145,19 +109,22 @@ pub enum KObject<'a> {
     Record(&'a RecordSubstrate<'a>, KType),
     /// NEWTYPE identity-wrapper carrier (and the ATTR abstract-type re-tag carrier): tags a
     /// representation value with a type identity. (A user-`UNION` variant value is a
-    /// [`Self::Tagged`], not a `Wrapped` — ruling 13.) A re-tag collapses one wrapper layer
-    /// ([`WrappedPayload::peel`]); a genuine construction preserves the payload verbatim
-    /// ([`WrappedPayload::hold`]), so a newtype nesting another keeps every layer. `type_id` is
-    /// the declaration-stable identity handle — for a standalone newtype the sealed member's
-    /// `SetMember` handle, for an identity-wrapper (`NEWTYPE (T AS W)`) construction a
-    /// `ConstructorApply` over it, and for an opaque-ascription abstract-type re-tag the
-    /// per-call `AbstractType` identity.
+    /// [`Self::Tagged`], not a `Wrapped` — ruling 13.) The `inner` field is a region borrow of the
+    /// payload's [`PayloadSubstrate`] — the single payload cell plus its three construction memos.
+    /// A re-tag collapses one wrapper layer ([`KObject::wrapped_peel`]); a genuine construction
+    /// preserves the payload verbatim ([`KObject::wrapped_hold`]), so a newtype nesting another
+    /// keeps every layer. `type_id` is the declaration-stable identity handle — for a standalone
+    /// newtype the sealed member's `SetMember` handle, for an identity-wrapper (`NEWTYPE (T AS W)`)
+    /// construction a `ConstructorApply` over it, and for an opaque-ascription abstract-type re-tag
+    /// the per-call `AbstractType` identity. Construct via [`KObject::wrapped_peel`] /
+    /// [`KObject::wrapped_hold`] — never the struct literal directly outside this module, and never
+    /// `Rc::new`: the substrate is born only through [`FoldingBrand::alloc_substrate_folded`].
     ///
     /// `ktype()` copies `type_id` — the per-declaration identity. ATTR over a `Wrapped` falls
     /// through to `inner`, so wrapping a struct in a NEWTYPE doesn't force every field accessor
     /// to redo.
     Wrapped {
-        inner: WrappedPayload<'a>,
+        inner: &'a PayloadSubstrate<'a>,
         type_id: KType,
     },
     /// First-class module value. A bare borrow into the region the module was minted in,
@@ -357,6 +324,50 @@ impl<'a> KObject<'a> {
         KObject::Record(substrate, record_type)
     }
 
+    /// Fresh `Tagged` carrier over one payload value. Allocates the payload substrate — the single
+    /// cell plus its three construction memos (computed relative to `door`'s own region as home) —
+    /// through `door`, the tagged door's sole construction site, then names the carrier `tag` /
+    /// `identity`. `value` is deep-cloned into the substrate (a pointer copy for a substrate-carrier
+    /// payload); the caller keeps its borrow.
+    pub fn tagged(
+        door: FoldingBrand<'a>,
+        tag: String,
+        value: &KObject<'a>,
+        identity: KType,
+    ) -> KObject<'a> {
+        let substrate = alloc_payload(door, value.deep_clone());
+        KObject::Tagged {
+            tag,
+            value: substrate,
+            identity,
+        }
+    }
+
+    /// Fresh `Wrapped` carrier for a **construction**, preserving the payload verbatim — including a
+    /// nested `Wrapped`, so a newtype over another keeps every layer. Allocates the payload substrate
+    /// (the single cell plus its memos, home = `door`'s region) through `door`. See
+    /// [`Self::wrapped_peel`] for the re-tag verb.
+    pub fn wrapped_hold(door: FoldingBrand<'a>, value: &KObject<'a>, type_id: KType) -> KObject<'a> {
+        let substrate = alloc_payload(door, value.deep_clone());
+        KObject::Wrapped {
+            inner: substrate,
+            type_id,
+        }
+    }
+
+    /// Fresh `Wrapped` carrier for a **re-tag**, collapsing one `Wrapped` layer so `Wrapped.inner`'s
+    /// payload is never itself `Wrapped` (the single-layer invariant): the new identity replaces the
+    /// old. When `value` is already a `Wrapped`, its inner substrate borrow rides verbatim (O(1), no
+    /// copy — the payload keeps its home, pinned by the carrier's reach); anything else allocates a
+    /// fresh payload substrate over an independent `deep_clone` through `door`.
+    pub fn wrapped_peel(door: FoldingBrand<'a>, value: &KObject<'a>, type_id: KType) -> KObject<'a> {
+        let inner = match value {
+            KObject::Wrapped { inner, .. } => *inner,
+            _ => alloc_payload(door, value.deep_clone()),
+        };
+        KObject::Wrapped { inner, type_id }
+    }
+
     /// Ascription stamping at an annotated boundary (FN return type, argument slot,
     /// LET ascription). Callers have already checked the value satisfies `declared`;
     /// this re-tags the carrier to *exactly* the declared parameter types — a
@@ -381,6 +392,8 @@ impl<'a> KObject<'a> {
                 KObject::Record(substrate, declared)
             }
             (KObject::Tagged { tag, value, .. }, TypeNode::ConstructorApply { .. }) => {
+                // Share the payload substrate borrow verbatim — immutable after construction, so the
+                // retype never touches the payload; only the identity handle changes.
                 KObject::Tagged {
                     tag,
                     value,
@@ -427,11 +440,11 @@ impl<'a> KObject<'a> {
     }
 
     /// True when every region borrow in `self` points into `dest`. Only value-channel borrows
-    /// are walked: `KFunction`, `Module`, `KExpression` splices, a substrate carrier's
-    /// (`Record`/`List`/`Dict`) substrate address (O(1), never its cells), and the [`Held`] cells
-    /// of the still-`Rc` composite carriers (`Tagged`/`Wrapped`). The `KType` tags (`List`/`Dict`/
-    /// `Record` memos, `Tagged { identity }`, `Wrapped { type_id }`) are not walked — a handle is
-    /// one `u128` naming registry-owned content, so it borrows no region at all.
+    /// are walked: `KFunction`, `Module`, `KExpression` splices, and a substrate carrier's
+    /// (`Record`/`List`/`Dict`/`Tagged`/`Wrapped`) substrate address (O(1), never its cells). The
+    /// `KType` tags (`List`/`Dict`/`Record` memos, `Tagged { identity }`, `Wrapped { type_id }`) are
+    /// not walked — a handle is one `u128` naming registry-owned content, so it borrows no region at
+    /// all.
     pub(crate) fn resident_in(&self, dest: &KoanRegion) -> bool {
         self.resident_in_visiting(&Residence::dest_only(dest))
     }
@@ -450,19 +463,14 @@ impl<'a> KObject<'a> {
             KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => true,
             KObject::KFunction(f) => residence.owns_function(f),
             KObject::KExpression(e) => e.is_splice_free(),
-            // O(1) address-membership check — never an element walk. Reached only when a list
-            // rides inside a still-`Rc` container (`Tagged`/`Wrapped`) being audited; a bare
-            // top-level list never routes this walk at all (it is born resident by construction
-            // through the fold door).
+            // O(1) address-membership check on the substrate borrow — never a cell walk. Every
+            // substrate carrier answers residence by its own address, whether it is a bare top-level
+            // value (born resident through the fold door) or rides inside another carrier.
             KObject::List(substrate, _) => residence.owns_substrate(substrate),
             KObject::Dict(substrate, _) => residence.owns_substrate(substrate),
-            // O(1) address-membership check — never a cell walk. Reached only when a substrate
-            // carrier rides inside a still-`Rc` container (`Tagged`/`Wrapped`) being audited; a bare
-            // top-level record / list / dict never routes this walk at all (it is born resident by
-            // construction through the fold door).
             KObject::Record(substrate, _) => residence.owns_substrate(substrate),
-            KObject::Tagged { value, .. } => value.resident_in_visiting(residence),
-            KObject::Wrapped { inner, .. } => inner.get().resident_in_visiting(residence),
+            KObject::Tagged { value, .. } => residence.owns_substrate(value),
+            KObject::Wrapped { inner, .. } => residence.owns_substrate(inner),
             KObject::Module(m) => residence.owns_module(m),
         }
     }
@@ -488,8 +496,10 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// Independent-but-cheap clone: composite payloads `Rc::clone` under the
-    /// immutable-value contract; a `KFunction` copies its bare defining-region borrow.
+    /// Independent-but-cheap clone: every composite pointer-copies its region-resident substrate
+    /// borrow (`Copy`) under the immutable-value contract, never rebuilding cells; a `KFunction`
+    /// copies its bare defining-region borrow. Lift-stability across a dying frame comes from the
+    /// carrier's witness/reach, not a refcount bump.
     pub fn deep_clone(&self) -> KObject<'a> {
         match self {
             KObject::Number(n) => KObject::Number(*n),
@@ -501,19 +511,21 @@ impl<'a> KObject<'a> {
             KObject::Dict(substrate, dict_type) => KObject::Dict(substrate, *dict_type),
             KObject::KExpression(e) => KObject::KExpression(e.clone()),
             KObject::KFunction(f) => KObject::KFunction(f),
+            // A pointer copy: the payload substrate borrow copies (`Copy`), never rebuilding the
+            // payload.
             KObject::Tagged {
                 tag,
                 value,
                 identity,
             } => KObject::Tagged {
                 tag: tag.clone(),
-                value: Rc::clone(value),
+                value,
                 identity: *identity,
             },
             // A pointer copy: the substrate borrow copies (`Copy`), never rebuilding the fields.
             KObject::Record(substrate, record_type) => KObject::Record(substrate, *record_type),
             KObject::Wrapped { inner, type_id } => KObject::Wrapped {
-                inner: inner.clone(),
+                inner,
                 type_id: *type_id,
             },
             KObject::Module(m) => KObject::Module(m),
@@ -541,31 +553,43 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// Whether `self` is, or (through a still-`Rc` `Tagged`/`Wrapped` spine) transitively
-    /// contains, a substrate carrier (`Record`, `List`, or `Dict`). Purely structural — unlike
+    /// Whether `self` is a substrate carrier — a `Record`, `List`, `Dict`, `Tagged`, or `Wrapped`,
+    /// each of which directly borrows a region-resident substrate. Purely structural — unlike
     /// [`Self::resident_in_visiting`], no residence is checked here. A substrate is always a genuine
     /// region borrow into its own home (Ruling 5, design/value-substrates.md), which the fold engines
-    /// that build a fresh `Tagged`/`Wrapped` around one cannot see (composing a witness only ever
-    /// consults the fold's *other* operands, never the value its own closure just built) — so a
-    /// step-terminal seal uses this predicate to force the carrier's `borrows_host` bit conservatively
-    /// true rather than under-reporting it.
+    /// that build a fresh carrier around one cannot see (composing a witness only ever consults the
+    /// fold's *other* operands, never the value its own closure just built) — so a step-terminal seal
+    /// uses this predicate to force the carrier's `borrows_host` bit conservatively true rather than
+    /// under-reporting it.
     pub(crate) fn embeds_substrate(&self) -> bool {
-        match self {
-            KObject::Record(..) | KObject::List(..) | KObject::Dict(..) => true,
-            KObject::Tagged { value, .. } => value.embeds_substrate(),
-            KObject::Wrapped { inner, .. } => inner.get().embeds_substrate(),
-            _ => false,
-        }
+        matches!(
+            self,
+            KObject::Record(..)
+                | KObject::List(..)
+                | KObject::Dict(..)
+                | KObject::Tagged { .. }
+                | KObject::Wrapped { .. }
+        )
     }
 }
 
+/// Allocate a [`PayloadSubstrate`] over one owned payload `value` through `door` — the single
+/// construction site every `Tagged` / `Wrapped` door verb ([`KObject::tagged`],
+/// [`KObject::wrapped_hold`], the non-`Wrapped` arm of [`KObject::wrapped_peel`], and the seam copy
+/// verb's tagged/wrapped arms) funnels through. Computes the payload's three memos relative to
+/// `door`'s own region as home, then stores the substrate and hands back a co-located borrow.
+fn alloc_payload<'a>(door: FoldingBrand<'a>, value: KObject<'a>) -> &'a PayloadSubstrate<'a> {
+    let home = door.region();
+    let memos = SubstrateMemos::compute_object(&value, home);
+    door.alloc_substrate_folded::<PayloadSubstrate<'static>>(ContainerSubstrate::new(value, memos))
+}
+
 /// The seam copy verb's total rebuild: reconstruct `value`'s entire reachable structure at `dest`'s
-/// brand. A substrate carrier (`Record` / `List` / `Dict`) rebuilds each cell recursively and
-/// allocates a fresh substrate at `dest` through its door (the contains-borrows memo recomputes —
-/// leaves ride the rebuild, so the bit can only stay or clear); a still-`Rc` composite (`Tagged` /
-/// `Wrapped`) rebuilds its `Rc` spine with recursively-copied cells; a scalar rebuilds owned; a
-/// `KFunction` / `Module` borrow rides verbatim (its own reach rides the transfer witness); a
-/// `KExpression` clones.
+/// brand. A substrate carrier (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) rebuilds each
+/// cell recursively and allocates a fresh substrate at `dest` through its door (the contains-borrows
+/// memo recomputes — leaves ride the rebuild, so the bit can only stay or clear); a scalar rebuilds
+/// owned; a `KFunction` / `Module` borrow rides verbatim (its own reach rides the transfer witness);
+/// a `KExpression` clones.
 /// Total or not at all — a partial spine copy would pay the copy *and* keep the pin. See
 /// [design/value-substrates.md § Escape](../../../../design/value-substrates.md#escape-pin-by-default).
 pub(crate) fn copy_object_into<'b>(value: &KObject<'b>, dest: FoldingBrand<'b>) -> KObject<'b> {
@@ -604,11 +628,11 @@ pub(crate) fn copy_object_into<'b>(value: &KObject<'b>, dest: FoldingBrand<'b>) 
             identity,
         } => KObject::Tagged {
             tag: tag.clone(),
-            value: Rc::new(copy_object_into(value, dest)),
+            value: alloc_payload(dest, copy_object_into(value.payload(), dest)),
             identity: *identity,
         },
         KObject::Wrapped { inner, type_id } => KObject::Wrapped {
-            inner: WrappedPayload::from_owned(copy_object_into(inner.get(), dest)),
+            inner: alloc_payload(dest, copy_object_into(inner.payload(), dest)),
             type_id: *type_id,
         },
     }
@@ -624,12 +648,12 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: FoldingBrand<'b>) -> Held<'b> {
     }
 }
 
-/// Exact host-release probe, run only when a record's contains-borrows memo is set: does any
+/// Exact host-release probe, run only when a container's contains-borrows memo is set: does any
 /// surviving borrow leaf of `value` point into `host`? A `KFunction` / `Module` leaf checks `host`'s
-/// own address tables; a non-splice-free `KExpression` answers conservatively `true`; a nested
-/// `Record` short-circuits on its own clear memo (the copy releases it), else recurses its fields; a
-/// still-`Rc` composite recurses its spine. A memo-clear record answers `false` outright — the copy
-/// releases every host it retired. Read-only; borrows nothing.
+/// own address tables; a non-splice-free `KExpression` answers conservatively `true`; a substrate
+/// carrier (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) short-circuits on its own clear memo
+/// (the copy releases it), else recurses its cells. A memo-clear carrier answers `false` outright —
+/// the copy releases every host it retired. Read-only; borrows nothing.
 pub(crate) fn still_borrows_host(value: &KObject<'_>, host: &KoanRegion) -> bool {
     match value {
         KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
@@ -657,8 +681,12 @@ pub(crate) fn still_borrows_host(value: &KObject<'_>, host: &KoanRegion) -> bool
                     .values()
                     .any(|cell| held_borrows_host(cell, host))
         }
-        KObject::Tagged { value, .. } => still_borrows_host(value, host),
-        KObject::Wrapped { inner, .. } => still_borrows_host(inner.get(), host),
+        KObject::Tagged { value, .. } => {
+            value.contains_borrows() && still_borrows_host(value.payload(), host)
+        }
+        KObject::Wrapped { inner, .. } => {
+            inner.contains_borrows() && still_borrows_host(inner.payload(), host)
+        }
     }
 }
 
@@ -785,7 +813,7 @@ impl<'a> KObject<'a> {
             KObject::KExpression(e) => e.summarize(),
             KObject::KFunction(f) => f.summarize(),
             KObject::Tagged { tag, value, .. } => {
-                format!("{}({})", tag, value.summarize(types))
+                format!("{}({})", tag, value.payload().summarize(types))
             }
             KObject::Record(substrate, _) => {
                 let parts: Vec<String> = substrate
@@ -797,7 +825,11 @@ impl<'a> KObject<'a> {
             }
             KObject::Null => "null".to_string(),
             KObject::Wrapped { inner, type_id } => {
-                format!("{}({})", type_id.name(types), inner.get().summarize(types))
+                format!(
+                    "{}({})",
+                    type_id.name(types),
+                    inner.payload().summarize(types)
+                )
             }
             KObject::Module(m) => m.path.clone(),
         }

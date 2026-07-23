@@ -145,8 +145,8 @@ fn list_with_type_carrier_is_authoritative_for_ktype() {
 /// holds the bare member reference, a stamped carrier the applied `ConstructorApply`.
 #[test]
 fn type_constructor_ktype_erased_vs_applied() {
-    use std::rc::Rc;
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let ctor = RecursiveGroupWindow::seal_singleton(
         "Result".into(),
         RelativeSchema::TypeConstructor {
@@ -156,11 +156,7 @@ fn type_constructor_ktype_erased_vs_applied() {
         None,
         &types,
     );
-    let erased = KObject::Tagged {
-        tag: "Ok".into(),
-        value: Rc::new(KObject::Number(1.0)),
-        identity: ctor,
-    };
+    let erased = KObject::tagged(door, "Ok".into(), &KObject::Number(1.0), ctor);
     let erased_handle = erased.ktype();
     match types.node(erased_handle) {
         TypeNode::SetMember { name, .. } => assert_eq!(name, "Result"),
@@ -170,11 +166,12 @@ fn type_constructor_ktype_erased_vs_applied() {
         ("Ok".to_string(), KType::NUMBER),
         ("Error".to_string(), KType::STR),
     ]);
-    let applied = KObject::Tagged {
-        tag: "Ok".into(),
-        value: Rc::new(KObject::Number(1.0)),
-        identity: types.constructor_apply(ctor, arguments.clone()),
-    };
+    let applied = KObject::tagged(
+        door,
+        "Ok".into(),
+        &KObject::Number(1.0),
+        types.constructor_apply(ctor, arguments.clone()),
+    );
     let applied_handle = applied.ktype();
     match types.node(applied_handle) {
         TypeNode::ConstructorApply {
@@ -220,16 +217,10 @@ fn unstamped_empty_container_detection() {
 /// per-declaration identity comparisons.
 #[test]
 fn wrapped_ktype_reports_clone_of_type_id() {
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
     let types = TypeRegistry::new();
-    let storage = run_root_storage();
-    let region = storage.brand();
-    let inner = region.alloc_object(KObject::Number(3.0));
+    container_door!(_storage, door);
     let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
-    let w = KObject::Wrapped {
-        inner: WrappedPayload::peel(inner),
-        type_id,
-    };
+    let w = KObject::wrapped_peel(door, &KObject::Number(3.0), type_id);
     let handle = w.ktype();
     match types.node(handle) {
         TypeNode::SetMember { name, .. } => assert_eq!(name, "Distance"),
@@ -239,37 +230,26 @@ fn wrapped_ktype_reports_clone_of_type_id() {
 
 #[test]
 fn wrapped_summarize_renders_surface_form() {
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
     let types = TypeRegistry::new();
-    let storage = run_root_storage();
-    let region = storage.brand();
-    let inner = region.alloc_object(KObject::Number(3.0));
+    container_door!(_storage, door);
     let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
-    let w = KObject::Wrapped {
-        inner: WrappedPayload::peel(inner),
-        type_id,
-    };
+    let w = KObject::wrapped_peel(door, &KObject::Number(3.0), type_id);
     assert_eq!(w.summarize(&types), "Distance(3)");
 }
 
-/// `deep_clone` is shallow: it `Rc::clone`s the inner (sharing the same allocation as the
-/// source `Wrapped`, not re-deep-cloning the repr) and copies the `type_id` handle.
+/// `deep_clone` is shallow: it pointer-copies the payload substrate borrow (sharing the same
+/// region-resident substrate as the source `Wrapped`, not re-rebuilding the repr) and copies the
+/// `type_id` handle.
 #[test]
-fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+fn wrapped_deep_clone_shares_inner_substrate_and_type_id() {
     let types = TypeRegistry::new();
-    let storage = run_root_storage();
-    let region = storage.brand();
-    let inner = region.alloc_object(KObject::Number(3.0));
+    container_door!(_storage, door);
     let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
-    let original = KObject::Wrapped {
-        inner: WrappedPayload::peel(inner),
-        type_id,
-    };
-    // `peel` `Rc`-boxes a fresh deep_clone, so the source's inner is its own allocation;
-    // `deep_clone` must then share *that* allocation, never re-allocate.
-    let original_inner: *const KObject = match &original {
-        KObject::Wrapped { inner, .. } => inner.get(),
+    let original = KObject::wrapped_peel(door, &KObject::Number(3.0), type_id);
+    // The source's payload rides its own region-resident substrate; `deep_clone` must share *that*
+    // substrate borrow, never allocate a fresh one.
+    let original_inner: *const PayloadSubstrate = match &original {
+        KObject::Wrapped { inner, .. } => *inner as *const _,
         _ => unreachable!(),
     };
     let cloned = original.deep_clone();
@@ -279,9 +259,9 @@ fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
             type_id: ct,
         } => {
             assert_eq!(
-                ci.get() as *const KObject,
+                ci as *const PayloadSubstrate,
                 original_inner,
-                "deep_clone must Rc::clone the inner, sharing the source allocation",
+                "deep_clone must pointer-copy the substrate borrow, sharing the source substrate",
             );
             assert_eq!(ct, type_id);
         }

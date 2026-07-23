@@ -1,8 +1,9 @@
 //! Tests for [`copy_carried`] — the witnessed-transfer copy hook. It structurally copies a
-//! [`Carried`] into a destination region: the top node is re-allocated there, while the composite
-//! spine shares its `Rc` payloads and a `KFunction` / first-class `Module` rides a bare
-//! borrow preserved verbatim. No region anchor is embedded in the value — the regions a copied
-//! value reaches are pinned by the carrier's witness set at the `transfer_into` layer, not here.
+//! [`Carried`] into a destination region: a substrate carrier is totally rebuilt so its
+//! region-resident substrate lands at `dest`, while a scalar re-allocates its top node and a
+//! `KFunction` / first-class `Module` rides a bare borrow preserved verbatim. No region anchor is
+//! embedded in the value — the regions a copied value reaches are pinned by the carrier's witness
+//! set at the `transfer_into` layer, not here.
 
 use super::*;
 use crate::builtins::test_support::TestRun;
@@ -175,10 +176,12 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
     }
 }
 
-/// A `Tagged` shares its `value` `Rc` through relocation, and its tag and interned `identity` type
-/// handle ride along unchanged.
+/// A `Tagged` relocated under a `Copy` verb is totally rebuilt at the destination brand: the rebuilt
+/// payload substrate lives in `dest`'s region, not the source's — a tagged value is a region-resident
+/// substrate, not a shared `Rc` spine. Its tag and interned `identity` type handle ride along
+/// unchanged.
 #[test]
-fn tagged_relocation_shares_value_and_identity() {
+fn tagged_relocation_rebuilds_payload_into_dest() {
     use crate::machine::core::ScopeId;
     use crate::machine::model::TypeNode;
     let root = run_root_storage();
@@ -188,7 +191,6 @@ fn tagged_relocation_shares_value_and_identity() {
     let dest = CallFrame::new(scope);
     let types = test_run.types.clone();
 
-    let inner = Rc::new(KObject::Number(42.0));
     // The value's own type handle: a `Maybe` constructor applied to `Number` — the shape a tagged
     // union member's `identity` interns to.
     let ctor = types.intern(TypeNode::AbstractType {
@@ -199,17 +201,14 @@ fn tagged_relocation_shares_value_and_identity() {
     });
     let identity =
         types.constructor_apply(ctor, Record::from_pairs([("T".to_string(), KType::NUMBER)]));
-    let tagged: &KObject = source
-        .brand()
-        .alloc_object_checked(
-            KObject::Tagged {
-                tag: "Just".into(),
-                value: Rc::clone(&inner),
-                identity,
-            },
-            &types,
-        )
-        .expect("a fresh owned Tagged is always resident-in-self");
+    let source_door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()));
+    let tagged: &KObject = source_door.alloc_object_folded(KObject::tagged(
+        source_door,
+        "Just".into(),
+        &KObject::Number(42.0),
+        identity,
+    ));
 
     let relocated = copy_carried(
         Carried::Object(tagged),
@@ -220,7 +219,7 @@ fn tagged_relocation_shares_value_and_identity() {
         Carried::Object(
             r @ KObject::Tagged {
                 tag,
-                value,
+                value: out,
                 identity: out_identity,
             },
         ) => {
@@ -229,13 +228,83 @@ fn tagged_relocation_shares_value_and_identity() {
                 "relocated tagged node lives in dest"
             );
             assert_eq!(tag, "Just");
-            assert!(Rc::ptr_eq(value, &inner), "the wrapped value is shared");
+            assert!(
+                dest.region().owns_substrate(*out),
+                "the rebuilt payload substrate lives in dest"
+            );
+            assert!(
+                !source.region().owns_substrate(*out),
+                "the source no longer owns the rebuilt substrate"
+            );
+            assert!(matches!(out.payload(), KObject::Number(n) if *n == 42.0));
             assert_eq!(
                 *out_identity, identity,
                 "the identity handle rides along unchanged"
             );
         }
         Carried::Object(other) => panic!("expected a Tagged, got {:?}", other.ktype()),
+        Carried::Type(_) | Carried::UnresolvedType(_) => panic!("expected an Object carrier"),
+    }
+}
+
+/// A `Wrapped` relocated under a `Copy` verb is totally rebuilt at the destination brand: the rebuilt
+/// payload substrate lives in `dest`'s region, not the source's, and the `type_id` rides unchanged.
+#[test]
+fn wrapped_relocation_rebuilds_payload_into_dest() {
+    use crate::machine::core::ScopeId;
+    use crate::machine::model::TypeNode;
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let source = CallFrame::new(scope);
+    let dest = CallFrame::new(scope);
+    let types = test_run.types.clone();
+
+    let type_id = types.intern(TypeNode::AbstractType {
+        source: ScopeId::from_raw(0, 0x12),
+        name: "Distance".into(),
+        param_names: vec![],
+        nonce: None,
+    });
+    let source_door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()));
+    let wrapped: &KObject = source_door.alloc_object_folded(KObject::wrapped_hold(
+        source_door,
+        &KObject::Number(7.0),
+        type_id,
+    ));
+
+    let relocated = copy_carried(
+        Carried::Object(wrapped),
+        RegionEscape::Copy { released: false },
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
+    );
+    match relocated {
+        Carried::Object(
+            r @ KObject::Wrapped {
+                inner: out,
+                type_id: out_type_id,
+            },
+        ) => {
+            assert!(
+                dest.region().owns_object(r),
+                "relocated wrapped node lives in dest"
+            );
+            assert!(
+                dest.region().owns_substrate(*out),
+                "the rebuilt payload substrate lives in dest"
+            );
+            assert!(
+                !source.region().owns_substrate(*out),
+                "the source no longer owns the rebuilt substrate"
+            );
+            assert!(matches!(out.payload(), KObject::Number(n) if *n == 7.0));
+            assert_eq!(
+                *out_type_id, type_id,
+                "the type_id handle rides along unchanged"
+            );
+        }
+        Carried::Object(other) => panic!("expected a Wrapped, got {:?}", other.ktype()),
         Carried::Type(_) | Carried::UnresolvedType(_) => panic!("expected an Object carrier"),
     }
 }

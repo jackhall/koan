@@ -346,7 +346,7 @@ fn fast_lane_on_tagged_union_constructs() {
             identity,
         } => {
             assert_eq!(tag, "Some");
-            assert!(matches!(value.as_ref(), KObject::Number(n) if *n == 42.0));
+            assert!(matches!(value.payload(), KObject::Number(n) if *n == 42.0));
             match test_run.types.node(*identity) {
                 TypeNode::SetMember { name, .. } => {
                     assert_eq!(name, "Some");
@@ -382,7 +382,7 @@ fn fast_lane_on_newtype_record_type_constructs() {
     match result {
         KObject::Wrapped { inner, type_id } => {
             assert_eq!(type_id.name(&test_run.types), "Pt");
-            match inner.get() {
+            match inner.payload() {
                 KObject::Record(substrate, _) => {
                     let values = substrate.fields();
                     assert!(
@@ -1074,7 +1074,7 @@ fn type_head_deferred_constructs_union_variant() {
     match result {
         KObject::Tagged { tag, value, .. } => {
             assert_eq!(tag, "Some");
-            assert!(matches!(value.as_ref(), KObject::Number(n) if *n == 42.0));
+            assert!(matches!(value.payload(), KObject::Number(n) if *n == 42.0));
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),
     }

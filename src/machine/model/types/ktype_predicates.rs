@@ -284,7 +284,7 @@ impl KType {
                                 return false;
                             }
                             match arguments.get(tag) {
-                                Some(argument) => argument.matches_value(value, types),
+                                Some(argument) => argument.matches_value(value.payload(), types),
                                 None => true,
                             }
                         }

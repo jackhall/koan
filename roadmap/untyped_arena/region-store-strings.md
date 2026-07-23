@@ -31,8 +31,6 @@ untyped-arena move for the whole family.
 
 **Requires:**
 
-- [Region-store tagged and wrapped payloads](region-store-tagged-wrapped.md) — same
-  ordering, and the tag discriminant is a string carrier.
 
 **Unblocks:**
 

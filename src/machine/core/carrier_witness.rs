@@ -32,8 +32,8 @@ pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
 
 /// The step-terminal seal's variant bit (design/value-substrates.md § Escape): force
-/// `borrows_host = true` on `witnessed` when its carried value is, or (through a still-`Rc`
-/// `Tagged`/`Wrapped` spine) embeds, a top-level substrate carrier (`Record` / `List`) — see
+/// `borrows_host = true` on `witnessed` when its carried value is a substrate carrier (`Record` /
+/// `List` / `Dict` / `Tagged` / `Wrapped`) — see
 /// [`KObject::embeds_substrate`](crate::machine::model::KObject::embeds_substrate).
 ///
 /// Every fold engine that builds `witnessed` (`map_pinned_placing`, `merge_pinned_placing`,

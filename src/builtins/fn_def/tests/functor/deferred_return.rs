@@ -95,9 +95,9 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
                 "the abstract identity is the SIG-named member `Carrier`",
             );
             assert!(
-                matches!(inner.get(), KObject::Number(n) if *n == 0.0),
+                matches!(inner.payload(), KObject::Number(n) if *n == 0.0),
                 "unwrapping the carrier yields the underlying Number(0), got {:?}",
-                inner.get().ktype(),
+                inner.payload().ktype(),
             );
         }
         other => panic!(

@@ -14,7 +14,7 @@ use crate::machine::core::DepPlacement;
 use crate::machine::core::{FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope};
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject, Record};
-use crate::machine::model::{CarriedFamily, WrappedPayload};
+use crate::machine::model::CarriedFamily;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{
@@ -389,15 +389,12 @@ fn finish_witnessed<'step>(
                     Residence::Copied,
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
-                        let inner = if collapse {
-                            WrappedPayload::peel(value.object())
+                        let wrapped = if collapse {
+                            KObject::wrapped_peel(region, value.object(), identity_ty)
                         } else {
-                            WrappedPayload::hold(value.object())
+                            KObject::wrapped_hold(region, value.object(), identity_ty)
                         };
-                        Carried::Object(region.alloc_object_folded(KObject::Wrapped {
-                            inner,
-                            type_id: identity_ty,
-                        }))
+                        Carried::Object(region.alloc_object_folded(wrapped))
                     },
                 ))
         }
@@ -448,11 +445,12 @@ fn finish_witnessed<'step>(
                     &dest_frame,
                     |(_region, fields), (_identity_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
-                        let record = Record::from_pairs(fields);
-                        Carried::Object(region.alloc_object_folded(KObject::Wrapped {
-                            inner: WrappedPayload::hold(&KObject::record(region, record, types)),
-                            type_id: identity_ty,
-                        }))
+                        let record = KObject::record(region, Record::from_pairs(fields), types);
+                        Carried::Object(region.alloc_object_folded(KObject::wrapped_hold(
+                            region,
+                            &record,
+                            identity_ty,
+                        )))
                     },
                 );
             // Step-terminal seal: the fresh record's substrate always borrows into this same
@@ -496,11 +494,12 @@ fn finish_witnessed<'step>(
                     Residence::Copied,
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
-                        Carried::Object(region.alloc_object_folded(KObject::Tagged {
+                        Carried::Object(region.alloc_object_folded(KObject::tagged(
+                            region,
                             tag,
-                            value: Rc::new(value.object().deep_clone()),
-                            identity: identity_ty,
-                        }))
+                            value.object(),
+                            identity_ty,
+                        )))
                     },
                 ))
         }
@@ -534,23 +533,20 @@ fn finish_witnessed<'step>(
                         // Stamp the value's FULL type — including a `Wrapped` payload's own
                         // nominal identity — as the sole applied arg before collapsing.
                         let arg = value.object().ktype();
-                        // Collapse: peel any single `Wrapped` layer so `Wrapped.inner` is never
-                        // itself `Wrapped` (the single-layer invariant); the peeled identity is
-                        // not lost — it lives in `arg`.
-                        let inner = if matches!(value.object(), KObject::Wrapped { .. }) {
-                            WrappedPayload::peel(value.object())
-                        } else {
-                            WrappedPayload::hold(value.object())
-                        };
                         // The type id is the interned `ConstructorApply(<constructor>,
                         // {<param> = arg})` — one handle, built where the registry is in scope.
                         let type_id = types.constructor_apply(
                             identity_ty,
                             Record::from_pairs([(param_name, arg)]),
                         );
-                        Carried::Object(
-                            region.alloc_object_folded(KObject::Wrapped { inner, type_id }),
-                        )
+                        // Collapse: `wrapped_peel` peels any single `Wrapped` layer so `Wrapped.inner`
+                        // is never itself `Wrapped` (the single-layer invariant); the peeled identity
+                        // is not lost — it lives in `arg`.
+                        Carried::Object(region.alloc_object_folded(KObject::wrapped_peel(
+                            region,
+                            value.object(),
+                            type_id,
+                        )))
                     },
                 ))
         }

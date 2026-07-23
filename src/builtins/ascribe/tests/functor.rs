@@ -318,7 +318,7 @@ fn pure_call_passes_return_check() {
                 "pure must return an identity-wrapper value, got {:?}",
                 type_id,
             );
-            assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
+            assert!(matches!(inner.payload(), KObject::Number(n) if *n == 3.0));
         }
         other => panic!("expected Wrapped from pure, got {:?}", other.ktype()),
     }

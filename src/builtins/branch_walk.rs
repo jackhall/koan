@@ -122,8 +122,8 @@ pub(crate) fn arm_tail<'a>(
                         Ok(match projection {
                             ItProjection::Scrutinee => object,
                             ItProjection::Payload => match object {
-                                KObject::Wrapped { inner, .. } => inner.get(),
-                                KObject::Tagged { value, .. } => &**value,
+                                KObject::Wrapped { inner, .. } => inner.payload(),
+                                KObject::Tagged { value, .. } => value.payload(),
                                 other => other,
                             },
                         })

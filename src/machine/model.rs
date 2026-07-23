@@ -28,5 +28,5 @@ pub(crate) use types::{
 };
 pub(crate) use values::{
     copy_object_into, copy_or_pin, still_borrows_host, CarriedFamily, DictSubstrate, ListSubstrate,
-    Module, NamedPairs, RecordSubstrate, RegionEscape, WrappedPayload,
+    Module, NamedPairs, PayloadSubstrate, RecordSubstrate, RegionEscape,
 };

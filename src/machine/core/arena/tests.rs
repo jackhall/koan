@@ -1387,7 +1387,7 @@ fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
 }
 
 /// `resident_in_visiting`'s `Record` arm — `residence.owns_substrate(substrate)` — is reached only
-/// when a record rides inside a still-`Rc` container (`List`/`Dict`/`Tagged`/`Wrapped`) crossing
+/// when a record rides inside another substrate carrier (`List`/`Dict`/`Tagged`/`Wrapped`) crossing
 /// the checked tier: a bare top-level record never routes this walk (born resident by
 /// construction through the fold door). This drives a `List` embedding a `Record` through
 /// `Scope::alloc_object_delivered` twice — once with evidence naming the record's home region

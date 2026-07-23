@@ -71,8 +71,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             ItSource::Carrier(carrier.duplicate(), projection)
         } else if selected.binds_payload {
             let payload = match value {
-                crate::machine::model::KObject::Tagged { value, .. } => (**value).deep_clone(),
-                crate::machine::model::KObject::Wrapped { inner, .. } => inner.get().deep_clone(),
+                crate::machine::model::KObject::Tagged { value, .. } => value.payload().deep_clone(),
+                crate::machine::model::KObject::Wrapped { inner, .. } => {
+                    inner.payload().deep_clone()
+                }
                 other => other.deep_clone(),
             };
             ItSource::Pure(payload)

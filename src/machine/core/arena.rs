@@ -23,7 +23,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::{
     Carried, CarriedFamily, ContainerSubstrate, DictSubstrate, Held, KObject, ListSubstrate,
-    Module, Record, RecordSubstrate,
+    Module, PayloadSubstrate, Record, RecordSubstrate,
 };
 use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
@@ -68,7 +68,13 @@ impl StorageProfile for KoanStorageProfile {
                                     TypeIdentifier,
                                     (
                                         RecordSubstrate<'static>,
-                                        (ListSubstrate<'static>, (DictSubstrate<'static>, ())),
+                                        (
+                                            ListSubstrate<'static>,
+                                            (
+                                                DictSubstrate<'static>,
+                                                (PayloadSubstrate<'static>, ()),
+                                            ),
+                                        ),
                                     ),
                                 ),
                             ),
@@ -336,8 +342,8 @@ impl<'a> FoldingBrand<'a> {
     /// fold-brand argument as [`Self::alloc_object_folded`]: `substrate` is typed at the brand
     /// lifetime, so an ambient-lifetime capture is a compile error at this signature, discharging the
     /// store's residence obligation at compile time. Each `ContainerSubstrate<C>` family lands in its
-    /// own sub-arena slot (its [`Stored`] impl); the three substrate families (record / list / dict)
-    /// share the `koan_substrate_family!` macro that generates that impl from a cell path.
+    /// own sub-arena slot (its [`Stored`] impl); the four substrate families (record / list / dict /
+    /// payload) share the `koan_substrate_family!` macro that generates that impl from a cell path.
     pub(crate) fn alloc_substrate_folded<K: Stored<KoanStorageProfile>>(
         self,
         substrate: K::At<'a>,
@@ -363,6 +369,7 @@ reattachable! {
     ContainerSubstrate<Record<Held<'static>>> => ContainerSubstrate<Record<Held<'r>>>,
     ContainerSubstrate<Vec<Held<'static>>> => ContainerSubstrate<Vec<Held<'r>>>,
     DictSubstrate<'static> => DictSubstrate<'r>,
+    ContainerSubstrate<KObject<'static>> => ContainerSubstrate<KObject<'r>>,
 }
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
@@ -461,6 +468,7 @@ macro_rules! koan_substrate_family {
 koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
 koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
 koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
 
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
@@ -525,7 +533,7 @@ pub(crate) trait KoanRegionExt {
     /// widens this with a per-reach-member check rather than a single `covers_region` call.
     fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<C>) -> bool;
 
-    /// Total bytes allocated across this region's eleven Koan families — each family's live count
+    /// Total bytes allocated across this region's twelve Koan families — each family's live count
     /// weighted by the flat size of its stored `'static` form. Prices the host region only, not the
     /// `outer` chain its `Rc<FrameStorage>` also retains (a documented approximation): the cost-copy
     /// seam reads this as the denominator of the payoff ratio, where the host's own footprint is the
@@ -607,6 +615,7 @@ impl KoanRegionExt for KoanRegion {
             + weigh::<RecordSubstrate<'static>>(self)
             + weigh::<ListSubstrate<'static>>(self)
             + weigh::<DictSubstrate<'static>>(self)
+            + weigh::<PayloadSubstrate<'static>>(self)
     }
 }
 
@@ -632,6 +641,7 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<RecordSubstrate<'static>>()
             + self.family_len::<ListSubstrate<'static>>()
             + self.family_len::<DictSubstrate<'static>>()
+            + self.family_len::<PayloadSubstrate<'static>>()
     }
 }
 

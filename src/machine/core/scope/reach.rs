@@ -232,11 +232,11 @@ impl<'a> Scope<'a> {
     /// envelope, or a frameless / run producer whose backing already outlives the read, reads under
     /// the carrier's bundled witness instead (the `None`-host arm of the envelope's open).
     ///
-    /// A value that **embeds a record** (a bare record, or one behind a `Tagged`/`Wrapped` spine)
-    /// is totally rebuilt into this scope's region through the record door
-    /// ([`Self::rebuild_delivered_substrate`]) rather than taking the pointer-copy arm: the record's
-    /// substrate is region-resident and cannot cross the checked audit by a `deep_clone` (which leaves
-    /// the substrate in the retiring producer, uncovered when its home is only ambiently covered). This
+    /// A value that **is a substrate carrier** (a `Record` / `List` / `Dict` / `Tagged` / `Wrapped`)
+    /// is totally rebuilt into this scope's region through the fold door
+    /// ([`Self::rebuild_delivered_substrate`]) rather than taking the pointer-copy arm: the substrate
+    /// is region-resident and cannot cross the checked audit by a `deep_clone` (which leaves the
+    /// substrate in the retiring producer, uncovered when its home is only ambiently covered). This
     /// path re-homes the value and discards its reach, so it always copies — the bind seam's pin verb
     /// ([`Self::copy_delivered_substrate`]) is reachable only where the binding retains the reach.
     pub(crate) fn adopt_sealed_copied(
@@ -274,17 +274,20 @@ impl<'a> Scope<'a> {
         })
     }
 
-    /// Bind a delivered value's record-embedding **projection** into this scope, routing the
-    /// escape-seam cost chooser ([`copy_or_pin`]) over the projected record. `project` selects
+    /// Bind a delivered value's substrate-carrier **projection** into this scope. `project` selects
     /// what to bind (identity for a whole-value bind, a `Tagged`/`Wrapped` payload for a MATCH/TRY
-    /// `it`); the caller vets that it yields a value embedding a record (a bare record, or one behind
-    /// a `Tagged`/`Wrapped` spine). The verb decides copy vs pin:
+    /// `it`); the caller vets that it yields a substrate carrier (a bare `Record` / `List` / `Dict` /
+    /// `Tagged` / `Wrapped`). Only a top-level **record** routes the escape-seam cost chooser
+    /// ([`copy_or_pin`]); every other carrier copies unconditionally. The verb decides copy vs pin:
     ///
     /// - **Copy** — a priceable home-crossing record with a clear borrows-home bit and small cost
-    ///   (copied out and released, the retiring producer frees), plus every unpriceable record and
-    ///   any projection whose top is a `Tagged`/`Wrapped` spine embedding a record (still-`Rc` at the
-    ///   top, unpriceable there): the value is totally rebuilt into this scope's region through the
-    ///   record door ([`Self::rebuild_delivered_substrate`]).
+    ///   (copied out and released, the retiring producer frees), every unpriceable record, and every
+    ///   non-record substrate carrier (`List` / `Dict` / `Tagged` / `Wrapped`): the value is totally
+    ///   rebuilt into this scope's region through the fold door
+    ///   ([`Self::rebuild_delivered_substrate`]). Non-records copy rather than price because pinning a
+    ///   bound value retains its producer region — which a tail loop's O(1) region turnover cannot
+    ///   afford (`it` in a `MATCH`-mediated tail hop binds a `Tagged` payload every iteration); a copy
+    ///   frees the producer. Records reach the pin arm only outside tail position.
     /// - **Pin** — a record that borrows its home region, a small home-crossing pin, or a foreign
     ///   (producer-resident) crossing: the projection is pointer-copied ([`KObject::deep_clone`], a
     ///   pointer copy for a record sharing the producer-region substrate) and moved in under the
@@ -309,12 +312,14 @@ impl<'a> Scope<'a> {
     {
         let host_region = cell.host().region();
         let verb = cell.open(|live| match project(&live) {
-            Ok(record) => match record {
-                KObject::Record(substrate, _) => copy_or_pin(substrate, record, host_region),
-                // A projection embedding a record behind a `Tagged`/`Wrapped` spine is unpriceable at
-                // the top (still-`Rc`): copy with a probe-derived release bit.
+            Ok(projected) => match projected {
+                KObject::Record(substrate, _) => copy_or_pin(substrate, projected, host_region),
+                // Only a top-level record is cost-driven here. Every other substrate carrier
+                // (`List` / `Dict` / `Tagged` / `Wrapped`) rebuilds unconditionally: pinning would
+                // retain the producer region, breaking the O(1) region turnover a tail loop's
+                // per-iteration `it` bind depends on. Copy with a probe-derived release bit.
                 _ => RegionEscape::Copy {
-                    released: !still_borrows_host(record, host_region),
+                    released: !still_borrows_host(projected, host_region),
                 },
             },
             Err(_) => RegionEscape::Copy { released: false },
@@ -342,23 +347,23 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Rebuild a delivered value's record-embedding **projection** into this scope's region through
-    /// the record door — the copy path for a region-resident record substrate, which cannot be
-    /// pointer-copied past the checked residence audit. `project` selects what to copy (identity for a
-    /// whole-value bind, a `Tagged`/`Wrapped` payload for a MATCH/TRY `it`); the caller vets that it
-    /// yields a value embedding a record (a bare record, or one behind a `Tagged`/`Wrapped` spine —
-    /// [`copy_object_into`] rebuilds the whole spine). The value relocates at the record's own
-    /// release-exact seam mode — a plain-data record `Residence::Released` (the retiring producer
-    /// frees), a record still borrowing its producer `Residence::Copied` and pinned — with the copy's
-    /// foreign reach minted into this scope's arena for liveness. The top node is then re-boxed
-    /// through the checked door to recover the `&'a` reference; its O(1) `owns_substrate` membership
-    /// passes because the rebuilt substrate is scope-resident, so no reach evidence is needed. Returns
-    /// the resident reference paired with the binding's stored reach (minted at the same mode).
+    /// Rebuild a delivered value's substrate-carrier **projection** into this scope's region through
+    /// the fold door — the copy path for a region-resident substrate, which cannot be pointer-copied
+    /// past the checked residence audit. `project` selects what to copy (identity for a whole-value
+    /// bind, a `Tagged`/`Wrapped` payload for a MATCH/TRY `it`); the caller vets that it yields a
+    /// substrate carrier ([`copy_object_into`] rebuilds the whole reachable structure). The value
+    /// relocates at the carrier's own release-exact seam mode — a plain-data carrier
+    /// `Residence::Released` (the retiring producer frees), a carrier still borrowing its producer
+    /// `Residence::Copied` and pinned — with the copy's foreign reach minted into this scope's arena
+    /// for liveness. The top node is then re-boxed through the checked door to recover the `&'a`
+    /// reference; its O(1) `owns_substrate` membership passes because the rebuilt substrate is
+    /// scope-resident, so no reach evidence is needed. Returns the resident reference paired with the
+    /// binding's stored reach (minted at the same mode).
     ///
     /// This is the unconditional-copy half of [`Self::copy_delivered_substrate`]'s chooser: the argument
     /// re-home ([`Self::adopt_sealed_copied`]) calls it directly, and the chooser's `Copy` verb
     /// delegates here (a `Copy` verb's residence is exactly this release-exact mode — a clear
-    /// borrows-home bit at a home crossing agrees with the probe, and the unpriceable / embedded-spine
+    /// borrows-home bit at a home crossing agrees with the probe, and the unpriceable / non-record
     /// verbs read the probe directly).
     fn rebuild_delivered_substrate<P>(
         &self,

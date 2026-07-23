@@ -425,7 +425,7 @@ mod tests {
                 let (name, kind) = member_of(test_run.types(), *type_id);
                 assert_eq!(name, "Distance");
                 assert_eq!(kind, KKind::NewType);
-                assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
+                assert!(matches!(inner.payload(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
         }
@@ -654,9 +654,9 @@ mod tests {
             KObject::Wrapped { inner, type_id } => {
                 assert_eq!(member_of(test_run.types(), *type_id).0, "Nums");
                 assert!(
-                    matches!(inner.get(), KObject::List(..)),
+                    matches!(inner.payload(), KObject::List(..)),
                     "inner is the bare list, got {:?}",
-                    inner.get().ktype(),
+                    inner.payload().ktype(),
                 );
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
@@ -676,9 +676,9 @@ mod tests {
                 assert_eq!(member_of(test_run.types(), *type_id).0, "Bar");
                 // Critical: `inner` must be the bare Number, NOT another Wrapped.
                 assert!(
-                    matches!(inner.get(), KObject::Number(n) if *n == 3.0),
+                    matches!(inner.payload(), KObject::Number(n) if *n == 3.0),
                     "expected bare Number inner, got {:?}",
-                    inner.get().ktype(),
+                    inner.payload().ktype(),
                 );
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
@@ -754,7 +754,7 @@ mod tests {
         match result {
             KObject::Wrapped { inner, type_id } => {
                 assert_eq!(member_of(test_run.types(), *type_id).0, "Distance");
-                assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
+                assert!(matches!(inner.payload(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
         }
@@ -794,7 +794,7 @@ mod tests {
         match result {
             KObject::Wrapped { inner, type_id } => {
                 assert_eq!(member_of(test_run.types(), *type_id).0, "Distance");
-                assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
+                assert!(matches!(inner.payload(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
         }
@@ -955,7 +955,7 @@ mod tests {
                     }
                     _ => panic!("expected a ConstructorApply type_id, got {type_id:?}"),
                 }
-                assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
+                assert!(matches!(inner.payload(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
         }
@@ -974,9 +974,9 @@ mod tests {
             KObject::Wrapped { inner, type_id } => {
                 // Single-layer invariant: the collapsed inner is the bare Number, not a Wrapped.
                 assert!(
-                    matches!(inner.get(), KObject::Number(n) if *n == 3.0),
+                    matches!(inner.payload(), KObject::Number(n) if *n == 3.0),
                     "inner must be the bare Number, got {:?}",
-                    inner.get().ktype(),
+                    inner.payload().ktype(),
                 );
                 match test_run.types().node(*type_id) {
                     TypeNode::ConstructorApply { arguments, .. } => {

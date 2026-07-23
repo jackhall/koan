@@ -56,14 +56,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         None => panic!("Result must be registered before CATCH"),
     };
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
-        // Wrap `payload` as a `Result` `Tagged` at the build brand `'x`. A free fn (no captured
-        // lifetime) so both branches' `transfer_into_placing` brand closures can call it.
-        fn build_result<'x>(tag: &str, identity: KType, payload: KObject<'x>) -> KObject<'x> {
-            KObject::Tagged {
-                tag: tag.to_string(),
-                value: Rc::new(payload),
-                identity,
-            }
+        // Wrap `payload` as a `Result` `Tagged` at the build brand `'x`, allocating the payload
+        // substrate through the fold `door`. A free fn (no captured lifetime) so both branches'
+        // `transfer_into_placing` brand closures can call it.
+        fn build_result<'x>(
+            door: FoldingBrand<'x>,
+            tag: &str,
+            identity: KType,
+            payload: &KObject<'x>,
+        ) -> KObject<'x> {
+            KObject::tagged(door, tag.to_string(), payload, identity)
         }
         // Build the `Result` `Tagged` **inside the witness closure** so it names every region the
         // wrapped value reaches. The `Result` member handle crosses the build brand as a
@@ -90,9 +92,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             |value, (_region, identity), placement| {
                 let region = FoldingBrand::in_fold_closure(placement);
                 Carried::Object(region.alloc_object_folded(build_result(
+                    region,
                     tag,
                     identity,
-                    value.object().deep_clone(),
+                    value.object(),
                 )))
             },
         );

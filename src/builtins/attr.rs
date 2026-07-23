@@ -15,7 +15,7 @@
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{Carried, Module, WrappedPayload};
+use crate::machine::model::{Carried, Module};
 use crate::machine::model::{Held, KObject, KType, Record, TypeNode};
 use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
@@ -261,7 +261,7 @@ fn wrapped_field<'v, 'w>(
     types: &TypeRegistry,
 ) -> Result<&'v Held<'w>, KError> {
     match target {
-        KObject::Wrapped { inner, type_id } => match inner.get() {
+        KObject::Wrapped { inner, type_id } => match inner.payload() {
             KObject::Record(substrate, _) => match substrate.fields().get(field) {
                 Some(held) => Ok(held),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
@@ -377,10 +377,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                     &[&obj_carrier, &tag_carrier],
                     |b, views| match (views[0], views[1]) {
                         (Carried::Object(o), Carried::Type(tag)) => {
-                            Carried::Object(b.alloc_object_folded(KObject::Wrapped {
-                                inner: WrappedPayload::peel(o),
-                                type_id: tag,
-                            }))
+                            Carried::Object(b.alloc_object_folded(KObject::wrapped_peel(b, o, tag)))
                         }
                         _ => unreachable!("operand order: [value member, re-tag identity]"),
                     },

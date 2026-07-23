@@ -215,8 +215,8 @@ cross-region store this seam and its siblings exercise.
 
 **Record substrate — checked-tier O(1) membership** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
 — `resident_in_visiting`'s `Record` arm (`residence.owns_substrate(substrate)` in
-[kobject.rs](../src/machine/model/values/kobject.rs)) is reached only when a record rides inside a
-still-`Rc` container (`List`/`Dict`/`Tagged`/`Wrapped`) crossing the checked tier
+[kobject.rs](../src/machine/model/values/kobject.rs)) is reached only when a record rides inside
+another substrate carrier (`List`/`Dict`/`Tagged`/`Wrapped`) crossing the checked tier
 (`Scope::alloc_object_delivered`) — a bare top-level record never routes this walk (born resident
 by construction through the fold door). This test drives a `List` embedding a `Record` through the
 checked tier twice: once with evidence naming the record's home region (must pass, reading the
@@ -522,8 +522,8 @@ contract's scope, re-read after the run drains the root into the run region.
 **`Carried` relocation + escaping-value retention** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
 — `relocate_carried` structurally copies a `Carried` into the consumer `dest` region at the brand the
 step `open` supplies (a safe alloc — the former value-relocation `unsafe`/fabrication is **deleted**):
-the composite spine shares its `Rc` payloads, and a closure / `KFuture` / `Module` rides a *bare*
-borrow into its defining region, never copied. That surviving borrow outlives the producer's frame
+a substrate carrier is totally rebuilt so its region-resident substrate lands at `dest`, and a
+closure / `KFuture` / `Module` rides a *bare* borrow into its defining region, never copied. That surviving borrow outlives the producer's frame
 only because `reached_frame` recovers the region (via the value's scope `region_owner`) and the
 consumer frame `retain`s it into `FrameStorage.retained` — at the three read-out boundaries (the
 `run_step` relocate, the root drain, and the `extract_terminal` test harness). Safe code; pinned
@@ -591,9 +591,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-23: 620s — 44 tests, 0 leaks, 0 UB
 - 2026-07-23: 613s — 44 tests, 0 leaks, 0 UB
 - 2026-07-23: 624s — 44 tests, 0 leaks, 0 UB
 - 2026-07-23: 979s — 44 tests, 0 leaks, 0 UB
 - 2026-07-22: 629s — 43 tests, 0 leaks, 0 UB
-- 2026-07-22: 475s — 36 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

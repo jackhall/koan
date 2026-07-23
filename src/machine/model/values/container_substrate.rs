@@ -3,8 +3,9 @@
 //! carries. [`RecordSubstrate`] (`C = Record<Held>`) is the field substrate behind a record value;
 //! [`ListSubstrate`] (`C = Vec<Held>`) is the element substrate behind a list value;
 //! [`DictSubstrate`] (`C = hashbrown::HashMap<KKey, Held>`) is the entry substrate behind a dict
-//! value. The wrapper is the pattern every later container conversion in this project copies; see
-//! [design/value-substrates.md](../../../../design/value-substrates.md).
+//! value; [`PayloadSubstrate`] (`C = KObject`) is the single-cell payload substrate behind a
+//! `Tagged` or `Wrapped` value. The wrapper is the pattern every later container conversion in this
+//! project copies; see [design/value-substrates.md](../../../../design/value-substrates.md).
 
 use hashbrown::HashMap;
 
@@ -18,15 +19,14 @@ use super::{Held, KKey, KObject};
 /// relative to their own cells.
 pub struct SubstrateMemos {
     /// Set iff some transitive cell is a region-borrow leaf (closure, module, non-splice-free
-    /// expression) or a still-`Rc` composite (tagged/wrapped — carrying no memo of its own to
-    /// consult, so the bit is conservative there until each container converts). A nested `Record`,
-    /// `List`, or `Dict` contributes its own memoized bit. Memoized in the same pass that computes
-    /// the element/field-type join; never recomputed by a walk.
+    /// expression). A nested `Record`, `List`, `Dict`, `Tagged`, or `Wrapped` contributes its own
+    /// memoized bit. Memoized in the same pass that computes the element/field-type join; never
+    /// recomputed by a walk.
     contains_borrows: bool,
     /// Exact cost in bytes of totally rebuilding this container's reachable structure at a
     /// destination brand. `u64::MAX` (saturated): unpriceable — some transitive cell is a
-    /// still-`Rc` composite (tagged/wrapped) or a `KExpression`, which carry no memo of their own
-    /// until their conversions ship. A nested `Record`, `List`, or `Dict` contributes its own cost.
+    /// `KExpression`, which carries no cost memo of its own. A nested `Record`, `List`, `Dict`,
+    /// `Tagged`, or `Wrapped` contributes its own cost.
     copy_cost: u64,
     /// Whether some transitive borrow leaf points into this container's own home region. Exact when
     /// `copy_cost` is priced (leaf regions are O(1) reads at construction; nested records compose
@@ -69,8 +69,20 @@ impl SubstrateMemos {
         SubstrateMemos::new(contains_borrows, copy_cost, borrows_home)
     }
 
-    /// Whether some transitive cell is a region-borrow leaf or a still-`Rc` composite — see the
-    /// field's own doc.
+    /// Derive all three memos over a single [`KObject`] payload cell, reading `home` as the
+    /// substrate's own region — the [`PayloadSubstrate`] path (a `Tagged` / `Wrapped` value's one
+    /// payload, always an object). Applies the same per-object any/cost/any rules
+    /// (`object_contains_borrows` / `object_copy_cost` / `object_borrows_home`) the multi-cell
+    /// [`Self::compute`] fold applies per [`Held::Object`] cell.
+    pub(crate) fn compute_object(payload: &KObject<'_>, home: &KoanRegion) -> Self {
+        SubstrateMemos::new(
+            object_contains_borrows(payload),
+            object_copy_cost(payload, home),
+            object_borrows_home(payload, home),
+        )
+    }
+
+    /// Whether some transitive cell is a region-borrow leaf — see the field's own doc.
     pub fn contains_borrows(&self) -> bool {
         self.contains_borrows
     }
@@ -118,7 +130,7 @@ impl<C> ContainerSubstrate<C> {
         &self.memos
     }
 
-    /// Whether some transitive cell is a region-borrow leaf or a still-`Rc` composite — see
+    /// Whether some transitive cell is a region-borrow leaf — see
     /// [`SubstrateMemos::contains_borrows`].
     pub fn contains_borrows(&self) -> bool {
         self.memos.contains_borrows()
@@ -174,24 +186,46 @@ impl<'a> ContainerSubstrate<HashMap<KKey, Held<'a>>> {
     }
 }
 
+/// The single-cell payload substrate an identity-carrying composite borrows —
+/// [`ContainerSubstrate<C>`] at `C = KObject`. A `Tagged` value's `value` and a `Wrapped` value's
+/// `inner` both ride one of these: exactly one payload cell (a tagged/wrapped value is always an
+/// object, never a first-class type) plus its three construction memos. One substrate family shared
+/// by both carriers, born only through the fold door — the payload's second ownership channel (the
+/// old `Rc`) is gone.
+pub(crate) type PayloadSubstrate<'a> = ContainerSubstrate<KObject<'a>>;
+
+impl<'a> ContainerSubstrate<KObject<'a>> {
+    /// The single payload cell — the tagged/wrapped value this substrate resides.
+    pub fn payload(&self) -> &KObject<'a> {
+        self.cells()
+    }
+}
+
 /// The per-cell contains-borrows rule shared by every substrate constructor (see
 /// [`RecordSubstrate`] / [`ListSubstrate`] / [`DictSubstrate`]): a type-channel cell never borrows a
-/// region; a scalar owns its data outright; `KFunction` / `Module` are borrow leaves; a `KExpression`
-/// borrows iff it carries a splice; a nested `Record`, `List`, or `Dict` contributes its own memoized
-/// bit (never re-walked); every other still-`Rc` composite is conservative `true` until it, too,
-/// converts to a substrate.
+/// region; an object cell defers to [`object_contains_borrows`].
 fn held_contains_borrows(h: &Held<'_>) -> bool {
     match h {
         Held::Type(_) | Held::UnresolvedType(_) => false,
-        Held::Object(o) => match o {
-            KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
-            KObject::KFunction(_) | KObject::Module(_) => true,
-            KObject::KExpression(e) => !e.is_splice_free(),
-            KObject::Record(substrate, _) => substrate.contains_borrows(),
-            KObject::List(substrate, _) => substrate.contains_borrows(),
-            KObject::Dict(substrate, _) => substrate.contains_borrows(),
-            KObject::Tagged { .. } | KObject::Wrapped { .. } => true,
-        },
+        Held::Object(o) => object_contains_borrows(o),
+    }
+}
+
+/// The object-level contains-borrows rule (the [`Held::Object`] arm of [`held_contains_borrows`],
+/// shared with the single-cell [`PayloadSubstrate`] memo): a scalar owns its data outright;
+/// `KFunction` / `Module` are borrow leaves; a `KExpression` borrows iff it carries a splice; a
+/// nested `Record`, `List`, `Dict`, `Tagged`, or `Wrapped` contributes its own memoized bit (never
+/// re-walked).
+fn object_contains_borrows(o: &KObject<'_>) -> bool {
+    match o {
+        KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
+        KObject::KFunction(_) | KObject::Module(_) => true,
+        KObject::KExpression(e) => !e.is_splice_free(),
+        KObject::Record(substrate, _) => substrate.contains_borrows(),
+        KObject::List(substrate, _) => substrate.contains_borrows(),
+        KObject::Dict(substrate, _) => substrate.contains_borrows(),
+        KObject::Tagged { value, .. } => value.contains_borrows(),
+        KObject::Wrapped { inner, .. } => inner.contains_borrows(),
     }
 }
 
@@ -202,46 +236,63 @@ fn held_flat_size() -> u64 {
 }
 
 /// The per-cell copy-cost rule shared by every substrate constructor (see [`RecordSubstrate`] /
-/// [`ListSubstrate`] / [`DictSubstrate`]): a cell contributes the bytes of totally rebuilding it at a
-/// destination brand. A type cell or a scalar costs one flat [`Held`]; a `KString` adds its byte
-/// length; a `KFunction` / `Module` is a borrow leaf that rides the transfer and rebuilds nothing
-/// (**0**); a nested `Record`, `List`, or `Dict` contributes its own memoized cost; a `KExpression`
-/// and every still-`Rc` composite are unpriceable (`u64::MAX`), carrying no cost memo of their own
-/// until each converts to a substrate.
-fn held_copy_cost(h: &Held<'_>, _home: &KoanRegion) -> u64 {
+/// [`ListSubstrate`] / [`DictSubstrate`]): a type-channel cell costs one flat [`Held`]; an object
+/// cell defers to [`object_copy_cost`].
+fn held_copy_cost(h: &Held<'_>, home: &KoanRegion) -> u64 {
     match h {
         Held::Type(_) | Held::UnresolvedType(_) => held_flat_size(),
-        Held::Object(o) => match o {
-            KObject::Number(_) | KObject::Bool(_) | KObject::Null => held_flat_size(),
-            KObject::KString(s) => held_flat_size().saturating_add(s.len() as u64),
-            KObject::KFunction(_) | KObject::Module(_) => 0,
-            KObject::Record(substrate, _) => substrate.copy_cost(),
-            KObject::List(substrate, _) => substrate.copy_cost(),
-            KObject::Dict(substrate, _) => substrate.copy_cost(),
-            KObject::KExpression(_) | KObject::Tagged { .. } | KObject::Wrapped { .. } => u64::MAX,
-        },
+        Held::Object(o) => object_copy_cost(o, home),
+    }
+}
+
+/// The object-level copy-cost rule (the [`Held::Object`] arm of [`held_copy_cost`], shared with the
+/// single-cell [`PayloadSubstrate`] memo): the bytes of totally rebuilding this object at a
+/// destination brand. A scalar costs one flat [`Held`]; a `KString` adds its byte length; a
+/// `KFunction` / `Module` is a borrow leaf that rides the transfer and rebuilds nothing (**0**); a
+/// nested `Record`, `List`, `Dict`, `Tagged`, or `Wrapped` contributes its own memoized cost (a
+/// `Tagged`'s tag `String` bytes stay out — short, the same negligible approximation a `KString`
+/// cell already takes for its own discriminant); a `KExpression` is unpriceable (`u64::MAX`),
+/// carrying no cost memo of its own.
+fn object_copy_cost(o: &KObject<'_>, _home: &KoanRegion) -> u64 {
+    match o {
+        KObject::Number(_) | KObject::Bool(_) | KObject::Null => held_flat_size(),
+        KObject::KString(s) => held_flat_size().saturating_add(s.len() as u64),
+        KObject::KFunction(_) | KObject::Module(_) => 0,
+        KObject::Record(substrate, _) => substrate.copy_cost(),
+        KObject::List(substrate, _) => substrate.copy_cost(),
+        KObject::Dict(substrate, _) => substrate.copy_cost(),
+        KObject::Tagged { value, .. } => value.copy_cost(),
+        KObject::Wrapped { inner, .. } => inner.copy_cost(),
+        KObject::KExpression(_) => u64::MAX,
     }
 }
 
 /// The per-cell borrows-home rule shared by every substrate constructor (see [`RecordSubstrate`] /
-/// [`ListSubstrate`] / [`DictSubstrate`]): whether this cell's transitive borrow leaf points into
-/// `home`, the substrate's own region. A type cell and a scalar borrow nothing (false); a
-/// `KFunction` / `Module` leaf borrows home iff its captured scope's region is `home` (an O(1) region
-/// read); a nested `Record`, `List`, or `Dict` composes its own memoized bit (co-resident by
-/// construction); a `KExpression` is conservative on a carried splice; every still-`Rc` composite is
-/// conservatively `true` until it, too, converts to a substrate.
+/// [`ListSubstrate`] / [`DictSubstrate`]): a type-channel cell borrows nothing (false); an object
+/// cell defers to [`object_borrows_home`].
 fn held_borrows_home(h: &Held<'_>, home: &KoanRegion) -> bool {
     match h {
         Held::Type(_) | Held::UnresolvedType(_) => false,
-        Held::Object(o) => match o {
-            KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
-            KObject::KFunction(f) => std::ptr::eq(f.captured_scope().region(), home),
-            KObject::Module(m) => std::ptr::eq(m.child_scope().region(), home),
-            KObject::Record(substrate, _) => substrate.borrows_home(),
-            KObject::List(substrate, _) => substrate.borrows_home(),
-            KObject::Dict(substrate, _) => substrate.borrows_home(),
-            KObject::KExpression(e) => !e.is_splice_free(),
-            KObject::Tagged { .. } | KObject::Wrapped { .. } => true,
-        },
+        Held::Object(o) => object_borrows_home(o, home),
+    }
+}
+
+/// The object-level borrows-home rule (the [`Held::Object`] arm of [`held_borrows_home`], shared
+/// with the single-cell [`PayloadSubstrate`] memo): whether this object's transitive borrow leaf
+/// points into `home`. A scalar borrows nothing (false); a `KFunction` / `Module` leaf borrows home
+/// iff its captured scope's region is `home` (an O(1) region read); a nested `Record`, `List`,
+/// `Dict`, `Tagged`, or `Wrapped` composes its own memoized bit (co-resident by construction); a
+/// `KExpression` is conservative on a carried splice.
+fn object_borrows_home(o: &KObject<'_>, home: &KoanRegion) -> bool {
+    match o {
+        KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
+        KObject::KFunction(f) => std::ptr::eq(f.captured_scope().region(), home),
+        KObject::Module(m) => std::ptr::eq(m.child_scope().region(), home),
+        KObject::Record(substrate, _) => substrate.borrows_home(),
+        KObject::List(substrate, _) => substrate.borrows_home(),
+        KObject::Dict(substrate, _) => substrate.borrows_home(),
+        KObject::Tagged { value, .. } => value.borrows_home(),
+        KObject::Wrapped { inner, .. } => inner.borrows_home(),
+        KObject::KExpression(e) => !e.is_splice_free(),
     }
 }

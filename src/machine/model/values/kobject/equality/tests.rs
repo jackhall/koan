@@ -274,22 +274,11 @@ fn two_member(types: &TypeRegistry) -> Vec<KType> {
 #[test]
 fn tagged_same_nominal_compares_payload() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let identity = newtype_singleton("Distance", KType::NUMBER, &types);
-    let a = KObject::Tagged {
-        tag: "Distance".into(),
-        value: Rc::new(num(3.0)),
-        identity,
-    };
-    let b = KObject::Tagged {
-        tag: "Distance".into(),
-        value: Rc::new(num(3.0)),
-        identity,
-    };
-    let c = KObject::Tagged {
-        tag: "Distance".into(),
-        value: Rc::new(num(4.0)),
-        identity,
-    };
+    let a = KObject::tagged(door, "Distance".into(), &num(3.0), identity);
+    let b = KObject::tagged(door, "Distance".into(), &num(3.0), identity);
+    let c = KObject::tagged(door, "Distance".into(), &num(4.0), identity);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&c, &types), Ok(false));
 }
@@ -300,6 +289,7 @@ fn tagged_same_nominal_compares_payload() {
 #[test]
 fn tagged_erased_and_stamped_are_distinct_identities() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let ctor = RecursiveGroupWindow::seal_singleton(
         "Box".into(),
         RelativeSchema::TypeConstructor {
@@ -309,36 +299,23 @@ fn tagged_erased_and_stamped_are_distinct_identities() {
         None,
         &types,
     );
-    let erased = KObject::Tagged {
-        tag: "Box".into(),
-        value: Rc::new(num(1.0)),
-        identity: ctor,
-    };
-    let stamped = KObject::Tagged {
-        tag: "Box".into(),
-        value: Rc::new(num(1.0)),
-        identity: types.constructor_apply(
-            ctor,
-            Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
-        ),
-    };
+    let erased = KObject::tagged(door, "Box".into(), &num(1.0), ctor);
+    let stamped = KObject::tagged(
+        door,
+        "Box".into(),
+        &num(1.0),
+        types.constructor_apply(ctor, Record::from_pairs([("Type".to_string(), KType::NUMBER)])),
+    );
     assert_eq!(erased.value_equal(&stamped, &types), Ok(false));
 }
 
 #[test]
 fn tagged_distinct_index_is_unequal() {
     let types = TypeRegistry::new();
+    container_door!(_storage, door);
     let members = two_member(&types);
-    let none = KObject::Tagged {
-        tag: "None".into(),
-        value: Rc::new(KObject::Null),
-        identity: members[0],
-    };
-    let some = KObject::Tagged {
-        tag: "Some".into(),
-        value: Rc::new(num(1.0)),
-        identity: members[1],
-    };
+    let none = KObject::tagged(door, "None".into(), &KObject::Null, members[0]);
+    let some = KObject::tagged(door, "Some".into(), &num(1.0), members[1]);
     assert_eq!(none.value_equal(&some, &types), Ok(false));
 }
 
@@ -347,20 +324,11 @@ fn tagged_distinct_index_is_unequal() {
 #[test]
 fn wrapped_identity_and_payload() {
     let types = TypeRegistry::new();
-    use crate::machine::model::values::WrappedPayload;
+    container_door!(_storage, door);
     let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
-    let a = KObject::Wrapped {
-        inner: WrappedPayload::hold(&num(3.0)),
-        type_id,
-    };
-    let b = KObject::Wrapped {
-        inner: WrappedPayload::hold(&num(3.0)),
-        type_id,
-    };
-    let diff_payload = KObject::Wrapped {
-        inner: WrappedPayload::hold(&num(4.0)),
-        type_id,
-    };
+    let a = KObject::wrapped_hold(door, &num(3.0), type_id);
+    let b = KObject::wrapped_hold(door, &num(3.0), type_id);
+    let diff_payload = KObject::wrapped_hold(door, &num(4.0), type_id);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&diff_payload, &types), Ok(false));
     // A wrapped value is never equal to its bare representation.
@@ -370,17 +338,11 @@ fn wrapped_identity_and_payload() {
 #[test]
 fn wrapped_distinct_nominal_is_unequal() {
     let types = TypeRegistry::new();
-    use crate::machine::model::values::WrappedPayload;
+    container_door!(_storage, door);
     let distance = newtype_singleton("Distance", KType::NUMBER, &types);
     let weight = newtype_singleton("Weight", KType::NUMBER, &types);
-    let a = KObject::Wrapped {
-        inner: WrappedPayload::hold(&num(3.0)),
-        type_id: distance,
-    };
-    let b = KObject::Wrapped {
-        inner: WrappedPayload::hold(&num(3.0)),
-        type_id: weight,
-    };
+    let a = KObject::wrapped_hold(door, &num(3.0), distance);
+    let b = KObject::wrapped_hold(door, &num(3.0), weight);
     assert_eq!(a.value_equal(&b, &types), Ok(false));
 }
 
