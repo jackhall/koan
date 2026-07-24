@@ -185,14 +185,12 @@ fn retention_hold_foreign_bundle_releases_at_pull_zero() {
         weak.upgrade().is_none(),
         "the hold's foreign bundle releases at pull-count zero, alongside the owner",
     );
-    assert!(
-        runtime
-            .read_result_with(dep_finish_id, |v| matches!(
-                v.object(),
-                KObject::Number(n) if *n == 42.0
-            ))
-            .expect("the finish delivered the pulled value"),
-    );
+    assert!(runtime
+        .read_result_with(dep_finish_id, |v| matches!(
+            v.object(),
+            KObject::Number(n) if *n == 42.0
+        ))
+        .expect("the finish delivered the pulled value"),);
 }
 
 #[test]

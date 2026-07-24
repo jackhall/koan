@@ -27,27 +27,28 @@ Reach evidence is two separate types, and nothing in the system conflates them:
   Dropping it is what releases them.
 
 The two are minted **together, as an inseparable pair**, by the derivation
-doors (§ Composition). There is no constructor that builds a description from
-loose parts, and a bundle comes to exist in exactly two ways: alongside its
-description at the mint, or **recovered** from a description at a genuine
-escape — the enveloped-holder clone a step terminal takes sealing under the
-step's pin, a resident read takes sealing under its scope's liveness. The
-recovery door ([`ReachDescription::to_bundle`](../workgraph/src/witnessed/reach.rs))
-is **module-private**: a bare description that embedder code holds builds
-nothing, because the door that would turn one into a bundle is not in the
-embedder's reach. The caller reads the description under the **host pin** —
-which covers its hosting side table, exactly as
-[`Carrier::with_reach`](../workgraph/src/witnessed/carrier.rs) covers any reach
-reference — and its `Weak` members are recovered by ambient upgrade under the
-holder rule: every member is live because the covering holder that reached the
-description already pins it. A member that fails to upgrade is a coverage bug,
-caught by a `debug_assert` (release-silent, treated as non-pinning) — the door
-sits at the **same discipline tier** as every other pinned reach read, not a
-compile-enforced coverage proof. What *is* compile-enforced is re-anchoring: a
-holder that has only a description cannot re-anchor the value it describes,
-because the re-anchor doors require the bundle by signature. This is the
-compile-safety line: *using a description where ownership is required does not
-typecheck.*
+doors (§ Composition), and ownership is **threaded, never recovered**: a
+bundle comes to exist in exactly two ways — alongside its description at the
+mint, or as a **clone of a bundle some holder already owns**. There is no
+description→bundle door. The library exposes no operation that derives an
+owned bundle from a description's `Weak` members, so a holder that has only a
+description cannot build the pins that would keep the described regions
+alive — not because a door is module-private, but because the door does not
+exist. Every constructor that needs owned reach — sealing a delivery
+envelope, seeding the scheduler's retention hold — takes the bundle **by
+signature**, and the supplying site clones it from the holder that already
+owns it (the binding entry's pair, a composition's freshly minted bundle, the
+envelope being consumed). § Threading traces each path. This is the
+compile-safety line: *using a description where ownership is required does
+not typecheck.*
+
+A description's `Weak` members are read in exactly one situation: membership
+**queries** (`pins_region` and siblings) under a pinned read, where the
+holder rule guarantees every member upgrades. A member that fails to upgrade
+is a coverage bug — `debug_assert`ed in debug, treated as non-pinning in
+release. That bug can misreport a query; it can never manufacture an
+under-pinned owned bundle, because no owned bundle is ever built from weak
+members.
 
 ## The description
 
@@ -120,10 +121,18 @@ Where bundles live:
   (staged-sub splices, catch continuations, spliced expression clones) holds
   its own pins for its own hold. The envelope is the *only* walking shape;
   a bare carrier never walks alone.
-- **Binding entries**: a scope binding stores the erased value, the opaque
-  reach token (`StoredReach` — description reference plus the `borrows_host`
-  bit), **and the entry's owned bundle**, side by side. The entry's bundle is
-  what makes the binding's pins real; the token is only the claim.
+- **Binding entries**: a scope binding stores the erased value and the
+  entry's **reach pair** — the opaque reach token (`StoredReach` —
+  description reference plus the `borrows_host` bit) fused to the entry's
+  owned bundle as one unsplittable value whose only producers are the mint
+  verbs. The bundle half is what makes the binding's pins real; the token
+  half is only the claim, and it cannot be read out and re-paired with a
+  bundle derived for a different value.
+- **The retention hold**: a finalized node slot's hold pairs the producer
+  frame owner with the terminal's owned foreign bundle —
+  `{ owner, foreign, pulls }` — released together at pull-count zero
+  (§ Retention model). This is the parked terminal's ownership; the slot's
+  sealed carrier is inert data without it.
 - **Transient pins**: short function-scope holds that re-anchor carriers —
   the run loop's per-step combined pin, the spliced-return check — hold
   explicit `Rc`s for exactly their scope. They never use a description as a
@@ -149,8 +158,10 @@ for implementors:
    [`StepCarried`](../src/machine/execute/step_carried.rs); an entry read
    under the entry's own bundle). "Enveloped" is a lifetime claim the borrow
    checker can see, not a convention.
-4. The re-anchor doors take the bundle (or the enveloping borrow) by
-   signature. A carrier plus no bundle is inert data.
+4. The re-anchor doors — and every constructor that stores ownership (the
+   envelope, the retention hold) — take the bundle (or the enveloping
+   borrow) by signature. A carrier plus no bundle is inert data, and stays
+   inert: no operation turns its description into a bundle (§ The split).
 5. Release is ordinary `Drop` of a bundle. There is no release verb, no
    un-mint, no audit. When a binding entry drops — its scope's region dying,
    evacuation — its pins drop with it. Bindings are bind-once, so an entry
@@ -166,9 +177,12 @@ destination's allocation capability; every composing site has one in hand
 guarantee 4 of [scheduler-library.md](scheduler-library.md#the-guarantees);
 a scope bind or adoption: the scope's region owner).
 
-The mint reads its source descriptions **precisely** — a value's witness never
-coarsens to "everything its host region reaches" — then applies, against the
-destination:
+The mint reads its sources **precisely** — a value's witness never coarsens
+to "everything its host region reaches" — and it reads them **strongly**:
+each source arrives as a pair, and the mint composes from the paired
+bundle's `Rc` members, never by upgrading a source description's `Weak`
+members (an upgrade could silently drop a member whose pin was missed,
+under-covering the minted set). It then applies, against the destination:
 
 1. **Home-omission** — the destination's own region is never a member of a
    description hosted in it, and never an `Rc` in a bundle stored resident in
@@ -194,6 +208,44 @@ per-call frame rule that a frame's `outer` chain strong-owns only a
 **strictly older** ancestor frame — a DAG, never a back-edge — so a
 dispatched frame chaining its (possibly per-call) captured parent forms no
 cycle ([per-call-region/](per-call-region/README.md)).
+
+## Threading: how a bundle reaches each holder
+
+Ownership flows from the mint to every holder that needs it as an explicit
+value. No path drops a bundle and re-derives it later; each hand-off is a
+clone from a holder that already owns the pins, so coverage is a local
+data-flow fact at every site, not an ambient whole-program invariant. The
+retention consequence: every bundle lives in a holder that already exists
+with the same death schedule, so threading extends no region's lifetime —
+frames still free at last-holder drop, never at region death.
+
+- **Bind.** The mint at the bind seam returns the pair; the binding entry is
+  the pair's home (§ The pin bundle). A resident read that seals the value
+  onward into an envelope clones the **entry's own bundle** — the pins were
+  on the entry beside the token all along.
+- **Merge / relocation.** The composition verbs return the freshly minted
+  bundle alongside the composed carrier (in addition to the copy retained in
+  the destination region for a product consumed in place). A Done-arm
+  product carries its bundle across the step with its carrier
+  ([`StepCarried`](../src/machine/execute/step_carried.rs)), so the seal at
+  the Done boundary supplies pins it holds. A Done product with empty reach
+  — a literal, a type carrier, a region-pure value, the majority of builtin
+  Done sites — carries the empty bundle, which pins nothing and allocates
+  nothing.
+- **Finalize → park → pull.** The finalize boundary hands the envelope's
+  foreign bundle to the scheduler, which houses it in the slot's retention
+  hold — `{ owner, foreign, pulls }`. A consumer pull builds its delivery
+  envelope by **cloning** `(owner, foreign)` out of the hold. The hold
+  releases both at pull-count zero — the same instant the bare `owner`
+  release already implies, since the held owner pins the foreign members
+  transitively (owner → region → resident pairs) for exactly that interval.
+  Housing the pins in the hold makes the parked terminal's coverage owned
+  rather than transitive; it does not lengthen it. In particular the pins do
+  **not** live in the node slot's terminal state: a slot stays terminal from
+  last pull until its free, and pins housed there would ride that window.
+- **Envelope travel / fan-out.** Duplicating an envelope clones its bundle
+  (§ The pin bundle), so each fan-out consumer owns its hold; a consumer
+  that re-homes the value mints a fresh pair against its own destination.
 
 ## Escape: the single seam
 
@@ -250,11 +302,12 @@ envelope whose host does not pin its value's residence cannot be built.
 ## Retention model
 
 The lifetime of a **host frame** is the scheduler's frame-retention: the
-scheduler holds a producer frame's owner `Rc` until every destination of its
-terminals has pulled; release is a function of deliveries only — never of any
-value's reach, and `borrows_host` never influences it. A walking terminal
-carries this hold inside its envelope bundle, so the pin travels with the
-value to each consumer.
+scheduler holds a producer frame's owner `Rc` — paired with the terminal's
+owned foreign bundle, `{ owner, foreign, pulls }` — until every destination
+of its terminals has pulled; release of both halves is a function of
+deliveries only — never of any value's reach, and `borrows_host` never
+influences it. A walking terminal carries this hold inside its envelope
+bundle, so the pins travel with the value to each consumer.
 
 - A **pass-through** value stays hosted in its birth frame and rides up by
   reference; the birth frame is retained across the whole return chain and

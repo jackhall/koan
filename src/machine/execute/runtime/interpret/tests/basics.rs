@@ -18,7 +18,9 @@ fn interprets_let_and_print() {
 
     assert_eq!(captured.borrow().as_slice(), b"hello\n");
     let data = scope.bindings().data();
-    assert!(matches!(data.get("x").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 42.0));
+    assert!(
+        matches!(data.get("x").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 42.0)
+    );
 }
 
 #[test]

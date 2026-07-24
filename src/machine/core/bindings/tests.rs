@@ -25,7 +25,11 @@ fn data_binding_round_trips_stored_reach() {
     let reach_set = minted.expect("a foreign materialize-host mints a single-member reach");
     let reach = StoredReach::for_test(Some(reach_set), false);
     bindings
-        .try_bind_value("x", BindingIndex::BUILTIN, Reached::for_test(obj, reach, FramePins::empty()))
+        .try_bind_value(
+            "x",
+            BindingIndex::BUILTIN,
+            Reached::for_test(obj, reach, FramePins::empty()),
+        )
         .expect("value bind should succeed");
     match bindings.lookup_value_carrier("x", None) {
         Some(NameLookup::Bound(hit)) => {
@@ -56,7 +60,11 @@ fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
     let reach_set = minted.expect("a foreign materialize-host mints a single-member reach");
     let reach = StoredReach::for_test(Some(reach_set), false);
     bindings
-        .try_bind_value("x", BindingIndex::BUILTIN, Reached::for_test(obj, reach, FramePins::empty()))
+        .try_bind_value(
+            "x",
+            BindingIndex::BUILTIN,
+            Reached::for_test(obj, reach, FramePins::empty()),
+        )
         .expect("value bind should succeed");
 
     let first = match bindings.lookup_value_carrier("x", None) {

@@ -20,7 +20,11 @@ fn resolve_name_part_identifier_resolved() {
     scope
         .bind_value(
             "x".to_string(),
-            Reached::for_test(bound, StoredReach::for_test(None, false), crate::machine::core::FramePins::empty()),
+            Reached::for_test(
+                bound,
+                StoredReach::for_test(None, false),
+                crate::machine::core::FramePins::empty(),
+            ),
             BindingIndex::BUILTIN,
         )
         .unwrap();

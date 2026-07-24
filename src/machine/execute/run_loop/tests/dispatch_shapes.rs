@@ -538,7 +538,11 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     scope
         .bind_value(
             "producer_target".to_string(),
-            Reached::for_test(producer_target, StoredReach::for_test(None, false), FramePins::empty()),
+            Reached::for_test(
+                producer_target,
+                StoredReach::for_test(None, false),
+                FramePins::empty(),
+            ),
             BindingIndex::BUILTIN,
         )
         .expect("bind_value should succeed");

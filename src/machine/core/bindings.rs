@@ -155,7 +155,11 @@ impl<'a, T> Reached<'a, T> {
     /// Fuse a value with the reach evidence a mint verb derived for it — the derivation-site
     /// constructor. Confined to `crate::machine::core` (the bind doors), so no caller can assemble a
     /// pair from a value and a reach it holds side by side.
-    pub(in crate::machine::core) fn mint(value: T, claim: StoredReach<'a>, pins: FramePins) -> Self {
+    pub(in crate::machine::core) fn mint(
+        value: T,
+        claim: StoredReach<'a>,
+        pins: FramePins,
+    ) -> Self {
         Reached { value, claim, pins }
     }
 
@@ -176,7 +180,6 @@ impl<'a, T> Reached<'a, T> {
     pub(crate) fn for_test(value: T, claim: StoredReach<'a>, pins: FramePins) -> Self {
         Reached { value, claim, pins }
     }
-
 }
 
 impl<'a, T: Copy> Reached<'a, T> {

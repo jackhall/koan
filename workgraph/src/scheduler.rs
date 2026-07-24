@@ -179,9 +179,9 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// A finalized dep as a **delivery envelope**: its duplicated sealed carrier
-    /// ([`dep_carrier`](Self::dep_carrier)) paired with its retained producer-frame owner
-    /// ([`dep_host`](Self::dep_host)), so a consumer reads the value under a pin sourced from the
-    /// retention hold rather than threaded per call site. Sound because the retention hold is active
+    /// ([`dep_carrier`](Self::dep_carrier)) paired with its retained producer-frame owner and the
+    /// terminal's owned foreign bundle, both cloned from the retention hold, so a consumer reads the
+    /// value under a pin sourced from the retention hold rather than threaded per call site. Sound because the retention hold is active
     /// while any consumer edge is undischarged (the pinning invariant) — and total for the same
     /// reason: every finalize seeds a hold (the run frame's storage owns the run region), so a
     /// pull-able dep always has a retained owner. Follows a bare-name-forward alias to the real

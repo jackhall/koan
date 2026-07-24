@@ -58,5 +58,7 @@ fn later_expression_sees_earlier_binding_via_lookup() {
 
     runtime.execute().unwrap();
     let data = root.bindings().data();
-    assert!(matches!(data.get("b").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 10.0));
+    assert!(
+        matches!(data.get("b").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 10.0)
+    );
 }

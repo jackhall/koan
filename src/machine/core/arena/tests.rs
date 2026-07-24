@@ -149,7 +149,11 @@ fn with_scope_relocates_seed_value_into_brand() {
         child
             .bind_value(
                 "it".to_string(),
-                Reached::for_test(it_obj, StoredReach::for_test(None, false), FramePins::empty()),
+                Reached::for_test(
+                    it_obj,
+                    StoredReach::for_test(None, false),
+                    FramePins::empty(),
+                ),
                 BindingIndex::BUILTIN,
             )
             .unwrap();
@@ -193,7 +197,11 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
         child_ref
             .bind_value(
                 "it".to_string(),
-                Reached::for_test(it_obj, StoredReach::for_test(None, false), FramePins::empty()),
+                Reached::for_test(
+                    it_obj,
+                    StoredReach::for_test(None, false),
+                    FramePins::empty(),
+                ),
                 BindingIndex::BUILTIN,
             )
             .unwrap();
@@ -969,7 +977,11 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                     kf.captured_scope()
                         .bind_value(
                             "inners".to_string(),
-                            Reached::for_test(list_obj, StoredReach::for_test(None, false), FramePins::empty()),
+                            Reached::for_test(
+                                list_obj,
+                                StoredReach::for_test(None, false),
+                                FramePins::empty(),
+                            ),
                             BindingIndex::BUILTIN,
                         )
                         .expect("bind the inners list into the outer closure's scope");

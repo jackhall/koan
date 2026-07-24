@@ -34,13 +34,16 @@ and needs no store door.
 
 **Directions.**
 
-- *Shape of the fused pair — open.* Either a single `Reached<T>` carrying any storable family, or a
-  per-family pair type. `Reached<T>` unifies the doors on one constructor to confine; per-family
-  types keep each door's audit signature concrete. Recommended: `Reached<T>`, since the doors
-  already differ only in the family they store.
-- *Test affordances — open.* `StoredReach::for_test` is `#[cfg(test)]`-gated and assembles a token
-  from explicit parts; the fused pair needs an equivalent, and it must not become a production
-  back door around the confinement (which is how the `Default` impl became one).
+- *Shape of the fused pair — decided.* A single `Reached<T>` carrying any storable family, unifying
+  the doors on one constructor to confine. The vehicle has shipped in
+  [bindings.rs](../../src/machine/core/bindings.rs) — `Reached<T>` carrying `{ value, StoredReach,
+  FramePins }`, landed on the binding entry first; this item extends the same type to the alloc-door
+  audit signatures.
+- *Test affordances — decided.* [`Reached::for_test`](../../src/machine/core/bindings.rs) has
+  shipped alongside the vehicle: a `#[cfg(test)]`-gated `pub(crate)` constructor assembling a fused
+  pair from explicit parts, mirroring `StoredReach::for_test` and confined so it is not a production
+  back door around the derivation-site confinement (the route the `Default` impl became one). This
+  item reuses it rather than adding its own.
 - *Reach of the change — decided.* The doors are `pub(crate)` and their callers are countable
   (`scope/registry.rs`'s fused bind doors, `scope/reach.rs`, `ascribe.rs`, `dispatch/exec.rs`, plus
   test fixtures), so this is a contained signature change, not a cross-cutting refactor.
@@ -51,6 +54,7 @@ The forgery route this item's residual sits behind — minting a `StoredReach` f
 `machine::core` — is already closed; see
 [memory-model.md § Move-in residence audits](../../design/memory-model.md#move-in-residence-audits).
 
-**Requires:** none — the reach-token confinement it builds on has shipped.
+**Requires:** none — the `Reached<T>` vehicle it extends has shipped in
+[bindings.rs](../../src/machine/core/bindings.rs).
 
 **Unblocks:** none tracked yet.
