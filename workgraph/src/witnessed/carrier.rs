@@ -26,7 +26,7 @@ use std::rc::Rc;
 
 use super::{
     with_branded_ref, ComposeWitness, Erased, PinsRegion, Reattachable, Region, RegionHandle,
-    RegionOwner, RegionSet, StorageProfile, Stored, Witnessed,
+    RegionOwner, RegionSet, StorageProfile, Witnessed,
 };
 
 /// [`Reattachable`] family for a lifetime-erased `&RegionSet<F>` — the erased reach reference a
@@ -250,9 +250,8 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         omit: impl Fn(&Region<P>) -> bool,
     ) -> (Option<&'d RegionSet<F>>, bool)
     where
-        P: StorageProfile + 'static,
+        P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
-        RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
     {
         let materialize = materialize_hosts(host, mode, self.borrows_host);
         let minted = self.with_reach(host, |reach| {
@@ -284,9 +283,8 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         mode: Residence,
     ) -> Self
     where
-        P: StorageProfile + 'static,
+        P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
-        RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
     {
         let materialize = materialize_hosts(host, mode, left.borrows_host);
         // `left`'s reach reads under the supplied host pin; `right`'s reach is the destination's
@@ -327,9 +325,8 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
         omit: impl Fn(&Region<P>) -> bool,
     ) -> (Option<&'d RegionSet<F>>, bool)
     where
-        P: StorageProfile + 'static,
+        P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
-        RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
     {
         // `host: None` means there is no residence host to materialize, so `Residence::Kept` here
         // is arbitrary — `mint_into`'s `materialize_hosts` returns an empty vec under either mode
@@ -365,10 +362,9 @@ fn materialize_hosts<F>(host: Option<&Rc<F>>, mode: Residence, borrows_host: boo
 unsafe impl<F, P, B> ComposeWitness<B> for Carrier<F>
 where
     F: PinsRegion + RegionOwner<Region = Region<P>> + 'static,
-    P: StorageProfile,
+    P: StorageProfile<FrameOwner = F>,
     B: Reattachable,
     for<'b> B::At<'b>: HasRegionHandle<'b, P>,
-    RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
     P: 'static,
 {
     fn compose<'b>(left: &Self, right: &Self, dest: &B::At<'b>) -> Self {
@@ -381,18 +377,12 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::witnessed::{FamilyArena, StorageOf};
 
     struct TestProfile;
 
     impl StorageProfile for TestProfile {
-        type Families = (RegionSet<TestFrame>, ());
-    }
-
-    impl Stored<TestProfile> for RegionSet<TestFrame> {
-        fn cell(storage: &StorageOf<TestProfile>) -> &FamilyArena<Self> {
-            &storage.0
-        }
+        type Families = ();
+        type FrameOwner = TestFrame;
     }
 
     /// A `FrameStorage` stand-in: a region plus an `outer` ancestor link, mirroring the shape every

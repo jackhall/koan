@@ -18,7 +18,8 @@ use super::super::*;
 struct ShapeProfile;
 
 impl StorageProfile for ShapeProfile {
-    type Families = (ValFamily, (RegionSet<ShapeFrame>, ()));
+    type Families = (ValFamily, ());
+    type FrameOwner = ShapeFrame;
 }
 
 /// The frame type: the library's own region owner with lazy mint and `outer`-chain pins — the
@@ -48,11 +49,6 @@ impl Stored<ShapeProfile> for ValFamily {
     }
 }
 
-impl Stored<ShapeProfile> for RegionSet<ShapeFrame> {
-    fn cell(storage: &StorageOf<ShapeProfile>) -> &FamilyArena<Self> {
-        &storage.1 .0
-    }
-}
 
 fn frame() -> Rc<ShapeFrame> {
     RegionHost::fresh(None)

@@ -28,7 +28,7 @@ use std::marker::PhantomData;
 
 use typed_arena::Arena;
 
-use super::{erase_to_static, with_branded_ref, Reattachable, RegionOwner};
+use super::{erase_to_static, with_branded_ref, PinsRegion, Reattachable, RegionOwner, RegionSet};
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
 /// from. The inner arena is private to the crate: holding a `&FamilyArena` grants no allocation
@@ -89,6 +89,11 @@ pub type StorageOf<W> = <<W as StorageProfile>::Families as FamilyList>::Arenas;
 /// it; the workload's [`Stored`] impls project each family's cell out by tuple path.
 pub trait StorageProfile: Sized {
     type Families: FamilyList;
+    /// The workload's frame-owner type — the `PinsRegion` member a region's reach descriptions
+    /// name. A [`Region`] hosts its reach descriptions in a side table typed at this owner
+    /// ([`Region::alloc_reach`]), separate from the [`Families`](Self::Families) arena bundle, so
+    /// the value pages carry no `Drop`-bearing reach state.
+    type FrameOwner: PinsRegion + 'static;
 }
 
 /// Per-family storage policy, implemented by the workload. The lifetime family itself comes from the
@@ -125,6 +130,15 @@ pub struct Region<W: StorageProfile> {
     /// [`owns_addr`](Self::owns_addr). `usize` rather than `*const _` keeps the field
     /// lifetime-erased and `Send`/`Sync`-neutral.
     membership: RefCell<Vec<usize>>,
+    /// The region's **reach side table**: an append-stable arena of the reach descriptions minted
+    /// for values living in this region ([`Region::alloc_reach`]). Separate from the family
+    /// [`storage`](Self::storage) bundle so a reach description — `Drop`-bearing, since it owns
+    /// frame-owner `Rc`s — is never arena-page data (see
+    /// [design/witness-hosting.md § The description](../../../design/witness-hosting.md#the-description)).
+    /// `typed_arena::Arena` hands back a `&` valid for the region's whole life, the same
+    /// append-stable-address guarantee [`alloc_resident`](Self::alloc_resident) rests on — so a
+    /// carrier can share a thin reference into it with no `Drop`-order or dangling hazard.
+    reach_table: Arena<RegionSet<W::FrameOwner>>,
 }
 
 impl<W: StorageProfile> Region<W> {
@@ -135,7 +149,19 @@ impl<W: StorageProfile> Region<W> {
         Self {
             storage: StorageOf::<W>::default(),
             membership: RefCell::new(Vec::new()),
+            reach_table: Arena::new(),
         }
+    }
+
+    /// Append a minted reach description to the region's side table and hand back a co-located
+    /// `&'a` — the sole reach-allocation path, reached through [`RegionSet::mint`]. Unlike
+    /// [`alloc_resident`](Self::alloc_resident) this touches no family cell and needs no
+    /// lifetime-retype: `RegionSet<F>` is lifetime-free, and `typed_arena::Arena` already returns a
+    /// reference valid for the `&'a self` borrow (the region's life), so the description a carrier
+    /// references outlives every read pinned by this region's owner. No `unsafe`: the append-stable
+    /// guarantee is the arena's, not a hand-audited pointer extension.
+    pub(crate) fn alloc_reach(&self, set: RegionSet<W::FrameOwner>) -> &RegionSet<W::FrameOwner> {
+        self.reach_table.alloc(set)
     }
 
     /// Number of values stored in family `K`'s cell. Read-only; exposes no `&Arena`, so it

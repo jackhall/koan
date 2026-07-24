@@ -30,7 +30,7 @@ use std::rc::Rc;
 use super::{
     Carrier, Erased, FoldToken, FoldedPlacement, HasRegionHandle, PinsRegion, Reattachable, Region,
     RegionHandle, RegionHandleFamily, RegionOwner, RegionSet, Residence, Sealed, StorageProfile,
-    Stored, Witnessed,
+    Witnessed,
 };
 
 /// A sealed carrier paired with the retained frame owner that pins its value's backing in transit.
@@ -146,9 +146,8 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         omit: impl Fn(&Region<P>) -> bool,
     ) -> (Option<&'d RegionSet<F>>, bool)
     where
-        P: StorageProfile + 'static,
+        P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
-        RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
     {
         self.witness().mint_into(dest, Some(&self.host), mode, omit)
     }
@@ -166,9 +165,8 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         omit: impl Fn(&Region<P>) -> bool,
     ) -> T::At<'d>
     where
-        P: StorageProfile + 'static,
+        P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
-        RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
         T::At<'static>: Copy,
     {
         let _ = self.mint_reach(dest, Residence::Kept, omit);
@@ -194,10 +192,9 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> Witnessed<P, Carrier<F>>
     where
-        Pr: StorageProfile + 'static,
+        Pr: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<Pr>>,
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
-        RegionSet<F>: Stored<Pr> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
         T::At<'static>: Copy,
     {
         let host = &self.host;
@@ -223,10 +220,9 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P::At<'b>,
     ) -> Witnessed<P, Carrier<F>>
     where
-        Pr: StorageProfile + 'static,
+        Pr: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<Pr>>,
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
-        RegionSet<F>: Stored<Pr> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
         T::At<'static>: Copy,
     {
         let host = &self.host;
@@ -262,9 +258,8 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         ) -> P::At<'b>,
     ) -> Witnessed<P, Carrier<F>>
     where
-        Pr: StorageProfile + 'static,
+        Pr: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<Pr>>,
-        RegionSet<F>: Stored<Pr> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
         T::At<'static>: Copy,
     {
         // The destination operand is the producer's own region, yoked out of the retained host — the

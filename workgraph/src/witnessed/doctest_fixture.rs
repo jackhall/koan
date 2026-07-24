@@ -86,21 +86,17 @@ unsafe impl Reattachable for RecordedRefFamily {
 /// verbs mint into, and the recorded-reference family the checked-store doctests audit against.
 pub struct FixtureProfile;
 impl StorageProfile for FixtureProfile {
-    type Families = (RefFamily, (RegionSet<RegionCart>, (RecordedRefFamily, ())));
+    type Families = (RefFamily, (RecordedRefFamily, ()));
+    type FrameOwner = RegionCart;
 }
 impl Stored<FixtureProfile> for RefFamily {
     fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
         &storage.0
     }
 }
-impl Stored<FixtureProfile> for RegionSet<RegionCart> {
-    fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
-        &storage.1 .0
-    }
-}
 impl Stored<FixtureProfile> for RecordedRefFamily {
     fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
-        &storage.1 .1 .0
+        &storage.1 .0
     }
     fn record_local(frame: &Region<FixtureProfile>, stored: &&'static u32) {
         frame.record_addr(*stored as *const u32 as usize);

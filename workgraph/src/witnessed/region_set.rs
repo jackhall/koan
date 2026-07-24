@@ -6,8 +6,7 @@
 use std::rc::Rc;
 
 use super::{
-    ComposeWitness, Reattachable, Region, RegionHandle, RegionOwner, StorageProfile, Stored,
-    Witness,
+    ComposeWitness, Reattachable, Region, RegionHandle, RegionOwner, StorageProfile, Witness,
 };
 
 /// A [`RegionOwner`] that can report whether holding it keeps another region's storage alive — the
@@ -168,12 +167,12 @@ impl<F: PinsRegion + 'static> RegionSet<F> {
         omit: impl Fn(&F::Region) -> bool,
     ) -> Option<&'a RegionSet<F>>
     where
-        W: StorageProfile,
-        // Bind `Region` on `RegionOwner`, the trait that DECLARES it — not on `PinsRegion`.
-        // `F: PinsRegion<Region = Region<W>>` is E0220 ("associated type `Region` not found for
-        // `PinsRegion`"): a supertrait's associated type is not bindable through the subtrait.
+        // `W::FrameOwner = F` ties the destination's reach side table to this set's member type, so
+        // the minted set lands in `dest`'s own [`Region::alloc_reach`] table. Binding `Region` on
+        // `RegionOwner` (the trait that DECLARES it, not `PinsRegion`) avoids E0220 — a supertrait's
+        // associated type is not bindable through the subtrait.
+        W: StorageProfile<FrameOwner = F>,
         F: RegionOwner<Region = Region<W>>,
-        RegionSet<F>: Stored<W> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
     {
         let dest_region: *const Region<W> = dest.region();
         // Rule 1 (self-cycle) folded together with the caller's policy predicate.
@@ -191,7 +190,7 @@ impl<F: PinsRegion + 'static> RegionSet<F> {
         if composed.is_empty() {
             None
         } else {
-            Some(dest.alloc_resident::<RegionSet<F>>(composed)) // freeze-at-store
+            Some(dest.region().alloc_reach(composed)) // freeze into the region's reach side table
         }
     }
 
@@ -208,9 +207,8 @@ impl<F: PinsRegion + 'static> RegionSet<F> {
         omit: impl Fn(&F::Region) -> bool,
     ) -> (Option<&'a RegionSet<F>>, bool)
     where
-        W: StorageProfile,
+        W: StorageProfile<FrameOwner = F>,
         F: RegionOwner<Region = Region<W>>,
-        RegionSet<F>: Stored<W> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
     {
         let borrows_into_dest = sources.iter().any(|s| s.pins_region(dest.region()))
             || materialize_hosts

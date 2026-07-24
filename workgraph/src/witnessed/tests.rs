@@ -391,13 +391,8 @@ fn step_context_alloc_carrier_is_empty() {
 struct StepProfile;
 
 impl StorageProfile for StepProfile {
-    type Families = (RegionSet<StepFrame>, ());
-}
-
-impl crate::witnessed::Stored<StepProfile> for RegionSet<StepFrame> {
-    fn cell(storage: &crate::witnessed::StorageOf<StepProfile>) -> &FamilyArena<Self> {
-        &storage.0
-    }
+    type Families = ();
+    type FrameOwner = StepFrame;
 }
 
 struct StepFrame {

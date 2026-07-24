@@ -63,17 +63,14 @@ impl StorageProfile for KoanStorageProfile {
                         (
                             OperatorGroup,
                             (
-                                FrameSet,
+                                TypeIdentifier,
                                 (
-                                    TypeIdentifier,
+                                    RecordSubstrate<'static>,
                                     (
-                                        RecordSubstrate<'static>,
+                                        ListSubstrate<'static>,
                                         (
-                                            ListSubstrate<'static>,
-                                            (
-                                                DictSubstrate<'static>,
-                                                (PayloadSubstrate<'static>, ()),
-                                            ),
+                                            DictSubstrate<'static>,
+                                            (PayloadSubstrate<'static>, ()),
                                         ),
                                     ),
                                 ),
@@ -84,6 +81,9 @@ impl StorageProfile for KoanStorageProfile {
             ),
         ),
     );
+
+    /// Reach descriptions live in the region's side table, typed at the per-call frame owner.
+    type FrameOwner = FrameStorage;
 }
 
 /// Run-lifetime allocator. A [`Region`] carrying the Koan family set; lives for one program
@@ -434,15 +434,9 @@ impl Stored<KoanStorageProfile> for OperatorGroup {
     }
 }
 
-impl Stored<KoanStorageProfile> for FrameSet {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .1 .0
-    }
-}
-
 impl Stored<KoanStorageProfile> for TypeIdentifier {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .1 .1 .0
+        &s.1 .1 .1 .1 .1 .1 .0
     }
 }
 
@@ -465,10 +459,10 @@ macro_rules! koan_substrate_family {
     };
 }
 
-koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
 
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
@@ -610,7 +604,6 @@ impl KoanRegionExt for KoanRegion {
             + weigh::<Module<'static>>(self)
             + weigh::<KType>(self)
             + weigh::<OperatorGroup>(self)
-            + weigh::<FrameSet>(self)
             + weigh::<TypeIdentifier>(self)
             + weigh::<RecordSubstrate<'static>>(self)
             + weigh::<ListSubstrate<'static>>(self)
@@ -637,7 +630,6 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<Module<'static>>()
             + self.family_len::<KType>()
             + self.family_len::<OperatorGroup>()
-            + self.family_len::<FrameSet>()
             + self.family_len::<RecordSubstrate<'static>>()
             + self.family_len::<ListSubstrate<'static>>()
             + self.family_len::<DictSubstrate<'static>>()

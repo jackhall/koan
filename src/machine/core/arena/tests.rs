@@ -1337,10 +1337,11 @@ fn mint_reads_back_under_pin() {
     assert_eq!(regions, vec![a.region() as *const _]);
 }
 
-/// A mint lands in the destination's `FrameSet` sub-arena — exactly one allocation regardless of
-/// how many sources/hosts compose into it.
+/// A mint lands in the destination's reach **side table**, never its family arena pages — so the
+/// counted `alloc_count()` (the value families) is untouched. Reach descriptions are `Drop`-bearing
+/// heap data hosted beside the arena, not in it (the storage-move invariant).
 #[test]
-fn mint_bumps_alloc_count() {
+fn mint_leaves_arena_pages_untouched() {
     let a = run_root_storage();
     let c = run_root_storage();
     let source_a = FrameSet::singleton(Rc::clone(&a));
@@ -1349,8 +1350,8 @@ fn mint_bumps_alloc_count() {
     let _minted = FrameSet::mint(c.brand().0, &[&source_a], &[], |_| false);
     assert_eq!(
         c.region().alloc_count(),
-        before + 1,
-        "mint stores exactly one set in dest's arena"
+        before,
+        "a minted reach set lives in the side table, not a counted value-family arena"
     );
 }
 

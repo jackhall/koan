@@ -141,9 +141,8 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         T: Reattachable,
         V: Reattachable,
         V::At<'static>: Copy,
-        P: StorageProfile + 'static,
+        P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
-        super::RegionSet<F>: super::Stored<P> + for<'r> Reattachable<At<'r> = super::RegionSet<F>>,
     {
         let acc0: Witnessed<AllocViews<V, F::Region>, Carrier<F>> = self
             .alloc::<AllocViews<V, F::Region>>(|region| (region, Vec::with_capacity(deps.len())));
@@ -182,12 +181,11 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         build: impl for<'b> FnOnce(FoldedPlacement<'b, P>, Vec<V::At<'b>>) -> T::At<'b>,
     ) -> Witnessed<T, Carrier<F>>
     where
-        P: StorageProfile + 'static,
+        P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
         T: Reattachable,
         V: Reattachable,
         V::At<'static>: Copy,
-        super::RegionSet<F>: super::Stored<P> + for<'r> Reattachable<At<'r> = super::RegionSet<F>>,
     {
         self.alloc_with::<T, V, P>(deps, |region, views, token| {
             // The accumulator was yoked over this frame's own region and `alloc_with` folds every
