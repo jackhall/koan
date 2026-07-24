@@ -89,6 +89,40 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     );
 }
 
+/// Retention-timeline acceptance (claim: *envelope pins at envelope drop*). A delivery envelope now
+/// carries the terminal's owned **foreign** [`FramePins`] bundle alongside the host frame `Rc`; the
+/// bundle pins every region the value reaches and drops with the envelope. Seal an envelope whose
+/// foreign bundle is the sole strong owner of a distinct region and confirm the region stays live
+/// while the envelope lives, released when the envelope drops — the reach owned end-to-end, never
+/// re-derived.
+#[test]
+fn delivery_envelope_foreign_bundle_releases_at_envelope_drop() {
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let producer = CallFrame::new(test_run.scope);
+    // A distinct region the terminal reaches; the envelope's foreign bundle will be its sole owner.
+    let foreign = run_root_storage();
+    let weak = Rc::downgrade(&foreign);
+
+    let (carrier, _producer_weak) = resident_scalar(&producer, false);
+    let envelope = Delivered::seal(
+        carrier,
+        producer.storage_rc(),
+        FramePins::singleton(Rc::clone(&foreign)),
+    );
+    // The envelope's owned foreign bundle is now the sole strong owner of `foreign`.
+    drop(foreign);
+    assert!(
+        weak.upgrade().is_some(),
+        "the envelope's owned foreign bundle keeps the reached region alive"
+    );
+    drop(envelope);
+    assert!(
+        weak.upgrade().is_none(),
+        "the foreign bundle releases when the envelope drops — owned to the envelope's life"
+    );
+}
+
 /// A value that genuinely borrows into its producer frame carries the `borrows_host` bit through
 /// the Done boundary unchanged — finalize seals as-is; the bit is read only at a later copied
 /// re-home mint, never as a lifecycle input. The frame's lifetime is retention's either way.

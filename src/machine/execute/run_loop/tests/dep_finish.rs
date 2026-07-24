@@ -83,7 +83,13 @@ fn dep_finish_short_circuits_on_dep_error() {
     let value = region.brand().alloc_object(KObject::Number(99.0));
     store.set_result(dep_ok, Ok(Carried::Object(value)));
     // A synthetic terminal carries no finalize-seeded retention hold; the dep pull requires one.
-    store.seed_retention(dep_ok, std::rc::Rc::clone(&region), 1);
+    // This slot reaches nothing foreign, so its hold's owned bundle is empty.
+    store.seed_retention(
+        dep_ok,
+        std::rc::Rc::clone(&region),
+        crate::machine::core::FramePins::empty(),
+        1,
+    );
     store.set_result(
         dep_err,
         Err(KError::new(KErrorKind::ShapeError(
@@ -112,6 +118,80 @@ fn dep_finish_short_circuits_on_dep_error() {
     assert!(
         err.frames.iter().any(|f| f.function == "<deps>"),
         "propagated error should carry a <deps> frame, got {err}",
+    );
+}
+
+/// Retention-timeline acceptance (claim: *foreign pins housed in the retention hold release at
+/// pull-count zero*). A finalized producer's hold now carries the terminal's owned **foreign**
+/// bundle alongside the region owner; both halves are released together when the last destination
+/// pull is discharged — the hold's own event, not the slot's free. Seed a synthetic producer's hold
+/// with a non-empty foreign bundle (the sole strong owner of a distinct region), wire one consumer
+/// that pulls it, and confirm the reached region stays live while the pull is outstanding and
+/// releases once the pull discharges the hold.
+#[test]
+fn retention_hold_foreign_bundle_releases_at_pull_zero() {
+    use crate::machine::execute::TerminalDepFinish;
+    use std::rc::Rc;
+
+    let region = run_root_storage();
+    // A distinct region the producer's terminal reaches; the hold's foreign bundle will be its sole
+    // strong owner once we drop our own handle.
+    let foreign = run_root_storage();
+    let weak = Rc::downgrade(&foreign);
+
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
+
+    let mk_dispatch =
+        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
+    let dep_ok = runtime.add(mk_dispatch(), scope);
+    let store = runtime.scheduler_mut();
+    store.clear_node(dep_ok);
+    let _ = store.pop_next();
+    let value = region.brand().alloc_object(KObject::Number(42.0));
+    store.set_result(dep_ok, Ok(Carried::Object(value)));
+    // Seed the hold with a foreign bundle pinning `foreign`, and one outstanding pull.
+    store.seed_retention(
+        dep_ok,
+        Rc::clone(&region),
+        crate::machine::core::FramePins::singleton(Rc::clone(&foreign)),
+        1,
+    );
+    // Drop our own strong handle: the hold's foreign bundle is now the sole owner of `foreign`.
+    drop(foreign);
+    assert!(
+        weak.upgrade().is_some(),
+        "the hold's foreign bundle keeps the reached region alive while the pull is outstanding",
+    );
+
+    // A finish that reads (pulls) the dep once — the delivered terminal clones the hold's
+    // (owner, foreign) out, and discharging that pull brings the count to zero and drops the hold.
+    let finish: TerminalDepFinish = Box::new(move |_sched, terminals| {
+        let v = match terminals.owned(0).value {
+            Carried::Object(object) => object,
+            _ => unreachable!("dep_ok delivered a Number object"),
+        };
+        Outcome::done_resident(Carried::Object(v))
+    });
+    let mut deps = crate::scheduler::ResolvedDeps::new();
+    deps.own(dep_ok);
+    let dep_finish_id = runtime.add_dep_finish(deps, scope, finish);
+    runtime.execute().unwrap();
+
+    // The single pull discharged to zero, dropping the hold — owner and foreign together — so the
+    // reached region is released. Bit-for-bit today's owner timeline, now carrying the foreign half.
+    assert!(
+        weak.upgrade().is_none(),
+        "the hold's foreign bundle releases at pull-count zero, alongside the owner",
+    );
+    assert!(
+        runtime
+            .read_result_with(dep_finish_id, |v| matches!(
+                v.object(),
+                KObject::Number(n) if *n == 42.0
+            ))
+            .expect("the finish delivered the pulled value"),
     );
 }
 

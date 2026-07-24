@@ -264,14 +264,17 @@ impl<W: Workload> Scheduler<W> {
     }
     /// Seed a retention hold on a synthetically-finalized slot ([`Self::set_result`] writes the
     /// terminal but runs no finalize, so no hold exists) — [`Self::dep_delivered`] requires one for
-    /// every pull-able dep. A synthetic slot carries no foreign reach, so the hold's bundle is empty.
-    pub fn seed_retention(&mut self, id: NodeId, owner: Rc<OwnerOf<W>>, pulls: usize) {
-        self.deps.seed_retain(
-            id.index(),
-            owner,
-            crate::witnessed::PinBundle::empty(),
-            pulls,
-        );
+    /// every pull-able dep. `foreign` is the hold's owned foreign bundle: pass
+    /// [`PinBundle::empty`](crate::witnessed::PinBundle::empty) for a slot that reaches nothing, or a
+    /// real bundle to exercise the foreign half's pull-count-zero release timeline.
+    pub fn seed_retention(
+        &mut self,
+        id: NodeId,
+        owner: Rc<OwnerOf<W>>,
+        foreign: crate::witnessed::PinBundle<OwnerOf<W>>,
+        pulls: usize,
+    ) {
+        self.deps.seed_retain(id.index(), owner, foreign, pulls);
     }
     pub fn result_is_none(&self, id: NodeId) -> bool {
         self.store.result_is_none(id)

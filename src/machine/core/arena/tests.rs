@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::builtins::test_support::{delivered_with_host, run_root_bare, TestRun};
+use crate::machine::core::Bindings;
 use crate::machine::core::Reached;
 use crate::machine::core::StoredReach;
 use crate::machine::model::KType;
@@ -611,6 +612,48 @@ fn mint_omit_predicate_drops_home_and_keeps_foreign_reach() {
     assert!(
         frameless.is_some(),
         "with no home frame to omit, the host lands in the minted set",
+    );
+}
+
+/// Retention-timeline acceptance (claim: *binding-entry pins release at entry death*). A value
+/// binding entry owns its foreign [`FramePins`] fused into its [`Reached`] vehicle; the bundle pins
+/// every region the value reaches for the entry's life and drops by ordinary `Drop` when the entry
+/// dies — here, when the owning [`Bindings`] drops. Bind an entry whose owned bundle is the sole
+/// strong owner of a foreign region and confirm the region stays live while bound, released at entry
+/// death.
+#[test]
+fn binding_entry_foreign_pins_release_at_entry_death() {
+    let region = run_root_storage();
+    let dest = run_root_storage();
+    let foreign = run_root_storage();
+    let weak = Rc::downgrade(&foreign);
+
+    // A value living in `region`, and an owned foreign bundle naming `foreign` (minted into a
+    // neutral dest with an always-false omit, so no home-omission drops the member).
+    let obj = region.brand().alloc_object(KObject::Number(1.0));
+    let (_reach, pins) =
+        FrameReach::mint(dest.brand().0, &[], &[Rc::clone(&foreign)], |_region| false);
+
+    let bindings: Bindings = Bindings::new();
+    bindings
+        .try_bind_value(
+            "x",
+            BindingIndex::BUILTIN,
+            Reached::for_test(obj, StoredReach::for_test(None, false), pins),
+        )
+        .expect("a fresh value bind lands");
+
+    // The entry's owned bundle is now the sole strong owner of `foreign`.
+    drop(foreign);
+    assert!(
+        weak.upgrade().is_some(),
+        "the bound entry's owned pins keep the reached region alive for the entry's life",
+    );
+
+    drop(bindings);
+    assert!(
+        weak.upgrade().is_none(),
+        "the entry's foreign pins release at entry death (the owning Bindings drop)",
     );
 }
 
