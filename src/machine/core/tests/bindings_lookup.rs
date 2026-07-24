@@ -6,7 +6,9 @@
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::StoredReach;
-use crate::machine::core::{run_root_storage, BindingIndex, FramePins, FrameStorageExt, NameLookup};
+use crate::machine::core::{
+    run_root_storage, BindingIndex, FramePins, FrameStorageExt, NameLookup,
+};
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};

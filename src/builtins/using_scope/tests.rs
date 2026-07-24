@@ -229,7 +229,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
     let (_window_reach, _window_pins) = window.host_reach_of(&window_root_cell);
     drop(window_root_cell);
 
-    let carrier = window
+    let (carrier, _carrier_pins) = window
         .resolve_value_carrier("val", None)
         .expect("val is bound in the module scope, surfaced through the transparent window")
         .bound()

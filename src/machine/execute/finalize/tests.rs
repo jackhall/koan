@@ -9,7 +9,7 @@ use std::rc::{Rc, Weak};
 
 use super::NodeFinalize;
 use crate::builtins::test_support::{parse_one, run_root_bare, TestRun};
-use crate::machine::core::{run_root_storage, CarrierWitness, FrameStorage};
+use crate::machine::core::{run_root_storage, CarrierWitness, FramePins, FrameStorage};
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
@@ -59,13 +59,16 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
         "the carrier pins nothing — liveness is retention's"
     );
 
-    let sealed = test_run
+    let (sealed, sealed_pins) = test_run
         .runtime
-        .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
+        .finalize_terminal(
+            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            None,
+        )
         .expect("no declared return, no error");
     // The retention seed: the producer's storage rides the envelope, exactly as the run loop hands
     // it to the scheduler at finalize.
-    let envelope = Delivered::seal(sealed, producer.storage_rc());
+    let envelope = Delivered::seal(sealed, producer.storage_rc(), sealed_pins);
 
     drop(producer);
     assert!(
@@ -102,15 +105,18 @@ fn home_borrowing_value_keeps_its_bit_and_rides_retention() {
         "the home-borrow bit rides the carrier"
     );
 
-    let sealed = test_run
+    let (sealed, sealed_pins) = test_run
         .runtime
-        .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
+        .finalize_terminal(
+            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            None,
+        )
         .expect("no declared return, no error");
     assert!(
         sealed.witness().borrows_host(),
         "the bit survives the Done boundary verbatim"
     );
-    let envelope = Delivered::seal(sealed, producer.storage_rc());
+    let envelope = Delivered::seal(sealed, producer.storage_rc(), sealed_pins);
 
     drop(producer);
     assert!(
@@ -293,11 +299,14 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, false);
-    let sealed = test_run
+    let (sealed, sealed_pins) = test_run
         .runtime
-        .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
+        .finalize_terminal(
+            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            None,
+        )
         .expect("no declared return, no error");
-    let cell = Delivered::seal(sealed, producer.storage_rc());
+    let cell = Delivered::seal(sealed, producer.storage_rc(), sealed_pins);
 
     drop(producer);
     assert!(
@@ -352,9 +361,12 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let storage = producer.storage_rc();
     let count_before = Rc::strong_count(&storage);
 
-    let sealed = test_run
+    let (sealed, sealed_pins) = test_run
         .runtime
-        .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
+        .finalize_terminal(
+            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            None,
+        )
         .expect("no declared return, no error");
     assert_eq!(
         Rc::strong_count(&storage),
@@ -362,7 +374,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
         "the Done boundary itself pays no refcount"
     );
 
-    let envelope = Delivered::seal(sealed, producer.storage_rc());
+    let envelope = Delivered::seal(sealed, producer.storage_rc(), sealed_pins);
     assert_eq!(
         Rc::strong_count(&storage),
         count_before + 1,

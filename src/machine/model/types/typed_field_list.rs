@@ -288,7 +288,11 @@ fn rewrite_threaded_self_refs<'e, 'a>(
                         window.sibling(&t.render(), crate::machine::model::KKind::NewType, types);
                     let carrier = scope.resident_type_carrier(sibling);
                     ExpressionPart::Spliced {
-                        cell: scope.seal_resident_delivered(carrier),
+                        // A `KType` carrier has no foreign reach, so it seals under an empty bundle.
+                        cell: scope.seal_resident_delivered(
+                            carrier,
+                            crate::machine::core::FramePins::empty(),
+                        ),
                     }
                 }
                 (ExpressionPart::SigiledTypeExpr(b), _) => {

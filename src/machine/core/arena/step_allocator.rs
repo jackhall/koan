@@ -91,13 +91,16 @@ impl<'step> StepAllocator<'step> {
         deps: &[&DeliveredCarried],
         build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
     ) -> StepCarried<'step> {
-        StepCarried::born(
-            self.context
-                .alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
-                    deps,
-                    |placement, views| build(FoldingBrand::in_fold_closure(placement), views),
-                ),
-        )
+        // The fold composes the deps' reach into the built carrier and hands back its owned foreign
+        // bundle; thread it through `born_pinned` so the reach-carrying product's pins ride the step
+        // to the seal.
+        let (carrier, pins) = self
+            .context
+            .alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
+                deps,
+                |placement, views| build(FoldingBrand::in_fold_closure(placement), views),
+            );
+        StepCarried::born_pinned(carrier, pins)
     }
 
     /// Wrap a `Copy` [`KType`] handle in a step terminal: reach = own region only. A handle carries

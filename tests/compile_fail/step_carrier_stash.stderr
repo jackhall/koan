@@ -7,4 +7,4 @@ error[E0521]: borrowed data escapes outside of closure
    |                 ------- `carrier` is a reference that is only valid in the closure body
 10 |         // Smuggle the step-branded carrier out of its step: `'b` escapes into `escaped`.
 11 |         escaped = Some(carrier);
-   |         ^^^^^^^^^^^^^^^^^^^^^^^ `carrier` escapes the closure body here
+   |         ^^^^^^^ `carrier` escapes the closure body here

@@ -435,14 +435,16 @@ fn step_context_alloc_with_mints_dep_hosts_and_preserves_dep_order() {
     let delivered_a: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
         Witnessed::<RefFamily, Carrier<StepFrame>>::resident(&ONE),
         Rc::clone(&dep_a),
+        PinBundle::empty(),
     );
     let delivered_b: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
         Witnessed::<RefFamily, Carrier<StepFrame>>::resident(&TWO),
         Rc::clone(&dep_b),
+        PinBundle::empty(),
     );
 
     let ctx: StepContext<StepFrame> = StepContext::new(Rc::clone(&own));
-    let w: Witnessed<RefFamily, Carrier<StepFrame>> = ctx
+    let (w, _bundle): (Witnessed<RefFamily, Carrier<StepFrame>>, _) = ctx
         .alloc_with::<RefFamily, RefFamily, StepProfile>(
             &[&delivered_a, &delivered_b],
             |_region, views, _token| {

@@ -26,7 +26,7 @@ use crate::machine::core::{
 use crate::machine::core::{FoldingBrand, ScopeRefFamily};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
-use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId, RunId};
+use crate::machine::{CallFrame, CarrierWitness, FramePins, KError, KErrorKind, NodeId, RunId};
 use crate::witnessed::SealedExtern;
 
 use super::dispatch::{BodyPlacement, DepRequest, SchedulerView, SubmitContext};
@@ -174,12 +174,17 @@ impl<'run> KoanRuntime<'run> {
         &self,
         producer: NodeId,
         dest: Witnessed<DestHandleFamily, CarrierWitness>,
-    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
         let verb = seam_verb(&delivered);
+        // The destination is a bare region handle (empty reach), so its operand bundle is empty.
+        // The transfer returns the relocated carrier paired with its composed owned foreign bundle —
+        // the relocated terminal's reach, threaded to the caller to re-seed the retention hold (a
+        // `Forward`-ready finalize) or retain past teardown (a drained root).
         Ok(
             delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
                 dest,
+                &FramePins::empty(),
                 verb.residence(),
                 |value, _region, placement| {
                     copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))

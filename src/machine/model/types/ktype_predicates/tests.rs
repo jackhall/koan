@@ -235,7 +235,11 @@ fn spliced_cell_classifies_by_opening() {
         crate::machine::core::StoredReach::for_test(None, false),
     );
     let cell_part = ExpressionPart::Spliced {
-        cell: Delivered::hosted(Sealed::seal(carrier), std::rc::Rc::clone(&storage)),
+        cell: Delivered::hosted(
+            Sealed::seal(carrier),
+            std::rc::Rc::clone(&storage),
+            crate::machine::core::FramePins::empty(),
+        ),
     };
 
     for (ty, admits) in [

@@ -158,7 +158,10 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine
         Some(lhs) => route(access_field(&ctx.ctx, target, &field_name, lhs, ctx.types)),
         None => {
             let resident = match ctx.scope.seal_fresh_object(target.deep_clone(), ctx.types) {
-                Ok(witnessed) => ctx.scope.seal_resident_delivered(witnessed),
+                // A region-pure rebuild seals under an empty foreign bundle.
+                Ok(witnessed) => ctx
+                    .scope
+                    .seal_resident_delivered(witnessed, crate::machine::core::FramePins::empty()),
                 Err(e) => return Action::Done(Err(e)),
             };
             route(access_field(
@@ -360,7 +363,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
     // (or its re-tag carrier) names the full reach without an embedded lhs to fold (the module
     // identity is the lhs).
     match module_scope.bindings().lookup_member(field, None) {
-        Some(MemberResolution::Value { obj, stored }) => {
+        Some(MemberResolution::Value { obj, stored, pins }) => {
             if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
                 // The re-tag allocates in the module region (not the read site's): both the value
                 // member `obj` and the re-tag identity `tag` cross as declared fold operands. `obj`
@@ -368,10 +371,14 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 // member's own `reach`; `tag` is a Copy handle sealed resident via
                 // `resident_type_carrier`. Both carriers union into the wrapped result's witness
                 // via `alloc_carried_with`.
-                let obj_carrier = module_scope
-                    .seal_resident_delivered(module_scope.resident_value_carrier(obj, stored));
-                let tag_carrier =
-                    module_scope.seal_resident_delivered(module_scope.resident_type_carrier(tag));
+                let obj_carrier = module_scope.seal_resident_delivered(
+                    module_scope.resident_value_carrier(obj, stored),
+                    pins,
+                );
+                let tag_carrier = module_scope.seal_resident_delivered(
+                    module_scope.resident_type_carrier(tag),
+                    crate::machine::core::FramePins::empty(),
+                );
                 let ctx = StepAllocator::for_scope(module_scope);
                 return Ok(ctx.alloc_carried_with(
                     &[&obj_carrier, &tag_carrier],
@@ -383,8 +390,10 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                     },
                 ));
             }
-            Ok(StepCarried::born(
+            // A value member read reaches into the module's region; thread the member's owned pins.
+            Ok(StepCarried::born_pinned(
                 module_scope.resident_value_carrier(obj, stored),
+                pins,
             ))
         }
         Some(MemberResolution::Type { kt }) => {

@@ -1,4 +1,4 @@
-use crate::machine::core::{FoldingBrand, KoanStorageProfile};
+use crate::machine::core::{FoldingBrand, FramePins, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{Carried, KType, TypeNode, TypeRegistry};
 use crate::machine::{CarrierWitness, DeliveredCarried, KError, KErrorKind};
@@ -43,7 +43,7 @@ pub(in crate::machine::execute) trait NodeFinalize {
         &self,
         envelope: DeliveredCarried,
         contract: Option<&ReturnObligation>,
-    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>;
+    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError>;
 }
 
 impl NodeFinalize for KoanRuntime<'_> {
@@ -51,16 +51,22 @@ impl NodeFinalize for KoanRuntime<'_> {
         &self,
         envelope: DeliveredCarried,
         contract: Option<&ReturnObligation>,
-    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError> {
+        // The terminal's owned foreign bundle is invariant across finalize: pass-through keeps the
+        // value verbatim, and restamp re-stamps *in place in the producer's own region*, so
+        // home-omission drops the `Kept` host and the foreign reach is identical to the input's.
+        // Clone it out of the envelope up front to seed the scheduler's retention hold — never
+        // re-derived from the (re-sealed) carrier's description.
+        let foreign = envelope.foreign().clone();
         // No per-call return obligation (frameless / run producer, or a framed producer with no
         // obligation) or nothing declared: recover the sealed carrier as-is via the seal→unseal
         // round-trip — retention owns the frame's lifetime, so the Done boundary makes no memory
         // decision.
         let Some(obligation) = contract else {
-            return Ok(envelope.into_cell().unseal());
+            return Ok((envelope.into_cell().unseal(), foreign));
         };
         let Some((declared, per_call)) = obligation.declared() else {
-            return Ok(envelope.into_cell().unseal());
+            return Ok((envelope.into_cell().unseal(), foreign));
         };
         let types = self.ambient.type_registry();
         // One read pass classifies the delivered carrier against the declared return under the
@@ -99,19 +105,22 @@ impl NodeFinalize for KoanRuntime<'_> {
                 got,
                 types,
             )),
-            Disposition::PassThrough => Ok(envelope.into_cell().unseal()),
+            Disposition::PassThrough => Ok((envelope.into_cell().unseal(), foreign)),
             // Re-stamp in place: re-tag the top node to the declared type and re-anchor it into the
             // producer's own region, sharing the substrate borrow verbatim. Residence is unchanged,
-            // so the re-sealed carrier's witness is identical to the delivered one.
-            Disposition::Restamp => Ok(envelope
-                .restamp_in_place::<CarriedFamily, KoanStorageProfile>(
+            // so the re-sealed carrier's witness — and its foreign bundle, captured above — is
+            // identical to the delivered one.
+            Disposition::Restamp => Ok((
+                envelope.restamp_in_place::<CarriedFamily, KoanStorageProfile>(
                     |value, _handle, placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         Carried::Object(region.alloc_object_folded(
                             value.object().deep_clone().stamp_type(declared, types),
                         ))
                     },
-                )),
+                ),
+                foreign,
+            )),
         }
     }
 }

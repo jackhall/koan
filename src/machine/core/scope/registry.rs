@@ -67,7 +67,9 @@ impl<'a> Scope<'a> {
                      rename it to avoid silently shadowing the module's `{name}`",
                 ))));
             }
-            return self.write_target().bind_value(name, obj, index, reach, pins);
+            return self
+                .write_target()
+                .bind_value(name, obj, index, reach, pins);
         }
         self.assert_open(&name);
         // Clone the owning bundle for the attempt, keeping the original for the defer path: on a
@@ -109,7 +111,7 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
         project: impl for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+    ) -> Result<(&'a KObject<'a>, StoredReach<'a>, FramePins), KError> {
         let projected_embeds_substrate = cell.open(|live| {
             project(&live)
                 .map(|object| object.embeds_substrate())
@@ -129,8 +131,11 @@ impl<'a> Scope<'a> {
             })?;
             (allocated, stored, pins)
         };
-        self.bind_value(name, allocated, index, stored, pins)?;
-        Ok((allocated, stored))
+        // Clone the owned bundle: one copy is the binding entry's (it pins the value's reach for the
+        // entry's life), the other rides the caller's terminal carrier out of the step (the Done-arm
+        // seal), so the reach is owned end-to-end on both the resident and the in-transit paths.
+        self.bind_value(name, allocated, index, stored, pins.clone())?;
+        Ok((allocated, stored, pins))
     }
 
     /// Fused region-pure / fresh-value bind: checked move-in of `value` into this scope's own
@@ -146,12 +151,13 @@ impl<'a> Scope<'a> {
         value: KObject<'_>,
         index: BindingIndex,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+    ) -> Result<(&'a KObject<'a>, StoredReach<'a>, FramePins), KError> {
         let (obj, stored) = self.alloc_object_checked_stored(value, types)?;
         // A checked bind is region-pure (`foreign: None`) — its borrows reach no foreign region — so
-        // the entry owns the empty bundle: nothing to pin beyond this scope's own region.
+        // the entry and the caller's terminal both own the empty bundle: nothing to pin beyond this
+        // scope's own region.
         self.bind_value(name, obj, index, stored, FramePins::empty())?;
-        Ok((obj, stored))
+        Ok((obj, stored, FramePins::empty()))
     }
 
     /// Add `fn_ref` to the `functions` bucket keyed by its untyped signature. `data[name]` is

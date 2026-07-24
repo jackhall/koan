@@ -5,7 +5,7 @@
 
 use super::Scope;
 use crate::machine::core::bindings::{Bindings, NameLookup};
-use crate::machine::core::{KFunction, LexicalFrame};
+use crate::machine::core::{FramePins, KFunction, LexicalFrame};
 use crate::machine::model::{CarriedFamily, KObject, KType, OperatorGroup};
 use crate::machine::{CarrierWitness, DeliveredCarried};
 use crate::witnessed::Witnessed;
@@ -124,12 +124,22 @@ impl<'a> Scope<'a> {
         &self,
         name: &str,
         chain: Option<&LexicalFrame>,
-    ) -> Option<NameLookup<Witnessed<CarriedFamily, CarrierWitness>>> {
+    ) -> Option<NameLookup<(Witnessed<CarriedFamily, CarrierWitness>, FramePins)>> {
         self.walk_chain(|scope| {
             scope
                 .bindings()
                 .lookup_value_carrier(name, scope.binding_cutoff(chain))
-                .map(|hit| hit.map(|value| scope.resident_value_carrier(value.obj, value.stored)))
+                .map(|hit| {
+                    // Carry a clone of the binding entry's owned foreign pins alongside the
+                    // reference-only carrier, so a reader that seals or Done-arms it threads the
+                    // reach's ownership rather than re-deriving it from the description.
+                    hit.map(|value| {
+                        (
+                            scope.resident_value_carrier(value.obj, value.stored),
+                            value.pins,
+                        )
+                    })
+                })
         })
     }
 
@@ -150,6 +160,7 @@ impl<'a> Scope<'a> {
                     hit.map(|value| {
                         scope.seal_resident_delivered(
                             scope.resident_value_carrier(value.obj, value.stored),
+                            value.pins,
                         )
                     })
                 })

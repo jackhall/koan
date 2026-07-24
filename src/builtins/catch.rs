@@ -86,23 +86,27 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             }
         };
         let tag = if result.is_ok() { "Ok" } else { "Error" };
-        let witnessed = carrier.transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
-            home,
-            Residence::Copied,
-            |value, (_region, identity), placement| {
-                let region = FoldingBrand::in_fold_closure(placement);
-                Carried::Object(region.alloc_object_folded(build_result(
-                    region,
-                    tag,
-                    identity,
-                    value.object(),
-                )))
-            },
-        );
+        // The type operand is empty-reach; the transfer composes the result payload's reach and
+        // hands back its owned foreign bundle for the Done-arm seal.
+        let (witnessed, pins) = carrier
+            .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
+                home,
+                &crate::machine::core::FramePins::empty(),
+                Residence::Copied,
+                |value, (_region, identity), placement| {
+                    let region = FoldingBrand::in_fold_closure(placement);
+                    Carried::Object(region.alloc_object_folded(build_result(
+                        region,
+                        tag,
+                        identity,
+                        value.object(),
+                    )))
+                },
+            );
         // Step-terminal seal: either arm's payload may be (or embed) a fresh record — force the
         // bit rather than trust the fold's operand-only compose.
         let witnessed = force_substrate_borrows_host(witnessed, &frame);
-        Action::Done(Ok(StepCarried::born(witnessed)))
+        Action::Done(Ok(StepCarried::born_pinned(witnessed, pins)))
     });
     Action::Catch {
         watched: DepRequest::Dispatch {

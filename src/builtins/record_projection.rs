@@ -111,7 +111,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 .scope
                 .seal_fresh_object(record_obj.deep_clone(), ctx.types)
             {
-                Ok(witnessed) => ctx.scope.seal_resident_delivered(witnessed),
+                // A freshly rebuilt object is region-pure (its reach is this scope's own region), so
+                // it seals under an empty foreign bundle.
+                Ok(witnessed) => ctx
+                    .scope
+                    .seal_resident_delivered(witnessed, crate::machine::core::FramePins::empty()),
                 Err(e) => return Action::Done(Err(e)),
             };
             &resident

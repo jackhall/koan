@@ -29,7 +29,7 @@ use std::marker::PhantomData;
 use typed_arena::Arena;
 
 use super::{
-    erase_to_static, with_branded_ref, PinBundle, PinsRegion, Reattachable, ReachDescription,
+    erase_to_static, with_branded_ref, PinBundle, PinsRegion, ReachDescription, Reattachable,
     RegionOwner,
 };
 

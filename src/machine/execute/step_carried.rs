@@ -16,7 +16,7 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::machine::core::{run_root_storage, FrameStorage, StepAllocator};
+use crate::machine::core::{run_root_storage, FramePins, FrameStorage, StepAllocator};
 use crate::machine::model::CarriedFamily;
 use crate::machine::CarrierWitness;
 use crate::witnessed::{Delivered, Reattachable, Witnessed};
@@ -42,24 +42,54 @@ use crate::witnessed::{Delivered, Reattachable, Witnessed};
 /// brand lifetime — never on the type being unnameable.
 pub struct StepCarried<'step, T: Reattachable = CarriedFamily> {
     inner: Witnessed<T, CarrierWitness>,
+    /// The carrier's owned foreign pin bundle — pinning every region the value reaches beyond the
+    /// producer's own. Empty for a region-pure / empty-reach producer (the majority of Done sites);
+    /// carried in hand for a reach-carrying producer (a resident binding read, a merge product, a
+    /// splice). [`Self::seal_at_step`] consumes it into the delivery envelope, so the terminal's
+    /// reach is threaded from here — never re-derived from the carrier's description.
+    pins: FramePins,
     step: PhantomData<&'step ()>,
 }
 
 impl<'step, T: Reattachable> StepCarried<'step, T> {
-    /// Wrap a carrier into the step brand. Unrestricted in-crate: wrapping only ever *adds*
-    /// confinement, so any construction site may brand a carrier it holds. `'step` is inferred from
-    /// the context the wrapper flows into — the Done-arm enums ([`Outcome`](super::outcome::Outcome),
-    /// [`NodeStep`](super::nodes::NodeStep)) carry it at the step open's rank-2 brand.
+    /// Wrap a **no-foreign-reach** carrier into the step brand — the majority of Done sites (literals,
+    /// type carriers, region-pure `alloc_object_witnessed` products, and a value that borrows only its
+    /// own home, e.g. a fresh closure capturing its defining scope). Debug-asserts the carrier names
+    /// no foreign reach, so its owned pin bundle is empty. Unrestricted in-crate: wrapping only
+    /// ever *adds* confinement, so any construction site may brand a carrier it holds. `'step` is
+    /// inferred from the context the wrapper flows into — the Done-arm enums
+    /// ([`Outcome`](super::outcome::Outcome), [`NodeStep`](super::nodes::NodeStep)) carry it at the
+    /// step open's rank-2 brand.
     pub(crate) fn born(inner: Witnessed<T, CarrierWitness>) -> Self {
+        debug_assert!(
+            !inner.witness().has_foreign_reach(),
+            "StepCarried::born is for carriers with no foreign reach (empty owned pins); a \
+             foreign-reach-carrying producer must thread its owned pins through born_pinned"
+        );
         StepCarried {
             inner,
+            pins: FramePins::empty(),
             step: PhantomData,
         }
     }
 
-    /// The only exit from the step brand: pair the carrier with the anchor's storage pin and hand it
-    /// to finalize. `pub(super)` so the seal/finalize sites in [`super`] can call it while
-    /// `crate::builtins` cannot — a builtin holding a `StepCarried` cannot strip the brand.
+    /// Wrap a **reach-carrying** carrier into the step brand, threading its owned foreign
+    /// [`FramePins`] — a resident binding read (the entry's pins), a merge product (the composed
+    /// bundle), a splice (the source envelope's foreign). The pins ride the step and
+    /// [`Self::seal_at_step`] consumes them into the delivery envelope, so the terminal's reach is
+    /// owned end-to-end rather than re-derived.
+    pub(crate) fn born_pinned(inner: Witnessed<T, CarrierWitness>, pins: FramePins) -> Self {
+        StepCarried {
+            inner,
+            pins,
+            step: PhantomData,
+        }
+    }
+
+    /// The only exit from the step brand: pair the carrier with the anchor's storage pin and its
+    /// owned foreign pins, and hand it to finalize. `pub(super)` so the seal/finalize sites in
+    /// [`super`] can call it while `crate::builtins` cannot — a builtin holding a `StepCarried`
+    /// cannot strip the brand.
     ///
     /// This door trusts its caller to pass the *right* host (the anchor's owner); binding that free
     /// parameter is a separate concern. The door's contract here is only that it is the unique way a
@@ -68,7 +98,7 @@ impl<'step, T: Reattachable> StepCarried<'step, T> {
         self,
         host: Rc<FrameStorage>,
     ) -> Delivered<T, CarrierWitness, FrameStorage> {
-        Delivered::seal(self.inner, host)
+        Delivered::seal(self.inner, host, self.pins)
     }
 
     /// Borrow the carrier the door built and read its pointee under an externally supplied `pin`,

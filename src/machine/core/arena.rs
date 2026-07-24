@@ -29,8 +29,7 @@ use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
     Erased, FamilyArena, FoldedPlacement, ReachDescription, Reattachable, Region, RegionHandle,
-    StorageOf,
-    StorageProfile, Stored, Witnessed,
+    StorageOf, StorageProfile, Stored, Witnessed,
 };
 
 mod frame;
@@ -69,10 +68,7 @@ impl StorageProfile for KoanStorageProfile {
                                     RecordSubstrate<'static>,
                                     (
                                         ListSubstrate<'static>,
-                                        (
-                                            DictSubstrate<'static>,
-                                            (PayloadSubstrate<'static>, ()),
-                                        ),
+                                        (DictSubstrate<'static>, (PayloadSubstrate<'static>, ())),
                                     ),
                                 ),
                             ),
@@ -205,15 +201,16 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// Mint a frozen reach description into this brand's region side table — the Koan veneer over
-    /// [`ReachDescription::mint_with_dest_bit`]. `omit` is the scope's home/lexical-ancestor policy
-    /// predicate; home-omission (self-cycle) is handled by the library. Returns the minted
-    /// description (`None` when the composed reach is empty — a region-pure value pins nothing), the
-    /// owned [`FramePins`] the holder keeps to pin its members, and the pre-omission
-    /// destination-coverage bit (`true` iff a source description or materialized host reaches this
-    /// brand's own region before home-omission drops it).
+    /// [`ReachDescription::mint_with_dest_bit`]. `sources` are the composition's owned pin bundles
+    /// (strong members — the union folds them, never a description's `Weak`). `omit` is the scope's
+    /// home/lexical-ancestor policy predicate; home-omission (self-cycle) is handled by the library.
+    /// Returns the minted description (`None` when the composed reach is empty — a region-pure value
+    /// pins nothing), the owned [`FramePins`] the holder keeps to pin its members, and the
+    /// pre-omission destination-coverage bit (`true` iff a source bundle or materialized host reaches
+    /// this brand's own region before home-omission drops it).
     pub(crate) fn mint(
         self,
-        sources: &[&FrameReach],
+        sources: &[&FramePins],
         materialize_hosts: &[Rc<FrameStorage>],
         omit: impl Fn(&KoanRegion) -> bool,
     ) -> (Option<&'a FrameReach>, FramePins, bool) {

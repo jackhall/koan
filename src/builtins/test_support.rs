@@ -361,6 +361,7 @@ pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
         cell: Delivered::hosted(
             Sealed::seal(Witnessed::resident(c)),
             crate::machine::run_root_storage(),
+            crate::machine::core::FramePins::empty(),
         ),
     }
 }
@@ -371,7 +372,11 @@ pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
 /// exactly as a scheduler pull or a resident seal would.
 #[cfg(test)]
 pub(crate) fn delivered_with_host(value: Carried<'_>, host: Rc<FrameStorage>) -> DeliveredCarried {
-    Delivered::seal(Witnessed::resident(value), host)
+    Delivered::seal(
+        Witnessed::resident(value),
+        host,
+        crate::machine::core::FramePins::empty(),
+    )
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.

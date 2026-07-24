@@ -643,7 +643,10 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     where
         W: ComposeWitness<B>,
     {
-        self.merge_composed(other, pin, W::compose, f)
+        // The generic composed witness owns whatever it names (a self-contained union), so it threads
+        // nothing out — `merge_composed`'s `X` is `()`.
+        let (out, ()) = self.merge_composed(other, pin, |l, r, d| (W::compose(l, r, d), ()), f);
+        out
     }
 
     /// [`Self::merge_pinned`] handing `f` a [`FoldedPlacement`] over the destination operand `other`'s
@@ -664,7 +667,13 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         W: ComposeWitness<B>,
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
     {
-        self.merge_composed(other, pin, W::compose, place_over_dest::<T, B, P2, Pr>(f))
+        let (out, ()) = self.merge_composed(
+            other,
+            pin,
+            |l, r, d| (W::compose(l, r, d), ()),
+            place_over_dest::<T, B, P2, Pr>(f),
+        );
+        out
     }
 
     /// The engine under [`Self::merge_pinned`] and the envelope-bearing
@@ -673,13 +682,22 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// destination's live form. Crate-private because a caller-supplied `compose` could
     /// under-cover; the two callers pass [`ComposeWitness::compose`] or the hosted carrier
     /// composition, both of which discharge the coverage obligation.
-    pub(in crate::witnessed) fn merge_composed<B: Reattachable, P: Reattachable, Pin: Witness>(
+    ///
+    /// `compose` returns the composed witness paired with a threaded value `X` — the freshly-minted
+    /// owned reach bundle for a reference-only carrier merge (threaded to the next fold step or the
+    /// terminal seal), or `()` for a self-contained composed witness that owns what it names.
+    pub(in crate::witnessed) fn merge_composed<
+        B: Reattachable,
+        P: Reattachable,
+        Pin: Witness,
+        X,
+    >(
         self,
         other: Witnessed<B, W>,
         pin: &Pin,
-        compose: impl for<'b> FnOnce(&W, &W, &B::At<'b>) -> W,
+        compose: impl for<'b> FnOnce(&W, &W, &B::At<'b>) -> (W, X),
         f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
-    ) -> Witnessed<P, W> {
+    ) -> (Witnessed<P, W>, X) {
         let Witnessed {
             value: left,
             witness: left_witness,
@@ -698,13 +716,16 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         // (`ComposeWitness`'s obligation, or the hosted composition's).
         let live_left: T::At<'_> = unsafe { left.reattach() };
         let live_right: B::At<'_> = unsafe { right.reattach() };
-        let witness = compose(&left_witness, &right_witness, &live_right);
+        let (witness, threaded) = compose(&left_witness, &right_witness, &live_right);
         let projected = f(live_left, live_right, FoldToken::mint());
         let _ = pin;
-        Witnessed {
-            value: Erased::erase(projected),
-            witness,
-        }
+        (
+            Witnessed {
+                value: Erased::erase(projected),
+                witness,
+            },
+            threaded,
+        )
     }
 }
 

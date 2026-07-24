@@ -240,21 +240,29 @@ impl<'run> KoanRuntime<'run> {
                         // re-stamps an obligation-coarsened value into the obligation's home region
                         // through the received envelope.
                         let envelope = carrier.seal_at_step(Rc::clone(anchor.owner()));
-                        let result =
-                            self.finalize_terminal(envelope, frame.and(post.obligation.as_ref()));
-                        if result.is_err() {
-                            scope.clear_placeholders_for_producer(id);
+                        // `finalize_terminal` surfaces the terminal's owned foreign bundle alongside
+                        // the sealed carrier; the scheduler seeds the retention hold with it, so no
+                        // pull re-derives the reach.
+                        match self.finalize_terminal(envelope, frame.and(post.obligation.as_ref()))
+                        {
+                            Ok((witnessed, foreign)) => {
+                                self.sched.finalize(idx, Ok(witnessed), foreign);
+                            }
+                            Err(error) => {
+                                scope.clear_placeholders_for_producer(id);
+                                self.sched.finalize(idx, Err(error), FramePins::empty());
+                            }
                         }
-                        self.sched.finalize(idx, result);
                     }
                     NodeStep::Error(error) => {
                         // An error finalizes bare (no value, no witness); the frame-gated
                         // obligation still labels it with the callee's trace frame.
                         let error = finalize_error(error, frame.and(post.obligation.as_ref()));
                         scope.clear_placeholders_for_producer(id);
-                        // A terminal error carries no value and no witness, but the producer frame
-                        // still retains until its (short-circuiting) destinations pull.
-                        self.sched.finalize(idx, Err(error));
+                        // A terminal error carries no value and no witness, so its retention hold's
+                        // foreign bundle is empty; the producer frame still retains until its
+                        // (short-circuiting) destinations pull.
+                        self.sched.finalize(idx, Err(error), FramePins::empty());
                     }
                     NodeStep::ForwardReady(producer) => {
                         // Relocate `producer`'s terminal into this slot's region via merge-transfer;
@@ -269,11 +277,17 @@ impl<'run> KoanRuntime<'run> {
                                 scope.brand().handle(),
                             ),
                         };
-                        let result = self.relocate_terminal(producer, dest);
-                        if result.is_err() {
-                            scope.clear_placeholders_for_producer(id);
+                        // The relocation threads back the relocated terminal's owned foreign bundle;
+                        // seed the retention hold with it so no pull re-derives the reach.
+                        match self.relocate_terminal(producer, dest) {
+                            Ok((witnessed, foreign)) => {
+                                self.sched.finalize(idx, Ok(witnessed), foreign);
+                            }
+                            Err(error) => {
+                                scope.clear_placeholders_for_producer(id);
+                                self.sched.finalize(idx, Err(error), FramePins::empty());
+                            }
                         }
-                        self.sched.finalize(idx, result);
                     }
                     NodeStep::Replace {
                         work: new_work,

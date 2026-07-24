@@ -49,7 +49,6 @@ impl Stored<ShapeProfile> for ValFamily {
     }
 }
 
-
 fn frame() -> Rc<ShapeFrame> {
     RegionHost::fresh(None)
 }
@@ -81,10 +80,9 @@ fn reach_element(
 ) -> Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> {
     let value: &u32 = store_val(content, v);
     // `content` is foreign to `host`, so it enters the minted description through the
-    // materialize-hosts arm; the returned bundle is dropped here, and the envelope re-derives its
-    // own owned foreign bundle from the description at `seal` (under the host pin, while `content`'s
-    // handle keeps it live).
-    let (reach, _bundle) = ReachDescription::mint(
+    // materialize-hosts arm; the returned bundle is the value's owned foreign reach, threaded into
+    // the envelope at `seal` so each holder owns its pins.
+    let (reach, bundle) = ReachDescription::mint(
         RegionHandle::from_owner(&**host),
         &[],
         &[Rc::clone(content)],
@@ -93,6 +91,7 @@ fn reach_element(
     Delivered::seal(
         Witnessed::from_erased(Erased::erase(value), Carrier::new(false, reach)),
         Rc::clone(host),
+        bundle,
     )
 }
 
@@ -106,11 +105,13 @@ fn kept_transfer_materializes_residence_host() {
     let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
         Witnessed::resident(store_val(&producer, 7)),
         Rc::clone(&producer),
+        PinBundle::empty(),
     );
     let dest = frame();
-    let merged: Witnessed<RefValFamily, Carrier<ShapeFrame>> = element
-        .transfer_into::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
+    let (merged, _bundle): (Witnessed<RefValFamily, Carrier<ShapeFrame>>, _) =
+        element.transfer_into::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
+            &PinBundle::empty(),
             Residence::Kept,
             |value, _handle, _brand| value,
         );
@@ -135,22 +136,26 @@ fn kept_transfer_unions_element_reach_across_folds() {
     let acc0: Witnessed<PairAcc, Carrier<ShapeFrame>> =
         StepContext::new(Rc::clone(&dest))
             .alloc_handle::<ShapeProfile, PairAcc>(|handle| (handle, Vec::new()));
-    let acc1 = reach_element(&dest, &content_a, 1).transfer_into::<PairAcc, PairAcc, ShapeProfile>(
-        acc0,
-        Residence::Kept,
-        |value, (handle, mut values), _brand| {
-            values.push(value);
-            (handle, values)
-        },
-    );
-    let acc2 = reach_element(&dest, &content_b, 2).transfer_into::<PairAcc, PairAcc, ShapeProfile>(
-        acc1,
-        Residence::Kept,
-        |value, (handle, mut values), _brand| {
-            values.push(value);
-            (handle, values)
-        },
-    );
+    let (acc1, acc1_bundle) = reach_element(&dest, &content_a, 1)
+        .transfer_into::<PairAcc, PairAcc, ShapeProfile>(
+            acc0,
+            &PinBundle::empty(),
+            Residence::Kept,
+            |value, (handle, mut values), _brand| {
+                values.push(value);
+                (handle, values)
+            },
+        );
+    let (acc2, _acc2_bundle) = reach_element(&dest, &content_b, 2)
+        .transfer_into::<PairAcc, PairAcc, ShapeProfile>(
+            acc1,
+            &acc1_bundle,
+            Residence::Kept,
+            |value, (handle, mut values), _brand| {
+                values.push(value);
+                (handle, values)
+            },
+        );
     let pair: Witnessed<PairVals, Carrier<ShapeFrame>> =
         acc2.map_pinned(&dest, |(_handle, values), _brand| (values[0], values[1]));
 
@@ -173,11 +178,13 @@ fn copied_transfer_materializes_borrowing_host() {
             Carrier::new(true, None),
         ),
         Rc::clone(&producer),
+        PinBundle::empty(),
     );
     let dest = frame();
-    let merged: Witnessed<RefValFamily, Carrier<ShapeFrame>> = element
-        .transfer_into::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
+    let (merged, _bundle): (Witnessed<RefValFamily, Carrier<ShapeFrame>>, _) =
+        element.transfer_into::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
+            &PinBundle::empty(),
             Residence::Copied,
             |value, _handle, _brand| value,
         );
@@ -198,11 +205,13 @@ fn copied_transfer_releases_residence_only_host() {
     let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
         Witnessed::resident(store_val(&producer, 9)),
         Rc::clone(&producer),
+        PinBundle::empty(),
     );
     let dest = frame();
-    let copied: Witnessed<ValFamily, Carrier<ShapeFrame>> = element
-        .transfer_into::<RegionHandleFamily<ShapeProfile>, ValFamily, ShapeProfile>(
+    let (copied, _bundle): (Witnessed<ValFamily, Carrier<ShapeFrame>>, _) =
+        element.transfer_into::<RegionHandleFamily<ShapeProfile>, ValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
+            &PinBundle::empty(),
             Residence::Copied,
             |value, _handle, _brand| *value,
         );
@@ -306,10 +315,11 @@ fn alloc_with_folds_dep_reach_before_result_read() {
     let dep: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
         Witnessed::resident(store_val(&dep_frame, 3)),
         Rc::clone(&dep_frame),
+        PinBundle::empty(),
     );
     let own = frame();
     let ctx: StepContext<ShapeFrame> = StepContext::new(Rc::clone(&own));
-    let built: Witnessed<RefValFamily, Carrier<ShapeFrame>> = ctx
+    let (built, _bundle): (Witnessed<RefValFamily, Carrier<ShapeFrame>>, _) = ctx
         .alloc_with::<RefValFamily, RefValFamily, ShapeProfile>(
             &[&dep],
             |_region, views, _token| views[0],

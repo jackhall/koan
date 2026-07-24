@@ -27,8 +27,8 @@
 use std::rc::Rc;
 
 use super::{
-    with_branded_ref, ComposeWitness, Erased, PinBundle, PinsRegion, Reattachable, ReachDescription,
-    Region, RegionHandle, RegionOwner, StorageProfile, Witnessed,
+    with_branded_ref, Erased, FoldToken, FoldedPlacement, PinBundle, PinsRegion, ReachDescription,
+    Reattachable, Region, RegionHandle, RegionOwner, StorageProfile, Witness, Witnessed,
 };
 
 /// [`Reattachable`] family for a lifetime-erased `&ReachDescription<F>` — the erased reach
@@ -164,6 +164,16 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         !self.borrows_host && self.reach.is_none()
     }
 
+    /// Whether the value's borrows reach a **foreign** region — i.e. whether the value's owned pin
+    /// bundle is non-empty. Distinct from [`Self::is_empty`], which also requires the home-borrow
+    /// bit (`borrows_host`) unset: a value that borrows only its own home (a fresh closure capturing
+    /// its defining scope) reaches nothing foreign, so its owned pins are empty even though it is not
+    /// `is_empty`. The empty-pins Done-arm seal ([`StepCarried::born`](crate::witnessed) veneer) keys
+    /// on this, not on `is_empty`.
+    pub fn has_foreign_reach(&self) -> bool {
+        self.reach.is_some()
+    }
+
     /// Read the reach set this carrier references, re-anchored under `pin` — the sole re-anchor of
     /// the erased reach reference. `None` reach means the empty set.
     ///
@@ -211,19 +221,6 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         self.with_reach_impl(pin, f)
     }
 
-    /// Derive the owned [`PinBundle`] of this carrier's foreign reach, upgrading the referenced
-    /// description's members — the covered-derivation the delivery envelope runs at seal time to take
-    /// ownership of the reach a reference-only carrier only names. `host` covers the description's
-    /// hosting region for the read (as in [`Self::with_reach`]); the members upgrade by their ambient
-    /// liveness at the seal point (the producer's step bundle, the resident scope's own liveness),
-    /// so the owned bundle the envelope keeps thereafter is what carries the reach across transit.
-    pub(in crate::witnessed) fn foreign_bundle(&self, host: Option<&Rc<F>>) -> PinBundle<F> {
-        self.with_reach(host, |reach| match reach {
-            None => PinBundle::empty(),
-            Some(desc) => desc.to_bundle(),
-        })
-    }
-
     /// Whether the value's foreign reach names `region` — reach members only; the borrows-into-home
     /// bit is a separate query ([`Self::borrows_host`]) because the home it refers to is the
     /// envelope's knowledge, not the carrier's. `pin` covers the reach set's hosting arena, as in
@@ -251,15 +248,18 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// public surface. Applies, via [`ReachDescription::mint`]: home-omission (`dest`'s own region
     /// is never a member), the caller's `omit` policy predicate, and outer-chain subsumption.
     ///
-    /// `host` doubles as the pin for the source-description read (`with_reach`); `None` asserts
-    /// the source region is ambiently covered (a resident value's own region, a held step pin) —
-    /// and also that there is no residence to materialize, so `mode` only gates a `Some` host.
-    /// Returns the minted description (`None` == empty, no allocation) hosted in `dest`, the owned
-    /// [`PinBundle`] the caller keeps to pin its members, and the borrows-into-dest bit: reach
-    /// members pinning `dest`'s region, or the `borrows_host` bit when `host` itself pins it (the
-    /// value's home *is* — or subsumes — the destination).
+    /// `source` is this carrier's own owned foreign reach bundle, threaded from the holder (the
+    /// delivery envelope's `foreign`, a binding entry's pins) — never recovered from the carrier's
+    /// description, so the composition folds strong `Rc`s. `host` is the value's producer frame
+    /// owner, materialized per `mode`; `None` asserts there is no residence to materialize (a
+    /// resident value's own region), so `mode` only gates a `Some` host. Returns the minted
+    /// description (`None` == empty, no allocation) hosted in `dest`, the owned [`PinBundle`] the
+    /// caller keeps to pin its members, and the borrows-into-dest bit: reach members pinning
+    /// `dest`'s region, or the `borrows_host` bit when `host` itself pins it (the value's home *is*
+    /// — or subsumes — the destination).
     pub(in crate::witnessed) fn mint_into<'d, P>(
         &self,
+        source: &PinBundle<F>,
         dest: RegionHandle<'d, P>,
         host: Option<&Rc<F>>,
         mode: Residence,
@@ -270,14 +270,8 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         F: RegionOwner<Region = Region<P>>,
     {
         let materialize = materialize_hosts(host, mode, self.borrows_host);
-        let (minted, bundle) = self.with_reach(host, |reach| {
-            let sources: &[&ReachDescription<F>] = match &reach {
-                Some(r) => std::slice::from_ref(r),
-                None => &[],
-            };
-            ReachDescription::mint(dest, sources, &materialize, omit)
-        });
-        let borrows_into_dest = self.reach_covers(host, dest.region())
+        let (minted, bundle) = ReachDescription::mint(dest, &[source], &materialize, omit);
+        let borrows_into_dest = source.pins_region(dest.region())
             || (mode != Residence::Released
                 && self.borrows_host
                 && host.is_some_and(|h| h.pins_region(dest.region())));
@@ -285,49 +279,45 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     }
 
     /// The relocation composition behind the envelope's
-    /// [`transfer_into`](super::Delivered::transfer_into) and the generic [`ComposeWitness`]
-    /// impl: mint BOTH operands' exact reach — `right`'s (an accumulator's prior folds, already
-    /// minted into this same `dest` arena, so re-minting is idempotent via subsumption) and
-    /// `left`'s (the newly-folded source) — plus `left`'s `host` per `mode`, into `dest`'s arena,
-    /// and compute the composed borrows-into-dest bit. Never `left` alone, or a multi-step
-    /// accumulator fold would drop everything folded before this step.
+    /// [`transfer_into`](super::Delivered::transfer_into) and the live-carrier reach merges: mint
+    /// BOTH operands' exact reach — `right`'s (an accumulator's prior folds, threaded as
+    /// `right_bundle`) and `left`'s (the newly-folded source, `left_bundle`) — plus `left`'s `host`
+    /// per `mode`, into `dest`'s arena, and compute the composed borrows-into-dest bit. Never `left`
+    /// alone, or a multi-step accumulator fold would drop everything folded before this step. Both
+    /// operand bundles are owned and threaded in — the composition folds strong `Rc`s, never a
+    /// description's `Weak`.
+    ///
+    /// Returns the composed carrier paired with the freshly-minted owned bundle: `dest`'s region
+    /// **retains a clone** for the region's life (what keeps the relocated value's reach alive when
+    /// the product is consumed in place — read directly rather than re-enveloped), and the returned
+    /// bundle threads to the next fold step or the terminal seal.
     pub(in crate::witnessed) fn compose_into<'b, P>(
         left: &Self,
         right: &Self,
+        left_bundle: &PinBundle<F>,
+        right_bundle: &PinBundle<F>,
         dest: RegionHandle<'b, P>,
         host: Option<&Rc<F>>,
         mode: Residence,
-    ) -> Self
+    ) -> (Self, PinBundle<F>)
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
         let materialize = materialize_hosts(host, mode, left.borrows_host);
-        // `left`'s reach reads under the supplied host pin; `right`'s reach is the destination's
-        // own prior folds, hosted in `dest`'s arena — covered by the live `dest` the caller is
-        // composing against. The composed value re-homes into `dest` and its reach description is
-        // non-owning, so `dest`'s region **retains** the owned bundle for the region's life — the
-        // liveness the old arena-hosted owning set provided. This is what keeps the relocated value's
-        // reach alive when the result is read directly (a `transfer_into` whose product is consumed
-        // in place) rather than re-enveloped.
-        let minted = left.with_reach(host, |left_reach| {
-            right.with_reach(None, |right_reach| {
-                let sources: Vec<&ReachDescription<F>> =
-                    left_reach.into_iter().chain(right_reach).collect();
-                let (desc, bundle) = ReachDescription::mint(dest, &sources, &materialize, |_| false);
-                dest.region().retain_reach(bundle);
-                desc
-            })
-        });
+        let (minted, bundle) =
+            ReachDescription::mint(dest, &[left_bundle, right_bundle], &materialize, |_| false);
+        dest.region().retain_reach(bundle.clone());
         let borrows_into_dest = right.borrows_host
-            || left.reach_covers(host, dest.region())
+            || left_bundle.pins_region(dest.region())
             || (mode != Residence::Released
                 && left.borrows_host
                 && host.is_some_and(|h| h.pins_region(dest.region())));
-        Carrier {
+        let carrier = Carrier {
             borrows_host: borrows_into_dest,
             reach: minted.map(Erased::<HostedSetRef<F>>::erase),
-        }
+        };
+        (carrier, bundle)
     }
 }
 
@@ -336,13 +326,15 @@ impl<F: PinsRegion + 'static> Carrier<F> {
 /// caller's context covers ambiently (the run-teardown rehome path). Resident twin of
 /// [`Delivered::mint_reach`](super::Delivered::mint_reach).
 impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
-    /// Mints this resident value's reach into `dest`.
+    /// Mints this resident value's reach into `dest`. `source` is the value's own owned foreign
+    /// reach bundle, threaded from its holder — never recovered from the carrier's description.
     ///
     /// Resident twin of [`Delivered::mint_reach`](super::Delivered::mint_reach): the value already
     /// lives in a region the caller's context covers ambiently, so there is no residence host to
     /// materialize and no `Residence` mode to choose.
     pub fn mint_resident_reach<'d, P>(
         &self,
+        source: &PinBundle<F>,
         dest: RegionHandle<'d, P>,
         omit: impl Fn(&Region<P>) -> bool,
     ) -> (Option<&'d ReachDescription<F>>, PinBundle<F>, bool)
@@ -353,7 +345,87 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
         // `host: None` means there is no residence host to materialize, so `Residence::Kept` here
         // is arbitrary — `mint_into`'s `materialize_hosts` returns an empty vec under either mode
         // once `host` is `None`.
-        self.witness().mint_into(dest, None, Residence::Kept, omit)
+        self.witness()
+            .mint_into(source, dest, None, Residence::Kept, omit)
+    }
+
+    /// Merge two **live** reference-only carriers under an externally supplied `pin` — the
+    /// bundle-threading twin of [`Witnessed::merge_pinned`] for the [`Carrier`] witness, whose
+    /// reach composition (unlike the self-contained generic [`super::ComposeWitness`]) folds owned
+    /// bundles. `self_bundle` / `other_bundle` are the two operands' owned foreign reach bundles
+    /// (threaded from their holders — an accumulator's prior fold, a resident read's entry pins);
+    /// there is no residence host to fold (both operands are resident, `host: None` /
+    /// `Residence::Copied`), so this is the pure reach mint. Returns the composed carrier paired with
+    /// the freshly-minted owned bundle, to thread onward or seal.
+    pub fn merge_reach<B, P, Pr, Pin>(
+        self,
+        self_bundle: &PinBundle<F>,
+        other: Witnessed<B, Carrier<F>>,
+        other_bundle: &PinBundle<F>,
+        pin: &Pin,
+        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
+    ) -> (Witnessed<P, Carrier<F>>, PinBundle<F>)
+    where
+        B: Reattachable,
+        P: Reattachable,
+        Pin: Witness,
+        Pr: StorageProfile<FrameOwner = F> + 'static,
+        F: RegionOwner<Region = Region<Pr>>,
+        for<'b> B::At<'b>: super::HasRegionHandle<'b, Pr>,
+    {
+        self.merge_composed(
+            other,
+            pin,
+            |left, right, live_dest| {
+                Carrier::compose_into(
+                    left,
+                    right,
+                    self_bundle,
+                    other_bundle,
+                    live_dest.region_handle(),
+                    None,
+                    Residence::Copied,
+                )
+            },
+            f,
+        )
+    }
+
+    /// [`Self::merge_reach`] handing `f` a [`FoldedPlacement`] over the destination operand's own
+    /// handle instead of a bare [`FoldToken`] — the bundle-threading twin of
+    /// [`Witnessed::merge_pinned_placing`].
+    pub fn merge_reach_placing<B, P, Pr, Pin>(
+        self,
+        self_bundle: &PinBundle<F>,
+        other: Witnessed<B, Carrier<F>>,
+        other_bundle: &PinBundle<F>,
+        pin: &Pin,
+        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P::At<'b>,
+    ) -> (Witnessed<P, Carrier<F>>, PinBundle<F>)
+    where
+        B: Reattachable,
+        P: Reattachable,
+        Pin: Witness,
+        Pr: StorageProfile<FrameOwner = F> + 'static,
+        F: RegionOwner<Region = Region<Pr>>,
+        for<'b> B::At<'b>: super::HasRegionHandle<'b, Pr>,
+    {
+        self.merge_composed(
+            other,
+            pin,
+            |left, right, live_dest| {
+                Carrier::compose_into(
+                    left,
+                    right,
+                    self_bundle,
+                    other_bundle,
+                    live_dest.region_handle(),
+                    None,
+                    Residence::Copied,
+                )
+            },
+            super::place_over_dest::<T, B, P, Pr>(f),
+        )
     }
 }
 
@@ -369,28 +441,6 @@ fn materialize_hosts<F>(host: Option<&Rc<F>>, mode: Residence, borrows_host: boo
         // `Released` never materializes the host, regardless of `borrows_host` — every other case
         // (no host, or `Copied`/`Kept` combinations already handled above) is likewise empty.
         _ => Vec::new(),
-    }
-}
-
-// SAFETY: `ComposeWitness`'s obligation is representational for a reference-only witness: the
-// composed carrier must NAME every region the relocated value's borrows reach, relative to `dest`.
-// `compose_into` mints both operands' exact reach into `dest`'s own arena (so the composed
-// reference is covered by whatever covers `dest`) and derives the borrows-into-dest bit from both
-// operands' bits and members. With no host in hand there is nothing to materialize — this is the
-// PURE reach mint; a relocation whose source has a residence pin to fold routes the
-// envelope-bearing [`Delivered::transfer_into`](super::Delivered::transfer_into) instead, which
-// supplies the host. Both operands' backings are externally covered across the composition (the
-// pinned-merge caller's contract).
-unsafe impl<F, P, B> ComposeWitness<B> for Carrier<F>
-where
-    F: PinsRegion + RegionOwner<Region = Region<P>> + 'static,
-    P: StorageProfile<FrameOwner = F>,
-    B: Reattachable,
-    for<'b> B::At<'b>: HasRegionHandle<'b, P>,
-    P: 'static,
-{
-    fn compose<'b>(left: &Self, right: &Self, dest: &B::At<'b>) -> Self {
-        Self::compose_into(left, right, dest.region_handle(), None, Residence::Copied)
     }
 }
 
@@ -501,8 +551,13 @@ mod tests {
         let dest = root_frame();
         let c: Carrier<TestFrame> = Carrier::default();
         let handle = RegionHandle::from_owner(&*dest);
-        let (minted, _bundle, borrows_into_dest) =
-            c.mint_into(handle, Some(&host), Residence::Kept, |_| false);
+        let (minted, _bundle, borrows_into_dest) = c.mint_into(
+            &PinBundle::empty(),
+            handle,
+            Some(&host),
+            Residence::Kept,
+            |_| false,
+        );
         let set = minted.expect("Kept materializes the residence host");
         assert!(set.pins_region(host.region()));
         assert!(!borrows_into_dest);
@@ -514,8 +569,13 @@ mod tests {
         let dest = root_frame();
         let c: Carrier<TestFrame> = Carrier::default();
         let handle = RegionHandle::from_owner(&*dest);
-        let (minted, _bundle, borrows_into_dest) =
-            c.mint_into(handle, Some(&host), Residence::Copied, |_| false);
+        let (minted, _bundle, borrows_into_dest) = c.mint_into(
+            &PinBundle::empty(),
+            handle,
+            Some(&host),
+            Residence::Copied,
+            |_| false,
+        );
         assert!(
             minted.is_none(),
             "a residence-only host never rides a copied re-home"
@@ -529,7 +589,13 @@ mod tests {
         let dest = root_frame();
         let c: Carrier<TestFrame> = Carrier::new(true, None);
         let handle = RegionHandle::from_owner(&*dest);
-        let (minted, _bundle, _) = c.mint_into(handle, Some(&host), Residence::Copied, |_| false);
+        let (minted, _bundle, _) = c.mint_into(
+            &PinBundle::empty(),
+            handle,
+            Some(&host),
+            Residence::Copied,
+            |_| false,
+        );
         let set = minted.expect("a borrows_host value keeps its old home as a member");
         assert!(set.pins_region(host.region()));
     }
@@ -543,8 +609,13 @@ mod tests {
         // no surviving borrow, so the host never materializes regardless.
         let c: Carrier<TestFrame> = Carrier::new(true, None);
         let handle = RegionHandle::from_owner(&*dest);
-        let (minted, _bundle, borrows_into_dest) =
-            c.mint_into(handle, Some(&host), Residence::Released, |_| false);
+        let (minted, _bundle, borrows_into_dest) = c.mint_into(
+            &PinBundle::empty(),
+            handle,
+            Some(&host),
+            Residence::Released,
+            |_| false,
+        );
         assert!(
             minted.is_none(),
             "Released never materializes the host, even when borrows_host is set"
@@ -562,8 +633,15 @@ mod tests {
         let left: Carrier<TestFrame> = Carrier::new(true, None);
         let right: Carrier<TestFrame> = Carrier::default();
         let handle = RegionHandle::from_owner(&*dest);
-        let composed =
-            Carrier::compose_into(&left, &right, handle, Some(&host), Residence::Released);
+        let (composed, _bundle) = Carrier::compose_into(
+            &left,
+            &right,
+            &PinBundle::empty(),
+            &PinBundle::empty(),
+            handle,
+            Some(&host),
+            Residence::Released,
+        );
         assert!(
             !composed.borrows_host(),
             "left's host-pin term is dropped from the composed bit under Released"
@@ -576,7 +654,13 @@ mod tests {
         let c: Carrier<TestFrame> = Carrier::new(true, None);
         let handle = RegionHandle::from_owner(&*dest);
         // The value's home IS the destination (host pins dest's region): borrows_host carries over.
-        let (_, _bundle, borrows_into_dest) = c.mint_into(handle, Some(&dest), Residence::Kept, |_| false);
+        let (_, _bundle, borrows_into_dest) = c.mint_into(
+            &PinBundle::empty(),
+            handle,
+            Some(&dest),
+            Residence::Kept,
+            |_| false,
+        );
         assert!(borrows_into_dest);
     }
 
@@ -586,11 +670,14 @@ mod tests {
         let host = root_frame();
         let dest = root_frame();
         let host_handle = RegionHandle::from_owner(&*host);
-        let (source, _bundle) =
+        let (source, bundle) =
             ReachDescription::mint(host_handle, &[], &[Rc::clone(&foreign)], |_| false);
         let c: Carrier<TestFrame> = Carrier::new(false, source);
         let dest_handle = RegionHandle::from_owner(&*dest);
-        let (minted, _bundle, _) = c.mint_into(dest_handle, Some(&host), Residence::Copied, |_| false);
+        let (minted, _bundle, _) =
+            c.mint_into(&bundle, dest_handle, Some(&host), Residence::Copied, |_| {
+                false
+            });
         let set = minted.expect("reach members always mint forward");
         assert!(set.pins_region(foreign.region()));
         assert!(

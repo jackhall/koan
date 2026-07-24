@@ -7,4 +7,4 @@ error[E0521]: borrowed data escapes outside of closure
    |                           --------- `allocator` is a reference that is only valid in the closure body
 12 |         // Smuggle the door product out of its step: `'b` escapes into `escaped`.
 13 |         escaped = allocator.alloc_object_scalar(&KObject::Number(1.0));
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `allocator` escapes the closure body here
+   |         ^^^^^^^ `allocator` escapes the closure body here

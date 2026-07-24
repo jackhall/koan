@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::{FoldingBrand, KoanRegionExt, KoanStorageProfile};
+use crate::machine::core::{FoldingBrand, FramePins, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
@@ -74,15 +74,19 @@ fn fold_cells(
     view: &SchedulerView<'_, '_>,
     cells: impl Iterator<Item = DeliveredCarried>,
     capacity: usize,
-) -> Witnessed<AggBuildFamily, CarrierWitness> {
+) -> (Witnessed<AggBuildFamily, CarrierWitness>, FramePins) {
     let dest_frame = view.dest_frame();
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame, |region| {
         (region.handle(), Vec::with_capacity(capacity))
     });
-    cells.fold(acc0, |acc, cell| {
+    // Thread the accumulator's owned foreign bundle across the fold: each cell's transfer composes
+    // its reach into the aggregate region and hands back the composed carrier + bundle. The empty
+    // seed pins nothing.
+    cells.fold((acc0, FramePins::empty()), |(acc, acc_bundle), cell| {
         let mode = copied_seam_mode(&cell);
         cell.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
             acc,
+            &acc_bundle,
             mode,
             |value, (region, mut cells), placement| {
                 cells.push(copy_held_from_carried(
@@ -162,7 +166,7 @@ impl<'step> KoanRuntime<'step> {
                 }
                 cells.push(cell_carrier(row.value, terminals));
             }
-            let acc = fold_cells(view, cells.into_iter(), n);
+            let (acc, pins) = fold_cells(view, cells.into_iter(), n);
             // The pin: the destination frame, whose arena holds the set the folds minted — through
             // it every producer the accumulated `Held` views point into.
             let dest_frame = view.dest_frame();
@@ -184,7 +188,7 @@ impl<'step> KoanRuntime<'step> {
             // from the accumulator alone, blind to that fact, so force it here rather than
             // under-report the value's own self-borrow.
             let witnessed = force_substrate_borrows_host(witnessed, &dest_frame);
-            Ok(StepCarried::born(witnessed))
+            Ok(StepCarried::born_pinned(witnessed, pins))
         });
         self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
     }
@@ -302,7 +306,8 @@ impl<'step> KoanRuntime<'step> {
                 let carrier = KoanRegion::alloc_witnessed(Rc::clone(&frame), move |region| {
                     Carried::Object(region.alloc_object(other.resolve_region_pure()))
                 });
-                Slot::Static(Delivered::seal(carrier, frame))
+                // A region-pure static literal reaches nothing foreign, so it seals empty.
+                Slot::Static(Delivered::seal(carrier, frame, FramePins::empty()))
             }
         }
     }

@@ -162,12 +162,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 .scope
                 .bind_checked(name, value.deep_clone(), bind_index, ctx.types),
         };
-        let (allocated, stored) = match bound {
-            Ok(pair) => pair,
+        let (allocated, stored, pins) = match bound {
+            Ok(triple) => triple,
             Err(e) => return done_err(e),
         };
-        Action::Done(Ok(StepCarried::born(
+        // The bound value's own owned foreign reach rides the terminal carrier out of the step, so
+        // its reached regions are pinned across transit (the delivery envelope), threaded from the
+        // bind rather than re-derived at seal.
+        Action::Done(Ok(StepCarried::born_pinned(
             ctx.scope.resident_value_carrier(allocated, stored),
+            pins,
         )))
     }
 }

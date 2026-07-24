@@ -79,13 +79,14 @@ impl<'run> KoanRuntime<'run> {
                 // The dest rides an empty-set `resident`: the run region outlives everything and is
                 // externally pinned, and yoking the run-root frame here would re-form a reference
                 // cycle into the drained value's witness.
-                if let Ok(witnessed) = self.relocate_terminal(
+                if let Ok((witnessed, pins)) = self.relocate_terminal(
                     id,
                     Witnessed::<DestHandleFamily, CarrierWitness>::resident(root.brand().handle()),
                 ) {
                     // Mint the rehomed terminal's reach into the run root's arena so those regions stay
-                    // alive past scheduler teardown.
-                    let _ = root.resident_reach_of(&witnessed);
+                    // alive past scheduler teardown, from the value's own owned foreign bundle the
+                    // relocation threaded back.
+                    let _ = root.resident_reach_of(&witnessed, &pins);
                     self.sched.rehome_terminal(id, Ok(witnessed));
                 }
             }

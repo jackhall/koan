@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use super::Scope;
 use crate::machine::core::{
-    FoldingBrand, FramePins, FrameReach, FrameStorage, KoanRegion, KoanStorageProfile, StoredReach,
+    FoldingBrand, FramePins, FrameStorage, KoanRegion, KoanStorageProfile, StoredReach,
 };
 use crate::machine::model::{
     copy_object_into, copy_or_pin, still_borrows_host, Carried, CarriedFamily, KObject, KType,
@@ -132,9 +132,10 @@ impl<'a> Scope<'a> {
     pub(crate) fn resident_reach_of<T: Reattachable>(
         &self,
         cell: &Witnessed<T, CarrierWitness>,
+        source: &FramePins,
     ) -> StoredReach<'a> {
         let (foreign, pins, borrows_into_home) =
-            cell.mint_resident_reach(self.brand().handle(), |region| {
+            cell.mint_resident_reach(source, self.brand().handle(), |region| {
                 self.covers_region_ambiently(region)
             });
         // The rehomed value stays resident in this scope's region past scheduler teardown, so the
@@ -193,12 +194,16 @@ impl<'a> Scope<'a> {
     pub(crate) fn seal_resident_delivered(
         &self,
         witnessed: Witnessed<CarriedFamily, CarrierWitness>,
+        pins: FramePins,
     ) -> DeliveredCarried {
         let home = self
             .region_owner()
             .upgrade()
             .expect("the resident scope's region owner is held while its value is sealed");
-        Delivered::seal(witnessed, home)
+        // The resident carrier's owned foreign reach — a clone of the binding entry's pins, threaded
+        // from the read — travels with the envelope, so the reached regions are owned across transit
+        // rather than re-derived from the carrier's description.
+        Delivered::seal(witnessed, home, pins)
     }
 
     /// Adopt a sealed dep carrier into this scope. The two channels adopt differently:
@@ -421,9 +426,14 @@ impl<'a> Scope<'a> {
             self.brand().handle(),
         );
         let mut projection_error: Option<KError> = None;
-        let copied = cell
+        // The destination is a bare region handle (empty reach), so its operand bundle is empty. The
+        // transfer's composed bundle is retained in this scope's region (by the composition), which
+        // covers the rebuilt value read in place; the binding's own stored reach is minted
+        // separately above, so the composed bundle is discarded here.
+        let (copied, _composed) = cell
             .transfer_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 dest,
+                &FramePins::empty(),
                 mode,
                 |value, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement);
@@ -480,9 +490,10 @@ impl<'a> Scope<'a> {
     /// only the home frame's own storage pin.
     pub(crate) fn child_module_reach(&self, child: &Scope<'a>) -> (StoredReach<'a>, FramePins) {
         let home = self.region_owner().upgrade();
-        let entry_sets: Vec<&FrameReach> = child.bindings().entry_reaches();
+        let entry_bundles: Vec<FramePins> = child.bindings().entry_bundles();
+        let entry_refs: Vec<&FramePins> = entry_bundles.iter().collect();
         let hosts: Vec<Rc<FrameStorage>> = child.region_owner().upgrade().into_iter().collect();
-        let (foreign, pins, borrows_into_home) = self.brand().mint(&entry_sets, &hosts, |region| {
+        let (foreign, pins, borrows_into_home) = self.brand().mint(&entry_refs, &hosts, |region| {
             home.as_ref().is_some_and(|h| h.pins_region(region))
         });
         (

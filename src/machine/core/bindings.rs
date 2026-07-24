@@ -148,6 +148,9 @@ pub enum MemberResolution<'a> {
         /// whole off the module's own `data` entry — so an ATTR read replays the same opaque token
         /// into a resident carrier rather than re-asserting single-frame co-location.
         stored: StoredReach<'a>,
+        /// A clone of the member entry's owned foreign pin bundle — threaded into a delivery
+        /// envelope when the ATTR read's carrier escapes to a new holder (the resident seal).
+        pins: FramePins,
     },
     Type {
         /// The member type as a `Copy` handle — interned in the run frame's registry, so an ATTR
@@ -167,6 +170,10 @@ pub struct ValueHit<'a> {
     /// off the `data` entry so the read wrapper does not hold the `RefCell` borrow across the
     /// carrier build.
     pub stored: StoredReach<'a>,
+    /// A clone of the binding entry's **owned** foreign pin bundle — the ownership the read threads
+    /// into a delivery envelope when the carrier escapes to a new holder (the resident seal), so the
+    /// reached regions are owned end-to-end rather than re-derived from the description.
+    pub pins: FramePins,
 }
 
 /// Outcome of a per-scope `lookup_function` call. Visibility (per
@@ -393,11 +400,12 @@ impl<'a> Bindings<'a> {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<MemberResolution<'a>> {
-        if let Some((obj, idx, reach, _pins)) = self.data.borrow().get(name) {
+        if let Some((obj, idx, reach, pins)) = self.data.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(MemberResolution::Value {
                     obj,
                     stored: *reach,
+                    pins: pins.clone(),
                 });
             }
         }
@@ -417,11 +425,12 @@ impl<'a> Bindings<'a> {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<NameLookup<ValueHit<'a>>> {
-        if let Some((obj, idx, reach, _pins)) = self.data.borrow().get(name) {
+        if let Some((obj, idx, reach, pins)) = self.data.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(NameLookup::Bound(ValueHit {
                     obj,
                     stored: *reach,
+                    pins: pins.clone(),
                 }));
             }
         }
@@ -528,14 +537,15 @@ impl<'a> Bindings<'a> {
         Ok(ApplyOutcome::Applied)
     }
 
-    /// Every value binding entry's hosted reach set, for the seal-time module-reach union. Type
-    /// entries carry no reach — a bound `KType` is owned data — so `data` is the whole union. Refs
-    /// are `'a` (region-arena hosted), so they outlive the returned `Vec`.
-    pub(crate) fn entry_reaches(&self) -> Vec<&'a FrameReach> {
+    /// Every value binding entry's **owned** foreign pin bundle, cloned for the seal-time
+    /// module-reach union. Type entries carry no reach — a bound `KType` is owned data — so `data`
+    /// is the whole union. The clones are owned (not borrowed from the `RefCell`), so they outlive
+    /// the returned `Vec`; the union folds their strong members, never a description's `Weak`.
+    pub(crate) fn entry_bundles(&self) -> Vec<FramePins> {
         self.data
             .borrow()
             .values()
-            .filter_map(|(_, _, r, _)| r.foreign)
+            .map(|(_, _, _, pins)| pins.clone())
             .collect()
     }
 
@@ -612,9 +622,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn data(
-        &self,
-    ) -> Ref<'_, HashMap<String, DataEntry<'a>>> {
+    pub fn data(&self) -> Ref<'_, HashMap<String, DataEntry<'a>>> {
         self.data.borrow()
     }
 
@@ -856,7 +864,13 @@ impl<'a> Bindings<'a> {
         // Clone each entry's owning pin bundle into the snapshot: the replay installs an independent
         // copy of the source's reach, so the target owns its members for its own entry's life while
         // the source keeps its own.
-        let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex, StoredReach<'a>, FramePins)> = src
+        let snapshot: Vec<(
+            String,
+            &'a KObject<'a>,
+            BindingIndex,
+            StoredReach<'a>,
+            FramePins,
+        )> = src
             .data
             .borrow()
             .iter()

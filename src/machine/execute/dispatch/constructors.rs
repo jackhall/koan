@@ -311,7 +311,8 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind) -> Out
         })
         .collect();
     let combine_finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {
-        finish_witnessed(view, &kind, terminals).map(StepCarried::born)
+        finish_witnessed(view, &kind, terminals)
+            .map(|(witnessed, pins)| StepCarried::born_pinned(witnessed, pins))
     });
     Await::on(Deps::from_owned(deps)).finish_witnessed(combine_finish)
 }
@@ -339,17 +340,24 @@ pub(crate) fn build_type_operand<'step>(
         .region_owner()
         .upgrade()
         .map_or_else(FramePins::empty, FramePins::singleton);
-    identity_carrier.merge_pinned::<DestHandleFamily, RegionTypeFamily, _>(
-        dest_brand,
-        &pin,
-        |carried, brand, _b| {
-            let kt = match carried {
-                Carried::Type(t) => t,
-                _ => unreachable!("the identity carrier is always a Type"),
-            };
-            (brand, kt)
-        },
-    )
+    // Both operands are empty-reach (a `Copy` identity handle and a bare dest handle), so both
+    // owned bundles are empty and the composed bundle is empty — the type operand carries no reach
+    // for the caller to thread, so it is discarded.
+    let (operand, _empty) = identity_carrier
+        .merge_reach::<DestHandleFamily, RegionTypeFamily, KoanStorageProfile, _>(
+            &FramePins::empty(),
+            dest_brand,
+            &FramePins::empty(),
+            &pin,
+            |carried, brand, _b| {
+                let kt = match carried {
+                    Carried::Type(t) => t,
+                    _ => unreachable!("the identity carrier is always a Type"),
+                };
+                (brand, kt)
+            },
+        );
+    operand
 }
 
 /// Seal a declaration's nominal identity as a `Carried::Type` terminal. A `KType` is a `Copy`
@@ -371,7 +379,7 @@ fn finish_witnessed<'step>(
     view: &SchedulerView<'step, '_>,
     kind: &CtorKind,
     terminals: DepResults<'_, &DepTerminal<'step>>,
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError> {
     // A constructor parks on its value subs only (all owned, no park producers), so its results are
     // exactly the owned suffix — read them as one slice.
     let terminals = terminals.owned_slice();
@@ -382,10 +390,13 @@ fn finish_witnessed<'step>(
             let collapse =
                 check_newtype_repr(*identity, terminals[0].value.object(), view.types())?;
             let home = build_type_operand(scope, view.dest_frame(), *identity);
+            // The type operand is empty-reach, so its dest bundle is empty; the transfer composes the
+            // value's reach and hands back the wrapped product's owned foreign bundle.
             Ok(terminals[0]
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
+                    &FramePins::empty(),
                     Residence::Copied,
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
@@ -420,28 +431,36 @@ fn finish_witnessed<'step>(
                 KoanRegion::yoke_branded::<RecordFieldsFamily, _>(view.dest_frame(), |region| {
                     (region.handle(), Vec::with_capacity(field_names.len()))
                 });
-            let fields = terminals
-                .iter()
-                .zip(field_names)
-                .fold(acc0, |acc, (term, name)| {
+            // Thread the accumulator's owned foreign bundle across the field fold: each field's
+            // `transfer_into` composes that field's reach into the accumulator's arena and hands back
+            // the composed carrier + bundle. The empty seed pins nothing.
+            let (fields, fields_bundle) = terminals.iter().zip(field_names).fold(
+                (acc0, FramePins::empty()),
+                |(acc, acc_bundle), (term, name)| {
                     let name = name.clone();
                     term.delivered
                         .transfer_into::<RecordFieldsFamily, RecordFieldsFamily, _>(
                             acc,
+                            &acc_bundle,
                             Residence::Copied,
                             move |value, (region, mut fields), _brand| {
                                 fields.push((name, value.object().deep_clone()));
                                 (region, fields)
                             },
                         )
-                });
+                },
+            );
             let home = build_type_operand(scope, view.dest_frame(), *identity);
             // The pin: the destination frame, whose arena holds the sets the field folds minted.
             let dest_frame = view.dest_frame();
             let types = view.types();
-            let witnessed = fields
-                .merge_pinned_placing::<RegionTypeFamily, CarriedFamily, KoanStorageProfile, _>(
+            // The type operand is empty-reach; merge the accumulated fields (their threaded bundle)
+            // with it, yielding the wrapped record and its owned foreign bundle.
+            let (witnessed, pins) = fields
+                .merge_reach_placing::<RegionTypeFamily, CarriedFamily, KoanStorageProfile, _>(
+                    &fields_bundle,
                     home,
+                    &FramePins::empty(),
                     &dest_frame,
                     |(_region, fields), (_identity_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
@@ -455,7 +474,7 @@ fn finish_witnessed<'step>(
                 );
             // Step-terminal seal: the fresh record's substrate always borrows into this same
             // `dest_frame` — force the bit rather than trust the merge's operand-only compose.
-            Ok(force_substrate_borrows_host(witnessed, &dest_frame))
+            Ok((force_substrate_borrows_host(witnessed, &dest_frame), pins))
         }
         CtorKind::Tagged {
             schema,
@@ -491,6 +510,7 @@ fn finish_witnessed<'step>(
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
+                    &FramePins::empty(),
                     Residence::Copied,
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
@@ -527,6 +547,7 @@ fn finish_witnessed<'step>(
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
+                    &FramePins::empty(),
                     Residence::Copied,
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);

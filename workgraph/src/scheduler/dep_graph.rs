@@ -9,6 +9,8 @@
 
 use std::rc::Rc;
 
+use crate::witnessed::PinBundle;
+
 use super::nodes::NodeWork;
 use super::workload::OwnerOf;
 use super::{NodeId, Workload};
@@ -42,15 +44,22 @@ pub(super) fn work_owned_edges<W: Workload>(work: &NodeWork<W>) -> Vec<DepEdge> 
 }
 
 /// The scheduler's frame-retention hold on one finalized producer slot: the producer frame's owner
-/// `Rc`, kept alive until every destination has pulled the terminal. `pulls` counts the outstanding
-/// destinations; the owner is dropped (releasing the frame) when a discharge brings `pulls` to zero.
-/// A seed of zero pulls does **not** release — it means "no current destination; wait for a late
-/// parker or an explicit free" — so only a decrement-to-zero triggers release. See
+/// `Rc` plus the terminal's owned foreign [`PinBundle`], kept alive as one unit until every
+/// destination has pulled the terminal. `pulls` counts the outstanding destinations; both halves
+/// are dropped (releasing the frame and the reached regions) when a discharge brings `pulls` to
+/// zero. A seed of zero pulls does **not** release — it means "no current destination; wait for a
+/// late parker or an explicit free" — so only a decrement-to-zero triggers release. See
 /// [design/witness-hosting.md § Retention model](../../../design/witness-hosting.md#retention-model).
-struct RetentionHold<F> {
+struct RetentionHold<F: crate::witnessed::PinsRegion> {
     /// The retained producer frame's owner. Its Drop releases the frame; the pinned read of a
     /// retained terminal re-anchors the value under a clone of it ([`DepGraph::retained_owner`]).
     owner: Rc<F>,
+    /// The terminal's owned foreign pin bundle — pinning every other region the value reaches,
+    /// threaded from the finalize hook (never re-derived from the carrier's description). Cloned
+    /// alongside `owner` at each pull to rebuild the delivery envelope ([`DepGraph::retained_foreign`]).
+    /// The owner already pins these members transitively over exactly this interval, so housing the
+    /// bundle here rather than in the slot's `Done` state keeps the timeline bit-for-bit today's.
+    foreign: PinBundle<F>,
     pulls: usize,
 }
 
@@ -175,10 +184,21 @@ impl<W: Workload> DepGraph<W> {
     }
 
     /// Seed a finalized producer's retention hold with the region owner (projected from the slot's
-    /// anchor) and its current destination count (the consumers parked on it at finalize). Called
-    /// once per Done producer, projecting the owner from the slot's own anchor.
-    pub(super) fn seed_retain(&mut self, producer: usize, owner: Rc<OwnerOf<W>>, pulls: usize) {
-        self.rows[producer].retain = Some(RetentionHold { owner, pulls });
+    /// anchor), the terminal's owned foreign pin bundle (threaded from the finalize hook), and its
+    /// current destination count (the consumers parked on it at finalize). Called once per Done
+    /// producer.
+    pub(super) fn seed_retain(
+        &mut self,
+        producer: usize,
+        owner: Rc<OwnerOf<W>>,
+        foreign: PinBundle<OwnerOf<W>>,
+        pulls: usize,
+    ) {
+        self.rows[producer].retain = Some(RetentionHold {
+            owner,
+            foreign,
+            pulls,
+        });
     }
 
     /// Record that `consumer` wired to an already-finalized retained `producer`: bump the producer's
@@ -238,6 +258,16 @@ impl<W: Workload> DepGraph<W> {
             .retain
             .as_ref()
             .map(|hold| Rc::clone(&hold.owner))
+    }
+
+    /// A clone of `producer`'s retained foreign pin bundle, or `None` for a frameless / released
+    /// producer — the owned reach [`DepGraph`] threads back into the delivery envelope at each pull,
+    /// never re-derived from the carrier's description.
+    pub(super) fn retained_foreign(&self, producer: usize) -> Option<PinBundle<OwnerOf<W>>> {
+        self.rows[producer]
+            .retain
+            .as_ref()
+            .map(|hold| hold.foreign.clone())
     }
 
     /// Drop `producer`'s retention hold outright — the owned-producer prompt release (its owning

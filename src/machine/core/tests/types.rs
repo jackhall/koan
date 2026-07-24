@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use super::super::Scope;
 use crate::builtins::test_support::{delivered_with_host, mock_declaration_site, run_root_bare};
-use crate::machine::core::{run_root_storage, FramePins, FrameStorageExt};
+use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, DeclarationSite};
@@ -70,6 +70,7 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
             },
         )),
         std::rc::Rc::clone(&storage),
+        crate::machine::core::FramePins::empty(),
     );
 
     // A separate (open) consumer scope adopts the carrier.
@@ -102,6 +103,7 @@ fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
             |r| Carried::Object(r.alloc_object(KObject::Number(9.0))),
         )),
         Rc::clone(&producer_frame),
+        crate::machine::core::FramePins::empty(),
     );
 
     // A consumer scope in a *different* frame adopts the carrier — its reach-set folds the producer.
@@ -144,9 +146,10 @@ fn child_module_reach_unions_member_entry_reaches_across_regions() {
     // module member reaching into another module's own region.
     let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
     let cell = delivered_with_host(Carried::Object(obj), Rc::clone(&inner_storage));
-    let (stored, _host_pins) = source_scope.host_reach_of(&cell);
-    // Drop the envelope now: it must not be what keeps `inner_storage` alive below — the minted
-    // reach folded into `stored` (and, downstream, `parent`'s union) is what the test exercises.
+    let (stored, host_pins) = source_scope.host_reach_of(&cell);
+    // Drop the envelope now: it must not be what keeps `inner_storage` alive below — the binding's
+    // owned `host_pins` bundle (and, downstream, `parent`'s union folding it in) is what the test
+    // exercises.
     drop(cell);
     source_scope
         .bind_value(
@@ -154,7 +157,7 @@ fn child_module_reach_unions_member_entry_reaches_across_regions() {
             obj,
             BindingIndex::value(0),
             stored,
-            FramePins::empty(),
+            host_pins,
         )
         .expect("bind should succeed");
     let source_region_ptr: *const KoanRegion = source_scope.region();

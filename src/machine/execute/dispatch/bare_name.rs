@@ -77,17 +77,20 @@ pub(in crate::machine::execute) fn resolve_bare_carrier(
     match part {
         ExpressionPart::Identifier(name) => {
             match scope.resolve_value_carrier(name, chain.map(|c| &**c)) {
-                Some(NameLookup::Bound(carrier)) => {
-                    Ok(BareCarrier::Sealed(scope.seal_resident_delivered(carrier)))
-                }
+                Some(NameLookup::Bound((carrier, pins))) => Ok(BareCarrier::Sealed(
+                    scope.seal_resident_delivered(carrier, pins),
+                )),
                 Some(NameLookup::Parked(producer)) => screen(scheduler, producer, name.clone()),
                 None => Ok(BareCarrier::Unbound(name.clone())),
             }
         }
         ExpressionPart::Type(t) => match type_channel(scope, t, chain.cloned(), types) {
-            TypeChannel::Done(kt) => Ok(BareCarrier::Sealed(
-                scope.seal_resident_delivered(scope.resident_type_carrier(kt)),
-            )),
+            // A `KType` is a `Copy` registry handle — no foreign reach — so the resident type
+            // carrier seals under an empty foreign bundle.
+            TypeChannel::Done(kt) => Ok(BareCarrier::Sealed(scope.seal_resident_delivered(
+                scope.resident_type_carrier(kt),
+                crate::machine::core::FramePins::empty(),
+            ))),
             TypeChannel::Parked(producer) => screen(scheduler, producer, t.render()),
             TypeChannel::Unbound(n) => Ok(BareCarrier::Unbound(n)),
         },

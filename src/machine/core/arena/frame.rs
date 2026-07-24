@@ -188,7 +188,10 @@ impl CallFrame {
         // address behind the Rc, keeping the erased reference valid.
         let scope_carrier = build_frame_child_witnessed(outer, &storage);
         Rc::new(CallFrame {
-            envelope: Delivered::hosted(scope_carrier, storage),
+            // The child scope seals under the empty (`resident`) carrier witness — its cross-region
+            // borrow into the parent rides `FrameStorage`'s own `outer` `Rc` chain, not the reach
+            // system — so the envelope's foreign bundle is empty.
+            envelope: Delivered::hosted(scope_carrier, storage, FramePins::empty()),
             non_dying: false,
             owner: Cell::new(None),
             type_registry: None,
@@ -215,7 +218,9 @@ impl CallFrame {
         let scope_carrier =
             Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(scope));
         Rc::new(CallFrame {
-            envelope: Delivered::hosted(scope_carrier, run_storage),
+            // The run scope lives in the run region (empty reach), so the envelope's foreign bundle
+            // is empty.
+            envelope: Delivered::hosted(scope_carrier, run_storage, FramePins::empty()),
             non_dying: true,
             owner: Cell::new(None),
             type_registry: Some(Rc::new(TypeRegistry::new())),

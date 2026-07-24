@@ -164,13 +164,6 @@ impl<W: Workload> Scheduler<W> {
         self.store.read_result_with(target, pin.as_ref(), f)
     }
 
-    /// The retained producer-frame owner of a finalized dep, or `None` for a frameless / run-region
-    /// producer. Private: a bare frame pin never escapes the scheduler — consumers receive it
-    /// paired with the sealed carrier as a [`dep_delivered`](Self::dep_delivered) envelope.
-    fn dep_host(&self, id: NodeId) -> Option<Rc<OwnerOf<W>>> {
-        self.deps.retained_owner(self.resolve_alias(id).index())
-    }
-
     /// The terminal's error, or `Ok(())` for a value terminal — the borrow-free success/failure
     /// probe that reads no value. Follows a bare-name-forward alias to the real producer.
     pub fn result_error(&self, id: NodeId) -> Result<(), &W::Error> {
@@ -202,10 +195,18 @@ impl<W: Workload> Scheduler<W> {
         id: NodeId,
     ) -> Result<Delivered<W::Value, Carrier<OwnerOf<W>>, OwnerOf<W>>, &W::Error> {
         let cell = self.dep_carrier(id)?;
+        let target = self.resolve_alias(id);
         let host = self
-            .dep_host(id)
+            .deps
+            .retained_owner(target.index())
             .expect("a pull-able dep's retention hold is active (seeded at every finalize)");
-        Ok(Delivered::hosted(cell, host))
+        // Clone the terminal's owned foreign bundle out of the hold — the reach was captured at
+        // finalize and threaded in, never re-derived from the carrier's description here.
+        let foreign = self
+            .deps
+            .retained_foreign(target.index())
+            .expect("a pull-able dep's retention hold carries its foreign bundle");
+        Ok(Delivered::hosted(cell, host, foreign))
     }
 
     /// Re-home a finalized terminal (relocated into a surviving region, bundled with the witness set
@@ -263,9 +264,14 @@ impl<W: Workload> Scheduler<W> {
     }
     /// Seed a retention hold on a synthetically-finalized slot ([`Self::set_result`] writes the
     /// terminal but runs no finalize, so no hold exists) — [`Self::dep_delivered`] requires one for
-    /// every pull-able dep.
+    /// every pull-able dep. A synthetic slot carries no foreign reach, so the hold's bundle is empty.
     pub fn seed_retention(&mut self, id: NodeId, owner: Rc<OwnerOf<W>>, pulls: usize) {
-        self.deps.seed_retain(id.index(), owner, pulls);
+        self.deps.seed_retain(
+            id.index(),
+            owner,
+            crate::witnessed::PinBundle::empty(),
+            pulls,
+        );
     }
     pub fn result_is_none(&self, id: NodeId) -> bool {
         self.store.result_is_none(id)
