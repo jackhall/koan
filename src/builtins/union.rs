@@ -309,7 +309,7 @@ mod tests {
         // same installing handle, so it overwrites idempotently and returns the bound union type.
         let second = super::finalize_union(&fctx, "Maybe".into(), make_window(), fields(), site);
         let is_union = second.map(|carrier| {
-            carrier.inspect_pinned(&crate::machine::FrameSet::empty(), |c| {
+            carrier.inspect_pinned(&crate::machine::FramePins::empty(), |c| {
                 matches!(c, Carried::Type(kt)
                     if matches!(types.node(*kt), TypeNode::Union { members } if members.len() == 2))
             })

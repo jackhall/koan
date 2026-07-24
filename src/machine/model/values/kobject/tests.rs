@@ -305,7 +305,7 @@ fn resident_in_true_for_same_region_kfunction() {
 fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::Body;
-    use crate::machine::core::{run_root_storage, FrameSet, FrameStorageExt};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::ast::KExpression;
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
     use crate::machine::KFunction;
@@ -333,8 +333,11 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
         "sanity: not resident without evidence"
     );
 
-    let foreign_reach = FrameSet::singleton(Rc::clone(&foreign));
-    assert!(o.resident_in_delivered(dest.region(), &[&foreign_reach]));
+    // Mint a description naming `foreign`'s region into `dest`'s side table (foreign to `dest`, so it
+    // survives home-omission as a member). `_pins` keeps its members alive for the assertion.
+    let (minted, _pins, _) = dest.brand().mint(&[], &[Rc::clone(&foreign)], |_| false);
+    let foreign_reach = minted.expect("a foreign materialize-host mints a member naming its region");
+    assert!(o.resident_in_delivered(dest.region(), &[foreign_reach]));
 }
 
 /// A `List` born in `dest`'s region is resident there: its element substrate lives in `dest`, so

@@ -3,7 +3,7 @@
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::StoredReach;
-use crate::machine::core::{run_root_storage, FrameStorageExt};
+use crate::machine::core::{run_root_storage, FramePins, FrameStorageExt};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
@@ -24,6 +24,7 @@ fn add_during_active_data_borrow_queues_and_drains() {
             pre,
             BindingIndex::BUILTIN,
             StoredReach::empty(),
+            FramePins::empty(),
         )
         .unwrap();
 
@@ -37,6 +38,7 @@ fn add_during_active_data_borrow_queues_and_drains() {
                 new_entry,
                 BindingIndex::BUILTIN,
                 StoredReach::empty(),
+                FramePins::empty(),
             )
             .unwrap();
         assert!(!snapshot.contains_key("during"));
@@ -45,7 +47,7 @@ fn add_during_active_data_borrow_queues_and_drains() {
     scope.drain_pending();
     let after = scope.bindings().data();
     assert!(
-        matches!(after.get("during").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 2.0)
+        matches!(after.get("during").map(|(o, _, _, _)| *o), Some(KObject::Number(n)) if *n == 2.0)
     );
 }
 
@@ -89,6 +91,7 @@ fn drain_debug_asserts_on_invariant_violation() {
             obj1,
             BindingIndex::BUILTIN,
             StoredReach::empty(),
+            FramePins::empty(),
         )
         .unwrap();
     drop(snapshot);
@@ -147,6 +150,7 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
             obj,
             BindingIndex::BUILTIN,
             StoredReach::empty(),
+            FramePins::empty(),
         )
         .unwrap();
     scope.drain_pending();
@@ -154,7 +158,7 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
     drop(snapshot);
     scope.drain_pending();
     assert!(
-        matches!(scope.bindings().data().get("v").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0)
+        matches!(scope.bindings().data().get("v").map(|(o, _, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0)
     );
 }
 

@@ -194,9 +194,9 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // to root a functor result's reach at module-bind time.
     let value_obj = module_scope.brand().alloc_object(KObject::Number(1.0));
     let cell = delivered_with_host(Carried::Object(value_obj), Rc::clone(&foreign_storage));
-    let stored_reach = module_scope.host_reach_of(&cell);
-    // Drop the envelope now: it must not be what keeps `foreign_storage` alive below — the
-    // stored reach it minted into `module_scope`'s own arena is what the test exercises.
+    let (stored_reach, pins) = module_scope.host_reach_of(&cell);
+    // Drop the envelope now: it must not be what keeps `foreign_storage` alive below — the owning
+    // pin bundle `host_reach_of` minted, carried into the binding, is what the test exercises.
     drop(cell);
     module_scope
         .bind_value(
@@ -204,6 +204,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
             value_obj,
             BindingIndex::value(0),
             stored_reach,
+            pins,
         )
         .expect("fresh binding name in an unborrowed scope");
 
@@ -224,7 +225,8 @@ fn using_window_value_read_reach_survives_under_module_root() {
         Carried::Object(window_root_dummy),
         Rc::clone(&module_storage),
     );
-    let _ = window.host_reach_of(&window_root_cell);
+    // The owning pin bundle is what roots the module's region transitively; hold it to end of scope.
+    let (_window_reach, _window_pins) = window.host_reach_of(&window_root_cell);
     drop(window_root_cell);
 
     let carrier = window

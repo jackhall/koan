@@ -2,7 +2,7 @@
 //! per-call frame storage is (or wraps) a `RegionHost<P>` — the region it names is created on first
 //! [`region()`](RegionHost::region) access, not at construction, so a frame that never allocates
 //! mints nothing. `outer` is the ancestor-frame link [`RegionHost::pins_region`] walks for
-//! [`RegionSet`](super::RegionSet) subsumption; the same shape [`RegionOwner`] / [`PinsRegion`] are
+//! [`PinBundle`](super::PinBundle) subsumption; the same shape [`RegionOwner`] / [`PinsRegion`] are
 //! implemented against everywhere in the workgraph model.
 
 use std::cell::OnceCell;

@@ -102,7 +102,7 @@ fn copy_delivered_substrate_pins_a_home_borrowing_record() {
     );
     let dep: DeliveredCarried = Delivered::seal(sealed, producer.storage_rc());
 
-    let (bound, _stored) = consumer
+    let (bound, _stored, _pins) = consumer
         .copy_delivered_substrate(&dep, |carried| Ok(carried.object()), &types)
         .expect("a home-borrowing record pins into the binding under Kept-minted evidence");
 
@@ -113,8 +113,8 @@ fn copy_delivered_substrate_pins_a_home_borrowing_record() {
         "the pinned record shares the producer's substrate (no rebuild)"
     );
 
-    // Drop the producer frame shell: the binding's stored reach holds the producer region alive, so
-    // the pinned substrate reads its field values back correctly.
+    // Drop the producer frame shell: the owning pin bundle (`_pins`) holds the producer region alive,
+    // so the pinned substrate reads its field values back correctly.
     drop(dep);
     drop(producer);
     match bound {

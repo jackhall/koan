@@ -111,7 +111,7 @@ a concept, not a final identifier.
 - The witnessed substrate ([witnessed.rs](../workgraph/src/witnessed.rs)): brands,
   carriers, erase-store, reattach.
 - The reach set, as an opaque description/bundle pair
-  ([witnessed/region_set.rs](../workgraph/src/witnessed/region_set.rs); see
+  ([witnessed/reach.rs](../workgraph/src/witnessed/reach.rs); see
   Vocabulary).
 - Terminal storage and delivery: sealing results into slots, handing dep
   terminals to finishes, and the first-errored-dep short-circuit.

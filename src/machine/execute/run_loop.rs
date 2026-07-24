@@ -13,7 +13,7 @@ use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
 use crate::machine::{
-    CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, NodeHandle, NodeId,
+    CarrierWitness, FramePins, KError, KErrorKind, KoanRegion, NodeHandle, NodeId,
 };
 use crate::witnessed::{
     erase_to_static, reattachable, RegionHandleFamily, SealedExtern, Witnessed,
@@ -57,7 +57,7 @@ pub(in crate::machine::execute) fn dest_brand(
 /// [`DepTerminal`](super::outcome::DepTerminal) — resolved value plus its `reach` set — so the reach
 /// rides the slice to the construction site without a parallel channel.
 /// Layout-invariant: a `Vec<Result<DepTerminal<'r>, KError>>` is a `Vec` of cells whose representation
-/// never depends on `'r` (`FrameSet` / `KError` are lifetime-free), so the `reattachable!` macro
+/// never depends on `'r` (`FrameReach` / `KError` are lifetime-free), so the `reattachable!` macro
 /// discharges the obligation.
 pub(in crate::machine::execute) struct DepResultsFamily;
 
@@ -151,27 +151,27 @@ impl<'run> KoanRuntime<'run> {
         // `'b`, then unioned into `combined` — the witness the open re-anchors carriers against, keeping
         // every dep source alive past `reclaim_deps`. It is *only* a liveness pin: every value terminal
         // rides `DoneWitnessed` with its own carrier naming its reach, so no terminal reads `pin`.
-        let pin: FrameSet = dep_sources
+        let pin: FramePins = dep_sources
             .iter()
-            .fold(FrameSet::empty(), |acc, src| match src {
+            .fold(FramePins::empty(), |acc, src| match src {
                 // The dep's liveness pin: its retained producer frame (the envelope's host, sourced from
                 // the retention hold since the reference-only carrier carries no pin of its own) unioned
-                // with the value's own foreign reach — `Delivered::liveness_frameset`, host ∪ reach
+                // with the value's own owned foreign reach — `Delivered::liveness_bundle`, host ∪ reach
                 // members. An errored dep carries no value the step reads — its error owns its data — so
                 // it contributes nothing.
-                Ok(t) => FrameSet::union(&acc, &t.delivered.liveness_frameset()),
+                Ok(t) => FramePins::union(&acc, &t.delivered.liveness_bundle()),
                 Err(_) => acc,
             });
         // The open witness: the anchor's projected region owner (pinning the continuation and dest
         // region — plus their ancestor backings via the storage `outer` chain) unioned with `pin`
         // (every dep source). Held across the open, so re-anchoring the zipped carriers to `'b`
-        // cannot dangle. A plain `FrameSet` (§ the run-loop step-open witness is a plain frame set):
+        // cannot dangle. A plain `FramePins` (§ the run-loop step-open witness is a plain owned pin bundle):
         // every member is a frame owner — each dep contributes its envelope's host ∪ reach through
         // `pin`, redundantly with the duplicated envelope held across the whole open in `dep_sources`
         // (see the struct doc above). Sourced off the scheduler-returned anchor, not a `storage_rc()`
         // of the cart the scheduler already holds.
-        let combined: FrameSet =
-            FrameSet::union(&FrameSet::singleton(Rc::clone(anchor.owner())), &pin);
+        let combined: FramePins =
+            FramePins::union(&FramePins::singleton(Rc::clone(anchor.owner())), &pin);
         // Open the three externally-witnessed carriers — continuation, active scope, dep slice —
         // together at one rank-2 `for<'b>` brand witnessed by `combined` (see the doc comment for why
         // nothing branded escapes).

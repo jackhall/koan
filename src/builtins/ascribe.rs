@@ -132,7 +132,11 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // nowhere — the view is a returned value, not a named binding — and sealed onto the terminal
     // carrier, witnessing the module in place. The opaque view's `new_scope` is a same-region child
     // of this frame, so the derived bit records the module's home borrow.
-    let stored = ctx.scope.child_module_reach(new_scope);
+    // The view is a returned value, not a named binding, so its owning pin bundle is not retained
+    // here: the terminal it seals is delivered onward, and the delivery envelope re-derives (and
+    // owns) the foreign reach at finalize, while this step's own liveness covers those members until
+    // then. A bound module instead hands its bundle to the binding entry (`Registry::bind_module`).
+    let (stored, _pins) = ctx.scope.child_module_reach(new_scope);
     // The view surfaces as the Object-arm module value (`new_module` lives in `region`'s own
     // region, so the audit passes on the dest-only check alone); a LET around it binds that value
     // like any other.
@@ -167,7 +171,10 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     // borrows nothing into this home frame (its interior points at the source region), so the derived
     // bit stays unset — a downstream copied-mode mint materializes no home-frame member, and the dying
     // home frame frees once its retention hold releases.
-    let stored = ctx.scope.child_module_reach(m.child_scope());
+    // Returned value, not a named binding: the owning bundle is not retained here — the delivered
+    // terminal's envelope re-derives and owns the foreign reach at finalize, under this step's
+    // liveness. (See the opaque arm above.)
+    let (stored, _pins) = ctx.scope.child_module_reach(m.child_scope());
     let new_module: &'a Module<'a> = ctx.scope.alloc_module_reaching(
         Module::new(format!("{} :! {}", m.path, s_name), m.child_scope()),
         &stored,

@@ -41,9 +41,6 @@ time.
 
 - [Region-store expression parts](region-store-expressions.md) — the last substrate
   conversion; every value family must be `Drop`-free in stored form before the move.
-- [Reach ownership split](reach-split.md) — reach data must leave the arena
-  pages (descriptions to the side table, owners to holder bundles) before pages
-  can be untyped and `Drop`-free.
 - [Residence-audit retirement](residence-audit-retirement.md) — the composite
   residence tiers this item deletes are dispositioned per-site there first.
 

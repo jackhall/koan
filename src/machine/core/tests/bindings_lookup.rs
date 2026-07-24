@@ -6,7 +6,7 @@
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::StoredReach;
-use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, NameLookup};
+use crate::machine::core::{run_root_storage, BindingIndex, FramePins, FrameStorageExt, NameLookup};
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
@@ -24,6 +24,7 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
             value,
             BindingIndex::value(99),
             StoredReach::empty(),
+            FramePins::empty(),
         )
         .unwrap();
     match scope.bindings().lookup_value("late", None) {
@@ -43,6 +44,7 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
             value,
             BindingIndex::value(5),
             StoredReach::empty(),
+            FramePins::empty(),
         )
         .unwrap();
     assert!(scope.bindings().lookup_value("later", Some(3)).is_none());
@@ -59,6 +61,7 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
             value,
             BindingIndex::value(2),
             StoredReach::empty(),
+            FramePins::empty(),
         )
         .unwrap();
     match scope.bindings().lookup_value("earlier", Some(5)) {

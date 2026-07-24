@@ -60,7 +60,5 @@ decided as a whole.
 
 **Requires:**
 
-- [Reach ownership split](reach-split.md) — droppable pins, so pricing
-  loop-carried carriers to pin does not chain retired regions across a tail loop.
 
 **Unblocks:** none tracked yet.

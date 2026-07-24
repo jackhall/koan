@@ -20,7 +20,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use arena::KoanRegionTestExt;
 pub use arena::{
-    run_root_storage, CallFrame, FoldingBrand, FrameSet, FrameStorage, KoanRegion,
+    run_root_storage, CallFrame, FoldingBrand, FramePins, FrameReach, FrameStorage, KoanRegion,
     RegionTypeFamily, StepAllocator,
 };
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};

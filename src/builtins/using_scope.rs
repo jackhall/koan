@@ -68,12 +68,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         .brand()
         .alloc_scope(Scope::child_transparent(ctx.scope, module_bindings));
     // Fold the eager `m` carrier's reach onto the overlay so the opened module's per-call region stays
-    // alive for the window's life (see the module-level soundness note). A top-level module reaches no
+    // alive for the window's life (see the module-level soundness note). The minted description is
+    // non-owning, so the overlay **retains** the returned owning bundle for its region's life — that
+    // is what roots the opened module's per-call region one hop removed. A top-level module reaches no
     // per-call region and a carrier-less module has no reach to root, so both fold nothing.
     let seed: Option<BlockSeed<'a>> = ctx.arg_carrier("m").map(|carrier| {
         let carrier = carrier.duplicate();
         let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope, _types: &TypeRegistry| {
-            let _ = overlay.host_reach_of(&carrier);
+            let (_stored, pins) = overlay.host_reach_of(&carrier);
+            overlay.retain_reach(pins);
         });
         seed
     });

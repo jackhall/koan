@@ -28,8 +28,6 @@ stopgap it is.
 
 **Requires:**
 
-- [Reach ownership split](reach-split.md) — holders own their pin bundles, so
-  pin liveness is typed rather than audit-maintained.
 
 **Unblocks:**
 

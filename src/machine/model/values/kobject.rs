@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::machine::core::KFunction;
-use crate::machine::core::{FoldingBrand, FrameSet, KoanRegion, KoanRegionExt, Residence};
+use crate::machine::core::{FoldingBrand, FrameReach, KoanRegion, KoanRegionExt, Residence};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 
@@ -53,8 +53,9 @@ pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::CostDriven;
 /// site. `Struct.fields` uses `IndexMap` so iteration matches declaration order.
 ///
 /// A `KFunction` is a bare borrow into its defining region; the regions an escaping
-/// closure reaches are pinned by its carrier's witness set ([`FrameSet`](crate::machine::FrameSet)),
-/// not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
+/// closure reaches are named by its carrier's reach description
+/// ([`FrameReach`](crate::machine::core::FrameReach)) and pinned by the holder's owned
+/// [`FramePins`](crate::machine::core::FramePins) bundle, not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
 pub enum KObject<'a> {
     Number(f64),
     KString(String),
@@ -462,7 +463,7 @@ impl<'a> KObject<'a> {
     /// `dest` or be covered by one of `sets` — the object delivered tier's coverage predicate,
     /// over the same borrows as [`Self::resident_in`]. The `StoredReach` tokens holding the
     /// reach are opaque to this layer; core extracts the sets before calling.
-    pub(crate) fn resident_in_delivered(&self, dest: &KoanRegion, sets: &[&FrameSet]) -> bool {
+    pub(crate) fn resident_in_delivered(&self, dest: &KoanRegion, sets: &[&FrameReach]) -> bool {
         self.resident_in_visiting(&Residence::with_reach(dest, sets))
     }
 

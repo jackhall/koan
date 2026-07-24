@@ -13,8 +13,9 @@
 //!   [`witnessed::Witness`], [`witnessed::WitnessRegion`], [`witnessed::RegionOwner`] (the
 //!   `Rc<F>` blanket-impl seam for [`witnessed::WitnessRegion`]), and the reference-only
 //!   composition seam [`witnessed::ComposeWitness`].
-//! - The opaque reach-set library type [`witnessed::RegionSet`], generic over the member trait
-//!   [`witnessed::PinsRegion`] an embedder implements for its own frame-owner type.
+//! - The reach-evidence types [`witnessed::ReachDescription`] (non-owning, side-table hosted) and
+//!   [`witnessed::PinBundle`] (owned), generic over the member trait [`witnessed::PinsRegion`] an
+//!   embedder implements for its own frame-owner type.
 //! - The lifetime family contract: [`witnessed::Reattachable`] and the
 //!   [`witnessed::reattachable`] macro that discharges its `unsafe` obligation once per family.
 //! - The generic region engine: [`witnessed::Region`], [`witnessed::StorageProfile`],

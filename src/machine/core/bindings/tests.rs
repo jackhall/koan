@@ -8,7 +8,7 @@ use crate::machine::model::KObject;
 use crate::machine::model::KType;
 
 /// A value binding round-trips the home-omitted foreign reach it was bound with: a carrier-oriented
-/// read hands back exactly the `FrameSet` stored at bind time, so the read wrapper can name the
+/// read hands back exactly the `FrameReach` stored at bind time, so the read wrapper can name the
 /// value's reach without reconstructing it from the value.
 #[test]
 fn data_binding_round_trips_stored_reach() {
@@ -18,17 +18,21 @@ fn data_binding_round_trips_stored_reach() {
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
     // A synthetic foreign frame the value "reaches" — stored on the binding as its reach.
     let foreign = run_root_storage();
-    let reach_set = FrameSet::singleton(foreign.clone());
-    let reach = StoredReach::for_test(Some(&reach_set), false);
+    // Mint a description naming `foreign` (foreign to `region`, so it survives home-omission as a
+    // member) to stand in for the home-omitted foreign reach a value borrows. `_pins` keeps the
+    // minted description's members alive for the scope.
+    let (minted, _pins, _) = region.mint(&[], std::slice::from_ref(&foreign), |_| false);
+    let reach_set = minted.expect("a foreign materialize-host mints a single-member reach");
+    let reach = StoredReach::for_test(Some(reach_set), false);
     bindings
-        .try_bind_value("x", obj, BindingIndex::BUILTIN, reach)
+        .try_bind_value("x", obj, BindingIndex::BUILTIN, reach, FramePins::empty())
         .expect("value bind should succeed");
     match bindings.lookup_value_carrier("x", None) {
         Some(NameLookup::Bound(hit)) => {
             assert!(std::ptr::eq(hit.obj, obj));
             assert!(
                 hit.stored.foreign.is_some_and(
-                    |f| matches!(f.members(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
+                    |f| matches!(f.members().as_slice(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
                 ),
                 "stored reach should round-trip the foreign frame",
             );
@@ -37,8 +41,8 @@ fn data_binding_round_trips_stored_reach() {
     }
 }
 
-/// A carrier-oriented read copies the stored `Option<&FrameSet>` reference — no per-hit clone. Two
-/// independent reads of the same binding hand back the *same* `&FrameSet` pointer, proving the read
+/// A carrier-oriented read copies the stored `Option<&FrameReach>` reference — no per-hit clone. Two
+/// independent reads of the same binding hand back the *same* `&FrameReach` pointer, proving the read
 /// path reuses the arena-hosted set rather than cloning a fresh one on every hit (the type-binding
 /// memo relies on the same no-clone copy).
 #[test]
@@ -48,10 +52,11 @@ fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
     let bindings: Bindings<'_> = Bindings::new();
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
     let foreign = run_root_storage();
-    let reach_set = FrameSet::singleton(foreign.clone());
-    let reach = StoredReach::for_test(Some(&reach_set), false);
+    let (minted, _pins, _) = region.mint(&[], std::slice::from_ref(&foreign), |_| false);
+    let reach_set = minted.expect("a foreign materialize-host mints a single-member reach");
+    let reach = StoredReach::for_test(Some(reach_set), false);
     bindings
-        .try_bind_value("x", obj, BindingIndex::BUILTIN, reach)
+        .try_bind_value("x", obj, BindingIndex::BUILTIN, reach, FramePins::empty())
         .expect("value bind should succeed");
 
     let first = match bindings.lookup_value_carrier("x", None) {
@@ -64,11 +69,11 @@ fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
     };
     assert!(
         std::ptr::eq(first, second),
-        "two reads of the same binding must return the same &FrameSet — a clone would allocate a \
+        "two reads of the same binding must return the same &FrameReach — a clone would allocate a \
          fresh Vec at a distinct address on every hit",
     );
     assert!(
-        std::ptr::eq(first, &reach_set),
+        std::ptr::eq(first, reach_set),
         "the stored reach is the exact reference bound in, not a copy of it",
     );
 }
@@ -282,6 +287,7 @@ fn type_token_may_not_bind_value_side() {
         val,
         BindingIndex::BUILTIN,
         StoredReach::for_test(None, false),
+        FramePins::empty(),
     ) {
         Err(e) => e,
         Ok(_) => panic!("a Type token names a type, not a value"),

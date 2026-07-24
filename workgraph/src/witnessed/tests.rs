@@ -53,7 +53,7 @@ reattachable! {
 /// "region") plus an `outer` link, mirroring `FrameStorage`'s region + ancestor-pin chain without
 /// naming a koan type. Held by `Rc`, so the backing's heap address is stable (a `StableDeref`); a
 /// descendant's `outer` chain keeps its ancestors' backings alive, exactly the relation the
-/// `RegionSet` union reads.
+/// `PinBundle` union reads.
 struct TestCart {
     backing: Vec<u32>,
     outer: Option<Rc<TestCart>>,
@@ -234,19 +234,19 @@ fn merge_pinned_binds_ancestor_ref_into_descendant_scope() {
     });
     // Scope carrier in the descendant: empty slot, pool = the descendant's own region. Lifted into
     // the set world so `merge` composes totally.
-    let scope_w: Witnessed<ScopeFamily, RegionSet<TestCart>> =
+    let scope_w: Witnessed<ScopeFamily, PinBundle<TestCart>> =
         Witnessed::yoke(Rc::clone(&descendant), |region| ScopeAndPool {
             scope: Cell::new(None),
             pool: region,
         })
-        .rewitness(RegionSet::singleton(Rc::clone(&descendant)));
+        .rewitness(PinBundle::singleton(Rc::clone(&descendant)));
     // Function stand-in: a reference sourced from the ancestor's region.
-    let fn_w: Witnessed<RefFamily, RegionSet<TestCart>> =
+    let fn_w: Witnessed<RefFamily, PinBundle<TestCart>> =
         Witnessed::yoke(Rc::clone(&ancestor), |region| &region[1])
-            .rewitness(RegionSet::singleton(Rc::clone(&ancestor)));
+            .rewitness(PinBundle::singleton(Rc::clone(&ancestor)));
     // Bind the ancestor ref into the descendant scope at the shared brand, then re-seal under the
     // total union.
-    let merged: Witnessed<ScopeFamily, RegionSet<TestCart>> = scope_w
+    let merged: Witnessed<ScopeFamily, PinBundle<TestCart>> = scope_w
         .merge_pinned::<RefFamily, ScopeFamily, _>(
             fn_w,
             &descendant,
@@ -281,10 +281,10 @@ fn merge_pinned_keeps_unrelated_carts_as_a_two_member_set() {
         backing: vec![2],
         outer: None,
     });
-    let wa: Witnessed<RefFamily, RegionSet<TestCart>> =
-        Witnessed::yoke(Rc::clone(&a), |r| &r[0]).rewitness(RegionSet::singleton(Rc::clone(&a)));
-    let wb: Witnessed<RefFamily, RegionSet<TestCart>> =
-        Witnessed::yoke(Rc::clone(&b), |r| &r[0]).rewitness(RegionSet::singleton(Rc::clone(&b)));
+    let wa: Witnessed<RefFamily, PinBundle<TestCart>> =
+        Witnessed::yoke(Rc::clone(&a), |r| &r[0]).rewitness(PinBundle::singleton(Rc::clone(&a)));
+    let wb: Witnessed<RefFamily, PinBundle<TestCart>> =
+        Witnessed::yoke(Rc::clone(&b), |r| &r[0]).rewitness(PinBundle::singleton(Rc::clone(&b)));
     let merged =
         wa.merge_pinned::<RefFamily, RefFamily, _>(wb, &a, |l, _r, _token: FoldToken<'_>| l);
     assert_eq!(

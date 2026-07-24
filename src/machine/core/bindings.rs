@@ -36,7 +36,7 @@ use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::machine::core::arena::FrameSet;
+use crate::machine::core::arena::{FramePins, FrameReach};
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::core::RunId;
 use crate::machine::model::KObject;
@@ -85,7 +85,8 @@ impl<T> NameLookup<T> {
 
 /// A binding's stored reach plus the one-bit answer to "does the bound value borrow into **this**
 /// scope's own region?" ([`Self::borrows_into_home`]). `foreign` is a reference to a set hosted in
-/// the binding scope's own region arena — minted at bind time via [`RegionSet::mint`], never owned
+/// the binding scope's own region arena — minted at bind time via
+/// [`ReachDescription::mint`](crate::witnessed::ReachDescription::mint), never owned
 /// here — home-omitted so it never names the scope's own home frame, whose `Rc` stored in-region
 /// would close the `frame → region → scope → bindings → frame` cycle; that fact is remembered as
 /// the bit instead. `None` is the faithful encoding of the empty set (a region-pure value pins
@@ -98,7 +99,7 @@ impl<T> NameLookup<T> {
 /// `true`.
 #[derive(Clone, Copy)]
 pub struct StoredReach<'a> {
-    pub(in crate::machine::core) foreign: Option<&'a FrameSet>,
+    pub(in crate::machine::core) foreign: Option<&'a FrameReach>,
     pub(in crate::machine::core) borrows_into_home: bool,
 }
 
@@ -121,13 +122,20 @@ impl<'a> StoredReach<'a> {
 
     /// Narrow test affordance: assemble a token from explicit parts for in-crate `mod tests` only.
     #[cfg(test)]
-    pub(crate) fn for_test(foreign: Option<&'a FrameSet>, borrows_into_home: bool) -> Self {
+    pub(crate) fn for_test(foreign: Option<&'a FrameReach>, borrows_into_home: bool) -> Self {
         StoredReach {
             foreign,
             borrows_into_home,
         }
     }
 }
+
+/// A value binding entry: the bound value, its lexical [`BindingIndex`], its `Copy` [`StoredReach`]
+/// claim (the home-omitted foreign reach reference + home-borrow bit), and the owned [`FramePins`]
+/// bundle that pins every region the value reaches — released by ordinary `Drop` at the entry's
+/// death (scope/region death, evacuation). The claim is handed out on reads (refcount-free); the
+/// pins stay owned here, so a read is enveloped under the entry's own liveness (holder rule 3).
+type DataEntry<'a> = (&'a KObject<'a>, BindingIndex, StoredReach<'a>, FramePins);
 
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature
 /// member access. Produced by [`crate::machine::core::Scope::lookup_member`], which checks the
@@ -149,7 +157,7 @@ pub enum MemberResolution<'a> {
 }
 
 /// The value-side reach-carrying payload of a `NameLookup<ValueHit>`: the bound value plus the
-/// binding's home-omitted foreign reach, copied out (a `&'a FrameSet` reference, not a clone) so
+/// binding's home-omitted foreign reach, copied out (a `&'a FrameReach` reference, not a clone) so
 /// the read wrapper does not hold the `data` `RefCell` borrow across the carrier build. Produced by
 /// [`Bindings::lookup_value_carrier`] so a name read builds a self-contained witness from the
 /// stored reach.
@@ -250,13 +258,13 @@ pub struct Bindings<'a> {
     /// type in every region.
     types: RefCell<HashMap<String, (KType, DeclarationSite)>>,
     /// Each value entry stores its bound value, its lexical [`BindingIndex`], and its **reach** —
-    /// the home-omitted foreign [`FrameSet`] the value borrows into, captured at bind time from the
+    /// the home-omitted foreign [`FrameReach`] the value borrows into, captured at bind time from the
     /// delivered carrier. A carrier-oriented read ([`Self::lookup_value_carrier`]) hands the reach
     /// back so the read wraps the value in a self-contained witness built from its stored reach,
     /// rather than re-asserting single-frame co-location. The reach is foreign-only (home-omitted)
     /// so it never stores the region's own home frame `Rc` in-region — that would close a
     /// `frame → region → scope → bindings → frame` strong cycle and leak the region.
-    data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex, StoredReach<'a>)>>,
+    data: RefCell<HashMap<String, DataEntry<'a>>>,
     functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,
     placeholders: RefCell<HashMap<String, (NodeId, BindingIndex, BindKind)>>,
     /// Bucket-key → entries for FN overloads whose binder has
@@ -325,7 +333,7 @@ impl<'a> Bindings<'a> {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
-        if let Some((obj, idx, _reach)) = self.data.borrow().get(name) {
+        if let Some((obj, idx, _reach, _pins)) = self.data.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(NameLookup::Bound(obj));
             }
@@ -385,7 +393,7 @@ impl<'a> Bindings<'a> {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<MemberResolution<'a>> {
-        if let Some((obj, idx, reach)) = self.data.borrow().get(name) {
+        if let Some((obj, idx, reach, _pins)) = self.data.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(MemberResolution::Value {
                     obj,
@@ -409,7 +417,7 @@ impl<'a> Bindings<'a> {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<NameLookup<ValueHit<'a>>> {
-        if let Some((obj, idx, reach)) = self.data.borrow().get(name) {
+        if let Some((obj, idx, reach, _pins)) = self.data.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(NameLookup::Bound(ValueHit {
                     obj,
@@ -523,11 +531,11 @@ impl<'a> Bindings<'a> {
     /// Every value binding entry's hosted reach set, for the seal-time module-reach union. Type
     /// entries carry no reach — a bound `KType` is owned data — so `data` is the whole union. Refs
     /// are `'a` (region-arena hosted), so they outlive the returned `Vec`.
-    pub(crate) fn entry_reaches(&self) -> Vec<&'a FrameSet> {
+    pub(crate) fn entry_reaches(&self) -> Vec<&'a FrameReach> {
         self.data
             .borrow()
             .values()
-            .filter_map(|(_, _, r)| r.foreign)
+            .filter_map(|(_, _, r, _)| r.foreign)
             .collect()
     }
 
@@ -537,7 +545,7 @@ impl<'a> Bindings<'a> {
         self.data
             .borrow()
             .iter()
-            .map(|(name, (obj, _, _))| (name.clone(), *obj))
+            .map(|(name, (obj, _, _, _))| (name.clone(), *obj))
             .collect()
     }
 
@@ -606,7 +614,7 @@ impl<'a> Bindings<'a> {
     #[cfg(test)]
     pub fn data(
         &self,
-    ) -> Ref<'_, HashMap<String, (&'a KObject<'a>, BindingIndex, StoredReach<'a>)>> {
+    ) -> Ref<'_, HashMap<String, DataEntry<'a>>> {
         self.data.borrow()
     }
 
@@ -637,7 +645,7 @@ impl<'a> Bindings<'a> {
         self.data
             .borrow()
             .get(name)
-            .map(|(obj, _, _)| *obj)
+            .map(|(obj, _, _, _)| *obj)
             .unwrap_or_else(|| panic!("expected bindings.data[{name:?}] to be present"))
     }
 
@@ -679,8 +687,9 @@ impl<'a> Bindings<'a> {
         obj: &'a KObject<'a>,
         index: BindingIndex,
         reach: StoredReach<'a>,
+        pins: FramePins,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, obj.as_function(), true, index, reach)
+        self.try_apply(name, obj, obj.as_function(), true, index, reach, pins)
     }
 
     /// Bare-`FN` overload registration: adds `fn_ref` to the `functions`
@@ -699,8 +708,17 @@ impl<'a> Bindings<'a> {
         obj: &'a KObject<'a>,
         index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
-        // A bare-`FN` registration writes `functions` only, not `data`, so it stores no reach.
-        self.try_apply(name, obj, Some(fn_ref), false, index, StoredReach::empty())
+        // A bare-`FN` registration writes `functions` only, not `data`, so it stores no reach and no
+        // pins (the empty bundle pins nothing).
+        self.try_apply(
+            name,
+            obj,
+            Some(fn_ref),
+            false,
+            index,
+            StoredReach::empty(),
+            FramePins::empty(),
+        )
     }
 
     /// Register `name` → `kt` in `types`. Errors `Rebind` if already present in `types`, or
@@ -786,7 +804,7 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
         kind: BindKind,
     ) -> Result<(), KError> {
-        if let Some((existing, _, _)) = self.data.borrow().get(&name) {
+        if let Some((existing, _, _, _)) = self.data.borrow().get(&name) {
             if matches!(existing, KObject::KFunction(_)) {
                 return Ok(());
             }
@@ -835,14 +853,17 @@ impl<'a> Bindings<'a> {
     /// `src.functions` separately. Panics on `Conflict` — a fresh `Bindings`
     /// should never hit a borrow conflict against itself.
     pub fn try_bulk_install_from(&self, src: &Bindings<'a>) -> Result<(), KError> {
-        let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex, StoredReach<'a>)> = src
+        // Clone each entry's owning pin bundle into the snapshot: the replay installs an independent
+        // copy of the source's reach, so the target owns its members for its own entry's life while
+        // the source keeps its own.
+        let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex, StoredReach<'a>, FramePins)> = src
             .data
             .borrow()
             .iter()
-            .map(|(k, (v, idx, reach))| (k.clone(), *v, *idx, *reach))
+            .map(|(k, (v, idx, reach, pins))| (k.clone(), *v, *idx, *reach, pins.clone()))
             .collect();
-        for (name, obj, index, reach) in snapshot {
-            match self.try_apply(&name, obj, obj.as_function(), true, index, reach)? {
+        for (name, obj, index, reach, pins) in snapshot {
+            match self.try_apply(&name, obj, obj.as_function(), true, index, reach, pins)? {
                 ApplyOutcome::Applied => {}
                 ApplyOutcome::Conflict => {
                     unreachable!(
@@ -926,6 +947,10 @@ impl<'a> Bindings<'a> {
     /// Dedupe when `fn_part.is_some()`: `ptr::eq` is a silent-success
     /// short-circuit (preserves intentional aliases like `LET g = (f)`);
     /// `indistinguishable_from` raises `DuplicateOverload`.
+    // Each argument names one irreducible input to the shared value-write path (identity, function
+    // mirror, the write-data gate, lexical position, and the reach evidence's claim + owned pins);
+    // bundling any of them would only relocate the arity, not remove it.
+    #[allow(clippy::too_many_arguments)]
     fn try_apply(
         &self,
         name: &str,
@@ -934,6 +959,7 @@ impl<'a> Bindings<'a> {
         write_data: bool,
         index: BindingIndex,
         reach: StoredReach<'a>,
+        pins: FramePins,
     ) -> Result<ApplyOutcome, KError> {
         // Cross-kind exclusion: a value name may not collide with a committed type — the
         // `data`/`types` partition is structural, not convention. Probe `types` first (borrow
@@ -973,7 +999,7 @@ impl<'a> Bindings<'a> {
         // `fn_part.is_some()` + existing `KFunction` falls through to bucket dedupe
         // (overload-add path); everything else is a rebind error.
         if let Some(data) = data.as_ref() {
-            if let Some((existing, _, _)) = data.get(name) {
+            if let Some((existing, _, _, _)) = data.get(name) {
                 match fn_part {
                     None => {
                         return Err(KError::new(KErrorKind::Rebind {
@@ -1013,7 +1039,7 @@ impl<'a> Bindings<'a> {
             cleared_overload_bucket = Some(key);
         }
         if let Some(data) = data.as_mut() {
-            data.insert(name.to_string(), (obj, index, reach));
+            data.insert(name.to_string(), (obj, index, reach, pins));
         }
         drop(data);
         drop(functions_handle);

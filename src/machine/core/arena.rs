@@ -28,7 +28,8 @@ use crate::machine::model::{
 use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, RegionSet, StorageOf,
+    Erased, FamilyArena, FoldedPlacement, ReachDescription, Reattachable, Region, RegionHandle,
+    StorageOf,
     StorageProfile, Stored, Witnessed,
 };
 
@@ -37,7 +38,7 @@ mod residence;
 mod step_allocator;
 
 pub(crate) use frame::FrameStorageExt;
-pub use frame::{run_root_storage, CallFrame, FrameSet, FrameStorage};
+pub use frame::{run_root_storage, CallFrame, FramePins, FrameReach, FrameStorage};
 pub(crate) use residence::Residence;
 use residence::ResidenceEvidence;
 pub use step_allocator::StepAllocator;
@@ -203,19 +204,20 @@ impl<'a> RegionBrand<'a> {
         self.0.alloc_resident::<OperatorGroup>(g)
     }
 
-    /// Mint a frozen witness set into this brand's region arena — the Koan veneer over
-    /// [`RegionSet::mint_with_dest_bit`]. `omit` is the scope's home/lexical-ancestor policy
-    /// predicate; home-omission (self-cycle) is handled by the library. Returns the minted set
-    /// (`None` when the composed reach is empty — a region-pure value pins nothing) paired with the
-    /// pre-omission destination-coverage bit (`true` iff a source set or materialized host reaches
-    /// this brand's own region before home-omission drops it).
+    /// Mint a frozen reach description into this brand's region side table — the Koan veneer over
+    /// [`ReachDescription::mint_with_dest_bit`]. `omit` is the scope's home/lexical-ancestor policy
+    /// predicate; home-omission (self-cycle) is handled by the library. Returns the minted
+    /// description (`None` when the composed reach is empty — a region-pure value pins nothing), the
+    /// owned [`FramePins`] the holder keeps to pin its members, and the pre-omission
+    /// destination-coverage bit (`true` iff a source description or materialized host reaches this
+    /// brand's own region before home-omission drops it).
     pub(crate) fn mint(
         self,
-        sources: &[&FrameSet],
+        sources: &[&FrameReach],
         materialize_hosts: &[Rc<FrameStorage>],
         omit: impl Fn(&KoanRegion) -> bool,
-    ) -> (Option<&'a FrameSet>, bool) {
-        RegionSet::mint_with_dest_bit(self.0, sources, materialize_hosts, omit)
+    ) -> (Option<&'a FrameReach>, FramePins, bool) {
+        ReachDescription::mint_with_dest_bit(self.0, sources, materialize_hosts, omit)
     }
 
     /// The witnessed-allocation surface for an owned object built fresh inside the brand: born
@@ -470,7 +472,7 @@ koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 
 /// `&KoanRegion` keeps only the identity surface here.
 pub(crate) trait KoanRegionExt {
     /// The alloc-witnessed construction inversion's region-pure primitive: build a value into
-    /// `owner`'s region *inside* the `yoke` closure, returning it bundled with the [`FrameSet`]
+    /// `owner`'s region *inside* the `yoke` closure, returning it bundled with the [`FrameReach`]
     /// singleton pinning `owner` so it is co-located by construction rather than paired with an
     /// asserted witness. The closure receives a per-construction [`RegionBrand`] confined to the
     /// `for<'b>` brand (it cannot escape the closure), so it allocates through the same handle as every

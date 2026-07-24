@@ -227,7 +227,7 @@ impl<W: Workload> NodeStore<W> {
             // into the run region) is externally pinned, so the read opens under the empty pin.
             SlotState::Done(Ok(w), ..) => Ok(match pin {
                 Some(p) => w.open_with(p, f),
-                None => w.open_with(&crate::witnessed::RegionSet::<OwnerOf<W>>::empty(), f),
+                None => w.open_with(&crate::witnessed::PinBundle::<OwnerOf<W>>::empty(), f),
             }),
             SlotState::Done(Err(e), ..) => Err(e),
             _ => panic!("result must be ready by the time it's read"),

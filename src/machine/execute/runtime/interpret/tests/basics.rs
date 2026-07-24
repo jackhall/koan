@@ -18,7 +18,7 @@ fn interprets_let_and_print() {
 
     assert_eq!(captured.borrow().as_slice(), b"hello\n");
     let data = scope.bindings().data();
-    assert!(matches!(data.get("x").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 42.0));
+    assert!(matches!(data.get("x").map(|(o, _, _, _)| *o), Some(KObject::Number(n)) if *n == 42.0));
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn let_binds_a_list_literal_of_numbers() {
     let test_run = run("LET xs = [1 2 3]\n", &region, captured);
     let scope = test_run.scope;
     let data = scope.bindings().data();
-    match data.get("xs").map(|(o, _, _)| *o) {
+    match data.get("xs").map(|(o, _, _, _)| *o) {
         Some(KObject::List(items, _)) => {
             assert_eq!(items.elements().len(), 3);
             assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0));
@@ -117,7 +117,7 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
     );
     let scope = test_run.scope;
     let data = scope.bindings().data();
-    match data.get("xs").map(|(o, _, _)| *o) {
+    match data.get("xs").map(|(o, _, _, _)| *o) {
         Some(obj @ KObject::List(items, _)) => {
             assert!(items.elements().is_empty());
             assert_eq!(
@@ -152,7 +152,7 @@ fn list_literal_with_subexpression_element_evaluates_eagerly() {
     let test_run = run("LET xs = [1 (2 + 5) 3]\n", &region, captured);
     let scope = test_run.scope;
     let data = scope.bindings().data();
-    match data.get("xs").map(|(o, _, _)| *o) {
+    match data.get("xs").map(|(o, _, _, _)| *o) {
         Some(KObject::List(items, _)) => {
             assert_eq!(items.elements().len(), 3);
             assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0));
@@ -185,7 +185,7 @@ fn multiline_list_literal_binds_correctly() {
     let test_run = run("LET xs = [\n  1\n  2\n  3\n]\n", &region, captured);
     let scope = test_run.scope;
     let data = scope.bindings().data();
-    match data.get("xs").map(|(o, _, _)| *o) {
+    match data.get("xs").map(|(o, _, _, _)| *o) {
         Some(KObject::List(items, _)) => {
             assert_eq!(items.elements().len(), 3);
             assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0));
@@ -202,7 +202,7 @@ fn nested_list_literal_produces_list_of_lists() {
     let test_run = run("LET xs = [[1 2] [3 4]]\n", &region, captured);
     let scope = test_run.scope;
     let data = scope.bindings().data();
-    match data.get("xs").map(|(o, _, _)| *o) {
+    match data.get("xs").map(|(o, _, _, _)| *o) {
         Some(KObject::List(outer, _)) => {
             assert_eq!(outer.elements().len(), 2);
             match &outer.elements()[0] {

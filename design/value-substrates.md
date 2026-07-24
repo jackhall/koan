@@ -243,7 +243,6 @@ permanently; "as much storage as possible" means the value substrates.
 The [untyped_arena](../roadmap/untyped_arena/README.md) roadmap project carries
 the conversion slate; its `Requires` chain encodes the order:
 
-- [Reach ownership split](../roadmap/untyped_arena/reach-split.md)
 - [Residence-audit retirement](../roadmap/untyped_arena/residence-audit-retirement.md)
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
 - [Region-store string values](../roadmap/untyped_arena/region-store-strings.md)

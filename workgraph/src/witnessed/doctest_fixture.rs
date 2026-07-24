@@ -7,7 +7,7 @@
 use std::cell::Cell;
 
 use super::{
-    AuditedStored, FamilyArena, PinsRegion, Reattachable, Region, RegionOwner, RegionSet,
+    AuditedStored, FamilyArena, PinBundle, PinsRegion, Reattachable, Region, RegionOwner,
     SealedExtern, StorageOf, StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
 };
 
@@ -53,13 +53,13 @@ unsafe impl PinsRegion for Cart {
     }
 }
 
-/// Build a set-witnessed carrier over a cart: yoked from the cart's own region (so the value is
-/// provably region-derived), then re-bundled under the singleton [`RegionSet`] that pins the same
+/// Build a bundle-witnessed carrier over a cart: yoked from the cart's own region (so the value is
+/// provably region-derived), then re-bundled under the singleton [`PinBundle`] that pins the same
 /// cart. Fixture-only: the doctests for the set-witnessed merge/transfer verbs need one, and the
 /// crate-internal witness-retype they route is not part of the module's real surface.
-pub fn set_witnessed(cart: std::rc::Rc<Cart>) -> Witnessed<RefFamily, RegionSet<Cart>> {
+pub fn set_witnessed(cart: std::rc::Rc<Cart>) -> Witnessed<RefFamily, PinBundle<Cart>> {
     Witnessed::<RefFamily, std::rc::Rc<Cart>>::yoke(std::rc::Rc::clone(&cart), |region| &region[0])
-        .rewitness(RegionSet::singleton(cart))
+        .rewitness(PinBundle::singleton(cart))
 }
 
 /// Build a [`SealedExtern`] from a live carrier. `SealedExtern`'s constructors are all

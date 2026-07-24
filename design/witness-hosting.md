@@ -28,11 +28,26 @@ Reach evidence is two separate types, and nothing in the system conflates them:
 
 The two are minted **together, as an inseparable pair**, by the derivation
 doors (§ Composition). There is no constructor that builds a description from
-loose parts, and no constructor that builds a bundle except alongside the
-description it covers. A holder that has only a description has no way to
-re-anchor the value it describes — the re-anchor doors require the bundle by
-signature. This is the compile-safety line: *using a description where
-ownership is required does not typecheck.*
+loose parts, and a bundle comes to exist in exactly two ways: alongside its
+description at the mint, or **recovered** from a description at a genuine
+escape — the enveloped-holder clone a step terminal takes sealing under the
+step's pin, a resident read takes sealing under its scope's liveness. The
+recovery door ([`ReachDescription::to_bundle`](../workgraph/src/witnessed/reach.rs))
+is **module-private**: a bare description that embedder code holds builds
+nothing, because the door that would turn one into a bundle is not in the
+embedder's reach. The caller reads the description under the **host pin** —
+which covers its hosting side table, exactly as
+[`Carrier::with_reach`](../workgraph/src/witnessed/carrier.rs) covers any reach
+reference — and its `Weak` members are recovered by ambient upgrade under the
+holder rule: every member is live because the covering holder that reached the
+description already pins it. A member that fails to upgrade is a coverage bug,
+caught by a `debug_assert` (release-silent, treated as non-pinning) — the door
+sits at the **same discipline tier** as every other pinned reach read, not a
+compile-enforced coverage proof. What *is* compile-enforced is re-anchoring: a
+holder that has only a description cannot re-anchor the value it describes,
+because the re-anchor doors require the bundle by signature. This is the
+compile-safety line: *using a description where ownership is required does not
+typecheck.*
 
 ## The description
 
@@ -137,8 +152,9 @@ for implementors:
 4. The re-anchor doors take the bundle (or the enveloping borrow) by
    signature. A carrier plus no bundle is inert data.
 5. Release is ordinary `Drop` of a bundle. There is no release verb, no
-   un-mint, no audit. When a binding entry drops — rebind, evacuation, scope
-   death — its pins drop with it.
+   un-mint, no audit. When a binding entry drops — its scope's region dying,
+   evacuation — its pins drop with it. Bindings are bind-once, so an entry
+   never drops by overwrite.
 
 ## Composition: minting a pair
 
@@ -164,7 +180,7 @@ destination:
 3. **Outer-chain subsumption** — a member whose region another member's
    `pins_region` owner chain already keeps alive is dropped, so the pair stays
    an antichain of deepest owners. The subsumption hook is the embedder's
-   [`PinsRegion`](../workgraph/src/witnessed/region_set.rs) impl.
+   [`PinsRegion`](../workgraph/src/witnessed/reach.rs) impl.
 
 A **pure pass-through** — a value returned up the call stack unmodified — runs
 no mint: its carrier rides by reference inside its envelope, host unchanged,
@@ -214,12 +230,17 @@ The canonical example, spelled out:
 FN count : n = MATCH (n) (0 -> 0) (_ -> count : n - 1)
 ```
 
-Each tail hop retires its frame per retention. If a loop-carried bind (`it`
-in a WHILE-shaped tail loop) prices to **pin**, iteration N's entry holds
-iteration N's producer region; iteration N+1's **rebind drops that entry**,
-and the region frees. At most one retired region is ever live beyond the
-current frame — pinning preserves the same O(1) region turnover as copying,
-and the pricing may pick either.
+Each tail hop retires its frame per retention. Bindings are bind-once and a
+tail call is not known to re-enter the same function with a congruent slot
+set, so each hop's `it` bind lands in a fresh scope: a loop-carried bind that
+priced to **pin** would chain — iteration N+1's entry pins frame N, whose own
+`it` entry pins frame N−1, transitively. Every pin in that chain is droppable
+(each dies with its entry's scope), but a pinned loop holds O(N) retired
+regions until
+[region evacuation](../roadmap/untyped_arena/region-evacuation.md) collapses
+the chain at frame death. The bind seam therefore keeps its copy-bias for
+loop-carried binds: the copy frees the producer at retention discharge,
+preserving the O(1) region turnover TCO depends on.
 
 Host = residence, by construction: a value is never moved out of its producer
 region by any channel, so the envelope's host pin, the producer's retention
@@ -244,8 +265,7 @@ value to each consumer.
   nothing.
 - **Region death** drops the region's side table and its scope's binding
   entries — and therefore every bundle those entries own. Refcount decrements
-  for a region's outbound pins batch at that teardown; a rebind pays only its
-  own entry's bundle.
+  for a region's outbound pins batch at that teardown.
 
 **TCO** consumes retention directly: a tail call reinstalls the slot's work,
 the retiring incarnation's region is held by retention until the reinstalled
@@ -295,8 +315,5 @@ Per the [scheduler-library.md](scheduler-library.md) division:
 
 ## Open work
 
-- [Reach ownership split](../roadmap/untyped_arena/reach-split.md) — ships
-  this doc's model: the description/ownership split and the holder-rule
-  plumbing at every carrier position.
 - [Residence-audit retirement](../roadmap/untyped_arena/residence-audit-retirement.md)
   — retires the runtime audit where this doc's typed pairing subsumes it.

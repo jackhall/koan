@@ -1,5 +1,6 @@
 //! The per-call allocation frame: [`FrameStorage`] (the Koan [`RegionHost`] alias), the run-root
-//! storage entry, the [`FrameSet`] reach-set alias, the witnessed child-scope construction door, and
+//! storage entry, the [`FrameReach`] / [`FramePins`] reach-evidence aliases, the witnessed
+//! child-scope construction door, and
 //! the [`CallFrame`] shell over a refcounted `FrameStorage` that holds the per-call child [`Scope`].
 //! The region/brand substrate these build on lives in the parent `arena` module.
 
@@ -12,8 +13,8 @@ use crate::machine::core::{Scope, ScopeId, ScopeRefFamily};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::CarrierWitness;
 use crate::witnessed::{
-    Delivered, RegionHandle, RegionHandleFamily, RegionHost, RegionSet, Sealed, SealedExtern,
-    Witnessed,
+    Delivered, PinBundle, ReachDescription, RegionHandle, RegionHandleFamily, RegionHost, Sealed,
+    SealedExtern, Witnessed,
 };
 
 /// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
@@ -55,11 +56,18 @@ impl FrameStorageExt for FrameStorage {
     }
 }
 
-/// The reach set backing carrier witnesses: the set of `Rc<FrameStorage>` whose regions a
-/// carrier's value reaches. See [`RegionSet`] for the shared mechanism (subsumption, folding,
-/// union); Koan's member semantics are the library's [`PinsRegion`](crate::witnessed::PinsRegion)
-/// impl for [`RegionHost`].
-pub type FrameSet = RegionSet<FrameStorage>;
+/// The non-owning reach description backing carrier witnesses: names the regions a carrier's value
+/// reaches, hosted in the value's home region's side table and referenced (never owned) by the
+/// carrier. See [`ReachDescription`] for the shared mechanism (membership queries, home-omission);
+/// Koan's member semantics are the library's [`PinsRegion`](crate::witnessed::PinsRegion) impl for
+/// [`RegionHost`]. Its owning counterpart is [`FramePins`].
+pub type FrameReach = ReachDescription<FrameStorage>;
+
+/// The owned pin bundle a holder keeps to pin every region a value reaches — the ownership
+/// counterpart of [`FrameReach`], released by ordinary `Drop` (a binding entry drops it at entry
+/// death, the delivery envelope carries it across transit). See [`PinBundle`] for the shared
+/// mechanism (subsumption, union).
+pub type FramePins = PinBundle<FrameStorage>;
 
 /// Build a per-call frame's child scope **witnessed**, sealing it to the externally-witnessed
 /// [`SealedExtern<ScopeRefFamily>`] the [`CallFrame`] holds — the construction door that re-anchors the

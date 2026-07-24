@@ -7,7 +7,7 @@ use super::{Scope, ScopeKind};
 use crate::machine::core::bindings::{
     ApplyOutcome, BindKind, BindingIndex, DeclarationSite, NameLookup,
 };
-use crate::machine::core::{KError, KErrorKind, KFunction, NodeId, StoredReach};
+use crate::machine::core::{FramePins, KError, KErrorKind, KFunction, NodeId, StoredReach};
 use crate::machine::model::{probe_key, Carried, KObject, OperatorGroup, TypeRegistry};
 use crate::machine::DeliveredCarried;
 
@@ -49,13 +49,15 @@ impl<'a> Scope<'a> {
         obj: &'a KObject<'a>,
         index: BindingIndex,
         reach: StoredReach<'a>,
+        pins: FramePins,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
             // Transparent `USING` window: reads consult the window before the call
             // site, so a local bind whose name is already a surfaced module member
             // would be silently shadowed. Reject it; otherwise forward to the call
             // site under the caller's `index` (the bind belongs to the call site's
-            // block, at the call site's statement position), carrying the value's reach.
+            // block, at the call site's statement position), carrying the value's reach
+            // and its owning pin bundle.
             if matches!(
                 self.bindings.get().lookup_value(&name, None),
                 Some(NameLookup::Bound(_))
@@ -65,17 +67,20 @@ impl<'a> Scope<'a> {
                      rename it to avoid silently shadowing the module's `{name}`",
                 ))));
             }
-            return self.write_target().bind_value(name, obj, index, reach);
+            return self.write_target().bind_value(name, obj, index, reach, pins);
         }
         self.assert_open(&name);
+        // Clone the owning bundle for the attempt, keeping the original for the defer path: on a
+        // borrow `Conflict` the attempt's clone is dropped and the retained original rides the
+        // deferred write, so the eventual entry owns exactly one bundle either way.
         match self
             .bindings
             .get()
-            .try_bind_value(&name, obj, index, reach)?
+            .try_bind_value(&name, obj, index, reach, pins.clone())?
         {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
-                self.pending.defer_value(name, obj, index, reach);
+                self.pending.defer_value(name, obj, index, reach, pins);
                 Ok(())
             }
         }
@@ -110,10 +115,10 @@ impl<'a> Scope<'a> {
                 .map(|object| object.embeds_substrate())
                 .unwrap_or(false)
         });
-        let (allocated, stored) = if projected_embeds_substrate {
+        let (allocated, stored, pins) = if projected_embeds_substrate {
             self.copy_delivered_substrate(cell, project, types)?
         } else {
-            let stored = self.adopted_reach_of(cell);
+            let (stored, pins) = self.adopted_reach_of(cell);
             let allocated = cell.open(|live| {
                 let projected = project(&live)?;
                 self.alloc_object_delivered(
@@ -122,9 +127,9 @@ impl<'a> Scope<'a> {
                     types,
                 )
             })?;
-            (allocated, stored)
+            (allocated, stored, pins)
         };
-        self.bind_value(name, allocated, index, stored)?;
+        self.bind_value(name, allocated, index, stored, pins)?;
         Ok((allocated, stored))
     }
 
@@ -143,7 +148,9 @@ impl<'a> Scope<'a> {
         types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
         let (obj, stored) = self.alloc_object_checked_stored(value, types)?;
-        self.bind_value(name, obj, index, stored)?;
+        // A checked bind is region-pure (`foreign: None`) — its borrows reach no foreign region — so
+        // the entry owns the empty bundle: nothing to pin beyond this scope's own region.
+        self.bind_value(name, obj, index, stored, FramePins::empty())?;
         Ok((obj, stored))
     }
 
@@ -392,9 +399,9 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
         types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
-        let stored = self.child_module_reach(child);
+        let (stored, pins) = self.child_module_reach(child);
         let obj = self.alloc_object_reaching(KObject::Module(module), &stored, types)?;
-        self.bind_value(name, obj, index, stored)?;
+        self.bind_value(name, obj, index, stored, pins)?;
         Ok((obj, stored))
     }
 

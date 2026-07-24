@@ -22,6 +22,7 @@ fn resolve_name_part_identifier_resolved() {
             bound,
             BindingIndex::BUILTIN,
             StoredReach::for_test(None, false),
+            crate::machine::core::FramePins::empty(),
         )
         .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());

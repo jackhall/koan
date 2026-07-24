@@ -28,7 +28,10 @@ use std::marker::PhantomData;
 
 use typed_arena::Arena;
 
-use super::{erase_to_static, with_branded_ref, PinsRegion, Reattachable, RegionOwner, RegionSet};
+use super::{
+    erase_to_static, with_branded_ref, PinBundle, PinsRegion, Reattachable, ReachDescription,
+    RegionOwner,
+};
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
 /// from. The inner arena is private to the crate: holding a `&FamilyArena` grants no allocation
@@ -130,15 +133,26 @@ pub struct Region<W: StorageProfile> {
     /// [`owns_addr`](Self::owns_addr). `usize` rather than `*const _` keeps the field
     /// lifetime-erased and `Send`/`Sync`-neutral.
     membership: RefCell<Vec<usize>>,
-    /// The region's **reach side table**: an append-stable arena of the reach descriptions minted
-    /// for values living in this region ([`Region::alloc_reach`]). Separate from the family
-    /// [`storage`](Self::storage) bundle so a reach description — `Drop`-bearing, since it owns
-    /// frame-owner `Rc`s — is never arena-page data (see
+    /// The region's **reach side table**: an append-stable arena of the non-owning reach
+    /// descriptions minted for values living in this region ([`Region::alloc_reach`]). Separate from
+    /// the family [`storage`](Self::storage) bundle so a description is never arena-page data (see
     /// [design/witness-hosting.md § The description](../../../design/witness-hosting.md#the-description)).
-    /// `typed_arena::Arena` hands back a `&` valid for the region's whole life, the same
-    /// append-stable-address guarantee [`alloc_resident`](Self::alloc_resident) rests on — so a
-    /// carrier can share a thin reference into it with no `Drop`-order or dangling hazard.
-    reach_table: Arena<RegionSet<W::FrameOwner>>,
+    /// A [`ReachDescription`] owns nothing — its members are `Weak`, so hosting it here pins no
+    /// region; the owning [`PinBundle`] that keeps its members alive is held by the value's holder
+    /// (a binding entry, the delivery envelope) or, for a region-resident adoption, by
+    /// [`retained_reach`](Self::retained_reach) below. `typed_arena::Arena` hands back a `&` valid
+    /// for the region's whole life, the append-stable-address guarantee
+    /// [`alloc_resident`](Self::alloc_resident) rests on — so a carrier can share a thin reference
+    /// into it with no `Drop`-order or dangling hazard.
+    reach_table: Arena<ReachDescription<W::FrameOwner>>,
+    /// Owning pin bundles retained for the region's whole life — the liveness home for a value
+    /// **adopted** copy-free into this region ([`Region::retain_reach`], routed by
+    /// [`Delivered::adopt_into`](super::Delivered::adopt_into)), whose re-anchored reference lives as
+    /// long as the region and whose reach a non-owning description cannot pin. A bound value instead
+    /// hands its bundle to the binding entry (dropped at entry death); this list is only for
+    /// genuinely region-resident adoptions, so it pins exactly as long as the old arena-hosted owning
+    /// set did.
+    retained_reach: RefCell<Vec<PinBundle<W::FrameOwner>>>,
 }
 
 impl<W: StorageProfile> Region<W> {
@@ -150,18 +164,36 @@ impl<W: StorageProfile> Region<W> {
             storage: StorageOf::<W>::default(),
             membership: RefCell::new(Vec::new()),
             reach_table: Arena::new(),
+            retained_reach: RefCell::new(Vec::new()),
         }
     }
 
     /// Append a minted reach description to the region's side table and hand back a co-located
-    /// `&'a` — the sole reach-allocation path, reached through [`RegionSet::mint`]. Unlike
+    /// `&'a` — the sole reach-allocation path, reached through [`ReachDescription::mint`]. Unlike
     /// [`alloc_resident`](Self::alloc_resident) this touches no family cell and needs no
-    /// lifetime-retype: `RegionSet<F>` is lifetime-free, and `typed_arena::Arena` already returns a
-    /// reference valid for the `&'a self` borrow (the region's life), so the description a carrier
-    /// references outlives every read pinned by this region's owner. No `unsafe`: the append-stable
-    /// guarantee is the arena's, not a hand-audited pointer extension.
-    pub(crate) fn alloc_reach(&self, set: RegionSet<W::FrameOwner>) -> &RegionSet<W::FrameOwner> {
+    /// lifetime-retype: a [`ReachDescription`] is lifetime-free, and `typed_arena::Arena` already
+    /// returns a reference valid for the `&'a self` borrow (the region's life), so the description a
+    /// carrier references outlives every read pinned by this region's owner. The description is
+    /// non-owning (`Weak` members), so hosting it pins nothing — the members' liveness is the
+    /// holder's [`PinBundle`], not this table. No `unsafe`: the append-stable guarantee is the
+    /// arena's, not a hand-audited pointer extension.
+    pub(crate) fn alloc_reach(
+        &self,
+        set: ReachDescription<W::FrameOwner>,
+    ) -> &ReachDescription<W::FrameOwner> {
         self.reach_table.alloc(set)
+    }
+
+    /// Retain an owning [`PinBundle`] for the region's whole life — the liveness home for a value
+    /// **adopted** copy-free into this region ([`Delivered::adopt_into`](super::Delivered::adopt_into)),
+    /// whose re-anchored reference lives as long as the region. A non-owning description cannot pin
+    /// the adopted value's reach, so the bundle it was minted with is parked here and dropped only at
+    /// region death — pinning exactly as long as the old arena-hosted owning set did. A *bound* value
+    /// never routes here: it hands its bundle to the binding entry (dropped at entry death).
+    pub(crate) fn retain_reach(&self, bundle: PinBundle<W::FrameOwner>) {
+        if !bundle.is_empty() {
+            self.retained_reach.borrow_mut().push(bundle);
+        }
     }
 
     /// Number of values stored in family `K`'s cell. Read-only; exposes no `&Arena`, so it
@@ -328,6 +360,14 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// The bare region this handle authorizes — identity queries only.
     pub fn region(self) -> &'a Region<W> {
         self.region
+    }
+
+    /// Retain an owning [`PinBundle`] in this handle's region for the region's whole life — the
+    /// public door onto [`Region::retain_reach`]. An embedder routes a copy-free adoption or a
+    /// run-teardown rehome here: the value stays resident in this region, so its reach (which a
+    /// non-owning [`ReachDescription`] only names) must be pinned for as long as the region lives.
+    pub fn retain_reach(self, bundle: PinBundle<W::FrameOwner>) {
+        self.region.retain_reach(bundle)
     }
 
     /// Brand-confined allocation — see [`Region::alloc`]'s (crate-private) docs. Move-in: `value`

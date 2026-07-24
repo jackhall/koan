@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use super::super::Scope;
 use crate::builtins::test_support::{delivered_with_host, mock_declaration_site, run_root_bare};
-use crate::machine::core::{run_root_storage, FrameStorageExt};
+use crate::machine::core::{run_root_storage, FramePins, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, DeclarationSite};
@@ -144,18 +144,25 @@ fn child_module_reach_unions_member_entry_reaches_across_regions() {
     // module member reaching into another module's own region.
     let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
     let cell = delivered_with_host(Carried::Object(obj), Rc::clone(&inner_storage));
-    let stored = source_scope.host_reach_of(&cell);
+    let (stored, _host_pins) = source_scope.host_reach_of(&cell);
     // Drop the envelope now: it must not be what keeps `inner_storage` alive below — the minted
     // reach folded into `stored` (and, downstream, `parent`'s union) is what the test exercises.
     drop(cell);
     source_scope
-        .bind_value("m".to_string(), obj, BindingIndex::value(0), stored)
+        .bind_value(
+            "m".to_string(),
+            obj,
+            BindingIndex::value(0),
+            stored,
+            FramePins::empty(),
+        )
         .expect("bind should succeed");
     let source_region_ptr: *const KoanRegion = source_scope.region();
 
     let parent_storage = run_root_storage();
     let parent = run_root_bare(&parent_storage);
-    let reach = parent.child_module_reach(source_scope).foreign;
+    let (child_reach, _module_pins) = parent.child_module_reach(source_scope);
+    let reach = child_reach.foreign;
 
     let members: Vec<*const KoanRegion> = reach
         .expect("a member reach + the child's own region must yield a non-empty union")

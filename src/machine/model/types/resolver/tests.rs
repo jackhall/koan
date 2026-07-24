@@ -25,6 +25,7 @@ fn type_token_cannot_bind_value_side() {
             region.brand().alloc_object(KObject::Number(7.0)),
             BindingIndex::BUILTIN,
             StoredReach::for_test(None, false),
+            crate::machine::core::FramePins::empty(),
         )
         .expect_err("a Type token names a type; it may not bind a value");
     assert!(

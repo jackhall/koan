@@ -18,7 +18,7 @@ use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{
-    force_substrate_borrows_host, CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion,
+    force_substrate_borrows_host, CarrierWitness, FramePins, KError, KErrorKind, KoanRegion,
     RegionTypeFamily,
 };
 use crate::source::Spanned;
@@ -335,10 +335,10 @@ pub(crate) fn build_type_operand<'step>(
     // `other` — `identity_carrier`'s own reach is what gets minted into the dest frame's arena.
     // The pin: the identity's home region owner when live (the identity and its reach set live
     // there), else the empty set — the identity is then covered by the live `scope` borrow itself.
-    let pin: FrameSet = scope
+    let pin: FramePins = scope
         .region_owner()
         .upgrade()
-        .map_or_else(FrameSet::empty, FrameSet::singleton);
+        .map_or_else(FramePins::empty, FramePins::singleton);
     identity_carrier.merge_pinned::<DestHandleFamily, RegionTypeFamily, _>(
         dest_brand,
         &pin,

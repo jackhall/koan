@@ -1,7 +1,7 @@
 //! Miri slate (tree borrows) for the abstract carrier shapes the witnessed substrate admits —
 //! the reference-only [`Carrier`]'s two liveness channels (residence and reach), the
 //! `Residence` × `borrows_host` materialization matrix, envelope duplication, the
-//! [`RegionSet::mint`] home-omission rule, and the [`StepContext::alloc_with`] finish-surface
+//! [`ReachDescription::mint`] home-omission rule, and the [`StepContext::alloc_with`] finish-surface
 //! fold. Everything routes production verbs over a library-only profile ([`ShapeProfile`] /
 //! `RegionHost` frames, `u32` content) — no embedder type. Each test frees every frame handle a
 //! regression would leave the value dangling into, then reads the value back: a use-after-free
@@ -80,10 +80,14 @@ fn reach_element(
     v: u32,
 ) -> Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> {
     let value: &u32 = store_val(content, v);
-    let reach = RegionSet::mint(
+    // `content` is foreign to `host`, so it enters the minted description through the
+    // materialize-hosts arm; the returned bundle is dropped here, and the envelope re-derives its
+    // own owned foreign bundle from the description at `seal` (under the host pin, while `content`'s
+    // handle keeps it live).
+    let (reach, _bundle) = ReachDescription::mint(
         RegionHandle::from_owner(&**host),
-        &[&RegionSet::singleton(Rc::clone(content))],
         &[],
+        &[Rc::clone(content)],
         |_| false,
     );
     Delivered::seal(
@@ -211,16 +215,18 @@ fn copied_transfer_releases_residence_only_host() {
     assert_eq!(copied.with_pinned(&dest, |v| *v), 9);
 }
 
-/// **Envelope duplication mints nothing** — duplicating for another consumer bit-copies the
-/// reference-only carrier (the reach set rides by reference, never re-minted) and clones exactly
-/// one `Rc`, the retained host. Per-member refcount traffic or a re-mint here is the regression
-/// this gates; the leak detector is the backstop.
+/// **Envelope duplication shares the description, clones the owned pins** — duplicating for another
+/// consumer bit-copies the reference-only carrier, so the reach **description** rides by reference
+/// (never re-minted); but the envelope owns its liveness now, so each duplicate clones one retained
+/// host `Rc` **and** its owned foreign [`PinBundle`] (one `Rc` per foreign member), giving every
+/// fan-out consumer its own pins for the parked period. A re-mint of the description here is the
+/// regression this gates; the leak detector is the backstop.
 #[test]
-fn duplicate_shares_reach_and_clones_one_host() {
+fn duplicate_shares_reach_and_clones_owned_pins() {
     let home = frame();
     let content = frame();
     let element = reach_element(&home, &content, 4);
-    let reach_ptr: *const RegionSet<ShapeFrame> =
+    let reach_ptr: *const ReachDescription<ShapeFrame> =
         element.witness().with_reach(Some(element.host()), |reach| {
             reach.expect("the element carries a minted reach") as *const _
         });
@@ -235,7 +241,7 @@ fn duplicate_shares_reach_and_clones_one_host() {
             .with_reach(Some(duplicate.host()), |reach| {
                 reach.expect("duplicates carry the reach") as *const _
             });
-        assert_eq!(ptr, reach_ptr, "the reach set rides by reference");
+        assert_eq!(ptr, reach_ptr, "the reach description rides by reference");
     }
     assert_eq!(
         Rc::strong_count(&home),
@@ -244,15 +250,16 @@ fn duplicate_shares_reach_and_clones_one_host() {
     );
     assert_eq!(
         Rc::strong_count(&content),
-        content_count,
-        "no per-member refcount traffic"
+        content_count + 2,
+        "one owned foreign-pin clone per duplicate — each consumer owns its pins"
     );
 }
 
-/// **`RegionSet::mint` home-omission** — a set hosted in region A never holds `Rc<A>` (the
-/// self-cycle rule): minting sources that include the destination's own frame materializes only
-/// the foreign member, the destination's arena then being that member's sole owner. Dropping the
-/// destination releases everything — the Miri leak audit over this test is what signs off the
+/// **`ReachDescription::mint` home-omission** — a description hosted in region A never names `A`
+/// (the self-cycle rule): minting materialize-hosts that include the destination's own frame keeps
+/// only the foreign member, and the minted **bundle** is that member's owner (the description's
+/// mirror holds only a `Weak`, so A's side table pins nothing). Dropping the bundle releases the
+/// member; dropping A frees A with no self-cycle — the Miri leak audit over this test signs off the
 /// no-self-cycle shape.
 #[test]
 fn mint_home_omission_prevents_self_cycle() {
@@ -261,29 +268,31 @@ fn mint_home_omission_prevents_self_cycle() {
     let weak_a = Rc::downgrade(&a);
     let weak_b = Rc::downgrade(&b);
 
-    let minted = RegionSet::mint(
+    let (minted, bundle) = ReachDescription::mint(
         RegionHandle::from_owner(&*a),
-        &[
-            &RegionSet::singleton(Rc::clone(&a)),
-            &RegionSet::singleton(Rc::clone(&b)),
-        ],
         &[],
+        &[Rc::clone(&a), Rc::clone(&b)],
         |_| false,
-    )
-    .expect("the foreign member materializes");
+    );
+    let minted = minted.expect("the foreign member materializes");
     assert!(
-        matches!(minted.members(), [only] if Rc::ptr_eq(only, &b)),
+        matches!(minted.members().as_slice(), [only] if Rc::ptr_eq(only, &b)),
         "home is omitted; the foreign member is kept"
     );
 
     drop(b);
     assert!(
         weak_b.upgrade().is_some(),
-        "a's arena holds the sole surviving member"
+        "the minted bundle holds the sole surviving member (A's side table only names it)"
     );
     drop(a);
     assert!(weak_a.upgrade().is_none(), "no self-cycle: a freed on drop");
-    assert!(weak_b.upgrade().is_none(), "teardown released the member");
+    // The member is owned by the bundle now, not A's arena, so freeing A does not release it.
+    drop(bundle);
+    assert!(
+        weak_b.upgrade().is_none(),
+        "dropping the pin bundle released the member"
+    );
 }
 
 /// **Finish-surface fold** — `alloc_with` folds every listed dep's envelope into the result's

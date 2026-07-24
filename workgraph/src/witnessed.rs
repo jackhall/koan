@@ -33,8 +33,8 @@ pub use region::{
     StorageProfile, Stored,
 };
 
-mod region_set;
-pub use region_set::{PinsRegion, RegionSet};
+mod reach;
+pub use reach::{PinBundle, PinsRegion, ReachDescription};
 
 mod host;
 pub use host::RegionHost;
@@ -422,7 +422,7 @@ unsafe impl<F: RegionOwner> WitnessRegion for Rc<F> {
 /// so an impl can *mint* into the destination rather than only computing a pure union. Total: every
 /// pair of witnesses is composable against any destination, so there is no failure verdict.
 ///
-/// Deliberately **not** `: Witness` — a reference-only witness composes too. [`RegionSet`] (a
+/// Deliberately **not** `: Witness` — a reference-only witness composes too. [`PinBundle`] (a
 /// pinning witness) composes by plain union, ignoring `dest`; [`Carrier`] (reference-only) composes
 /// by minting both operands' reach into `dest`'s own arena and deriving the borrows-into-dest bit —
 /// the pure reach mint, since it has no residence pin in hand to materialize (that is the
@@ -496,7 +496,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     }
 
     /// The bundled witness — the value's reach/pin description. For a pinning witness (a
-    /// [`RegionSet`]) this is the set of producer frame `Rc`s that pin the carrier's pointee; for
+    /// [`PinBundle`]) this is the set of producer frame `Rc`s that pin the carrier's pointee; for
     /// a reference-only witness (the collapsed [`Carrier`]) it names the reach without pinning it.
     pub fn witness(&self) -> &W {
         &self.witness

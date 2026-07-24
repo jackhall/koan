@@ -7,7 +7,7 @@
 
 use std::cell::Cell;
 
-use super::{FrameSet, KoanRegion, KoanRegionExt, KoanStorageProfile};
+use super::{FrameReach, KoanRegion, KoanRegionExt, KoanStorageProfile};
 use crate::machine::core::{KError, KErrorKind, KFunction, Scope, StoredReach};
 use crate::machine::model::{CarriedFamily, ContainerSubstrate, KObject, Module, TypeRegistry};
 use crate::machine::CarrierWitness;
@@ -38,7 +38,7 @@ impl<'a> Scope<'a> {
         types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError> {
         let kt = o.ktype();
-        let sets: &[&FrameSet] = match &evidence.foreign {
+        let sets: &[&FrameReach] = match &evidence.foreign {
             Some(fs) => std::slice::from_ref(fs),
             None => &[],
         };
@@ -76,7 +76,7 @@ impl<'a> Scope<'a> {
         types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError> {
         let kt = o.ktype();
-        let sets: Vec<&FrameSet> = evidence.iter().filter_map(|r| r.foreign).collect();
+        let sets: Vec<&FrameReach> = evidence.iter().filter_map(|r| r.foreign).collect();
         let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
         self.brand()
             .0
@@ -105,7 +105,7 @@ impl<'a> Scope<'a> {
         m: Module<'_>,
         evidence: &StoredReach<'_>,
     ) -> &'a Module<'a> {
-        let sets: &[&FrameSet] = match &evidence.foreign {
+        let sets: &[&FrameReach] = match &evidence.foreign {
             Some(fs) => std::slice::from_ref(fs),
             None => &[],
         };
@@ -183,7 +183,7 @@ impl<'a> Scope<'a> {
 /// the destination scope by construction.
 pub(crate) struct Residence<'d> {
     dest: &'d KoanRegion,
-    reach: &'d [&'d FrameSet],
+    reach: &'d [&'d FrameReach],
     ambient: Option<&'d dyn Fn(&KoanRegion) -> bool>,
     /// A saw-a-region-pointer recorder: each `owns_*` leaf (a `KFunction` / `Module`
     /// pointer — the residence side-table's recorded region pointers) sets it. A
@@ -215,7 +215,7 @@ impl<'d> Residence<'d> {
         }
     }
 
-    pub(crate) fn with_reach(dest: &'d KoanRegion, reach: &'d [&'d FrameSet]) -> Self {
+    pub(crate) fn with_reach(dest: &'d KoanRegion, reach: &'d [&'d FrameReach]) -> Self {
         Residence {
             dest,
             reach,
@@ -228,7 +228,7 @@ impl<'d> Residence<'d> {
     /// ([`Scope::covers_region_ambiently`]) — see the type doc's `ambient` paragraph.
     pub(crate) fn with_reach_and_ambient(
         dest: &'d KoanRegion,
-        reach: &'d [&'d FrameSet],
+        reach: &'d [&'d FrameReach],
         ambient: &'d dyn Fn(&KoanRegion) -> bool,
     ) -> Self {
         Residence {
@@ -248,11 +248,11 @@ impl<'d> Residence<'d> {
 
     /// Whether `region` is `dest` itself, is covered by some `reach` member's own pin chain, or is
     /// reported covered by `ambient` — [`Scope::alloc_module_reaching`]'s coverage check.
-    /// [`RegionSet::pins_region`](crate::witnessed::RegionSet::pins_region) is the library's public
-    /// reach-coverage query (unlike
-    /// [`RegionSet::members`](crate::witnessed::RegionSet::members), which is gated to
+    /// [`ReachDescription::pins_region`](crate::witnessed::ReachDescription::pins_region) is the
+    /// library's public reach-coverage query (unlike
+    /// [`ReachDescription::members`](crate::witnessed::ReachDescription::members), which is gated to
     /// `test`/`test-hooks` — koan cannot enumerate a
-    /// set's members in production, only ask it whether a given region is covered).
+    /// description's members in production, only ask it whether a given region is covered).
     pub(crate) fn covers_region(&self, region: &KoanRegion) -> bool {
         std::ptr::eq(self.dest, region)
             || self.reach.iter().any(|fs| fs.pins_region(region))
@@ -280,7 +280,7 @@ impl<'d> Residence<'d> {
     /// `ContainerSubstrate<C>` carries no borrow naming its own home region — there is no
     /// scope/captured-scope shortcut to widen through [`Self::covers_region`] — so this walks
     /// `reach`'s members directly via
-    /// [`RegionSet::any_member_region`](crate::witnessed::RegionSet::any_member_region), the
+    /// [`ReachDescription::any_member_region`](crate::witnessed::ReachDescription::any_member_region), the
     /// production-safe per-member query that answers the address check without enumerating members
     /// out to the caller.
     pub(crate) fn owns_substrate<C>(&self, substrate: &ContainerSubstrate<C>) -> bool {
@@ -307,7 +307,7 @@ impl<'d> Residence<'d> {
 /// own evidence-tier methods, so the ambient predicate is always the destination scope's own
 /// coverage — a builtin cannot mint a permissive (always-true ambient) context.
 pub struct ResidenceEvidence<'ctx> {
-    reach: &'ctx [&'ctx FrameSet],
+    reach: &'ctx [&'ctx FrameReach],
     ambient: Option<&'ctx dyn Fn(&KoanRegion) -> bool>,
     seen: Option<&'ctx Cell<bool>>,
 }
@@ -336,7 +336,7 @@ impl<'ctx> ResidenceEvidence<'ctx> {
     /// coverage. Module-private so only [`Scope`]'s evidence-tier methods mint it — binding
     /// `ambient` to the destination scope by construction.
     fn reaching_ambient(
-        reach: &'ctx [&'ctx FrameSet],
+        reach: &'ctx [&'ctx FrameReach],
         ambient: &'ctx dyn Fn(&KoanRegion) -> bool,
     ) -> Self {
         ResidenceEvidence {
