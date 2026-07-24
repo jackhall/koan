@@ -31,7 +31,7 @@ fn strict_cross_sig_subtype_wins_dispatch() {
         .bindings()
         .data()
         .get("tag")
-        .map(|(o, _, _, _)| *o);
+        .map(|(_, r)| r.value());
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 1.0),
         "a module satisfying both Wide and Base must dispatch to the more-specific :Wide overload, got {:?}",
@@ -62,7 +62,7 @@ fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
         .bindings()
         .data()
         .get("tag")
-        .map(|(o, _, _, _)| *o);
+        .map(|(_, r)| r.value());
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 1.0),
         "declaring the less-specific :Base overload first must not flip the winner, got {:?}",
@@ -135,7 +135,7 @@ fn cross_sig_specificity_with_pinned_abstract_member() {
         .bindings()
         .data()
         .get("tag")
-        .map(|(o, _, _, _)| *o);
+        .map(|(_, r)| r.value());
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 1.0),
         "a pinned :Wide must still beat a pinned :Base when it strictly refines it, got {:?}",

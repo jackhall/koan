@@ -22,7 +22,7 @@ fn module_returning_fn_binds_value_side() {
         .bindings()
         .data()
         .get("make_set")
-        .map(|(object, _, _, _)| *object);
+        .map(|(_, r)| r.value());
     assert!(
         matches!(bound, Some(KObject::KFunction(_))),
         "make_set must bind value-side in bindings.data as a KFunction, got {:?}",
@@ -71,7 +71,7 @@ fn module_returning_fn_applies_by_the_keyworded_call_convention() {
         .bindings()
         .data()
         .get("inner")
-        .map(|(object, _, _, _)| *object);
+        .map(|(_, r)| r.value());
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
         "the returned module must carry inner = 1, got {:?}",

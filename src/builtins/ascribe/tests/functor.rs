@@ -26,7 +26,7 @@ fn functor_returns_a_module() {
         .bindings()
         .data()
         .get("inner")
-        .map(|(o, _, _, _)| *o);
+        .map(|(_, r)| r.value());
     assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -51,7 +51,7 @@ fn functor_body_reads_signature_typed_parameter() {
         .bindings()
         .data()
         .get("sample")
-        .map(|(o, _, _, _)| *o);
+        .map(|(_, r)| r.value());
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
@@ -155,7 +155,7 @@ fn functor_admits_unascribed_module_structurally() {
         .bindings()
         .data()
         .get("inner")
-        .map(|(o, _, _, _)| *o);
+        .map(|(_, r)| r.value());
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
         "generated module should carry inner=1, got {:?}",
@@ -223,13 +223,13 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
         .bindings()
         .data()
         .get("tag")
-        .map(|(o, _, _, _)| *o);
+        .map(|(_, r)| r.value());
     let th = mh
         .child_scope()
         .bindings()
         .data()
         .get("tag")
-        .map(|(o, _, _, _)| *o);
+        .map(|(_, r)| r.value());
     assert!(
         matches!(to, Some(KObject::Number(n)) if *n == 1.0),
         "Ordered call should pick body with tag=1, got {:?}",
@@ -265,7 +265,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
         .bindings()
         .data()
         .get("sample")
-        .map(|(o, _, _, _)| *o);
+        .map(|(_, r)| r.value());
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
@@ -348,7 +348,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
         .bindings()
         .data()
         .get("sample")
-        .map(|(o, _, _, _)| *o);
+        .map(|(_, r)| r.value());
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
@@ -447,12 +447,12 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     let child = held.child_scope();
     let inner = child.bindings().data();
     assert!(
-        matches!(inner.get("compare").map(|(o, _, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0),
+        matches!(inner.get("compare").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 7.0),
         "held.child_scope().compare must still read 7.0 after subsequent churn",
     );
     assert!(
         matches!(
-            inner.get("helper").map(|(o, _, _, _)| *o),
+            inner.get("helper").map(|(_, r)| r.value()),
             Some(KObject::KFunction(_))
         ),
         "held.child_scope().helper must still resolve to a KFunction after churn",

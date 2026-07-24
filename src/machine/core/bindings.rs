@@ -130,12 +130,73 @@ impl<'a> StoredReach<'a> {
     }
 }
 
-/// A value binding entry: the bound value, its lexical [`BindingIndex`], its `Copy` [`StoredReach`]
-/// claim (the home-omitted foreign reach reference + home-borrow bit), and the owned [`FramePins`]
-/// bundle that pins every region the value reaches — released by ordinary `Drop` at the entry's
-/// death (scope/region death, evacuation). The claim is handed out on reads (refcount-free); the
-/// pins stay owned here, so a read is enveloped under the entry's own liveness (holder rule 3).
-type DataEntry<'a> = (&'a KObject<'a>, BindingIndex, StoredReach<'a>, FramePins);
+/// A stored value fused to the reach evidence derived *for it*: the value `T`, its `Copy`
+/// [`StoredReach`] claim (home-omitted foreign reach reference + home-borrow bit), and the owned
+/// [`FramePins`] bundle that pins every region the value reaches. The three travel as one unit, so a
+/// binding entry can never pair a value with a claim or bundle derived for a *different* value — the
+/// re-pairing the reach-token discipline exists to prevent.
+///
+/// Construction is confined to `crate::machine::core`: the bind doors ([`Scope::bind_delivered`] and
+/// its siblings) fuse a freshly allocated value with the reach its mint verb derived, and `Clone`
+/// preserves that pairing rather than reassembling it. There is no field-wise constructor outside
+/// core, and deliberately no `Default` — a value + claim + bundle a caller happens to hold side by
+/// side cannot be assembled into one. The sibling `fused-reach-alloc-doors` item extends the same
+/// vehicle to the alloc-door audit signatures, so the entry is not re-surgeried.
+///
+/// [`Scope::bind_delivered`]: crate::machine::core::Scope::bind_delivered
+#[derive(Clone)]
+pub struct Reached<'a, T> {
+    value: T,
+    claim: StoredReach<'a>,
+    pins: FramePins,
+}
+
+impl<'a, T> Reached<'a, T> {
+    /// Fuse a value with the reach evidence a mint verb derived for it — the derivation-site
+    /// constructor. Confined to `crate::machine::core` (the bind doors), so no caller can assemble a
+    /// pair from a value and a reach it holds side by side.
+    pub(in crate::machine::core) fn mint(value: T, claim: StoredReach<'a>, pins: FramePins) -> Self {
+        Reached { value, claim, pins }
+    }
+
+    /// The fused-empty pair for a value that reaches nothing foreign — a bare-`FN` registration's
+    /// unused entry (empty claim, empty bundle). Confined like [`Self::mint`].
+    pub(in crate::machine::core) fn empty(value: T) -> Self {
+        Reached {
+            value,
+            claim: StoredReach::empty(),
+            pins: FramePins::empty(),
+        }
+    }
+
+    /// Narrow test affordance mirroring [`StoredReach::for_test`]: fuse explicit parts for tests
+    /// only. `#[cfg(test)]`-gated so it is not a production back door around the derivation-site
+    /// confinement (the route a `Default` impl would silently reopen).
+    #[cfg(test)]
+    pub(crate) fn for_test(value: T, claim: StoredReach<'a>, pins: FramePins) -> Self {
+        Reached { value, claim, pins }
+    }
+
+}
+
+impl<'a, T: Copy> Reached<'a, T> {
+    /// The stored value (a `Copy` handle — `&KObject` for the binding entry). Reading the fused
+    /// value is unrestricted — only *constructing* a pair is confined — but production readers live
+    /// in this module and touch the field directly, so the accessor exists for out-of-module tests.
+    #[cfg(test)]
+    pub(crate) fn value(&self) -> T {
+        self.value
+    }
+}
+
+/// A value binding entry: its lexical [`BindingIndex`] plus the [`Reached`] vehicle fusing the bound
+/// value, its `Copy` [`StoredReach`] claim (home-omitted foreign reach reference + home-borrow bit),
+/// and the owned [`FramePins`] bundle that pins every region the value reaches — the bundle released
+/// by ordinary `Drop` at the entry's death (scope/region death, evacuation). The claim is handed out
+/// on reads (refcount-free); the pins stay owned in the fused vehicle, so a read is enveloped under
+/// the entry's own liveness (holder rule 3). Fusing the three keeps the write door from ever pairing
+/// a value with a reach derived for a different value.
+type DataEntry<'a> = (BindingIndex, Reached<'a, &'a KObject<'a>>);
 
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature
 /// member access. Produced by [`crate::machine::core::Scope::lookup_member`], which checks the
@@ -340,9 +401,9 @@ impl<'a> Bindings<'a> {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
-        if let Some((obj, idx, _reach, _pins)) = self.data.borrow().get(name) {
+        if let Some((idx, reached)) = self.data.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
-                return Some(NameLookup::Bound(obj));
+                return Some(NameLookup::Bound(reached.value));
             }
         }
         self.value_placeholder(name, chain_cutoff)
@@ -400,12 +461,12 @@ impl<'a> Bindings<'a> {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<MemberResolution<'a>> {
-        if let Some((obj, idx, reach, pins)) = self.data.borrow().get(name) {
+        if let Some((idx, reached)) = self.data.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(MemberResolution::Value {
-                    obj,
-                    stored: *reach,
-                    pins: pins.clone(),
+                    obj: reached.value,
+                    stored: reached.claim,
+                    pins: reached.pins.clone(),
                 });
             }
         }
@@ -425,12 +486,12 @@ impl<'a> Bindings<'a> {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<NameLookup<ValueHit<'a>>> {
-        if let Some((obj, idx, reach, pins)) = self.data.borrow().get(name) {
+        if let Some((idx, reached)) = self.data.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(NameLookup::Bound(ValueHit {
-                    obj,
-                    stored: *reach,
-                    pins: pins.clone(),
+                    obj: reached.value,
+                    stored: reached.claim,
+                    pins: reached.pins.clone(),
                 }));
             }
         }
@@ -545,7 +606,7 @@ impl<'a> Bindings<'a> {
         self.data
             .borrow()
             .values()
-            .map(|(_, _, _, pins)| pins.clone())
+            .map(|(_, reached)| reached.pins.clone())
             .collect()
     }
 
@@ -555,7 +616,7 @@ impl<'a> Bindings<'a> {
         self.data
             .borrow()
             .iter()
-            .map(|(name, (obj, _, _, _))| (name.clone(), *obj))
+            .map(|(name, (_, reached))| (name.clone(), reached.value))
             .collect()
     }
 
@@ -653,7 +714,7 @@ impl<'a> Bindings<'a> {
         self.data
             .borrow()
             .get(name)
-            .map(|(obj, _, _, _)| *obj)
+            .map(|(_, reached)| reached.value)
             .unwrap_or_else(|| panic!("expected bindings.data[{name:?}] to be present"))
     }
 
@@ -685,19 +746,21 @@ impl<'a> Bindings<'a> {
 
     /// LET-style value bind. Errors `Rebind` if `data[name]` already exists, or if `name`
     /// is a committed type (`types[name]`) — the value/type partition is mutually exclusive.
-    /// When `obj` wraps a `KFunction` it is also mirrored into
+    /// When the bound value wraps a `KFunction` it is also mirrored into
     /// `functions[signature.untyped_key()]` so dispatch finds it (`LET f = (FN ...)`).
+    ///
+    /// The value, its reach claim, and its owned pins arrive fused in one [`Reached`] — the write
+    /// door cannot pair a value with a reach derived for a different value.
     ///
     /// `Conflict` means borrow contention (caller queues); `Err` is semantic rejection.
     pub fn try_bind_value(
         &self,
         name: &str,
-        obj: &'a KObject<'a>,
         index: BindingIndex,
-        reach: StoredReach<'a>,
-        pins: FramePins,
+        reached: Reached<'a, &'a KObject<'a>>,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, obj.as_function(), true, index, reach, pins)
+        let fn_part = reached.value.as_function();
+        self.try_apply(name, fn_part, true, index, reached)
     }
 
     /// Bare-`FN` overload registration: adds `fn_ref` to the `functions`
@@ -716,17 +779,9 @@ impl<'a> Bindings<'a> {
         obj: &'a KObject<'a>,
         index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
-        // A bare-`FN` registration writes `functions` only, not `data`, so it stores no reach and no
-        // pins (the empty bundle pins nothing).
-        self.try_apply(
-            name,
-            obj,
-            Some(fn_ref),
-            false,
-            index,
-            StoredReach::empty(),
-            FramePins::empty(),
-        )
+        // A bare-`FN` registration writes `functions` only, not `data`, so its entry never lands:
+        // the fused-empty `Reached` carries no reach and the empty bundle pins nothing.
+        self.try_apply(name, Some(fn_ref), false, index, Reached::empty(obj))
     }
 
     /// Register `name` → `kt` in `types`. Errors `Rebind` if already present in `types`, or
@@ -812,8 +867,8 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
         kind: BindKind,
     ) -> Result<(), KError> {
-        if let Some((existing, _, _, _)) = self.data.borrow().get(&name) {
-            if matches!(existing, KObject::KFunction(_)) {
+        if let Some((_, reached)) = self.data.borrow().get(&name) {
+            if matches!(reached.value, KObject::KFunction(_)) {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
@@ -864,20 +919,15 @@ impl<'a> Bindings<'a> {
         // Clone each entry's owning pin bundle into the snapshot: the replay installs an independent
         // copy of the source's reach, so the target owns its members for its own entry's life while
         // the source keeps its own.
-        let snapshot: Vec<(
-            String,
-            &'a KObject<'a>,
-            BindingIndex,
-            StoredReach<'a>,
-            FramePins,
-        )> = src
+        let snapshot: Vec<(String, BindingIndex, Reached<'a, &'a KObject<'a>>)> = src
             .data
             .borrow()
             .iter()
-            .map(|(k, (v, idx, reach, pins))| (k.clone(), *v, *idx, *reach, pins.clone()))
+            .map(|(k, (idx, reached))| (k.clone(), *idx, reached.clone()))
             .collect();
-        for (name, obj, index, reach, pins) in snapshot {
-            match self.try_apply(&name, obj, obj.as_function(), true, index, reach, pins)? {
+        for (name, index, reached) in snapshot {
+            let fn_part = reached.value.as_function();
+            match self.try_apply(&name, fn_part, true, index, reached)? {
                 ApplyOutcome::Applied => {}
                 ApplyOutcome::Conflict => {
                     unreachable!(
@@ -961,19 +1011,16 @@ impl<'a> Bindings<'a> {
     /// Dedupe when `fn_part.is_some()`: `ptr::eq` is a silent-success
     /// short-circuit (preserves intentional aliases like `LET g = (f)`);
     /// `indistinguishable_from` raises `DuplicateOverload`.
-    // Each argument names one irreducible input to the shared value-write path (identity, function
-    // mirror, the write-data gate, lexical position, and the reach evidence's claim + owned pins);
-    // bundling any of them would only relocate the arity, not remove it.
-    #[allow(clippy::too_many_arguments)]
+    // Each argument names one irreducible input to the shared value-write path: the fused
+    // value+reach+pins evidence ([`Reached`]), the function mirror, the write-data gate, and the
+    // lexical position. The value is read out of `reached` where the insert and the mirror need it.
     fn try_apply(
         &self,
         name: &str,
-        obj: &'a KObject<'a>,
         fn_part: Option<&'a KFunction<'a>>,
         write_data: bool,
         index: BindingIndex,
-        reach: StoredReach<'a>,
-        pins: FramePins,
+        reached: Reached<'a, &'a KObject<'a>>,
     ) -> Result<ApplyOutcome, KError> {
         // Cross-kind exclusion: a value name may not collide with a committed type — the
         // `data`/`types` partition is structural, not convention. Probe `types` first (borrow
@@ -1013,7 +1060,7 @@ impl<'a> Bindings<'a> {
         // `fn_part.is_some()` + existing `KFunction` falls through to bucket dedupe
         // (overload-add path); everything else is a rebind error.
         if let Some(data) = data.as_ref() {
-            if let Some((existing, _, _, _)) = data.get(name) {
+            if let Some((_, existing)) = data.get(name) {
                 match fn_part {
                     None => {
                         return Err(KError::new(KErrorKind::Rebind {
@@ -1021,7 +1068,7 @@ impl<'a> Bindings<'a> {
                         }))
                     }
                     Some(_) => {
-                        if !matches!(existing, KObject::KFunction(_)) {
+                        if !matches!(existing.value, KObject::KFunction(_)) {
                             return Err(KError::new(KErrorKind::Rebind {
                                 name: name.to_string(),
                             }));
@@ -1053,7 +1100,7 @@ impl<'a> Bindings<'a> {
             cleared_overload_bucket = Some(key);
         }
         if let Some(data) = data.as_mut() {
-            data.insert(name.to_string(), (obj, index, reach, pins));
+            data.insert(name.to_string(), (index, reached));
         }
         drop(data);
         drop(functions_handle);

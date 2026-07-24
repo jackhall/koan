@@ -11,6 +11,7 @@
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::core::run_root_storage;
 use crate::machine::core::FramePins;
+use crate::machine::core::Reached;
 use crate::machine::core::StoredReach;
 use crate::machine::core::{arg_object, Action, BodyCtx};
 use crate::machine::execute::dispatch::{
@@ -94,10 +95,8 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
     scope
         .bind_value(
             "f".to_string(),
-            obj,
+            Reached::for_test(obj, StoredReach::for_test(None, false), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::for_test(None, false),
-            FramePins::empty(),
         )
         .expect("bind_value should succeed");
 }
@@ -539,10 +538,8 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     scope
         .bind_value(
             "producer_target".to_string(),
-            producer_target,
+            Reached::for_test(producer_target, StoredReach::for_test(None, false), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::for_test(None, false),
-            FramePins::empty(),
         )
         .expect("bind_value should succeed");
     let producer = runtime.dispatch_in_scope(parse_one("producer_target {y = 1}"), scope);

@@ -230,7 +230,7 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("MODULE foo = (LET x = 1)");
         assert!(
-            matches!(scope.bindings().data().get("foo").map(|(o, _, _, _)| *o),
+            matches!(scope.bindings().data().get("foo").map(|(_, r)| r.value()),
                 Some(KObject::Module(m)) if m.path == "foo"),
             "MODULE binds the module value on the value channel",
         );
@@ -452,10 +452,10 @@ mod tests {
         let foo = lookup_module(scope, "foo", &test_run.types);
         let inner = foo.child_scope().bindings().data();
         assert!(
-            matches!(inner.get("x").map(|(o, _, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0)
+            matches!(inner.get("x").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 7.0)
         );
         assert!(
-            matches!(inner.get("z").map(|(o, _, _, _)| *o), Some(KObject::Number(n)) if *n == 11.0)
+            matches!(inner.get("z").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 11.0)
         );
     }
 }

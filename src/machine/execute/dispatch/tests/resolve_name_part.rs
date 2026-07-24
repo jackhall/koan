@@ -1,4 +1,5 @@
 use crate::builtins::test_support::TestRun;
+use crate::machine::core::Reached;
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::execute::dispatch::{
@@ -19,10 +20,8 @@ fn resolve_name_part_identifier_resolved() {
     scope
         .bind_value(
             "x".to_string(),
-            bound,
+            Reached::for_test(bound, StoredReach::for_test(None, false), crate::machine::core::FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::for_test(None, false),
-            crate::machine::core::FramePins::empty(),
         )
         .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());

@@ -3,6 +3,7 @@
 use super::super::{BindingIndex, DeclarationSite, NameLookup, Scope};
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
+use crate::machine::core::Reached;
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FramePins, FrameStorageExt};
 use crate::machine::model::KObject;
@@ -24,19 +25,15 @@ fn bind_value_errors_on_same_scope_rebind() {
     scope
         .bind_value(
             "x".to_string(),
-            v1,
+            Reached::for_test(v1, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     let err = scope
         .bind_value(
             "x".to_string(),
-            v2,
+            Reached::for_test(v2, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap_err();
     match &err.kind {
@@ -53,10 +50,8 @@ fn bind_value_allows_shadowing_in_child_scope() {
     outer
         .bind_value(
             "x".to_string(),
-            v1,
+            Reached::for_test(v1, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
@@ -64,10 +59,8 @@ fn bind_value_allows_shadowing_in_child_scope() {
     inner
         .bind_value(
             "x".to_string(),
-            v2,
+            Reached::for_test(v2, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
@@ -82,10 +75,8 @@ fn close_marks_scope_and_is_idempotent_reads_still_work() {
     scope
         .bind_value(
             "x".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     assert!(!scope.is_closed());
@@ -107,10 +98,8 @@ fn bind_after_close_panics() {
     let v = region.brand().alloc_object(KObject::Number(1.0));
     let _ = scope.bind_value(
         "x".to_string(),
-        v,
+        Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
         BindingIndex::BUILTIN,
-        StoredReach::empty(),
-        FramePins::empty(),
     );
 }
 
@@ -124,10 +113,8 @@ fn close_is_per_scope_open_child_still_binds() {
     inner
         .bind_value(
             "x".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
@@ -209,10 +196,8 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
     let err = scope
         .bind_value(
             "OTHER_NAME".to_string(),
-            obj2,
+            Reached::for_test(obj2, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap_err();
     assert!(
@@ -247,19 +232,15 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
     scope
         .bind_value(
             "FIRST".to_string(),
-            obj1,
+            Reached::for_test(obj1, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     scope
         .bind_value(
             "ALIAS".to_string(),
-            obj2,
+            Reached::for_test(obj2, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
 }
@@ -330,10 +311,8 @@ fn register_function_coexists_with_same_name_value() {
     scope
         .bind_value(
             "FOO".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     let f = region.brand().alloc_function(KFunction::new(
@@ -351,7 +330,7 @@ fn register_function_coexists_with_same_name_value() {
         .register_function("FOO".to_string(), f, obj, BindingIndex::BUILTIN)
         .expect("bare FN registration must not collide with a same-name value");
     assert!(
-        matches!(scope.bindings().data().get("FOO").map(|(o, _, _, _)| *o), Some(KObject::Number(n)) if *n == 1.0)
+        matches!(scope.bindings().data().get("FOO").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 1.0)
     );
     let key = f.signature.untyped_key();
     assert!(scope
@@ -407,10 +386,8 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
     scope
         .bind_value(
             "val".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     scope.register_type("Ty".to_string(), KType::NUMBER, DeclarationSite::BUILTIN);
@@ -452,10 +429,8 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
     outer
         .bind_value(
             "x".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
@@ -496,10 +471,8 @@ fn bind_value_clears_own_placeholder() {
     scope
         .bind_value(
             "x".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     assert!(scope.bindings().placeholders().get("x").is_none());
@@ -522,10 +495,8 @@ fn visibility_chain_none_sees_every_entry() {
     scope
         .bind_value(
             "late".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
             BindingIndex::value(99),
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     // A chain whose `index_for(scope.id) = None` treats the scope as complete:
@@ -548,10 +519,8 @@ fn visibility_strict_less_than_hides_later_sibling() {
     scope
         .bind_value(
             "later".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
             BindingIndex::value(5),
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     // Cutoff 3, producer at 5 → `5 < 3` is false → invisible.
@@ -569,10 +538,8 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
     scope
         .bind_value(
             "earlier".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
             BindingIndex::value(2),
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 5);
@@ -592,10 +559,8 @@ fn visibility_self_index_hidden_under_strict_less_than() {
     scope
         .bind_value(
             "self_idx".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
             BindingIndex::value(3),
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     // Cutoff equal to producer idx (e.g. `LET x = x`): `3 < 3` is false.

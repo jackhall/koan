@@ -5,6 +5,7 @@
 
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
+use crate::machine::core::Reached;
 use crate::machine::core::StoredReach;
 use crate::machine::core::{
     run_root_storage, BindingIndex, FramePins, FrameStorageExt, NameLookup,
@@ -23,10 +24,8 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
     scope
         .bind_value(
             "late".to_string(),
-            value,
+            Reached::for_test(value, StoredReach::empty(), FramePins::empty()),
             BindingIndex::value(99),
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     match scope.bindings().lookup_value("late", None) {
@@ -43,10 +42,8 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
     scope
         .bind_value(
             "later".to_string(),
-            value,
+            Reached::for_test(value, StoredReach::empty(), FramePins::empty()),
             BindingIndex::value(5),
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     assert!(scope.bindings().lookup_value("later", Some(3)).is_none());
@@ -60,10 +57,8 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
     scope
         .bind_value(
             "earlier".to_string(),
-            value,
+            Reached::for_test(value, StoredReach::empty(), FramePins::empty()),
             BindingIndex::value(2),
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     match scope.bindings().lookup_value("earlier", Some(5)) {

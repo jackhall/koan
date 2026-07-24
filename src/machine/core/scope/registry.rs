@@ -7,7 +7,9 @@ use super::{Scope, ScopeKind};
 use crate::machine::core::bindings::{
     ApplyOutcome, BindKind, BindingIndex, DeclarationSite, NameLookup,
 };
-use crate::machine::core::{FramePins, KError, KErrorKind, KFunction, NodeId, StoredReach};
+use crate::machine::core::{
+    FramePins, KError, KErrorKind, KFunction, NodeId, Reached, StoredReach,
+};
 use crate::machine::model::{probe_key, Carried, KObject, OperatorGroup, TypeRegistry};
 use crate::machine::DeliveredCarried;
 
@@ -40,24 +42,23 @@ impl<'a> Scope<'a> {
     /// iff a borrow conflict would otherwise panic.
     ///
     /// The private tail the fused value doors ([`Self::bind_delivered`], [`Self::bind_checked`])
-    /// call after deriving the value's stored reach: it takes the reach as a parameter, so it is
-    /// crate-internal — every production value bind routes through a fused door that derives the
-    /// token rather than asserting it here.
+    /// call after fusing the value with the stored reach its mint verb derived: it takes the fused
+    /// [`Reached`] vehicle, so it is crate-internal — every production value bind routes through a
+    /// fused door that derives the pairing rather than asserting it here, and no caller can pair a
+    /// value with a reach derived for a different value.
     pub(crate) fn bind_value(
         &self,
         name: String,
-        obj: &'a KObject<'a>,
+        reached: Reached<'a, &'a KObject<'a>>,
         index: BindingIndex,
-        reach: StoredReach<'a>,
-        pins: FramePins,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
             // Transparent `USING` window: reads consult the window before the call
             // site, so a local bind whose name is already a surfaced module member
             // would be silently shadowed. Reject it; otherwise forward to the call
             // site under the caller's `index` (the bind belongs to the call site's
-            // block, at the call site's statement position), carrying the value's reach
-            // and its owning pin bundle.
+            // block, at the call site's statement position), carrying the value fused
+            // to its reach and owning pin bundle.
             if matches!(
                 self.bindings.get().lookup_value(&name, None),
                 Some(NameLookup::Bound(_))
@@ -67,22 +68,20 @@ impl<'a> Scope<'a> {
                      rename it to avoid silently shadowing the module's `{name}`",
                 ))));
             }
-            return self
-                .write_target()
-                .bind_value(name, obj, index, reach, pins);
+            return self.write_target().bind_value(name, reached, index);
         }
         self.assert_open(&name);
-        // Clone the owning bundle for the attempt, keeping the original for the defer path: on a
+        // Clone the fused evidence for the attempt, keeping the original for the defer path: on a
         // borrow `Conflict` the attempt's clone is dropped and the retained original rides the
         // deferred write, so the eventual entry owns exactly one bundle either way.
         match self
             .bindings
             .get()
-            .try_bind_value(&name, obj, index, reach, pins.clone())?
+            .try_bind_value(&name, index, reached.clone())?
         {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
-                self.pending.defer_value(name, obj, index, reach, pins);
+                self.pending.defer_value(name, index, reached);
                 Ok(())
             }
         }
@@ -131,10 +130,11 @@ impl<'a> Scope<'a> {
             })?;
             (allocated, stored, pins)
         };
-        // Clone the owned bundle: one copy is the binding entry's (it pins the value's reach for the
-        // entry's life), the other rides the caller's terminal carrier out of the step (the Done-arm
-        // seal), so the reach is owned end-to-end on both the resident and the in-transit paths.
-        self.bind_value(name, allocated, index, stored, pins.clone())?;
+        // Clone the owned bundle: one copy fuses into the binding entry's [`Reached`] (pinning the
+        // value's reach for the entry's life), the other rides the caller's terminal carrier out of
+        // the step (the Done-arm seal), so the reach is owned end-to-end on both the resident and
+        // the in-transit paths.
+        self.bind_value(name, Reached::mint(allocated, stored, pins.clone()), index)?;
         Ok((allocated, stored, pins))
     }
 
@@ -156,7 +156,7 @@ impl<'a> Scope<'a> {
         // A checked bind is region-pure (`foreign: None`) — its borrows reach no foreign region — so
         // the entry and the caller's terminal both own the empty bundle: nothing to pin beyond this
         // scope's own region.
-        self.bind_value(name, obj, index, stored, FramePins::empty())?;
+        self.bind_value(name, Reached::mint(obj, stored, FramePins::empty()), index)?;
         Ok((obj, stored, FramePins::empty()))
     }
 
@@ -407,7 +407,7 @@ impl<'a> Scope<'a> {
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
         let (stored, pins) = self.child_module_reach(child);
         let obj = self.alloc_object_reaching(KObject::Module(module), &stored, types)?;
-        self.bind_value(name, obj, index, stored, pins)?;
+        self.bind_value(name, Reached::mint(obj, stored, pins), index)?;
         Ok((obj, stored))
     }
 

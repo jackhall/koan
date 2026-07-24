@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::builtins::test_support::{delivered_with_host, run_root_bare, TestRun};
+use crate::machine::core::Reached;
 use crate::machine::core::StoredReach;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
@@ -111,10 +112,8 @@ fn with_scope_opens_child_scope_at_brand() {
         let v = s.brand().alloc_object(KObject::Number(7.0));
         s.bind_value(
             "k".to_string(),
-            v,
+            Reached::for_test(v, StoredReach::for_test(None, false), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::for_test(None, false),
-            FramePins::empty(),
         )
         .unwrap();
         assert!(matches!(s.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
@@ -149,10 +148,8 @@ fn with_scope_relocates_seed_value_into_brand() {
         child
             .bind_value(
                 "it".to_string(),
-                it_obj,
+                Reached::for_test(it_obj, StoredReach::for_test(None, false), FramePins::empty()),
                 BindingIndex::BUILTIN,
-                StoredReach::for_test(None, false),
-                FramePins::empty(),
             )
             .unwrap();
         assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 99.0));
@@ -195,10 +192,8 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
         child_ref
             .bind_value(
                 "it".to_string(),
-                it_obj,
+                Reached::for_test(it_obj, StoredReach::for_test(None, false), FramePins::empty()),
                 BindingIndex::BUILTIN,
-                StoredReach::for_test(None, false),
-                FramePins::empty(),
             )
             .unwrap();
         assert!(matches!(child_ref.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
@@ -931,10 +926,8 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                     kf.captured_scope()
                         .bind_value(
                             "inners".to_string(),
-                            list_obj,
+                            Reached::for_test(list_obj, StoredReach::for_test(None, false), FramePins::empty()),
                             BindingIndex::BUILTIN,
-                            StoredReach::for_test(None, false),
-                            FramePins::empty(),
                         )
                         .expect("bind the inners list into the outer closure's scope");
                 }

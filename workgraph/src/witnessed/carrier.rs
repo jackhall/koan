@@ -27,9 +27,13 @@
 use std::rc::Rc;
 
 use super::{
-    with_branded_ref, Erased, FoldToken, FoldedPlacement, PinBundle, PinsRegion, ReachDescription,
-    Reattachable, Region, RegionHandle, RegionOwner, StorageProfile, Witness, Witnessed,
+    Erased, FoldToken, FoldedPlacement, PinBundle, PinsRegion, ReachDescription, Reattachable,
+    Region, RegionHandle, RegionOwner, StorageProfile, Witness, Witnessed,
 };
+// `with_branded_ref` re-anchors the erased reach reference inside `with_reach_impl`, which is a
+// white-box test hook now that no production path reads a carrier's description.
+#[cfg(any(test, feature = "test-hooks"))]
+use super::with_branded_ref;
 
 /// [`Reattachable`] family for a lifetime-erased `&ReachDescription<F>` — the erased reach
 /// reference a [`Carrier`] re-anchors under an externally supplied pin. Module-private: the pinned
@@ -183,6 +187,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// [`super::Sealed::open_with`] confines a value. Pass `pin: None` only when the hosting arena
     /// is covered by the caller's ambient container — the reader's own region for a resident
     /// carrier's set, or the step pin held across a step-brand read.
+    #[cfg(any(test, feature = "test-hooks"))]
     fn with_reach_impl<R>(
         &self,
         pin: Option<&Rc<F>>,
@@ -199,19 +204,10 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         }
     }
 
-    /// White-box reach introspection: kept ungated `pub(crate)` for [`Self::mint_into`] /
-    /// [`Self::compose_into`]'s own use, and re-exposed `pub` only under `test-hooks` for an
-    /// embedder's white-box tests (mirroring `Scheduler::anchor_of`'s gate).
-    #[cfg(not(any(test, feature = "test-hooks")))]
-    pub(crate) fn with_reach<R>(
-        &self,
-        pin: Option<&Rc<F>>,
-        f: impl FnOnce(Option<&ReachDescription<F>>) -> R,
-    ) -> R {
-        self.with_reach_impl(pin, f)
-    }
-
-    /// See [`Self::with_reach_impl`].
+    /// White-box reach introspection, exposed `pub` only under `test-hooks` (or the crate's own
+    /// tests) for an embedder's white-box tests — mirroring `Scheduler::anchor_of`'s gate. Ownership
+    /// now flows forward from the mint, so no production path reads a carrier's description to build
+    /// a bundle; the membership queries alone survive, and only tests observe them.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn with_reach<R>(
         &self,
@@ -224,16 +220,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// Whether the value's foreign reach names `region` — reach members only; the borrows-into-home
     /// bit is a separate query ([`Self::borrows_host`]) because the home it refers to is the
     /// envelope's knowledge, not the carrier's. `pin` covers the reach set's hosting arena, as in
-    /// [`Self::with_reach`].
-    ///
-    /// White-box reach introspection: same `test-hooks` gate as [`Self::with_reach`] /
-    /// [`Self::borrows_host`].
-    #[cfg(not(any(test, feature = "test-hooks")))]
-    pub(crate) fn reach_covers(&self, pin: Option<&Rc<F>>, region: &F::Region) -> bool {
-        self.with_reach_impl(pin, |reach| reach.is_some_and(|r| r.pins_region(region)))
-    }
-
-    /// See [`Self::reach_covers`] above.
+    /// [`Self::with_reach`]. Same `test-hooks` gate as [`Self::with_reach`].
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn reach_covers(&self, pin: Option<&Rc<F>>, region: &F::Region) -> bool {
         self.with_reach_impl(pin, |reach| reach.is_some_and(|r| r.pins_region(region)))

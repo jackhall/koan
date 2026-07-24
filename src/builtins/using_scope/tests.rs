@@ -7,6 +7,7 @@
 use std::rc::Rc;
 
 use crate::builtins::test_support::{delivered_with_host, parse_one, run_root_bare, TestRun};
+use crate::machine::core::Reached;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::KErrorKind;
 use crate::machine::{run_root_storage, BindingIndex, Scope};
@@ -201,10 +202,8 @@ fn using_window_value_read_reach_survives_under_module_root() {
     module_scope
         .bind_value(
             "val".to_string(),
-            value_obj,
+            Reached::for_test(value_obj, stored_reach, pins),
             BindingIndex::value(0),
-            stored_reach,
-            pins,
         )
         .expect("fresh binding name in an unborrowed scope");
 

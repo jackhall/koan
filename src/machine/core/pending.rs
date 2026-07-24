@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{FramePins, StoredReach};
+use crate::machine::core::Reached;
 use crate::machine::model::KObject;
 
 use super::bindings::{ApplyOutcome, BindingIndex, Bindings, DeclarationSite};
@@ -19,14 +19,11 @@ use super::bindings::{ApplyOutcome, BindingIndex, Bindings, DeclarationSite};
 enum PendingWrite<'a> {
     Value {
         name: String,
-        obj: &'a KObject<'a>,
         index: BindingIndex,
-        /// The bound value's home-omitted foreign reach, carried through the deferred write so a
-        /// drained bind stores the same reach a direct bind would (see [`Bindings::try_bind_value`]).
-        reach: StoredReach<'a>,
-        /// The bound value's owning pin bundle, carried through the deferred write so the drained
-        /// entry owns exactly the pins a direct bind's entry would — released at that entry's death.
-        pins: FramePins,
+        /// The bound value fused to its home-omitted foreign reach and owning pin bundle, carried
+        /// through the deferred write so a drained bind stores exactly what a direct bind would (see
+        /// [`Bindings::try_bind_value`]) — the entry's pins released at that entry's death.
+        reached: Reached<'a, &'a KObject<'a>>,
     },
     Function {
         name: String,
@@ -55,17 +52,13 @@ impl<'a> PendingQueue<'a> {
     pub fn defer_value(
         &self,
         name: String,
-        obj: &'a KObject<'a>,
         index: BindingIndex,
-        reach: StoredReach<'a>,
-        pins: FramePins,
+        reached: Reached<'a, &'a KObject<'a>>,
     ) {
         self.pending.borrow_mut().push(PendingWrite::Value {
             name,
-            obj,
             index,
-            reach,
-            pins,
+            reached,
         });
     }
 
@@ -116,22 +109,19 @@ impl<'a> PendingQueue<'a> {
             match item {
                 PendingWrite::Value {
                     name,
-                    obj,
                     index,
-                    reach,
-                    pins,
+                    reached,
                 } => {
-                    // Clone the owning bundle for the attempt, keeping the original for a re-defer on
-                    // a repeat conflict, mirroring the direct-bind path.
-                    match bindings.try_bind_value(&name, obj, index, reach, pins.clone()) {
+                    // Clone the fused evidence for the attempt, keeping the original for a re-defer on
+                    // a repeat conflict, mirroring the direct-bind path (the clone preserves the
+                    // value ⇔ reach ⇔ pins pairing).
+                    match bindings.try_bind_value(&name, index, reached.clone()) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
                             still_pending.push(PendingWrite::Value {
                                 name,
-                                obj,
                                 index,
-                                reach,
-                                pins,
+                                reached,
                             });
                         }
                         // `_e`: format string only reads it in debug.

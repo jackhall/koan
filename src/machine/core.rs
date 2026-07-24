@@ -26,7 +26,7 @@ pub use arena::{
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
 pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
-    NodeHandle, PendingBinderGuard, StoredReach,
+    NodeHandle, PendingBinderGuard, Reached, StoredReach,
 };
 pub(crate) use carrier_witness::force_substrate_borrows_host;
 pub use carrier_witness::{CarrierWitness, DeliveredCarried};

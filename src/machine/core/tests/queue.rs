@@ -2,6 +2,7 @@
 
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction};
+use crate::machine::core::Reached;
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FramePins, FrameStorageExt};
 use crate::machine::model::KObject;
@@ -21,10 +22,8 @@ fn add_during_active_data_borrow_queues_and_drains() {
     scope
         .bind_value(
             "pre".to_string(),
-            pre,
+            Reached::for_test(pre, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
 
@@ -35,10 +34,8 @@ fn add_during_active_data_borrow_queues_and_drains() {
         scope
             .bind_value(
                 "during".to_string(),
-                new_entry,
+                Reached::for_test(new_entry, StoredReach::empty(), FramePins::empty()),
                 BindingIndex::BUILTIN,
-                StoredReach::empty(),
-                FramePins::empty(),
             )
             .unwrap();
         assert!(!snapshot.contains_key("during"));
@@ -47,7 +44,7 @@ fn add_during_active_data_borrow_queues_and_drains() {
     scope.drain_pending();
     let after = scope.bindings().data();
     assert!(
-        matches!(after.get("during").map(|(o, _, _, _)| *o), Some(KObject::Number(n)) if *n == 2.0)
+        matches!(after.get("during").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 2.0)
     );
 }
 
@@ -88,10 +85,8 @@ fn drain_debug_asserts_on_invariant_violation() {
     scope
         .bind_value(
             "a".to_string(),
-            obj1,
+            Reached::for_test(obj1, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     drop(snapshot);
@@ -147,10 +142,8 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
     scope
         .bind_value(
             "v".to_string(),
-            obj,
+            Reached::for_test(obj, StoredReach::empty(), FramePins::empty()),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
-            FramePins::empty(),
         )
         .unwrap();
     scope.drain_pending();
@@ -158,7 +151,7 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
     drop(snapshot);
     scope.drain_pending();
     assert!(
-        matches!(scope.bindings().data().get("v").map(|(o, _, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0)
+        matches!(scope.bindings().data().get("v").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 7.0)
     );
 }
 

@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use super::super::Scope;
 use crate::builtins::test_support::{delivered_with_host, mock_declaration_site, run_root_bare};
+use crate::machine::core::Reached;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
@@ -154,10 +155,8 @@ fn child_module_reach_unions_member_entry_reaches_across_regions() {
     source_scope
         .bind_value(
             "m".to_string(),
-            obj,
+            Reached::for_test(obj, stored, host_pins),
             BindingIndex::value(0),
-            stored,
-            host_pins,
         )
         .expect("bind should succeed");
     let source_region_ptr: *const KoanRegion = source_scope.region();

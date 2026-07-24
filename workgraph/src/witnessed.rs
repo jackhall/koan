@@ -326,9 +326,12 @@ impl<T: Reattachable> Erased<T> {
     /// The `'static`-erased inner value, for a crate-internal re-anchor via [`with_branded_ref`] —
     /// the route for a carrier that stores an erased reference *alongside* (not inside) its own
     /// witness, so it re-anchors under a pin other than the one bundled with it. The sole caller is
-    /// [`Carrier`](carrier::Carrier)'s pinned reach reader. The returned `&T::At<'static>` interior is
-    /// `Copy`, so a caller must re-anchor it under a held pin immediately (as `with_reach` does) and
-    /// never let the `'static` form escape the re-anchor expression.
+    /// [`Carrier`](carrier::Carrier)'s pinned reach reader, itself a white-box test hook now that
+    /// ownership flows forward from the mint — hence the same `test-hooks` gate. The returned
+    /// `&T::At<'static>` interior is `Copy`, so a caller must re-anchor it under a held pin
+    /// immediately (as `with_reach` does) and never let the `'static` form escape the re-anchor
+    /// expression.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(in crate::witnessed) fn as_static(&self) -> &T::At<'static> {
         &self.inner
     }
