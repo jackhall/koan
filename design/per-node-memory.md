@@ -376,7 +376,7 @@ scalar (an id, a region) where they need no live scope — so no `&Scope` rides 
 seed-side binds fold onto `open` the same way: the MATCH / TRY arm `it`-bind, the user-fn param-bind, and
 the deferred-return-type elaboration each open the child scope at the brand through
 [`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller-`'a` value into the
-opened scope's own region through the substrate ([`RegionBrand::alloc_object_delivered`](../src/machine/core/arena.rs),
+opened scope's own region through the substrate ([`Scope::store_object_adopted`](../src/machine/core/arena/residence.rs),
 which re-homes the value at the frame region under a residence audit against the bind's own reach
 evidence rather than assuming purity — see [memory-model.md § Move-in residence audits](memory-model.md#move-in-residence-audits)
 — for the `it` / param binds; the deferred return re-homing its elaborated `KType` into the

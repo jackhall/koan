@@ -136,17 +136,17 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // here: the terminal it seals is delivered onward, and the delivery envelope re-derives (and
     // owns) the foreign reach at finalize, while this step's own liveness covers those members until
     // then. A bound module instead hands its bundle to the binding entry (`Registry::bind_module`).
-    let (stored, _pins) = ctx.scope.child_module_reach(new_scope);
     // The view surfaces as the Object-arm module value (`new_module` lives in `region`'s own
     // region, so the audit passes on the dest-only check alone); a LET around it binds that value
-    // like any other.
-    let obj = crate::try_action!(ctx.scope.alloc_object_reaching(
-        KObject::Module(new_module),
-        &stored,
-        ctx.types
-    ));
+    // like any other. The fused door derives the module value's reach from its own `new_scope`, so
+    // value and reach cannot be mispaired; the owning pins are discarded (the delivered terminal's
+    // envelope re-derives the foreign reach at finalize).
+    let reached = crate::try_action!(ctx
+        .scope
+        .store_module_object(new_module, new_scope, ctx.types));
     Action::Done(Ok(StepCarried::born(
-        ctx.scope.resident_value_carrier(obj, stored),
+        ctx.scope
+            .resident_value_carrier(reached.value(), reached.claim()),
     )))
 }
 
@@ -174,23 +174,20 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     // Returned value, not a named binding: the owning bundle is not retained here — the delivered
     // terminal's envelope re-derives and owns the foreign reach at finalize, under this step's
     // liveness. (See the opaque arm above.)
-    let (stored, _pins) = ctx.scope.child_module_reach(m.child_scope());
-    let new_module: &'a Module<'a> = ctx.scope.alloc_module_reaching(
+    // The re-tagged Module and its Object-arm wrapper both ride one reach derived off the reused
+    // (foreign) source child scope — the fused door allocs the Module reaching that region, seals the
+    // view's self-sig on it (SIG-declared value slots read the source's concrete types after
+    // substitution), then audits the wrapping value against the same reach and fuses. The owning pins
+    // are discarded (the delivered terminal's envelope re-derives the foreign reach at finalize).
+    let reached = crate::try_action!(ctx.scope.store_transparent_view(
         Module::new(format!("{} :! {}", m.path, s_name), m.child_scope()),
-        &stored,
-    );
-    // Seal the view's self-sig off the source child scope it reuses; SIG-declared value slots
-    // read the source's concrete types after substitution.
-    seal_view_self_sig(new_module, &s_schema, ctx.types);
-    // The view surfaces as the Object-arm module value under the same token that pins the reused
-    // source's (foreign) child-scope region; a LET around it binds that value like any other.
-    let obj = crate::try_action!(ctx.scope.alloc_object_reaching(
-        KObject::Module(new_module),
-        &stored,
-        ctx.types
+        m.child_scope(),
+        |view| seal_view_self_sig(view, &s_schema, ctx.types),
+        ctx.types,
     ));
     Action::Done(Ok(StepCarried::born(
-        ctx.scope.resident_value_carrier(obj, stored),
+        ctx.scope
+            .resident_value_carrier(reached.value(), reached.claim()),
     )))
 }
 

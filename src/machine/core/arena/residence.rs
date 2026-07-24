@@ -8,9 +8,11 @@
 use std::cell::Cell;
 
 use super::{FrameReach, KoanRegion, KoanRegionExt, KoanStorageProfile};
-use crate::machine::core::{KError, KErrorKind, KFunction, Scope, StoredReach};
-use crate::machine::model::{CarriedFamily, ContainerSubstrate, KObject, Module, TypeRegistry};
-use crate::machine::CarrierWitness;
+use crate::machine::core::{KError, KErrorKind, KFunction, Reached, Scope, StoredReach};
+use crate::machine::model::{
+    Carried, CarriedFamily, ContainerSubstrate, KObject, Module, TypeRegistry,
+};
+use crate::machine::{CarrierWitness, DeliveredCarried};
 use crate::witnessed::{AuditedStored, Witnessed};
 
 /// The evidence-tier move-ins live on [`Scope`], not [`super::RegionBrand`]: a [`StoredReach`] is
@@ -31,95 +33,141 @@ impl<'a> Scope<'a> {
     /// at an outer/root scope, read by a nested per-call functor body). Placing an Object-arm module value
     /// takes this door — a module binds value-side — because the module's child scope lives in a
     /// region named by the derived stored reach, not necessarily this scope's own.
-    pub(crate) fn alloc_object_reaching(
+    pub(crate) fn store_object_adopted<P>(
         &self,
-        o: KObject<'_>,
-        evidence: &StoredReach<'_>,
+        cell: &DeliveredCarried,
+        project: P,
         types: &TypeRegistry,
-    ) -> Result<&'a KObject<'a>, KError> {
-        let kt = o.ktype();
-        let sets: &[&FrameReach] = match &evidence.foreign {
-            Some(fs) => std::slice::from_ref(fs),
-            None => &[],
-        };
-        let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
-        self.brand()
-            .0
-            .alloc_resident_checked::<KObject<'static>>(
-                o,
-                ResidenceEvidence::reaching_ambient(sets, &ambient),
-            )
-            .ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(format!(
-                    "{}: borrows a region other than its seal's destination, evidence reach, \
-                     or the destination scope's ambient coverage",
-                    kt.name(types)
-                )))
-            })
+    ) -> Result<Reached<'a, &'a KObject<'a>>, KError>
+    where
+        P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+    {
+        let (stored, pins) = self.adopted_reach_of(cell);
+        let obj = self.store_projection_reaching(cell, &project, stored, types)?;
+        Ok(Reached::mint(obj, stored, pins))
     }
 
-    /// The object evidence tier: for an `o` built from (or embedding a projection of) values
-    /// whose reach this scope has already minted as `evidence` — a delivered arg carrier's
-    /// `adopted_reach_of`/`host_reach_of`, or several for a multi-carrier fold (an args record).
-    /// Widens the coverage predicate over every evidence member's hosting arena, same partiality
-    /// as [`super::RegionBrand::alloc_object_checked`] — plus a region [`Self::covers_region_ambiently`]
-    /// covers (see [`Self::alloc_object_reaching`]'s doc for why the evidence alone under-covers
-    /// that case). Returns a structured `KError` on rejection — the item's decided non-panicking
-    /// conversion-failure policy — so a bug in the caller's evidence computation surfaces as a
-    /// catchable error rather than crashing the interpreter; a caller with no `KError` channel in
-    /// hand (e.g. a seed closure with no `Result` return) calls `.expect(...)` naming the site
-    /// invariant instead.
-    pub(crate) fn alloc_object_delivered(
+    /// The pin twin of [`Self::store_object_adopted`]: derive the non-omitting `Kept` stored reach
+    /// ([`Self::pinned_reach_of`], naming every region the record borrows so the audit's
+    /// `any_member_region` arm evidences the foreign substrate), copy the projection in under it, and
+    /// fuse. Used by the bind seam's pin verb, where the binding retains the reach.
+    pub(crate) fn store_object_pinned<P>(
         &self,
-        o: KObject<'_>,
-        evidence: &[StoredReach<'_>],
+        cell: &DeliveredCarried,
+        project: P,
         types: &TypeRegistry,
-    ) -> Result<&'a KObject<'a>, KError> {
-        let kt = o.ktype();
-        let sets: Vec<&FrameReach> = evidence.iter().filter_map(|r| r.foreign).collect();
-        let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
-        self.brand()
-            .0
-            .alloc_resident_checked::<KObject<'static>>(
-                o,
-                ResidenceEvidence::reaching_ambient(&sets, &ambient),
-            )
-            .ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(format!(
-                    "{}: borrows a region not covered by dest, the supplied evidence, or \
-                     the destination scope's ambient coverage",
-                    kt.name(types)
-                )))
-            })
+    ) -> Result<Reached<'a, &'a KObject<'a>>, KError>
+    where
+        P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+    {
+        let (stored, pins) = self.pinned_reach_of(cell);
+        let obj = self.store_projection_reaching(cell, &project, stored, types)?;
+        Ok(Reached::mint(obj, stored, pins))
     }
 
-    /// Placement for a `Module` whose child scope legitimately lives in a region other than this
-    /// scope's own — transparent-ascribe's re-tagged `Module`, which reuses the foreign source
-    /// module's child scope. `evidence` is the `StoredReach` the caller minted for that child
-    /// scope's region *before* this call ([`Scope::child_module_reach`]), so the audit widens
-    /// [`super::RegionBrand::alloc_module`]'s dest-only check to "this scope's region, `evidence`'s
-    /// reach, or a region [`Self::covers_region_ambiently`] covers" (see
-    /// [`Self::alloc_object_reaching`]'s doc for why the last disjunct is needed).
-    pub(crate) fn alloc_module_reaching(
+    /// Fuse a resident `Module` value with the reach its own `child` scope mints — the object-arm
+    /// module bind ([`Scope::bind_module`]) and an opaque ascription view. Derives the child's stored
+    /// reach ([`Self::child_module_reach`]), audits the wrapping `KObject::Module` against it (the
+    /// module's child scope may live in a region other than this scope's own — a co-located `MODULE`
+    /// child, or a foreign source reused by a view), and fuses. Value and reach are both derived from
+    /// `child` inside this door, so no caller can pair the module with a foreign reach.
+    pub(crate) fn store_module_object(
         &self,
-        m: Module<'_>,
-        evidence: &StoredReach<'_>,
-    ) -> &'a Module<'a> {
-        let sets: &[&FrameReach] = match &evidence.foreign {
-            Some(fs) => std::slice::from_ref(fs),
-            None => &[],
-        };
+        module: &'a Module<'a>,
+        child: &Scope<'a>,
+        types: &TypeRegistry,
+    ) -> Result<Reached<'a, &'a KObject<'a>>, KError> {
+        let (stored, pins) = self.child_module_reach(child);
+        let obj = self.store_value_reaching(KObject::Module(module), stored, types)?;
+        Ok(Reached::mint(obj, stored, pins))
+    }
+
+    /// The transparent-ascription store: a fresh re-tagged `Module` reusing a *foreign* source
+    /// module's child scope, whose region is not this scope's own. Derives one stored reach off that
+    /// `source_child` ([`Self::child_module_reach`]), allocates the re-tagged `Module` reaching it,
+    /// runs `seal` on the resident module (the view's self-sig), then audits the wrapping
+    /// `KObject::Module` against the *same* reach and fuses. Both audits ride one derived reach, so
+    /// value and reach cannot be mispaired.
+    pub(crate) fn store_transparent_view(
+        &self,
+        module: Module<'a>,
+        source_child: &Scope<'a>,
+        seal: impl FnOnce(&'a Module<'a>),
+        types: &TypeRegistry,
+    ) -> Result<Reached<'a, &'a KObject<'a>>, KError> {
+        let (stored, pins) = self.child_module_reach(source_child);
+        let sets: &[&FrameReach] = stored_sets(&stored);
         let ambient = |region: &KoanRegion| self.covers_region_ambiently(region);
-        self.brand()
+        let new_module: &'a Module<'a> = self
+            .brand()
             .0
             .alloc_resident_checked::<Module<'static>>(
-                m,
+                module,
                 ResidenceEvidence::reaching_ambient(sets, &ambient),
             )
             .expect(
-                "alloc_module_reaching: a Module's child scope must be covered by dest, the \
-                 supplied evidence reach, or the destination scope's ambient coverage",
+                "store_transparent_view: a Module's child scope must be covered by dest, the \
+                 derived reach, or the destination scope's ambient coverage",
+            );
+        seal(new_module);
+        let obj = self.store_value_reaching(KObject::Module(new_module), stored, types)?;
+        Ok(Reached::mint(obj, stored, pins))
+    }
+
+    /// Audit a projection of the delivered `cell` (deep-cloned into this scope's region) against
+    /// `stored`'s reach plus this scope's ambient coverage — the shared audit behind the object
+    /// store doors. Widens [`super::RegionBrand::alloc_object_checked`]'s dest-only audit to "this
+    /// scope's region, `stored`'s reach members, or a region [`Self::covers_region_ambiently`]
+    /// covers"; the last disjunct is the exact complement of the mint's omission policy (which
+    /// materializes no member for an ambiently covered region), so a dest/reach-only audit would
+    /// under-cover a value legitimately reaching one. Returns a structured `KError` on rejection so a
+    /// bug in the caller's derivation surfaces catchably rather than crashing the interpreter. The
+    /// projection is read under the cell's own pin ([`DeliveredCarried::open`]), so the source backing
+    /// stays live for the deep clone.
+    fn store_projection_reaching<P>(
+        &self,
+        cell: &DeliveredCarried,
+        project: &P,
+        stored: StoredReach<'_>,
+        types: &TypeRegistry,
+    ) -> Result<&'a KObject<'a>, KError>
+    where
+        P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+    {
+        cell.open(|live| {
+            let projected = project(&live)?;
+            self.store_value_reaching(projected.deep_clone(), stored, types)
+        })
+    }
+
+    /// Audit an already-resident-lifetime value `o` against `stored`'s reach plus ambient coverage —
+    /// the no-projection twin of [`Self::store_projection_reaching`], for a value in hand (a module
+    /// wrapped as an object). Private: its only callers are the fused store doors above, each of
+    /// which derives `o` and `stored` from one source (a `cell`, a `child` scope), so the pairing is
+    /// co-derived here and never assembled from a value and a reach held side by side. No `pub(crate)`
+    /// door exposes this two-parameter shape.
+    fn store_value_reaching(
+        &self,
+        o: KObject<'_>,
+        stored: StoredReach<'_>,
+        types: &TypeRegistry,
+    ) -> Result<&'a KObject<'a>, KError> {
+        let kt = o.ktype();
+        let sets: &[&FrameReach] = stored_sets(&stored);
+        let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
+        self.brand()
+            .0
+            .alloc_resident_checked::<KObject<'static>>(
+                o,
+                ResidenceEvidence::reaching_ambient(sets, &ambient),
             )
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{}: borrows a region not covered by dest, its reach evidence, or the \
+                     destination scope's ambient coverage",
+                    kt.name(types)
+                )))
+            })
     }
 
     /// Checked move-in of a fresh object into this scope's own region ([`super::RegionBrand::alloc_object_checked`]'s
@@ -166,6 +214,31 @@ impl<'a> Scope<'a> {
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         let (obj, stored) = self.alloc_object_checked_stored(value, types)?;
         Ok(self.resident_value_carrier(obj, stored))
+    }
+
+    /// Test affordance mirroring [`StoredReach::for_test`]: drive the reaching/delivered residence
+    /// audit directly from a value in hand and a fabricated `StoredReach`, for a unit test
+    /// exercising the audit predicate in isolation. `#[cfg(test)]`-gated so production keeps value
+    /// and reach fused inside a store door — the mispairing a bare `(value, StoredReach)` door would
+    /// allow is not reachable outside tests.
+    #[cfg(test)]
+    pub(crate) fn store_value_reaching_for_test(
+        &self,
+        o: KObject<'_>,
+        stored: StoredReach<'_>,
+        types: &TypeRegistry,
+    ) -> Result<&'a KObject<'a>, KError> {
+        self.store_value_reaching(o, stored, types)
+    }
+}
+
+/// A single stored reach's foreign set as an audit slice: a one-element slice naming the foreign
+/// reach, or empty when the value reaches nothing foreign. The reaching audits take a slice so one
+/// audit shape covers both the reach-bearing and region-pure cases.
+fn stored_sets<'s, 'r>(stored: &'s StoredReach<'r>) -> &'s [&'r FrameReach] {
+    match &stored.foreign {
+        Some(fs) => std::slice::from_ref(fs),
+        None => &[],
     }
 }
 
@@ -247,7 +320,8 @@ impl<'d> Residence<'d> {
     }
 
     /// Whether `region` is `dest` itself, is covered by some `reach` member's own pin chain, or is
-    /// reported covered by `ambient` — [`Scope::alloc_module_reaching`]'s coverage check.
+    /// reported covered by `ambient` — the module store doors' ([`Scope::store_module_object`],
+    /// [`Scope::store_transparent_view`]) coverage check.
     /// [`ReachDescription::pins_region`](crate::witnessed::ReachDescription::pins_region) is the
     /// library's public reach-coverage query (unlike
     /// [`ReachDescription::members`](crate::witnessed::ReachDescription::members), which is gated to

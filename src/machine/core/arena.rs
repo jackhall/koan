@@ -187,7 +187,7 @@ impl<'a> RegionBrand<'a> {
     /// INVARIANT: a `Module` must be allocated into its own child scope's region — every `Module`
     /// borrows the child scope `MODULE` opened for its body, so it can never be `'static`. The one
     /// legitimate cross-region caller (transparent-ascribe's re-tagged `Module`) takes
-    /// [`Scope::alloc_module_reaching`] instead. See [`Self::alloc_function`].
+    /// [`Scope::store_transparent_view`] instead. See [`Self::alloc_function`].
     pub fn alloc_module(self, m: Module<'_>) -> &'a Module<'a> {
         self.0
             .alloc_resident_checked::<Module<'static>>(m, ResidenceEvidence::dest_only())

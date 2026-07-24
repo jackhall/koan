@@ -116,26 +116,20 @@ impl<'a> Scope<'a> {
                 .map(|object| object.embeds_substrate())
                 .unwrap_or(false)
         });
-        let (allocated, stored, pins) = if projected_embeds_substrate {
+        // The fused door derives the value and the reach it is audited against from this one `cell`,
+        // so the binding entry can never pair the value with a reach some other value derived. A
+        // record-embedding projection routes the escape-seam chooser; every other deep-clones its top
+        // node under the copied-mode reach.
+        let reached = if projected_embeds_substrate {
             self.copy_delivered_substrate(cell, project, types)?
         } else {
-            let (stored, pins) = self.adopted_reach_of(cell);
-            let allocated = cell.open(|live| {
-                let projected = project(&live)?;
-                self.alloc_object_delivered(
-                    projected.deep_clone(),
-                    std::slice::from_ref(&stored),
-                    types,
-                )
-            })?;
-            (allocated, stored, pins)
+            self.store_object_adopted(cell, project, types)?
         };
-        // Clone the owned bundle: one copy fuses into the binding entry's [`Reached`] (pinning the
-        // value's reach for the entry's life), the other rides the caller's terminal carrier out of
-        // the step (the Done-arm seal), so the reach is owned end-to-end on both the resident and
-        // the in-transit paths.
-        self.bind_value(name, Reached::mint(allocated, stored, pins.clone()), index)?;
-        Ok((allocated, stored, pins))
+        // Clone the fused pair: one copy binds into the entry (pinning the value's reach for the
+        // entry's life), the other's parts ride the caller's terminal carrier out of the step (the
+        // Done-arm seal), so the reach is owned end-to-end on both the resident and in-transit paths.
+        self.bind_value(name, reached.clone(), index)?;
+        Ok(reached.into_parts())
     }
 
     /// Fused region-pure / fresh-value bind: checked move-in of `value` into this scope's own
@@ -405,9 +399,9 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
         types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
-        let (stored, pins) = self.child_module_reach(child);
-        let obj = self.alloc_object_reaching(KObject::Module(module), &stored, types)?;
-        self.bind_value(name, Reached::mint(obj, stored, pins), index)?;
+        let reached = self.store_module_object(module, child, types)?;
+        self.bind_value(name, reached.clone(), index)?;
+        let (obj, stored, _pins) = reached.into_parts();
         Ok((obj, stored))
     }
 

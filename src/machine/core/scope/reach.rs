@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use super::Scope;
 use crate::machine::core::{
-    FoldingBrand, FramePins, FrameStorage, KoanRegion, KoanStorageProfile, StoredReach,
+    FoldingBrand, FramePins, FrameStorage, KoanRegion, KoanStorageProfile, Reached, StoredReach,
 };
 use crate::machine::model::{
     copy_object_into, copy_or_pin, still_borrows_host, Carried, CarriedFamily, KObject, KType,
@@ -39,7 +39,7 @@ impl<'a> Scope<'a> {
     /// materialize no member for a region it covers, because re-pinning one, paired with a sibling
     /// bind of a call's result, would close a `frame → region → scope → frame` cycle — and
     /// therefore also the evidence-tier audits' ambient coverage
-    /// ([`Scope::alloc_object_reaching`] and siblings): evidence this scope minted is complete
+    /// ([`Scope::store_object_adopted`] and siblings): evidence this scope minted is complete
     /// exactly relative to "destination ∪ evidence members ∪ this predicate", so mint and audit
     /// stay complements by sharing it.
     pub(crate) fn covers_region_ambiently(&self, region: &KoanRegion) -> bool {
@@ -114,7 +114,7 @@ impl<'a> Scope<'a> {
     /// adds no over-retention beyond the pin's own semantics. `Residence::Kept` materializes the host
     /// unconditionally; the library's `mint` excludes `dest`'s own region from `foreign` (that home
     /// borrow rides `borrows_into_home`), so this names only the foreign producer host.
-    fn pinned_reach_of(&self, cell: &DeliveredCarried) -> (StoredReach<'a>, FramePins) {
+    pub(crate) fn pinned_reach_of(&self, cell: &DeliveredCarried) -> (StoredReach<'a>, FramePins) {
         let (foreign, pins, borrows_into_home) =
             cell.mint_reach(self.brand().handle(), Residence::Kept, |_region| false);
         (
@@ -284,33 +284,26 @@ impl<'a> Scope<'a> {
         if embeds_substrate {
             let (object, _stored, pins) = self
                 .rebuild_delivered_substrate(cell, |carried| Ok(carried.object()), types)
-                .expect("a whole-value record adoption's copy is infallible");
+                .expect("a whole-value record adoption's copy is infallible")
+                .into_parts();
             // The rebuilt substrate is resident in this scope's region and its reach is discarded
             // (not bound), so the owning bundle is retained here for the region's life — the copy's
             // interior foreign borrows would otherwise be pinned by nothing.
             self.brand().handle().retain_reach(pins);
             return Carried::Object(object);
         }
-        // Mint FIRST: pin every region the copy still reaches (interior borrows survive
-        // `deep_clone`) into this scope's arena before the copy's `&'a` is fabricated. Copied mode:
-        // the producer host materializes only if the value's borrows genuinely reach it. Also the
-        // deep-cloned copy's own residence evidence — its leaves may still embed the producer's
-        // foreign borrows.
-        let (reach, pins) = self.adopted_reach_of(cell);
-        // The copy is resident in this scope's region and its reach is discarded (not bound), so the
-        // owning bundle is retained here for the region's life — the deep copy's surviving interior
-        // foreign borrows would otherwise be pinned by nothing.
+        // The fused door mints the copy's reach (`adopted_reach_of`, Copied mode — the producer host
+        // materializes only if the value's borrows genuinely reach it) and deep-clones the top node
+        // under it in one step, so the copy's residence is audited against a reach derived for that
+        // same value. The reach is discarded (not bound), so its owning bundle is retained here for
+        // the region's life — the deep copy's surviving interior foreign borrows would otherwise be
+        // pinned by nothing.
+        let (object, _reach, pins) = self
+            .store_object_adopted(cell, |carried| Ok(carried.object()), types)
+            .expect("a deep copy's own residence must be covered by its own reach evidence")
+            .into_parts();
         self.brand().handle().retain_reach(pins);
-        cell.open(|live| {
-            Carried::Object(
-                self.alloc_object_delivered(
-                    live.object().deep_clone(),
-                    std::slice::from_ref(&reach),
-                    types,
-                )
-                .expect("a deep copy's own residence must be covered by its own reach evidence"),
-            )
-        })
+        Carried::Object(object)
     }
 
     /// Bind a delivered value's substrate-carrier **projection** into this scope. `project` selects
@@ -338,14 +331,15 @@ impl<'a> Scope<'a> {
     ///   [`Self::bind_delivered`] stores the reach on the binding entry — never the argument re-home
     ///   ([`Self::adopt_sealed_copied`]), which discards it and copies unconditionally.
     ///
-    /// Returns the resident reference paired with the binding's stored reach (minted at the verb's
-    /// residence mode), the same pair [`Self::bind_delivered`] / a caller's terminal seal consume.
+    /// Returns the resident value fused to the binding's stored reach (minted at the verb's
+    /// residence mode) — the same [`Reached`] [`Self::bind_delivered`] / a caller's terminal seal
+    /// consume.
     pub(crate) fn copy_delivered_substrate<P>(
         &self,
         cell: &DeliveredCarried,
         project: P,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, StoredReach<'a>, FramePins), KError>
+    ) -> Result<Reached<'a, &'a KObject<'a>>, KError>
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
@@ -371,18 +365,7 @@ impl<'a> Scope<'a> {
             // explicitly named producer region covers the foreign substrate on the audit's
             // `any_member_region` reach-member path. The reach is the pin's liveness — the caller
             // ([`Self::bind_delivered`]) stores it on the binding.
-            RegionEscape::Pin => {
-                let (stored, pins) = self.pinned_reach_of(cell);
-                let allocated = cell.open(|live| {
-                    let projected = project(&live)?;
-                    self.alloc_object_delivered(
-                        projected.deep_clone(),
-                        std::slice::from_ref(&stored),
-                        types,
-                    )
-                })?;
-                Ok((allocated, stored, pins))
-            }
+            RegionEscape::Pin => self.store_object_pinned(cell, project, types),
         }
     }
 
@@ -396,8 +379,10 @@ impl<'a> Scope<'a> {
     /// `Residence::Copied` and pinned — with the copy's foreign reach minted into this scope's arena
     /// for liveness. The top node is then re-boxed through the checked door to recover the `&'a`
     /// reference; its O(1) `owns_substrate` membership passes because the rebuilt substrate is
-    /// scope-resident, so no reach evidence is needed. Returns the resident reference paired with the
-    /// binding's stored reach (minted at the same mode).
+    /// scope-resident, so no reach evidence is needed. Returns the resident value fused to the
+    /// binding's stored reach (minted at the same mode): the rebuilt value is dest-resident so its
+    /// re-box is dest-only checked, while the fused reach names the copy's own foreign interior
+    /// borrows for the binding's liveness — both derived from this one `cell`.
     ///
     /// This is the unconditional-copy half of [`Self::copy_delivered_substrate`]'s chooser: the argument
     /// re-home ([`Self::adopt_sealed_copied`]) calls it directly, and the chooser's `Copy` verb
@@ -409,7 +394,7 @@ impl<'a> Scope<'a> {
         cell: &DeliveredCarried,
         project: P,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, StoredReach<'a>, FramePins), KError>
+    ) -> Result<Reached<'a, &'a KObject<'a>>, KError>
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
@@ -456,10 +441,11 @@ impl<'a> Scope<'a> {
             .upgrade()
             .expect("the adopting scope's region owner is held while copying a delivered record");
         let object = Sealed::seal(copied).open_with(&pin, |live| {
-            self.alloc_object_delivered(live.object().deep_clone(), &[], types)
+            self.brand()
+                .alloc_object_checked(live.object().deep_clone(), types)
                 .expect("a rebuilt record's substrate is resident in the adopting scope's region")
         });
-        Ok((object, stored, pins))
+        Ok(Reached::mint(object, stored, pins))
     }
 
     /// Build the terminal carrier for a type living **in this scope's region** — the type-channel

@@ -267,7 +267,7 @@ The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params, t
 elaboration) open the child scope at a `for<'b>` brand through
 [`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller value into the
 opened scope's own region through the substrate before binding it — the `it`-bind and param-bind via
-[`RegionBrand::alloc_object_delivered`](../src/machine/core/arena.rs) (which re-homes the value at the
+[`Scope::store_object_adopted`](../src/machine/core/arena/residence.rs) (which re-homes the value at the
 frame region under a residence audit against the bind's own reach evidence, rather than assuming
 purity — see [§ Move-in residence audits](#move-in-residence-audits)), the deferred return re-homing
 its elaborated `KType` into the captured-scope region — so the
@@ -346,8 +346,8 @@ compile-only capability with no runtime audit at all:
   audit could reject. Confined to identity-preserving stores: a
   caller reaches here only to store a value whose identity a `'static` rebuild would break (a
   module-family pointer, an `Rc`-shared payload).
-- **reaching / delivered** (`Scope::alloc_object_reaching` / `alloc_module_reaching` /
-  `alloc_object_delivered`) — widens the dest-only check with reach evidence the scope already minted
+- **reaching / delivered** (`Scope::store_object_adopted` / `store_object_pinned` /
+  `store_module_object` / `store_transparent_view`) — widens the dest-only check with reach evidence the scope already minted
   (a bind's `host_reach_of` / `adopted_reach_of`), *plus* the regions the mint's own omission policy
   deliberately never materializes as reach-set members (`Scope::covers_region_ambiently`: the home
   frame's storage pin chain and the lexical-ancestor chain — re-pinning one would close a
@@ -356,10 +356,11 @@ compile-only capability with no runtime audit at all:
   nested per-call functor body). Mint and audit share the one predicate, so they stay exact
   complements; and unlike the other tiers these live on `Scope`, not `RegionBrand` — a `StoredReach`
   is meaningful only relative to its minting scope, so taking the destination from `self` binds
-  evidence, ambient coverage, and destination region together by construction. These tiers' callers
-  are fused doors: the `StoredReach` is an opaque token they derive and thread whole into the alloc,
-  never a free parameter a caller asserts. The bind door (`Scope::bind_delivered` and siblings)
-  derives it from the value's own witness. A deferred FN's per-call return *type* needs no evidence
+  evidence, ambient coverage, and destination region together by construction. These tiers are fused
+  doors: each derives the `StoredReach` from the one source it takes (a delivered `cell`, a `child`
+  scope) and audits the re-homed value against it in the same call, so the reach is never a free
+  parameter a caller pairs with the value. The bind door (`Scope::bind_delivered` and siblings)
+  consumes the fused [`Reached`](../src/machine/core/bindings.rs) the store door returns. A deferred FN's per-call return *type* needs no evidence
   at all — [`home_return_type`](../src/machine/core/kfunction/exec.rs) clones it into the
   captured-scope region through the single type door — but the clone still comes back capped at the
   caller-supplied **contract** lifetime rather than the captured region's own, so a `ret` reference

@@ -1572,7 +1572,7 @@ fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
 /// when a record rides inside another substrate carrier (`List`/`Dict`/`Tagged`/`Wrapped`) crossing
 /// the checked tier: a bare top-level record never routes this walk (born resident by
 /// construction through the fold door). This drives a `List` embedding a `Record` through
-/// `Scope::alloc_object_delivered` twice — once with evidence naming the record's home region
+/// `Scope::store_value_reaching_for_test` twice — once with evidence naming the record's home region
 /// (must pass, reading the address table, never the record's fields) and once without (must
 /// reject) — proving the arm is a genuine O(1) membership check, not an always-true stand-in.
 #[test]
@@ -1595,7 +1595,7 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
 
     // Covered: evidence names `producer`'s region — the nested record's home. Minting `producer`
     // (foreign to the consumer) into the consumer region yields a hosted description naming it;
-    // `_covering_pins` keeps the member pinned across the `alloc_object_delivered` read below.
+    // `_covering_pins` keeps the member pinned across the `store_value_reaching_for_test` read below.
     let (covering, _covering_pins) = FrameReach::mint(
         consumer_storage.brand().0,
         &[],
@@ -1605,11 +1605,7 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
     let covering = covering.expect("producer is foreign to the consumer region");
     let covering_evidence = StoredReach::for_test(Some(covering), false);
     let moved = consumer_scope
-        .alloc_object_delivered(
-            list_obj.deep_clone(),
-            std::slice::from_ref(&covering_evidence),
-            &types,
-        )
+        .store_value_reaching_for_test(list_obj.deep_clone(), covering_evidence, &types)
         .expect("evidence naming the record's home region covers it via owns_substrate membership");
     match moved {
         KObject::List(items, _) => match items.elements()[0].object() {
@@ -1633,11 +1629,8 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
     // own region too — the audit must reject rather than silently accept. An empty reach is the
     // `None` foreign case (a region-pure evidence naming nothing).
     let no_evidence = StoredReach::for_test(None, false);
-    let rejected = consumer_scope.alloc_object_delivered(
-        list_obj.deep_clone(),
-        std::slice::from_ref(&no_evidence),
-        &types,
-    );
+    let rejected =
+        consumer_scope.store_value_reaching_for_test(list_obj.deep_clone(), no_evidence, &types);
     assert!(
         rejected.is_err(),
         "a nested record foreign to dest and evidence must be rejected, not silently accepted"

@@ -180,15 +180,27 @@ impl<'a, T> Reached<'a, T> {
     pub(crate) fn for_test(value: T, claim: StoredReach<'a>, pins: FramePins) -> Self {
         Reached { value, claim, pins }
     }
+
+    /// Consume the fused pair into its owned parts — the value, its reach claim, and its owning
+    /// pins. For a fused door's caller that needs the triple (a bind door forwarding its resident
+    /// reference and stored reach onward). Reading is unrestricted — only *constructing* a pair is
+    /// confined.
+    pub(crate) fn into_parts(self) -> (T, StoredReach<'a>, FramePins) {
+        (self.value, self.claim, self.pins)
+    }
 }
 
 impl<'a, T: Copy> Reached<'a, T> {
     /// The stored value (a `Copy` handle — `&KObject` for the binding entry). Reading the fused
-    /// value is unrestricted — only *constructing* a pair is confined — but production readers live
-    /// in this module and touch the field directly, so the accessor exists for out-of-module tests.
-    #[cfg(test)]
+    /// value is unrestricted — only *constructing* a pair is confined.
     pub(crate) fn value(&self) -> T {
         self.value
+    }
+
+    /// The fused reach claim (a `Copy` witness), for a reader that seals a terminal carrier from the
+    /// resident value under the same reach the store audited it against.
+    pub(crate) fn claim(&self) -> StoredReach<'a> {
+        self.claim
     }
 }
 

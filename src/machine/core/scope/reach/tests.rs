@@ -104,7 +104,8 @@ fn copy_delivered_substrate_pins_a_home_borrowing_record() {
 
     let (bound, _stored, _pins) = consumer
         .copy_delivered_substrate(&dep, |carried| Ok(carried.object()), &types)
-        .expect("a home-borrowing record pins into the binding under Kept-minted evidence");
+        .expect("a home-borrowing record pins into the binding under Kept-minted evidence")
+        .into_parts();
 
     // The pin shares the producer-resident substrate rather than rebuilding it.
     assert_eq!(
