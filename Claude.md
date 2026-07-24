@@ -3,6 +3,9 @@
 - Always propose a plan before making changes; wait for approval before editing.
 - After smoke testing features or bug fixes, try to create a verifiable unit test based on the smoke test.
 - Top-level structs and free functions come with comments explaining their purpose. The README contains an overview of the architecture. When modifying code, make sure these docs stay up-to-date and brief.
+- When using subagents:
+  - prefer Sonnet for purely mechanical tasks and searches
+  - prefer Opus if there may be ambiguity in the task or search
 
 ## Project Context
 - Koan is a pre-release language with NO users; do not invent backward-compatibility concerns or migration paths in design proposals.
