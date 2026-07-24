@@ -13,7 +13,7 @@ This command is doc-only. You do not write code, run cargo, or commit.
 
 - **Read-only** outside docs: `src/`, `tests/`, `Cargo.toml`, `Cargo.lock`, `tools/` (you may *invoke* `tools/doclinks.py`, but do not edit it), `.claude/` configuration.
 - **Write allowed** only in: `design/*.md`, `roadmap/*.md`, `README.md`, `tutorial/`.
-- **No** `cargo` commands. **No** commits. **No** implementing the work yourself, and **no** invocation of the `Plan` or `shepherd` agents — those are `/work-item`'s lane.
+- **No** `cargo` commands. **No** implementing the work yourself, and **no** invocation of the `Plan` or `shepherd` agents — those are `/work-item`'s lane.
 - If the user mid-discussion asks you to do anything that violates these, refuse and remind them this is a doc-only workflow. They can run `/work-item` or a normal session for code changes.
 
 ## Workflow

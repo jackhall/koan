@@ -25,4 +25,4 @@ If any step hard-failed, replace the relevant clause with the failure (e.g. `tes
 
 - **Miri.** The audit slate is separately gated and slow; use the `miri` skill when you need memory-safety verification.
 - **`cargo fmt`.** Format drift isn't gated here. Run `cargo fmt --all` separately when needed.
-- **Modgraph score regressions.** A higher score is reported but doesn't fail the run — the metric is informational. Use the delta as input to a code-review judgment call.
+- **Modgraph score regressions.** A higher score is reported but doesn't fail the run. Use the delta as input to a code-review judgment call, and report it to the user.
