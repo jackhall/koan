@@ -35,9 +35,12 @@ Region liveness) and freed once the new incarnation has adopted the carried
 arguments.
 
 Constant space follows: one slot serves the whole loop (`O(1)` node table), and at
-steady state at most two regions are live — the retiring incarnation's, still
-pinned while its arguments are adopted, and the running one. A depth-`N` loop is
-`O(1)` in both.
+steady state at most two incarnation regions are live — the retiring incarnation's,
+still pinned while its arguments are adopted, and the running one. A depth-`N` loop is
+`O(1)` in both. The one exception is a loop whose callee is a fresh closure capturing
+each iteration's frame: those captured frames are a genuine data dependency (the final
+closure reaches every one), so they are retained `O(N)` through the scope chain
+(§ Soundness, Lemma 3) — this is required liveness, not a TCO regression.
 
 Because the reinstall applies **after** the caller's step returns
 ([apply_outcome](../src/machine/execute/runtime.rs) is the sole graph-writing site,
@@ -121,15 +124,30 @@ zero, [witness-hosting.md § Retention model](witness-hosting.md#retention-model
 So the free is ordered *after* the adoption copy, never before, and the single
 consumer of tail position makes the release prompt.
 
-**Lemma 3 — cross-region references are witnessed, never raw.** An incarnation
-whose lexical chain reaches into an enclosing frame's region (a MATCH/TRY arm
-resolving free names against its surrounding call) holds that reach as a
-**witness-set member** pinning the enclosing region, not a raw pointer — the
-reference-only carrier model
-([witness-hosting.md § The carrier](witness-hosting.md#the-carrier)). So no
-reference outlives the region it names: the enclosing region is retained exactly as
-long as an incarnation's reach names it. *Enforced by* the carrier being the only
-way to hold a cross-region borrow.
+**Lemma 3 — cross-region references are pinned, never raw.** Two kinds of
+cross-region reference arise, each with its own pin:
+
+- **A value borrowing a foreign region** (a returned closure's reach, a spliced
+  argument) holds that reach as a **witness-set member** pinning the region, not a
+  raw pointer — the reference-only carrier model
+  ([witness-hosting.md § The carrier](witness-hosting.md#the-carrier)). *Enforced by*
+  the carrier being the only way to hold a cross-region value borrow.
+- **An incarnation's own scope chain reaching into an enclosing frame's region** (a
+  MATCH/TRY arm, or a called closure whose captured definition scope lives in a
+  per-call frame) holds it through the frame's `outer` `Rc` chain: `CallFrame::new`
+  derives the pin from the parent scope's own region owner
+  ([`Scope::parent_frame_pin`](../src/machine/core/scope.rs)), so the captured
+  region is retained for the frame's life. A fresh-tail cart is **no exception** — its
+  `outer` is the callee closure's captured scope, chained exactly as a non-tail call
+  chains its parent, so a closure capturing a per-call frame survives the hop that
+  retires the caller. A top-level-defined recursive fn instead captures the run-root
+  scope, whose `parent_frame_pin` is `None`, so it chains nothing.
+
+So no reference outlives the region it names. The scope chain is a DAG — each frame's
+`outer` names a strictly older frame — so it forms no cycle; home-omission keeps a
+value's stored reach from ever naming its own home frame, closing the one cycle a
+scope-chain pin could otherwise complete
+([witness-hosting.md](witness-hosting.md)).
 
 Together: Lemma 1 rules out freeing under a live borrow, Lemma 2 rules out freeing a
 region an adoption still reads, Lemma 3 rules out a raw cross-region pointer. Stable

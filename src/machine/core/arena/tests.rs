@@ -266,17 +266,26 @@ fn builtin_frame_under_per_call_parent_chains_region_owner() {
     ));
 }
 
-/// The reserved tail door chains nothing **even** when its parent scope is per-call: a fresh-tail
-/// cart strong-owns no ancestor, so tail recursion stays constant-space and no back-edge forms —
-/// the one deliberate no-chain shape, distinct from the derived `CallFrame::new`.
+/// A fresh-tail hop over a **per-call** captured scope chains that scope's region owner, so a
+/// closure capturing a per-call frame survives the hop that retires the caller — the same derivation
+/// as [`builtin_frame_under_per_call_parent_chains_region_owner`], reached through the fresh-tail
+/// path (`resolve_frame_placement`'s `FreshTail` mints via `CallFrame::new`). A top-level-defined
+/// recursive fn instead captures the run-root scope and chains nothing (see
+/// [`builtin_frame_at_top_level_chains_nothing`]), keeping the common tail loop constant-space.
 #[test]
-fn new_tail_chains_nothing_under_per_call_parent() {
+fn fresh_tail_hop_over_per_call_captured_scope_pins_it() {
     let region = run_root_storage();
     let run_test_run = TestRun::silent(&region);
     let run_scope = run_test_run.scope;
     let outer = CallFrame::new(run_scope);
-    let tail = outer.with_scope(CallFrame::new_tail);
-    assert!(tail.storage_rc().outer().is_none());
+    // The fresh-tail hop's `outer` is the callee's captured scope; here that scope is per-call.
+    let tail = outer.with_scope(CallFrame::new);
+    assert!(Rc::ptr_eq(
+        tail.storage_rc()
+            .outer()
+            .expect("a fresh-tail hop over a per-call captured scope chains its region owner"),
+        &outer.storage_rc(),
+    ));
 }
 
 /// Allocating records the stored address into the `membership` side-table via
@@ -1153,6 +1162,78 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
         "the narrowed record shares the exact same substrate borrow — never copies — read back \
          after the producer frame freed"
     );
+}
+
+/// The **single escape seam** re-stamp: [`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place)
+/// re-tags a declared substrate return's top node to its declared type and re-anchors it into the
+/// *producer's own region*, sharing the substrate borrow verbatim — the exact `finalize_terminal`
+/// `Disposition::Restamp` motion. Because the destination is the value's own home region,
+/// home-omission drops the `Residence::Kept`-materialized host: the composed witness is identical to
+/// the input's (here, empty), so nothing pins the producer region from a set hosted *inside* it.
+/// That is the leak shape this pins — a regression that minted the self-host would self-cycle the
+/// producer region (it never drops → a Miri leak). The value must also read back soundly, sharing
+/// the same substrate pointer, in its own producer region after every intermediate handle drops.
+#[test]
+fn restamp_in_place_shares_substrate_and_home_omits_self_host() {
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
+
+    // Producer: a plain-data record resident in its own frame's region, born through the fold door —
+    // the shape a declared substrate return arrives as at the Done boundary.
+    let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+        producer_frame.brand().handle(),
+    ));
+    let fields = Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(3.0)))]);
+    let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
+    let expected_addr = match obj {
+        KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
+        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+    };
+    let envelope: DeliveredCarried = Delivered::seal(
+        Witnessed::from_erased(Erased::erase(Carried::Object(obj)), CarrierWitness::default()),
+        producer_frame.storage_rc(),
+    );
+
+    // The declared type the return re-stamps to — a distinct handle for the same record shape.
+    let declared = types.record(Record::from_pairs([("a".to_string(), KType::NUMBER)]));
+
+    // Re-stamp in place: re-tag the top node to `declared`, re-anchored into the producer's own
+    // region through the folded placement — the substrate rides shared (`deep_clone` pointer-copies
+    // it, `stamp_type` swaps only the handle).
+    let restamped: Witnessed<CarriedFamily, CarrierWitness> = envelope
+        .restamp_in_place::<CarriedFamily, KoanStorageProfile>(|value, _handle, placement| {
+            let region = FoldingBrand::in_fold_closure(placement);
+            Carried::Object(
+                region.alloc_object_folded(value.object().deep_clone().stamp_type(declared, &types)),
+            )
+        });
+    assert!(
+        restamped.witness().is_empty(),
+        "re-stamping into the value's own home region home-omits the Kept host — witness unchanged, \
+         no set hosted inside the producer region pins it"
+    );
+
+    // The producer storage is the sole pin: the re-stamped value lives in its own region.
+    let producer_storage = producer_frame.storage_rc();
+    drop(envelope);
+    drop(producer_frame);
+
+    let read_addr = restamped.with_pinned(&producer_storage, |c| match c.object() {
+        KObject::Record(substrate, record_type) => {
+            assert_eq!(*record_type, declared, "re-stamped to the declared type");
+            *substrate as *const RecordSubstrate<'_> as usize
+        }
+        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+    });
+    assert_eq!(
+        read_addr, expected_addr,
+        "the re-stamped record shares the exact same substrate borrow — never copies — read back in \
+         its own producer region"
+    );
+    // Dropping `producer_storage` here frees the region; Miri confirms 0 leaks (no self-cycle).
 }
 
 // `RegionSet::mint` — the witness-set hosting substrate (design/witness-hosting.md § Composition).

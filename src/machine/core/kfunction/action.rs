@@ -520,11 +520,13 @@ pub enum BlockEntry<'a> {
 
 /// The cart a `Tail` runs in.
 pub enum FramePlacement<'a> {
-    /// Mint a fresh cart at apply through the reserved `CallFrame::new_tail(outer)`. The TCO
-    /// tail-call frame — FN-body invoke, deferred `PerCall` tails. The only harness-constructed cart;
-    /// the retiring cart drops at the reinstall, and the library retires its region once the sealed
-    /// argument carriers that pin it release their hold. `new_tail` is the one door that chains no
-    /// ancestor pin, so the minted frame strong-owns no ancestor and carries no back-edge.
+    /// Mint a fresh cart at apply through `CallFrame::new(outer)`, where `outer` is the callee
+    /// closure's captured (definition) scope. The TCO tail-call frame — FN-body invoke, deferred
+    /// `PerCall` tails. The only harness-constructed cart; the retiring caller cart drops at the
+    /// reinstall (its region retires once the sealed argument carriers that pin it release their
+    /// hold), while the fresh cart chains the captured scope's region owner so a closure's captured
+    /// per-call frame survives the hop. A top-level-defined recursive fn captures the run-root scope
+    /// and so chains nothing; see [`CallFrame::new`].
     FreshTail { outer: &'a Scope<'a> },
     /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`), handed
     /// to the harness to install. The builtin owns construction because it may seed the cart before

@@ -20,7 +20,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use arena::KoanRegionTestExt;
 pub use arena::{
-    run_root_storage, CallFrame, FoldingBrand, FrameSet, FrameStorage, KoanRegion, RegionBrand,
+    run_root_storage, CallFrame, FoldingBrand, FrameSet, FrameStorage, KoanRegion,
     RegionTypeFamily, StepAllocator,
 };
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
@@ -38,9 +38,7 @@ pub(crate) use kfunction::action::{
     AwaitContinue, BlockEntry, BodyCtx, BodyPlacement, CatchContinue, DepPlacement, DepRequest,
     DepTerminal, FinishCtx, FramePlacement, OwnedDispatch, TailContract,
 };
-pub(crate) use kfunction::body::{
-    body_statement_refs, split_body_statements, ReturnContract, SealedContract,
-};
+pub(crate) use kfunction::body::{body_statement_refs, split_body_statements, ReturnContract};
 pub(crate) use kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction, NodeId};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};

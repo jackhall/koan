@@ -52,11 +52,7 @@ pub(crate) fn resolve_arm_contract<'a>(
             }
         }
     };
-    Ok(ReturnContract::Arm {
-        ret: ret_kt,
-        kind,
-        scope: ctx.scope,
-    })
+    Ok(ReturnContract::Arm { ret: ret_kt, kind })
 }
 
 /// Which part of a carrier's carried value the arm's `it` binds.

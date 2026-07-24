@@ -304,7 +304,10 @@ fn tagged_erased_and_stamped_are_distinct_identities() {
         door,
         "Box".into(),
         &num(1.0),
-        types.constructor_apply(ctor, Record::from_pairs([("Type".to_string(), KType::NUMBER)])),
+        types.constructor_apply(
+            ctor,
+            Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
+        ),
     );
     assert_eq!(erased.value_equal(&stamped, &types), Ok(false));
 }

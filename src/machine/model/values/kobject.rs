@@ -347,7 +347,11 @@ impl<'a> KObject<'a> {
     /// nested `Wrapped`, so a newtype over another keeps every layer. Allocates the payload substrate
     /// (the single cell plus its memos, home = `door`'s region) through `door`. See
     /// [`Self::wrapped_peel`] for the re-tag verb.
-    pub fn wrapped_hold(door: FoldingBrand<'a>, value: &KObject<'a>, type_id: KType) -> KObject<'a> {
+    pub fn wrapped_hold(
+        door: FoldingBrand<'a>,
+        value: &KObject<'a>,
+        type_id: KType,
+    ) -> KObject<'a> {
         let substrate = alloc_payload(door, value.deep_clone());
         KObject::Wrapped {
             inner: substrate,
@@ -360,7 +364,11 @@ impl<'a> KObject<'a> {
     /// old. When `value` is already a `Wrapped`, its inner substrate borrow rides verbatim (O(1), no
     /// copy — the payload keeps its home, pinned by the carrier's reach); anything else allocates a
     /// fresh payload substrate over an independent `deep_clone` through `door`.
-    pub fn wrapped_peel(door: FoldingBrand<'a>, value: &KObject<'a>, type_id: KType) -> KObject<'a> {
+    pub fn wrapped_peel(
+        door: FoldingBrand<'a>,
+        value: &KObject<'a>,
+        type_id: KType,
+    ) -> KObject<'a> {
         let inner = match value {
             KObject::Wrapped { inner, .. } => *inner,
             _ => alloc_payload(door, value.deep_clone()),

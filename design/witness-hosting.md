@@ -174,8 +174,10 @@ genuinely restated against a new region — a bind, an adoption, a merge.
 
 Acyclicity of the region ownership graph rests on two rules: home-omission
 (no self edge, in either the description or a resident bundle) and the
-per-call frame rule that a dispatched frame strong-owns no lexical ancestor
-([per-call-region/](per-call-region/README.md)).
+per-call frame rule that a frame's `outer` chain strong-owns only a
+**strictly older** ancestor frame — a DAG, never a back-edge — so a
+dispatched frame chaining its (possibly per-call) captured parent forms no
+cycle ([per-call-region/](per-call-region/README.md)).
 
 ## Escape: the single seam
 
@@ -283,14 +285,18 @@ Per the [scheduler-library.md](scheduler-library.md) division:
   subsumption fold), the
   [`{ borrows_host, reach }` carrier](../workgraph/src/witnessed/carrier.rs),
   the envelope, the mint verbs (which require a destination allocation
-  capability by signature), and the scheduler's frame-retention (release at
+  capability by signature), the single-seam escape verb
+  [`restamp_in_place`](../workgraph/src/witnessed/delivered.rs) (re-tags a
+  delivered value's top node in its own producer region, composing to a witness
+  identical to the input's), and the scheduler's frame-retention (release at
   pull-count zero).
 - **Workload-supplied:** the frame-owner type `F` with its `PinsRegion`
   subsumption hook and the omission-policy predicate at bind sites.
 
 ## Open work
 
-- [Reach ownership split and the single escape seam](../roadmap/untyped_arena/reach-ownership-split.md)
-  — ships this doc's model: the description/ownership split, the holder-rule
-  plumbing at every carrier position, and the deletion of the Done-boundary
-  relocation channel.
+- [Reach ownership split](../roadmap/untyped_arena/reach-split.md) — ships
+  this doc's model: the description/ownership split and the holder-rule
+  plumbing at every carrier position.
+- [Residence-audit retirement](../roadmap/untyped_arena/residence-audit-retirement.md)
+  — retires the runtime audit where this doc's typed pairing subsumes it.

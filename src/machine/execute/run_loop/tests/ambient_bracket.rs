@@ -13,12 +13,10 @@ use crate::machine::LexicalFrame;
 
 /// A trivial declared-return obligation the bracket tests deposit to stand in for the old
 /// `in_contract_chain` bool: any obligation makes `in_contract_chain()` read `true` inside the step.
-fn sample_obligation<'a>(scope: &'a crate::machine::Scope<'a>) -> ReturnObligation {
-    let ret = KType::NUMBER;
+fn sample_obligation() -> ReturnObligation {
     ReturnObligation::seal(ReturnContract::Arm {
-        ret,
+        ret: KType::NUMBER,
         kind: "return type",
-        scope,
     })
 }
 
@@ -26,8 +24,7 @@ fn sample_obligation<'a>(scope: &'a crate::machine::Scope<'a>) -> ReturnObligati
 fn slot_step_bracket_restores_ambient_on_unwind() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
-    let root = test_run.scope;
-    let obligation = sample_obligation(root);
+    let obligation = sample_obligation();
     let runtime = &mut test_run.runtime;
     let frame = runtime.run_frame_ref().expect("seeded run frame").clone();
     let payload = NodePayload {
@@ -59,8 +56,7 @@ fn slot_step_bracket_restores_ambient_on_unwind() {
 fn slot_step_bracket_restores_ambient_on_normal_return() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
-    let root = test_run.scope;
-    let obligation = sample_obligation(root);
+    let obligation = sample_obligation();
     let runtime = &mut test_run.runtime;
     let frame = runtime.run_frame_ref().expect("seeded run frame").clone();
     let payload = NodePayload {

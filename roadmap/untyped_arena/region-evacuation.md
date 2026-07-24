@@ -60,9 +60,7 @@ decided as a whole.
 
 **Requires:**
 
-- [Reach ownership split and the single escape seam](reach-ownership-split.md) — the
-  all-carrier bind-seam pricing needs drift-free residence and droppable pins, so
-  pricing every carrier neither hits spurious residence rejects nor chains retired
-  regions across a tail loop.
+- [Reach ownership split](reach-split.md) — droppable pins, so pricing
+  loop-carried carriers to pin does not chain retired regions across a tail loop.
 
 **Unblocks:** none tracked yet.

@@ -29,7 +29,8 @@ use std::rc::Rc;
 
 use super::{
     Carrier, Erased, FoldToken, FoldedPlacement, HasRegionHandle, PinsRegion, Reattachable, Region,
-    RegionHandle, RegionOwner, RegionSet, Residence, Sealed, StorageProfile, Stored, Witnessed,
+    RegionHandle, RegionHandleFamily, RegionOwner, RegionSet, Residence, Sealed, StorageProfile,
+    Stored, Witnessed,
 };
 
 /// A sealed carrier paired with the retained frame owner that pins its value's backing in transit.
@@ -237,5 +238,43 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
             },
             super::place_over_dest::<T, B, P, Pr>(relocate),
         )
+    }
+
+    /// Re-stamp the delivered value **in place, in its own producer region** — the single-seam
+    /// escape verb. The destination is the retained host's own region (not an ancestor), so
+    /// `relocate` re-anchors the value where it already resides: no bytes move and nothing re-homes.
+    /// `relocate` builds the re-stamped value into that region through the folded placement — for a
+    /// koan declared return, re-tagging the top node while sharing its substrate borrow verbatim.
+    /// Its second operand is the same producer-region handle the placement covers, redundant with it
+    /// (a caller ignores it), retained only to match the transfer fold's shape.
+    ///
+    /// The composed witness is identical to the input's: the destination is the value's own home
+    /// region, so home-omission drops the [`Residence::Kept`]-materialized host from the minted set,
+    /// leaving exactly the value's foreign reach, and the composed `borrows_host` bit reduces to the
+    /// input's. Host, producer pin, and residence coincide by construction — an envelope stating
+    /// otherwise has no constructor.
+    pub fn restamp_in_place<P: Reattachable, Pr>(
+        &self,
+        relocate: impl for<'b> FnOnce(
+            T::At<'b>,
+            RegionHandle<'b, Pr>,
+            FoldedPlacement<'b, Pr>,
+        ) -> P::At<'b>,
+    ) -> Witnessed<P, Carrier<F>>
+    where
+        Pr: StorageProfile + 'static,
+        F: RegionOwner<Region = Region<Pr>>,
+        RegionSet<F>: Stored<Pr> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
+        T::At<'static>: Copy,
+    {
+        // The destination operand is the producer's own region, yoked out of the retained host — the
+        // region the value already lives in. Re-stamping into it re-anchors, never relocates.
+        let dest: Witnessed<RegionHandleFamily<Pr>, Carrier<F>> =
+            Witnessed::<RegionHandleFamily<Pr>, Rc<F>>::yoke_handle(
+                Rc::clone(&self.host),
+                |handle| handle,
+            )
+            .into_reference_only();
+        self.transfer_into_placing::<RegionHandleFamily<Pr>, P, Pr>(dest, Residence::Kept, relocate)
     }
 }

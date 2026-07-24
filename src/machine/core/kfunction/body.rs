@@ -2,14 +2,9 @@
 //! body-statement splitters, and the `Body` enum (an action `fn` pointer vs a captured
 //! user-defined `KExpression`).
 
-use std::rc::Rc;
-
 use crate::machine::model::{ExpressionPart, KExpression};
 
-use crate::machine::core::{FrameStorage, RegionBrand, Scope};
 use crate::machine::model::KType;
-use crate::scheduler::Sealed;
-use crate::witnessed::reattachable;
 
 use super::KFunction;
 
@@ -18,26 +13,20 @@ use super::KFunction;
 /// MATCH / TRY arm with `-> :T`) rides the same channel as an FN call: `Arm` carries the
 /// declared type directly, `Function` reads it off the callee's signature.
 ///
-/// `Arm`'s / `PerCall`'s `ret` is region-borrowed so the whole contract stays `Copy`, matching the
-/// `&KFunction` it sits beside. Sealed as [`SealedContract`] into a `ReturnObligation` that rides the
-/// tail chain as a continuation capture, pinned by its own carried witness. A tail chain keeps the
-/// **first** contract (the keep-first rule at the `Outcome::Continue` construction sites in
-/// `execute::runtime`, which wraps each replacement continuation with the established obligation), so
-/// the check fires against the original caller's declared return, not the tail-most callee's.
+/// `Arm`'s / `PerCall`'s `ret` is a `Copy` `KType` handle so the whole contract stays `Copy`,
+/// matching the `&KFunction` it sits beside. Sealed into a `ReturnObligation` — pure `Copy` data
+/// (the declared type plus a trace label) that rides the tail chain as a continuation capture. A
+/// tail chain keeps the **first** contract (the keep-first rule at the `Outcome::Continue`
+/// construction sites in `execute::runtime`, which wraps each replacement continuation with the
+/// established obligation), so the check fires against the original caller's declared return, not the
+/// tail-most callee's.
 #[derive(Clone, Copy)]
 pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
     Function(&'a KFunction<'a>),
-    /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`.
-    /// `scope` is the arm's declaring scope — the call-site (outer) scope, a strict ancestor of the
-    /// arm frame — so a coarsened re-tag re-homes there with no step-scope walk. `ret` is a `Copy`
-    /// handle, so the contract stays `Copy`; [`Self::home_owner`] resolves the owning
-    /// `Rc<FrameStorage>` off `scope` for the contract's carried witness.
-    Arm {
-        ret: KType,
-        kind: &'static str,
-        scope: &'a Scope<'a>,
-    },
+    /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`. `ret`
+    /// is a `Copy` handle, so the contract stays `Copy`.
+    Arm { ret: KType, kind: &'static str },
     /// A deferred-return FN whose per-call return type resolved to `ret`. Rides the FN-body
     /// chain shape (a `Function`/`PerCall` contract) so a tail-replaced deferred body assembles its
     /// lexical chain like any FN — preserving TCO — while `finalize_terminal` checks the
@@ -45,53 +34,6 @@ pub enum ReturnContract<'a> {
     /// the frame). `ret` is a `Copy` handle like `Arm`'s, so the contract stays `Copy`.
     PerCall { func: &'a KFunction<'a>, ret: KType },
 }
-
-impl<'a> ReturnContract<'a> {
-    /// The contract's home region — where a coarsened re-tag is re-homed so it outlives the
-    /// producer frame. A `Function`/`PerCall` reads it off the callee's captured-scope region; an
-    /// `Arm` reads it off its declaring scope. All three are a strict ancestor region of the
-    /// producing frame, so a re-tag there outlives it.
-    pub fn home_region(self) -> RegionBrand<'a> {
-        match self {
-            ReturnContract::Function(f) | ReturnContract::PerCall { func: f, .. } => {
-                f.captured_scope().brand()
-            }
-            ReturnContract::Arm { scope, .. } => scope.brand(),
-        }
-    }
-
-    /// The `Rc<FrameStorage>` owning the contract's home region — resolved uniformly across every
-    /// variant so the contract's own carried witness (not the cart's `outer` chain) pins it across a
-    /// tail chain. `None` only when the owner's `Weak` has already released.
-    pub fn home_owner(self) -> Option<Rc<FrameStorage>> {
-        match self {
-            ReturnContract::Function(f) | ReturnContract::PerCall { func: f, .. } => {
-                f.captured_scope().region_owner().upgrade()
-            }
-            ReturnContract::Arm { scope, .. } => scope.region_owner().upgrade(),
-        }
-    }
-}
-
-/// `Reattachable` family for [`ReturnContract`] — the return-contract erasure carried on a node's
-/// `TraceFrame`. Layout-invariant: the contract's arms are `&'a` references, a `&'static str`, and
-/// a lifetime-free `KType` handle, whose representation does not depend on `'a`.
-pub struct ContractFamily;
-
-// `ReturnContract<'r>` is one type generic only in `'r` (every arm is a reference), layout identical
-// for all `'r`; the shared `reattachable!` macro discharges that obligation once.
-reattachable!(ContractFamily => ReturnContract<'r>);
-
-/// A [`ReturnContract`] sealed into its dormant, `'static`-storage form for a `ReturnObligation`
-/// riding a tail chain as a continuation capture. Pinned by its own carried witness —
-/// [`ReturnContract::home_owner`]'s
-/// `Rc<FrameStorage>`, folded into a [`FrameSet`](crate::machine::FrameSet) singleton at seal time
-/// (a genuine pinning witness; the reference-only value carrier pins nothing) — not by the cart's
-/// `outer` chain, so the contract's home region stays live across every hop of a tail chain
-/// independent of which cart the slot currently carries. Re-anchored at the Done read boundary at
-/// the step's combined open; the `Function` / `Arm` discriminant is readable there without
-/// re-anchoring the pointee, for the chain-shape decision that needs the tag but not the pointee.
-pub type SealedContract = Sealed<ContractFamily, crate::machine::FrameSet>;
 
 /// Split an FN / MATCH-arm / TRY-arm body into top-level statements. The single source of
 /// truth for the all-`Expression` multi-statement detection: any non-`Expression` part or

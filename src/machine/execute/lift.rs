@@ -103,8 +103,12 @@ pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> Re
             KObject::Record(substrate, _) => copy_or_pin(substrate, value, host),
             KObject::List(substrate, _) => copy_or_pin(substrate, value, host),
             KObject::Dict(substrate, _) => copy_or_pin(substrate, value, host),
-            KObject::Tagged { value: substrate, .. } => copy_or_pin(substrate, value, host),
-            KObject::Wrapped { inner: substrate, .. } => copy_or_pin(substrate, value, host),
+            KObject::Tagged {
+                value: substrate, ..
+            } => copy_or_pin(substrate, value, host),
+            KObject::Wrapped {
+                inner: substrate, ..
+            } => copy_or_pin(substrate, value, host),
             _ => RegionEscape::Copy { released: false },
         },
         _ => RegionEscape::Copy { released: false },

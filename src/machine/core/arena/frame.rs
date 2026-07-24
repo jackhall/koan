@@ -97,8 +97,9 @@ pub(crate) fn build_frame_child_witnessed<'p>(
         // structural invariant this construction door alone upholds by always chaining `storage`'s
         // `outer` to the same frame that owns `outer_b`'s region. That chain is **derived**, not
         // asserted: `CallFrame::new` computes it from the parent scope's own `region_owner`
-        // (`Scope::parent_frame_pin`), root-region parents chain nothing, and the one deliberate
-        // no-chain frame is the reserved `CallFrame::new_tail`.
+        // (`Scope::parent_frame_pin`), and root-region parents chain nothing. A fresh-tail hop's
+        // parent is the callee closure's captured scope, so the same chain keeps that captured
+        // (possibly per-call) region alive across the hop that retires the caller.
         //
         // The store runs the real `Scope` family audit — the same live O(1)
         // `ptr::eq(region, value.region())` as `alloc_scope`. `child` is built over
@@ -152,28 +153,20 @@ impl CallFrame {
     /// storage pin chained for the parent is **derived** from `outer` via
     /// [`Scope::parent_frame_pin`]: the parent scope's own region owner when it is per-call, or no
     /// chain when the parent lives in the run-root region (which outlives the run). No caller can
-    /// under-pin — there is no pin parameter to mis-wire; the one deliberate no-chain frame is the
-    /// TCO fresh-tail cart, minted by the reserved [`Self::new_tail`].
+    /// under-pin — there is no pin parameter to mis-wire.
+    ///
+    /// The one entry for every per-call frame, the TCO fresh-tail cart included: a fresh-tail hop's
+    /// `outer` is the callee closure's captured (definition) scope, so chaining that scope's region
+    /// owner is exactly what keeps a closure's captured frame alive across the hop that retires the
+    /// caller. This never over-retains in the common tail loop — a top-level-defined recursive fn
+    /// captures the run-root scope, whose [`Scope::parent_frame_pin`] is `None` (no chain), and a
+    /// locally-defined tail-recursive helper captures one stable per-call def frame, pinned once (the
+    /// same `Rc` every iteration). Only a loop that genuinely builds a fresh closure over each
+    /// iteration's frame retains `O(N)` frames — an unavoidable data dependency, since evaluating the
+    /// final closure reaches every one. The chain is a DAG (each frame's `outer` names a strictly
+    /// older frame), so it forms no cycle; see `design/tail-call-optimization.md`.
     pub fn new<'p>(outer: &'p Scope<'p>) -> Rc<CallFrame> {
-        Self::with_parent_pin(outer, outer.parent_frame_pin())
-    }
-
-    /// The TCO fresh-tail cart: a frame that strong-owns no ancestor (`outer_frame = None`), so tail
-    /// recursion stays constant-space and no back-edge forms. The captured scope's liveness rides the
-    /// closure value's carrier and the return contract's witness, not the `FrameStorage.outer` chain
-    /// (see `design/tail-call-optimization.md`). `pub(in crate::machine)` reserves it to the
-    /// fresh-tail placement (`resolve_frame_placement`, in `crate::machine`); builtins live in
-    /// `crate::builtins` and cannot name it, so the no-chain shape is unreachable to them.
-    pub(in crate::machine) fn new_tail<'p>(outer: &'p Scope<'p>) -> Rc<CallFrame> {
-        Self::with_parent_pin(outer, None)
-    }
-
-    /// Shared body of [`Self::new`] and [`Self::new_tail`]: build the frame with `outer_frame` as the
-    /// parent pin the fresh storage's `outer` chain holds.
-    fn with_parent_pin<'p>(
-        outer: &'p Scope<'p>,
-        outer_frame: Option<Rc<FrameStorage>>,
-    ) -> Rc<CallFrame> {
+        let outer_frame = outer.parent_frame_pin();
         // The storage is heap-pinned behind its own `Rc` from this point on (its region minted
         // lazily, on the child scope's allocation below), so the erased child-scope pointer stays
         // valid as the storage Rc moves into the shell.

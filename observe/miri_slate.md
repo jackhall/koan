@@ -101,7 +101,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-44 tests, grouped by the unsafe site each pins down. Names below are the exact
+45 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 21 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -212,6 +212,25 @@ cross-region store this seam and its siblings exercise.
 
 - `envelope_transfer_folds_an_independent_foreign_value`
 - `pass_through_duplicate_keeps_reach_pointer_and_mints_nothing`
+
+**Single escape seam — re-stamp in place, self-host home-omission** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
+— the single-seam escape verb
+([`Delivered::restamp_in_place`](../workgraph/src/witnessed/delivered.rs)): a declared substrate
+return re-tags its top node to the declared type and re-anchors it into the **producer's own
+region** through `transfer_into_placing` at `Residence::Kept`, sharing the substrate borrow verbatim
+(the exact `finalize_terminal` `Disposition::Restamp` motion). The distinguishing shape from the
+envelope-transfer group above: the destination *is* the value's own home region, so home-omission
+drops the Kept-materialized host from the minted set — the composed witness reduces to the input's
+(here, empty). A regression that instead minted the self-host would seat an `Rc<producer>` in a set
+hosted inside the producer's own region: a strong self-cycle the region never drops, a leak at
+process exit under Miri. The test re-stamps a producer-resident record, asserts the witness stays
+empty, drops every intermediate handle, then reads the shared substrate back in its own region — a
+use-after-free the instant re-stamp relocated instead of re-anchoring, a leak the instant it failed
+to home-omit. The `unsafe` routed is the shared `retype` in `witnessed.rs` plus the four
+`unsafe impl AuditedStored` family audits in [`arena/residence.rs`](../src/machine/core/arena/residence.rs)
+this Kept store crosses.
+
+- `restamp_in_place_shares_substrate_and_home_omits_self_host`
 
 **Record substrate — checked-tier O(1) membership** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
 — `resident_in_visiting`'s `Record` arm (`residence.owns_substrate(substrate)` in
@@ -591,9 +610,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-24: 654s — 45 tests, 0 leaks, 0 UB
+- 2026-07-24: 623s — 44 tests, 0 leaks, 0 UB
 - 2026-07-23: 620s — 44 tests, 0 leaks, 0 UB
 - 2026-07-23: 613s — 44 tests, 0 leaks, 0 UB
 - 2026-07-23: 624s — 44 tests, 0 leaks, 0 UB
-- 2026-07-23: 979s — 44 tests, 0 leaks, 0 UB
-- 2026-07-22: 629s — 43 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

@@ -505,8 +505,6 @@ digraph {
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction::body" -> "koan" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction::body" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::parse" [label="uses", style="dashed"];
@@ -690,7 +688,6 @@ digraph {
     "koan::machine::execute::finalize" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute" [label="uses", style="dashed"];
-    "koan::machine::execute::finalize" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -708,10 +705,9 @@ digraph {
     "koan::machine::execute::nodes" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::execute::obligation" -> "koan" [label="uses", style="dashed"];
-    "koan::machine::execute::obligation" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::obligation" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::obligation" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
+    "koan::machine::execute::obligation" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine" [label="uses", style="dashed"];

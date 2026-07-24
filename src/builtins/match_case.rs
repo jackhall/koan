@@ -59,28 +59,27 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // projection (ruling F3) picks the scrutinee itself or its wrapped payload. A boolean arm over
     // a `Bool` scrutinee binds `Null` (a boolean carries no payload); a region-pure scrutinee (e.g.
     // a plain Number) has no carrier, so the copy is region-pure and audited as such in `arm_tail`.
-    let it_source =
-        if !selected.binds_payload && matches!(value, crate::machine::model::KObject::Bool(_)) {
-            ItSource::Pure(crate::machine::model::KObject::Null)
-        } else if let Some(carrier) = ctx.arg_carrier("value") {
-            let projection = if selected.binds_payload {
-                ItProjection::Payload
-            } else {
-                ItProjection::Scrutinee
-            };
-            ItSource::Carrier(carrier.duplicate(), projection)
-        } else if selected.binds_payload {
-            let payload = match value {
-                crate::machine::model::KObject::Tagged { value, .. } => value.payload().deep_clone(),
-                crate::machine::model::KObject::Wrapped { inner, .. } => {
-                    inner.payload().deep_clone()
-                }
-                other => other.deep_clone(),
-            };
-            ItSource::Pure(payload)
+    let it_source = if !selected.binds_payload
+        && matches!(value, crate::machine::model::KObject::Bool(_))
+    {
+        ItSource::Pure(crate::machine::model::KObject::Null)
+    } else if let Some(carrier) = ctx.arg_carrier("value") {
+        let projection = if selected.binds_payload {
+            ItProjection::Payload
         } else {
-            ItSource::Pure(value.deep_clone())
+            ItProjection::Scrutinee
         };
+        ItSource::Carrier(carrier.duplicate(), projection)
+    } else if selected.binds_payload {
+        let payload = match value {
+            crate::machine::model::KObject::Tagged { value, .. } => value.payload().deep_clone(),
+            crate::machine::model::KObject::Wrapped { inner, .. } => inner.payload().deep_clone(),
+            other => other.deep_clone(),
+        };
+        ItSource::Pure(payload)
+    } else {
+        ItSource::Pure(value.deep_clone())
+    };
     arm_tail(ctx.scope, it_source, selected.body, contract, ctx.types)
 }
 

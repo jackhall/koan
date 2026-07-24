@@ -259,8 +259,7 @@ fn wrapped_deep_clone_shares_inner_substrate_and_type_id() {
             type_id: ct,
         } => {
             assert_eq!(
-                ci as *const PayloadSubstrate,
-                original_inner,
+                ci as *const PayloadSubstrate, original_inner,
                 "deep_clone must pointer-copy the substrate borrow, sharing the source substrate",
             );
             assert_eq!(ct, type_id);

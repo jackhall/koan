@@ -682,7 +682,7 @@ impl<'a> KExpression<'a> {
     /// True when no part anywhere in the tree is a `Spliced` cell — the expression is raw, unevaluated
     /// AST (a quoted expression, an FN body). This is the precondition that lets an AST-embedding object
     /// alloc through the **region-pure** witnessed surface
-    /// ([`alloc_object_witnessed`](crate::machine::core::RegionBrand::alloc_object_witnessed)): a
+    /// ([`alloc_object_witnessed`](crate::machine::core::arena::RegionBrand::alloc_object_witnessed)): a
     /// splice-free expression names no producer reach, so the embedding object's reach is the empty set.
     pub fn is_splice_free(&self) -> bool {
         self.parts.iter().all(|p| p.value.is_splice_free())

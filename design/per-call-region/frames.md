@@ -53,11 +53,13 @@ scope's own `region_owner` when the parent lives in a per-call region, or
 no pin when it lives in the run-root region (which outlives the run — a
 root chain plus an escaping value's reach-set pin would close a
 `region → value → frame` cycle). There is no pin parameter for a caller
-to mis-wire; the one deliberate no-chain frame is the TCO fresh-tail
-cart, minted by the reserved `CallFrame::new_tail`. A frame built under a
-run-root parent (a top-level invoke) therefore chains nothing and TCO
-recursion stays bounded, while one built under a per-call parent chains
-that parent's storage automatically.
+to mis-wire. The TCO fresh-tail cart is minted through the **same**
+`CallFrame::new`, with the callee closure's captured definition scope as
+its parent, so it chains that scope's region owner exactly like any other
+frame: a top-level-defined recursive fn captures the run-root scope and
+therefore chains nothing (TCO recursion stays bounded), while a closure
+capturing a per-call frame chains it so that frame survives the hop that
+retires the caller.
 
 The builtins that build their own per-call frame — MATCH and TRY through
 `branch_walk.rs`'s `arm_tail`, EVAL directly:

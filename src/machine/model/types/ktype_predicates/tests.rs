@@ -1,8 +1,8 @@
 use super::*;
 use crate::builtins::test_support::spliced_part;
+use crate::machine::core::FoldingBrand;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
-use crate::machine::core::FoldingBrand;
 use crate::machine::model::Carried;
 use crate::machine::model::Record;
 
@@ -405,8 +405,11 @@ fn of_kind_nominal_is_type_channel_only() {
     assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Type(ctor_tv)), &types));
 
     // The runtime `Wrapped` *instance* is never matched by a kind slot.
-    let w: &KObject<'_> =
-        door.alloc_object_folded(KObject::wrapped_peel(door, &KObject::Number(3.0), newtype_tv));
+    let w: &KObject<'_> = door.alloc_object_folded(KObject::wrapped_peel(
+        door,
+        &KObject::Number(3.0),
+        newtype_tv,
+    ));
     assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Object(w)), &types));
     assert!(!newtype_ty.matches_value(w, &types));
 }

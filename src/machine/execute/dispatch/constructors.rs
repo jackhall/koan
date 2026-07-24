@@ -12,9 +12,9 @@ use std::rc::Rc;
 
 use crate::machine::core::DepPlacement;
 use crate::machine::core::{FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope};
+use crate::machine::model::CarriedFamily;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject, Record};
-use crate::machine::model::CarriedFamily;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{
