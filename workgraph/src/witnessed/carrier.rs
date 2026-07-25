@@ -30,9 +30,9 @@ use super::{
     Erased, FoldToken, FoldedPlacement, PinBundle, PinsRegion, ReachDescription, Reattachable,
     Region, RegionHandle, RegionOwner, StorageProfile, Witness, Witnessed,
 };
-// `with_branded_ref` re-anchors the erased reach reference inside `with_reach_impl`, which is a
-// white-box test hook now that no production path reads a carrier's description.
-#[cfg(any(test, feature = "test-hooks"))]
+// `with_branded_ref` re-anchors the erased reach reference: in production for the `Sealed →
+// Delivered` lift's description-to-bundle upgrade ([`Carrier::upgrade_bundle`]), and under
+// `test-hooks` for the white-box membership queries (`with_reach_impl`).
 use super::with_branded_ref;
 
 /// [`Reattachable`] family for a lifetime-erased `&ReachDescription<F>` — the erased reach
@@ -178,6 +178,26 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         self.reach.is_some()
     }
 
+    /// Upgrade this carrier's reach description into an owned [`PinBundle`] under `pin` — the
+    /// `Weak → Rc` upgrade the [`Sealed → Delivered`](super::Sealed) **lift** routes: a value read
+    /// out of an arena-hosted seal is re-owned so the source frame may die in transit while the
+    /// bundle keeps its reached regions alive. `pin` covers the description's hosting arena for the
+    /// whole call (the holder rule), so [`ReachDescription::to_bundle`]'s member upgrades all
+    /// succeed. `None` reach (the empty / region-pure carrier) yields the empty bundle.
+    pub(in crate::witnessed) fn upgrade_bundle(&self, pin: &Rc<F>) -> PinBundle<F> {
+        // `pin` keeps the description's hosting arena live for the whole call — the same role the
+        // envelope host plays for a reach read; the branded re-anchor confines the reference exactly
+        // as `with_reach_impl` does, and the upgrade re-owns the members before it ends.
+        let _ = pin;
+        match &self.reach {
+            None => PinBundle::empty(),
+            Some(erased) => with_branded_ref::<HostedSetRef<F>, _>(
+                erased.as_static(),
+                |set_ref: &&ReachDescription<F>| set_ref.to_bundle(),
+            ),
+        }
+    }
+
     /// Read the reach set this carrier references, re-anchored under `pin` — the sole re-anchor of
     /// the erased reach reference. `None` reach means the empty set.
     ///
@@ -238,12 +258,17 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// `source` is this carrier's own owned foreign reach bundle, threaded from the holder (the
     /// delivery envelope's `foreign`, a binding entry's pins) — never recovered from the carrier's
     /// description, so the composition folds strong `Rc`s. `host` is the value's producer frame
-    /// owner, materialized per `mode`; `None` asserts there is no residence to materialize (a
-    /// resident value's own region), so `mode` only gates a `Some` host. Returns the minted
-    /// description (`None` == empty, no allocation) hosted in `dest`, the owned [`PinBundle`] the
-    /// caller keeps to pin its members, and the borrows-into-dest bit: reach members pinning
-    /// `dest`'s region, or the `borrows_host` bit when `host` itself pins it (the value's home *is*
-    /// — or subsumes — the destination).
+    /// owner, materialized per `mode` and the internal [`Self::borrows_host`] home-membership signal;
+    /// `None` asserts there is no residence to materialize (a resident value's own region), so `mode`
+    /// only gates a `Some` host. Returns the minted description (`None` == empty, no allocation)
+    /// hosted in `dest`, the owned [`PinBundle`] the caller keeps to pin its members, and the
+    /// borrows-into-dest bit: reach members pinning `dest`'s region, or the internal home-membership
+    /// signal when `host` itself pins it (the value's home *is* — or subsumes — the destination).
+    ///
+    // Phase 2: home becomes an ordinary reach member under the never-pin-a-region-into-itself rule,
+    // so membership subsumes the borrows-into-dest bit and this return degrades to `(desc, bundle)`.
+    // It is retained in Phase 1 because koan's residence audit and module-reach evidence still read
+    // it via `StoredReach.borrows_into_home` (home-omission drops `dest` from the stored members).
     pub(in crate::witnessed) fn mint_into<'d, P>(
         &self,
         source: &PinBundle<F>,

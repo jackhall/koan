@@ -28,7 +28,7 @@
 use std::rc::Rc;
 
 use super::{
-    Carrier, Erased, FoldToken, FoldedPlacement, HasRegionHandle, PinBundle, PinsRegion,
+    Carrier, Erased, FoldToken, FoldedPlacement, HasRegionHandle, Opened, PinBundle, PinsRegion,
     ReachDescription, Reattachable, Region, RegionHandle, RegionHandleFamily, RegionOwner,
     Residence, Sealed, StorageProfile, Witnessed,
 };
@@ -65,6 +65,19 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
         T::At<'static>: Copy,
     {
         self.cell.open_with(&self.host, f)
+    }
+
+    /// Open the delivered value into the **in-use** [`Opened`] state at the step lifetime `'b`,
+    /// pinned by the envelope's own retained host — the one-line convenience over
+    /// [`Sealed::open_at`] that supplies its own owned coverage (the envelope already holds the pin
+    /// its value's backing needs). Returns an [`Opened<'b, T, W>`] the step reads freely and
+    /// [`reseal`](Opened::reseal)s or lifts at step end.
+    pub fn open_at<'b>(&'b self) -> Opened<'b, T, W>
+    where
+        T::At<'static>: Copy,
+        W: Clone,
+    {
+        self.cell.open_at(&self.host)
     }
 
     /// The reference-only reach witness — the value's reach description, for a reach query or a
@@ -142,6 +155,22 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         }
     }
 
+    /// **Lift** a [`Sealed`] carrier at rest into a delivery envelope in transit (`Sealed →
+    /// Delivered`): upgrade the sealed carrier's reach description `Weak → Rc` into an owned inline
+    /// [`PinBundle`] under `host`, then bundle it with `host` as the transit pin. The owned set is
+    /// what lets the value travel after its source frame dies — an arena-hosted `&ReachDescription`
+    /// would dangle in transit, so the lift re-owns the claimed subset while the reached regions are
+    /// still covered (the holder rule under `host`). `host` is the value's residence owner, covering
+    /// both its backing and its description's hosting arena.
+    pub fn lift(cell: Sealed<T, Carrier<F>>, host: Rc<F>) -> Self {
+        let foreign = cell.witness().upgrade_bundle(&host);
+        Delivered {
+            cell,
+            host,
+            foreign,
+        }
+    }
+
     /// Seal a live [`Witnessed`] carrier into a delivery envelope pinned by `host` and the owned
     /// foreign [`PinBundle`] `foreign` — the resident / Done-arm seal veneer's library half. Bundles
     /// the born-witnessed carrier with the region owner the caller already holds and the owned bundle
@@ -165,8 +194,8 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
 
     /// Mint this value's reach into `dest`, materializing the retained host per `mode`
     /// ([`Residence::Kept`]: unconditionally — the value keeps living there; [`Residence::Copied`]:
-    /// only when its borrows genuinely reach it, the `borrows_host` bit), under `omit` — the
-    /// embedder's omission policy (regions the destination's container already pins). Returns the
+    /// only when its borrows genuinely reach it, the internal home-membership signal), under `omit` —
+    /// the embedder's omission policy (regions the destination's container already pins). Returns the
     /// minted description (`None` == empty, no allocation) hosted in `dest`, the owned [`PinBundle`]
     /// the binding entry keeps to pin its members, and the borrows-into-dest bit. The reach read runs
     /// under the retained host pin.
@@ -213,6 +242,39 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         // retained bundle pins every region it names for the region's life ⊇ 'd; the re-anchored
         // borrow cannot outlive its pin.
         unsafe { erased.reattach() }
+    }
+
+    /// **Adopt** the delivered value into `dest`, dropping to rest as a [`Sealed`] (`Delivered →
+    /// Sealed`): mint the value's reach into `dest`'s arena (home materialized as an ordinary member,
+    /// with `dest`'s own region omitted by the never-pin-a-region-into-itself rule), **retain** the
+    /// resulting owned [`PinBundle`] into `dest`'s liveness for the region's life, and re-seal the
+    /// value under a resident [`Carrier`] that references the minted (now weak) description. The
+    /// value keeps its identity in the producer's region; the minted set is what pins that region for
+    /// `dest`'s life, so the resident seal reads soundly under `dest`'s ambient coverage. `omit`
+    /// names regions `dest`'s context covers ambiently, as in [`Self::mint_reach`].
+    ///
+    /// The dual of [`Self::adopt_into`] (which re-anchors to a live `T::At<'d>`): `adopt` hands back a
+    /// dormant seal for a table entry / node slot instead.
+    pub fn adopt<'d, P>(
+        &self,
+        dest: RegionHandle<'d, P>,
+        omit: impl Fn(&Region<P>) -> bool,
+    ) -> Sealed<T, Carrier<F>>
+    where
+        P: StorageProfile<FrameOwner = F> + 'static,
+        F: RegionOwner<Region = Region<P>>,
+        T::At<'static>: Copy,
+    {
+        let (minted, bundle, _borrows_into_dest) = self.mint_reach(dest, Residence::Kept, omit);
+        // The description is non-owning; the adopted value keeps living in the producer region, so
+        // `dest` retains the owning bundle (dropped only at region death) to pin every region the
+        // value reaches for `dest`'s life ⊇ the resident seal's reads.
+        dest.region().retain_reach(bundle);
+        let erased: Erased<T> = self.open(Erased::<T>::erase);
+        // A resident value's home is its residence (pinned by `dest`'s retained bundle), so the
+        // reference-only carrier carries no home-borrow signal — home membership rides the minted
+        // set, exact by construction.
+        Sealed::seal(Witnessed::from_erased(erased, Carrier::new(false, minted)))
     }
 
     /// Relocate the delivered value into a destination and re-seal it under the composed carrier

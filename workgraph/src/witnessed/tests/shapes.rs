@@ -304,6 +304,60 @@ fn mint_home_omission_prevents_self_cycle() {
     );
 }
 
+/// **`Delivered::lift`** — the `Sealed → Delivered` transform re-owns the sealed carrier's reach
+/// description (`Weak → Rc`) into an owned inline bundle under the host pin, so the value survives
+/// its description's hosting arena dying in transit. A seal whose carrier references a set naming
+/// `content` (hosted in `host`) is lifted; the lifted bundle owns `content`, so dropping the `host`
+/// handle (the description's arena) leaves the value readable. A missed upgrade is a dangling `Weak`
+/// read — a UAF under tree borrows.
+#[test]
+fn lift_reowns_description_into_transit_bundle() {
+    let host = frame();
+    let content = frame();
+    let value: &u32 = store_val(&content, 5);
+    let (reach, _bundle) = ReachDescription::mint(
+        RegionHandle::from_owner(&*host),
+        &[],
+        &[Rc::clone(&content)],
+        |_| false,
+    );
+    let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
+        Erased::erase(value),
+        Carrier::new(false, reach),
+    ));
+
+    let delivered = Delivered::lift(sealed, Rc::clone(&host));
+    assert!(
+        delivered.foreign().pins_region(content.region()),
+        "the lift re-owns the description's member into the transit bundle"
+    );
+    // Drop the description's hosting arena; the lifted owned bundle keeps `content` (the value's
+    // backing) alive on its own.
+    drop(host);
+    assert_eq!(delivered.open(|r| *r), 5);
+    drop(content);
+}
+
+/// **`Delivered::adopt`** — the `Delivered → Sealed` transform mints the value's reach into `dest`,
+/// retains the owned bundle into `dest`'s liveness, and re-seals the value resident. A value living
+/// in its producer is adopted into `dest`; after the producer handle drops, `dest`'s retained bundle
+/// is the sole pin under which the resident seal reads back. A missed retain is a UAF.
+#[test]
+fn adopt_settles_resident_value_into_dest() {
+    let producer = frame();
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
+        Witnessed::resident(store_val(&producer, 7)),
+        Rc::clone(&producer),
+        PinBundle::empty(),
+    );
+    let dest = frame();
+    let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> =
+        element.adopt(RegionHandle::from_owner(&*dest), |_| false);
+    drop(element);
+    drop(producer);
+    assert_eq!(sealed.open_with(&dest, |r| *r), 7);
+}
+
 /// **Finish-surface fold** — `alloc_with` folds every listed dep's envelope into the result's
 /// carrier *by construction*, before the build closure can embed a dep view. The built value here
 /// IS a dep view (a borrow into the producer's region, riding the result un-copied); the producer

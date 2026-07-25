@@ -294,6 +294,35 @@ fn merge_pinned_keeps_unrelated_carts_as_a_two_member_set() {
     );
 }
 
+/// `Sealed::open_at` + `Opened::reseal`: the borrow-tied in-use state. A real borrow is sealed,
+/// opened at a step lifetime pinned by a separately-held `Rc`, read out of the `Opened`, then
+/// resealed; after every original handle drops the resealed carrier's own bundled witness keeps the
+/// pointee live and it reads back. The step lifetime `'b` rides the pin borrow (a `&'b Rc`), so the
+/// read cannot outlive the frame — Miri must stay clean across the reseal round-trip. (`open_at`
+/// copies the value out, so it is a `Copy`-family verb — the invariant-`Cell` stress lives on the
+/// rank-2 `with` / `map` round-trips.)
+#[test]
+fn open_at_reseal_roundtrip() {
+    let backing: Rc<Vec<u32>> = Rc::new(vec![5, 6, 7]);
+    let sealed: Sealed<RefFamily, Rc<Vec<u32>>> = {
+        let borrow: &u32 = &backing[2];
+        Sealed::seal(Witnessed::from_erased(Erased::erase(borrow), Rc::clone(&backing)))
+    };
+    // Pin held across the open; `'b` rides this borrow.
+    let pin = Rc::clone(&backing);
+    drop(backing); // the seal's bundled witness + `pin` keep the pointee live.
+    let resealed: Sealed<RefFamily, Rc<Vec<u32>>> = {
+        let opened = sealed.open_at(&pin);
+        assert_eq!(*opened.value(), 7);
+        opened.reseal()
+    };
+    // The resealed carrier carries its own cloned `Rc` witness, so it stays live after `pin` drops.
+    drop(pin);
+    assert_eq!(resealed.open(|r| *r), 7);
+    // Read again to catch a tree-borrows regression on the reattached view.
+    assert_eq!(resealed.open(|r| *r), 7);
+}
+
 /// `SealedExtern::open` — the **consuming, externally-witnessed** rank-2 open, distinct from the
 /// bundled-witness [`Sealed::open`] (which this slate covers via its own `compile_fail` doctest and
 /// the `Witnessed` round-trips). A real borrow is erased into the witness-less `SealedExtern`, opened

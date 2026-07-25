@@ -14,7 +14,10 @@
 //! co-location holds by construction, and [`Witnessed::merge_pinned`] combines two under one brand
 //! and re-seals under their composed witness. For storage *between* accesses a carrier rests in a
 //! [`Sealed`], the opaque dormant form that hides every transform and re-anchors only through the
-//! rank-2 [`Sealed::open`].
+//! rank-2 [`Sealed::open`]. *During* a step it opens into an [`Opened`], the borrow-tied in-use
+//! state whose content lifetime rides the frame borrow so a step reads freely and
+//! [`reseal`](Opened::reseal)s at step end — the third carrier state alongside `Sealed` (at rest)
+//! and [`Delivered`](delivered::Delivered) (in transit).
 //!
 //! The layout machinery underneath — the [`Reattachable`] family contract, the private [`retype`]
 //! primitive, [`erase_to_static`] and the storable [`Erased<T>`] — is the same single-lifetime
@@ -325,13 +328,12 @@ impl<T: Reattachable> Erased<T> {
 
     /// The `'static`-erased inner value, for a crate-internal re-anchor via [`with_branded_ref`] —
     /// the route for a carrier that stores an erased reference *alongside* (not inside) its own
-    /// witness, so it re-anchors under a pin other than the one bundled with it. The sole caller is
-    /// [`Carrier`](carrier::Carrier)'s pinned reach reader, itself a white-box test hook now that
-    /// ownership flows forward from the mint — hence the same `test-hooks` gate. The returned
-    /// `&T::At<'static>` interior is `Copy`, so a caller must re-anchor it under a held pin
-    /// immediately (as `with_reach` does) and never let the `'static` form escape the re-anchor
-    /// expression.
-    #[cfg(any(test, feature = "test-hooks"))]
+    /// witness, so it re-anchors under a pin other than the one bundled with it. Reached by
+    /// [`Carrier`](carrier::Carrier)'s pinned reach reader — the `Sealed → Delivered` lift's
+    /// description-to-bundle upgrade in production, and the white-box membership queries under
+    /// `test-hooks`. The returned `&T::At<'static>` interior is `Copy`, so a caller must re-anchor it
+    /// under a held pin immediately (as the reach readers do) and never let the `'static` form escape
+    /// the re-anchor expression.
     pub(in crate::witnessed) fn as_static(&self) -> &T::At<'static> {
         &self.inner
     }
@@ -1024,6 +1026,36 @@ impl<T: Reattachable, W> Sealed<T, W> {
         f(self.inner.read_pinned())
     }
 
+    /// Open the sealed carrier into the **in-use** [`Opened`] state at the step lifetime `'b` — the
+    /// borrow-tied read whose `'b` rides the `pin` borrow (the live frame), the third carrier state
+    /// between [`Sealed`] (at rest) and [`Delivered`](delivered::Delivered) (in transit). Where
+    /// [`Self::open`] / [`Self::open_with`] confine the re-anchored value inside a **rank-2** closure,
+    /// `open_at` hands it out as an [`Opened<'b, T, W>`] whose content lifetime **is** the borrow
+    /// lifetime `'b` — so the borrow checker keeps it from escaping the pin without a `for<'b>`
+    /// closure at every read site (the step opens once, reads freely, and [`Opened::reseal`]s or lifts
+    /// at step end).
+    ///
+    /// Sound for the exact reason [`Witnessed::read`] is: `'b` is a concrete lifetime bounded by
+    /// **both** the `&'b self` seal borrow and the `&'b pin` frame borrow — not a free `'b` an
+    /// inference could widen to `'static` (the Miri-proven use-after-free the rank-2 brand otherwise
+    /// guards). While `pin` is borrowed for `'b` its region stays live, so the value re-anchored into
+    /// it cannot dangle; the returned [`Opened`] is `Copy` and constructible only here, so the
+    /// value↔reach pairing it carries is exactly this seal's.
+    pub fn open_at<'b, Pin: Witness>(&'b self, pin: &'b Pin) -> Opened<'b, T, W>
+    where
+        T::At<'static>: Copy,
+        W: Clone,
+    {
+        // `pin` is borrowed for `'b`, so its region stays live for the whole life of the returned
+        // `Opened`; `read_pinned` re-anchors the value at the `&'b self` borrow (bounded by `'b`,
+        // never a free lifetime), and the witness is cloned so the value↔reach pairing rides along.
+        let _ = pin;
+        Opened {
+            value: self.inner.read_pinned(),
+            witness: self.inner.witness().clone(),
+        }
+    }
+
     /// Duplicate the sealed carrier — copy the erased value (a `Copy` carrier family) and clone the
     /// witness — leaving this seal intact. The consumer-pull lift hands each construction finish a
     /// duplicate of the producer slot's own carrier (so the dep arrives **witnessed**, its reach named,
@@ -1106,6 +1138,66 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
         // into `R`. Same brand and same audited reattach as `Witnessed::with`, so `Sealed` introduces
         // no `unsafe` of its own.
         f(self.inner.read())
+    }
+}
+
+/// The **in-use** carrier state: a value re-anchored at a step lifetime `'b`, paired with its reach
+/// witness, produced by [`Sealed::open_at`] / [`Delivered::open_at`](delivered::Delivered::open_at)
+/// and returned to rest by [`Self::reseal`]. It is the borrow-tied twin of the rank-2 read verbs —
+/// where [`Sealed::open`] confines the re-anchored value inside a `for<'b>` closure, an `Opened`
+/// carries it out at the concrete borrow lifetime `'b`, so a step opens once and reads freely for
+/// the frame's duration.
+///
+/// It borrows at `'b` and **pins nothing** — the value's backing is kept alive by the frame the
+/// opening `pin` borrowed, not by the `Opened` (`W` is the reach witness, reference-only for the
+/// collapsed [`Carrier`]). It is `Copy` when its value family and witness are (a thin reference plus
+/// a bit-copy carrier), and constructible **only** by opening a seal or delivery, so the
+/// value↔reach pairing it carries is never fabricated — [`Self::reseal`] returns exactly the seal
+/// the value came from.
+pub struct Opened<'b, T: Reattachable, W> {
+    value: T::At<'b>,
+    witness: W,
+}
+
+// Manual impls: a derive would over-constrain (`T: Clone/Copy` rather than `T::At<'b>: Copy`),
+// mirroring the manual carrier impls elsewhere in the module.
+impl<'b, T: Reattachable, W: Clone> Clone for Opened<'b, T, W>
+where
+    T::At<'b>: Copy,
+{
+    fn clone(&self) -> Self {
+        Opened {
+            value: self.value,
+            witness: self.witness.clone(),
+        }
+    }
+}
+impl<'b, T: Reattachable, W: Copy> Copy for Opened<'b, T, W> where T::At<'b>: Copy {}
+
+impl<'b, T: Reattachable, W> Opened<'b, T, W> {
+    /// The re-anchored value, borrowed at the step lifetime `'b`. `Copy` families hand it back by
+    /// value; the borrow checker keeps it inside `'b` (the opening pin's borrow), so it cannot
+    /// outlive the frame that pins its backing.
+    pub fn value(&self) -> T::At<'b>
+    where
+        T::At<'b>: Copy,
+    {
+        self.value
+    }
+
+    /// The reach witness this open carries — the value's reach description, unchanged from the seal
+    /// it was opened from.
+    pub fn witness(&self) -> &W {
+        &self.witness
+    }
+
+    /// Return the value to rest as a [`Sealed`] — the step-end re-seal. Sound because an `Opened` is
+    /// `Copy` and constructible only by opening a seal or delivery: re-erasing the value under the
+    /// witness it was opened with reconstitutes exactly that carrier's value↔reach pairing, never a
+    /// fabricated one. Safe: the value stays a lifetime-only re-erase to `'static` for storage (no
+    /// reattach), so this adds no `unsafe`.
+    pub fn reseal(self) -> Sealed<T, W> {
+        Sealed::seal(Witnessed::from_erased(Erased::erase(self.value), self.witness))
     }
 }
 

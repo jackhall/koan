@@ -116,6 +116,20 @@ impl<F: PinsRegion> ReachDescription<F> {
         hit
     }
 
+    /// Upgrade every member `Weak → Rc` under a pinned read, collecting the owned [`PinBundle`] that
+    /// pins each member region — the description-to-bundle upgrade the `Sealed → Delivered` **lift**
+    /// routes (a value read out of an arena-hosted seal is re-owned so the source frame may die in
+    /// transit). The one sanctioned production upgrade of a description into an owned bundle: it runs
+    /// under the holder rule (the caller holds a pin covering this description's hosting arena for the
+    /// whole call), so every member upgrade succeeds — a failure is the same coverage bug
+    /// [`Self::for_each_owner`] `debug_assert`s. Subsumption is re-applied through
+    /// [`PinBundle::insert`], so the result is an antichain of the deepest owners.
+    pub fn to_bundle(&self) -> PinBundle<F> {
+        let mut bundle = PinBundle::empty();
+        self.for_each_owner(|owner| bundle.insert(Rc::clone(owner)));
+        bundle
+    }
+
     /// The description's live members, upgraded under a pinned read — white-box reach introspection.
     /// No library-internal caller, so gated entirely behind `test-hooks` for an embedder's own
     /// white-box tests (mirroring `Scheduler::anchor_of`'s gate).
@@ -192,6 +206,8 @@ impl<F: PinsRegion> ReachDescription<F> {
     /// members, so the bit is the only surviving record that the value's borrows reach the
     /// destination — the multi-source generalization of the `borrows_into_dest` companion
     /// [`Carrier::mint_into`](super::Carrier::mint_into) computes for a single carrier.
+    // Phase 2: retire alongside the single-carrier borrows-into-dest bit once home is an ordinary
+    // reach member (membership subsumes the pre-omission coverage query).
     pub fn mint_with_dest_bit<'a, W>(
         dest: RegionHandle<'a, W>,
         sources: &[&PinBundle<F>],
