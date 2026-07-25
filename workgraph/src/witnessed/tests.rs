@@ -306,7 +306,10 @@ fn open_at_reseal_roundtrip() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![5, 6, 7]);
     let sealed: Sealed<RefFamily, Rc<Vec<u32>>> = {
         let borrow: &u32 = &backing[2];
-        Sealed::seal(Witnessed::from_erased(Erased::erase(borrow), Rc::clone(&backing)))
+        Sealed::seal(Witnessed::from_erased(
+            Erased::erase(borrow),
+            Rc::clone(&backing),
+        ))
     };
     // Pin held across the open; `'b` rides this borrow.
     let pin = Rc::clone(&backing);

@@ -17,6 +17,9 @@ name = "koan"
 path = "src/main.rs"
 
 [features]
+# Module ascription (`:|` / `:!`) and every test that exercises it.
+ascription = []
+
 # Escape-seam verification builds — mutually exclusive (a `compile_error!` guards the pair).
 # Force every record escape seam to a single verb so the output-asserting suite becomes an
 # equivalence battery: identical hardcoded expectations under each prove the policy is

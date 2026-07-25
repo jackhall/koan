@@ -1,3 +1,4 @@
+#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::KObject;
@@ -176,6 +177,7 @@ fn val_slot_after_type_records_abstract_member() {
 /// `AbstractType` for `Elt` in its `type_members`, nonced on the view module's own `ScopeId`. The
 /// `source` binder stays the canonical sentinel — generativity rides `nonce` alone — so the mint is
 /// a distinct identity from the SIG-decl-time member it was threaded from.
+#[cfg(feature = "ascription")]
 #[test]
 fn opaque_ascription_mints_module_abstract_for_type_member() {
     let region = run_root_storage();
@@ -214,6 +216,7 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
 
 /// Two `:|` applications of one SIG mint distinct opaque slot types: each ascription allocates a
 /// fresh child scope, so the per-application `nonce` differs even though `source` and name agree.
+#[cfg(feature = "ascription")]
 #[test]
 fn two_ascriptions_of_one_sig_mint_distinct_slot_types() {
     let region = run_root_storage();
@@ -391,6 +394,7 @@ fn monad_signature_smoke() {
 /// per-call-minted constructor variant. The module supplies the higher-kinded abstract `Wrap`
 /// slot with a real arity-1 constructor (`LET Wrap = Wrapper`) — a proper type would fail the
 /// slot's kind and parameter-name check.
+#[cfg(feature = "ascription")]
 #[test]
 fn module_attr_access_returns_type_constructor() {
     let region = run_root_storage();

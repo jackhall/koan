@@ -346,6 +346,7 @@ fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KT
 /// member name and the *rendered* types that disagreed. Rendering to `String` at the failure
 /// site (the only thing [`Self::render_fragment`] ever does with them) keeps this type free of
 /// any `KType` reference, so it travels as plain diagnostic data.
+#[cfg_attr(not(feature = "ascription"), allow(dead_code))]
 pub enum SigSubtypeFailure {
     MissingTypeMember {
         name: String,
@@ -373,6 +374,7 @@ pub enum SigSubtypeFailure {
     },
 }
 
+#[cfg_attr(not(feature = "ascription"), allow(dead_code))]
 impl SigSubtypeFailure {
     /// Render the failure as the message fragment an ascription error embeds after
     /// `` module does not satisfy signature `{path}`: ``.

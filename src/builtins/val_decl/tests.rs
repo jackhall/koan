@@ -1,3 +1,4 @@
+#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 use crate::builtins::test_support::{binds_module, parse_one, TestRun};
 use crate::machine::model::{KType, SigSchema, TypeNode, TypeRegistry};
 use crate::machine::run_root_storage;
@@ -139,6 +140,7 @@ fn val_function_typed_slot() {
 /// surfaces as a ShapeError naming the missing member and the signature. A signature carries no
 /// declaration label (ruling 12), so it is named structurally (`SIG (compare: Number)`), not by
 /// the binder `WithCompare`.
+#[cfg(feature = "ascription")]
 #[test]
 fn val_slot_required_by_shape_check() {
     let region = run_root_storage();
@@ -162,6 +164,7 @@ fn val_slot_required_by_shape_check() {
 /// Pins the name-presence-only contract: shape_check passes even though the
 /// MODULE's `LET compare = 0` value isn't type-checked against the VAL's declared
 /// `Number` — that's modular implicits' job, not shape_check's.
+#[cfg(feature = "ascription")]
 #[test]
 fn val_slot_satisfied_by_module_let_member() {
     let region = run_root_storage();

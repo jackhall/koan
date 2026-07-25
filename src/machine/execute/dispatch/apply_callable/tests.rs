@@ -158,6 +158,7 @@ fn unknown_type_parameter_is_named() {
 
 /// A SIG's abstract constructor slot applies by name inside the same SIG's value slots, and a
 /// module whose supplied family declares the same parameter name satisfies it.
+#[cfg(feature = "ascription")]
 #[test]
 fn abstract_slot_applies_named_type_argument() {
     let region = run_root_storage();
@@ -179,6 +180,7 @@ fn abstract_slot_applies_named_type_argument() {
 
 /// An arity-2 abstract slot is satisfied end to end by a module binding the builtin `Result`,
 /// whose parameters are named `Ok` and `Error`.
+#[cfg(feature = "ascription")]
 #[test]
 fn arity_two_abstract_slot_satisfied_by_result() {
     let region = run_root_storage();

@@ -1,13 +1,17 @@
 //! Return-type expressions that reference earlier parameters (`p.T`, bare param name, `sig WITH {S = p.T}`), resolved per-call.
 
+#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 use crate::builtins::test_support::{binds_module, lookup_fn, parse_one, TestRun};
+#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::run_root_storage;
+#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 use crate::witnessed::region_metrics;
 
 /// Bare parameter-name return type: `-> er` resolves per-call to the carried type. The parameter is
 /// `:Signature`-kind, so `Er` resolves to a *signature*. The body returns a module ascribed to that
 /// per-call signature (`int_ord :| er`), which the per-call return contract admits.
+#[cfg(feature = "ascription")]
 #[test]
 fn functor_return_bare_parameter_name_resolves_per_call() {
     use crate::machine::model::ReturnType;
@@ -39,6 +43,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
 /// `ReturnType::Deferred(Expression(...))` rather than erroring "unbound name
 /// `er`" at FN-construction. Pins the FN-def side; the end-to-end invocation is
 /// covered by [`functor_get_zero_on_opaque_view_re_tags_slot_read`].
+#[cfg(feature = "ascription")]
 #[test]
 fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     use crate::machine::model::ReturnType;
@@ -71,6 +76,7 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
 /// `er.Carrier`. The result carries the abstract `Carrier` identity
 /// (`ktype().name()` is "Carrier", a `KType::AbstractType`); unwrapping the `Wrapped`
 /// carrier yields the underlying `Number(0)`.
+#[cfg(feature = "ascription")]
 #[test]
 fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
     let region = run_root_storage();
@@ -142,6 +148,7 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
 /// `(LIST OF Any)` lifts with the *declared* element type `Any` — the deferred-path twin
 /// of the resolved-return coarsening at the lift boundary. Without the stamp the body's
 /// incidental `Number` element type would leak through.
+#[cfg(feature = "ascription")]
 #[test]
 fn functor_deferred_return_coarsens_list_carrier() {
     let region = run_root_storage();
@@ -171,6 +178,7 @@ fn functor_deferred_return_coarsens_list_carrier() {
 /// per-call return type rides a `ReturnContract::PerCall` on the tail-replace, so the body is a
 /// proper tail call — no per-call dep-finish frame is held, so a recursive deferred body stays
 /// TCO-flat. (The pre-`PerCall` dep-finish lowering held a frame per call and would not collapse.)
+#[cfg(feature = "ascription")]
 #[test]
 fn deferred_return_tail_call_stays_tco_flat() {
     let region = run_root_storage();
@@ -215,6 +223,7 @@ fn deferred_return_tail_call_stays_tco_flat() {
 /// resolution (keep-first discards its contract) and tail-replaces, so the chain mints one region
 /// per call instead of accumulating a dep-finish per call. (The pre-`DeferredExprTail` lowering ran
 /// the body as dep-finish dependencies, making each onward call a dep — O(n).)
+#[cfg(feature = "ascription")]
 #[test]
 fn deferred_expression_return_tail_chain_stays_flat() {
     let region = run_root_storage();
@@ -259,6 +268,7 @@ fn deferred_expression_return_tail_chain_stays_flat() {
 /// slot check against the per-call elaboration and rejects with a diagnostic
 /// mentioning "per-call return type", pinning that the rejection path is the
 /// per-call check, not the static lift-time one.
+#[cfg(feature = "ascription")]
 #[test]
 fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     use crate::machine::KErrorKind;

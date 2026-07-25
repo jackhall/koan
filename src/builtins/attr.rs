@@ -630,6 +630,7 @@ mod tests {
     /// An opaque (`:|`) view re-tags a VAL-slot read with the per-call abstract identity:
     /// `int_ord_view.zero` reads as the abstract `Carrier` (`ktype().name() == "Carrier"`), not the
     /// underlying `Number`, so a deferred return `er.Carrier` accepts the body.
+    #[cfg(feature = "ascription")]
     #[test]
     fn opaque_view_slot_read_re_tags_with_abstract_type() {
         let region = run_root_storage();
@@ -651,6 +652,7 @@ mod tests {
 
     /// Transparent (`:!`) views leave `slot_type_tags` empty, so the slot read stays
     /// concrete: `int_ord_view.zero` reads as the underlying `Number`, not the abstract `Type`.
+    #[cfg(feature = "ascription")]
     #[test]
     fn transparent_view_slot_read_stays_concrete() {
         let region = run_root_storage();

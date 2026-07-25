@@ -22,10 +22,13 @@ pub(crate) use binder::{symbol_from_parts, symbol_from_quote_body, BinderKey};
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn};
 pub(crate) use types::{
     constructor_param_names, declarator_window, elaborate_type_identifier, finalize_nominal_member,
-    pair_list_names, parse_typed_field_list_via_elaborator, sig_subtype, substitute_sig_members,
-    unsaturated_constructor_message, Elaborator, FieldListContext, FieldListOutcome, FieldNameKind,
-    ResultFeed, SealOutcome, SigSchema, TypeDigest, TypeResolution,
+    pair_list_names, parse_typed_field_list_via_elaborator, unsaturated_constructor_message,
+    Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, ResultFeed, SealOutcome,
+    SigSchema, TypeResolution,
 };
+/// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
+#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
+pub(crate) use types::{sig_subtype, substitute_sig_members, TypeDigest};
 pub(crate) use values::{
     copy_object_into, copy_or_pin, still_borrows_host, CarriedFamily, DictSubstrate, ListSubstrate,
     Module, NamedPairs, PayloadSubstrate, RecordSubstrate, RegionEscape,

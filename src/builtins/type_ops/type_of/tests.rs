@@ -48,6 +48,7 @@ fn type_of_module_is_its_self_sig() {
 
 /// An opaque view is its own module with its own sealed self-sig, so `TYPE OF` reports the
 /// *view's* signature — its abstract per-call identities — not the source module's concrete ones.
+#[cfg(feature = "ascription")]
 #[test]
 fn type_of_opaque_view_reports_the_view_not_its_source() {
     let region = run_root_storage();
@@ -87,6 +88,7 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
 
 /// A transparent view records its source's concrete types, so its self-sig has no abstract
 /// members — the complement of the opaque case above.
+#[cfg(feature = "ascription")]
 #[test]
 fn type_of_transparent_view_reports_concrete_slots() {
     let region = run_root_storage();

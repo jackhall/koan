@@ -190,6 +190,7 @@ impl<'a, T> Reached<'a, T> {
     }
 }
 
+#[cfg_attr(not(feature = "ascription"), allow(dead_code))]
 impl<'a, T: Copy> Reached<'a, T> {
     /// The stored value (a `Copy` handle — `&KObject` for the binding entry). Reading the fused
     /// value is unrestricted — only *constructing* a pair is confined.

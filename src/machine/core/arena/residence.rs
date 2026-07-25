@@ -88,6 +88,7 @@ impl<'a> Scope<'a> {
     /// runs `seal` on the resident module (the view's self-sig), then audits the wrapping
     /// `KObject::Module` against the *same* reach and fuses. Both audits ride one derived reach, so
     /// value and reach cannot be mispaired.
+    #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     pub(crate) fn store_transparent_view(
         &self,
         module: Module<'a>,

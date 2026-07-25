@@ -1197,7 +1197,10 @@ impl<'b, T: Reattachable, W> Opened<'b, T, W> {
     /// fabricated one. Safe: the value stays a lifetime-only re-erase to `'static` for storage (no
     /// reattach), so this adds no `unsafe`.
     pub fn reseal(self) -> Sealed<T, W> {
-        Sealed::seal(Witnessed::from_erased(Erased::erase(self.value), self.witness))
+        Sealed::seal(Witnessed::from_erased(
+            Erased::erase(self.value),
+            self.witness,
+        ))
     }
 }
 

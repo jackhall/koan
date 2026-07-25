@@ -132,6 +132,7 @@ fn distinct_module_interfaces_compare_unequal_via_type_of() {
     ));
 }
 
+#[cfg(feature = "ascription")]
 #[test]
 fn opaque_views_have_distinct_type_of() {
     // Each `:|` ascription mints a fresh generative identity, so their `TYPE OF` types differ.

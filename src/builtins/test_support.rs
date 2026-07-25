@@ -264,6 +264,7 @@ impl<'a> TestRun<'a> {
     /// `prelude`, so a test can measure each counter's movement across `probe` alone rather than
     /// over the whole run.
     #[cfg(test)]
+    #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     pub(crate) fn run_probe_returning_registry(
         &mut self,
         prelude: &str,

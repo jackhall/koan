@@ -325,6 +325,7 @@ fn let_type_class_signature_alias_preserves_identity() {
 /// module RHS rejects at the LET site. See design/typing/elaboration.md
 /// § Binding-map partition. A module is a value, so a *Type*-classified binder is the wrong
 /// spelling for one — whatever RHS produced it. The diagnostic names the snake_case respelling.
+#[cfg(feature = "ascription")]
 #[test]
 fn let_type_class_lhs_with_module_rhs_rejects() {
     use crate::builtins::test_support::{parse_one, TestRun};
@@ -377,6 +378,7 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
 
 /// A module is a value, so a value-classified LET of a module RHS binds it into `data` like any
 /// other object value. The cross-kind exclusion means exactly one map holds the name.
+#[cfg(feature = "ascription")]
 #[test]
 fn let_value_class_with_module_rhs_binds_value_side() {
     use crate::builtins::test_support::{binds_module, TestRun};
