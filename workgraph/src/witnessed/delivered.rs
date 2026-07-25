@@ -17,7 +17,7 @@
 //! [`Delivered::mint_reach`] and [`Delivered::transfer_into`] — are the only places a producer
 //! frame is folded into a minted destination set, gated on the [`Residence`] mode (unconditionally
 //! for a value that keeps living in the producer's region; on `borrows_host` for a value copied
-//! out). See [design/witness-hosting.md § Composition](../../../design/witness-hosting.md#composition-minting-a-set).
+//! out). See [design/witness-hosting.md § Composition](../../../design/witness-hosting.md#composition-minting-a-description-and-retaining-its-pins).
 //!
 //! [`Delivered::mint_reach`] is the sole envelope-bearing mint entry a consumer routes; a value with
 //! no envelope in hand instead mints through [`Witnessed::mint_resident_reach`](super::Witnessed::mint_resident_reach).

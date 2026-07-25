@@ -8,10 +8,9 @@ which also defines *storage family*; other terms of art are in that doc's
 **Problem.** Every region storage family is a typed sub-arena whose slots run `Drop`
 at region death, even where the stored (`'static`) form owns nothing — there is no
 shared untyped arena for `Drop`-free families to migrate into, so region teardown
-walks slots running destructors. The runtime residence tiers
-(`alloc_object_checked`, the
-[`resident_in`](../../src/machine/model/values/kobject.rs) structural walk) also
-persist beside the construction doors that already enforce residence at compile
+walks slots running destructors. The residual dest-only
+[`resident_in`](../../src/machine/model/values/kobject.rs) splice-free gate also
+persists beside the construction doors that already enforce residence at compile
 time.
 
 **Acceptance criteria.**
@@ -22,8 +21,10 @@ time.
 - Region death for those bytes is deallocation only — no per-slot `Drop` glue runs.
 - Families designed to own things — a `Scope`'s mutable binding tables, a
   `FrameSet`'s region holds — remain typed and droppy.
-- The composite runtime residence tiers are deleted: no `resident_in` walk and no
-  checked move-in path for composite values; residence is compile-enforced by the
+- The residual dest-only `resident_in` splice-free gate is deleted (the
+  reaching tier was retired in
+  [residence-audit retirement](residence-audit-retirement.md)): no `resident_in`
+  walk survives for composite values; residence is compile-enforced by the
   construction doors alone.
 - [design/memory-model.md](../../design/memory-model.md)'s storage-family and
   move-in-audit prose matches the shipped model, reconciled with
@@ -43,5 +44,8 @@ time.
   conversion; every value family must be `Drop`-free in stored form before the move.
 - [Residence-audit retirement](residence-audit-retirement.md) — the composite
   residence tiers this item deletes are dispositioned per-site there first.
+- [Binding tables as witnessed carriers](binding-tables-witnessed-carriers.md) —
+  removes the `data` table's typed-and-droppy residue, so its entries can migrate
+  into the untyped bump arena.
 
 **Unblocks:** none tracked yet.

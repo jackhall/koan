@@ -136,7 +136,7 @@ pub struct Region<W: StorageProfile> {
     /// The region's **reach side table**: an append-stable arena of the non-owning reach
     /// descriptions minted for values living in this region ([`Region::alloc_reach`]). Separate from
     /// the family [`storage`](Self::storage) bundle so a description is never arena-page data (see
-    /// [design/witness-hosting.md § The description](../../../design/witness-hosting.md#the-description)).
+    /// [design/witness-hosting.md § The reach description](../../../design/witness-hosting.md#the-reach-description)).
     /// A [`ReachDescription`] owns nothing — its members are `Weak`, so hosting it here pins no
     /// region; the owning [`PinBundle`] that keeps its members alive is held by the value's holder
     /// (a binding entry, the delivery envelope) or, for a region-resident adoption, by

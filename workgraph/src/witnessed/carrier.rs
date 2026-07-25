@@ -1,7 +1,7 @@
 //! [`Carrier<F>`] — the reference-only carrier witness: one `borrows_host` bit plus a *reference*
 //! to a hosted reach set, the same shape whether the value is resident in a region or walking
 //! between nodes. See
-//! [design/witness-hosting.md § The carrier](../../../design/witness-hosting.md#the-carrier).
+//! [design/witness-hosting.md § The carrier states](../../../design/witness-hosting.md#the-carrier-states).
 //!
 //! The carrier **owns no pin**: cloning is a bit-copy plus a reference-copy, and a carrier's death
 //! releases nothing. What keeps its reach set (and the value it describes) alive is external —
