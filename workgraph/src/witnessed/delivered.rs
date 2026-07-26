@@ -172,22 +172,21 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         }
     }
 
-    /// Mint this value's reach into `dest` under `omit` — the embedder's omission policy (regions
-    /// the destination's container already pins). The envelope's own pins are the source the
-    /// composition folds, so the value's home rides in as an ordinary member and the self rule
-    /// alone decides whether it survives into the returned bundle. Returns the minted description
-    /// (`None` == empty, no allocation) hosted in `dest`, the owned [`PinBundle`] the binding entry
-    /// keeps to pin its members, and the borrows-into-dest bit.
+    /// Mint this value's reach into `dest`. The envelope's own pins are the source the composition
+    /// folds, so the value's home rides in as an ordinary member and the self rule alone decides
+    /// whether it survives into the returned bundle. No policy is threaded in: the minted
+    /// description is the value's **exact** reach. Returns the minted description (`None` == empty,
+    /// no allocation) hosted in `dest`, the owned [`PinBundle`] the binding entry keeps to pin its
+    /// members, and the borrows-into-dest bit.
     pub fn mint_reach<'d, P>(
         &self,
         dest: RegionHandle<'d, P>,
-        omit: impl Fn(&Region<P>) -> bool,
     ) -> (Option<&'d ReachDescription<F>>, PinBundle<F>, bool)
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
-        self.witness().mint_into(&self.pins, dest, omit)
+        self.witness().mint_into(&self.pins, dest)
     }
 
     /// Copy-free adoption: mints this envelope's reach — home included, as an ordinary member —
@@ -196,19 +195,13 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
     /// reached without the pin that keeps it live: the minted description names the value's
     /// reach and the retained bundle owns it for the region's life ⊇ `'d`, so every
     /// region the value reaches (its home included) outlives the returned borrow.
-    /// `omit` names regions the caller's context covers ambiently, as in
-    /// [`Self::mint_reach`].
-    pub fn adopt_into<'d, P>(
-        &self,
-        dest: RegionHandle<'d, P>,
-        omit: impl Fn(&Region<P>) -> bool,
-    ) -> T::At<'d>
+    pub fn adopt_into<'d, P>(&self, dest: RegionHandle<'d, P>) -> T::At<'d>
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
         T::At<'static>: Copy,
     {
-        let (_desc, bundle, _borrows_into_dest) = self.mint_reach(dest, omit);
+        let (_desc, bundle, _borrows_into_dest) = self.mint_reach(dest);
         // The description is non-owning; the adopted value lives for the region's life, so the
         // region retains the owning bundle (dropped only at region death) — the liveness the old
         // arena-hosted owning set provided, now carried by the region's retention list.
@@ -233,19 +226,14 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
     ///
     /// The dual of [`Self::adopt_into`] (which re-anchors to a live `T::At<'d>` and retains into the
     /// region, having no holder to hand pins to): `adopt` hands back a dormant seal for a table
-    /// entry / node slot instead. `omit` names regions `dest`'s context covers ambiently, as in
-    /// [`Self::mint_reach`].
-    pub fn adopt<'d, P>(
-        &self,
-        dest: RegionHandle<'d, P>,
-        omit: impl Fn(&Region<P>) -> bool,
-    ) -> (Sealed<T, Carrier<F>>, PinBundle<F>)
+    /// entry / node slot instead.
+    pub fn adopt<'d, P>(&self, dest: RegionHandle<'d, P>) -> (Sealed<T, Carrier<F>>, PinBundle<F>)
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
         T::At<'static>: Copy,
     {
-        let (minted, bundle, borrows_into_dest) = self.mint_reach(dest, omit);
+        let (minted, bundle, borrows_into_dest) = self.mint_reach(dest);
         let erased: Erased<T> = self.open(Erased::<T>::erase);
         let sealed = Sealed::seal(Witnessed::from_erased(
             erased,

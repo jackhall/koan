@@ -189,8 +189,8 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// Mint this carrier's reach into `dest` and report whether the value's borrows reach `dest`'s
     /// own region — the shared core the crate-internal mint verbs route through
     /// ([`Delivered::mint_reach`](super::Delivered::mint_reach)). Not itself part of the public
-    /// surface. Applies, via [`ReachDescription::mint`]: the caller's `omit` policy predicate,
-    /// outer-chain subsumption, and the self rule on the returned bundle.
+    /// surface. Applies, via [`ReachDescription::mint`]: outer-chain subsumption and the self rule
+    /// on the returned bundle — no caller policy, so the minted description is exact.
     ///
     /// `source` is the holder's owned pin bundle — the delivery envelope's pins, a binding entry's
     /// pins — which names the value's home as an ordinary member alongside everything else it
@@ -202,13 +202,12 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         &self,
         source: &PinBundle<F>,
         dest: RegionHandle<'d, P>,
-        omit: impl Fn(&Region<P>) -> bool,
     ) -> (Option<&'d ReachDescription<F>>, PinBundle<F>, bool)
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
-        ReachDescription::mint_with_dest_bit(dest, &[source], omit)
+        ReachDescription::mint_with_dest_bit(dest, &[source])
     }
 
     /// The relocation composition behind the envelope's
@@ -240,8 +239,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
-        let (minted, bundle) =
-            ReachDescription::mint(dest, &[left_bundle, right_bundle], |_| false);
+        let (minted, bundle) = ReachDescription::mint(dest, &[left_bundle, right_bundle]);
         dest.region().retain_reach(bundle.clone());
         let borrows_into_dest = right.borrows_host || left_bundle.pins_region(dest.region());
         let carrier = Carrier {
@@ -420,11 +418,8 @@ mod tests {
         let home = root_frame();
         let foreign = root_frame();
         let handle = RegionHandle::from_owner(&*home);
-        let (minted, _bundle) = ReachDescription::mint(
-            handle,
-            &[&PinBundle::singleton(Rc::clone(&foreign))],
-            |_| false,
-        );
+        let (minted, _bundle) =
+            ReachDescription::mint(handle, &[&PinBundle::singleton(Rc::clone(&foreign))]);
         let c: Carrier<TestFrame> = Carrier::new(false, minted);
         let home_before = Rc::strong_count(&home);
         let foreign_before = Rc::strong_count(&foreign);
@@ -441,11 +436,8 @@ mod tests {
         let home = root_frame();
         // Mint a set naming `foreign` into `home`'s own region — the shape a resident bind produces.
         let handle = RegionHandle::from_owner(&*home);
-        let (minted, _bundle) = ReachDescription::mint(
-            handle,
-            &[&PinBundle::singleton(Rc::clone(&foreign))],
-            |_| false,
-        );
+        let (minted, _bundle) =
+            ReachDescription::mint(handle, &[&PinBundle::singleton(Rc::clone(&foreign))]);
         let value = 7u32;
         let sealed = seal_ref(Carrier::new(false, minted), &value);
         let opened = sealed.open_at(&home);
@@ -471,11 +463,8 @@ mod tests {
         let foreign = root_frame();
         let home = root_frame();
         let handle = RegionHandle::from_owner(&*home);
-        let (minted, _bundle) = ReachDescription::mint(
-            handle,
-            &[&PinBundle::singleton(Rc::clone(&foreign))],
-            |_| false,
-        );
+        let (minted, _bundle) =
+            ReachDescription::mint(handle, &[&PinBundle::singleton(Rc::clone(&foreign))]);
         let value = 7u32;
         let sealed = seal_ref(Carrier::new(false, minted), &value);
         let opened = sealed.open_at(&home);
@@ -497,7 +486,7 @@ mod tests {
             &PinBundle::singleton(Rc::clone(&dest)),
             &PinBundle::singleton(Rc::clone(&foreign)),
         );
-        let (minted, bundle) = ReachDescription::mint(handle, &[&source], |_| false);
+        let (minted, bundle) = ReachDescription::mint(handle, &[&source]);
         let set = minted.expect("the composed reach is non-empty");
         assert!(
             set.pins_region(dest.region()),
@@ -516,9 +505,7 @@ mod tests {
         let dest = child_frame(&outer);
         let handle = RegionHandle::from_owner(&*dest);
         let (minted, bundle) =
-            ReachDescription::mint(handle, &[&PinBundle::singleton(Rc::clone(&outer))], |_| {
-                false
-            });
+            ReachDescription::mint(handle, &[&PinBundle::singleton(Rc::clone(&outer))]);
         let set = minted.expect("the ancestor is a member");
         assert!(set.pins_region(outer.region()));
         assert!(
@@ -537,7 +524,7 @@ mod tests {
             &PinBundle::singleton(Rc::clone(&dest)),
             &PinBundle::singleton(Rc::clone(&outer)),
         );
-        let (minted, bundle) = ReachDescription::mint(handle, &[&source], |_| false);
+        let (minted, bundle) = ReachDescription::mint(handle, &[&source]);
         let set = minted.expect("dest survives into the description");
         assert!(
             set.pins_region(outer.region()),
@@ -558,7 +545,7 @@ mod tests {
         // The value's home IS the destination, and home rides the source bundle as an ordinary
         // member — so the pre-strip source query is what reports the bit.
         let (_, _bundle, borrows_into_dest) =
-            c.mint_into(&PinBundle::singleton(Rc::clone(&dest)), handle, |_| false);
+            c.mint_into(&PinBundle::singleton(Rc::clone(&dest)), handle);
         assert!(borrows_into_dest);
     }
 
@@ -569,7 +556,7 @@ mod tests {
         let c: Carrier<TestFrame> = Carrier::default();
         let handle = RegionHandle::from_owner(&*dest);
         let (_, _bundle, borrows_into_dest) =
-            c.mint_into(&PinBundle::singleton(Rc::clone(&home)), handle, |_| false);
+            c.mint_into(&PinBundle::singleton(Rc::clone(&home)), handle);
         assert!(!borrows_into_dest);
     }
 
@@ -579,16 +566,13 @@ mod tests {
         let home = root_frame();
         let dest = root_frame();
         let home_handle = RegionHandle::from_owner(&*home);
-        let (source, reach) = ReachDescription::mint(
-            home_handle,
-            &[&PinBundle::singleton(Rc::clone(&foreign))],
-            |_| false,
-        );
+        let (source, reach) =
+            ReachDescription::mint(home_handle, &[&PinBundle::singleton(Rc::clone(&foreign))]);
         let c: Carrier<TestFrame> = Carrier::new(false, source);
         // The holder's pins are home ∪ reach — the envelope shape, home as an ordinary member.
         let pins = PinBundle::union(&PinBundle::singleton(Rc::clone(&home)), &reach);
         let dest_handle = RegionHandle::from_owner(&*dest);
-        let (minted, bundle, _) = c.mint_into(&pins, dest_handle, |_| false);
+        let (minted, bundle, _) = c.mint_into(&pins, dest_handle);
         let set = minted.expect("reach members always mint forward");
         assert!(set.pins_region(foreign.region()));
         assert!(
@@ -596,19 +580,5 @@ mod tests {
             "home rides the source bundle like any other member"
         );
         assert!(bundle.pins_region(home.region()));
-    }
-
-    #[test]
-    fn mint_drops_an_omitted_member_from_both_outputs() {
-        let dest = root_frame();
-        let ambient = root_frame();
-        let handle = RegionHandle::from_owner(&*dest);
-        let ambient_region: *const Region<TestProfile> = ambient.region();
-        let (minted, bundle) =
-            ReachDescription::mint(handle, &[&PinBundle::singleton(Rc::clone(&ambient))], |r| {
-                std::ptr::eq(r as *const _, ambient_region)
-            });
-        assert!(minted.is_none(), "the only member was omitted");
-        assert!(bundle.is_empty());
     }
 }

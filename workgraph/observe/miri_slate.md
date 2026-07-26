@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-24 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+25 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -128,6 +128,21 @@ does not, and walks the teardown (A frees on drop; the foreign member is release
 library layer. Embedder twin: koan's `mint_teardown_releases_members`, over `FrameStorage`.
 
 - `mint_keeps_home_in_the_description_but_not_the_bundle`
+
+**A region's union bundle — one deduped antichain per region**
+([src/witnessed/region.rs](../src/witnessed/region.rs), fold in
+[src/witnessed/reach.rs](../src/witnessed/reach.rs)) — a value adopted copy-free into a region
+(`Delivered::adopt_into`) leaves only a non-owning description behind, so the region itself owns the
+pins: `Region::retain_reach` folds every retention into **one** `PinBundle` through
+`PinBundle::absorb`, dropped whole at region death. The fold is where liveness can be dropped on the
+floor, because `insert`'s subsumption deletes a member another member's owner chain already pins — a
+wrong verdict frees a region the adopted value still borrows into (a UAF under tree borrows), a
+missed dedup keeps an `Rc` nothing needs (a leak the exit detector catches). The test adopts the
+same producer twice and then retains an ancestor of the already-retained member, asserts the
+refcounts the antichain implies, and frees every producer handle before reading the adopted value
+back under the region's bundle alone.
+
+- `region_retention_folds_into_one_deduped_bundle`
 
 **The three carrier states and the transform verbs between them**
 ([src/witnessed.rs](../src/witnessed.rs), [src/witnessed/delivered.rs](../src/witnessed/delivered.rs))

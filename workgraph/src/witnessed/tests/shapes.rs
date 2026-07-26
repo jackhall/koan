@@ -86,7 +86,6 @@ fn reach_element(
     let (reach, bundle) = ReachDescription::mint(
         RegionHandle::from_owner(&**home),
         &[&PinBundle::singleton(Rc::clone(content))],
-        |_| false,
     );
     Delivered::seal(
         Witnessed::from_erased(Erased::erase(value), Carrier::new(false, reach)),
@@ -276,8 +275,7 @@ fn mint_keeps_home_in_the_description_but_not_the_bundle() {
         &PinBundle::singleton(Rc::clone(&a)),
         &PinBundle::singleton(Rc::clone(&b)),
     );
-    let (minted, bundle) =
-        ReachDescription::mint(RegionHandle::from_owner(&*a), &[&source], |_| false);
+    let (minted, bundle) = ReachDescription::mint(RegionHandle::from_owner(&*a), &[&source]);
     let minted = minted.expect("both members compose");
     assert!(
         minted.pins_region(a.region()) && minted.pins_region(b.region()),
@@ -318,7 +316,6 @@ fn lift_reowns_description_into_transit_bundle() {
     let (reach, _bundle) = ReachDescription::mint(
         RegionHandle::from_owner(&*host),
         &[&PinBundle::singleton(Rc::clone(&content))],
-        |_| false,
     );
     let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
         Erased::erase(value),
@@ -358,10 +355,57 @@ fn adopt_settles_resident_value_into_dest() {
     let (sealed, pins): (
         Sealed<RefValFamily, Carrier<ShapeFrame>>,
         PinBundle<ShapeFrame>,
-    ) = element.adopt(RegionHandle::from_owner(&*dest), |_| false);
+    ) = element.adopt(RegionHandle::from_owner(&*dest));
     drop(element);
     drop(producer);
     assert_eq!(sealed.open_with(&pins, |r| *r), 7);
+}
+
+/// **The region's union bundle** — a region retains ONE deduped [`PinBundle`], folded through
+/// [`PinBundle::absorb`], never a bundle per retention: adopting the same producer twice costs one
+/// `Rc` in total, and retaining an ancestor of an already-retained member costs none (the member's
+/// own `outer` chain already pins it). What survives is an antichain of the deepest owners, and it
+/// is the sole pin under the read once every producer handle drops — a fold that dropped the wrong
+/// member is a use-after-free here, and the counts gate the refcount a bundle-per-retention list
+/// would hold.
+#[test]
+fn region_retention_folds_into_one_deduped_bundle() {
+    let outer = frame();
+    let producer = RegionHost::fresh(Some(Rc::clone(&outer)));
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
+        Witnessed::resident(store_val(&producer, 13)),
+        Rc::clone(&producer),
+        PinBundle::empty(),
+    );
+    let dest = frame();
+    let handle = RegionHandle::from_owner(&*dest);
+
+    // Each adoption mints the producer into `dest` and folds the owned bundle into the region's
+    // union; the second finds the region already pinned and drops its clone.
+    let adopted: &u32 = element.adopt_into(handle);
+    let retained = Rc::strong_count(&producer);
+    let _second: &u32 = element.adopt_into(handle);
+    assert_eq!(
+        Rc::strong_count(&producer),
+        retained,
+        "the second adoption of the same region dedupes into the union bundle"
+    );
+
+    let outer_before = Rc::strong_count(&outer);
+    handle.retain_reach(PinBundle::singleton(Rc::clone(&outer)));
+    assert_eq!(
+        Rc::strong_count(&outer),
+        outer_before,
+        "the producer's chain already pins its ancestor's region, so subsumption drops the newcomer"
+    );
+
+    drop(element);
+    drop(producer);
+    drop(outer);
+    assert_eq!(
+        *adopted, 13,
+        "the region's union bundle is the sole pin left"
+    );
 }
 
 /// **The three states and the four transform verbs, end to end** — `Delivered → adopt → Sealed →
@@ -380,7 +424,7 @@ fn transform_verb_round_trip_preserves_liveness() {
     let dest = frame();
 
     // Delivered → Sealed: at rest in `dest`'s table, its pins held by the adopting holder.
-    let (sealed, pins) = element.adopt(RegionHandle::from_owner(&*dest), |_| false);
+    let (sealed, pins) = element.adopt(RegionHandle::from_owner(&*dest));
     assert!(
         sealed.open_at(&pins).reach_covers(producer.region()),
         "adopt composed the value's home into dest's description as an ordinary member"
