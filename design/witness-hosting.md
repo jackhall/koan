@@ -48,7 +48,7 @@ by wrapping one in another:
 
 | State | Reach members | Posture | Where it lives |
 |---|---|---|---|
-| [`Delivered`](../workgraph/src/witnessed/delivered.rs) | **owned** — `Rc`s in an inline set | in transit, borrows nothing | library-internal: retention holds and the pull / adopt / relocate verbs |
+| [`Delivered`](../workgraph/src/witnessed/delivered.rs) | **owned** — `Rc`s in an inline set | in transit, borrows nothing | retention holds, node slots, dep terminals, and the pull / adopt / relocate verbs |
 | [`Sealed`](../workgraph/src/witnessed.rs) | **weak** — a reference to the arena-hosted description | at rest, borrows nothing | binding-table entries, parked node slots |
 | [`Opened<'b>`](../workgraph/src/witnessed.rs) | weak, read under a pin | in use at a step lifetime `'b` | within a step (`Resolved<'step>`, ATTR / schema reads) |
 
@@ -62,18 +62,27 @@ by wrapping one in another:
   lifetime `'b`. It is the only state that can answer membership queries,
   because the pin it borrows is what makes reading the `Weak` members sound.
 
-**Only two of the three states are nameable by the embedder.** `Delivered` and
-`PinBundle` are crate-private to the library: every owned pin lives in a
-library-owned holder (a retention hold, a region's union bundle, a step's
-coverage), and every embedder-facing verb takes or returns a `Sealed` or an
-`Opened<'b>`. Koan therefore cannot hold, clone, or drop a pin: the pinning
-invariant below is not a rule Koan is asked to honor but one it has no vocabulary
-to break. What Koan supplies instead is *policy*: the retention
+**The embedder has no pin vocabulary.** `PinBundle` is crate-private to the
+library. Every owned pin lives in a library-owned holder — a retention hold, a
+region's union bundle, a step's coverage — and the only shape one crosses the
+boundary in is `StepCoverage`, an opaque holder the embedder may hold, thread and
+drop but cannot compute with: union, subsumption, narrowing and member removal
+have no public surface. Koan therefore cannot assemble, widen or narrow a claim.
+The pinning invariant below is not a rule Koan is asked to honor but one it has no
+vocabulary to break. What Koan supplies instead is *policy*: the retention
 predicate at the escape seam (§ Escape) and the value-model queries a cost
 decision runs on. Each of the transform verbs is exposed as a **container verb**
 on the holder that owns the pins — a node slot, a region, a step — so the
 container supplies the home owner the verb needs and Koan never has to recover a
 producer region from a member set.
+
+`Delivered` stays **nameable** by the embedder, and is the one state that is. An
+in-transit envelope has to appear in the embedder's own type positions — a parked
+node slot, a dep terminal, a finish callback's result — and a step's dep slice must
+*own* its envelopes across a step that mutably borrows the scheduler, so an
+`Opened<'b>` borrowed from the retention hold would not type. Nameable is not
+transparent: the envelope's pins have no public accessor, no constructor takes a
+bare bundle, and every operation on them is a verb on the envelope itself.
 
 The transform verbs:
 
@@ -139,8 +148,8 @@ covered reach names. Where owned pins live:
   terminal lifted for a pull, a dep crossing steps — carries its own pins, so
   every fan-out consumer (staged-sub splices, catch continuations, spliced
   expression clones) holds its own liveness. Duplicating a `Delivered`
-  duplicates its pins. The envelope is library-internal, so this set exists only
-  for the span of a library verb.
+  duplicates its pins. The set has no public accessor: it exists only for the
+  library verbs the envelope exposes.
 - **The region union bundle.** A region owns **one** deduped `PinBundle<F>`
   ([`Region::retain_reach`](../workgraph/src/witnessed/region.rs)); each bind and
   each copy-free adoption unions its pins into it. Binding entries themselves own

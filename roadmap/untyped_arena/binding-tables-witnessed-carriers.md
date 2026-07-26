@@ -44,7 +44,7 @@ recover the answer.
   variant is added.
 - One value family flows through three carrier states connected by transform
   verbs, never by wrapping: `Delivered` (owning members inline, in transit —
-  library-internal, held by retention holds and the container verbs), `Sealed`
+  nameable but pin-opaque, held by retention holds and the container verbs), `Sealed`
   (weak, arena-hosted description, at rest in table entries and node slots), and
   `Opened<'b>` (weak, borrowing at a step lifetime `'b`). The verbs are
   `Sealed::open_at`, `Opened::reseal`, the `Sealed → Delivered` lift (weak members
@@ -63,13 +63,19 @@ recover the answer.
   pins into (applying the self-pin rule), so frame death drops one union, not N
   per-entry bundles, and a carrier read hands out a claim with no `FramePins` clone.
   `Scope` holds no pin state.
-- Koan names only `Sealed` and `Opened<'b>`: `Delivered` and `PinBundle` are
-  crate-private to `workgraph`, and every pull, adopt, relocate and seal is a
-  container verb on the holder that owns the pins (a node slot, a region, a step).
-  `Scope::envelope_reach_of` / `copied_reach_of` / `pinned_reach_of`, the
-  `carrier_witness.rs` source-claim helpers, `with_home_region`, and
-  `lift::seam_source_pins` / `copied_seam_source_pins` are all deleted, and no koan
-  source file names an owned pin bundle.
+- Koan has no pin vocabulary. `PinBundle` is crate-private to `workgraph`, and
+  every owned pin crosses the boundary as an opaque `StepCoverage` — a holder Koan
+  may hold, thread and drop, but whose set arithmetic (union, subsumption,
+  narrowing, member removal) has no public surface. Every pull, adopt, relocate and
+  seal is a container verb on the holder that owns the pins (a node slot, a region,
+  a step). Koan still *names* `Delivered`, because an in-transit envelope has to
+  appear in its own type positions (a parked node slot, a dep terminal, a finish
+  callback's result) and a step's dep slice must own its envelopes while the
+  scheduler is mutably borrowed; what Koan cannot do is see inside one or build one
+  from loose pins. `Scope::envelope_reach_of` / `copied_reach_of` /
+  `pinned_reach_of`, the `carrier_witness.rs` source-claim helpers,
+  `with_home_region`, and `lift::seam_source_pins` / `copied_seam_source_pins` are
+  all deleted, and no koan source file names an owned pin bundle.
 - A relocation verb derives its source claim from a workload predicate run on the
   built product — `still_borrows(product, source_region)` — rather than accepting a
   bundle or verdict computed before the fold. A `false` answer drops the source
@@ -114,12 +120,17 @@ recover the answer.
   deletion rather than new machinery. Region-owned rather than scope-owned because
   bind-once entries make the two death schedules identical, and a region is a
   library type — which is what keeps the union out of Koan's hands.
-- *Embedder boundary — decided.* `Delivered` and `PinBundle` go crate-private; Koan
-  names only `Sealed` and `Opened<'b>` and reaches the transform verbs through
-  container verbs on the pin-owning holder. The container supplies the home owner
-  each verb needs, so Koan never recovers a producer region from a member set and
-  the `with_home_region` / `PinBundle::any_member_region` probes are deleted rather
-  than kept.
+- *Embedder boundary — decided.* `PinBundle` goes crate-private and Koan reaches
+  the transform verbs through container verbs on the pin-owning holder, with owned
+  pins crossing the boundary only as the opaque `StepCoverage`. The container
+  supplies the home owner each verb needs, so Koan never recovers a producer region
+  from a member set and the `with_home_region` / `PinBundle::any_member_region`
+  probes are deleted rather than kept. `Delivered` stays nameable: Koan's own type
+  positions (node slots, dep terminals, finish callbacks) need it, and a step's dep
+  slice must own its envelopes across a step that mutably borrows the scheduler, so
+  an `Opened<'b>` borrowed from the retention hold does not type. Nameable is not
+  the same as transparent — the envelope's pins have no public accessor, and the
+  invariant Koan lacks the vocabulary to break is the one that matters.
 - *Source claim — decided.* Derived by the library from a workload predicate run on
   the built product, not supplied by Koan as a bundle or a mode enum. A checked
   property of the bytes that exist beats a promise made before they are written, and
@@ -138,7 +149,7 @@ recover the answer.
   both ahead of the table reshape so the bind doors are written once against the
   final mint contract; (2b) the `data` table; (2c) boundary cutover — the retention
   predicate, then the container-verb surface and the crate-private
-  `Delivered` / `PinBundle`; (3) the `functions` table with
+  `PinBundle`; (3) the `functions` table with
   dispatch on `Opened<'step>` and `ReturnContract` holding a `Sealed`; (4)
   ascription — drop the `ascription` feature flag and migrate the feature onto the
   carrier surface.

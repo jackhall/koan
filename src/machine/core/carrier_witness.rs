@@ -8,7 +8,7 @@ use std::rc::Rc;
 use crate::machine::model::{still_borrows_host, Carried, CarriedFamily, KObject};
 use crate::witnessed::{Erased, Witnessed};
 
-use super::arena::{FrameStorage, KoanRegion, KoanRegionExt};
+use super::arena::{FrameStorage, KoanRegion};
 
 /// Koan's value-carrier witness: the library [`Carrier`](crate::witnessed::Carrier) over koan's
 /// frame owner — one `borrows_host` bit plus a reference to the value's hosted reach set. It pins
@@ -23,45 +23,13 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// in-transit form of a value's liveness — from a scheduler pull (or a resident seal) to its
 /// adoption — and the only surface that materializes a producer frame into a minted reach set
 /// (`mint_reach` / `transfer_into`), so koan never holds a bare frame pin at a consumer site. The
-/// envelope's member set names the value's home region as an ordinary member — there is no
-/// distinguished host field — so a site that needs the home back locates it by residence
-/// ([`with_home_region`]), and a relocation derives what it still reaches from the product it
+/// envelope's member set names the value's home region as an ordinary member, and the envelope
+/// records the residence owner its container supplied — so a site that needs the home back reads it
+/// ([`Delivered::with_home_region`](crate::witnessed::Delivered::with_home_region)) rather than
+/// searching the member set, and a relocation derives what it still reaches from the product it
 /// built ([`product_still_borrows`]) rather than choosing a bundle up front.
 pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
-
-/// Run `f` against the region that **hosts** `object` among `envelope`'s pinned members — the
-/// value's own home region. Home is an ordinary member of the envelope's flat member set with no
-/// distinguished field, so it is recovered here the way residence is defined: by *where the value
-/// lives*, i.e. the member whose address side table recorded the value's top node
-/// ([`KoanRegionExt::owns_object`]). No member reference escapes — the probe runs inside
-/// [`PinBundle::any_member_region`](crate::witnessed::PinBundle::any_member_region).
-///
-/// The escape-seam probes are the callers: [`copy_or_pin`](crate::machine::model::copy_or_pin) and
-/// [`still_borrows_host`](crate::machine::model::still_borrows_host) each price a crossing *out of
-/// the region the value lives in*, which is exactly that member.
-///
-/// `None` when no pinned member owns the top node — a value whose home was subsumed out of the
-/// antichain by an outer member, or one built into a region the envelope does not pin. Every
-/// caller reads `None` conservatively: copy the value and keep its source pinned.
-pub(crate) fn with_home_region<R>(
-    envelope: &DeliveredCarried,
-    object: &KObject<'_>,
-    f: impl FnOnce(&KoanRegion) -> R,
-) -> Option<R> {
-    let ptr = object as *const KObject<'_>;
-    let mut found = None;
-    let mut f = Some(f);
-    envelope.pins().any_member_region(|region| {
-        if region.owns_object(ptr) {
-            found = f.take().map(|f| f(region));
-            true
-        } else {
-            false
-        }
-    });
-    found
-}
 
 /// The step-terminal seal's variant bit (design/value-substrates.md § Escape): force
 /// `borrows_host = true` on `witnessed` when its carried value is a substrate carrier (`Record` /
@@ -97,9 +65,10 @@ pub(crate) fn force_substrate_borrows_host(
 /// design/witness-hosting.md § Escape): whether `product` — the bytes the fold just built at the
 /// destination — still borrows `region`, one of the regions the envelope pins.
 ///
-/// Only the value's **home** region is ever released, and `region` is home exactly when it hosts
-/// the source value's top node ([`KoanRegionExt::owns_object`]) — the library hands each pinned
-/// region over in turn, so residence is answered per region with no probe over the member set.
+/// Only the value's **home** region is ever released, and `region` is home exactly when it is the
+/// residence the envelope's container supplied ([`Delivered::with_home_region`]) — the library hands
+/// each pinned region over in turn, so residence is answered per region by identity with no probe
+/// over the member set.
 /// Every other member is kept: a foreign member may be reached through structure the product's own
 /// walk cannot see (a `KFunction`'s captured environment, a `Module`'s child scope), so releasing
 /// it on a walk that only follows the product's cells would dangle. Home is exact — the walk is
@@ -114,10 +83,7 @@ pub(crate) fn product_still_borrows(
     product: Option<&KObject<'_>>,
     region: &KoanRegion,
 ) -> bool {
-    let is_home = envelope.open(|live| {
-        live.as_object()
-            .is_some_and(|object| region.owns_object(object as *const KObject<'_>))
-    });
+    let is_home = envelope.with_home_region(|home| std::ptr::eq(home, region));
     !is_home || product.is_none_or(|value| still_borrows_host(value, region))
 }
 

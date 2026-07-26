@@ -31,8 +31,8 @@
 use std::rc::Rc;
 
 use super::{
-    Erased, FoldToken, FoldedPlacement, Opened, PinBundle, PinsRegion, ReachDescription,
-    Reattachable, Region, RegionHandle, RegionOwner, StorageProfile, Witness, Witnessed,
+    Erased, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable, Region, RegionHandle,
+    RegionOwner, StorageProfile,
 };
 // `with_branded_ref` re-anchors the erased reach reference: for the `Sealed → Delivered` lift's
 // description-to-bundle upgrade ([`Carrier::upgrade_bundle`]) and for the membership queries the
@@ -267,85 +267,6 @@ impl<'b, T: Reattachable, F: PinsRegion + 'static> Opened<'b, T, Carrier<F>> {
     }
 }
 
-/// The live-carrier reach merges: two resident values, each carried under a reference-only
-/// [`Carrier`] witness with no [`Delivered`](super::Delivered) envelope in hand, folded into one.
-impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
-    /// Merge two **live** reference-only carriers under an externally supplied `pin` — the
-    /// bundle-threading twin of [`Witnessed::merge_pinned`] for the [`Carrier`] witness, whose
-    /// reach composition (unlike the self-contained generic [`super::ComposeWitness`]) folds owned
-    /// bundles. `self_bundle` / `other_bundle` are the two operands' owned pin bundles (threaded
-    /// from their holders — an accumulator's prior fold, a resident read's entry pins), each
-    /// naming its value's home as an ordinary member. Returns the composed carrier paired with the
-    /// freshly-minted owned bundle, to thread onward or seal.
-    pub fn merge_reach<B, P, Pr, Pin>(
-        self,
-        self_bundle: &PinBundle<F>,
-        other: Witnessed<B, Carrier<F>>,
-        other_bundle: &PinBundle<F>,
-        pin: &Pin,
-        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
-    ) -> (Witnessed<P, Carrier<F>>, PinBundle<F>)
-    where
-        B: Reattachable,
-        P: Reattachable,
-        Pin: Witness,
-        Pr: StorageProfile<FrameOwner = F> + 'static,
-        F: RegionOwner<Region = Region<Pr>>,
-        for<'b> B::At<'b>: super::HasRegionHandle<'b, Pr>,
-    {
-        self.merge_composed(
-            other,
-            pin,
-            |_left, right_witness, left_value, dest, token| {
-                // Both operands ride un-copied, so neither claim depends on the product: compose off
-                // the destination's handle before `f` consumes it.
-                let (witness, bundle) = Carrier::compose_into(
-                    right_witness,
-                    self_bundle,
-                    other_bundle,
-                    dest.region_handle(),
-                );
-                (f(left_value, dest, token), witness, bundle)
-            },
-        )
-    }
-
-    /// [`Self::merge_reach`] handing `f` a [`FoldedPlacement`] over the destination operand's own
-    /// handle instead of a bare [`FoldToken`] — the bundle-threading twin of
-    /// [`Witnessed::merge_pinned_placing`].
-    pub fn merge_reach_placing<B, P, Pr, Pin>(
-        self,
-        self_bundle: &PinBundle<F>,
-        other: Witnessed<B, Carrier<F>>,
-        other_bundle: &PinBundle<F>,
-        pin: &Pin,
-        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P::At<'b>,
-    ) -> (Witnessed<P, Carrier<F>>, PinBundle<F>)
-    where
-        B: Reattachable,
-        P: Reattachable,
-        Pin: Witness,
-        Pr: StorageProfile<FrameOwner = F> + 'static,
-        F: RegionOwner<Region = Region<Pr>>,
-        for<'b> B::At<'b>: super::HasRegionHandle<'b, Pr>,
-    {
-        let placing = super::place_over_dest::<T, B, P, Pr>(f);
-        self.merge_composed(
-            other,
-            pin,
-            |_left, right_witness, left_value, dest, token| {
-                let (witness, bundle) = Carrier::compose_into(
-                    right_witness,
-                    self_bundle,
-                    other_bundle,
-                    dest.region_handle(),
-                );
-                (placing(left_value, dest, token), witness, bundle)
-            },
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
@@ -415,7 +336,10 @@ mod tests {
     /// Seal `carrier` over a borrow of `value` — the caller then opens it under its own pin, which
     /// is the only route to a membership query, since only [`Opened`] can answer one.
     fn seal_ref(carrier: Carrier<TestFrame>, value: &u32) -> Sealed<RefFamily, Carrier<TestFrame>> {
-        Sealed::seal(Witnessed::from_erased(Erased::erase(value), carrier))
+        Sealed::seal(crate::witnessed::Witnessed::from_erased(
+            Erased::erase(value),
+            carrier,
+        ))
     }
 
     #[test]

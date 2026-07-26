@@ -9,9 +9,7 @@
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
 use crate::machine::core::FoldingBrand;
-use crate::machine::core::{
-    product_still_borrows, with_home_region, KoanRegion, KoanStorageProfile,
-};
+use crate::machine::core::{product_still_borrows, KoanRegion, KoanStorageProfile};
 use crate::machine::model::{copy_object_into, copy_or_pin, Carried, Held, KObject, RegionEscape};
 use crate::machine::DeliveredCarried;
 use crate::witnessed::RegionHandle;
@@ -100,10 +98,9 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
 /// (`Copy { released: false }` → `Residence::Copied`, the behavior for non-substrate carriers).
 pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> RegionEscape {
     delivered.open(|carried| match carried {
-        // The crossing is priced against the region the value *lives in* — the envelope member
-        // whose address table recorded its top node ([`with_home_region`]). An unlocatable home
-        // prices nothing: copy and keep the source pinned.
-        Carried::Object(value) => with_home_region(delivered, value, |host| match value {
+        // The crossing is priced against the region the value *lives in* — the residence the
+        // envelope's container supplied ([`Delivered::with_home_region`]).
+        Carried::Object(value) => delivered.with_home_region(|host| match value {
             KObject::Record(substrate, _) => copy_or_pin(substrate, value, host),
             KObject::List(substrate, _) => copy_or_pin(substrate, value, host),
             KObject::Dict(substrate, _) => copy_or_pin(substrate, value, host),
@@ -114,8 +111,7 @@ pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> Re
                 inner: substrate, ..
             } => copy_or_pin(substrate, value, host),
             _ => RegionEscape::Copy { released: false },
-        })
-        .unwrap_or(RegionEscape::Copy { released: false }),
+        }),
         _ => RegionEscape::Copy { released: false },
     })
 }

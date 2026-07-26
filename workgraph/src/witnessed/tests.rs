@@ -467,27 +467,26 @@ fn step_context_alloc_with_mints_dep_homes_and_preserves_dep_order() {
     let delivered_a: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
         Witnessed::<RefFamily, Carrier<StepFrame>>::resident(&ONE),
         Rc::clone(&dep_a),
-        PinBundle::empty(),
+        StepCoverage::empty(),
     );
     let delivered_b: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
         Witnessed::<RefFamily, Carrier<StepFrame>>::resident(&TWO),
         Rc::clone(&dep_b),
-        PinBundle::empty(),
+        StepCoverage::empty(),
     );
 
     let ctx: StepContext<StepFrame> = StepContext::new(Rc::clone(&own));
-    let (w, _bundle): (Witnessed<RefFamily, Carrier<StepFrame>>, _) = ctx
-        .alloc_with::<RefFamily, RefFamily, StepProfile>(
-            &[&delivered_a, &delivered_b],
-            |_region, views, _token| {
-                assert_eq!(views.iter().map(|v| **v).collect::<Vec<_>>(), vec![1, 2]);
-                &ONE
-            },
-        );
+    let built = ctx.alloc_with::<RefFamily, RefFamily, StepProfile>(
+        &[&delivered_a, &delivered_b],
+        |_region, views, _token| {
+            assert_eq!(views.iter().map(|v| **v).collect::<Vec<_>>(), vec![1, 2]);
+            &ONE
+        },
+    );
     // Both dep homes composed into the set minted into `own`'s arena — they arrived as ordinary
     // members of each dep envelope's pins. `own` itself is not a member: nothing composed it in
     // (the accumulator is region-pure), so the built value borrows into no region of its own.
-    let sealed: Sealed<RefFamily, Carrier<StepFrame>> = Sealed::seal(w);
+    let sealed: Sealed<RefFamily, Carrier<StepFrame>> = built.into_cell();
     let opened = sealed.open_at(&own);
     opened.with_reach(|reach| {
         let reach = reach.expect("dep homes compose as reach members");

@@ -208,7 +208,11 @@ impl<W: Workload> Scheduler<W> {
             .deps
             .retained_foreign(target.index())
             .expect("a pull-able dep's retention hold carries its foreign bundle");
-        Ok(Delivered::hosted(cell, host, foreign))
+        Ok(Delivered::hosted(
+            cell,
+            host,
+            crate::witnessed::StepCoverage(foreign),
+        ))
     }
 
     /// Re-home a finalized terminal (relocated into a surviving region, bundled with the witness set
@@ -267,16 +271,16 @@ impl<W: Workload> Scheduler<W> {
     /// Seed a retention hold on a synthetically-finalized slot ([`Self::set_result`] writes the
     /// terminal but runs no finalize, so no hold exists) — [`Self::dep_delivered`] requires one for
     /// every pull-able dep. `foreign` is the hold's owned foreign bundle: pass
-    /// [`PinBundle::empty`](crate::witnessed::PinBundle::empty) for a slot that reaches nothing, or a
+    /// [`StepCoverage::empty`](crate::witnessed::StepCoverage::empty) for a slot that reaches nothing, or a
     /// real bundle to exercise the foreign half's pull-count-zero release timeline.
     pub fn seed_retention(
         &mut self,
         id: NodeId,
         owner: Rc<OwnerOf<W>>,
-        foreign: crate::witnessed::PinBundle<OwnerOf<W>>,
+        foreign: crate::witnessed::StepCoverage<OwnerOf<W>>,
         pulls: usize,
     ) {
-        self.deps.seed_retain(id.index(), owner, foreign, pulls);
+        self.deps.seed_retain(id.index(), owner, foreign.0, pulls);
     }
     pub fn result_is_none(&self, id: NodeId) -> bool {
         self.store.result_is_none(id)

@@ -6,8 +6,8 @@
 use super::Scope;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::{
-    clone_still_borrows, product_still_borrows, with_home_region, FoldingBrand, FramePins,
-    FrameReach, KoanRegion, KoanStorageProfile,
+    clone_still_borrows, product_still_borrows, FoldingBrand, FramePins, FrameReach, KoanRegion,
+    KoanStorageProfile,
 };
 use crate::machine::model::{
     copy_object_into, copy_or_pin, still_borrows_host, Carried, CarriedFamily, KObject, KType,
@@ -287,25 +287,23 @@ impl<'a> Scope<'a> {
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
-        // The crossing is priced against the region the delivered value *lives in* — the envelope
-        // member whose address table recorded its top node ([`with_home_region`]) — not against the
-        // projection, which may be an interior payload. An unlocatable home prices nothing: copy
-        // and keep the source pinned.
+        // The crossing is priced against the region the delivered value *lives in* — the residence
+        // the envelope's container supplied ([`Delivered::with_home_region`]) — not against the
+        // projection, which may be an interior payload.
         let verb = cell.open(|live| {
-            let (Some(carried), Ok(projected)) = (live.as_object(), project(&live)) else {
+            let Ok(projected) = project(&live) else {
                 return RegionEscape::Copy { released: false };
             };
-            with_home_region(cell, carried, |host_region| match projected {
+            cell.with_home_region(|host_region| match projected {
                 KObject::Record(substrate, _) => copy_or_pin(substrate, projected, host_region),
                 // Only a top-level record is cost-driven here. Every other substrate carrier
                 // (`List` / `Dict` / `Tagged` / `Wrapped`) rebuilds unconditionally: pinning would
                 // retain the producer region, breaking the O(1) region turnover a tail loop's
-                // per-iteration `it` bind depends on. Copy with a probe-derived release bit.
+                // per-iteration `it` bind depends on. Copy with a walk-derived release bit.
                 _ => RegionEscape::Copy {
                     released: !still_borrows_host(projected, host_region),
                 },
             })
-            .unwrap_or(RegionEscape::Copy { released: false })
         });
 
         match verb {

@@ -37,7 +37,8 @@ pub use region::{
 };
 
 mod reach;
-pub use reach::{PinBundle, PinsRegion, ReachDescription};
+pub(crate) use reach::PinBundle;
+pub use reach::{PinsRegion, ReachDescription, StepCoverage};
 
 mod host;
 pub use host::RegionHost;
@@ -375,6 +376,23 @@ const _: fn() = || {
     fn assert_stable_deref<P: StableDeref>() {}
     let _ = assert_stable_deref::<Rc<()>>;
 };
+
+/// The [`Witness`] that pins **nothing** — the named form of the empty set witness the safety
+/// contract above sanctions. A read takes it when the pointee's backing is kept alive by something
+/// outside the read (a run-global region, a frame the caller already holds across the call, an
+/// operand that carries no region content at all), so the read needs no pin of its own.
+///
+/// It exists so an embedder can say "no coverage of my own" without naming an owned
+/// [`PinBundle`](reach::PinBundle): a bundle is the ownership tier, and constructing an empty one
+/// purely to stand in as a witness would put pin vocabulary in embedder hands for a site that pins
+/// nothing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoPins;
+
+// SAFETY: `NoPins` holds nothing and so pins nothing — the empty element the `Witness` safety
+// contract names. Every site that passes it asserts, exactly as an empty bundle did, that the
+// pointee's backing outlives the read for an external reason.
+unsafe impl Witness for NoPins {}
 
 /// A [`Witness`] that exposes the region it pins, so a value built *solely* from that region is
 /// co-located with the witness by construction. This is the seam [`Witnessed::yoke`] routes: the

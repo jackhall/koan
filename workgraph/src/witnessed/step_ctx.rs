@@ -11,8 +11,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{
-    Carrier, Delivered, FoldToken, FoldedPlacement, PinBundle, PinsRegion, Reattachable, Region,
-    RegionHandle, RegionOwner, StorageProfile, Witnessed,
+    Carrier, Delivered, FoldToken, FoldedPlacement, PinsRegion, Reattachable, Region, RegionHandle,
+    RegionOwner, StepCoverage, StorageProfile, Witnessed,
 };
 
 /// The step construction context — handed to a finish by the step loop, whose held region owner is
@@ -95,41 +95,41 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// ```
     /// use std::rc::Rc;
     /// use workgraph::witnessed::doctest_fixture::{fresh_region, RefFamily, RegionCart};
-    /// use workgraph::witnessed::{Carrier, Delivered, PinBundle, StepContext, Witnessed};
+    /// use workgraph::witnessed::{Carrier, Delivered, StepContext, StepCoverage, Witnessed};
     ///
     /// static TEN: u32 = 10;
     /// let dep_cart = Rc::new(RegionCart(fresh_region()));
     /// let dep: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = Delivered::seal(
     ///     Witnessed::<RefFamily, Carrier<RegionCart>>::resident(&TEN),
     ///     Rc::clone(&dep_cart),
-    ///     PinBundle::empty(),
+    ///     StepCoverage::empty(),
     /// );
     ///
     /// let cart = Rc::new(RegionCart(fresh_region()));
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
-    /// let (w, _bundle): (Witnessed<RefFamily, Carrier<RegionCart>>, _) =
+    /// let built: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> =
     ///     ctx.alloc_with(&[&dep], |_region, views, _token| views[0]);
-    /// assert_eq!(w.with_pinned(&cart, |r| **r), 10);
+    /// assert_eq!(built.open(|r| *r), 10);
     /// ```
     ///
     /// ```compile_fail
     /// use std::rc::Rc;
     /// use workgraph::witnessed::doctest_fixture::{fresh_region, RefFamily, RegionCart};
-    /// use workgraph::witnessed::{Carrier, Delivered, PinBundle, StepContext, Witnessed};
+    /// use workgraph::witnessed::{Carrier, Delivered, StepContext, StepCoverage, Witnessed};
     ///
     /// static TEN: u32 = 10;
     /// let dep_cart = Rc::new(RegionCart(fresh_region()));
     /// let dep: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = Delivered::seal(
     ///     Witnessed::<RefFamily, Carrier<RegionCart>>::resident(&TEN),
     ///     Rc::clone(&dep_cart),
-    ///     PinBundle::empty(),
+    ///     StepCoverage::empty(),
     /// );
     ///
     /// let cart = Rc::new(RegionCart(fresh_region()));
     /// let ctx: StepContext<RegionCart> = StepContext::new(cart);
     /// let mut escaped: Option<&u32> = None;
     /// // Try to smuggle a dep view OUT of `alloc_with`'s closure — rejected by the `for<'b>` brand.
-    /// let (_w, _bundle): (Witnessed<RefFamily, Carrier<RegionCart>>, _) = ctx.alloc_with(&[&dep], |_region, views, _token| {
+    /// let _built: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = ctx.alloc_with(&[&dep], |_region, views, _token| {
     ///     escaped = Some(views[0]);
     ///     views[0]
     /// });
@@ -139,7 +139,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         &self,
         deps: &[&Delivered<V, Carrier<F>, F>],
         build: impl for<'b> FnOnce(&'b F::Region, Vec<V::At<'b>>, FoldToken<'b>) -> T::At<'b>,
-    ) -> (Witnessed<T, Carrier<F>>, PinBundle<F>)
+    ) -> Delivered<T, Carrier<F>, F>
     where
         T: Reattachable,
         V: Reattachable,
@@ -147,27 +147,31 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
-        let acc0: Witnessed<AllocViews<V, F::Region>, Carrier<F>> = self
-            .alloc::<AllocViews<V, F::Region>>(|region| (region, Vec::with_capacity(deps.len())));
-        // Thread the accumulator's owned foreign bundle across the fold: each `transfer_into` folds
-        // one dep's reach in (`right` = the prior accumulator, `right_bundle` = its threaded pins)
-        // and hands back the composed carrier + its owned bundle. The empty seed pins nothing.
-        let (acc, acc_bundle) =
-            deps.iter()
-                .fold((acc0, PinBundle::empty()), |(acc, acc_bundle), dep| {
-                    dep.transfer_into::<AllocViews<V, F::Region>, AllocViews<V, F::Region>, P>(
-                        acc,
-                        &acc_bundle,
-                        // The view rides the accumulator un-copied, so the built value genuinely
-                        // borrows into every region the dep does: the predicate releases none.
-                        |_product, _region| true,
-                        fold_dep_view::<V, F::Region>(),
-                    )
-                });
-        // `map_pinned` re-projects the value under the same witness, so the accumulated foreign
-        // bundle carries over unchanged as the built carrier's owned pins.
-        let result = acc.map_pinned::<T, _>(&self.frame, finalize_alloc_with::<F, T, V>(build));
-        (result, acc_bundle)
+        // The accumulator is enveloped over this context's own frame — the region it is yoked into —
+        // so each fold step composes into an envelope rather than a carrier plus a loose bundle.
+        let acc0 = Delivered::seal(
+            self.alloc::<AllocViews<V, F::Region>>(|region| {
+                (region, Vec::with_capacity(deps.len()))
+            }),
+            Rc::clone(&self.frame),
+            StepCoverage::empty(),
+        );
+        let acc = deps.iter().fold(acc0, |acc, dep| {
+            dep.transfer_into::<AllocViews<V, F::Region>, AllocViews<V, F::Region>, P>(
+                acc,
+                // The view rides the accumulator un-copied, so the built value genuinely
+                // borrows into every region the dep does: the predicate releases none.
+                |_product, _region| true,
+                fold_dep_view::<V, F::Region>(),
+            )
+        });
+        // `map_pinned` re-projects the value under the same witness, so the accumulated envelope's
+        // pins carry over unchanged as the built carrier's owned coverage.
+        let (cell, pins) = acc.into_parts();
+        let result = cell
+            .unseal()
+            .map_pinned::<T, _>(&self.frame, finalize_alloc_with::<F, T, V>(build));
+        Delivered::seal(result, Rc::clone(&self.frame), pins)
     }
 
     /// [`Self::alloc`] for a frame owning a library [`Region`]: the build closure receives the
@@ -193,7 +197,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         &self,
         deps: &[&Delivered<V, Carrier<F>, F>],
         build: impl for<'b> FnOnce(FoldedPlacement<'b, P>, Vec<V::At<'b>>) -> T::At<'b>,
-    ) -> (Witnessed<T, Carrier<F>>, PinBundle<F>)
+    ) -> Delivered<T, Carrier<F>, F>
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,

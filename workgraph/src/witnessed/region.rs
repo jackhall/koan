@@ -30,7 +30,7 @@ use typed_arena::Arena;
 
 use super::{
     erase_to_static, with_branded_ref, PinBundle, PinsRegion, ReachDescription, Reattachable,
-    RegionOwner,
+    RegionOwner, StepCoverage,
 };
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
@@ -367,13 +367,36 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         self.region
     }
 
-    /// Fold an owning [`PinBundle`] into this handle's region's union bundle, retained for the
+    /// Fold an owned [`StepCoverage`] into this handle's region's union bundle, retained for the
     /// region's whole life — the public door onto [`Region::retain_reach`]. An embedder routes a
     /// copy-free adoption or a run-teardown rehome here: the value stays resident in this region, so
     /// its reach (which a non-owning [`ReachDescription`] only names) must be pinned for as long as
     /// the region lives.
-    pub fn retain_reach(self, bundle: PinBundle<W::FrameOwner>) {
-        self.region.retain_reach(bundle)
+    pub fn retain_reach(self, coverage: StepCoverage<W::FrameOwner>) {
+        self.region.retain_reach(coverage.0)
+    }
+
+    /// **Mint and retain in one verb** — the embedder-facing reach-derivation door. Freezes
+    /// `sources`' composed reach into this region's side table and folds the owning bundle the mint
+    /// hands back straight into this region's union bundle, so the description and the ownership
+    /// that backs it are established together and the embedder never holds the pins in between.
+    ///
+    /// Returns the hosted description (`None` == empty, no allocation) and the
+    /// borrows-into-this-region bit. No policy is threaded in: the mint applies subsumption and the
+    /// self rule alone, so the description is the value's exact reach and the retained bundle is
+    /// that reach minus this region itself (a region owning a pin on itself is a cycle).
+    pub fn mint_retained(
+        self,
+        sources: &[&StepCoverage<W::FrameOwner>],
+    ) -> (Option<&'a ReachDescription<W::FrameOwner>>, bool)
+    where
+        W::FrameOwner: RegionOwner<Region = Region<W>>,
+    {
+        let bundles: Vec<&PinBundle<W::FrameOwner>> = sources.iter().map(|s| &s.0).collect();
+        let (description, bundle, borrows_into_dest) =
+            ReachDescription::mint_with_dest_bit(self, &bundles);
+        self.region.retain_reach(bundle);
+        (description, borrows_into_dest)
     }
 
     /// Brand-confined allocation — see [`Region::alloc`]'s (crate-private) docs. Move-in: `value`

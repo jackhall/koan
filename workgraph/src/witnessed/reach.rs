@@ -5,7 +5,7 @@
 //! - [`ReachDescription<F>`] — the **non-owning** description: `Weak<F>` members, hosted in a
 //!   region's append-stable side table ([`Region::alloc_reach`]) and *referenced* (never owned) by
 //!   a [`Carrier`](super::Carrier). It keeps nothing alive; it answers membership queries
-//!   ([`Self::pins_region`] / [`Self::any_member_region`]) by upgrading its members under a pinned
+//!   ([`Self::pins_region`]) by upgrading its members under a pinned
 //!   read. Whoever holds a description's coverage also holds the owning [`PinBundle`] that pins its
 //!   members, so every upgrade succeeds under the holder rule — a failed upgrade is a coverage bug
 //!   (`debug_assert` in debug, treated as non-pinning in release).
@@ -267,16 +267,6 @@ impl<F: PinsRegion> PinBundle<F> {
         self.members.iter().any(|m| m.pins_region(region))
     }
 
-    /// Whether any member's own region satisfies `pred` — the bundle-side twin of
-    /// [`ReachDescription::any_member_region`], for a holder with no single named target region to
-    /// test (an address-table membership check against a raw stored pointer: "which member region
-    /// hosts this value?"). This is how a holder locates a value's **home** now that home is an
-    /// ordinary member with no distinguished field. No member reference escapes: `pred` runs
-    /// against each member's region internally, so the bundle stays unenumerable.
-    pub fn any_member_region(&self, mut pred: impl FnMut(&F::Region) -> bool) -> bool {
-        self.members.iter().any(|m| pred(m.region()))
-    }
-
     /// Insert `owner` under outer-chain subsumption: skip it when an existing member already pins
     /// its region (dedup + the newcomer-is-an-ancestor case), else drop every existing member the
     /// newcomer subsumes and add it. Keeps the bundle an antichain of the deepest owners.
@@ -390,3 +380,61 @@ unsafe impl<F: PinsRegion, B: Reattachable> ComposeWitness<B> for PinBundle<F> {
         Self::union(left, right)
     }
 }
+
+/// The **embedder-facing** owned-coverage holder: a [`PinBundle`] an embedder may hold, clone,
+/// thread and drop — but not compute with. It is the "step's coverage" of
+/// design/witness-hosting.md § Threading, and the shape every owned pin crosses the library
+/// boundary in: a step carries one from the fold that composed it to the seal that consumes it, a
+/// finalize hands one to the retention hold, a region retains one for its life.
+///
+/// The point is what it *lacks*. `PinBundle`'s arithmetic — [`union`](PinBundle::union),
+/// [`without_region`](PinBundle::without_region), [`retaining`](PinBundle::retaining),
+/// [`insert`](PinBundle::insert), [`absorb`](PinBundle::absorb) — is crate-private, so an embedder
+/// cannot narrow a claim, strip a member, or assemble a bundle by hand. Every set operation is a
+/// container verb on the holder that owns the pins, which is what makes the pinning invariant
+/// something the embedder has no vocabulary to break rather than a rule it is asked to honor.
+///
+/// It is a [`Witness`]: holding one keeps every member region live, so a read may run under it.
+pub struct StepCoverage<F: PinsRegion>(pub(crate) PinBundle<F>);
+
+impl<F: PinsRegion> StepCoverage<F> {
+    /// Coverage of nothing — the frameless / run-region terminal, and the seed a fold accumulates
+    /// from. Allocates nothing.
+    pub fn empty() -> Self {
+        StepCoverage(PinBundle::empty())
+    }
+
+    /// Coverage of one region, from an owner the caller already holds (a step's anchor frame, a
+    /// scope's own region owner). Handing in an `Rc` is not pin arithmetic: the caller already has
+    /// the pin, and this only names it as coverage.
+    pub fn of(owner: Rc<F>) -> Self {
+        StepCoverage(PinBundle::singleton(owner))
+    }
+
+    /// Widen this coverage to also cover everything `other` covers — the union a step assembles
+    /// across its deps. Consuming, so a hand-off clones no `Rc`.
+    pub fn absorb(&mut self, other: StepCoverage<F>) {
+        self.0.absorb(other.0);
+    }
+
+    /// Whether this coverage holds no region owner.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<F: PinsRegion> Clone for StepCoverage<F> {
+    fn clone(&self) -> Self {
+        StepCoverage(self.0.clone())
+    }
+}
+
+impl<F: PinsRegion> Default for StepCoverage<F> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+// SAFETY: the wrapped `PinBundle` is a `Witness` — holding it keeps every member region's storage
+// live at a fixed address — and this newtype adds nothing but the narrowed surface.
+unsafe impl<F: PinsRegion> Witness for StepCoverage<F> {}
