@@ -87,11 +87,11 @@ impl<T> NameLookup<T> {
 /// scope's own region?" ([`Self::borrows_into_home`]). `foreign` is a reference to a set hosted in
 /// the binding scope's own region arena — minted at bind time via
 /// [`ReachDescription::mint`](crate::witnessed::ReachDescription::mint), never owned
-/// here — home-omitted so it never names the scope's own home frame, whose `Rc` stored in-region
-/// would close the `frame → region → scope → bindings → frame` cycle; that fact is remembered as
-/// the bit instead. `None` is the faithful encoding of the empty set (a region-pure value pins
-/// nothing), not a missing value — a read materializes the bit back into an explicit reach member;
-/// until then a bind threads it through unread.
+/// here — and exact: every region the value borrows into is a member, the scope's own included.
+/// Membership is `Weak`, so naming the scope's own home frame closes no
+/// `frame → region → scope → bindings → frame` cycle; the strong `Rc` on that frame is what the
+/// mint's self rule strips from the owned bundle. `None` is the faithful encoding of the empty set
+/// (a region-pure value pins nothing), not a missing value.
 ///
 /// [`Self::empty`] defaults the bit to `false`: a value delivered by a region-pure or foreign
 /// carrier borrows into no home region, which is every builtin registration and every test bind.
@@ -131,7 +131,7 @@ impl<'a> StoredReach<'a> {
 }
 
 /// A stored value fused to the reach evidence derived *for it*: the value `T`, its `Copy`
-/// [`StoredReach`] claim (home-omitted foreign reach reference + home-borrow bit), and the owned
+/// [`StoredReach`] claim (exact reach reference + home-borrow bit), and the owned
 /// [`FramePins`] bundle that pins every region the value reaches. The three travel as one unit, so a
 /// binding entry can never pair a value with a claim or bundle derived for a *different* value — the
 /// re-pairing the reach-token discipline exists to prevent.
@@ -206,7 +206,7 @@ impl<'a, T: Copy> Reached<'a, T> {
 }
 
 /// A value binding entry: its lexical [`BindingIndex`] plus the [`Reached`] vehicle fusing the bound
-/// value, its `Copy` [`StoredReach`] claim (home-omitted foreign reach reference + home-borrow bit),
+/// value, its `Copy` [`StoredReach`] claim (exact reach reference + home-borrow bit),
 /// and the owned [`FramePins`] bundle that pins every region the value reaches — the bundle released
 /// by ordinary `Drop` at the entry's death (scope/region death, evacuation). The claim is handed out
 /// on reads (refcount-free); the pins stay owned in the fused vehicle, so a read is enveloped under
@@ -221,7 +221,7 @@ type DataEntry<'a> = (BindingIndex, Reached<'a, &'a KObject<'a>>);
 pub enum MemberResolution<'a> {
     Value {
         obj: &'a KObject<'a>,
-        /// The member's stored reach (home-omitted foreign reach + the home-borrow bit), copied
+        /// The member's stored reach (the exact reach + the home-borrow bit), copied
         /// whole off the module's own `data` entry — so an ATTR read replays the same opaque token
         /// into a resident carrier rather than re-asserting single-frame co-location.
         stored: StoredReach<'a>,
@@ -237,13 +237,13 @@ pub enum MemberResolution<'a> {
 }
 
 /// The value-side reach-carrying payload of a `NameLookup<ValueHit>`: the bound value plus the
-/// binding's home-omitted foreign reach, copied out (a `&'a FrameReach` reference, not a clone) so
+/// binding's exact reach, copied out (a `&'a FrameReach` reference, not a clone) so
 /// the read wrapper does not hold the `data` `RefCell` borrow across the carrier build. Produced by
 /// [`Bindings::lookup_value_carrier`] so a name read builds a self-contained witness from the
 /// stored reach.
 pub struct ValueHit<'a> {
     pub obj: &'a KObject<'a>,
-    /// The binding's stored reach (home-omitted foreign reach + the home-borrow bit), copied whole
+    /// The binding's stored reach (the exact reach + the home-borrow bit), copied whole
     /// off the `data` entry so the read wrapper does not hold the `RefCell` borrow across the
     /// carrier build.
     pub stored: StoredReach<'a>,
@@ -342,11 +342,11 @@ pub struct Bindings<'a> {
     /// type in every region.
     types: RefCell<HashMap<String, (KType, DeclarationSite)>>,
     /// Each value entry stores its bound value, its lexical [`BindingIndex`], and its **reach** —
-    /// the home-omitted foreign [`FrameReach`] the value borrows into, captured at bind time from the
+    /// the exact [`FrameReach`] the value borrows into, captured at bind time from the
     /// delivered carrier. A carrier-oriented read ([`Self::lookup_value_carrier`]) hands the reach
     /// back so the read wraps the value in a self-contained witness built from its stored reach,
-    /// rather than re-asserting single-frame co-location. The reach is foreign-only (home-omitted)
-    /// so it never stores the region's own home frame `Rc` in-region — that would close a
+    /// rather than re-asserting single-frame co-location. Members are `Weak`, and the mint's self
+    /// rule keeps the region's own home frame `Rc` out of the owned bundle — either would close a
     /// `frame → region → scope → bindings → frame` strong cycle and leak the region.
     data: RefCell<HashMap<String, DataEntry<'a>>>,
     functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,

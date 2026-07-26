@@ -213,24 +213,25 @@ cross-region store this seam and its siblings exercise.
 - `envelope_transfer_folds_an_independent_foreign_value`
 - `pass_through_duplicate_keeps_reach_pointer_and_mints_nothing`
 
-**Single escape seam — re-stamp in place, self-host home-omission** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
+**Single escape seam — re-stamp in place, the self rule** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
 — the single-seam escape verb
 ([`Delivered::restamp_in_place`](../workgraph/src/witnessed/delivered.rs)): a declared substrate
 return re-tags its top node to the declared type and re-anchors it into the **producer's own
-region** through `transfer_into_placing` at `Residence::Kept`, sharing the substrate borrow verbatim
+region** through `transfer_into_placing`, sharing the substrate borrow verbatim
 (the exact `finalize_terminal` `Disposition::Restamp` motion). The distinguishing shape from the
-envelope-transfer group above: the destination *is* the value's own home region, so home-omission
-drops the Kept-materialized host from the minted set — the composed witness reduces to the input's
-(here, empty). A regression that instead minted the self-host would seat an `Rc<producer>` in a set
-hosted inside the producer's own region: a strong self-cycle the region never drops, a leak at
-process exit under Miri. The test re-stamps a producer-resident record, asserts the witness stays
-empty, drops every intermediate handle, then reads the shared substrate back in its own region — a
-use-after-free the instant re-stamp relocated instead of re-anchoring, a leak the instant it failed
-to home-omit. The `unsafe` routed is the shared `retype` in `witnessed.rs` plus the four
+envelope-transfer group above: the destination *is* the value's own home region, so the mint's self
+rule strips that region from the **owned bundle** — the description still names it as an ordinary
+member, but no `Rc` rides out. A regression that instead kept the self pin would seat an
+`Rc<producer>` in a bundle retained inside the producer's own region: a strong self-cycle the region
+never drops, a leak at process exit under Miri. The test re-stamps a producer-resident record,
+asserts the carrier still names reach members while the owned bundle is empty, drops every
+intermediate handle, then reads the shared substrate back in its own region — a use-after-free the
+instant re-stamp relocated instead of re-anchoring, a leak the instant the self rule failed. The
+`unsafe` routed is the shared `retype` in `witnessed.rs` plus the four
 `unsafe impl AuditedStored` family audits in [`arena/residence.rs`](../src/machine/core/arena/residence.rs)
-this Kept store crosses.
+this store crosses.
 
-- `restamp_in_place_shares_substrate_and_home_omits_self_host`
+- `restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin`
 
 **Record substrate — checked-tier O(1) membership** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
 — `resident_in_visiting`'s `Record` arm (`residence.owns_substrate(substrate)` in

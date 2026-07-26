@@ -268,7 +268,7 @@ fn wrapped_deep_clone_shares_inner_substrate_and_type_id() {
     }
 }
 
-// --- KObject::resident_in / resident_in_delivered ---------------------------------
+// --- KObject::resident_in_delivered ----------------------------------------------
 
 /// A `KFunction` allocated into `dest`'s own region is dest-resident.
 #[test]
@@ -295,7 +295,7 @@ fn resident_in_true_for_same_region_kfunction() {
         &test_run.types,
     ));
     let o = KObject::KFunction(f);
-    assert!(o.resident_in(storage.region()));
+    assert!(o.resident_in_delivered(storage.region(), &[]));
 }
 
 /// A `KFunction` allocated into a foreign region is not resident in an unrelated `dest`, and
@@ -329,14 +329,14 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
 
     let dest = run_root_storage();
     assert!(
-        !o.resident_in(dest.region()),
+        !o.resident_in_delivered(dest.region(), &[]),
         "sanity: not resident without evidence"
     );
 
-    // Mint a description naming `foreign`'s region into `dest`'s side table (foreign to `dest`, so it
-    // survives home-omission as a member). `_pins` keeps its members alive for the assertion.
+    // Mint a description naming `foreign`'s region into `dest`'s side table (foreign to `dest`, so
+    // the self rule keeps it in the owned bundle). `_pins` keeps its members alive for the assertion.
     let foreign_bundle = crate::machine::core::FramePins::singleton(Rc::clone(&foreign));
-    let (minted, _pins, _) = dest.brand().mint(&[&foreign_bundle], |_| false);
+    let (minted, _pins, _) = dest.brand().mint(&[&foreign_bundle]);
     let foreign_reach = minted.expect("a foreign member mints a member naming its region");
     assert!(o.resident_in_delivered(dest.region(), &[foreign_reach]));
 }
@@ -357,5 +357,5 @@ fn resident_in_true_for_owned_list() {
         vec![KObject::Number(1.0), KObject::Number(2.0)],
         &types,
     );
-    assert!(o.resident_in(dest.region()));
+    assert!(o.resident_in_delivered(dest.region(), &[]));
 }

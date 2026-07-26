@@ -20,7 +20,7 @@ enum PendingWrite<'a> {
     Value {
         name: String,
         index: BindingIndex,
-        /// The bound value fused to its home-omitted foreign reach and owning pin bundle, carried
+        /// The bound value fused to its exact reach and owning pin bundle, carried
         /// through the deferred write so a drained bind stores exactly what a direct bind would (see
         /// [`Bindings::try_bind_value`]) — the entry's pins released at that entry's death.
         reached: Reached<'a, &'a KObject<'a>>,

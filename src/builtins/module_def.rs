@@ -67,8 +67,9 @@ pub(super) fn await_module_body<'a>(
                 .bindings()
                 .lookup_value_carrier(&name_for_finish, None)
             {
-                return Action::Done(Ok(StepCarried::born(
+                return Action::Done(Ok(StepCarried::born_pinned(
                     fctx.scope.resident_value_carrier(hit.obj, hit.stored),
+                    hit.pins,
                 )));
             }
             let module: &'a Module<'a> = fctx
@@ -91,7 +92,7 @@ pub(super) fn await_module_body<'a>(
             // Fused MODULE-finish bind: the module's stored reach is derived off the child scope held
             // **directly** here (never by walking the built value) — the home-borrow bit included,
             // `true` because the same-region child's own region owner covers this scope's region
-            // before home-omission — and the Object-arm module value is allocated and bound
+            // — and the Object-arm module value is allocated and bound
             // value-side (`bindings.data`) under it. The returned terminal witnesses that same value
             // from the same stored reach.
             match fctx.scope.bind_module(
@@ -101,8 +102,9 @@ pub(super) fn await_module_body<'a>(
                 bind_index,
                 fctx.types,
             ) {
-                Ok((obj, stored)) => Action::Done(Ok(StepCarried::born(
+                Ok((obj, stored, pins)) => Action::Done(Ok(StepCarried::born_pinned(
                     fctx.scope.resident_value_carrier(obj, stored),
+                    pins,
                 ))),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<module>",

@@ -387,8 +387,9 @@ impl<'a> Scope<'a> {
     /// Fused MODULE-finish value bind: derive the module's stored reach off its `child` scope
     /// ([`Self::child_module_reach`]) — never by walking the built value — allocate the Object-arm
     /// module value under that evidence, and bind it into [`Bindings::data`]. Returns the resident
-    /// `&KObject` paired with the token so the caller seals its terminal from the same evidence
-    /// ([`Self::resident_value_carrier`]). The home-borrow bit is derived by the mint, never
+    /// `&KObject` paired with the token and a clone of the owned pin bundle, so the caller seals its
+    /// terminal from the same evidence ([`Self::resident_value_carrier`]) with the reached regions
+    /// pinned across transit. The home-borrow bit is derived by the mint, never
     /// hand-asserted. A module name is an Identifier and every builtin type name is a Type token, so
     /// no builtin-type shadow is reachable here; [`Self::bind_value`] raises the ordinary `Rebind`.
     pub(crate) fn bind_module(
@@ -398,11 +399,10 @@ impl<'a> Scope<'a> {
         child: &Scope<'a>,
         index: BindingIndex,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+    ) -> Result<(&'a KObject<'a>, StoredReach<'a>, FramePins), KError> {
         let reached = self.store_module_object(module, child, types)?;
         self.bind_value(name, reached.clone(), index)?;
-        let (obj, stored, _pins) = reached.into_parts();
-        Ok((obj, stored))
+        Ok(reached.into_parts())
     }
 
     /// Builtin type registration: [`Self::register_type`] at [`DeclarationSite::BUILTIN`], same

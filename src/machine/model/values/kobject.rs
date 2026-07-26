@@ -448,20 +448,13 @@ impl<'a> KObject<'a> {
         )
     }
 
-    /// True when every region borrow in `self` points into `dest`. Only value-channel borrows
-    /// are walked: `KFunction`, `Module`, `KExpression` splices, and a substrate carrier's
-    /// (`Record`/`List`/`Dict`/`Tagged`/`Wrapped`) substrate address (O(1), never its cells). The
-    /// `KType` tags (`List`/`Dict`/`Record` memos, `Tagged { identity }`, `Wrapped { type_id }`) are
-    /// not walked — a handle is one `u128` naming registry-owned content, so it borrows no region at
-    /// all.
-    pub(crate) fn resident_in(&self, dest: &KoanRegion) -> bool {
-        self.resident_in_visiting(&Residence::dest_only(dest))
-    }
-
-    /// The evidence-widened twin of [`Self::resident_in`], for a value built from (or embedding a
-    /// projection of) one or more delivered carriers: every walked borrow must point into
-    /// `dest` or be covered by one of `sets` — the object delivered tier's coverage predicate,
-    /// over the same borrows as [`Self::resident_in`]. The `StoredReach` tokens holding the
+    /// True when every region borrow in `self` points into `dest` or is covered by one of `sets` —
+    /// the object delivered tier's coverage predicate, and with `sets` empty the plain
+    /// dest-residence check. Only value-channel borrows are walked: `KFunction`, `Module`,
+    /// `KExpression` splices, and a substrate carrier's (`Record`/`List`/`Dict`/`Tagged`/`Wrapped`)
+    /// substrate address (O(1), never its cells). The `KType` tags (`List`/`Dict`/`Record` memos,
+    /// `Tagged { identity }`, `Wrapped { type_id }`) are not walked — a handle is one `u128` naming
+    /// registry-owned content, so it borrows no region at all. The `StoredReach` tokens holding the
     /// reach are opaque to this layer; core extracts the sets before calling.
     pub(crate) fn resident_in_delivered(&self, dest: &KoanRegion, sets: &[&FrameReach]) -> bool {
         self.resident_in_visiting(&Residence::with_reach(dest, sets))

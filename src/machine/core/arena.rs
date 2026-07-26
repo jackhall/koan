@@ -139,7 +139,8 @@ impl<'a> RegionBrand<'a> {
 
     /// Runtime-checked twin of [`Self::alloc_object`] for an `o` that cannot rebuild owned at
     /// `'static` (`KObject` has no general `'static` rebuild):
-    /// [`KObject::resident_in`] audits every region borrow `o` carries against this brand's own
+    /// [`KObject::resident_in_delivered`] audits every region borrow `o` carries, with no reach
+    /// evidence, against this brand's own
     /// region. A `Wrapped { type_id }` tag needs no walk: the `type_id` is a `Copy` `KType` handle
     /// that reaches nothing the audit could reject.
     pub fn alloc_object_checked(
@@ -202,20 +203,16 @@ impl<'a> RegionBrand<'a> {
 
     /// Mint a frozen reach description into this brand's region side table — the Koan veneer over
     /// [`ReachDescription::mint_with_dest_bit`]. `sources` are the composition's owned pin bundles
-    /// (strong members — the union folds them, never a description's `Weak`). `omit` is the scope's
-    /// home/lexical-ancestor policy predicate; the self rule (never pin a region into itself) is
-    /// handled by the library. A value's home region rides `sources` as an ordinary member, so
-    /// there is no separate host-materialization arm.
+    /// (strong members — the union folds them, never a description's `Weak`). No policy is threaded
+    /// in: the library applies subsumption and the self rule (never pin a region into itself), so
+    /// the minted description is the value's exact reach. A value's home region rides `sources` as
+    /// an ordinary member, so there is no separate host-materialization arm.
     /// Returns the minted description (`None` when the composed reach is empty — a region-pure value
     /// pins nothing), the owned [`FramePins`] the holder keeps to pin its members, and the
-    /// pre-omission destination-coverage bit (`true` iff a source bundle reaches this brand's own
-    /// region before the self rule strips it from the owned bundle).
-    pub(crate) fn mint(
-        self,
-        sources: &[&FramePins],
-        omit: impl Fn(&KoanRegion) -> bool,
-    ) -> (Option<&'a FrameReach>, FramePins, bool) {
-        ReachDescription::mint_with_dest_bit(self.0, sources, omit)
+    /// destination-coverage bit (`true` iff a source bundle reaches this brand's own region, before
+    /// the self rule strips it from the owned bundle).
+    pub(crate) fn mint(self, sources: &[&FramePins]) -> (Option<&'a FrameReach>, FramePins, bool) {
+        ReachDescription::mint_with_dest_bit(self.0, sources)
     }
 
     /// The witnessed-allocation surface for an owned object built fresh inside the brand: born
@@ -277,7 +274,7 @@ impl<'a> RegionBrand<'a> {
     /// defining frame pins the region for the step, and past the step the scheduler's retention hold
     /// (the delivery envelope's host) carries the pin. Confines [`Witnessed::resident`] to this arena
     /// surface, so no read / define builtin reaches for it. `witness` must name the value's
-    /// home-omitted foreign reach; the caller
+    /// exact reach; the caller
     /// ([`Scope::resident_value_carrier`](crate::machine::core::Scope)) folds it. The brand is the
     /// capability marker: only a handle into the region the value lives in may re-seal it resident.
     pub(crate) fn seal_resident(

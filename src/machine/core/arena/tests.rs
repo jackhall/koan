@@ -569,68 +569,37 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     assert_eq!(got, vec![1.0, 2.0]); // both foreign elements survived the fold and every handle drop.
 }
 
-/// The mint's caller-supplied `omit` predicate is the per-scope reach fold's home-omission hook: a
-/// frame the predicate reports the scope's home frame already pins never lands as a member, so a
-/// resident value never witnesses its own home frame — the `region → scope → set → frame` cycle the
-/// reach forbids (and the source of the `let rec` self-bind no-op). A same-region (home) host is
-/// omitted; a foreign frame is kept; duplicate hosts collapse under subsumption; an always-false
-/// predicate (a frameless scope with no home to omit) keeps everything. Minted into a neutral `dest`
-/// region so the caller predicate — not the destination self-cycle rule — drives the omission.
+/// A mint applies no destination-relative policy: every source member lands in the description, and
+/// two sources naming the same region collapse to one member (subsumption dedups by region). Minted
+/// into a neutral `dest` region so neither the self rule nor ancestor subsumption is in play.
 #[test]
-fn mint_omit_predicate_drops_home_and_keeps_foreign_reach() {
-    let home = run_root_storage();
+fn mint_keeps_every_source_member_and_dedups_by_region() {
     let foreign = run_root_storage();
     let dest = run_root_storage();
 
-    // A source naming the home frame the predicate already pins contributes no member (the
-    // self-bind / home-frame omission).
-    let (omitted, _omitted_pins) = FrameReach::mint(
-        dest.brand().0,
-        &[&FramePins::singleton(Rc::clone(&home))],
-        |region| home.pins_region(region),
-    );
-    assert!(
-        omitted.is_none(),
-        "the home frame must be omitted from the minted set"
-    );
-
-    // A foreign frame the predicate does not cover is kept — the region a bound closure / module
-    // borrows into. `_kept_pins` (the owned bundle) pins the member across the `members()` read.
+    // A source frame lands as a member — the region a bound closure / module borrows into.
+    // `_kept_pins` (the owned bundle) pins the member across the `members()` read.
     let (kept, _kept_pins) = FrameReach::mint(
         dest.brand().0,
         &[&FramePins::singleton(Rc::clone(&foreign))],
-        |region| home.pins_region(region),
     );
     assert!(
         matches!(kept.unwrap().members().as_slice(), [only] if Rc::ptr_eq(only, &foreign)),
-        "a foreign frame must land in the minted set",
+        "a source frame must land in the minted set",
     );
 
-    // Two sources naming the same foreign region collapse to one member (subsumption dedups by
-    // region).
+    // Two sources naming the same foreign region collapse to one member.
     let (deduped, _deduped_pins) = FrameReach::mint(
         dest.brand().0,
         &[
             &FramePins::singleton(Rc::clone(&foreign)),
             &FramePins::singleton(Rc::clone(&foreign)),
         ],
-        |region| home.pins_region(region),
     );
     assert_eq!(
         deduped.unwrap().members().len(),
         1,
         "a duplicate member stays a singleton, not a double entry",
-    );
-
-    // With an always-false predicate (a frameless scope with no home to omit), nothing is omitted.
-    let (frameless, _frameless_pins) = FrameReach::mint(
-        dest.brand().0,
-        &[&FramePins::singleton(Rc::clone(&home))],
-        |_region| false,
-    );
-    assert!(
-        frameless.is_some(),
-        "with no home frame to omit, the member lands in the minted set",
     );
 }
 
@@ -648,12 +617,11 @@ fn binding_entry_foreign_pins_release_at_entry_death() {
     let weak = Rc::downgrade(&foreign);
 
     // A value living in `region`, and an owned foreign bundle naming `foreign` (minted into a
-    // neutral dest with an always-false omit, so no home-omission drops the member).
+    // neutral dest, so the self rule does not strip the member).
     let obj = region.brand().alloc_object(KObject::Number(1.0));
     let (_reach, pins) = FrameReach::mint(
         dest.brand().0,
         &[&FramePins::singleton(Rc::clone(&foreign))],
-        |_region| false,
     );
 
     let bindings: Bindings = Bindings::new();
@@ -1350,8 +1318,8 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
 }
 
 // `FrameReach::mint` — the witness-set hosting substrate (design/witness-hosting.md § Composition).
-// Each test below pins one rule of the mint's composition (home-omission, borrows-host
-// materialization, outer-chain subsumption, precise reads, teardown release). The mint returns the
+// Each test below pins one rule of the mint's composition (exact membership, the self rule,
+// outer-chain subsumption, precise reads, teardown release). The mint returns the
 // hosted (`Weak`-membered) description alongside the owned `FramePins` bundle that pins its members;
 // each test keeps that bundle alive across its `members()` read.
 
@@ -1369,7 +1337,6 @@ fn mint_composes_exact_members() {
             &FramePins::singleton(Rc::clone(&a)),
             &FramePins::singleton(Rc::clone(&b)),
         ],
-        |_| false,
     );
     let minted = minted.unwrap();
 
@@ -1391,10 +1358,7 @@ fn mint_composes_exact_members() {
 fn mint_self_rule_strips_dest_from_the_bundle_only() {
     let c = run_root_storage();
 
-    let (minted, pins) =
-        FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&c))], |_| {
-            false
-        });
+    let (minted, pins) = FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&c))]);
 
     assert_eq!(
         minted
@@ -1419,9 +1383,7 @@ fn mint_materializes_foreign_host() {
     let c = run_root_storage();
 
     let (minted_into_c, _pins_c) =
-        FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&a))], |_| {
-            false
-        });
+        FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&a))]);
     let minted_into_c = minted_into_c.unwrap();
     assert_eq!(minted_into_c.members().len(), 1, "A is foreign to C");
     assert!(std::ptr::eq(
@@ -1430,9 +1392,7 @@ fn mint_materializes_foreign_host() {
     ));
 
     let (minted_into_a, pins_a) =
-        FrameReach::mint(a.brand().0, &[&FramePins::singleton(Rc::clone(&a))], |_| {
-            false
-        });
+        FrameReach::mint(a.brand().0, &[&FramePins::singleton(Rc::clone(&a))]);
     assert_eq!(
         minted_into_a
             .expect("A stays an exact member of the description minted into A")
@@ -1461,7 +1421,6 @@ fn mint_subsumes_ancestor() {
             &FramePins::singleton(Rc::clone(&a)),
             &FramePins::singleton(Rc::clone(&b)),
         ],
-        |_| false,
     );
     let minted = minted.unwrap();
 
@@ -1479,10 +1438,7 @@ fn mint_reads_back_under_pin() {
     let a = run_root_storage();
     let c = run_root_storage();
 
-    let (minted, _pins) =
-        FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&a))], |_| {
-            false
-        });
+    let (minted, _pins) = FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&a))]);
     let minted = minted.unwrap();
 
     let regions: Vec<*const KoanRegion> = minted
@@ -1502,10 +1458,7 @@ fn mint_leaves_arena_pages_untouched() {
     let c = run_root_storage();
 
     let before = c.region().alloc_count();
-    let (_minted, _pins) =
-        FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&a))], |_| {
-            false
-        });
+    let (_minted, _pins) = FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&a))]);
     assert_eq!(
         c.region().alloc_count(),
         before,
@@ -1517,7 +1470,7 @@ fn mint_leaves_arena_pages_untouched() {
 /// `Weak`, so the owned `FramePins` bundle carries the strong pins. Retaining that bundle in `C`'s
 /// region ([`RegionHandle::retain_reach`]) makes `C` the members' liveness home; dropping `C`'s
 /// storage drops the retained bundle, decrementing each member's refcount. No self-cycle
-/// (home-omission forbids `C` from holding its own `Rc`), so the extra refs fall away at `C`'s death
+/// (the self rule forbids `C` from holding its own `Rc`), so the extra refs fall away at `C`'s death
 /// — the shape the Miri leak audit exercises. (AC: teardown releasing members at region death.)
 #[test]
 fn mint_teardown_releases_members() {
@@ -1535,7 +1488,6 @@ fn mint_teardown_releases_members() {
                 &FramePins::singleton(Rc::clone(&a)),
                 &FramePins::singleton(Rc::clone(&b)),
             ],
-            |_| false,
         );
         assert_eq!(minted.unwrap().members().len(), 2);
         // The region retains the owned bundle for its whole life — the liveness home a resident
@@ -1625,7 +1577,7 @@ fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
             let ptr = *substrate as *const RecordSubstrate<'_>;
             (
                 region.owns_substrate(ptr),
-                super::Residence::dest_only(region).owns_substrate(substrate),
+                super::Residence::with_reach(region, &[]).owns_substrate(substrate),
             )
         }
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
@@ -1671,7 +1623,6 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
     let (covering, _covering_pins) = FrameReach::mint(
         consumer_storage.brand().0,
         &[&FramePins::singleton(Rc::clone(&producer))],
-        |_| false,
     );
     let covering = covering.expect("producer is foreign to the consumer region");
     let covering_evidence = StoredReach::for_test(Some(covering), false);

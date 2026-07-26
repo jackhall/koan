@@ -16,7 +16,7 @@ use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureEle
 use crate::machine::CallFrame;
 use crate::witnessed::Delivered;
 
-/// Build a scalar carrier residing in `producer`'s region with the given home-omitted foreign reach
+/// Build a scalar carrier residing in `producer`'s region with the given exact reach
 /// and `borrows_into_home` bit — the exact carrier a resident-value read hands to finalize. Returns
 /// the carrier (lifetime-erased, so it escapes the frame's rank-2 scope open) and a [`Weak`] to the
 /// producer's `FrameStorage` for the liveness census.

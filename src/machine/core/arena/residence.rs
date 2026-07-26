@@ -16,23 +16,20 @@ use crate::machine::{CarrierWitness, DeliveredCarried};
 use crate::witnessed::{AuditedStored, Witnessed};
 
 /// The evidence-tier move-ins live on [`Scope`], not [`super::RegionBrand`]: a [`StoredReach`] is
-/// meaningful only relative to the scope that minted it — the mint materializes no member for a
-/// region [`Scope::covers_region_ambiently`] already covers — so the audit that consumes one must
-/// run against that same scope's region and ambient coverage. Taking the destination from `self`
-/// makes it the minting scope's own region by construction; there is no scope parameter for a
-/// caller to mismatch. (The block lives here, beside the other move-in tiers and [`Residence`],
-/// rather than in `scope.rs`.)
+/// meaningful only relative to the scope that minted it — its description is hosted in that
+/// scope's own arena — so the audit that consumes one must run against that same scope's region.
+/// Taking the destination from `self` makes it the minting scope's own region by construction;
+/// there is no scope parameter for a caller to mismatch. (The block lives here, beside the other
+/// move-in tiers and [`Residence`], rather than in `scope.rs`.)
 impl<'a> Scope<'a> {
     /// The evidence tier for an `o` whose region borrows may reach a *foreign* region this scope
     /// has already minted reach evidence for (a read-site's materialized `StoredReach`), not just
     /// its own region. Widens [`super::RegionBrand::alloc_object_checked`]'s dest-only audit to
-    /// "this scope's region, `evidence`'s reach members, or a region
-    /// [`Self::covers_region_ambiently`] covers" — the last disjunct is the exact complement of the
-    /// mint's omission policy, which materializes no member for an ambiently covered region, so a
-    /// dest/evidence-only audit would under-cover a value legitimately reaching one (a module bound
-    /// at an outer/root scope, read by a nested per-call functor body). Placing an Object-arm module value
-    /// takes this door — a module binds value-side — because the module's child scope lives in a
-    /// region named by the derived stored reach, not necessarily this scope's own.
+    /// "this scope's region, or `evidence`'s reach members" — exact, because the mint applies no
+    /// omission policy, so every region the value legitimately reaches is a named member. Placing
+    /// an Object-arm module value takes this door — a module binds value-side — because the
+    /// module's child scope lives in a region named by the derived stored reach, not necessarily
+    /// this scope's own.
     pub(crate) fn store_object_adopted<P>(
         &self,
         cell: &DeliveredCarried,
@@ -47,8 +44,8 @@ impl<'a> Scope<'a> {
         Ok(Reached::mint(obj, stored, pins))
     }
 
-    /// The pin twin of [`Self::store_object_adopted`]: derive the non-omitting `Kept` stored reach
-    /// ([`Self::pinned_reach_of`], naming every region the record borrows so the audit's
+    /// The pin twin of [`Self::store_object_adopted`]: derive the whole-envelope stored reach
+    /// ([`Self::envelope_reach_of`], naming every region the record borrows so the audit's
     /// `any_member_region` arm evidences the foreign substrate), copy the projection in under it, and
     /// fuse. Used by the bind seam's pin verb, where the binding retains the reach.
     pub(crate) fn store_object_pinned<P>(
@@ -60,7 +57,7 @@ impl<'a> Scope<'a> {
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
-        let (stored, pins) = self.pinned_reach_of(cell);
+        let (stored, pins) = self.envelope_reach_of(cell);
         let obj = self.store_projection_reaching(cell, &project, stored, types)?;
         Ok(Reached::mint(obj, stored, pins))
     }
@@ -98,17 +95,13 @@ impl<'a> Scope<'a> {
     ) -> Result<Reached<'a, &'a KObject<'a>>, KError> {
         let (stored, pins) = self.child_module_reach(source_child);
         let sets: &[&FrameReach] = stored_sets(&stored);
-        let ambient = |region: &KoanRegion| self.covers_region_ambiently(region);
         let new_module: &'a Module<'a> = self
             .brand()
             .0
-            .alloc_resident_checked::<Module<'static>>(
-                module,
-                ResidenceEvidence::reaching_ambient(sets, &ambient),
-            )
+            .alloc_resident_checked::<Module<'static>>(module, ResidenceEvidence::reaching(sets))
             .expect(
-                "store_transparent_view: a Module's child scope must be covered by dest, the \
-                 derived reach, or the destination scope's ambient coverage",
+                "store_transparent_view: a Module's child scope must be covered by dest or the \
+                 derived reach",
             );
         seal(new_module);
         let obj = self.store_value_reaching(KObject::Module(new_module), stored, types)?;
@@ -116,15 +109,12 @@ impl<'a> Scope<'a> {
     }
 
     /// Audit a projection of the delivered `cell` (deep-cloned into this scope's region) against
-    /// `stored`'s reach plus this scope's ambient coverage — the shared audit behind the object
-    /// store doors. Widens [`super::RegionBrand::alloc_object_checked`]'s dest-only audit to "this
-    /// scope's region, `stored`'s reach members, or a region [`Self::covers_region_ambiently`]
-    /// covers"; the last disjunct is the exact complement of the mint's omission policy (which
-    /// materializes no member for an ambiently covered region), so a dest/reach-only audit would
-    /// under-cover a value legitimately reaching one. Returns a structured `KError` on rejection so a
-    /// bug in the caller's derivation surfaces catchably rather than crashing the interpreter. The
-    /// projection is read under the cell's own pin ([`DeliveredCarried::open`]), so the source backing
-    /// stays live for the deep clone.
+    /// `stored`'s reach — the shared audit behind the object store doors. Widens
+    /// [`super::RegionBrand::alloc_object_checked`]'s dest-only audit to "this scope's region, or
+    /// `stored`'s reach members"; exact, because the mint omits nothing. Returns a structured
+    /// `KError` on rejection so a bug in the caller's derivation surfaces catchably rather than
+    /// crashing the interpreter. The projection is read under the cell's own pin
+    /// ([`DeliveredCarried::open`]), so the source backing stays live for the deep clone.
     fn store_projection_reaching<P>(
         &self,
         cell: &DeliveredCarried,
@@ -141,7 +131,7 @@ impl<'a> Scope<'a> {
         })
     }
 
-    /// Audit an already-resident-lifetime value `o` against `stored`'s reach plus ambient coverage —
+    /// Audit an already-resident-lifetime value `o` against `stored`'s reach —
     /// the no-projection twin of [`Self::store_projection_reaching`], for a value in hand (a module
     /// wrapped as an object). Private: its only callers are the fused store doors above, each of
     /// which derives `o` and `stored` from one source (a `cell`, a `child` scope), so the pairing is
@@ -155,17 +145,12 @@ impl<'a> Scope<'a> {
     ) -> Result<&'a KObject<'a>, KError> {
         let kt = o.ktype();
         let sets: &[&FrameReach] = stored_sets(&stored);
-        let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
         self.brand()
             .0
-            .alloc_resident_checked::<KObject<'static>>(
-                o,
-                ResidenceEvidence::reaching_ambient(sets, &ambient),
-            )
+            .alloc_resident_checked::<KObject<'static>>(o, ResidenceEvidence::reaching(sets))
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
-                    "{}: borrows a region not covered by dest, its reach evidence, or the \
-                     destination scope's ambient coverage",
+                    "{}: borrows a region not covered by dest or its reach evidence",
                     kt.name(types)
                 )))
             })
@@ -244,21 +229,16 @@ fn stored_sets<'s, 'r>(stored: &'s StoredReach<'r>) -> &'s [&'r FrameReach] {
 }
 
 /// Ownership predicate for the checked/reaching-tier residence audits: "`dest`, or the hosting
-/// arena of some member of `reach`, or a region `ambient` reports as already covered" —
-/// [`KObject::resident_in`](KObject::resident_in)'s dest-only check is the `reach: &[]`,
-/// `ambient: None` case; the object delivered tier widens it. Each `reach` set was minted into `dest`'s own arena by
-/// the same scope the audit runs against (`Scope::envelope_reach_of`), so
-/// membership here is dest-relative by construction — no separate "is this evidence dest-relative"
-/// check is needed. `ambient`, when supplied, is the destination scope's own
-/// [`Scope::covers_region_ambiently`](super::scope::Scope::covers_region_ambiently) — the exact
-/// predicate every `envelope_reach_of` mint omits by, so a region the mint left
-/// out of `reach` is still resident — omitted from the *reach set*, never from *residence*. Only
-/// [`Scope`]'s own evidence-tier methods construct the `ambient` form, binding the predicate to
-/// the destination scope by construction.
+/// arena of some member of `reach`" — the `reach: &[]` case is the plain dest-only check
+/// ([`KObject::resident_in_delivered`](KObject::resident_in_delivered)); the object delivered tier
+/// widens it. Each `reach` set was minted
+/// into `dest`'s own arena by the same scope the audit runs against
+/// (`Scope::envelope_reach_of`), so membership here is dest-relative by construction — no separate
+/// "is this evidence dest-relative" check is needed. A mint applies no omission policy, so `reach`
+/// names every region the value borrows into and the two disjuncts are exhaustive.
 pub(crate) struct Residence<'d> {
     dest: &'d KoanRegion,
     reach: &'d [&'d FrameReach],
-    ambient: Option<&'d dyn Fn(&KoanRegion) -> bool>,
     /// A saw-a-region-pointer recorder: each `owns_*` leaf (a `KFunction` / `Module`
     /// pointer — the residence side-table's recorded region pointers) sets it. A
     /// walk that passes the audit and set this reports a value whose borrows reach *some* region; a
@@ -269,22 +249,12 @@ pub(crate) struct Residence<'d> {
 }
 
 impl<'d> Residence<'d> {
-    pub(crate) fn dest_only(dest: &'d KoanRegion) -> Self {
-        Residence {
-            dest,
-            reach: &[],
-            ambient: None,
-            seen: None,
-        }
-    }
-
-    /// [`Self::dest_only`] with a saw-a-region-pointer recorder — the [`Self::seen`] flag is set
-    /// while the walk visits any `owns_*` region-pointer leaf.
+    /// [`Self::with_reach`] with no reach evidence plus a saw-a-region-pointer recorder — the
+    /// [`Self::seen`] flag is set while the walk visits any `owns_*` region-pointer leaf.
     pub(crate) fn dest_only_seen(dest: &'d KoanRegion, seen: &'d Cell<bool>) -> Self {
         Residence {
             dest,
             reach: &[],
-            ambient: None,
             seen: Some(seen),
         }
     }
@@ -293,22 +263,6 @@ impl<'d> Residence<'d> {
         Residence {
             dest,
             reach,
-            ambient: None,
-            seen: None,
-        }
-    }
-
-    /// [`Self::with_reach`] plus the destination scope's own ambient coverage
-    /// ([`Scope::covers_region_ambiently`]) — see the type doc's `ambient` paragraph.
-    pub(crate) fn with_reach_and_ambient(
-        dest: &'d KoanRegion,
-        reach: &'d [&'d FrameReach],
-        ambient: &'d dyn Fn(&KoanRegion) -> bool,
-    ) -> Self {
-        Residence {
-            dest,
-            reach,
-            ambient: Some(ambient),
             seen: None,
         }
     }
@@ -320,18 +274,16 @@ impl<'d> Residence<'d> {
         }
     }
 
-    /// Whether `region` is `dest` itself, is covered by some `reach` member's own pin chain, or is
-    /// reported covered by `ambient` — the module store doors' ([`Scope::store_module_object`],
-    /// [`Scope::store_transparent_view`]) coverage check.
+    /// Whether `region` is `dest` itself or is covered by some `reach` member's own pin chain — the
+    /// module store doors' ([`Scope::store_module_object`], [`Scope::store_transparent_view`])
+    /// coverage check.
     /// [`ReachDescription::pins_region`](crate::witnessed::ReachDescription::pins_region) is the
     /// library's public reach-coverage query (unlike
     /// [`ReachDescription::members`](crate::witnessed::ReachDescription::members), which is gated to
     /// `test`/`test-hooks` — koan cannot enumerate a
     /// description's members in production, only ask it whether a given region is covered).
     pub(crate) fn covers_region(&self, region: &KoanRegion) -> bool {
-        std::ptr::eq(self.dest, region)
-            || self.reach.iter().any(|fs| fs.pins_region(region))
-            || self.ambient.is_some_and(|f| f(region))
+        std::ptr::eq(self.dest, region) || self.reach.iter().any(|fs| fs.pins_region(region))
     }
 
     /// Whether `module`'s own storage is `dest`-resident (the address side-table check) or its
@@ -373,17 +325,14 @@ impl<'d> Residence<'d> {
 /// call-site half of a [`Residence`], without the destination region (the audit takes that from
 /// the handle it runs against). A family's `audit` builds a [`Residence`] from `(region, self)`
 /// and runs the family's own residence walk over it. Fields are private and mirror [`Residence`]'s
-/// evidence fields: `reach` are the reach sets a foreign borrow may legitimately land in, `ambient`
-/// (when present) is the destination scope's own [`Scope::covers_region_ambiently`], and `seen` is
-/// the walk's saw-a-region-pointer recorder.
+/// evidence fields: `reach` are the reach sets a foreign borrow may legitimately land in, and
+/// `seen` is the walk's saw-a-region-pointer recorder.
 ///
 /// [`Self::dest_only`] and [`Self::dest_only_seen`] are freely mintable within `machine::core`; the
-/// ambient-bearing form ([`Self::reaching_ambient`]) is module-private, minted only by [`Scope`]'s
-/// own evidence-tier methods, so the ambient predicate is always the destination scope's own
-/// coverage — a builtin cannot mint a permissive (always-true ambient) context.
+/// reach-bearing form ([`Self::reaching`]) is module-private, minted only by [`Scope`]'s own
+/// evidence-tier methods, so the reach sets are always ones that scope minted into its own arena.
 pub struct ResidenceEvidence<'ctx> {
     reach: &'ctx [&'ctx FrameReach],
-    ambient: Option<&'ctx dyn Fn(&KoanRegion) -> bool>,
     seen: Option<&'ctx Cell<bool>>,
 }
 
@@ -392,7 +341,6 @@ impl<'ctx> ResidenceEvidence<'ctx> {
     pub(crate) fn dest_only() -> Self {
         ResidenceEvidence {
             reach: &[],
-            ambient: None,
             seen: None,
         }
     }
@@ -402,49 +350,28 @@ impl<'ctx> ResidenceEvidence<'ctx> {
     pub(crate) fn dest_only_seen(seen: &'ctx Cell<bool>) -> Self {
         ResidenceEvidence {
             reach: &[],
-            ambient: None,
             seen: Some(seen),
         }
     }
 
-    /// The reaching evidence tier: `reach`'s foreign sets plus the destination scope's own ambient
-    /// coverage. Module-private so only [`Scope`]'s evidence-tier methods mint it — binding
-    /// `ambient` to the destination scope by construction.
-    fn reaching_ambient(
-        reach: &'ctx [&'ctx FrameReach],
-        ambient: &'ctx dyn Fn(&KoanRegion) -> bool,
-    ) -> Self {
-        ResidenceEvidence {
-            reach,
-            ambient: Some(ambient),
-            seen: None,
-        }
+    /// The reaching evidence tier: `reach`'s foreign sets. Module-private so only [`Scope`]'s
+    /// evidence-tier methods mint it — binding the sets to the destination scope's own arena by
+    /// construction.
+    fn reaching(reach: &'ctx [&'ctx FrameReach]) -> Self {
+        ResidenceEvidence { reach, seen: None }
     }
 }
 
 // SAFETY: `audit` returns true only when every region borrow the stored `KObject`
-// carries is resident in `region`, covered by `context`'s reach evidence, or (when the ambient
-// predicate is present) covered by the destination scope's own ambient coverage — the residence the
+// carries is resident in `region` or covered by `context`'s reach evidence — the residence the
 // `KObject` walk verifies. A `Wrapped { type_id }` tag needs no walk: `KType` is a Copy digest
 // handle carrying no region borrow, so it reaches nothing outside `region`.
 unsafe impl AuditedStored<KoanStorageProfile> for KObject<'static> {
     type AuditContext<'ctx> = ResidenceEvidence<'ctx>;
     fn audit(region: &KoanRegion, value: &KObject<'_>, context: ResidenceEvidence<'_>) -> bool {
-        match (context.ambient, context.seen) {
-            (Some(ambient), _) => {
-                // The plain evidence-only check first (cheap, directly unit-testable); only fall
-                // back to the ambient-widened walk when it declines.
-                value.resident_in_delivered(region, context.reach)
-                    || value.resident_in_visiting(&Residence::with_reach_and_ambient(
-                        region,
-                        context.reach,
-                        ambient,
-                    ))
-            }
-            (None, Some(seen)) => {
-                value.resident_in_visiting(&Residence::dest_only_seen(region, seen))
-            }
-            (None, None) => value.resident_in(region),
+        match context.seen {
+            Some(seen) => value.resident_in_visiting(&Residence::dest_only_seen(region, seen)),
+            None => value.resident_in_delivered(region, context.reach),
         }
     }
 }
@@ -469,18 +396,14 @@ unsafe impl AuditedStored<KoanStorageProfile> for Scope<'static> {
 }
 
 // SAFETY: `audit` returns true only when the stored `Module`'s child scope's region is `region`
-// itself, covered by `context`'s reach evidence, or covered by the destination scope's ambient
-// coverage — the `Module` borrows that child scope, so its region must be covered. Exact: the
-// child-scope reference is the `Module`'s only region borrow. The `type_members` /
-// `slot_type_tags` maps and the `self_sig` cell need no walk — a `KType` owns its content and
-// borrows no region data, so nothing installed through them can reach outside `region`.
+// itself or covered by `context`'s reach evidence — the `Module` borrows that child scope, so its
+// region must be covered. Exact: the child-scope reference is the `Module`'s only region borrow.
+// The `type_members` / `slot_type_tags` maps and the `self_sig` cell need no walk — a `KType` owns
+// its content and borrows no region data, so nothing installed through them can reach outside
+// `region`.
 unsafe impl AuditedStored<KoanStorageProfile> for Module<'static> {
     type AuditContext<'ctx> = ResidenceEvidence<'ctx>;
     fn audit(region: &KoanRegion, value: &Module<'_>, context: ResidenceEvidence<'_>) -> bool {
-        let residence = match context.ambient {
-            Some(ambient) => Residence::with_reach_and_ambient(region, context.reach, ambient),
-            None => Residence::dest_only(region),
-        };
-        residence.covers_region(value.child_scope().region())
+        Residence::with_reach(region, context.reach).covers_region(value.child_scope().region())
     }
 }

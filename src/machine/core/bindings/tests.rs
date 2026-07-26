@@ -7,7 +7,7 @@ use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 
-/// A value binding round-trips the home-omitted foreign reach it was bound with: a carrier-oriented
+/// A value binding round-trips the exact reach it was bound with: a carrier-oriented
 /// read hands back exactly the `FrameReach` stored at bind time, so the read wrapper can name the
 /// value's reach without reconstructing it from the value.
 #[test]
@@ -18,11 +18,11 @@ fn data_binding_round_trips_stored_reach() {
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
     // A synthetic foreign frame the value "reaches" — stored on the binding as its reach.
     let foreign = run_root_storage();
-    // Mint a description naming `foreign` (foreign to `region`, so it survives home-omission as a
-    // member) to stand in for the home-omitted foreign reach a value borrows. `_pins` keeps the
+    // Mint a description naming `foreign` (foreign to `region`, so the self rule keeps it in the
+    // owned bundle) to stand in for the reach a value borrows. `_pins` keeps the
     // minted description's members alive for the scope.
     let foreign_bundle = FramePins::singleton(Rc::clone(&foreign));
-    let (minted, _pins, _) = region.mint(&[&foreign_bundle], |_| false);
+    let (minted, _pins, _) = region.mint(&[&foreign_bundle]);
     let reach_set = minted.expect("a foreign member mints a single-member reach");
     let reach = StoredReach::for_test(Some(reach_set), false);
     bindings
@@ -58,7 +58,7 @@ fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
     let foreign = run_root_storage();
     let foreign_bundle = FramePins::singleton(Rc::clone(&foreign));
-    let (minted, _pins, _) = region.mint(&[&foreign_bundle], |_| false);
+    let (minted, _pins, _) = region.mint(&[&foreign_bundle]);
     let reach_set = minted.expect("a foreign member mints a single-member reach");
     let reach = StoredReach::for_test(Some(reach_set), false);
     bindings

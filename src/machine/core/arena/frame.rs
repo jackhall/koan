@@ -58,7 +58,7 @@ impl FrameStorageExt for FrameStorage {
 
 /// The non-owning reach description backing carrier witnesses: names the regions a carrier's value
 /// reaches, hosted in the value's home region's side table and referenced (never owned) by the
-/// carrier. See [`ReachDescription`] for the shared mechanism (membership queries, home-omission);
+/// carrier. See [`ReachDescription`] for the shared mechanism (membership queries, the self rule);
 /// Koan's member semantics are the library's [`PinsRegion`](crate::witnessed::PinsRegion) impl for
 /// [`RegionHost`]. Its owning counterpart is [`FramePins`].
 pub type FrameReach = ReachDescription<FrameStorage>;
