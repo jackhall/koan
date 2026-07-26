@@ -31,7 +31,7 @@ use crate::witnessed::SealedExtern;
 
 use super::dispatch::{BodyPlacement, DepRequest, SchedulerView, SubmitContext};
 use super::finalize::check_spliced_return;
-use super::lift::{copy_carried, seam_source_pins, seam_verb};
+use super::lift::{copy_carried, seam_still_borrows, seam_verb};
 use super::nodes::{ChainOp, NodeStep, NodeWork};
 use super::obligation::{with_obligation, ReturnObligation};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
@@ -185,7 +185,7 @@ impl<'run> KoanRuntime<'run> {
             delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
                 dest,
                 &FramePins::empty(),
-                &seam_source_pins(&delivered, verb),
+                seam_still_borrows(&delivered, verb),
                 |value, _region, placement| {
                     copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
                 },

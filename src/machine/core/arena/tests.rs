@@ -374,7 +374,7 @@ fn envelope_transfer_folds_an_independent_foreign_value() {
         delivered.transfer_into::<BrandFamily, CarriedFamily, _>(
             here_dest,
             &FramePins::empty(),
-            delivered.pins(),
+            |_product, _region| true,
             |foreign, _brand, _b: FoldToken<'_>| foreign,
         );
     drop(delivered);
@@ -409,7 +409,7 @@ fn pass_through_duplicate_keeps_reach_pointer_and_mints_nothing() {
         source.transfer_into::<BrandFamily, CarriedFamily, _>(
             here_dest,
             &FramePins::empty(),
-            source.pins(),
+            |_product, _region| true,
             |foreign, _brand, _b: FoldToken<'_>| foreign,
         );
 
@@ -505,7 +505,7 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     let (acc1, bundle1) = dep_a.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc0,
         &FramePins::empty(),
-        dep_a.pins(),
+        |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
             (region, cells)
@@ -514,7 +514,7 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     let (acc2, _bundle2) = dep_b.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc1,
         &bundle1,
-        dep_b.pins(),
+        |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
             (region, cells)
@@ -816,7 +816,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let (acc1, bundle1) = source_a.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc0,
         &FramePins::empty(),
-        source_a.pins(),
+        |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
             (region, cells)
@@ -826,7 +826,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let (acc2, _bundle2) = source_b.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc1,
         &bundle1,
-        source_b.pins(),
+        |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
             (region, cells)
@@ -900,7 +900,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
     let (acc1, bundle1) = source_1.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc0,
         &FramePins::empty(),
-        source_1.pins(),
+        |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
             (region, cells)
@@ -910,7 +910,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
     let (acc2, bundle2) = source_2.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc1,
         &bundle1,
-        source_2.pins(),
+        |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
             (region, cells)
@@ -928,7 +928,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
         source_outer.transfer_into_placing::<AggBuildFamily, CarriedFamily, _>(
             acc2,
             &bundle2,
-            source_outer.pins(),
+            |_product, _region| true,
             |outer_v, (_region, cells), placement| {
                 let region = FoldingBrand::in_fold_closure(placement);
                 if let KObject::KFunction(kf) = outer_v.object() {
@@ -1001,7 +1001,7 @@ fn multi_region_record_of_closures_survives_frame_free() {
     let (acc1, bundle1) = source_a.transfer_into::<RecordCellFamily, RecordCellFamily, _>(
         acc0,
         &FramePins::empty(),
-        source_a.pins(),
+        |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(("a".to_string(), Held::from_carried(dep)));
             (region, cells)
@@ -1011,7 +1011,7 @@ fn multi_region_record_of_closures_survives_frame_free() {
     let (acc2, _bundle2) = source_b.transfer_into::<RecordCellFamily, RecordCellFamily, _>(
         acc1,
         &bundle1,
-        source_b.pins(),
+        |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(("b".to_string(), Held::from_carried(dep)));
             (region, cells)

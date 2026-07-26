@@ -111,7 +111,8 @@ fn transfer_composes_the_source_home_from_its_pins() {
         element.transfer_into::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
             &PinBundle::empty(),
-            element.pins(),
+            // The product IS the source borrow, so it still reaches every region the envelope pins.
+            |_product, _region| true,
             |value, _handle, _brand| value,
         );
     drop(element);
@@ -138,7 +139,7 @@ fn transfer_unions_element_reach_across_folds() {
     let (acc1, acc1_bundle) = element_a.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
         acc0,
         &PinBundle::empty(),
-        element_a.pins(),
+        |_product, _region| true,
         |value, (handle, mut values), _brand| {
             values.push(value);
             (handle, values)
@@ -148,7 +149,7 @@ fn transfer_unions_element_reach_across_folds() {
     let (acc2, _acc2_bundle) = element_b.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
         acc1,
         &acc1_bundle,
-        element_b.pins(),
+        |_product, _region| true,
         |value, (handle, mut values), _brand| {
             values.push(value);
             (handle, values)
@@ -183,7 +184,9 @@ fn copied_transfer_pins_the_producer_when_the_product_still_borrows() {
         element.transfer_into::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
             &PinBundle::empty(),
-            element.pins(),
+            // The product's leaves still point into the producer's region, so the predicate keeps
+            // every member and the fold composes the producer in.
+            |_product, _region| true,
             |value, _handle, _brand| value,
         );
     drop(element);
@@ -210,7 +213,9 @@ fn copied_transfer_releases_the_producer_when_nothing_borrows_it() {
         element.transfer_into::<RegionHandleFamily<ShapeProfile>, ValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
             &PinBundle::empty(),
-            &PinBundle::empty(),
+            // The product is an owned `u32` — it borrows nothing, so the predicate releases every
+            // member and the fold pins nothing on the source side.
+            |_product, _region| false,
             |value, _handle, _brand| *value,
         );
     drop(element);

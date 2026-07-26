@@ -296,10 +296,17 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
         self.merge_composed(
             other,
             pin,
-            |_left, right, live_dest| {
-                Carrier::compose_into(right, self_bundle, other_bundle, live_dest.region_handle())
+            |_left, right_witness, left_value, dest, token| {
+                // Both operands ride un-copied, so neither claim depends on the product: compose off
+                // the destination's handle before `f` consumes it.
+                let (witness, bundle) = Carrier::compose_into(
+                    right_witness,
+                    self_bundle,
+                    other_bundle,
+                    dest.region_handle(),
+                );
+                (f(left_value, dest, token), witness, bundle)
             },
-            f,
         )
     }
 
@@ -322,13 +329,19 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
         F: RegionOwner<Region = Region<Pr>>,
         for<'b> B::At<'b>: super::HasRegionHandle<'b, Pr>,
     {
+        let placing = super::place_over_dest::<T, B, P, Pr>(f);
         self.merge_composed(
             other,
             pin,
-            |_left, right, live_dest| {
-                Carrier::compose_into(right, self_bundle, other_bundle, live_dest.region_handle())
+            |_left, right_witness, left_value, dest, token| {
+                let (witness, bundle) = Carrier::compose_into(
+                    right_witness,
+                    self_bundle,
+                    other_bundle,
+                    dest.region_handle(),
+                );
+                (placing(left_value, dest, token), witness, bundle)
             },
-            super::place_over_dest::<T, B, P, Pr>(f),
         )
     }
 }

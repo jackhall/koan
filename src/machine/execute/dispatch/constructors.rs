@@ -396,7 +396,8 @@ fn finish_witnessed<'step>(
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     &FramePins::empty(),
-                    terminals[0].delivered.pins(),
+                    // The wrap holds the value's borrow verbatim, so nothing is released.
+                    |_product, _region| true,
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         let wrapped = if collapse {
@@ -441,7 +442,9 @@ fn finish_witnessed<'step>(
                         .transfer_into::<RecordFieldsFamily, RecordFieldsFamily, _>(
                             acc,
                             &acc_bundle,
-                            term.delivered.pins(),
+                            // Each field cell is a pointer copy of the term's value, so it
+                            // borrows everything the term did.
+                            |_product, _region| true,
                             move |value, (region, mut fields), _brand| {
                                 fields.push((name, value.object().deep_clone()));
                                 (region, fields)
@@ -510,7 +513,8 @@ fn finish_witnessed<'step>(
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     &FramePins::empty(),
-                    terminals[0].delivered.pins(),
+                    // The tag holds the value's borrow verbatim, so nothing is released.
+                    |_product, _region| true,
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         Carried::Object(region.alloc_object_folded(KObject::tagged(
@@ -547,7 +551,8 @@ fn finish_witnessed<'step>(
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     &FramePins::empty(),
-                    terminals[0].delivered.pins(),
+                    // The wrap holds the value's borrow verbatim, so nothing is released.
+                    |_product, _region| true,
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         // Stamp the value's FULL type — including a `Wrapped` payload's own

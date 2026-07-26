@@ -29,7 +29,7 @@ pub use bindings::{
     NodeHandle, PendingBinderGuard,
 };
 pub(crate) use carrier_witness::{
-    copied_source_pins, force_substrate_borrows_host, source_pins_releasing_home, with_home_region,
+    clone_still_borrows, force_substrate_borrows_host, product_still_borrows, with_home_region,
 };
 pub use carrier_witness::{CarrierWitness, DeliveredCarried};
 pub(crate) use kerror::kerror_ktype;

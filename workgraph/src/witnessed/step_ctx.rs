@@ -159,8 +159,8 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
                         acc,
                         &acc_bundle,
                         // The view rides the accumulator un-copied, so the built value genuinely
-                        // borrows into the dep's regions: the dep's own pins are the claim.
-                        dep.pins(),
+                        // borrows into every region the dep does: the predicate releases none.
+                        |_product, _region| true,
                         fold_dep_view::<V, F::Region>(),
                     )
                 });

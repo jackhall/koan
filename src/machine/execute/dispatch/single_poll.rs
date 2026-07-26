@@ -13,7 +13,7 @@ use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
-use super::super::lift::{copy_carried, seam_source_pins, seam_verb};
+use super::super::lift::{copy_carried, seam_still_borrows, seam_verb};
 use super::super::run_loop::{dest_brand, DestHandleFamily};
 use super::super::StepCarried;
 use super::super::WitnessedDepFinish;
@@ -193,7 +193,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
             .transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
                 dest,
                 &crate::machine::core::FramePins::empty(),
-                &seam_source_pins(delivered, verb),
+                seam_still_borrows(delivered, verb),
                 |value, _region, placement| {
                     copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
                 },

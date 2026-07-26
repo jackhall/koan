@@ -651,8 +651,12 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         W: ComposeWitness<B>,
     {
         // The generic composed witness owns whatever it names (a self-contained union), so it threads
-        // nothing out — `merge_composed`'s `X` is `()`.
-        let (out, ()) = self.merge_composed(other, pin, |l, r, d| (W::compose(l, r, d), ()), f);
+        // nothing out — `merge_composed`'s `X` is `()`. It reads the destination operand before `f`
+        // consumes it, and depends on neither the product nor a source claim.
+        let (out, ()) = self.merge_composed(other, pin, |l, r, left, right, token| {
+            let witness = W::compose(l, r, &right);
+            (f(left, right, token), witness, ())
+        });
         out
     }
 
@@ -674,25 +678,27 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         W: ComposeWitness<B>,
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
     {
-        let (out, ()) = self.merge_composed(
-            other,
-            pin,
-            |l, r, d| (W::compose(l, r, d), ()),
-            place_over_dest::<T, B, P2, Pr>(f),
-        );
+        let placing = place_over_dest::<T, B, P2, Pr>(f);
+        let (out, ()) = self.merge_composed(other, pin, |l, r, left, right, token| {
+            let witness = W::compose(l, r, &right);
+            (placing(left, right, token), witness, ())
+        });
         out
     }
 
     /// The engine under [`Self::merge_pinned`] and the envelope-bearing
     /// [`Delivered::transfer_into`](delivered::Delivered::transfer_into): a pinned merge whose
-    /// composed witness is computed by an explicit `compose` closure over both witnesses and the
-    /// destination's live form. Crate-private because a caller-supplied `compose` could
-    /// under-cover; the two callers pass [`ComposeWitness::compose`] or the hosted carrier
-    /// composition, both of which discharge the coverage obligation.
+    /// `fold` both builds the product and computes the composed witness, inside one brand. Both
+    /// operand witnesses and both live forms are in scope there, so a composition that must see the
+    /// *product* — the retention predicate at a relocation verb, which asks what the folded bytes
+    /// still borrow — is expressible without a second re-anchor. Crate-private because a
+    /// caller-supplied composition could under-cover; the callers pass [`ComposeWitness::compose`]
+    /// or the hosted carrier composition, both of which discharge the coverage obligation.
     ///
-    /// `compose` returns the composed witness paired with a threaded value `X` — the freshly-minted
-    /// owned reach bundle for a reference-only carrier merge (threaded to the next fold step or the
-    /// terminal seal), or `()` for a self-contained composed witness that owns what it names.
+    /// `fold` returns the projected value, the composed witness, and a threaded value `X` — the
+    /// freshly-minted owned reach bundle for a reference-only carrier merge (threaded to the next
+    /// fold step or the terminal seal), or `()` for a self-contained composed witness that owns
+    /// what it names.
     pub(in crate::witnessed) fn merge_composed<
         B: Reattachable,
         P: Reattachable,
@@ -702,8 +708,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         self,
         other: Witnessed<B, W>,
         pin: &Pin,
-        compose: impl for<'b> FnOnce(&W, &W, &B::At<'b>) -> (W, X),
-        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
+        fold: impl for<'b> FnOnce(&W, &W, T::At<'b>, B::At<'b>, FoldToken<'b>) -> (P::At<'b>, W, X),
     ) -> (Witnessed<P, W>, X) {
         let Witnessed {
             value: left,
@@ -717,14 +722,19 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         // (the `Witness` contract, supplied externally as in `Sealed::open_with`), and the right
         // (destination) operand's backing is the live destination the caller holds to compose
         // into. Both carriers are re-anchored to one existential brand the `for<'b>` closure
-        // cannot leak, and the projection is immediately re-erased to `'static` for storage.
-        // `compose` runs before `f` consumes `live_right`, so the destination's live form is still
-        // available to mint into; the composed witness names the coverage thereafter
-        // (`ComposeWitness`'s obligation, or the hosted composition's).
+        // cannot leak, and the projection is immediately re-erased to `'static` for storage. The
+        // composition runs inside `fold`, where the destination's live form is available to mint
+        // into; the composed witness names the coverage thereafter (`ComposeWitness`'s obligation,
+        // or the hosted composition's).
         let live_left: T::At<'_> = unsafe { left.reattach() };
         let live_right: B::At<'_> = unsafe { right.reattach() };
-        let (witness, threaded) = compose(&left_witness, &right_witness, &live_right);
-        let projected = f(live_left, live_right, FoldToken::mint());
+        let (projected, witness, threaded) = fold(
+            &left_witness,
+            &right_witness,
+            live_left,
+            live_right,
+            FoldToken::mint(),
+        );
         let _ = pin;
         (
             Witnessed {

@@ -416,7 +416,7 @@ fn type_recursive_member_relocates_and_navigates() {
 /// Build-time accumulator for the aggregate-fold mirrors below: the destination region plus the
 /// partial cell vector — a local twin of `dispatch::literal::AggBuildFamily` (private to that
 /// module), reattached here so the tests can drive `fold_cells`'s own mechanism
-/// (`copied_seam_source_pins` + `transfer_into_placing` + `copy_held_from_carried`) directly.
+/// (`cell_still_borrows` + `transfer_into_placing` + `copy_held_from_carried`) directly.
 struct RecordAggFamily;
 reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
 
@@ -446,10 +446,10 @@ fn alloc_home_closure_record<'run>(
     door.alloc_object_folded(KObject::record_of_held(door, fields, types))
 }
 
-/// Escape with **copy**: `fold_cells`'s exact aggregate loop (`copied_seam_source_pins` +
+/// Escape with **copy**: `fold_cells`'s exact aggregate loop (`cell_still_borrows` +
 /// `transfer_into_placing` + `copy_held_from_carried`), mirrored here for `DEPTH` independent
-/// producers each contributing a plain-data record — no field borrows anything, so
-/// `still_borrows_host` answers false and every cell claims the empty source bundle: the
+/// producers each contributing a plain-data record — no field borrows anything, so the retention
+/// predicate answers false over the rebuilt cell and every producer is released: the
 /// record is totally rebuilt into the aggregate's own region and every producer frame is dropped
 /// *before* the read, proving the seam genuinely releases rather than conservatively pinning.
 #[test]
@@ -466,7 +466,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
     let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
         (region.handle(), Vec::with_capacity(DEPTH))
     });
-    let (acc_final, _final_bundle) =
+    let (acc_final, final_bundle) =
         (0..DEPTH).fold((acc0, FramePins::empty()), |(acc, acc_bundle), i| {
             let producer: Rc<CallFrame> = CallFrame::new(scope);
             let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
@@ -480,8 +480,8 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
                 door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
             // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
             // conservatively forces `borrows_host = true` at construction, regardless of its own
-            // contents — `copied_seam_source_pins`'s exact `still_borrows_host` answer is what
-            // actually decides release vs. retain below; the seal bit only matters if the source is retained.
+            // contents — the retention predicate's walk over the rebuilt cell is what actually
+            // decides release vs. retain below; the seal bit only matters if the source is retained.
             let sealed = force_substrate_borrows_host(
                 Witnessed::from_erased(
                     Erased::erase(Carried::Object(obj)),
@@ -491,16 +491,11 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
             );
             let dep: DeliveredCarried =
                 Delivered::seal(sealed, producer.storage_rc(), FramePins::empty());
-            let source_pins = copied_seam_source_pins(&dep);
-            assert!(
-                source_pins.is_empty(),
-                "a plain-data record cell must claim the empty source bundle (released)"
-            );
             producers.push(producer);
             dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
                 acc,
                 &acc_bundle,
-                &source_pins,
+                cell_still_borrows(&dep),
                 |value, (region, mut cells), placement| {
                     cells.push(copy_held_from_carried(
                         value,
@@ -510,6 +505,11 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
                 },
             )
         });
+
+    assert!(
+        final_bundle.is_empty(),
+        "every plain-data record cell releases its producer: the fold's composed bundle pins none"
+    );
 
     for producer in producers.drain(..) {
         drop(producer);
@@ -558,7 +558,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
     let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
         (region.handle(), Vec::with_capacity(DEPTH))
     });
-    let (acc_final, _final_bundle) =
+    let (acc_final, final_bundle) =
         (0..DEPTH).fold((acc0, FramePins::empty()), |(acc, acc_bundle), _| {
             let producer: Rc<CallFrame> = CallFrame::new(scope);
             let obj = alloc_home_closure_record(&producer, &types);
@@ -572,9 +572,9 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
                 other => panic!("expected a Record, got {}", other.ktype().name(&types)),
             });
             // The seal chokepoint (Ruling 5): every record's carrier conservatively forces
-            // `borrows_host = true` at construction — without it, the retained-source claim's
-            // `materialize_hosts` arm (`iff borrows_host`) would skip materializing the producer even
-            // though `copied_seam_source_pins` below correctly retains the source, dangling the read at the end.
+            // `borrows_host = true` at construction; the retention predicate below independently
+            // walks the rebuilt cell and finds the closure leaf, so the producer is retained either
+            // way.
             let sealed = force_substrate_borrows_host(
                 Witnessed::from_erased(
                     Erased::erase(Carried::Object(obj)),
@@ -584,16 +584,11 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
             );
             let dep: DeliveredCarried =
                 Delivered::seal(sealed, producer.storage_rc(), FramePins::empty());
-            let source_pins = copied_seam_source_pins(&dep);
-            assert!(
-                !source_pins.is_empty(),
-                "a closure-embedding record cell must claim its envelope's pins"
-            );
             producers.push(producer);
             dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
                 acc,
                 &acc_bundle,
-                &source_pins,
+                cell_still_borrows(&dep),
                 |value, (region, mut cells), placement| {
                     cells.push(copy_held_from_carried(
                         value,
@@ -603,6 +598,11 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
                 },
             )
         });
+
+    assert!(
+        !final_bundle.is_empty(),
+        "every closure-embedding record cell keeps its producer: the fold's composed bundle pins it"
+    );
 
     for producer in producers.drain(..) {
         drop(producer);
@@ -631,7 +631,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
 /// Escape with the **cost-chooser-selected pin** verb at the value-level seam (`seam_verb` →
 /// [`RegionEscape::Pin`] → the envelope's own pins + [`copy_carried`]), the shape `relocate_terminal` /
 /// `single_poll` / `finalize` take for a top-level record — distinct from the two container-cell
-/// cases above, which route `copied_seam_source_pins` (never a pin). Each of the `DEPTH` producers
+/// cases above, which route `cell_still_borrows` (never a pin). Each of the `DEPTH` producers
 /// contributes a record whose only field is a closure captured in that same frame: priceable (the
 /// closure leaf costs zero) with `borrows_home` set, so the chooser returns `Pin`. Under the verb's
 /// `Kept` residence the producer host is minted into the destination reach unconditionally, and
@@ -680,10 +680,22 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
             "a priceable home-borrowing record must select the Pin verb at the value-level seam"
         );
             producers.push(producer);
+            // The value-level predicate, lifted over this mirror's accumulator: it answers for the
+            // cell the fold just pushed, exactly as `relocate_terminal` answers for its lone
+            // product.
+            let mut still_borrows = seam_still_borrows(&dep, verb);
+            let cell_still_borrows =
+                move |product: &(RegionHandle<'_, KoanStorageProfile>, Vec<Carried<'_>>),
+                      region: &KoanRegion| {
+                    product
+                        .1
+                        .last()
+                        .is_some_and(|cell| still_borrows(cell, region))
+                };
             dep.transfer_into_placing::<PinAggFamily, PinAggFamily, _>(
                 acc,
                 &acc_bundle,
-                &seam_source_pins(&dep, verb),
+                cell_still_borrows,
                 |value, (region, mut cells), placement| {
                     cells.push(copy_carried(
                         value,

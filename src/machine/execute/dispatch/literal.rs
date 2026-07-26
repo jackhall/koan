@@ -12,7 +12,7 @@ use crate::machine::{
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Delivered, RegionHandle, Witnessed};
 
-use super::super::lift::{copied_seam_source_pins, copy_held_from_carried};
+use super::super::lift::{cell_still_borrows, copy_held_from_carried};
 use super::super::outcome::DepTerminal;
 use super::super::runtime::KoanRuntime;
 use super::super::{StepCarried, WitnessedDepFinish};
@@ -64,7 +64,7 @@ fn cell_carrier(slot: Slot, terminals: DepResults<'_, &DepTerminal<'_>>) -> Deli
 
 /// Fold a sequence of cell envelopes into a witnessed `(region, Vec<Held>)` accumulator over the
 /// consumer scope's region: `yoke` an empty accumulator under the consumer frame, then
-/// `transfer_into_placing` each envelope at its own [`copied_seam_mode`] — [`copy_held_from_carried`]
+/// `transfer_into_placing` each envelope under [`cell_still_borrows`] — [`copy_held_from_carried`]
 /// relocates each cell into the aggregate region (a top-level record totally rebuilt through the
 /// record door so its substrate is container-resident), so a plain-data record cell releases its
 /// producer while a cell that still borrows its producer (a closure's captured environment)
@@ -83,11 +83,13 @@ fn fold_cells(
     // its reach into the aggregate region and hands back the composed carrier + bundle. The empty
     // seed pins nothing.
     cells.fold((acc0, FramePins::empty()), |(acc, acc_bundle), cell| {
-        let source_pins = copied_seam_source_pins(&cell);
         cell.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
             acc,
             &acc_bundle,
-            &source_pins,
+            // The cell always rebuilds through the container door, so the retention predicate walks
+            // the cell the fold just pushed — the exact answer for what this relocation left
+            // pointing back at its source.
+            cell_still_borrows(&cell),
             |value, (region, mut cells), placement| {
                 cells.push(copy_held_from_carried(
                     value,

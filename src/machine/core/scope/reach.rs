@@ -6,7 +6,7 @@
 use super::Scope;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::{
-    copied_source_pins, source_pins_releasing_home, with_home_region, FoldingBrand, FramePins,
+    clone_still_borrows, product_still_borrows, with_home_region, FoldingBrand, FramePins,
     FrameReach, KoanRegion, KoanStorageProfile,
 };
 use crate::machine::model::{
@@ -45,7 +45,7 @@ impl<'a> Scope<'a> {
     /// **region's** union bundle — the single reach-derivation door behind every bind. `source` is
     /// the caller's owned claim (a delivery envelope's whole member set, or a release-exact subset
     /// of it), which already names the value's home region as an ordinary member: there is no
-    /// residence mode to choose, only which bundle a relocation site hands the fold.
+    /// residence mode to choose.
     ///
     /// Returns the hosted description (`None` == empty, no allocation) and the borrows-into-this-
     /// region bit — the move-in's audit evidence and the resident seal's witness, both derived here
@@ -70,11 +70,18 @@ impl<'a> Scope<'a> {
     /// not reside in the producer's region, so a copy that leaves nothing pointing back drops that
     /// region from its claim — which is what lets a tail loop's retiring region free once its
     /// delivered carrier drops, instead of riding every later incarnation's stored reach.
+    ///
+    /// The copy this mint covers is a top-node clone, so the retention predicate reads off the
+    /// envelope's own value ([`clone_still_borrows`]) rather than a folded product.
     pub(crate) fn copied_reach_of(
         &self,
         cell: &DeliveredCarried,
     ) -> (Option<&'a FrameReach>, bool) {
-        self.mint_retained(&copied_source_pins(cell))
+        self.mint_retained(
+            &cell
+                .pins()
+                .retaining(|region| clone_still_borrows(cell, region)),
+        )
     }
 
     /// Seal a value living **in this scope's region** into its dormant binding form: the value
@@ -325,9 +332,8 @@ impl<'a> Scope<'a> {
     /// past the checked residence audit. `project` selects what to copy (identity for a whole-value
     /// bind, a `Tagged`/`Wrapped` payload for a MATCH/TRY `it`); the caller vets that it yields a
     /// substrate carrier ([`copy_object_into`] rebuilds the whole reachable structure). The value
-    /// relocates under its own release-exact source claim — a plain-data carrier claims the empty
-    /// bundle (the retiring producer frees), a carrier still borrowing its home claims the
-    /// envelope's pins.
+    /// relocates under the retention predicate's release-exact answer — a plain-data rebuild
+    /// releases the producer (which then frees), a rebuild still borrowing its home keeps it.
     ///
     /// The fold's own composition mints the product's exact reach into this scope's arena and
     /// retains the owning bundle here for the region's life, so the witnessed product is already
@@ -337,9 +343,8 @@ impl<'a> Scope<'a> {
     ///
     /// This is the unconditional-copy half of [`Self::copy_delivered_substrate`]'s chooser: the argument
     /// re-home ([`Self::adopt_sealed_copied`]) calls it directly, and the chooser's `Copy` verb
-    /// delegates here (a `Copy` verb's source claim is exactly this release-exact one — a clear
-    /// borrows-home bit at a home crossing agrees with the probe, and the unpriceable / non-record
-    /// verbs read the probe directly).
+    /// delegates here (a `Copy` verb's claim is exactly this one — the predicate walks the rebuilt
+    /// product, which is what the verb's own `released` bit predicted).
     fn rebuild_delivered_substrate<P>(
         &self,
         cell: &DeliveredCarried,
@@ -348,36 +353,21 @@ impl<'a> Scope<'a> {
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
-        // What the copy still reaches on the source side: a plain-data rebuild claims the empty
-        // bundle, so a tail loop's retiring producer frees at retention discharge rather than
-        // riding the destination's reach; a rebuild that still borrows its home, or one whose home
-        // is not locatable among the envelope's members, claims the envelope's own pins.
-        let released = cell.open(|live| match (live.as_object(), project(&live)) {
-            (Some(carried), Ok(record)) => with_home_region(cell, carried, |host_region| {
-                !still_borrows_host(record, host_region)
-            })
-            .unwrap_or(false),
-            _ => false,
-        });
-        let source_pins = if released {
-            source_pins_releasing_home(cell)
-        } else {
-            copied_source_pins(cell)
-        };
         let dest = Witnessed::<RegionHandleFamily<KoanStorageProfile>, CarrierWitness>::resident(
             self.brand().handle(),
         );
         let mut projection_error: Option<KError> = None;
         // The destination is a bare region handle (empty reach), so its operand bundle is empty and
-        // the composition mints exactly the copy's release-exact reach: a released plain-data record
-        // drops the producer region, so a tail loop's retiring frame does not ride this binding. The
-        // composition also retains its bundle in this scope's region, which is what covers the
-        // rebuilt value read in place.
+        // the composition mints exactly the copy's release-exact reach: the retention predicate runs
+        // over the rebuilt value, so a plain-data record drops the producer region and a tail loop's
+        // retiring frame does not ride this binding, while a rebuild that still borrows its home
+        // keeps it. The composition also retains its bundle in this scope's region, which is what
+        // covers the rebuilt value read in place.
         let (copied, composed) = cell
             .transfer_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 dest,
                 &FramePins::empty(),
-                &source_pins,
+                |product, region| product_still_borrows(cell, product.as_object(), region),
                 |value, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement);
                     match project(&value) {

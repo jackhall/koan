@@ -330,6 +330,22 @@ impl<F: PinsRegion> PinBundle<F> {
         }
     }
 
+    /// This bundle keeping only the members whose region satisfies `keep` — the **retention
+    /// predicate**'s filter (design/witness-hosting.md § Escape). A relocation verb derives a source
+    /// claim by running the embedder's `still_borrows` over the product against each member region
+    /// in turn, so a claim is a checked property of the folded bytes rather than a bundle assembled
+    /// by hand. No member reference escapes: `keep` sees each member's region, never its owner.
+    pub fn retaining(&self, mut keep: impl FnMut(&F::Region) -> bool) -> Self {
+        PinBundle {
+            members: self
+                .members
+                .iter()
+                .filter(|m| keep(m.region()))
+                .map(Rc::clone)
+                .collect(),
+        }
+    }
+
     /// The description mirror of this bundle's antichain — `Weak` members for side-table hosting.
     /// Called at a mint, where the bundle is the freshly-composed antichain and the description it
     /// yields is stored frozen alongside it.

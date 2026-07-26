@@ -91,7 +91,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                 home,
                 &crate::machine::core::FramePins::empty(),
-                carrier.pins(),
+                // The built `Ok`/`Error` record holds the payload's borrow verbatim, so the
+                // predicate releases nothing: every region the payload reaches rides on.
+                |_product, _region| true,
                 |value, (_region, identity), placement| {
                     let region = FoldingBrand::in_fold_closure(placement);
                     Carried::Object(region.alloc_object_folded(build_result(

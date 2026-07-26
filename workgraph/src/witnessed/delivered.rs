@@ -15,9 +15,10 @@
 //! Home riding as an ordinary member is what lets the envelope-bearing mint verbs —
 //! [`Delivered::mint_reach`] and [`Delivered::transfer_into`] — fold a producer frame into a minted
 //! destination set with no separate materialization arm and no residence mode: the home pin is
-//! already in the bundle the composition folds. What a relocation site still chooses is *which*
-//! bundle it hands the fold — its own pins to keep the producer alive, or the empty bundle for a
-//! true deep copy that must let the producer die. See
+//! already in the bundle the composition folds. A relocation site chooses nothing about that
+//! bundle: [`Delivered::transfer_into`] *derives* the source claim by running the site's retention
+//! predicate over the folded product against each pinned region in turn, so what the product still
+//! reaches is a checked property of the bytes rather than a promise made before they existed. See
 //! [design/witness-hosting.md § Composition](../../../design/witness-hosting.md#composition-minting-a-description-and-retaining-its-pins).
 //!
 //! [`Delivered::mint_reach`] is the envelope-bearing mint entry a consumer routes, a thin caller
@@ -83,10 +84,9 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
     }
 
     /// The owned [`PinBundle`] pinning every region the value reaches, home included — the
-    /// ownership counterpart of the carrier's non-owning reach description, and the coverage a
-    /// relocation site hands the fold to keep this value's whole reach alive. A consumer that
-    /// re-seeds a retention hold from an envelope it already holds (the value-terminal finalize)
-    /// clones it.
+    /// ownership counterpart of the carrier's non-owning reach description, and the coverage every
+    /// read of this envelope runs under. A consumer that re-seeds a retention hold from an envelope
+    /// it already holds (the value-terminal finalize) clones it.
     pub fn pins(&self) -> &PinBundle<F> {
         &self.pins
     }
@@ -250,21 +250,18 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
     /// `relocate` — the workload's structural copy/fold, which builds into `dest` at the brand
     /// natively. The composed witness mints both operands' reach into `dest`'s own arena.
     ///
-    /// `source_pins` is what the relocated product is claimed to reach *from the source side*, and
-    /// it is where the site prices copy against pin (design § Escape):
-    ///
-    /// - [`self.pins()`](Self::pins) — the product still borrows into this value's regions, home
-    ///   among them, so the fold keeps the producer alive. The copy-free re-anchor and any copy
-    ///   whose leaves still point back.
-    /// - [`PinBundle::empty()`] — a true deep copy with no surviving borrow into the source. The
-    ///   producer's region is free to die at retention release (the tail-loop turnover rule). The
-    ///   caller asserts the copy left no leaf behind; passing the empty bundle for a product that
-    ///   does still borrow is a dangling read.
+    /// What the relocated product still reaches *from the source side* is **derived, not accepted**:
+    /// once `relocate` has built the product, `still_borrows` is run over it against each region
+    /// this envelope pins, and the source claim is the members it answers `true` for (design §
+    /// Escape). A `false` verdict drops that region from the composed bundle, so its owner frees at
+    /// retention discharge — the tail-loop turnover rule; a `true` verdict keeps it, so the producer
+    /// transfers by hold. The claim is therefore a checked property of the bytes that exist. A
+    /// predicate that answers conservatively costs retention, never soundness.
     pub fn transfer_into<B: Reattachable, P: Reattachable, Pr>(
         &self,
         dest: Witnessed<B, Carrier<F>>,
         dest_bundle: &PinBundle<F>,
-        source_pins: &PinBundle<F>,
+        still_borrows: impl for<'b> FnMut(&P::At<'b>, &F::Region) -> bool,
         relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> (Witnessed<P, Carrier<F>>, PinBundle<F>)
     where
@@ -273,15 +270,17 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
         T::At<'static>: Copy,
     {
-        // The re-anchor runs under the envelope's own pins, whatever `source_pins` claims the
+        // The re-anchor runs under the envelope's own pins, whatever the predicate later claims the
         // product reaches: reading the source value is always covered here.
         self.cell.duplicate().unseal().merge_composed(
             dest,
             &self.pins,
-            |_left, right, live_dest| {
-                Carrier::compose_into(right, source_pins, dest_bundle, live_dest.region_handle())
-            },
-            relocate,
+            relocate_then_compose::<T, B, P, F, Pr>(
+                &self.pins,
+                dest_bundle,
+                still_borrows,
+                relocate,
+            ),
         )
     }
 
@@ -294,7 +293,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         &self,
         dest: Witnessed<B, Carrier<F>>,
         dest_bundle: &PinBundle<F>,
-        source_pins: &PinBundle<F>,
+        still_borrows: impl for<'b> FnMut(&P::At<'b>, &F::Region) -> bool,
         relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P::At<'b>,
     ) -> (Witnessed<P, Carrier<F>>, PinBundle<F>)
     where
@@ -303,12 +302,10 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
         T::At<'static>: Copy,
     {
-        self.cell.duplicate().unseal().merge_composed(
+        self.transfer_into::<B, P, Pr>(
             dest,
-            &self.pins,
-            |_left, right, live_dest| {
-                Carrier::compose_into(right, source_pins, dest_bundle, live_dest.region_handle())
-            },
+            dest_bundle,
+            still_borrows,
             super::place_over_dest::<T, B, P, Pr>(relocate),
         )
     }
@@ -352,15 +349,57 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
             })
             .into_reference_only();
         // The destination is a bare region handle (empty reach), so the destination operand bundle
-        // is empty; the source claim is the envelope's own pins, since nothing is copied out. The
-        // composed bundle the transfer retains in the home region covers the restamped value read
-        // in place, so it is discarded here.
+        // is empty; nothing is copied out, so the retention predicate keeps every member — the
+        // restamped value borrows exactly what the original did. The composed bundle the transfer
+        // retains in the home region covers the restamped value read in place, so it is discarded
+        // here.
         let (restamped, _composed) = self.transfer_into_placing::<RegionHandleFamily<Pr>, P, Pr>(
             dest,
             &PinBundle::empty(),
-            &self.pins,
+            |_product, _region| true,
             relocate,
         );
         restamped
+    }
+}
+
+/// [`Delivered::transfer_into`]'s [`Witnessed::merge_composed`] fold: run `relocate` at the brand,
+/// derive the source claim by running the **retention predicate** over the product against each
+/// region `source` pins, then compose. The destination handle is read off the operand *before*
+/// `relocate` consumes it, so the mint still targets the engine's own operand region.
+///
+/// Built as a returned `impl for<'b> FnOnce` for the same reason as
+/// [`place_over_dest`](super::place_over_dest): an inline closure written inside `transfer_into`,
+/// whose scope binds `T::At<'static>: Copy`, is not coerced to `for<'b>` and trips a spurious
+/// `'b: 'static`.
+#[allow(clippy::type_complexity)]
+fn relocate_then_compose<'s, T, B, P, F, Pr>(
+    source: &'s PinBundle<F>,
+    dest_bundle: &'s PinBundle<F>,
+    mut still_borrows: impl for<'b> FnMut(&P::At<'b>, &F::Region) -> bool + 's,
+    relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b> + 's,
+) -> impl for<'b> FnOnce(
+    &Carrier<F>,
+    &Carrier<F>,
+    T::At<'b>,
+    B::At<'b>,
+    FoldToken<'b>,
+) -> (P::At<'b>, Carrier<F>, PinBundle<F>)
+       + 's
+where
+    T: Reattachable,
+    B: Reattachable,
+    P: Reattachable,
+    F: PinsRegion + RegionOwner<Region = Region<Pr>> + 'static,
+    Pr: StorageProfile<FrameOwner = F> + 'static,
+    for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
+{
+    move |_left, right_witness, left_value, live_dest, token| {
+        let handle = live_dest.region_handle();
+        let product = relocate(left_value, live_dest, token);
+        let source_pins = source.retaining(|region| still_borrows(&product, region));
+        let (witness, bundle) =
+            Carrier::compose_into(right_witness, &source_pins, dest_bundle, handle);
+        (product, witness, bundle)
     }
 }

@@ -5,8 +5,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::FramePins;
-use crate::machine::model::{Carried, CarriedFamily, KObject};
+use crate::machine::model::{still_borrows_host, Carried, CarriedFamily, KObject};
 use crate::witnessed::{Erased, Witnessed};
 
 use super::arena::{FrameStorage, KoanRegion, KoanRegionExt};
@@ -26,7 +25,8 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// (`mint_reach` / `transfer_into`), so koan never holds a bare frame pin at a consumer site. The
 /// envelope's member set names the value's home region as an ordinary member — there is no
 /// distinguished host field — so a site that needs the home back locates it by residence
-/// ([`with_home_region`]), and a relocation's only choice is *which bundle* it hands the fold.
+/// ([`with_home_region`]), and a relocation derives what it still reaches from the product it
+/// built ([`product_still_borrows`]) rather than choosing a bundle up front.
 pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
 
@@ -92,33 +92,39 @@ pub(crate) fn force_substrate_borrows_host(
     }
 }
 
-/// The **source claim** for a copy that leaves nothing pointing back at the region the value lived
-/// in: `envelope`'s own members minus that home region. Every other member survives — a copy can
-/// drop its producer and still borrow elsewhere. Falls back to the whole set when the home is not
-/// locatable among the members ([`with_home_region`]), which over-retains rather than dangles.
+/// Koan's **retention predicate** for a copying relocation of `envelope`
+/// ([`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into),
+/// design/witness-hosting.md § Escape): whether `product` — the bytes the fold just built at the
+/// destination — still borrows `region`, one of the regions the envelope pins.
 ///
-/// Dropping the producer from the claim is what frees a tail loop's retiring region once its
-/// delivered carrier drops, instead of chaining it into every successor region's arena.
-pub(crate) fn source_pins_releasing_home(envelope: &DeliveredCarried) -> FramePins {
-    envelope
-        .open(|live| {
-            live.as_object().and_then(|object| {
-                with_home_region(envelope, object, |home| {
-                    envelope.pins().without_region(home)
-                })
-            })
-        })
-        .unwrap_or_else(|| envelope.pins().clone())
+/// Only the value's **home** region is ever released, and `region` is home exactly when it hosts
+/// the source value's top node ([`KoanRegionExt::owns_object`]) — the library hands each pinned
+/// region over in turn, so residence is answered per region with no probe over the member set.
+/// Every other member is kept: a foreign member may be reached through structure the product's own
+/// walk cannot see (a `KFunction`'s captured environment, a `Module`'s child scope), so releasing
+/// it on a walk that only follows the product's cells would dangle. Home is exact — the walk is
+/// asking whether the copy left a leaf behind in the region it was copied out of, which is
+/// precisely what [`still_borrows_host`] answers.
+///
+/// A `product` of `None` (the fold built no object — a type-channel cell) keeps every member.
+/// Releasing home is what frees a tail loop's retiring region once its delivered carrier drops,
+/// instead of chaining it into every successor region's arena.
+pub(crate) fn product_still_borrows(
+    envelope: &DeliveredCarried,
+    product: Option<&KObject<'_>>,
+    region: &KoanRegion,
+) -> bool {
+    let is_home = envelope.open(|live| {
+        live.as_object()
+            .is_some_and(|object| region.owns_object(object as *const KObject<'_>))
+    });
+    !is_home || product.is_none_or(|value| still_borrows_host(value, region))
 }
 
-/// The **source claim** for a value copied out of `envelope` with no per-value release probe run:
-/// [`source_pins_releasing_home`] when the carrier reports its borrows do not reach its own home
-/// (the borrows-home bit, the pin-free form of that membership query), else the whole member set.
-/// The copy-bind doors and the non-substrate copy seams take this; a seam that runs the exact
-/// `still_borrows_host` probe overrides the bit with its own answer.
-pub(crate) fn copied_source_pins(envelope: &DeliveredCarried) -> FramePins {
-    if envelope.witness().borrows_host() {
-        return envelope.pins().clone();
-    }
-    source_pins_releasing_home(envelope)
+/// [`product_still_borrows`] for a relocation whose product is a top-node
+/// [`deep_clone`](KObject::deep_clone) of the source value — a scalar, a `KFunction` / `Module` /
+/// `KExpression` leaf riding its borrow verbatim. Such a clone borrows exactly what the source
+/// does, so the source *is* the product and the predicate answers off the envelope alone.
+pub(crate) fn clone_still_borrows(envelope: &DeliveredCarried, region: &KoanRegion) -> bool {
+    envelope.open(|live| product_still_borrows(envelope, live.as_object(), region))
 }
