@@ -6,7 +6,7 @@
 use super::Scope;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::{
-    clone_still_borrows, product_still_borrows, FoldingBrand, FramePins, FrameReach, KoanRegion,
+    product_still_borrows, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
     KoanStorageProfile,
 };
 use crate::machine::model::{
@@ -14,7 +14,7 @@ use crate::machine::model::{
     RegionEscape, TypeIdentifier, TypeRegistry,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, KError};
-use crate::witnessed::{Delivered, RegionHandleFamily, Sealed, Witnessed};
+use crate::witnessed::{Delivered, Reattachable, RegionHandleFamily, Sealed, Witnessed};
 
 // The sole test here pins the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy`
 // build rebuilds the record instead, so the module cannot hold there. The equivalence battery proves
@@ -31,21 +31,23 @@ impl<'a> Scope<'a> {
             .any(|scope| std::ptr::eq(scope.region(), region))
     }
 
-    /// Retain an owning [`FramePins`] bundle in this scope's own region for the region's life — the
+    /// Retain an owning [`FrameCoverage`] in this scope's own region for the region's life — the
     /// scope-facing door onto [`RegionHandle::retain_reach`](crate::witnessed::RegionHandle::retain_reach).
     /// A value **resident** in this scope whose reach is not carried by a binding entry (a USING
     /// overlay rooting an opened module's region, a copy-free adoption that discards its stored
-    /// reach) parks its pins here so the non-owning description they mirror stays backed for the
+    /// reach) parks its coverage here so the non-owning description it mirrors stays backed for the
     /// scope's life.
-    pub(crate) fn retain_reach(&self, pins: FramePins) {
-        self.brand().handle().retain_reach(pins);
+    pub(crate) fn retain_reach(&self, coverage: FrameCoverage) {
+        self.brand().handle().retain_reach(coverage);
     }
 
-    /// Mint `source` into this scope's own arena and fold the owned bundle it hands back into the
-    /// **region's** union bundle — the single reach-derivation door behind every bind. `source` is
-    /// the caller's owned claim (a delivery envelope's whole member set, or a release-exact subset
-    /// of it), which already names the value's home region as an ordinary member: there is no
-    /// residence mode to choose.
+    /// Mint `sources` into this scope's own arena and fold the owned bundle the mint hands back into
+    /// the **region's** union bundle — the single reach-derivation door behind every bind, a veneer
+    /// over the library's fused
+    /// [`RegionHandle::mint_retained`](crate::witnessed::RegionHandle::mint_retained). Each source is
+    /// a caller's owned claim (a delivery envelope's whole coverage, or a release-exact subset of
+    /// it), which already names the value's home region as an ordinary member: there is no residence
+    /// mode to choose.
     ///
     /// Returns the hosted description (`None` == empty, no allocation) and the borrows-into-this-
     /// region bit — the move-in's audit evidence and the resident seal's witness, both derived here
@@ -54,34 +56,16 @@ impl<'a> Scope<'a> {
     /// reach.
     ///
     /// The description is arena-hosted for the region's life and non-owning (`Weak` members); the
-    /// owning bundle folds into [`Region::retain_reach`](crate::witnessed::RegionHandle::retain_reach),
-    /// which dedupes by region identity with outer-chain subsumption — one owning `Rc` per distinct
-    /// region across everything resident here, dropped whole at region death. Binding entries own
-    /// nothing, and since a binding never dies before its scope, that pins no longer than a
-    /// per-entry bundle would.
-    pub(crate) fn mint_retained(&self, source: &FramePins) -> (Option<&'a FrameReach>, bool) {
-        let (description, pins, borrows_into_home) = self.brand().mint(&[source]);
-        self.brand().handle().retain_reach(pins);
-        (description, borrows_into_home)
-    }
-
-    /// The **copy-bind** source claim: the release-exact subset of `cell`'s member set rather than
-    /// the whole of it (a parameter bind, a MATCH/TRY `it` bind, the LET value route). The copy does
-    /// not reside in the producer's region, so a copy that leaves nothing pointing back drops that
-    /// region from its claim — which is what lets a tail loop's retiring region free once its
-    /// delivered carrier drops, instead of riding every later incarnation's stored reach.
-    ///
-    /// The copy this mint covers is a top-node clone, so the retention predicate reads off the
-    /// envelope's own value ([`clone_still_borrows`]) rather than a folded product.
-    pub(crate) fn copied_reach_of(
+    /// owning bundle never crosses back out — the library folds it straight into the region's union
+    /// bundle, which dedupes by region identity with outer-chain subsumption, so one owning `Rc` per
+    /// distinct region covers everything resident here and drops whole at region death. Binding
+    /// entries own nothing, and since a binding never dies before its scope, that pins no longer
+    /// than a per-entry bundle would.
+    pub(crate) fn mint_retained(
         &self,
-        cell: &DeliveredCarried,
+        sources: &[&FrameCoverage],
     ) -> (Option<&'a FrameReach>, bool) {
-        self.mint_retained(
-            &cell
-                .pins()
-                .retaining(|region| clone_still_borrows(cell, region)),
-        )
+        self.brand().handle().mint_retained(sources)
     }
 
     /// Seal a value living **in this scope's region** into its dormant binding form: the value
@@ -131,9 +115,9 @@ impl<'a> Scope<'a> {
     pub(crate) fn lift_resident_parts(
         &self,
         sealed: SealedValue,
-    ) -> (Witnessed<CarriedFamily, CarrierWitness>, FramePins) {
-        let (cell, pins) = self.lift_resident(sealed).into_parts();
-        (cell.unseal(), pins)
+    ) -> (Witnessed<CarriedFamily, CarrierWitness>, FrameCoverage) {
+        let (cell, coverage) = self.lift_resident(sealed).into_parts();
+        (cell.unseal(), coverage)
     }
 
     /// Seal a resident carrier — a value already living in this scope's own region — into a
@@ -143,19 +127,24 @@ impl<'a> Scope<'a> {
     /// [`resident_value_carrier`](Self::resident_value_carrier) folds into the witness), so a spliced
     /// resident cell travels self-covering by its own witness *and* pinned by its home, identical in
     /// shape to a delivered dep — there is no `pin: None` resident special case at the splice sites.
-    pub(crate) fn seal_resident_delivered(
+    ///
+    /// Generic over the carrier's family so a **destination operand** seals the same way a value
+    /// does: a relocation's dest is a bare region handle living in this scope's own region, and the
+    /// composition verbs take their destination as an envelope, so it is sealed here rather than
+    /// paired with an asserted host at the call site.
+    pub(crate) fn seal_resident_delivered<T: Reattachable>(
         &self,
-        witnessed: Witnessed<CarriedFamily, CarrierWitness>,
-        pins: FramePins,
-    ) -> DeliveredCarried {
+        witnessed: Witnessed<T, CarrierWitness>,
+        coverage: FrameCoverage,
+    ) -> Delivered<T, CarrierWitness, FrameStorage> {
         let home = self
             .region_owner()
             .upgrade()
             .expect("the resident scope's region owner is held while its value is sealed");
-        // The resident carrier's owned foreign reach — a clone of the binding entry's pins, threaded
-        // from the read — travels with the envelope, so the reached regions are owned across transit
-        // rather than re-derived from the carrier's description.
-        Delivered::seal(witnessed, home, pins)
+        // The resident carrier's owned foreign reach — a clone of the binding entry's coverage,
+        // threaded from the read — travels with the envelope, so the reached regions are owned
+        // across transit rather than re-derived from the carrier's description.
+        Delivered::seal(witnessed, home, coverage)
     }
 
     /// Adopt a sealed dep carrier into this scope. The two channels adopt differently:
@@ -200,8 +189,8 @@ impl<'a> Scope<'a> {
     /// value-channel twin of [`Self::adopt_sealed`]'s copy-free object arm, for a consumer that
     /// re-homes the value anyway (a call's argument delivery). The top node is `deep_clone`d into
     /// this scope's own arena, so the producer's region is *not* part of the copy's residence: the
-    /// mint stores the copy's release-exact reach ([`Self::copied_reach_of`] — the copy's own
-    /// members, its home among them), never a residence-only host pin. This is what
+    /// mint stores the copy's release-exact reach ([`Delivered::coverage_retaining`] — the copy's
+    /// own members, its home among them), never a residence-only host pin. This is what
     /// frees a tail loop's retiring region once its delivered carrier drops (the working expression
     /// at step end), instead of chaining it into every successor region's arena.
     ///
@@ -351,8 +340,13 @@ impl<'a> Scope<'a> {
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
-        let dest = Witnessed::<RegionHandleFamily<KoanStorageProfile>, CarrierWitness>::resident(
-            self.brand().handle(),
+        // The destination operand is this scope's own region handle, sealed into an envelope under
+        // this scope's own region owner — its residence, which the composition gives the product.
+        let dest = self.seal_resident_delivered(
+            Witnessed::<RegionHandleFamily<KoanStorageProfile>, CarrierWitness>::resident(
+                self.brand().handle(),
+            ),
+            FrameCoverage::empty(),
         );
         let mut projection_error: Option<KError> = None;
         // The destination is a bare region handle (empty reach), so its operand bundle is empty and
@@ -361,10 +355,9 @@ impl<'a> Scope<'a> {
         // retiring frame does not ride this binding, while a rebuild that still borrows its home
         // keeps it. The composition also retains its bundle in this scope's region, which is what
         // covers the rebuilt value read in place.
-        let (copied, composed) = cell
+        let copied = cell
             .transfer_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 dest,
-                &FramePins::empty(),
                 |product, region| product_still_borrows(cell, product.as_object(), region),
                 |value, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement);
@@ -382,10 +375,10 @@ impl<'a> Scope<'a> {
         if let Some(error) = projection_error {
             return Err(error);
         }
-        // The product lives in this scope's region and its composed reach is already retained here,
-        // so the envelope's home is this scope's own region owner and `composed` is the owned
-        // coverage a consumer travels under.
-        Ok(self.seal_resident_delivered(copied, composed))
+        // The product lives in this scope's region and its composed reach is already retained here.
+        // The transfer gives the product the destination operand's own residence — this scope's
+        // region owner — so the envelope it hands back is already the finished one.
+        Ok(copied)
     }
 
     /// Build the terminal carrier for a type living **in this scope's region** — the type-channel
@@ -415,10 +408,10 @@ impl<'a> Scope<'a> {
     /// a source module claims that source's (foreign) region. Never recovered by walking the built
     /// module value.
     pub(crate) fn child_module_reach(&self, child: &Scope<'a>) -> (Option<&'a FrameReach>, bool) {
-        let child_home: FramePins = match child.region_owner().upgrade() {
-            Some(owner) => FramePins::singleton(owner),
-            None => FramePins::empty(),
+        let child_home: FrameCoverage = match child.region_owner().upgrade() {
+            Some(owner) => FrameCoverage::of(owner),
+            None => FrameCoverage::empty(),
         };
-        self.mint_retained(&child_home)
+        self.mint_retained(&[&child_home])
     }
 }

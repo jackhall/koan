@@ -13,10 +13,10 @@ use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
 use crate::machine::{
-    CarrierWitness, FramePins, KError, KErrorKind, KoanRegion, NodeHandle, NodeId,
+    CarrierWitness, FrameCoverage, KError, KErrorKind, KoanRegion, NodeHandle, NodeId,
 };
 use crate::witnessed::{
-    erase_to_static, reattachable, RegionHandleFamily, SealedExtern, Witnessed,
+    erase_to_static, reattachable, Delivered, RegionHandleFamily, SealedExtern, Witnessed,
 };
 
 use super::dispatch::SchedulerView;
@@ -39,13 +39,17 @@ mod tests;
 /// `RegionHandle` alone), so koan carries no impl of its own for it.
 pub(in crate::machine::execute) type DestHandleFamily = RegionHandleFamily<KoanStorageProfile>;
 
-/// The destination-region carrier for a relocation: `dest_frame`'s handle `yoke`d into that frame's
-/// own region, witnessed by it — co-located by construction rather than paired with an asserted
-/// singleton.
+/// The destination operand for a relocation: `dest_frame`'s handle `yoke`d into that frame's own
+/// region, witnessed by it, and sealed into the delivery envelope the composition verbs take — its
+/// residence is that same frame, so the product the composition builds inherits it. Co-located by
+/// construction rather than paired with an asserted singleton. A bare handle reaches nothing beyond
+/// its own region, so the operand's coverage is empty.
 pub(in crate::machine::execute) fn dest_brand(
     dest_frame: Rc<FrameStorage>,
-) -> Witnessed<DestHandleFamily, CarrierWitness> {
-    KoanRegion::yoke_branded::<DestHandleFamily, _>(dest_frame, |b| b.handle())
+) -> Delivered<DestHandleFamily, CarrierWitness, FrameStorage> {
+    let handle =
+        KoanRegion::yoke_branded::<DestHandleFamily, _>(Rc::clone(&dest_frame), |b| b.handle());
+    Delivered::seal(handle, dest_frame, FrameCoverage::empty())
 }
 
 /// `Reattachable` family for the step's **dep slice** — the producer terminals read out, erased, and
@@ -146,32 +150,22 @@ impl<'run> KoanRuntime<'run> {
                 Ok(DepTerminal { value, delivered })
             })
             .collect();
-        // The consumer-step **pin**: the union of every region this step's deps reach (an errored dep
-        // has no `DepTerminal`, so its witness is re-read). Assembled before the open so it outlives
-        // `'b`, then unioned into `combined` — the witness the open re-anchors carriers against, keeping
-        // every dep source alive past `reclaim_deps`. It is *only* a liveness pin: every value terminal
-        // rides `DoneWitnessed` with its own carrier naming its reach, so no terminal reads `pin`.
-        let pin: FramePins = dep_sources
-            .iter()
-            .fold(FramePins::empty(), |acc, src| match src {
-                // The dep's liveness pin: the envelope's own owned member set — its retained producer
-                // frame (sourced from the retention hold, since the reference-only carrier carries no
-                // pin of its own) riding as an ordinary member alongside every other region the value
-                // reaches. An errored dep carries no value the step reads — its error owns its data —
-                // so it contributes nothing.
-                Ok(t) => FramePins::union(&acc, t.delivered.pins()),
-                Err(_) => acc,
-            });
-        // The open witness: the anchor's projected region owner (pinning the continuation and dest
-        // region — plus their ancestor backings via the storage `outer` chain) unioned with `pin`
-        // (every dep source). Held across the open, so re-anchoring the zipped carriers to `'b`
-        // cannot dangle. A plain `FramePins` (§ the run-loop step-open witness is a plain owned pin bundle):
-        // every member is a frame owner — each dep contributes its envelope's host ∪ reach through
-        // `pin`, redundantly with the duplicated envelope held across the whole open in `dep_sources`
-        // (see the struct doc above). Sourced off the scheduler-returned anchor, not a `storage_rc()`
-        // of the cart the scheduler already holds.
-        let combined: FramePins =
-            FramePins::union(&FramePins::singleton(Rc::clone(anchor.owner())), &pin);
+        // The step's open witness — the **step's coverage**: the anchor's projected region owner
+        // (pinning the continuation and dest region, plus their ancestor backings via the storage
+        // `outer` chain) widened by every region this step's deps reach. Assembled before the open so
+        // it outlives `'b`, and held across it, so re-anchoring the zipped carriers to `'b` cannot
+        // dangle. Each dep contributes its envelope's own coverage — its retained producer frame
+        // (sourced from the retention hold, since the reference-only carrier carries no pin of its
+        // own) riding as an ordinary member alongside every other region the value reaches —
+        // redundantly with the duplicated envelope held across the whole open in `dep_sources` (see
+        // the struct doc above). An errored dep carries no value the step reads, so it contributes
+        // nothing. The coverage is *only* a liveness pin: every value terminal rides `DoneWitnessed`
+        // with its own carrier naming its reach, so no terminal reads it. Sourced off the
+        // scheduler-returned anchor, not a `storage_rc()` of the cart the scheduler already holds.
+        let mut combined: FrameCoverage = FrameCoverage::of(Rc::clone(anchor.owner()));
+        for terminal in dep_sources.iter().flatten() {
+            combined.absorb(terminal.delivered.coverage().clone());
+        }
         // Open the three externally-witnessed carriers — continuation, active scope, dep slice —
         // together at one rank-2 `for<'b>` brand witnessed by `combined` (see the doc comment for why
         // nothing branded escapes).
@@ -253,7 +247,7 @@ impl<'run> KoanRuntime<'run> {
                             }
                             Err(error) => {
                                 scope.clear_placeholders_for_producer(id);
-                                self.sched.finalize(idx, Err(error), FramePins::empty());
+                                self.sched.finalize(idx, Err(error), FrameCoverage::empty());
                             }
                         }
                     }
@@ -265,7 +259,7 @@ impl<'run> KoanRuntime<'run> {
                         // A terminal error carries no value and no witness, so its retention hold's
                         // foreign bundle is empty; the producer frame still retains until its
                         // (short-circuiting) destinations pull.
-                        self.sched.finalize(idx, Err(error), FramePins::empty());
+                        self.sched.finalize(idx, Err(error), FrameCoverage::empty());
                     }
                     NodeStep::ForwardReady(producer) => {
                         // Relocate `producer`'s terminal into this slot's region via merge-transfer;
@@ -276,8 +270,11 @@ impl<'run> KoanRuntime<'run> {
                         // an `Err`.
                         let dest = match frame {
                             Some(_) => dest_brand(Rc::clone(anchor.owner())),
-                            None => Witnessed::<DestHandleFamily, CarrierWitness>::resident(
-                                scope.brand().handle(),
+                            None => scope.seal_resident_delivered(
+                                Witnessed::<DestHandleFamily, CarrierWitness>::resident(
+                                    scope.brand().handle(),
+                                ),
+                                FrameCoverage::empty(),
                             ),
                         };
                         // The relocation threads back the relocated terminal's owned foreign bundle;
@@ -288,7 +285,7 @@ impl<'run> KoanRuntime<'run> {
                             }
                             Err(error) => {
                                 scope.clear_placeholders_for_producer(id);
-                                self.sched.finalize(idx, Err(error), FramePins::empty());
+                                self.sched.finalize(idx, Err(error), FrameCoverage::empty());
                             }
                         }
                     }

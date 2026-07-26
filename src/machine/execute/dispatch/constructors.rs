@@ -18,14 +18,13 @@ use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{
-    force_substrate_borrows_host, CarrierWitness, FramePins, KError, KErrorKind, KoanRegion,
-    RegionTypeFamily,
+    force_substrate_borrows_host, CarrierWitness, DeliveredCarried, FrameCoverage, KError,
+    KErrorKind, KoanRegion, RegionTypeFamily,
 };
 use crate::source::Spanned;
-use crate::witnessed::{reattachable, RegionHandle, Witnessed};
+use crate::witnessed::{reattachable, Delivered, RegionHandle};
 
 use super::super::outcome::DepTerminal;
-use super::super::run_loop::{dest_brand, DestHandleFamily};
 use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::SchedulerView;
 use super::{Await, DepRequest, Outcome};
@@ -310,53 +309,27 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind) -> Out
         })
         .collect();
     let combine_finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {
-        finish_witnessed(view, &kind, terminals)
-            .map(|(witnessed, pins)| StepCarried::born_pinned(witnessed, pins))
+        finish_witnessed(view, &kind, terminals).map(StepCarried::born_delivered)
     });
     Await::on(Deps::from_owned(deps)).finish_witnessed(combine_finish)
 }
 
 /// Build the construction operand carrying `(dest brand, nominal identity)` across the build brand.
-/// `dest_frame`'s brand is `yoke`d into that frame's own region — witnessed by it — and `merge`d with
-/// the identity wrapped by [`Scope::resident_type_carrier`] under its `stored` per-binding token, so
-/// the operand's witness is the dest region's pin ∪ the identity's own reach — folded, never paired
-/// with an asserted witness. The token's foreign reach is empty — the identity is a bare interned
-/// handle (a `u128` into the registry) that points into no region — and the token's home-borrow bit
-/// is replayed from its derivation, never asserted here.
-pub(crate) fn build_type_operand<'step>(
-    scope: &'step Scope<'step>,
+/// The whole operand is `yoke`d into `dest_frame`'s own region — witnessed by it — with the identity
+/// moved into the brand closure alongside the handle. `KType` is a bare interned handle (a `u128`
+/// into the registry) that points into no region, so it is region-pure data the yoke may carry in:
+/// nothing is composed, and the operand's reach is exactly the dest region's own, born co-located
+/// rather than paired with an asserted witness. The envelope it seals into is [`dest_brand`]'s shape
+/// exactly — homed in `dest_frame`, covering nothing beyond it — since a handle plus a scalar reaches
+/// nothing else.
+pub(crate) fn build_type_operand(
     dest_frame: Rc<FrameStorage>,
     identity: KType,
-) -> Witnessed<RegionTypeFamily, CarrierWitness> {
-    let dest_brand = dest_brand(Rc::clone(&dest_frame));
-    let identity_carrier = scope.resident_type_carrier(identity);
-    // The dest brand is the *destination* operand (its `DestHandleFamily` live form is the
-    // `HasRegionHandle` mint target the pinned merge's composition seam needs), so it rides as
-    // `other` — `identity_carrier`'s own reach is what gets minted into the dest frame's arena.
-    // The pin: the identity's home region owner when live (the identity and its reach set live
-    // there), else the empty set — the identity is then covered by the live `scope` borrow itself.
-    let pin: FramePins = scope
-        .region_owner()
-        .upgrade()
-        .map_or_else(FramePins::empty, FramePins::singleton);
-    // Both operands are empty-reach (a `Copy` identity handle and a bare dest handle), so both
-    // owned bundles are empty and the composed bundle is empty — the type operand carries no reach
-    // for the caller to thread, so it is discarded.
-    let (operand, _empty) = identity_carrier
-        .merge_reach::<DestHandleFamily, RegionTypeFamily, KoanStorageProfile, _>(
-            &FramePins::empty(),
-            dest_brand,
-            &FramePins::empty(),
-            &pin,
-            |carried, brand, _b| {
-                let kt = match carried {
-                    Carried::Type(t) => t,
-                    _ => unreachable!("the identity carrier is always a Type"),
-                };
-                (brand, kt)
-            },
-        );
-    operand
+) -> Delivered<RegionTypeFamily, CarrierWitness, FrameStorage> {
+    let operand = KoanRegion::yoke_branded::<RegionTypeFamily, _>(Rc::clone(&dest_frame), |b| {
+        (b.handle(), identity)
+    });
+    Delivered::seal(operand, dest_frame, FrameCoverage::empty())
 }
 
 /// Seal a declaration's nominal identity as a `Carried::Type` terminal. A `KType` is a `Copy`
@@ -378,24 +351,22 @@ fn finish_witnessed<'step>(
     view: &SchedulerView<'step, '_>,
     kind: &CtorKind,
     terminals: DepResults<'_, &DepTerminal<'step>>,
-) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError> {
+) -> Result<DeliveredCarried, KError> {
     // A constructor parks on its value subs only (all owned, no park producers), so its results are
     // exactly the owned suffix — read them as one slice.
     let terminals = terminals.owned_slice();
-    let scope = view.current_scope();
     match kind {
         CtorKind::NewType { identity } => {
             debug_assert_eq!(terminals.len(), 1);
             let collapse =
                 check_newtype_repr(*identity, terminals[0].value.object(), view.types())?;
-            let home = build_type_operand(scope, view.dest_frame(), *identity);
-            // The type operand is empty-reach, so its dest bundle is empty; the transfer composes the
-            // value's reach and hands back the wrapped product's owned foreign bundle.
+            let home = build_type_operand(view.dest_frame(), *identity);
+            // The type operand is empty-reach, so the transfer composes the value's reach alone and
+            // hands back the wrapped product as an envelope homed in the dest frame.
             Ok(terminals[0]
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
-                    &FramePins::empty(),
                     // The wrap holds the value's borrow verbatim, so nothing is released.
                     |_product, _region| true,
                     move |value, (_region, identity_ty), placement| {
@@ -427,21 +398,27 @@ fn finish_witnessed<'step>(
             // The fold accumulator is yoked into the dest frame's own region up front (mirroring
             // `dispatch::literal`'s `AggBuildFamily`), so each field's `transfer_into` composes by
             // minting that field's reach into the accumulator's own arena rather than by plain union.
-            let acc0 =
-                KoanRegion::yoke_branded::<RecordFieldsFamily, _>(view.dest_frame(), |region| {
-                    (region.handle(), Vec::with_capacity(field_names.len()))
-                });
-            // Thread the accumulator's owned foreign bundle across the field fold: each field's
-            // `transfer_into` composes that field's reach into the accumulator's arena and hands back
-            // the composed carrier + bundle. The empty seed pins nothing.
-            let (fields, fields_bundle) = terminals.iter().zip(field_names).fold(
-                (acc0, FramePins::empty()),
-                |(acc, acc_bundle), (term, name)| {
+            let dest_frame = view.dest_frame();
+            // The accumulator crosses as an envelope homed in the dest frame, so each field's
+            // `transfer_into` composes into it directly — the accumulated coverage rides the
+            // envelope rather than being threaded beside it. A bare handle plus an empty `Vec`
+            // reaches nothing, so the seed's coverage is empty.
+            let acc0 = Delivered::seal(
+                KoanRegion::yoke_branded::<RecordFieldsFamily, _>(
+                    Rc::clone(&dest_frame),
+                    |region| (region.handle(), Vec::with_capacity(field_names.len())),
+                ),
+                Rc::clone(&dest_frame),
+                FrameCoverage::empty(),
+            );
+            let fields = terminals
+                .iter()
+                .zip(field_names)
+                .fold(acc0, |acc, (term, name)| {
                     let name = name.clone();
                     term.delivered
                         .transfer_into::<RecordFieldsFamily, RecordFieldsFamily, _>(
                             acc,
-                            &acc_bundle,
                             // Each field cell is a pointer copy of the term's value, so it
                             // borrows everything the term did.
                             |_product, _region| true,
@@ -450,20 +427,14 @@ fn finish_witnessed<'step>(
                                 (region, fields)
                             },
                         )
-                },
-            );
-            let home = build_type_operand(scope, view.dest_frame(), *identity);
-            // The pin: the destination frame, whose arena holds the sets the field folds minted.
-            let dest_frame = view.dest_frame();
+                });
+            let home = build_type_operand(Rc::clone(&dest_frame), *identity);
             let types = view.types();
-            // The type operand is empty-reach; merge the accumulated fields (their threaded bundle)
-            // with it, yielding the wrapped record and its owned foreign bundle.
-            let (witnessed, pins) = fields
-                .merge_reach_placing::<RegionTypeFamily, CarriedFamily, KoanStorageProfile, _>(
-                    &fields_bundle,
+            // The type operand is empty-reach; merge the accumulated fields into it, yielding the
+            // wrapped record homed in the dest frame.
+            let product = fields
+                .merge_into_placing::<RegionTypeFamily, CarriedFamily, KoanStorageProfile>(
                     home,
-                    &FramePins::empty(),
-                    &dest_frame,
                     |(_region, fields), (_identity_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         let record = KObject::record(region, Record::from_pairs(fields), types);
@@ -475,8 +446,15 @@ fn finish_witnessed<'step>(
                     },
                 );
             // Step-terminal seal: the fresh record's substrate always borrows into this same
-            // `dest_frame` — force the bit rather than trust the merge's operand-only compose.
-            Ok((force_substrate_borrows_host(witnessed, &dest_frame), pins))
+            // `dest_frame` — force the bit rather than trust the merge's operand-only compose. The
+            // re-seal is at the product's own residence under its own foreign coverage, so nothing
+            // about what it reaches changes.
+            let foreign = product.coverage_releasing_home();
+            Ok(Delivered::seal(
+                force_substrate_borrows_host(product.into_cell().unseal(), &dest_frame),
+                dest_frame,
+                foreign,
+            ))
         }
         CtorKind::Tagged {
             schema,
@@ -506,13 +484,12 @@ fn finish_witnessed<'step>(
             // The member handle crosses the brand as a `Copy` operand so the built `Tagged`
             // names its identity at the brand. The handle borrows no region — it is one `u128`
             // naming registry-owned content — so the operand's reach stays empty.
-            let home = build_type_operand(scope, view.dest_frame(), *member);
+            let home = build_type_operand(view.dest_frame(), *member);
             let tag = tag.clone();
             Ok(terminals[0]
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
-                    &FramePins::empty(),
                     // The tag holds the value's borrow verbatim, so nothing is released.
                     |_product, _region| true,
                     move |value, (_region, identity_ty), placement| {
@@ -544,13 +521,12 @@ fn finish_witnessed<'step>(
                     .expect("an identity-wrapper family declares one type parameter"),
                 _ => unreachable!("a ConstructorApply ctor is a TypeConstructor-kind member"),
             };
-            let home = build_type_operand(scope, view.dest_frame(), identity);
+            let home = build_type_operand(view.dest_frame(), identity);
             let types = view.types();
             Ok(terminals[0]
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
-                    &FramePins::empty(),
                     // The wrap holds the value's borrow verbatim, so nothing is released.
                     |_product, _region| true,
                     move |value, (_region, identity_ty), placement| {

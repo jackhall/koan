@@ -246,7 +246,7 @@ impl KError {
         let witnessed = force_substrate_borrows_host(witnessed, &frame);
         // The tagged error object is built fresh in this scope's region (region-pure foreign reach),
         // so it seals under an empty foreign bundle.
-        scope.seal_resident_delivered(witnessed, crate::machine::core::FramePins::empty())
+        scope.seal_resident_delivered(witnessed, crate::machine::core::FrameCoverage::empty())
     }
 }
 

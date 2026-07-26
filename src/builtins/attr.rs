@@ -153,9 +153,10 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine
         None => {
             let resident = match ctx.scope.seal_fresh_object(target.deep_clone(), ctx.types) {
                 // A region-pure rebuild seals under an empty foreign bundle.
-                Ok(witnessed) => ctx
-                    .scope
-                    .seal_resident_delivered(witnessed, crate::machine::core::FramePins::empty()),
+                Ok(witnessed) => ctx.scope.seal_resident_delivered(
+                    witnessed,
+                    crate::machine::core::FrameCoverage::empty(),
+                ),
                 Err(e) => return Action::Done(Err(e)),
             };
             route(access_field(&ctx.ctx, &field_name, &resident, ctx.types))
@@ -376,7 +377,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 let obj_carrier = module_scope.lift_resident(sealed);
                 let tag_carrier = module_scope.seal_resident_delivered(
                     module_scope.resident_type_carrier(tag),
-                    crate::machine::core::FramePins::empty(),
+                    crate::machine::core::FrameCoverage::empty(),
                 );
                 let ctx = StepAllocator::for_scope(module_scope);
                 return Ok(ctx.alloc_carried_with(

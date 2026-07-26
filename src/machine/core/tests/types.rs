@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use super::super::Scope;
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
-use crate::machine::core::{run_root_storage, FramePins, FrameStorageExt};
+use crate::machine::core::{run_root_storage, FrameCoverage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, DeclarationSite};
@@ -64,7 +64,7 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
     let cell = Delivered::hosted(
         producer.seal_resident_value(Carried::Object(obj), None, false),
         std::rc::Rc::clone(&storage),
-        crate::machine::core::FramePins::empty(),
+        crate::machine::core::FrameCoverage::empty(),
     );
 
     // A separate (open) consumer scope adopts the carrier.
@@ -97,7 +97,7 @@ fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
             |r| Carried::Object(r.alloc_object(KObject::Number(9.0))),
         )),
         Rc::clone(&producer_frame),
-        crate::machine::core::FramePins::empty(),
+        crate::machine::core::FrameCoverage::empty(),
     );
 
     // A consumer scope in a *different* frame adopts the carrier — its reach-set folds the producer.
@@ -142,7 +142,7 @@ fn child_module_reach_names_the_child_region_which_owns_its_members_reaches() {
     // `source_scope`'s region union, so nothing but that region keeps `inner_storage` alive.
     let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
     let (reach, borrows_home) =
-        source_scope.mint_retained(&FramePins::singleton(Rc::clone(&inner_storage)));
+        source_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&inner_storage))]);
     let sealed = source_scope.seal_resident_value(Carried::Object(obj), reach, borrows_home);
     source_scope
         .bind_value("m".to_string(), sealed, None, BindingIndex::value(0))

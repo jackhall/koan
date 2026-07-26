@@ -26,7 +26,9 @@ use crate::machine::core::{
 use crate::machine::core::{FoldingBrand, ScopeRefFamily};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
-use crate::machine::{CallFrame, CarrierWitness, FramePins, KError, KErrorKind, NodeId, RunId};
+use crate::machine::{
+    CallFrame, CarrierWitness, FrameCoverage, FrameStorage, KError, KErrorKind, NodeId, RunId,
+};
 use crate::witnessed::SealedExtern;
 
 use super::dispatch::{BodyPlacement, DepRequest, SchedulerView, SubmitContext};
@@ -42,7 +44,7 @@ use super::{
 };
 use crate::machine::model::CarriedFamily;
 use crate::scheduler::{Deps, ResolvedDeps, Scheduler, Workload};
-use crate::witnessed::Witnessed;
+use crate::witnessed::{Delivered, Witnessed};
 
 mod interpret;
 mod submit;
@@ -173,24 +175,24 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn relocate_terminal(
         &self,
         producer: NodeId,
-        dest: Witnessed<DestHandleFamily, CarrierWitness>,
-    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError> {
+        dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
+    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FrameCoverage), KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
         let verb = seam_verb(&delivered);
-        // The destination is a bare region handle (empty reach), so its operand bundle is empty.
-        // The transfer returns the relocated carrier paired with its composed owned foreign bundle —
-        // the relocated terminal's reach, threaded to the caller to re-seed the retention hold (a
+        // The destination is a bare region handle (empty reach), so the transfer composes the
+        // producer's reach alone. The product envelope's residence is `dest`'s own frame, which the
+        // caller re-pins as the terminal's host, so it is released here and what crosses back is the
+        // relocated terminal's foreign reach — threaded to re-seed the retention hold (a
         // `Forward`-ready finalize) or retain past teardown (a drained root).
-        Ok(
-            delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
-                dest,
-                &FramePins::empty(),
-                seam_still_borrows(&delivered, verb),
-                |value, _region, placement| {
-                    copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
-                },
-            ),
-        )
+        let relocated = delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
+            dest,
+            seam_still_borrows(&delivered, verb),
+            |value, _region, placement| {
+                copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
+            },
+        );
+        let foreign = relocated.coverage_releasing_home();
+        Ok((relocated.into_cell().unseal(), foreign))
     }
 
     pub fn len(&self) -> usize {

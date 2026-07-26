@@ -334,9 +334,10 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     );
 
     // Mint a description naming `foreign`'s region into `dest`'s side table (foreign to `dest`, so
-    // the self rule keeps it in the owned bundle). `_pins` keeps its members alive for the assertion.
-    let foreign_bundle = crate::machine::core::FramePins::singleton(Rc::clone(&foreign));
-    let (minted, _pins, _) = dest.brand().mint(&[&foreign_bundle]);
+    // the self rule keeps it in the owned bundle). The mint retains that bundle in `dest`'s region,
+    // which keeps the description's members alive for the assertion.
+    let foreign_bundle = crate::machine::core::FrameCoverage::of(Rc::clone(&foreign));
+    let (minted, _) = dest.brand().handle().mint_retained(&[&foreign_bundle]);
     let foreign_reach = minted.expect("a foreign member mints a member naming its region");
     assert!(o.resident_in_delivered(dest.region(), &[foreign_reach]));
 }

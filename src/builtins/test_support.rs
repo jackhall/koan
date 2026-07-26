@@ -362,7 +362,7 @@ pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
         cell: Delivered::hosted(
             Sealed::seal(Witnessed::resident(c)),
             crate::machine::run_root_storage(),
-            crate::machine::core::FramePins::empty(),
+            crate::machine::core::FrameCoverage::empty(),
         ),
     }
 }

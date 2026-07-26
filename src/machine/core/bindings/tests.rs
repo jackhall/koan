@@ -5,7 +5,7 @@
 use super::*;
 use crate::machine::core::arena::RegionBrand;
 use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
-use crate::machine::core::{CarrierWitness, FramePins, FrameReach, FrameStorage};
+use crate::machine::core::{CarrierWitness, FrameCoverage, FrameReach, FrameStorage};
 use crate::machine::model::values::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
@@ -19,10 +19,11 @@ fn sealed_reaching<'a>(
     foreign: &Rc<FrameStorage>,
 ) -> (SealedValue, &'a FrameReach) {
     // Mint a description naming `foreign` (foreign to `region`, so the self rule keeps it in the
-    // owned bundle) to stand in for the reach a value borrows. The owned bundle is dropped: these
-    // tests assert on the description the seal carries, and `foreign` outlives them on the stack.
-    let foreign_bundle = FramePins::singleton(Rc::clone(foreign));
-    let (minted, _pins, _) = region.mint(&[&foreign_bundle]);
+    // owned bundle) to stand in for the reach a value borrows. The mint retains its own bundle in
+    // `region`; these tests assert on the description the seal carries, and `foreign` outlives them
+    // on the stack.
+    let foreign_bundle = FrameCoverage::of(Rc::clone(foreign));
+    let (minted, _) = region.handle().mint_retained(&[&foreign_bundle]);
     let reach_set = minted.expect("a foreign member mints a single-member reach");
     let sealed = Sealed::seal(region.seal_resident(
         Carried::Object(obj),

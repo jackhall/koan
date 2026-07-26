@@ -147,13 +147,13 @@ pub(super) fn literal_pass_through<'step>(
         // rather than re-wrapping the read-back value under a freshly-asserted witness. Strictly
         // better witnessing: the value arrives with the exact reach its producer named.
         ExpressionPart::Spliced { cell } => {
-            // The spliced cell is the producer's own delivery envelope; recover its owned member
-            // set — the producer's own region among them — before unsealing, so the recovered
-            // carrier's reach is threaded, not re-derived.
-            let pins = cell.pins().clone();
+            // The spliced cell is the producer's own delivery envelope; recover its whole coverage
+            // — the producer's own region among them — before unsealing, so the recovered carrier's
+            // reach is threaded, not re-derived.
+            let coverage = cell.coverage().clone();
             Outcome::Done(Ok(StepCarried::born_pinned(
                 cell.into_cell().unseal(),
-                pins,
+                coverage,
             )))
         }
         // A quote is its body as data: seal the `KObject::KExpression` into this scope's region
@@ -187,18 +187,17 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         let delivered = &deps.owned(0).delivered;
         let verb = seam_verb(delivered);
         // The dest brand is a bare region handle (empty reach); the transfer composes the literal
-        // producer's reach into it and hands back the product's owned foreign bundle, threaded
-        // through `born_pinned`.
-        let (carrier, pins) = delivered
-            .transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
+        // producer's reach into it and homes the product in the consumer's own frame, which the
+        // step's seal re-pins — so `born_delivered` releases it and the foreign coverage rides on.
+        Ok(StepCarried::born_delivered(
+            delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
                 dest,
-                &crate::machine::core::FramePins::empty(),
                 seam_still_borrows(delivered, verb),
                 |value, _region, placement| {
                     copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
                 },
-            );
-        Ok(StepCarried::born_pinned(carrier, pins))
+            ),
+        ))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)
 }

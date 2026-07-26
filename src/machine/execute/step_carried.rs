@@ -16,7 +16,7 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::machine::core::{run_root_storage, FramePins, FrameStorage, StepAllocator};
+use crate::machine::core::{run_root_storage, FrameCoverage, FrameStorage, StepAllocator};
 use crate::machine::model::CarriedFamily;
 use crate::machine::CarrierWitness;
 use crate::witnessed::{Delivered, Reattachable, Witnessed};
@@ -42,12 +42,12 @@ use crate::witnessed::{Delivered, Reattachable, Witnessed};
 /// brand lifetime — never on the type being unnameable.
 pub struct StepCarried<'step, T: Reattachable = CarriedFamily> {
     inner: Witnessed<T, CarrierWitness>,
-    /// The carrier's owned foreign pin bundle — pinning every region the value reaches beyond the
+    /// The carrier's owned foreign coverage — pinning every region the value reaches beyond the
     /// producer's own. Empty for a region-pure / empty-reach producer (the majority of Done sites);
     /// carried in hand for a reach-carrying producer (a resident binding read, a merge product, a
     /// splice). [`Self::seal_at_step`] consumes it into the delivery envelope, so the terminal's
     /// reach is threaded from here — never re-derived from the carrier's description.
-    pins: FramePins,
+    pins: FrameCoverage,
     step: PhantomData<&'step ()>,
 }
 
@@ -68,19 +68,36 @@ impl<'step, T: Reattachable> StepCarried<'step, T> {
         );
         StepCarried {
             inner,
-            pins: FramePins::empty(),
+            pins: FrameCoverage::empty(),
             step: PhantomData,
         }
     }
 
-    /// Wrap a **reach-carrying** carrier into the step brand, threading its owned foreign
-    /// [`FramePins`] — a resident binding read (the entry's pins), a merge product (the composed
-    /// bundle), a splice (the source envelope's foreign). The pins ride the step and
-    /// [`Self::seal_at_step`] consumes them into the delivery envelope, so the terminal's reach is
-    /// owned end-to-end rather than re-derived.
-    pub(crate) fn born_pinned(inner: Witnessed<T, CarrierWitness>, pins: FramePins) -> Self {
+    /// Wrap a **reach-carrying** carrier into the step brand, threading its owned
+    /// [`FrameCoverage`] — a resident binding read (the entry's coverage), a splice (the source
+    /// envelope's whole coverage, its producer's own region among them), or a fold product whose
+    /// carrier the site re-derives before sealing (`force_substrate_borrows_host`), which
+    /// [`Self::born_delivered`] cannot take because it consumes the envelope whole. The coverage
+    /// rides the step and [`Self::seal_at_step`] consumes it into the delivery envelope, so the
+    /// terminal's reach is owned end-to-end rather than re-derived.
+    pub(crate) fn born_pinned(inner: Witnessed<T, CarrierWitness>, pins: FrameCoverage) -> Self {
         StepCarried {
             inner,
+            pins,
+            step: PhantomData,
+        }
+    }
+
+    /// Wrap the **product of a composition into the step's own destination region**: a fold, a
+    /// relocation, a merge. The product envelope's residence *is* that destination, which
+    /// [`Self::seal_at_step`] pins again as the terminal's host, so it is released here
+    /// ([`Delivered::coverage_releasing_home`]) and what rides the step is the product's foreign
+    /// coverage alone — the same set the composition's self rule already stripped from the bundle it
+    /// composed.
+    pub(crate) fn born_delivered(envelope: Delivered<T, CarrierWitness, FrameStorage>) -> Self {
+        let pins = envelope.coverage_releasing_home();
+        StepCarried {
+            inner: envelope.into_cell().unseal(),
             pins,
             step: PhantomData,
         }

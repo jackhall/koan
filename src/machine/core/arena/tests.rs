@@ -14,14 +14,26 @@ use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
 use crate::machine::KFunction;
 use crate::witnessed::{
-    Delivered, Erased, FoldToken, FoldedPlacement, RegionHandleFamily, RegionHost, Sealed,
-    WitnessRegion, Witnessed,
+    Delivered, Erased, FoldToken, FoldedPlacement, RegionHandleFamily, RegionHost, WitnessRegion,
+    Witnessed,
 };
 
 /// Test-only destination-region operand: the library's [`RegionHandleFamily`], the
 /// `HasRegionHandle` mint target a `merge`/`transfer_into` composition needs — the same family
 /// production's `execute::run_loop::DestHandleFamily` aliases.
 type BrandFamily = RegionHandleFamily<KoanStorageProfile>;
+
+/// The destination operand for a composition: `frame`'s own handle `yoke`d into its region and
+/// sealed into the envelope the composition verbs take, homed there. A bare handle reaches nothing
+/// beyond its own region, so the operand's coverage is empty — production's
+/// `execute::run_loop::dest_brand` in test shape.
+fn dest_operand(frame: &Rc<FrameStorage>) -> Delivered<BrandFamily, CarrierWitness, FrameStorage> {
+    Delivered::seal(
+        KoanRegion::yoke_branded::<BrandFamily, _>(Rc::clone(frame), |b| b.handle()),
+        Rc::clone(frame),
+        FrameCoverage::empty(),
+    )
+}
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameReach`
 /// subsumption walks. Region escape is irrelevant to the `outer`-chain test, so a plain region.
@@ -49,49 +61,16 @@ fn pins_region_walks_outer_chain() {
     );
 }
 
-/// `FramePins::union` over related carts collapses to the descendant singleton (the ancestor's region
-/// is already pinned by the descendant's `outer` chain), regardless of operand order.
+/// The single-owner `Rc<FrameStorage>` witness (the `yoke` seam) exposes exactly its own region.
+/// The composition over those owners — union, subsumption, the antichain shape — is library
+/// mechanism koan holds no vocabulary for; it is read here off the descriptions the mint freezes
+/// ([`mint_subsumes_ancestor`], [`mint_composes_exact_members`]).
 #[test]
-fn frameset_merge_subsumes_ancestor() {
-    let root = run_root_storage();
-    let child = child_storage(&root);
-    let descendant = FramePins::singleton(Rc::clone(&child));
-    let ancestor = FramePins::singleton(Rc::clone(&root));
-
-    let merged = FramePins::union(&descendant, &ancestor);
-    let [sole] = merged.members() else {
-        panic!("ancestor subsumed by descendant");
-    };
-    assert!(std::ptr::eq(sole.region(), child.region()));
-
-    // Order-independent: the antichain is the same either way.
-    let merged_rev = FramePins::union(&ancestor, &descendant);
-    let [sole_rev] = merged_rev.members() else {
-        panic!("ancestor subsumed by descendant");
-    };
-    assert!(std::ptr::eq(sole_rev.region(), child.region()));
-}
-
-/// `FramePins::union` over unrelated carts keeps both — neither `outer` chain pins the other.
-#[test]
-fn frameset_merge_keeps_unrelated() {
-    let a = run_root_storage();
-    let b = run_root_storage();
-    let merged = FramePins::union(&FramePins::singleton(a), &FramePins::singleton(b));
-    assert_eq!(merged.members().len(), 2, "unrelated regions both kept");
-}
-
-/// The single-owner `Rc<FrameStorage>` witness (the `yoke` seam) exposes exactly its own region. A
-/// singleton `FramePins` exposes its sole frame; the empty bundle exposes none.
-#[test]
-fn single_owner_exposes_region_and_frameset_members() {
+fn single_owner_exposes_its_own_region() {
     let root = run_root_storage();
     // The `yoke` seam is `WitnessRegion for Rc<FrameStorage>`: a held owner pins exactly one region.
     assert!(std::ptr::eq(WitnessRegion::region(&root), root.region()));
-    let set = FramePins::singleton(Rc::clone(&root));
-    assert_eq!(set.members().len(), 1);
-    assert!(FramePins::empty().members().is_empty());
-    assert!(FramePins::empty().is_empty());
+    assert!(FrameCoverage::empty().is_empty());
 }
 
 /// `with_scope` opens the child scope at a `for<'b>` brand. A scalar copies out; a bind / lookup
@@ -367,16 +346,15 @@ fn envelope_transfer_folds_an_independent_foreign_value() {
     // own arena) — only its carrier re-homes: the envelope's host mints into `here_frame`'s arena
     // as a reach member (the value keeps living there).
     let delivered: DeliveredCarried =
-        Delivered::seal(foreign, Rc::clone(&foreign_frame), FramePins::empty());
-    let here_dest: Witnessed<BrandFamily, CarrierWitness> =
-        KoanRegion::yoke_branded::<BrandFamily, _>(Rc::clone(&here_frame), |b| b.handle());
-    let (merged, _merged_pins): (Witnessed<CarriedFamily, CarrierWitness>, FramePins) =
-        delivered.transfer_into::<BrandFamily, CarriedFamily, _>(
-            here_dest,
-            &FramePins::empty(),
+        Delivered::seal(foreign, Rc::clone(&foreign_frame), FrameCoverage::empty());
+    let merged = delivered
+        .transfer_into::<BrandFamily, CarriedFamily, _>(
+            dest_operand(&here_frame),
             |_product, _region| true,
             |foreign, _brand, _b: FoldToken<'_>| foreign,
-        );
+        )
+        .into_cell()
+        .unseal();
     drop(delivered);
     drop(foreign_frame); // the minted member in `here_frame`'s arena is now the sole foreign owner.
     let got = merged.with_pinned(&here_frame, |c| match *c {
@@ -390,7 +368,7 @@ fn envelope_transfer_folds_an_independent_foreign_value() {
 /// **description** by reference — it copies the erased value, bit-copies the reference-only carrier,
 /// and never re-mints the description, so every duplicate's reach pointer is identical to the
 /// original's. What it clones is the envelope's owned liveness: one retained-host `Rc` and its owned
-/// foreign [`FramePins`](crate::machine::FramePins) bundle per duplicate, so each consumer owns its
+/// foreign [`FrameCoverage`](crate::machine::FrameCoverage) bundle per duplicate, so each consumer owns its
 /// own pins for the parked period. A re-mint of the description (the regression this gates) would
 /// change the reach pointer; Miri backs the no-leak half.
 #[test]
@@ -401,32 +379,26 @@ fn pass_through_duplicate_keeps_reach_pointer_and_mints_nothing() {
         KoanRegion::alloc_witnessed(Rc::clone(&foreign_frame), |r| {
             Carried::Object(r.alloc_object(KObject::Number(1.0)))
         });
-    let here_dest: Witnessed<BrandFamily, CarrierWitness> =
-        KoanRegion::yoke_branded::<BrandFamily, _>(Rc::clone(&here_frame), |b| b.handle());
     let source: DeliveredCarried =
-        Delivered::seal(foreign, Rc::clone(&foreign_frame), FramePins::empty());
-    let (merged, merged_pins): (Witnessed<CarriedFamily, CarrierWitness>, FramePins) =
-        source.transfer_into::<BrandFamily, CarriedFamily, _>(
-            here_dest,
-            &FramePins::empty(),
-            |_product, _region| true,
-            |foreign, _brand, _b: FoldToken<'_>| foreign,
-        );
+        Delivered::seal(foreign, Rc::clone(&foreign_frame), FrameCoverage::empty());
+    // The transfer's product **is** the envelope: homed in `here_frame`, covering everything the
+    // relocated value reaches.
+    let envelope: DeliveredCarried = source.transfer_into::<BrandFamily, CarriedFamily, _>(
+        dest_operand(&here_frame),
+        |_product, _region| true,
+        |foreign, _brand, _b: FoldToken<'_>| foreign,
+    );
 
-    // The reach query lives on the **in-use** carrier state: seal and open at `here_frame`'s pin,
-    // whose borrow is the coverage the reach re-anchor needs.
-    let merged_sealed = Sealed::seal(merged);
-    let reach_ptr = merged_sealed
-        .open_at(&here_frame)
+    // The reach query lives on the **in-use** carrier state, opened under the envelope's own
+    // coverage — the pins the reach re-anchor needs.
+    let reach_ptr = envelope
+        .open_at()
         .with_reach(|r| r.map(|set| set as *const _));
-    let merged = merged_sealed.unseal();
+    // Baselines taken with the envelope already built, so they include its own host clone.
     let here_count_before = Rc::strong_count(&here_frame);
     let foreign_count_before = Rc::strong_count(&foreign_frame);
 
     // The walking motion — dep delivery duplicates a producer slot's envelope for each consumer.
-    let envelope: DeliveredCarried =
-        Delivered::seal(merged, Rc::clone(&here_frame), merged_pins.clone());
-    let here_count_before = here_count_before + 1; // the envelope itself holds one host clone.
     let copy_a = envelope.duplicate();
     let copy_b = envelope.duplicate();
 
@@ -444,10 +416,9 @@ fn pass_through_duplicate_keeps_reach_pointer_and_mints_nothing() {
     );
     assert_eq!(
         Rc::strong_count(&foreign_frame),
-        foreign_count_before + 3,
+        foreign_count_before + 2,
         "the reach description rides by reference (no re-mint), but the envelope OWNS its foreign \
-         pins: sealing `merged` derives one foreign-frame clone, and each of the two duplicates \
-         clones the owned bundle (one more each) -- three total over the pre-seal count"
+         pins: each of the two duplicates clones the owned coverage, one foreign-frame clone each"
     );
 }
 
@@ -481,39 +452,40 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
             Carried::Object(r.alloc_object(KObject::Number(1.0)))
         }),
         Rc::clone(&frame_a),
-        FramePins::empty(),
+        FrameCoverage::empty(),
     );
     let dep_b: DeliveredCarried = Delivered::seal(
         KoanRegion::alloc_witnessed(Rc::clone(&frame_b), |r| {
             Carried::Object(r.alloc_object(KObject::Number(2.0)))
         }),
         Rc::clone(&frame_b),
-        FramePins::empty(),
+        FrameCoverage::empty(),
     );
     // The consumer's own frame: the region the finished list node lands in.
     let dest_frame = run_root_storage();
     let types = TypeRegistry::new();
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
-    let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
+    let acc0: Delivered<AggBuildFamily, CarrierWitness, FrameStorage> = Delivered::seal(
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
             (region.handle(), Vec::new())
-        });
+        }),
+        Rc::clone(&dest_frame),
+        FrameCoverage::empty(),
+    );
     // Fold each dep in: bind its re-anchored carrier into the cells (a list element borrows into the
-    // foreign region exactly as a surviving closure rides its bare borrow); the witness accumulates
-    // the union. `transfer_into` borrows the dep's seal (does not consume it — other consumers keep
-    // reading the producer terminal).
-    let (acc1, bundle1) = dep_a.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+    // foreign region exactly as a surviving closure rides its bare borrow); the accumulated envelope
+    // covers the union. `transfer_into` borrows the dep's seal (does not consume it — other
+    // consumers keep reading the producer terminal).
+    let acc1 = dep_a.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc0,
-        &FramePins::empty(),
         |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
             (region, cells)
         },
     );
-    let (acc2, _bundle2) = dep_b.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+    let acc2 = dep_b.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc1,
-        &bundle1,
         |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
@@ -523,12 +495,14 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // Allocate the list node from the carried dest region; the cells ride borrows into both foreign
     // regions, both now minted as members into the dest arena.
     let list: Witnessed<CarriedFamily, CarrierWitness> =
-        acc2.map_pinned(&dest_frame, |(region, cells), _token| {
-            let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
-            Carried::Object(
-                region.alloc_object_folded(KObject::list_of_held(region, cells, &types)),
-            )
-        });
+        acc2.into_cell()
+            .unseal()
+            .map_pinned(&dest_frame, |(region, cells), _token| {
+                let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
+                Carried::Object(
+                    region.alloc_object_folded(KObject::list_of_held(region, cells, &types)),
+                )
+            });
     // Drop the producer handles: the dest arena's minted set solely owns both foreign regions; the
     // dest region itself rides the held `dest_frame` (the retention stand-in), which the read names.
     drop(frame_a);
@@ -555,25 +529,23 @@ fn mint_keeps_every_source_member_and_dedups_by_region() {
     let foreign = run_root_storage();
     let dest = run_root_storage();
 
-    // A source frame lands as a member — the region a bound closure / module borrows into.
-    // `_kept_pins` (the owned bundle) pins the member across the `members()` read.
-    let (kept, _kept_pins) = FrameReach::mint(
-        dest.brand().0,
-        &[&FramePins::singleton(Rc::clone(&foreign))],
-    );
+    // A source frame lands as a member — the region a bound closure / module borrows into. The
+    // mint retains its own bundle in `dest`'s region, which pins the member across the `members()`
+    // read.
+    let (kept, _) = dest
+        .brand()
+        .handle()
+        .mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
     assert!(
         matches!(kept.unwrap().members().as_slice(), [only] if Rc::ptr_eq(only, &foreign)),
         "a source frame must land in the minted set",
     );
 
     // Two sources naming the same foreign region collapse to one member.
-    let (deduped, _deduped_pins) = FrameReach::mint(
-        dest.brand().0,
-        &[
-            &FramePins::singleton(Rc::clone(&foreign)),
-            &FramePins::singleton(Rc::clone(&foreign)),
-        ],
-    );
+    let (deduped, _) = dest.brand().handle().mint_retained(&[
+        &FrameCoverage::of(Rc::clone(&foreign)),
+        &FrameCoverage::of(Rc::clone(&foreign)),
+    ]);
     assert_eq!(
         deduped.unwrap().members().len(),
         1,
@@ -582,7 +554,7 @@ fn mint_keeps_every_source_member_and_dedups_by_region() {
 }
 
 /// Retention-timeline acceptance (claim: *reach pins release at region death*). A binding entry
-/// owns nothing: the mint that derives a bound value's reach folds the owning [`FramePins`] bundle
+/// owns nothing: the mint that derives a bound value's reach folds the owning [`FrameCoverage`] bundle
 /// into the destination **region's** deduped union, which pins every region anything resident there
 /// reaches and drops with the region itself. Mint a reach whose owned bundle is the sole strong
 /// owner of a foreign region, then confirm the foreign region outlives both the entry and the
@@ -597,7 +569,7 @@ fn region_union_foreign_pins_release_at_region_death() {
         let obj = scope.brand().alloc_object(KObject::Number(1.0));
         // The bind-door mint: derive the exact reach into `dest`'s arena and fold the owning bundle
         // into `dest`'s region union. `foreign` is not the dest, so the self rule keeps it.
-        let (reach, borrows_home) = scope.mint_retained(&FramePins::singleton(Rc::clone(&foreign)));
+        let (reach, borrows_home) = scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
         let bindings: Bindings = Bindings::new();
         bindings
             .try_bind_value(
@@ -745,7 +717,7 @@ fn delivered_closure(home: &Rc<CallFrame>) -> DeliveredCarried {
             CarrierWitness::default(),
         ),
         home.storage_rc(),
-        FramePins::empty(),
+        FrameCoverage::empty(),
     )
 }
 
@@ -770,7 +742,7 @@ fn delivered_reread_closure<'run>(
     // The bind-time mint: `home` materializes into the reader's arena as the entry's reach, with
     // the owning bundle folded into the reader region's union. The read then lifts that entry —
     // upgrading the description's members `Weak → Rc` — into an envelope hosted by the reader.
-    let (reach, borrows_home) = reader_scope.mint_retained(&FramePins::singleton(Rc::clone(home)));
+    let (reach, borrows_home) = reader_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(home))]);
     let sealed = reader_scope.seal_resident_value(Carried::Object(obj), reach, borrows_home);
     reader_scope.lift_resident(sealed)
 }
@@ -806,16 +778,19 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope); // the list node lands here.
     let types = test_run.types.clone();
 
-    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame.storage_rc(), |region| {
-        (region.handle(), Vec::new())
-    });
+    let acc0 = Delivered::seal(
+        KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame.storage_rc(), |region| {
+            (region.handle(), Vec::new())
+        }),
+        dest_frame.storage_rc(),
+        FrameCoverage::empty(),
+    );
     // Fold each re-read element into the accumulator; the temporary source carrier drops after each
     // statement, leaving only the aggregate witness (reach union + materialized reader hosts)
     // holding the four regions.
     let source_a = delivered_reread_closure(&home_a, reader_a_scope);
-    let (acc1, bundle1) = source_a.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+    let acc1 = source_a.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc0,
-        &FramePins::empty(),
         |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
@@ -823,9 +798,8 @@ fn multi_region_list_of_closures_survives_frame_free() {
         },
     );
     let source_b = delivered_reread_closure(&home_b, reader_b_scope);
-    let (acc2, _bundle2) = source_b.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+    let acc2 = source_b.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc1,
-        &bundle1,
         |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
@@ -836,12 +810,14 @@ fn multi_region_list_of_closures_survives_frame_free() {
     // the scheduler seeds at finalize.
     let dest_storage = dest_frame.storage_rc();
     let list: Witnessed<CarriedFamily, CarrierWitness> =
-        acc2.map_pinned(&dest_storage, |(region, cells), _token| {
-            let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
-            Carried::Object(
-                region.alloc_object_folded(KObject::list_of_held(region, cells, &types)),
-            )
-        });
+        acc2.into_cell()
+            .unseal()
+            .map_pinned(&dest_storage, |(region, cells), _token| {
+                let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
+                Carried::Object(
+                    region.alloc_object_folded(KObject::list_of_held(region, cells, &types)),
+                )
+            });
 
     // Free every home and reader shell: the dest arena's minted set (the unioned closure homes plus
     // the materialized readers) and the retained dest storage are now the sole owners of all five
@@ -893,13 +869,16 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
 
     // Fold the two inner closures into a list carrier over frame_outer's region — its witness derives to
     // {frame_outer, frame_1, frame_2} through the fold, never a hand-assembled union.
-    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(frame_outer.storage_rc(), |region| {
-        (region.handle(), Vec::new())
-    });
+    let acc0 = Delivered::seal(
+        KoanRegion::yoke_branded::<AggBuildFamily, _>(frame_outer.storage_rc(), |region| {
+            (region.handle(), Vec::new())
+        }),
+        frame_outer.storage_rc(),
+        FrameCoverage::empty(),
+    );
     let source_1 = delivered_closure(&frame_1);
-    let (acc1, bundle1) = source_1.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+    let acc1 = source_1.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc0,
-        &FramePins::empty(),
         |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
@@ -907,9 +886,8 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
         },
     );
     let source_2 = delivered_closure(&frame_2);
-    let (acc2, bundle2) = source_2.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+    let acc2 = source_2.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc1,
-        &bundle1,
         |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(Held::from_carried(dep));
@@ -924,10 +902,9 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
     // in, so the outer closure now reaches frame_1 / frame_2 through the bound list (the reach tree).
     let outer_storage = frame_outer.storage_rc();
     let source_outer = delivered_closure(&frame_outer);
-    let (captured, _bundle3): (Witnessed<CarriedFamily, CarrierWitness>, FramePins) =
-        source_outer.transfer_into_placing::<AggBuildFamily, CarriedFamily, _>(
+    let captured = source_outer
+        .transfer_into_placing::<AggBuildFamily, CarriedFamily, _>(
             acc2,
-            &bundle2,
             |_product, _region| true,
             |outer_v, (_region, cells), placement| {
                 let region = FoldingBrand::in_fold_closure(placement);
@@ -944,7 +921,9 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                 }
                 outer_v
             },
-        );
+        )
+        .into_cell()
+        .unseal();
 
     drop(frame_outer);
     drop(frame_1);
@@ -994,13 +973,16 @@ fn multi_region_record_of_closures_survives_frame_free() {
 
     // Fold each field's closure into a named-cell accumulator over the dest region; the record's witness
     // derives to {dest ∪ frame_a ∪ frame_b} through the fold, never a hand-assembled union.
-    let acc0 = KoanRegion::yoke_branded::<RecordCellFamily, _>(dest_frame.storage_rc(), |region| {
-        (region.handle(), Vec::new())
-    });
+    let acc0 = Delivered::seal(
+        KoanRegion::yoke_branded::<RecordCellFamily, _>(dest_frame.storage_rc(), |region| {
+            (region.handle(), Vec::new())
+        }),
+        dest_frame.storage_rc(),
+        FrameCoverage::empty(),
+    );
     let source_a = delivered_closure(&frame_a);
-    let (acc1, bundle1) = source_a.transfer_into::<RecordCellFamily, RecordCellFamily, _>(
+    let acc1 = source_a.transfer_into::<RecordCellFamily, RecordCellFamily, _>(
         acc0,
-        &FramePins::empty(),
         |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(("a".to_string(), Held::from_carried(dep)));
@@ -1008,9 +990,8 @@ fn multi_region_record_of_closures_survives_frame_free() {
         },
     );
     let source_b = delivered_closure(&frame_b);
-    let (acc2, _bundle2) = source_b.transfer_into::<RecordCellFamily, RecordCellFamily, _>(
+    let acc2 = source_b.transfer_into::<RecordCellFamily, RecordCellFamily, _>(
         acc1,
-        &bundle1,
         |_product, _region| true,
         |dep, (region, mut cells), _brand| {
             cells.push(("b".to_string(), Held::from_carried(dep)));
@@ -1019,14 +1000,16 @@ fn multi_region_record_of_closures_survives_frame_free() {
     );
     let dest_storage = dest_frame.storage_rc();
     let record: Witnessed<CarriedFamily, CarrierWitness> =
-        acc2.map_pinned(&dest_storage, |(region, cells), _token| {
-            let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
-            Carried::Object(region.alloc_object_folded(KObject::record_of_held(
-                region,
-                Record::from_pairs(cells),
-                &types,
-            )))
-        });
+        acc2.into_cell()
+            .unseal()
+            .map_pinned(&dest_storage, |(region, cells), _token| {
+                let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
+                Carried::Object(region.alloc_object_folded(KObject::record_of_held(
+                    region,
+                    Record::from_pairs(cells),
+                    &types,
+                )))
+            });
 
     drop(frame_a);
     drop(frame_b);
@@ -1083,7 +1066,7 @@ fn object_field_reach_fold_survives_producer_frame_free() {
             CarrierWitness::default(),
         ),
         producer_frame.storage_rc(),
-        FramePins::empty(),
+        FrameCoverage::empty(),
     );
 
     // Consumer: a StepAllocator over a *different* frame — the finish surface's own region.
@@ -1166,7 +1149,7 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
             CarrierWitness::default(),
         ),
         producer_frame.storage_rc(),
-        FramePins::empty(),
+        FrameCoverage::empty(),
     );
 
     // Consumer: a different frame — FROM's own step surface, narrowing to just `{x}`.
@@ -1240,7 +1223,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
             CarrierWitness::default(),
         ),
         producer_frame.storage_rc(),
-        FramePins::empty(),
+        FrameCoverage::empty(),
     );
 
     // The declared type the return re-stamps to — a distinct handle for the same record shape.
@@ -1293,7 +1276,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
 // `FrameReach::mint` — the witness-set hosting substrate (design/witness-hosting.md § Composition).
 // Each test below pins one rule of the mint's composition (exact membership, the self rule,
 // outer-chain subsumption, precise reads, teardown release). The mint returns the
-// hosted (`Weak`-membered) description alongside the owned `FramePins` bundle that pins its members;
+// hosted (`Weak`-membered) description alongside the owned `FrameCoverage` bundle that pins its members;
 // each test keeps that bundle alive across its `members()` read.
 
 /// The mint composes its inputs' **exact** member set — two unrelated frames materialized as
@@ -1304,13 +1287,10 @@ fn mint_composes_exact_members() {
     let b = run_root_storage();
     let c = run_root_storage();
 
-    let (minted, _pins) = FrameReach::mint(
-        c.brand().0,
-        &[
-            &FramePins::singleton(Rc::clone(&a)),
-            &FramePins::singleton(Rc::clone(&b)),
-        ],
-    );
+    let (minted, _) = c.brand().handle().mint_retained(&[
+        &FrameCoverage::of(Rc::clone(&a)),
+        &FrameCoverage::of(Rc::clone(&b)),
+    ]);
     let minted = minted.unwrap();
 
     assert_eq!(minted.members().len(), 2, "exact members — no coarsening");
@@ -1330,8 +1310,12 @@ fn mint_composes_exact_members() {
 #[test]
 fn mint_self_rule_strips_dest_from_the_bundle_only() {
     let c = run_root_storage();
+    let count_before = Rc::strong_count(&c);
 
-    let (minted, pins) = FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&c))]);
+    let (minted, _) = c
+        .brand()
+        .handle()
+        .mint_retained(&[&FrameCoverage::of(Rc::clone(&c))]);
 
     assert_eq!(
         minted
@@ -1341,8 +1325,11 @@ fn mint_self_rule_strips_dest_from_the_bundle_only() {
         1,
         "membership stays exact — home is an ordinary member"
     );
-    assert!(
-        pins.is_empty(),
+    // The owned bundle is retained into `c`'s own region, so a surviving self member would show up
+    // as a strong ref `c` holds on itself — the cycle the self rule forbids.
+    assert_eq!(
+        Rc::strong_count(&c),
+        count_before,
         "the owned bundle never pins the destination region into itself"
     );
 }
@@ -1355,8 +1342,10 @@ fn mint_materializes_foreign_host() {
     let a = run_root_storage();
     let c = run_root_storage();
 
-    let (minted_into_c, _pins_c) =
-        FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&a))]);
+    let (minted_into_c, _) = c
+        .brand()
+        .handle()
+        .mint_retained(&[&FrameCoverage::of(Rc::clone(&a))]);
     let minted_into_c = minted_into_c.unwrap();
     assert_eq!(minted_into_c.members().len(), 1, "A is foreign to C");
     assert!(std::ptr::eq(
@@ -1364,8 +1353,11 @@ fn mint_materializes_foreign_host() {
         a.region()
     ));
 
-    let (minted_into_a, pins_a) =
-        FrameReach::mint(a.brand().0, &[&FramePins::singleton(Rc::clone(&a))]);
+    let a_count_before = Rc::strong_count(&a);
+    let (minted_into_a, _) = a
+        .brand()
+        .handle()
+        .mint_retained(&[&FrameCoverage::of(Rc::clone(&a))]);
     assert_eq!(
         minted_into_a
             .expect("A stays an exact member of the description minted into A")
@@ -1373,9 +1365,10 @@ fn mint_materializes_foreign_host() {
             .len(),
         1
     );
-    assert!(
-        pins_a.is_empty(),
-        "the self rule strips A from the bundle minted into A"
+    assert_eq!(
+        Rc::strong_count(&a),
+        a_count_before,
+        "the self rule strips A from the bundle retained into A"
     );
 }
 
@@ -1388,13 +1381,10 @@ fn mint_subsumes_ancestor() {
     let b = child_storage(&a);
     let c = run_root_storage();
 
-    let (minted, _pins) = FrameReach::mint(
-        c.brand().0,
-        &[
-            &FramePins::singleton(Rc::clone(&a)),
-            &FramePins::singleton(Rc::clone(&b)),
-        ],
-    );
+    let (minted, _) = c.brand().handle().mint_retained(&[
+        &FrameCoverage::of(Rc::clone(&a)),
+        &FrameCoverage::of(Rc::clone(&b)),
+    ]);
     let minted = minted.unwrap();
 
     let members = minted.members();
@@ -1411,7 +1401,10 @@ fn mint_reads_back_under_pin() {
     let a = run_root_storage();
     let c = run_root_storage();
 
-    let (minted, _pins) = FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&a))]);
+    let (minted, _) = c
+        .brand()
+        .handle()
+        .mint_retained(&[&FrameCoverage::of(Rc::clone(&a))]);
     let minted = minted.unwrap();
 
     let regions: Vec<*const KoanRegion> = minted
@@ -1431,7 +1424,10 @@ fn mint_leaves_arena_pages_untouched() {
     let c = run_root_storage();
 
     let before = c.region().alloc_count();
-    let (_minted, _pins) = FrameReach::mint(c.brand().0, &[&FramePins::singleton(Rc::clone(&a))]);
+    let (_minted, _) = c
+        .brand()
+        .handle()
+        .mint_retained(&[&FrameCoverage::of(Rc::clone(&a))]);
     assert_eq!(
         c.region().alloc_count(),
         before,
@@ -1440,7 +1436,7 @@ fn mint_leaves_arena_pages_untouched() {
 }
 
 /// Teardown releases a retained bundle's members: the side-table description names its members with
-/// `Weak`, so the owned `FramePins` bundle carries the strong pins. Retaining that bundle in `C`'s
+/// `Weak`, so the owned `FrameCoverage` bundle carries the strong pins. Retaining that bundle in `C`'s
 /// region ([`RegionHandle::retain_reach`]) makes `C` the members' liveness home; dropping `C`'s
 /// storage drops the retained bundle, decrementing each member's refcount. No self-cycle
 /// (the self rule forbids `C` from holding its own `Rc`), so the extra refs fall away at `C`'s death
@@ -1455,17 +1451,14 @@ fn mint_teardown_releases_members() {
     let count_before_b = Rc::strong_count(&b);
 
     {
-        let (minted, bundle) = FrameReach::mint(
-            c.brand().0,
-            &[
-                &FramePins::singleton(Rc::clone(&a)),
-                &FramePins::singleton(Rc::clone(&b)),
-            ],
-        );
+        // The mint retains its own bundle in `c`'s region for that region's whole life — the
+        // liveness home a resident value's reach rides while the side-table description only names
+        // the members.
+        let (minted, _) = c.brand().handle().mint_retained(&[
+            &FrameCoverage::of(Rc::clone(&a)),
+            &FrameCoverage::of(Rc::clone(&b)),
+        ]);
         assert_eq!(minted.unwrap().members().len(), 2);
-        // The region retains the owned bundle for its whole life — the liveness home a resident
-        // value's reach rides while the side-table description only names the members.
-        c.brand().0.retain_reach(bundle);
     }
     assert_eq!(
         Rc::strong_count(&a),
@@ -1507,7 +1500,7 @@ fn spliced_expression_is_rejected_by_the_checked_object_seal() {
         cell: Delivered::hosted(
             Sealed::seal(witnessed),
             Rc::clone(&storage),
-            FramePins::empty(),
+            FrameCoverage::empty(),
         ),
     };
     let expression = KExpression::new(vec![spliced.into()]);
@@ -1593,10 +1586,10 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
     // Covered: evidence names `producer`'s region — the nested record's home. Minting `producer`
     // (foreign to the consumer) into the consumer region yields a hosted description naming it;
     // `_covering_pins` keeps the member pinned across the `store_value_reaching_for_test` read below.
-    let (covering, _covering_pins) = FrameReach::mint(
-        consumer_storage.brand().0,
-        &[&FramePins::singleton(Rc::clone(&producer))],
-    );
+    let (covering, _) = consumer_storage
+        .brand()
+        .handle()
+        .mint_retained(&[&FrameCoverage::of(Rc::clone(&producer))]);
     let covering = covering.expect("producer is foreign to the consumer region");
     let covering_evidence = (Some(covering), false);
     let moved = consumer_scope

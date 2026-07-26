@@ -9,7 +9,7 @@ use std::rc::{Rc, Weak};
 
 use super::NodeFinalize;
 use crate::builtins::test_support::{parse_one, run_root_bare, TestRun};
-use crate::machine::core::{run_root_storage, CarrierWitness, FramePins, FrameStorage};
+use crate::machine::core::{run_root_storage, CarrierWitness, FrameCoverage, FrameStorage};
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
@@ -61,7 +61,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     let (sealed, sealed_pins) = test_run
         .runtime
         .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
             &producer.storage_rc(),
             None,
         )
@@ -90,7 +90,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
 }
 
 /// Retention-timeline acceptance (claim: *envelope pins at envelope drop*). A delivery envelope now
-/// carries the terminal's owned **foreign** [`FramePins`] bundle alongside the host frame `Rc`; the
+/// carries the terminal's owned **foreign** [`FrameCoverage`] bundle alongside the host frame `Rc`; the
 /// bundle pins every region the value reaches and drops with the envelope. Seal an envelope whose
 /// foreign bundle is the sole strong owner of a distinct region and confirm the region stays live
 /// while the envelope lives, released when the envelope drops — the reach owned end-to-end, never
@@ -108,7 +108,7 @@ fn delivery_envelope_foreign_bundle_releases_at_envelope_drop() {
     let envelope = Delivered::seal(
         carrier,
         producer.storage_rc(),
-        FramePins::singleton(Rc::clone(&foreign)),
+        FrameCoverage::of(Rc::clone(&foreign)),
     );
     // The envelope's owned foreign bundle is now the sole strong owner of `foreign`.
     drop(foreign);
@@ -142,7 +142,7 @@ fn home_borrowing_value_keeps_its_bit_and_rides_retention() {
     let (sealed, sealed_pins) = test_run
         .runtime
         .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
             &producer.storage_rc(),
             None,
         )
@@ -337,7 +337,7 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
     let (sealed, sealed_pins) = test_run
         .runtime
         .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
             &producer.storage_rc(),
             None,
         )
@@ -399,7 +399,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let (sealed, sealed_pins) = test_run
         .runtime
         .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
             &producer.storage_rc(),
             None,
         )

@@ -235,7 +235,7 @@ fn spliced_cell_classifies_by_opening() {
         cell: Delivered::hosted(
             scope.seal_resident_value(Carried::Object(obj), None, false),
             std::rc::Rc::clone(&storage),
-            crate::machine::core::FramePins::empty(),
+            crate::machine::core::FrameCoverage::empty(),
         ),
     };
 

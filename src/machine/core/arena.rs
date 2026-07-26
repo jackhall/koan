@@ -28,8 +28,8 @@ use crate::machine::model::{
 use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    Erased, FamilyArena, FoldedPlacement, ReachDescription, Reattachable, Region, RegionHandle,
-    StorageOf, StorageProfile, Stored, Witnessed,
+    Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StorageOf,
+    StorageProfile, Stored, Witnessed,
 };
 
 mod frame;
@@ -37,7 +37,7 @@ mod residence;
 mod step_allocator;
 
 pub(crate) use frame::FrameStorageExt;
-pub use frame::{run_root_storage, CallFrame, FramePins, FrameReach, FrameStorage};
+pub use frame::{run_root_storage, CallFrame, FrameCoverage, FrameReach, FrameStorage};
 pub(crate) use residence::Residence;
 use residence::ResidenceEvidence;
 pub use step_allocator::StepAllocator;
@@ -201,20 +201,6 @@ impl<'a> RegionBrand<'a> {
         self.0.alloc_resident::<OperatorGroup>(g)
     }
 
-    /// Mint a frozen reach description into this brand's region side table — the Koan veneer over
-    /// [`ReachDescription::mint_with_dest_bit`]. `sources` are the composition's owned pin bundles
-    /// (strong members — the union folds them, never a description's `Weak`). No policy is threaded
-    /// in: the library applies subsumption and the self rule (never pin a region into itself), so
-    /// the minted description is the value's exact reach. A value's home region rides `sources` as
-    /// an ordinary member, so there is no separate host-materialization arm.
-    /// Returns the minted description (`None` when the composed reach is empty — a region-pure value
-    /// pins nothing), the owned [`FramePins`] the holder keeps to pin its members, and the
-    /// destination-coverage bit (`true` iff a source bundle reaches this brand's own region, before
-    /// the self rule strips it from the owned bundle).
-    pub(crate) fn mint(self, sources: &[&FramePins]) -> (Option<&'a FrameReach>, FramePins, bool) {
-        ReachDescription::mint_with_dest_bit(self.0, sources)
-    }
-
     /// The witnessed-allocation surface for an owned object built fresh inside the brand: born
     /// witnessed by the **empty** (foreign-reach-only) set. The brand-confined
     /// [`alloc`](Region::alloc) stores `value` and hands the freshly-stored `&'b KObject<'b>` to the
@@ -371,12 +357,12 @@ reattachable! {
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
 /// type-channel identity (a `SetMember` / declared type) that must cross the build brand. A
-/// value-embedding construction `transfer_into`/`merge`s its object carrier with this operand so the
-/// wrapped value lands — allocated through the handle — tagged by the identity, both re-anchored to
-/// the build brand under the same witness; the dest frame's `outer` chain pins the identity's
-/// (ancestor) region. Used by the newtype / tagged-union constructors and the `CATCH` `Result`
-/// build. Layout-invariant: a thin pointer and a `Copy` `KType` handle, representation independent
-/// of `'r`.
+/// value-embedding construction `transfer_into`s its object carrier into this operand so the wrapped
+/// value lands — allocated through the handle — tagged by the identity, both re-anchored to the
+/// build brand under the same witness. The identity is a bare interned handle pointing into no
+/// region, so the whole operand is born co-located in the dest region by a single yoke. Used by the
+/// newtype / tagged-union constructors and the `CATCH` `Result` build. Layout-invariant: a thin
+/// pointer and a `Copy` `KType` handle, representation independent of `'r`.
 pub struct RegionTypeFamily;
 reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, KType));
 

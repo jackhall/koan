@@ -291,7 +291,7 @@ fn rewrite_threaded_self_refs<'e, 'a>(
                         // A `KType` carrier has no foreign reach, so it seals under an empty bundle.
                         cell: scope.seal_resident_delivered(
                             carrier,
-                            crate::machine::core::FramePins::empty(),
+                            crate::machine::core::FrameCoverage::empty(),
                         ),
                     }
                 }

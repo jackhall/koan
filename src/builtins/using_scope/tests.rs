@@ -9,7 +9,7 @@ use std::rc::Rc;
 use crate::builtins::test_support::{parse_one, run_root_bare, TestRun};
 use crate::machine::model::{Carried, KObject};
 use crate::machine::KErrorKind;
-use crate::machine::{run_root_storage, BindingIndex, FramePins, Scope};
+use crate::machine::{run_root_storage, BindingIndex, FrameCoverage, Scope};
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
@@ -194,7 +194,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // folds the owning bundle into the module region's union.
     let value_obj = module_scope.brand().alloc_object(KObject::Number(1.0));
     let (reach, borrows_home) =
-        module_scope.mint_retained(&FramePins::singleton(Rc::clone(&foreign_storage)));
+        module_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign_storage))]);
     let sealed = module_scope.seal_resident_value(Carried::Object(value_obj), reach, borrows_home);
     module_scope
         .bind_value("val".to_string(), sealed, None, BindingIndex::value(0))
@@ -214,7 +214,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // the window -- the step that roots the module's region transitively.
     // The window region's own union is what roots the module's region transitively.
     let (_window_reach, _borrows) =
-        window.mint_retained(&FramePins::singleton(Rc::clone(&module_storage)));
+        window.mint_retained(&[&FrameCoverage::of(Rc::clone(&module_storage))]);
 
     let delivered = window
         .resolve_value_delivered("val", None)

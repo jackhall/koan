@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::{FoldingBrand, FramePins, KoanRegionExt, KoanStorageProfile};
+use crate::machine::core::{FoldingBrand, FrameCoverage, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
 use crate::machine::{
-    force_substrate_borrows_host, CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion,
-    NodeId, TraceFrame,
+    force_substrate_borrows_host, CarrierWitness, DeliveredCarried, FrameStorage, KError,
+    KErrorKind, KoanRegion, NodeId, TraceFrame,
 };
 use crate::source::Spanned;
-use crate::witnessed::{reattachable, Delivered, RegionHandle, Witnessed};
+use crate::witnessed::{reattachable, Delivered, RegionHandle};
 
 use super::super::lift::{cell_still_borrows, copy_held_from_carried};
 use super::super::outcome::DepTerminal;
@@ -74,18 +74,22 @@ fn fold_cells(
     view: &SchedulerView<'_, '_>,
     cells: impl Iterator<Item = DeliveredCarried>,
     capacity: usize,
-) -> (Witnessed<AggBuildFamily, CarrierWitness>, FramePins) {
+) -> Delivered<AggBuildFamily, CarrierWitness, FrameStorage> {
     let dest_frame = view.dest_frame();
-    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame, |region| {
-        (region.handle(), Vec::with_capacity(capacity))
-    });
-    // Thread the accumulator's owned foreign bundle across the fold: each cell's transfer composes
-    // its reach into the aggregate region and hands back the composed carrier + bundle. The empty
-    // seed pins nothing.
-    cells.fold((acc0, FramePins::empty()), |(acc, acc_bundle), cell| {
+    // The accumulator crosses as an envelope homed in the aggregate's own destination frame, so each
+    // cell's transfer composes into it directly and the accumulated coverage rides the envelope
+    // rather than being threaded beside it. A bare handle plus an empty `Vec` reaches nothing, so
+    // the seed's coverage is empty.
+    let acc0 = Delivered::seal(
+        KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
+            (region.handle(), Vec::with_capacity(capacity))
+        }),
+        dest_frame,
+        FrameCoverage::empty(),
+    );
+    cells.fold(acc0, |acc, cell| {
         cell.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
             acc,
-            &acc_bundle,
             // The cell always rebuilds through the container door, so the retention predicate walks
             // the cell the fold just pushed — the exact answer for what this relocation left
             // pointing back at its source.
@@ -168,29 +172,35 @@ impl<'step> KoanRuntime<'step> {
                 }
                 cells.push(cell_carrier(row.value, terminals));
             }
-            let (acc, pins) = fold_cells(view, cells.into_iter(), n);
-            // The pin: the destination frame, whose arena holds the set the folds minted — through
-            // it every producer the accumulated `Held` views point into.
+            let acc = fold_cells(view, cells.into_iter(), n);
+            // The accumulated envelope's coverage carries every region the folded `Held` views point
+            // into; `map_pinned_placing` re-projects the value under the same witness, so it carries
+            // over unchanged onto the built carrier. The pin for that read: the destination frame,
+            // whose arena holds the set the folds minted.
             let dest_frame = view.dest_frame();
             let types = view.types();
-            let witnessed = acc.map_pinned_placing::<CarriedFamily, KoanStorageProfile, _>(
-                &dest_frame,
-                move |(_region, value_helds), placement| {
-                    let region = FoldingBrand::in_fold_closure(placement);
-                    Carried::Object(region.alloc_object_folded(assemble(
-                        region,
-                        keys,
-                        value_helds,
-                        types,
-                    )))
-                },
-            );
+            let coverage = acc.coverage_releasing_home();
+            let witnessed = acc
+                .into_cell()
+                .unseal()
+                .map_pinned_placing::<CarriedFamily, KoanStorageProfile, _>(
+                    &dest_frame,
+                    move |(_region, value_helds), placement| {
+                        let region = FoldingBrand::in_fold_closure(placement);
+                        Carried::Object(region.alloc_object_folded(assemble(
+                            region,
+                            keys,
+                            value_helds,
+                            types,
+                        )))
+                    },
+                );
             // Step-terminal seal: a record literal's fresh substrate always borrows into this
             // same `dest_frame` it was just built into — the fold above composes the witness
             // from the accumulator alone, blind to that fact, so force it here rather than
             // under-report the value's own self-borrow.
             let witnessed = force_substrate_borrows_host(witnessed, &dest_frame);
-            Ok(StepCarried::born_pinned(witnessed, pins))
+            Ok(StepCarried::born_pinned(witnessed, coverage))
         });
         self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
     }
@@ -309,7 +319,7 @@ impl<'step> KoanRuntime<'step> {
                     Carried::Object(region.alloc_object(other.resolve_region_pure()))
                 });
                 // A region-pure static literal reaches nothing foreign, so it seals empty.
-                Slot::Static(Delivered::seal(carrier, frame, FramePins::empty()))
+                Slot::Static(Delivered::seal(carrier, frame, FrameCoverage::empty()))
             }
         }
     }

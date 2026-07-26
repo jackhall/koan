@@ -87,7 +87,7 @@ pub(in crate::machine::execute) fn resolve_bare_carrier(
             // carrier seals under an empty foreign bundle.
             TypeChannel::Done(kt) => Ok(BareCarrier::Sealed(scope.seal_resident_delivered(
                 scope.resident_type_carrier(kt),
-                crate::machine::core::FramePins::empty(),
+                crate::machine::core::FrameCoverage::empty(),
             ))),
             TypeChannel::Parked(producer) => screen(scheduler, producer, t.render()),
             TypeChannel::Unbound(n) => Ok(BareCarrier::Unbound(n)),
@@ -146,7 +146,7 @@ pub(in crate::machine::execute) fn resolve_name_part(
             // it in the same envelope currency under an empty foreign bundle.
             TypeChannel::Done(kt) => Ok(NameOutcome::Resolved(scope.seal_resident_delivered(
                 scope.resident_type_carrier(kt),
-                crate::machine::core::FramePins::empty(),
+                crate::machine::core::FrameCoverage::empty(),
             ))),
             TypeChannel::Unbound(n) => Ok(NameOutcome::Unbound(n)),
             TypeChannel::Parked(producer) => screen_outcome(scheduler, producer, name),

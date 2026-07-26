@@ -101,7 +101,8 @@ fn copy_delivered_substrate_pins_a_home_borrowing_record() {
         Erased::erase(Carried::Object(record)),
         CarrierWitness::default(),
     );
-    let dep: DeliveredCarried = Delivered::seal(sealed, producer.storage_rc(), FramePins::empty());
+    let dep: DeliveredCarried =
+        Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
 
     let bound_seal = consumer
         .copy_delivered_substrate(&dep, |carried| Ok(carried.object()), &types)

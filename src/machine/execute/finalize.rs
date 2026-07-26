@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::machine::core::{FoldingBrand, FramePins, FrameStorage, KoanStorageProfile};
+use crate::machine::core::{FoldingBrand, FrameCoverage, FrameStorage, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{Carried, KType, TypeNode, TypeRegistry};
 use crate::machine::{CarrierWitness, DeliveredCarried, KError, KErrorKind};
@@ -51,7 +51,7 @@ pub(in crate::machine::execute) trait NodeFinalize {
         envelope: DeliveredCarried,
         home: &Rc<FrameStorage>,
         contract: Option<&ReturnObligation>,
-    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError>;
+    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FrameCoverage), KError>;
 }
 
 impl NodeFinalize for KoanRuntime<'_> {
@@ -60,16 +60,17 @@ impl NodeFinalize for KoanRuntime<'_> {
         envelope: DeliveredCarried,
         home: &Rc<FrameStorage>,
         contract: Option<&ReturnObligation>,
-    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError> {
+    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FrameCoverage), KError> {
         // The terminal's owned member set is invariant across finalize: pass-through keeps the
         // value verbatim, and restamp re-stamps *in place in the producer's own region*, so the
         // member set is identical to the input's. Clone it out of the envelope up front to seed the
         // scheduler's retention hold — never re-derived from the (re-sealed) carrier's description.
         //
-        // `home` is stripped by the self rule: the retention hold owns the producer frame as its
-        // own `owner` field, so re-listing it here would be a second `Rc` on the very frame the
-        // hold's release is supposed to free — a tail loop's retiring region would never turn over.
-        let foreign = envelope.pins().without_region(home.region());
+        // The envelope's own residence — the same `home` the seal paired it with — is released by
+        // the container verb: the retention hold owns the producer frame as its own `owner` field,
+        // so re-listing it here would be a second `Rc` on the very frame the hold's release is
+        // supposed to free — a tail loop's retiring region would never turn over.
+        let foreign = envelope.coverage_releasing_home();
         // No per-call return obligation (frameless / run producer, or a framed producer with no
         // obligation) or nothing declared: recover the sealed carrier as-is via the seal→unseal
         // round-trip — retention owns the frame's lifetime, so the Done boundary makes no memory
