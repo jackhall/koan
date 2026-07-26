@@ -5,7 +5,10 @@
 
 use std::cell::RefCell;
 
-use crate::machine::core::kfunction::KFunction;
+use std::rc::Rc;
+
+use crate::machine::core::arena::FrameStorage;
+use crate::machine::core::carrier_witness::SealedFunction;
 
 use super::bindings::{ApplyOutcome, BindingIndex, Bindings, DeclarationSite, SealedValue};
 
@@ -14,19 +17,19 @@ use super::bindings::{ApplyOutcome, BindingIndex, Bindings, DeclarationSite, Sea
 /// stay intact. A value/function write carries the original [`BindingIndex`] and a type
 /// write its [`DeclarationSite`], so the drained write lands under the same position and
 /// declaration identity the conflicted write would have used.
-enum PendingWrite<'a> {
+enum PendingWrite {
     Value {
         name: String,
         index: BindingIndex,
         /// The bound value fused to its exact reach, carried through the deferred write so a
         /// drained bind stores exactly what a direct bind would (see [`Bindings::try_bind_value`]).
         sealed: SealedValue,
-        /// The `KFunction` that value wraps, if any — the mirror the drained write replays.
-        function: Option<&'a KFunction<'a>>,
+        /// The value's mirror seal, if it wraps a callable — the mirror the drained write replays.
+        function: Option<SealedFunction>,
     },
     Function {
         name: String,
-        fn_ref: &'a KFunction<'a>,
+        fn_ref: SealedFunction,
         index: BindingIndex,
     },
     Type {
@@ -36,11 +39,11 @@ enum PendingWrite<'a> {
     },
 }
 
-pub struct PendingQueue<'a> {
-    pending: RefCell<Vec<PendingWrite<'a>>>,
+pub struct PendingQueue {
+    pending: RefCell<Vec<PendingWrite>>,
 }
 
-impl<'a> PendingQueue<'a> {
+impl PendingQueue {
     pub fn new() -> Self {
         Self {
             pending: RefCell::new(Vec::new()),
@@ -52,7 +55,7 @@ impl<'a> PendingQueue<'a> {
         name: String,
         index: BindingIndex,
         sealed: SealedValue,
-        function: Option<&'a KFunction<'a>>,
+        function: Option<SealedFunction>,
     ) {
         self.pending.borrow_mut().push(PendingWrite::Value {
             name,
@@ -62,7 +65,7 @@ impl<'a> PendingQueue<'a> {
         });
     }
 
-    pub fn defer_function(&self, name: String, fn_ref: &'a KFunction<'a>, index: BindingIndex) {
+    pub fn defer_function(&self, name: String, fn_ref: SealedFunction, index: BindingIndex) {
         self.pending.borrow_mut().push(PendingWrite::Function {
             name,
             fn_ref,
@@ -92,12 +95,12 @@ impl<'a> PendingQueue<'a> {
     /// `std::mem::take` is load-bearing: `Bindings::try_*` may itself contend and
     /// re-entrantly `defer_*` during retry, so the queue must move out before the
     /// loop or the inner borrow would deadlock.
-    pub fn drain(&self, bindings: &Bindings<'a>) {
+    pub fn drain(&self, bindings: &Bindings<'_>, pin: &Rc<FrameStorage>) {
         if self.pending.borrow().is_empty() {
             return;
         }
         let pending = std::mem::take(&mut *self.pending.borrow_mut());
-        let mut still_pending: Vec<PendingWrite<'a>> = Vec::new();
+        let mut still_pending: Vec<PendingWrite> = Vec::new();
         for item in pending {
             match item {
                 PendingWrite::Value {
@@ -109,7 +112,13 @@ impl<'a> PendingQueue<'a> {
                     // Duplicate the seal for the attempt, keeping the original for a re-defer on a
                     // repeat conflict, mirroring the direct-bind path (the duplicate preserves the
                     // value ⇔ reach pairing).
-                    match bindings.try_bind_value(&name, index, sealed.duplicate(), function) {
+                    match bindings.try_bind_value(
+                        &name,
+                        index,
+                        sealed.duplicate(),
+                        function.as_ref().map(SealedFunction::duplicate),
+                        pin,
+                    ) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
                             still_pending.push(PendingWrite::Value {
@@ -132,7 +141,7 @@ impl<'a> PendingQueue<'a> {
                     name,
                     fn_ref,
                     index,
-                } => match bindings.try_register_function(&name, fn_ref, index) {
+                } => match bindings.try_register_function(&name, fn_ref.duplicate(), index, pin) {
                     Ok(ApplyOutcome::Applied) => {}
                     Ok(ApplyOutcome::Conflict) => {
                         still_pending.push(PendingWrite::Function {
@@ -167,7 +176,7 @@ impl<'a> PendingQueue<'a> {
     }
 }
 
-impl<'a> Default for PendingQueue<'a> {
+impl Default for PendingQueue {
     fn default() -> Self {
         Self::new()
     }
@@ -180,12 +189,13 @@ mod tests {
 
     #[test]
     fn defer_type_queues_and_drain_replays_into_types() {
+        let storage = crate::machine::core::run_root_storage();
         let bindings: Bindings<'_> = Bindings::new();
-        let queue: PendingQueue<'_> = PendingQueue::new();
+        let queue: PendingQueue = PendingQueue::new();
         let kt = KType::NUMBER;
         queue.defer_type("Foo".to_string(), kt, DeclarationSite::BUILTIN);
         assert!(bindings.types().get("Foo").is_none());
-        queue.drain(&bindings);
+        queue.drain(&bindings, &storage);
         let stored = bindings
             .types()
             .get("Foo")
@@ -196,9 +206,10 @@ mod tests {
 
     #[test]
     fn default_yields_empty_queue() {
-        let queue: PendingQueue<'_> = PendingQueue::default();
+        let storage = crate::machine::core::run_root_storage();
+        let queue: PendingQueue = PendingQueue::default();
         let bindings: Bindings<'_> = Bindings::new();
-        queue.drain(&bindings);
+        queue.drain(&bindings, &storage);
         assert!(bindings.data().is_empty());
         assert!(bindings.types().is_empty());
     }

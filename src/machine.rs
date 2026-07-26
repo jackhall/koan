@@ -23,7 +23,8 @@ pub(crate) use core::{
     TailContract,
 };
 pub use core::{
-    run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, Scope, ScopeId,
+    run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, OpenedFunction,
+    Scope, ScopeId, SealedFunction,
 };
 pub(crate) use core::{
     BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, KoanRegion,

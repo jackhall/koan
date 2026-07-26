@@ -1221,6 +1221,23 @@ impl<'b, T: Reattachable, W> Opened<'b, T, W> {
         &self.witness
     }
 
+    /// The re-anchored value, consuming the open — the by-move twin of [`Self::value`] for a family
+    /// whose live form is not `Copy`, and the tail [`Delivered::adopt_into`](delivered::Delivered::adopt_into)
+    /// reads its adopted value back through.
+    pub fn into_value(self) -> T::At<'b> {
+        self.value
+    }
+
+    /// Bundle a value the **library itself** re-anchored at `'b` with the witness describing it —
+    /// the constructor behind [`Delivered::open_adopted`](delivered::Delivered::open_adopted),
+    /// whose `'b` is the destination region's own lifetime rather than a borrow of a pin. Crate-
+    /// internal to `witnessed`: the adopt door retains the pins covering `'b` *before* it hands the
+    /// value over, so the value↔reach pairing an `Opened` carries is still never fabricated by a
+    /// caller.
+    pub(in crate::witnessed) fn adopted(value: T::At<'b>, witness: W) -> Self {
+        Opened { value, witness }
+    }
+
     /// Return the value to rest as a [`Sealed`] — the step-end re-seal. Sound because an `Opened` is
     /// `Copy` and constructible only by opening a seal or delivery: re-erasing the value under the
     /// witness it was opened with reconstitutes exactly that carrier's value↔reach pairing, never a

@@ -270,7 +270,10 @@ impl<'a> ExpressionSignature<'a> {
     /// two would tie as `Equal` on every call and poison the bucket with unresolvable
     /// ambiguity. Return types are deliberately excluded: dispatch never selects on them, so
     /// they distinguish nothing. Independent of `Argument::name`.
-    pub fn indistinguishable_from(&self, other: &ExpressionSignature<'a>) -> bool {
+    /// `other` is free in its own lifetime: the comparison reads `elements` alone, which carries
+    /// none, so a bucket's dormant overload opened at some other brand compares against a live one
+    /// without the two regions having to be the same.
+    pub fn indistinguishable_from(&self, other: &ExpressionSignature<'_>) -> bool {
         if self.elements.len() != other.elements.len() {
             return false;
         }

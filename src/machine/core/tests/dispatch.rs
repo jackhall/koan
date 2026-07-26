@@ -408,7 +408,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     match inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &types) {
         DispatchOutcome::Resolved(r) => assert!(
             matches!(
-                r.function.signature.elements.first(),
+                r.function.value().signature.elements.first(),
                 Some(SignatureElement::Argument(arg)) if arg.ktype == KType::IDENTIFIER
             ),
             "outer `:Identifier` overload must Pick the bare name shape-only",

@@ -12,7 +12,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::KFunction;
+use crate::machine::core::OpenedFunction;
 use crate::machine::core::{scope_frame, DepPlacement};
 use crate::machine::core::{FrameStorage, StepAllocator};
 use crate::machine::model::types::TypeRegistry;
@@ -264,7 +264,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         &self,
         mut working_expr: KExpression<'step>,
         staged_subs: Vec<(usize, DepRequest<'step>)>,
-        picked: Option<&'step KFunction<'step>>,
+        picked: Option<OpenedFunction<'step>>,
     ) -> Outcome<'step> {
         use super::super::TerminalDepFinish;
         let (part_indices, deps): (Vec<usize>, Vec<DepRequest<'step>>) =
@@ -399,7 +399,7 @@ const PAIRWISE_HAS_TWO_PAIRS: &str =
 fn finish_eager_subs<'step>(
     view: &SchedulerView<'step, '_>,
     working_expr: KExpression<'step>,
-    picked: Option<&'step KFunction<'step>>,
+    picked: Option<OpenedFunction<'step>>,
 ) -> Outcome<'step> {
     match picked {
         Some(f) => super::exec::invoke_continue(view, f, working_expr),

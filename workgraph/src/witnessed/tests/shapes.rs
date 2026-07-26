@@ -477,3 +477,61 @@ fn alloc_with_folds_dep_reach_before_result_read() {
     drop(dep_frame);
     assert_eq!(built.open(|r| *r), 3);
 }
+
+/// **`open_adopted` — the adopt that stays open at the destination's own lifetime.** It is
+/// [`Delivered::adopt`] and [`Delivered::adopt_into`] fused: the mint stores the value's reach in
+/// `dest`'s side table and the region retains the owning bundle, so the returned [`Opened`] borrows
+/// at `'d` rather than at a pin borrow — and every handle the value's backing came from can go
+/// before it is read. The open's witness is the adopted one, so [`Opened::reseal`] reproduces
+/// exactly the seal `adopt` would have handed back.
+#[test]
+fn open_adopted_reads_at_the_destination_lifetime_after_the_producer_drops() {
+    let producer = frame();
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
+        Witnessed::resident(store_val(&producer, 23)),
+        Rc::clone(&producer),
+        StepCoverage::empty(),
+    );
+    let dest = frame();
+
+    let opened = element.open_adopted(RegionHandle::from_owner(&*dest));
+    assert!(
+        opened.reach_covers(producer.region()),
+        "the mint composed the value's home into dest's description as an ordinary member",
+    );
+    drop(element);
+    drop(producer);
+
+    assert_eq!(
+        *opened.value(),
+        23,
+        "the region's retained bundle is the sole pin left"
+    );
+    let resealed = opened.reseal();
+    assert_eq!(
+        resealed.open_with(&StepCoverage::<ShapeFrame>::of(Rc::clone(&dest)), |r| *r),
+        23,
+        "reseal returns exactly the adopted seal",
+    );
+}
+
+/// **`project` re-families in place.** Nothing moves and nothing is minted: the envelope keeps its
+/// residence, its coverage and its witness, and the projection borrows *from* the value the
+/// envelope already covers. Dropping the producer handles leaves the envelope's own pins as the
+/// only thing keeping the pointee alive, so a projection that dropped them is a use-after-free here.
+#[test]
+fn project_refamilies_under_the_envelopes_own_pins() {
+    let producer = frame();
+    let pair = RegionHandle::from_owner(&*producer).alloc_resident::<ValFamily>(31);
+    let second = RegionHandle::from_owner(&*producer).alloc_resident::<ValFamily>(37);
+    let element: Delivered<PairVals, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
+        Witnessed::resident((pair, second)),
+        Rc::clone(&producer),
+        StepCoverage::empty(),
+    );
+
+    let projected: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        element.project::<RefValFamily>(|(left, _right), _token| left);
+    drop(producer);
+    assert_eq!(projected.open(|r| *r), 31);
+}

@@ -12,7 +12,7 @@
 //! dead lean must not pre-empt an outer scope that could strict-pick the bare
 //! name as an `:Identifier` / `:Any` slot.
 
-use crate::machine::core::{ClassifiedSlots, KFunction};
+use crate::machine::core::{ClassifiedSlots, OpenedFunction};
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
@@ -56,8 +56,13 @@ pub fn reset_resolve_dispatch_entry_count() {
 /// for auto-wrap, replay-park, and eager-sub scheduling. Sole carrier of the
 /// disjoint `(eager_indices | wrap_indices | ref_name_indices)` invariant from
 /// [`crate::machine::core::ClassifiedSlots`].
+///
+/// `function` is the pick **in use**: adopted into its own binding region, so the mint that
+/// re-anchored it named its reach there and the region retains the pins — which is what lets the
+/// callable ride the `'step` lifetime across argument evaluation and into the invoke. The escape
+/// into the call chain [`reseal`](crate::witnessed::Opened::reseal)s it back to rest.
 pub struct Resolved<'step> {
-    pub function: &'step KFunction<'step>,
+    pub function: OpenedFunction<'step>,
     pub slots: ClassifiedSlots,
 }
 
@@ -104,7 +109,7 @@ impl<'step> Scope<'step> {
             let cutoff = chain.and_then(|c| c.index_for(root.id));
             let lookup = root.bindings().lookup_function(&key, cutoff);
             if let ScopeDecision::Terminal(outcome) =
-                decide_scope(&lookup, expr, bare_outcomes, types)
+                decide_scope(root, &lookup, expr, bare_outcomes, types)
             {
                 return outcome;
             }
@@ -115,7 +120,7 @@ impl<'step> Scope<'step> {
         for scope in self.ancestors() {
             let cutoff = scope.binding_cutoff(chain);
             let lookup = scope.bindings().lookup_function(&key, cutoff);
-            match decide_scope(&lookup, expr, bare_outcomes, types) {
+            match decide_scope(scope, &lookup, expr, bare_outcomes, types) {
                 ScopeDecision::Terminal(outcome) => return outcome,
                 ScopeDecision::DeadLean(name) => {
                     if dead_lean.is_none() {
@@ -153,14 +158,29 @@ enum ScopeDecision<'step> {
 /// 3. A strict-Empty bucket runs the relaxed pass: leaned-parked ⇒ park,
 ///    else leaned-eager ⇒ defer, else leaned-dead ⇒ `DeadLean` (continue),
 ///    else `Continue`.
+///
+/// The candidate walk reads signatures only, so it opens each dormant overload at `scope`'s own
+/// region-owner borrow — a candidate that loses the tournament is never re-anchored past this call.
+/// Only the **pick** escapes, through [`Scope::open_function`], which adopts it at `scope`'s region
+/// lifetime; `scope` is the very scope the bucket was read from, whose arena hosts the descriptions.
 fn decide_scope<'step, 'e>(
-    lookup: &FunctionLookup<'step>,
+    scope: &Scope<'step>,
+    lookup: &FunctionLookup,
     expr: &KExpression<'e>,
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
+    let pin = scope
+        .region_owner()
+        .upgrade()
+        .expect("a scope's region owner is held while its dispatch bucket is walked");
+    let candidates: Vec<OpenedFunction<'_>> = lookup
+        .overloads
+        .iter()
+        .map(|sealed| sealed.open_at(&pin))
+        .collect();
     let bucket = OverloadBucket {
-        candidates: &lookup.overloads,
+        candidates: &candidates,
     };
     // Pending always parks at its scope, even over a finalized Pick: the
     // pending sibling would shadow once it finalizes, so resolve nothing until
@@ -176,9 +196,9 @@ fn decide_scope<'step, 'e>(
         return ScopeDecision::Terminal(DispatchOutcome::ParkOnProducers(producers));
     }
     match bucket.pick_strict(expr, bare_outcomes, types) {
-        PickPass::Picked(f) => {
-            ScopeDecision::Terminal(DispatchOutcome::Resolved(build_resolved(f, expr, types)))
-        }
+        PickPass::Picked(index) => ScopeDecision::Terminal(DispatchOutcome::Resolved(
+            build_resolved(scope.open_function(&lookup.overloads[index]), expr, types),
+        )),
         // Tie with an unevaluated eager part may break once it evaluates: a
         // typed `Spliced(List …)` re-dispatch is element-aware where the bare
         // literal is shape-only. Defer; a genuine tie resurfaces as `Ambiguous`
@@ -199,7 +219,7 @@ fn decide_scope<'step, 'e>(
 /// on a hard already-resolved /
 /// literal / keyword slot does not admit even relaxed and contributes nothing.
 fn decide_relaxed<'step, 'e>(
-    bucket: &OverloadBucket<'step, '_>,
+    bucket: &OverloadBucket<'_, '_>,
     expr: &KExpression<'e>,
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
@@ -208,7 +228,7 @@ fn decide_relaxed<'step, 'e>(
     let mut any_eager_lean = false;
     let mut dead_name: Option<String> = None;
     for f in bucket.candidates.iter() {
-        let Some(leans) = relaxed_admits(&f.signature, expr, bare_outcomes, types) else {
+        let Some(leans) = relaxed_admits(&f.value().signature, expr, bare_outcomes, types) else {
             continue;
         };
         for lean in leans {
@@ -239,26 +259,34 @@ fn decide_relaxed<'step, 'e>(
     }
 }
 
-/// View over a single scope's visibility-pre-filtered overload bucket.
-/// Encapsulates the filter-then-[`ExpressionSignature::most_specific`] dance.
-struct OverloadBucket<'step, 'b> {
-    candidates: &'b [&'step KFunction<'step>],
+/// View over a single scope's visibility-pre-filtered overload bucket, opened at the scope's own
+/// pin. Encapsulates the filter-then-[`ExpressionSignature::most_specific`] dance.
+struct OverloadBucket<'p, 'b> {
+    candidates: &'b [OpenedFunction<'p>],
 }
 
-impl<'step> OverloadBucket<'step, '_> {
+impl OverloadBucket<'_, '_> {
+    /// The winner's index into the bucket, so the caller re-anchors only the pick — these opens
+    /// borrow the walk's own pin and none of them may leave it.
     fn pick_strict<'e>(
         &self,
         expr: &KExpression<'e>,
         bare_outcomes: &[Option<NameOutcome>],
         types: &TypeRegistry,
-    ) -> PickPass<'step> {
-        let survivors: Vec<&'step KFunction<'step>> = self
+    ) -> PickPass {
+        let survivors: Vec<usize> = self
             .candidates
             .iter()
-            .copied()
-            .filter(|f| signature_admits_strict(&f.signature, expr, bare_outcomes, types))
+            .enumerate()
+            .filter(|(_, f)| {
+                signature_admits_strict(&f.value().signature, expr, bare_outcomes, types)
+            })
+            .map(|(i, _)| i)
             .collect();
-        let sigs: Vec<&ExpressionSignature> = survivors.iter().map(|f| &f.signature).collect();
+        let sigs: Vec<&ExpressionSignature> = survivors
+            .iter()
+            .map(|i| &self.candidates[*i].value().signature)
+            .collect();
         match ExpressionSignature::most_specific(&sigs, types) {
             Some(i) => PickPass::Picked(survivors[i]),
             None if !survivors.is_empty() => PickPass::Tie(survivors.len()),
@@ -277,7 +305,8 @@ impl<'step> OverloadBucket<'step, '_> {
     ) -> Vec<NodeId> {
         let mut producers: Vec<NodeId> = Vec::new();
         for f in self.candidates.iter() {
-            let Some(leans) = relaxed_admits(&f.signature, expr, bare_outcomes, types) else {
+            let Some(leans) = relaxed_admits(&f.value().signature, expr, bare_outcomes, types)
+            else {
                 continue;
             };
             for lean in leans {
@@ -293,9 +322,10 @@ impl<'step> OverloadBucket<'step, '_> {
 }
 
 /// Policy-free outcome of one filter→`most_specific` pass; the `Tie` →
-/// `Ambiguous` / `Deferred` translation lives at the call site.
-enum PickPass<'step> {
-    Picked(&'step KFunction<'step>),
+/// `Ambiguous` / `Deferred` translation lives at the call site. `Picked` names the winner's bucket
+/// index rather than the callable, so the pick is re-anchored once, at the call site.
+enum PickPass {
+    Picked(usize),
     Tie(usize),
     Empty,
 }
@@ -496,12 +526,13 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
 /// Sole producer of the embedded `slots`; disjointness lives in
 /// [`KFunction::classify_for_pick`].
 fn build_resolved<'step, 'e>(
-    picked: &'step KFunction<'step>,
+    picked: OpenedFunction<'step>,
     expr: &KExpression<'e>,
     types: &TypeRegistry,
 ) -> Resolved<'step> {
+    let slots = picked.value().classify_for_pick(expr, types);
     Resolved {
         function: picked,
-        slots: picked.classify_for_pick(expr, types),
+        slots,
     }
 }

@@ -148,6 +148,31 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
         self.cell
     }
 
+    /// Re-family the delivered value **in place**: re-anchor it under the envelope's own pins at a
+    /// `for<'b>` brand, project it with `f`, and re-erase. Nothing moves and nothing is minted — the
+    /// envelope keeps its residence, its coverage and its witness, which stay correct because `f`
+    /// selects a part *of* the value the envelope already covers (the callable a value wraps, a
+    /// variant's payload) and so can reach nothing the whole did not. The witness may therefore
+    /// over-state the projection's reach; it never under-states it.
+    ///
+    /// This is how a family-specific carrier is reached without splitting the value from its pins:
+    /// a projection that went out through a bare read would arrive somewhere else with no proven
+    /// reach at all.
+    pub fn project<P: Reattachable>(
+        self,
+        f: impl for<'b> FnOnce(T::At<'b>, FoldToken<'b>) -> P::At<'b>,
+    ) -> Delivered<P, W, F> {
+        let Delivered { cell, home, pins } = self;
+        // The envelope's own pins cover the re-anchor for the whole call — the same coverage every
+        // read of this envelope runs under.
+        let projected = cell.unseal().map_pinned(&pins, f);
+        Delivered {
+            cell: Sealed::seal(projected),
+            home,
+            pins,
+        }
+    }
+
     /// Duplicate the envelope: [`duplicate`](Sealed::duplicate) the sealed carrier (bit-copy value +
     /// witness clone) and clone the owned [`PinBundle`], leaving the source intact — the producer
     /// keeps its terminal for other consumers, and every pinned region (home among them) gains one
@@ -266,16 +291,38 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         F: RegionOwner<Region = Region<P>>,
         T::At<'static>: Copy,
     {
-        let (_desc, bundle, _borrows_into_dest) = self.mint_reach(dest);
+        self.open_adopted(dest).into_value()
+    }
+
+    /// Adopt the delivered value into `dest` and hand it back in the **in-use** [`Opened`] state at
+    /// the destination region's own lifetime `'d` — [`Self::adopt_into`]'s carrier-bearing form,
+    /// for a consumer that reads the value across a step at `'d` and re-seals it
+    /// ([`Opened::reseal`], which reproduces exactly [`Self::adopt`]'s seal) when it escapes onward.
+    ///
+    /// Where [`Sealed::open_at`] takes its `'b` from a borrowed pin, this open takes it from the
+    /// destination region: the mint stores the value's reach into `dest`'s side table and the
+    /// retained bundle owns it for the region's life ⊇ `'d`, so the coverage justifying the open
+    /// outlives every use of it. That is what lets an adopted value ride a step-lifetime type
+    /// position no rank-2 read and no pin borrow can reach.
+    pub fn open_adopted<'d, P>(&self, dest: RegionHandle<'d, P>) -> Opened<'d, T, Carrier<F>>
+    where
+        P: StorageProfile<FrameOwner = F> + 'static,
+        F: RegionOwner<Region = Region<P>>,
+        T::At<'static>: Copy,
+    {
+        let (minted, bundle, borrows_into_dest) = self.mint_reach(dest);
         // The description is non-owning; the adopted value lives for the region's life, so the
         // region retains the owning bundle (dropped only at region death) — the liveness the old
         // arena-hosted owning set provided, now carried by the region's retention list.
         dest.region().retain_reach(bundle);
         let erased: Erased<T> = self.open(Erased::<T>::erase);
-        // SAFETY: the mint above stored this carrier's reach into `dest`'s side table and the
-        // retained bundle pins every region it names for the region's life ⊇ 'd; the re-anchored
-        // borrow cannot outlive its pin.
-        unsafe { erased.reattach() }
+        Opened::adopted(
+            // SAFETY: the mint above stored this carrier's reach into `dest`'s side table and the
+            // retained bundle pins every region it names for the region's life ⊇ 'd; the
+            // re-anchored borrow cannot outlive its pin.
+            unsafe { erased.reattach::<'d>() },
+            Carrier::new(borrows_into_dest, minted),
+        )
     }
 
     /// **Adopt** the delivered value into `dest`, dropping to rest as a [`Sealed`] (`Delivered →

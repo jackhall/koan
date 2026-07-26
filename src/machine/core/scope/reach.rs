@@ -5,6 +5,8 @@
 
 use super::Scope;
 use crate::machine::core::bindings::SealedValue;
+use crate::machine::core::carrier_witness::{function_mirror_of, OpenedFunction, SealedFunction};
+use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::{
     product_still_borrows, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
     KoanStorageProfile,
@@ -95,12 +97,92 @@ impl<'a> Scope<'a> {
         )
     }
 
+    /// Seal a `KFunction` living **in this scope's region** into its dormant registration form — the
+    /// function-family twin of [`Self::seal_resident_value`], for the bare-`FN` door, which binds no
+    /// value and so has no mirrored `data` seal to derive its claim from. The reach is the exact
+    /// empty set: `FN` allocates the callable into the very scope it captures, so its only region
+    /// borrow is home, which every read of it already pins.
+    pub(crate) fn seal_resident_function(&self, f: &'a KFunction<'a>) -> SealedFunction {
+        Sealed::seal(
+            self.brand()
+                .seal_resident::<KFunctionFamily>(f, CarrierWitness::new(false, None)),
+        )
+    }
+
+    /// The **mirror seal**: project a bound value's dormant carrier onto the `KFunction` it wraps,
+    /// carrying that value's own witness across unchanged — so a `functions` bucket entry states
+    /// exactly the claim its `data` twin does instead of holding a reference with no reach at all.
+    /// `None` when the value is not a callable. The projection reads under this scope's own region
+    /// owner, which is where the value it seals lives.
+    pub(crate) fn seal_function_mirror(&self, sealed: &SealedValue) -> Option<SealedFunction> {
+        let home = self
+            .region_owner()
+            .upgrade()
+            .expect("the binding scope's region owner is held while its value is mirrored");
+        function_mirror_of(sealed, &home)
+    }
+
+    /// **Open** a dormant function carrier at this scope's own region lifetime: lift it into a
+    /// delivery envelope under its home pin, then adopt it here
+    /// ([`Delivered::open_adopted`]) — the mint stores its reach in this arena and the region
+    /// retains the owning bundle for the region's life, so the returned open reads freely for the
+    /// whole step rather than inside a pin borrow. `self` must be the scope the seal was read from
+    /// (or one its region outlives): the lift upgrades the description hosted there.
+    pub fn open_function(&self, sealed: &SealedFunction) -> OpenedFunction<'a> {
+        self.lift_resident(sealed.duplicate())
+            .open_adopted(self.brand().handle())
+    }
+
+    /// Read a dormant function carrier under this scope's own region owner — the probe form of
+    /// [`Self::open_function`], for a caller that only inspects the signature. Nothing is minted and
+    /// nothing escapes: the `for<'b>` brand confines the re-anchored callable to the call.
+    pub fn read_function<R>(
+        &self,
+        sealed: &SealedFunction,
+        read: impl for<'b> FnOnce(&'b KFunction<'b>) -> R,
+    ) -> R {
+        let pin = self
+            .region_owner()
+            .upgrade()
+            .expect("the binding scope's region owner is held while its overloads are read");
+        sealed.open_with(&pin, read)
+    }
+
+    /// Adopt a delivered value **as a callable** into this scope — the head-resolution twin of
+    /// [`Self::open_function`], for a lane whose callable arrives in an envelope rather than out of
+    /// a dispatch bucket (a value-bound head, a deferred head expression). The envelope is
+    /// projected onto the `KFunction` it wraps *inside* its own coverage
+    /// ([`Delivered::project`], which moves nothing and keeps the envelope's pins), then adopted
+    /// here, so the callable's captured foreign environment is retained for this region's life and
+    /// the returned open reads at this scope's lifetime. `None` when the value is not callable —
+    /// the caller falls back to the whole-value classification for its diagnostic.
+    pub(crate) fn adopt_delivered_function(
+        &self,
+        cell: &DeliveredCarried,
+    ) -> Option<OpenedFunction<'a>> {
+        let callable = cell.open(|live| matches!(live.as_object(), Some(KObject::KFunction(_))));
+        if !callable {
+            return None;
+        }
+        let function = cell.duplicate().project::<KFunctionFamily>(|live, _| {
+            match live.as_object() {
+                Some(KObject::KFunction(f)) => f,
+                // The probe above read this same envelope: its value is a callable.
+                _ => unreachable!("the callable probe ran over this envelope"),
+            }
+        });
+        Some(function.open_adopted(self.brand().handle()))
+    }
+
     /// **Lift** a binding's dormant carrier into a delivery envelope pinned by this scope's own
     /// region owner (`Sealed → Delivered`): the library [`Delivered::lift`] upgrades the sealed
     /// description's members `Weak → Rc` under that pin, so the value's whole reach travels owned
     /// and the envelope survives its source frame's death. `self` must be the **binding** scope —
     /// the region the value lives in, whose arena hosts the description the upgrade reads.
-    pub(crate) fn lift_resident(&self, sealed: SealedValue) -> DeliveredCarried {
+    pub(crate) fn lift_resident<T: Reattachable>(
+        &self,
+        sealed: Sealed<T, CarrierWitness>,
+    ) -> Delivered<T, CarrierWitness, FrameStorage> {
         let home = self
             .region_owner()
             .upgrade()

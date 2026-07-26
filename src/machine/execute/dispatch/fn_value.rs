@@ -4,9 +4,8 @@
 //! immediately, an unbound name errors, and a still-finalizing head placeholder parks via a
 //! [`park_resume`] closure that re-runs the fast lane on resume.
 
-use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::{KError, KErrorKind, NameLookup, NodeId};
+use crate::machine::{DeliveredCarried, KError, KErrorKind, NameLookup, NodeId};
 
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
@@ -26,10 +25,7 @@ pub(super) fn initial<'step>(
         // mints the callable's reach there and retains it, so the captured foreign environment
         // outlives the application and the re-anchored value is valid at `'step`. Same door the
         // deferred-head lane takes (`head_deferred::classify_head`).
-        Some(NameLookup::Bound(delivered)) => {
-            let head_value = ctx.current_scope().adopt_sealed(&delivered);
-            dispatch_callable_value(ctx, expr, head_value)
-        }
+        Some(NameLookup::Bound(delivered)) => dispatch_callable_value(ctx, expr, &delivered),
         // Head placeholder. `Errored` means the binder failed before binding the head, so the name
         // never became a value — propagate. `Ready` means the producer finalized without binding the
         // head as a value, so the name is unbound. `Park` re-runs the fast lane on resume.
@@ -53,16 +49,20 @@ pub(super) fn initial<'step>(
 fn dispatch_callable_value<'step>(
     ctx: &SchedulerView<'step, '_>,
     expr: KExpression<'step>,
-    head_value: Carried<'step>,
+    delivered: &DeliveredCarried,
 ) -> Outcome<'step> {
-    let callable = match head_value {
-        Carried::Object(KObject::KFunction(f)) => ResolvedCallable::Function(f),
-        other => {
+    // The head is **adopted** into the calling scope's region as a callable rather than read bare:
+    // the adopt mints its reach there and retains it, so the captured foreign environment outlives
+    // the application and the callable rides the apply tail with that reach still proven.
+    let callable = match ctx.current_scope().adopt_delivered_function(delivered) {
+        Some(function) => ResolvedCallable::Function(function),
+        None => {
+            let got = delivered.open(|live| live.summarize(ctx.types()));
             return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "KFunction or Type".to_string(),
-                got: other.summarize(ctx.types()),
-            })))
+                got,
+            })));
         }
     };
     apply_callable(ctx, callable, &expr)

@@ -9,6 +9,7 @@ use crate::machine::model::{still_borrows_host, Carried, CarriedFamily, KObject}
 use crate::witnessed::{Erased, Witnessed};
 
 use super::arena::{FrameStorage, KoanRegion};
+use super::kfunction::KFunctionFamily;
 
 /// Koan's value-carrier witness: the library [`Carrier`](crate::witnessed::Carrier) over koan's
 /// frame owner — one `borrows_host` bit plus a reference to the value's hosted reach set. It pins
@@ -30,6 +31,19 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// built ([`product_still_borrows`]) rather than choosing a bundle up front.
 pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
+
+/// A callable's **dormant** carrier: the `KFunction` fused to the exact reach description minted for
+/// it, over the [`KFunctionFamily`] the library dispatches on. This is what a `functions` dispatch
+/// bucket stores and what a [`ReturnContract`](crate::machine::core::ReturnContract) carries across
+/// a tail chain: the seal states the same claim its mirrored `data` entry does, where a bare
+/// `&KFunction` would state no reach at all.
+pub type SealedFunction = crate::witnessed::Sealed<KFunctionFamily, CarrierWitness>;
+
+/// A callable **in use**: re-anchored at a region's own lifetime, paired with the reach witness it
+/// was opened under. Dispatch resolves on one of these and carries it across argument evaluation
+/// (`Resolved<'step>`); the escape into the call chain
+/// [`reseal`](crate::witnessed::Opened::reseal)s it back to a [`SealedFunction`].
+pub type OpenedFunction<'a> = crate::witnessed::Opened<'a, KFunctionFamily, CarrierWitness>;
 
 /// The step-terminal seal's variant bit (design/value-substrates.md § Escape): force
 /// `borrows_host = true` on `witnessed` when its carried value is a substrate carrier (`Record` /
@@ -58,6 +72,25 @@ pub(crate) fn force_substrate_borrows_host(
         Some(erased) => Witnessed::from_erased(erased, CarrierWitness::new(true, None)),
         None => witnessed,
     }
+}
+
+/// Project a bound value's dormant carrier onto the `KFunction` it wraps, under `pin` — the write
+/// door's **mirror seal**. The witness rides across verbatim, so the `functions` bucket entry and its
+/// `data` twin state one claim about one value; a value that is not a callable yields `None` and
+/// mirrors nothing. The projected reference is re-erased inside the pinned read, so nothing anchored
+/// at the read's brand escapes it.
+pub(crate) fn function_mirror_of(
+    sealed: &crate::witnessed::Sealed<CarriedFamily, CarrierWitness>,
+    pin: &Rc<FrameStorage>,
+) -> Option<SealedFunction> {
+    let projected = sealed.open_with(pin, |carried: Carried<'_>| match carried {
+        Carried::Object(object) => object.as_function().map(Erased::erase),
+        _ => None,
+    })?;
+    Some(crate::witnessed::Sealed::seal(Witnessed::from_erased(
+        projected,
+        *sealed.witness(),
+    )))
 }
 
 /// Koan's **retention predicate** for a copying relocation of `envelope`

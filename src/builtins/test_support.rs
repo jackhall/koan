@@ -23,6 +23,8 @@ use crate::machine::FrameStorageExt;
 use crate::machine::KFunction;
 use crate::machine::KoanRuntime;
 #[cfg(test)]
+use crate::machine::SealedFunction;
+#[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
 use crate::machine::{FrameStorage, KError, Scope};
 use crate::parse::parse;
@@ -309,21 +311,29 @@ pub(crate) fn binds_module(scope: &Scope<'_>, name: &str) -> bool {
 pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
     let mut found: Option<&'a KFunction<'a>> = None;
     for (_, bucket) in scope.bindings().iter_functions() {
-        for f in bucket {
-            let first_kw = f.signature.elements.iter().find_map(|e| match e {
-                SignatureElement::Keyword(s) => Some(s.as_str()),
-                _ => None,
-            });
-            if first_kw == Some(keyword) {
-                assert!(
-                    found.is_none(),
-                    "ambiguous: multiple overloads under `{keyword}`"
-                );
-                found = Some(f);
+        for sealed in bucket {
+            if first_keyword_of(scope, &sealed).as_deref() != Some(keyword) {
+                continue;
             }
+            assert!(
+                found.is_none(),
+                "ambiguous: multiple overloads under `{keyword}`"
+            );
+            found = Some(scope.open_function(&sealed).value());
         }
     }
     found.unwrap_or_else(|| panic!("no FN overload registered under `{keyword}`"))
+}
+
+/// The first keyword of a dormant overload's signature, read under `scope`'s own pin.
+#[cfg(test)]
+fn first_keyword_of(scope: &Scope<'_>, sealed: &SealedFunction) -> Option<String> {
+    scope.read_function(sealed, |f| {
+        f.signature.elements.iter().find_map(|e| match e {
+            SignatureElement::Keyword(s) => Some(s.clone()),
+            _ => None,
+        })
+    })
 }
 
 /// True iff some `functions` bucket holds an overload whose first keyword is `keyword`.
@@ -335,12 +345,9 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
         .iter_functions()
         .into_iter()
         .any(|(_, bucket)| {
-            bucket.iter().any(|f| {
-                f.signature.elements.iter().find_map(|e| match e {
-                    SignatureElement::Keyword(s) => Some(s.as_str()),
-                    _ => None,
-                }) == Some(keyword)
-            })
+            bucket
+                .iter()
+                .any(|sealed| first_keyword_of(scope, sealed).as_deref() == Some(keyword))
         })
 }
 

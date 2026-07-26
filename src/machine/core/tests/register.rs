@@ -536,3 +536,82 @@ fn sig_scope_bindings_reject_value_token_type_write() {
         "expected the token-class partition error, got {error}",
     );
 }
+
+/// The **mirror seal** states the `data` entry's own claim: a `LET`-bound callable's `functions`
+/// bucket entry carries the carrier projected off the very seal the value binds under, so the
+/// bucket names every region the callable reaches and dispatch's pick escapes with those pins
+/// proven.
+#[test]
+fn function_mirror_seals_the_data_entrys_own_claim() {
+    use crate::machine::core::FrameCoverage;
+    use std::rc::Rc;
+
+    let types = TypeRegistry::new();
+    let region = run_root_storage();
+    let scope = run_root_bare(&region);
+    let f = region.brand().alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+        false,
+        &types,
+    ));
+    let obj = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f), &types)
+        .expect("f was just allocated into this region");
+
+    // A foreign region the callable's captured environment stands for: minted into the binding
+    // scope's arena exactly as a bind door's mint would, so the seal carries a real reach.
+    let foreign = run_root_storage();
+    let (reach, borrows_home) = scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
+    let sealed = scope.seal_resident_value(Carried::Object(obj), reach, borrows_home);
+    let mirror = scope
+        .seal_function_mirror(&sealed)
+        .expect("the bound value wraps a callable");
+    scope
+        .bind_value("f".to_string(), sealed, Some(mirror), BindingIndex::BUILTIN)
+        .expect("a fresh callable bind lands");
+
+    let lookup = scope
+        .bindings()
+        .lookup_function(&f.signature.untyped_key(), None);
+    assert_eq!(lookup.overloads.len(), 1, "the mirror wrote one overload");
+    assert!(
+        scope
+            .open_function(&lookup.overloads[0])
+            .reach_covers(foreign.region()),
+        "the bucket entry names the foreign region the bound value reaches",
+    );
+}
+
+/// A bare `FN` binds no value, so it has no `data` twin to derive a claim from: it seals the
+/// **exact empty** reach. `FN` allocates the callable into the very scope it captures, so its only
+/// region borrow is home — which every read of it already pins.
+#[test]
+fn bare_fn_registration_seals_the_empty_reach() {
+    let types = TypeRegistry::new();
+    let region = run_root_storage();
+    let scope = run_root_bare(&region);
+    let f = region.brand().alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+        false,
+        &types,
+    ));
+    scope
+        .register_function("FOO".to_string(), f, BindingIndex::BUILTIN)
+        .unwrap();
+    let foreign = run_root_storage();
+    let lookup = scope
+        .bindings()
+        .lookup_function(&f.signature.untyped_key(), None);
+    assert_eq!(lookup.overloads.len(), 1);
+    assert!(
+        !scope
+            .open_function(&lookup.overloads[0])
+            .reach_covers(foreign.region()),
+        "a bare FN reaches nothing foreign",
+    );
+}

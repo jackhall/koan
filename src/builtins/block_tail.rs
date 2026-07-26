@@ -47,7 +47,7 @@ pub(crate) fn block_tail<'a>(
     block: BlockScope<'a>,
     seed: Option<BlockSeed<'a>>,
     body: BlockBody<'a>,
-    contract: Option<ReturnContract<'a>>,
+    contract: Option<ReturnContract>,
     types: &TypeRegistry,
 ) -> Action<'a> {
     let block_entry = match block {

@@ -249,6 +249,15 @@ fn block_entry_scope(block_entry: &BlockEntry<'_>) -> Option<crate::machine::cor
     }
 }
 
+/// The coverage a callable [`ReturnContract`] re-opens under: the step's own frame storage. A
+/// `Function` / `PerCall` contract is minted inside its callee's installed cart
+/// ([`super::dispatch::exec::invoke`]), whose `outer` chain pins the callable's home region for the
+/// body's whole life (design/tail-call-optimization.md Lemma 3). `None` on a frameless step, which
+/// carries only an `Arm` contract — a `Copy` handle that reopens nothing.
+fn contract_pin(view: &SchedulerView<'_, '_>) -> Option<Rc<crate::machine::core::FrameStorage>> {
+    view.current_frame().map(|frame| frame.storage_rc())
+}
+
 pub(in crate::machine::execute) fn run_action<'step>(
     view: &SchedulerView<'step, '_>,
     action: Action<'step>,
@@ -292,9 +301,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     contract.as_ref(),
                     body_index,
                 );
-                let winner = view
-                    .current_obligation_duplicate()
-                    .or_else(|| contract.map(ReturnObligation::seal));
+                let winner = view.current_obligation_duplicate().or_else(|| {
+                    contract.map(|c| ReturnObligation::seal(c, contract_pin(view).as_ref()))
+                });
                 return Outcome::Continue {
                     work: super::dispatch::decide_tail(tail, winner),
                     frame: frame_placement,
@@ -358,9 +367,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     contract.as_ref(),
                     body_index,
                 );
-                let winner = view
-                    .current_obligation_duplicate()
-                    .or_else(|| contract.map(ReturnObligation::seal));
+                let winner = view.current_obligation_duplicate().or_else(|| {
+                    contract.map(|c| ReturnObligation::seal(c, contract_pin(view).as_ref()))
+                });
                 Outcome::Continue {
                     work: super::dispatch::decide_tail(tail, winner),
                     frame: frame_placement,

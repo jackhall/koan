@@ -23,17 +23,22 @@ fn find_match<'a>(
     let key = expr.untyped_key();
     let mut current: Option<&Scope<'a>> = Some(scope);
     while let Some(s) = current {
-        let functions = s.bindings().functions();
-        if let Some(bucket) = functions.get(&key) {
-            if let Some((f, _)) = bucket
+        let bucket: Vec<_> = match s.bindings().functions().get(&key) {
+            Some(bucket) => bucket
                 .iter()
-                .find(|(f, _)| f.signature.matches(expr, types))
-            {
-                return Some(*f);
+                .map(|(_, sealed)| sealed.duplicate())
+                .collect(),
+            None => {
+                current = s.outer();
+                continue;
             }
-            if let Some((f, _)) = bucket.iter().next() {
-                return Some(*f);
-            }
+        };
+        let matched = bucket
+            .iter()
+            .find(|sealed| s.read_function(sealed, |f| f.signature.matches(expr, types)))
+            .or_else(|| bucket.first());
+        if let Some(sealed) = matched {
+            return Some(scope.open_function(sealed).value());
         }
         current = s.outer();
     }

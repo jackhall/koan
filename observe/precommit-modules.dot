@@ -474,12 +474,14 @@ digraph {
     "koan::machine::core::bindings" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::core::arena" [label="uses", style="dashed"];
+    "koan::machine::core::bindings" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::core::kerror" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::core::arena" [label="uses", style="dashed"];
+    "koan::machine::core::carrier_witness" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -495,7 +497,7 @@ digraph {
     "koan::machine::core::kfunction::action" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction::action" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::action" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -503,6 +505,7 @@ digraph {
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::body" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::parse" [label="uses", style="dashed"];
@@ -515,8 +518,9 @@ digraph {
     "koan::machine::core::kfunction::pick" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::lexical_frame" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::core::pending" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
-    "koan::machine::core::pending" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
+    "koan::machine::core::pending" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::run_id" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::arena" [label="uses", style="dashed"];
@@ -529,11 +533,14 @@ digraph {
     "koan::machine::core::scope::reach" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
+    "koan::machine::core::scope::reach" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
+    "koan::machine::core::scope::reach" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::scope::registry" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::scope::registry" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::scope::registry" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
+    "koan::machine::core::scope::registry" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::scope::registry" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::scope::registry" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::scope::resolve" -> "koan::machine" [label="uses", style="dashed"];

@@ -47,13 +47,15 @@ fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
 #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
 fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
     for (_, bucket) in scope.bindings().iter_functions() {
-        for f in bucket {
-            let first_kw = f.signature.elements.iter().find_map(|e| match e {
-                SignatureElement::Keyword(s) => Some(s.as_str()),
-                _ => None,
+        for sealed in bucket {
+            let first_kw = scope.read_function(&sealed, |f| {
+                f.signature.elements.iter().find_map(|e| match e {
+                    SignatureElement::Keyword(s) => Some(s.clone()),
+                    _ => None,
+                })
             });
-            if first_kw == Some(keyword) {
-                return f;
+            if first_kw.as_deref() == Some(keyword) {
+                return scope.open_function(&sealed).value();
             }
         }
     }

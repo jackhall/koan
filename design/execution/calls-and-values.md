@@ -266,8 +266,15 @@ and per-arm (the arm that runs is the arm that's checked), the same
 discipline FN return types follow — see
 [typing/ktype/slots-and-signatures.md § Function signatures](../typing/ktype/slots-and-signatures.md#function-signatures).
 `ReturnContract`
-is the slot's return carrier: `Function(&KFunction)` for an FN / builtin
-call, `Arm { ret, kind }` for a function-less MATCH / TRY arm.
+is the slot's return carrier: `Function(SealedFunction)` for an FN / builtin
+call, `Arm { ret, kind }` for a function-less MATCH / TRY arm. The callable arms
+carry the pick **at rest**, as the same dormant carrier its dispatch bucket
+holds — a tail chain outlives the step that picked, so nothing region-bound may
+ride it. A reader re-opens the seal under the step's own frame, whose `outer`
+chain pins the callable's home for as long as its body runs
+([tail-call-optimization.md](../tail-call-optimization.md) Lemma 3), and what the
+chain actually keeps is the sealed obligation: a `Copy` type handle and a trace
+label, resolved once at the first read.
 
 ### Read-side hook
 

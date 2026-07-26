@@ -3,11 +3,14 @@
 //! forwarding + conditional-defer shape they share. Split out of the parent `scope`
 //! module.
 
+use std::rc::Rc;
+
 use super::{Scope, ScopeKind};
 use crate::machine::core::bindings::{
     ApplyOutcome, BindKind, BindingIndex, DeclarationSite, SealedValue,
 };
-use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
+use crate::machine::core::carrier_witness::SealedFunction;
+use crate::machine::core::{FrameStorage, KError, KErrorKind, KFunction, NodeId};
 use crate::machine::model::{probe_key, Carried, KObject, OperatorGroup, TypeRegistry};
 use crate::machine::DeliveredCarried;
 
@@ -43,13 +46,14 @@ impl<'a> Scope<'a> {
     /// call after sealing the value under the reach its mint verb derived: it takes the dormant
     /// [`SealedValue`] carrier, so it is crate-internal — every production value bind routes through
     /// a fused door that derives the pairing rather than asserting it here, and no caller can pair a
-    /// value with a reach derived for a different value. `function` is what the value wraps, if
-    /// anything, classified by that same door while it still holds the value resident.
+    /// value with a reach derived for a different value. `function` is the value's **mirror seal** —
+    /// the callable it wraps, projected off that same carrier ([`Self::seal_function_mirror`]), so
+    /// the `functions` bucket states the claim the `data` entry does.
     pub(crate) fn bind_value(
         &self,
         name: String,
         sealed: SealedValue,
-        function: Option<&'a KFunction<'a>>,
+        function: Option<SealedFunction>,
         index: BindingIndex,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
@@ -74,17 +78,28 @@ impl<'a> Scope<'a> {
         // `Conflict` the attempt's duplicate is dropped and the retained original rides the deferred
         // write. Both name the same arena-hosted description and neither owns pins, so the entry is
         // the same either way.
-        match self
-            .bindings
-            .get()
-            .try_bind_value(&name, index, sealed.duplicate(), function)?
-        {
+        match self.bindings.get().try_bind_value(
+            &name,
+            index,
+            sealed.duplicate(),
+            function.as_ref().map(SealedFunction::duplicate),
+            &self.write_pin(),
+        )? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
                 self.pending.defer_value(name, index, sealed, function);
                 Ok(())
             }
         }
+    }
+
+    /// The coverage every `functions`-touching write opens its bucket under: this scope's own region
+    /// owner. Both the mirror being installed and every entry already in the bucket were sealed into
+    /// that region, so it is the pin the dedupe walk's re-anchors run under.
+    fn write_pin(&self) -> Rc<FrameStorage> {
+        self.region_owner()
+            .upgrade()
+            .expect("the binding scope's region owner is held while it is written to")
     }
 
     /// Fused value bind: mint the bound value's exact reach off the delivered `cell` (copied
@@ -128,10 +143,9 @@ impl<'a> Scope<'a> {
             (self.copy_delivered_substrate(cell, project, types)?, None)
         } else {
             let (object, reach, borrows_home) = self.store_object_adopted(cell, project, types)?;
-            (
-                self.seal_resident_value(Carried::Object(object), reach, borrows_home),
-                object.as_function(),
-            )
+            let sealed = self.seal_resident_value(Carried::Object(object), reach, borrows_home);
+            let mirror = self.seal_function_mirror(&sealed);
+            (sealed, mirror)
         };
         // Duplicate the seal: one binds into the entry, the other rides the caller's terminal
         // carrier out of the step (the Done-arm seal). Neither owns pins — the region's union bundle
@@ -157,7 +171,8 @@ impl<'a> Scope<'a> {
         // description to host and nothing to fold into the region's union bundle.
         let (obj, (_, borrows_home)) = self.alloc_object_checked_stored(value, types)?;
         let sealed = self.seal_resident_value(Carried::Object(obj), None, borrows_home);
-        self.bind_value(name, sealed.duplicate(), obj.as_function(), index)?;
+        let mirror = self.seal_function_mirror(&sealed);
+        self.bind_value(name, sealed.duplicate(), mirror, index)?;
         Ok(sealed)
     }
 
@@ -173,7 +188,8 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
     ) -> Result<(), KError> {
         let sealed = self.seal_resident_value(Carried::Object(obj), None, false);
-        self.bind_value(name, sealed, obj.as_function(), index)
+        let mirror = self.seal_function_mirror(&sealed);
+        self.bind_value(name, sealed, mirror, index)
     }
 
     /// Add `fn_ref` to the `functions` bucket keyed by its untyped signature. `data[name]` is
@@ -201,14 +217,16 @@ impl<'a> Scope<'a> {
         {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        match self
-            .bindings
-            .get()
-            .try_register_function(&name, fn_ref, index)?
-        {
+        let sealed = self.seal_resident_function(fn_ref);
+        match self.bindings.get().try_register_function(
+            &name,
+            sealed.duplicate(),
+            index,
+            &self.write_pin(),
+        )? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
-                self.pending.defer_function(name, fn_ref, index);
+                self.pending.defer_function(name, sealed, index);
                 Ok(())
             }
         }
@@ -237,14 +255,16 @@ impl<'a> Scope<'a> {
                 .register_operator_function(name, fn_ref, index);
         }
         self.assert_open(&name);
-        match self
-            .bindings
-            .get()
-            .try_register_function(&name, fn_ref, index)?
-        {
+        let sealed = self.seal_resident_function(fn_ref);
+        match self.bindings.get().try_register_function(
+            &name,
+            sealed.duplicate(),
+            index,
+            &self.write_pin(),
+        )? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
-                self.pending.defer_function(name, fn_ref, index);
+                self.pending.defer_function(name, sealed, index);
                 Ok(())
             }
         }
@@ -441,7 +461,7 @@ impl<'a> Scope<'a> {
             self.write_target().drain_pending();
             return;
         }
-        self.pending.drain(self.bindings.get());
+        self.pending.drain(self.bindings.get(), &self.write_pin());
     }
 
     /// Install a dispatch-time placeholder for `name` -> producer slot `idx`. See

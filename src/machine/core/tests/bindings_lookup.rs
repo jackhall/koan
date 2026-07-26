@@ -111,7 +111,10 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
     let key = f.signature.untyped_key();
     let lookup = scope.bindings().lookup_function(&key, None);
     assert_eq!(lookup.overloads.len(), 1);
-    assert!(std::ptr::eq(lookup.overloads[0], f));
+    assert!(std::ptr::eq(
+        scope.open_function(&lookup.overloads[0]).value(),
+        f
+    ));
     assert!(lookup.pending.is_none());
 }
 
@@ -170,7 +173,10 @@ fn lookup_function_filters_per_overload_visibility() {
         1,
         "only the earlier-sibling overload is visible"
     );
-    assert!(std::ptr::eq(visible_early.overloads[0], f_early));
+    assert!(std::ptr::eq(
+        scope.open_function(&visible_early.overloads[0]).value(),
+        f_early
+    ));
     let visible_both = scope.bindings().lookup_function(&key, Some(9));
     assert_eq!(visible_both.overloads.len(), 2);
 }

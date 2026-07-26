@@ -102,6 +102,21 @@ The transform verbs:
 - **The adopt, `Delivered → Sealed`** — mint a frozen description into the
   destination arena, retain the owned members into the destination's liveness
   (§ The pin bundle), and resolve the resting carrier's members to weak.
+  `Delivered::open_adopted` is the same verb landing in `Opened<'d>` instead of
+  at rest: `'d` is the *destination region's* own lifetime rather than a pin
+  borrow, which is sound because the retained bundle covers that region's whole
+  life. That is what lets an adopted value ride a step-lifetime type position no
+  pin borrow reaches — dispatch's picked overload becomes an
+  `Opened<'step, KFunctionFamily>` this way, carried by `Resolved<'step>` across
+  argument evaluation and `reseal`ed into the `ReturnContract` that escapes into
+  the call chain.
+- **`Delivered::project`** re-families an envelope *in place* — no mint, no copy,
+  no relocation. The envelope keeps its residence, coverage and witness, which
+  stay correct because the projection selects a part **of** the value the
+  envelope already covers (the callable a bound value wraps), so it can reach
+  nothing the whole did not. It is how a family-specific carrier is reached
+  without splitting the value from its pins; a projection taken through a bare
+  read would arrive somewhere else with no proven reach at all.
 
 Home rides as an **ordinary member**, never a distinguished field. A carrier's
 reach is one flat set, and "the value borrows into the region it lives in" is
@@ -463,8 +478,9 @@ Per the [scheduler-library.md](scheduler-library.md) division:
   delivered value's top node in its own producer region, composing to a witness
   identical to the input's); the scheduler's frame-retention (release at
   pull-count zero); and **every owned pin** — the region union bundles, the
-  retention holds, the step coverages. `Delivered` and `PinBundle` are
-  crate-private, so the whole ownership tier is unreachable from outside.
+  retention holds, the step coverages. `PinBundle` is crate-private and an
+  envelope's pins have no accessor, so the whole ownership tier is unreachable
+  from outside even though `Delivered` itself is nameable (§ The carrier states).
 - **Workload-supplied:** the frame-owner type `F` with its `PinsRegion`
   subsumption hook, and the retention predicate at relocation sites (§ Escape) —
   policy inputs, never pins.

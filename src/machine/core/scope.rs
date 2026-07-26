@@ -57,7 +57,7 @@ pub struct Scope<'a> {
     /// Position-independent origin id, recorded on an `AbstractType` node's `source` so
     /// dispatch on SIG-declared members compares ids rather than scope pointers.
     pub id: ScopeId,
-    pending: PendingQueue<'a>,
+    pending: PendingQueue,
     pub kind: ScopeKind,
     /// Set iff this is a `RECURSIVE TYPES` block's child scope: the open
     /// [`RecursiveGroupWindow`] whose members are co-declared and elaborate together. The

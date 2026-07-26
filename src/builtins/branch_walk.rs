@@ -25,7 +25,7 @@ use std::rc::Rc;
 pub(crate) fn resolve_arm_contract<'a>(
     ctx: &crate::machine::BodyCtx<'a, '_>,
     kind: &'static str,
-) -> Result<ReturnContract<'a>, KError> {
+) -> Result<ReturnContract, KError> {
     use crate::machine::{arg_type, arg_unresolved_type};
     let ret_kt = if let Some(te) = arg_unresolved_type(ctx.args, "return_type") {
         match ctx
@@ -84,7 +84,7 @@ pub(crate) fn arm_tail<'a>(
     root: &'a Scope<'a>,
     it_source: ItSource<'a>,
     body_expr: KExpression<'a>,
-    contract: ReturnContract<'a>,
+    contract: ReturnContract,
     types: &TypeRegistry,
 ) -> crate::machine::Action<'a> {
     use super::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};

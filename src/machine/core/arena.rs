@@ -263,13 +263,13 @@ impl<'a> RegionBrand<'a> {
     /// exact reach; the caller
     /// ([`Scope::seal_resident_value`](crate::machine::core::Scope)) folds it. The brand is the
     /// capability marker: only a handle into the region the value lives in may re-seal it resident.
-    pub(crate) fn seal_resident(
+    pub(crate) fn seal_resident<T: Reattachable>(
         self,
-        carried: Carried<'_>,
+        value: T::At<'_>,
         witness: CarrierWitness,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
+    ) -> Witnessed<T, CarrierWitness> {
         let _ = self.0;
-        Witnessed::from_erased(Erased::erase(carried), witness)
+        Witnessed::from_erased(Erased::erase(value), witness)
     }
 }
 

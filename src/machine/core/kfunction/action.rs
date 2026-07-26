@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use super::body::ReturnContract;
-use super::KFunction;
+use crate::machine::core::carrier_witness::SealedFunction;
 use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, StepAllocator};
 use crate::machine::execute::StepCarried;
 use crate::machine::model::Held;
@@ -358,9 +358,9 @@ pub type CatchContinue<'a> = Box<
 /// statement's result at finish time (a deferred-`Expression` FN return: the return-type
 /// expression rides as the last leading statement, and the lowering's finish reads the resolved
 /// type and homes it as a `PerCall` contract for `func`).
-pub enum TailContract<'a> {
-    Eager(Option<ReturnContract<'a>>),
-    FromLastResult { func: &'a KFunction<'a> },
+pub enum TailContract {
+    Eager(Option<ReturnContract>),
+    FromLastResult { func: SealedFunction },
 }
 
 /// What happens next for a slot — the four shapes the builtin survey reduced everything to.
@@ -384,7 +384,7 @@ pub enum Action<'a> {
     Tail {
         leading: Vec<KExpression<'a>>,
         tail: KExpression<'a>,
-        contract: TailContract<'a>,
+        contract: TailContract,
         frame_placement: FramePlacement<'a>,
         block_entry: BlockEntry<'a>,
     },

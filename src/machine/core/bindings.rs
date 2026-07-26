@@ -36,6 +36,8 @@ use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+use crate::machine::core::arena::FrameStorage;
+use crate::machine::core::carrier_witness::SealedFunction;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::core::RunId;
 use crate::machine::model::CarriedFamily;
@@ -92,8 +94,8 @@ impl<T> NameLookup<T> {
 }
 
 /// A value binding entry: its lexical [`BindingIndex`], the dormant [`SealedValue`] carrier fusing
-/// the bound value with the exact reach description minted for it, and — while the `functions`
-/// mirror still stores a bare reference — the [`KFunction`] that value wraps, if any.
+/// the bound value with the exact reach description minted for it, and the callable that value
+/// wraps, if any.
 ///
 /// The entry owns **nothing**: liveness for every region the value reaches lives in the binding
 /// scope's region-owned union bundle
@@ -102,16 +104,18 @@ impl<T> NameLookup<T> {
 /// so region death and entry death are the same schedule — the entry is `Copy`-cheap to read out
 /// and carries no `Drop`. Fusing value and reach in the seal keeps the write door from ever pairing
 /// a value with a reach derived for a different value.
-pub(crate) struct DataEntry<'a> {
+pub(crate) struct DataEntry {
     index: BindingIndex,
     sealed: SealedValue,
-    /// The `KFunction` the bound value wraps, or `None`. Read by the function-mirror write path and
-    /// the overload-add rebind gate, which classify the entry without re-anchoring its value; it
-    /// retires with the `functions` table's own bare reference in the functions-table phase.
-    function: Option<&'a KFunction<'a>>,
+    /// The callable the bound value wraps, or `None` — the very seal this entry installed into
+    /// `functions`, carrying the bound value's own reach witness. Read by the function-mirror write
+    /// path (which opens it to key and dedupe the bucket) and by the overload-add rebind gate,
+    /// which only asks whether it is there, so classifying an entry never separates the callable
+    /// from what proves it.
+    function: Option<SealedFunction>,
 }
 
-impl<'a> DataEntry<'a> {
+impl DataEntry {
     /// A bit-copy of the entry — the dormant seal duplicated (value bit-copy + reference-only
     /// witness clone, no refcount traffic) beside the `Copy` index and mirror reference. Every read
     /// hands one of these out so no caller holds the `data` `RefCell` borrow across a carrier build.
@@ -119,7 +123,7 @@ impl<'a> DataEntry<'a> {
         DataEntry {
             index: self.index,
             sealed: self.sealed.duplicate(),
-            function: self.function,
+            function: self.function.as_ref().map(SealedFunction::duplicate),
         }
     }
 }
@@ -154,8 +158,12 @@ pub enum MemberResolution {
 /// consumer parks on the earliest-index visible producer; on wake it
 /// re-dispatches and either picks from the now-live bucket or re-parks on the
 /// next-earliest pending sibling.
-pub struct FunctionLookup<'a> {
-    pub overloads: Vec<&'a KFunction<'a>>,
+pub struct FunctionLookup {
+    /// The visible finalized overloads, each a bit-copy of the bucket's dormant carrier — value and
+    /// proven reach as one unit, re-anchored only by an [`open`](crate::witnessed::Sealed::open_at)
+    /// under a named pin. Copied out so no caller holds the `functions` borrow across a candidate
+    /// walk.
+    pub overloads: Vec<SealedFunction>,
     pub pending: Option<NodeId>,
 }
 
@@ -235,8 +243,13 @@ pub struct Bindings<'a> {
     /// `Weak`, and the owning pins live in the region's union bundle rather than here — either a
     /// strong member or a per-entry `Rc` on the scope's own frame would close a
     /// `frame → region → scope → bindings → frame` cycle and leak the region.
-    data: RefCell<HashMap<String, DataEntry<'a>>>,
-    functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,
+    data: RefCell<HashMap<String, DataEntry>>,
+    /// Each dispatch-bucket entry stores its callable fused to the same exact reach its mirrored
+    /// `data` entry claims, in one dormant [`SealedFunction`], plus its own lexical
+    /// [`BindingIndex`] — overloads sharing a bucket sit at different positions, so the picker
+    /// filters per-overload. Like `data`, the entry owns nothing: the reached regions are held by
+    /// the region's union bundle, and a read hands out a bit-copy the caller re-anchors under a pin.
+    functions: RefCell<HashMap<UntypedKey, Vec<(BindingIndex, SealedFunction)>>>,
     placeholders: RefCell<HashMap<String, (NodeId, BindingIndex, BindKind)>>,
     /// Bucket-key → entries for FN overloads whose binder has
     /// dispatched but not finalized. Sibling binders sharing one inner-call
@@ -403,20 +416,16 @@ impl<'a> Bindings<'a> {
     /// (`functions[key]`, filtered per-overload) AND the earliest-index visible
     /// `pending_overloads[key]` producer together — one pass over each map. The
     /// scope walk decides pending-vs-finalized precedence with both in hand.
-    pub fn lookup_function(
-        &self,
-        key: &UntypedKey,
-        chain_cutoff: Option<usize>,
-    ) -> FunctionLookup<'a> {
-        let overloads: Vec<&'a KFunction<'a>> = self
+    pub fn lookup_function(&self, key: &UntypedKey, chain_cutoff: Option<usize>) -> FunctionLookup {
+        let overloads: Vec<SealedFunction> = self
             .functions
             .borrow()
             .get(key)
             .map(|bucket| {
                 bucket
                     .iter()
-                    .filter(|(_, idx)| Self::visible(*idx, chain_cutoff))
-                    .map(|(f, _)| *f)
+                    .filter(|(idx, _)| Self::visible(*idx, chain_cutoff))
+                    .map(|(_, sealed)| sealed.duplicate())
                     .collect()
             })
             .unwrap_or_default();
@@ -505,14 +514,22 @@ impl<'a> Bindings<'a> {
             .collect()
     }
 
-    /// Snapshot every `(UntypedKey, Vec<&KFunction>)` pair in `functions`,
-    /// ignoring per-overload visibility. For chain-gated picks use
-    /// [`Self::lookup_function`].
-    pub fn iter_functions(&self) -> Vec<(UntypedKey, Vec<&'a KFunction<'a>>)> {
+    /// Snapshot every `(UntypedKey, Vec<SealedFunction>)` pair in `functions`, ignoring per-overload
+    /// visibility. Each seal is a bit-copy; the caller re-anchors what it needs under its own pin.
+    /// For chain-gated picks use [`Self::lookup_function`].
+    pub fn iter_functions(&self) -> Vec<(UntypedKey, Vec<SealedFunction>)> {
         self.functions
             .borrow()
             .iter()
-            .map(|(key, bucket)| (key.clone(), bucket.iter().map(|(f, _)| *f).collect()))
+            .map(|(key, bucket)| {
+                (
+                    key.clone(),
+                    bucket
+                        .iter()
+                        .map(|(_, sealed)| sealed.duplicate())
+                        .collect(),
+                )
+            })
             .collect()
     }
 
@@ -533,7 +550,7 @@ impl<'a> Bindings<'a> {
         self.functions
             .borrow()
             .get(key)
-            .is_some_and(|bucket| bucket.iter().any(|(_, idx)| *idx == BindingIndex::BUILTIN))
+            .is_some_and(|bucket| bucket.iter().any(|(idx, _)| *idx == BindingIndex::BUILTIN))
     }
 
     /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒ `b.idx < c`.
@@ -559,14 +576,12 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) fn data(&self) -> Ref<'_, HashMap<String, DataEntry<'a>>> {
+    pub(crate) fn data(&self) -> Ref<'_, HashMap<String, DataEntry>> {
         self.data.borrow()
     }
 
     #[cfg(test)]
-    pub fn functions(
-        &self,
-    ) -> Ref<'_, HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>> {
+    pub fn functions(&self) -> Ref<'_, HashMap<UntypedKey, Vec<(BindingIndex, SealedFunction)>>> {
         self.functions.borrow()
     }
 
@@ -617,9 +632,10 @@ impl<'a> Bindings<'a> {
     /// `functions[signature.untyped_key()]` so dispatch finds it (`LET f = (FN ...)`).
     ///
     /// The value and its exact reach arrive fused in one [`SealedValue`] — the write door cannot
-    /// pair a value with a reach derived for a different value. `function` is the `KFunction` that
-    /// value wraps, classified by the bind door that still holds it resident, so the mirror write
-    /// needs no re-anchor of the sealed value.
+    /// pair a value with a reach derived for a different value. `function` is that same value's
+    /// **mirror seal** ([`Scope::seal_function_mirror`](crate::machine::core::Scope)), opened at the
+    /// binding scope's region so the bucket write can key and dedupe on the signature without
+    /// re-anchoring anything itself.
     ///
     /// `Conflict` means borrow contention (caller queues); `Err` is semantic rejection.
     pub fn try_bind_value(
@@ -627,9 +643,10 @@ impl<'a> Bindings<'a> {
         name: &str,
         index: BindingIndex,
         sealed: SealedValue,
-        function: Option<&'a KFunction<'a>>,
+        function: Option<SealedFunction>,
+        pin: &Rc<FrameStorage>,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, function, index, Some(sealed))
+        self.try_apply(name, function, index, Some(sealed), pin)
     }
 
     /// Bare-`FN` overload registration: adds `fn_ref` to the `functions`
@@ -643,12 +660,13 @@ impl<'a> Bindings<'a> {
     pub fn try_register_function(
         &self,
         name: &str,
-        fn_ref: &'a KFunction<'a>,
+        fn_ref: SealedFunction,
         index: BindingIndex,
+        pin: &Rc<FrameStorage>,
     ) -> Result<ApplyOutcome, KError> {
         // A bare-`FN` registration writes `functions` only, not `data`: no sealed value, so no
         // entry lands and nothing is minted or retained.
-        self.try_apply(name, Some(fn_ref), index, None)
+        self.try_apply(name, Some(fn_ref), index, None, pin)
     }
 
     /// Register `name` → `kt` in `types`. Errors `Rebind` if already present in `types`, or
@@ -782,12 +800,16 @@ impl<'a> Bindings<'a> {
     /// re-mirrors `KFunction` entries into `functions`, so callers do not walk
     /// `src.functions` separately. Panics on `Conflict` — a fresh `Bindings`
     /// should never hit a borrow conflict against itself.
-    pub fn try_bulk_install_from(&self, src: &Bindings<'a>) -> Result<(), KError> {
+    pub fn try_bulk_install_from(
+        &self,
+        src: &Bindings<'a>,
+        pin: &Rc<FrameStorage>,
+    ) -> Result<(), KError> {
         // Duplicate each entry into the snapshot: the seal is a bit-copy naming the source's own
         // minted description, so the replayed entry replays that same claim. The reached regions
         // stay owned by the *source* scope's region union — the replay target's own region must
         // already outlive it (a bulk install is same-run re-entrant ascription).
-        let snapshot: Vec<(String, DataEntry<'a>)> = src
+        let snapshot: Vec<(String, DataEntry)> = src
             .data
             .borrow()
             .iter()
@@ -795,7 +817,7 @@ impl<'a> Bindings<'a> {
             .collect();
         for (name, entry) in snapshot {
             let index = entry.index;
-            match self.try_apply(&name, entry.function, index, Some(entry.sealed))? {
+            match self.try_apply(&name, entry.function, index, Some(entry.sealed), pin)? {
                 ApplyOutcome::Applied => {}
                 ApplyOutcome::Conflict => {
                     unreachable!(
@@ -876,15 +898,20 @@ impl<'a> Bindings<'a> {
     /// entry stores; `None` for bare-`FN` (dispatch-only, no `data` insert). The only combinations
     /// that occur are `(None, Some)`, `(Some, Some)`, `(Some, None)`.
     ///
+    /// `fn_part` arrives dormant: the bucket write opens it under `pin` to key on its signature and
+    /// dedupe against the signatures already there, then stores that same seal — so `functions[key]`
+    /// and `data[name]` carry one claim about one value, and no bare reference crosses the door.
+    ///
     /// Dedupe when `fn_part.is_some()`: `ptr::eq` is a silent-success
     /// short-circuit (preserves intentional aliases like `LET g = (f)`);
     /// `indistinguishable_from` raises `DuplicateOverload`.
     fn try_apply(
         &self,
         name: &str,
-        fn_part: Option<&'a KFunction<'a>>,
+        fn_part: Option<SealedFunction>,
         index: BindingIndex,
         sealed: Option<SealedValue>,
+        pin: &Rc<FrameStorage>,
     ) -> Result<ApplyOutcome, KError> {
         let write_data = sealed.is_some();
         // Cross-kind exclusion: a value name may not collide with a committed type — the
@@ -943,24 +970,44 @@ impl<'a> Bindings<'a> {
             }
         }
         let mut cleared_overload_bucket: Option<UntypedKey> = None;
-        if let (Some(f_ref), Some(functions)) = (fn_part, functions_handle.as_mut()) {
-            let key = f_ref.signature.untyped_key();
+        if let (Some(mirror), Some(functions)) = (fn_part.as_ref(), functions_handle.as_mut()) {
+            // The mirror and every entry already in the bucket were sealed into the region `pin`
+            // owns, so `pin` covers each open here; the dedupe reads signatures alone and never lets
+            // a re-anchored callable out of its own brand.
+            let key = mirror.open_with(pin, |f_ref: &KFunction<'_>| f_ref.signature.untyped_key());
             let bucket = functions.entry(key.clone()).or_default();
-            let mut already_present = false;
-            for (existing, _) in bucket.iter() {
-                if std::ptr::eq(*existing, f_ref) {
-                    already_present = true;
-                    break;
+            let verdict = mirror.open_with(pin, |f_ref: &KFunction<'_>| {
+                for (_, existing) in bucket.iter() {
+                    let hit = existing.open_with(pin, |existing: &KFunction<'_>| {
+                        let same = std::ptr::eq(
+                            existing as *const KFunction<'_> as *const (),
+                            f_ref as *const KFunction<'_> as *const (),
+                        );
+                        if same {
+                            return Some(Ok(()));
+                        }
+                        if existing.signature.indistinguishable_from(&f_ref.signature) {
+                            return Some(Err(existing.summarize()));
+                        }
+                        None
+                    });
+                    if let Some(hit) = hit {
+                        return Some(hit);
+                    }
                 }
-                if existing.signature.indistinguishable_from(&f_ref.signature) {
+                None
+            });
+            match verdict {
+                Some(Err(signature)) => {
                     return Err(KError::new(KErrorKind::DuplicateOverload {
                         name: name.to_string(),
-                        signature: existing.summarize(),
+                        signature,
                     }));
                 }
-            }
-            if !already_present {
-                bucket.push((f_ref, index));
+                // `ptr::eq` hit: the same callable is already registered (an intentional alias like
+                // `LET g = (f)`), so the bucket keeps its first entry.
+                Some(Ok(())) => {}
+                None => bucket.push((index, mirror.duplicate())),
             }
             cleared_overload_bucket = Some(key);
         }
