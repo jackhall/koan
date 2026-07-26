@@ -33,12 +33,13 @@ pub(super) fn bare_identifier<'step, 'b>(
     s: &'b Scope<'b>,
     name: String,
 ) -> Outcome<'step> {
-    match s.resolve_value_carrier(&name, ctx.chain_deref()) {
-        // The bound value rides out on a carrier witnessed by its binding scope's home frame, which
-        // transitively pins that scope's reach-set — so the read names the value's reach by
-        // construction rather than reconstructing it from the value.
-        Some(NameLookup::Bound((carrier, pins))) => {
-            Outcome::Done(Ok(StepCarried::born_pinned(carrier, pins)))
+    match s.resolve_value_delivered(&name, ctx.chain_deref()) {
+        // The bound value rides out on a carrier lifted at its binding scope, pinned by that
+        // scope's own region owner — so the read names the value's reach by construction rather
+        // than reconstructing it from the value.
+        Some(NameLookup::Bound(delivered)) => {
+            let (cell, pins) = delivered.into_parts();
+            Outcome::Done(Ok(StepCarried::born_pinned(cell.unseal(), pins)))
         }
         Some(NameLookup::Parked(producer)) => forward_to_producer(producer),
         None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name)))),

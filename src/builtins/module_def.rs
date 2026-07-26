@@ -62,15 +62,11 @@ pub(super) fn await_module_body<'a>(
         move |fctx| {
             // Idempotent-finalize guard: a re-bound name short-circuits, re-surfacing the
             // already-bound module value from its **stored** reach.
-            if let Some(NameLookup::Bound(hit)) = fctx
-                .scope
-                .bindings()
-                .lookup_value_carrier(&name_for_finish, None)
+            if let Some(NameLookup::Bound(sealed)) =
+                fctx.scope.bindings().lookup_value(&name_for_finish, None)
             {
-                return Action::Done(Ok(StepCarried::born_pinned(
-                    fctx.scope.resident_value_carrier(hit.obj, hit.stored),
-                    hit.pins,
-                )));
+                let (carrier, pins) = fctx.scope.lift_resident_parts(sealed);
+                return Action::Done(Ok(StepCarried::born_pinned(carrier, pins)));
             }
             let module: &'a Module<'a> = fctx
                 .scope
@@ -102,10 +98,10 @@ pub(super) fn await_module_body<'a>(
                 bind_index,
                 fctx.types,
             ) {
-                Ok((obj, stored, pins)) => Action::Done(Ok(StepCarried::born_pinned(
-                    fctx.scope.resident_value_carrier(obj, stored),
-                    pins,
-                ))),
+                Ok(sealed) => {
+                    let (carrier, pins) = fctx.scope.lift_resident_parts(sealed);
+                    Action::Done(Ok(StepCarried::born_pinned(carrier, pins)))
+                }
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<module>",
                     format!("{surface} {name_for_finish} body"),
@@ -232,8 +228,7 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("MODULE foo = (LET x = 1)");
         assert!(
-            matches!(scope.bindings().data().get("foo").map(|(_, r)| r.value()),
-                Some(KObject::Module(m)) if m.path == "foo"),
+            matches!(scope.lookup("foo"), Some(KObject::Module(m)) if m.path == "foo"),
             "MODULE binds the module value on the value channel",
         );
         assert!(
@@ -452,12 +447,8 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("LET y = 7\nMODULE foo = ((LET x = y) (LET z = 11))");
         let foo = lookup_module(scope, "foo", &test_run.types);
-        let inner = foo.child_scope().bindings().data();
-        assert!(
-            matches!(inner.get("x").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 7.0)
-        );
-        assert!(
-            matches!(inner.get("z").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 11.0)
-        );
+        let inner = foo.child_scope();
+        assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 7.0));
+        assert!(matches!(inner.lookup("z"), Some(KObject::Number(n)) if *n == 11.0));
     }
 }

@@ -6,10 +6,8 @@
 use std::cell::RefCell;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::Reached;
-use crate::machine::model::KObject;
 
-use super::bindings::{ApplyOutcome, BindingIndex, Bindings, DeclarationSite};
+use super::bindings::{ApplyOutcome, BindingIndex, Bindings, DeclarationSite, SealedValue};
 
 /// The variant tag is load-bearing: it routes each retry through the matching
 /// `Bindings::try_*` so per-map collision checks (function-mirror, `types` vs `data`)
@@ -20,15 +18,15 @@ enum PendingWrite<'a> {
     Value {
         name: String,
         index: BindingIndex,
-        /// The bound value fused to its exact reach and owning pin bundle, carried
-        /// through the deferred write so a drained bind stores exactly what a direct bind would (see
-        /// [`Bindings::try_bind_value`]) — the entry's pins released at that entry's death.
-        reached: Reached<'a, &'a KObject<'a>>,
+        /// The bound value fused to its exact reach, carried through the deferred write so a
+        /// drained bind stores exactly what a direct bind would (see [`Bindings::try_bind_value`]).
+        sealed: SealedValue,
+        /// The `KFunction` that value wraps, if any — the mirror the drained write replays.
+        function: Option<&'a KFunction<'a>>,
     },
     Function {
         name: String,
         fn_ref: &'a KFunction<'a>,
-        obj: &'a KObject<'a>,
         index: BindingIndex,
     },
     Type {
@@ -53,26 +51,21 @@ impl<'a> PendingQueue<'a> {
         &self,
         name: String,
         index: BindingIndex,
-        reached: Reached<'a, &'a KObject<'a>>,
+        sealed: SealedValue,
+        function: Option<&'a KFunction<'a>>,
     ) {
         self.pending.borrow_mut().push(PendingWrite::Value {
             name,
             index,
-            reached,
+            sealed,
+            function,
         });
     }
 
-    pub fn defer_function(
-        &self,
-        name: String,
-        fn_ref: &'a KFunction<'a>,
-        obj: &'a KObject<'a>,
-        index: BindingIndex,
-    ) {
+    pub fn defer_function(&self, name: String, fn_ref: &'a KFunction<'a>, index: BindingIndex) {
         self.pending.borrow_mut().push(PendingWrite::Function {
             name,
             fn_ref,
-            obj,
             index,
         });
     }
@@ -110,18 +103,20 @@ impl<'a> PendingQueue<'a> {
                 PendingWrite::Value {
                     name,
                     index,
-                    reached,
+                    sealed,
+                    function,
                 } => {
-                    // Clone the fused evidence for the attempt, keeping the original for a re-defer on
-                    // a repeat conflict, mirroring the direct-bind path (the clone preserves the
-                    // value ⇔ reach ⇔ pins pairing).
-                    match bindings.try_bind_value(&name, index, reached.clone()) {
+                    // Duplicate the seal for the attempt, keeping the original for a re-defer on a
+                    // repeat conflict, mirroring the direct-bind path (the duplicate preserves the
+                    // value ⇔ reach pairing).
+                    match bindings.try_bind_value(&name, index, sealed.duplicate(), function) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
                             still_pending.push(PendingWrite::Value {
                                 name,
                                 index,
-                                reached,
+                                sealed,
+                                function,
                             });
                         }
                         // `_e`: format string only reads it in debug.
@@ -136,15 +131,13 @@ impl<'a> PendingQueue<'a> {
                 PendingWrite::Function {
                     name,
                     fn_ref,
-                    obj,
                     index,
-                } => match bindings.try_register_function(&name, fn_ref, obj, index) {
+                } => match bindings.try_register_function(&name, fn_ref, index) {
                     Ok(ApplyOutcome::Applied) => {}
                     Ok(ApplyOutcome::Conflict) => {
                         still_pending.push(PendingWrite::Function {
                             name,
                             fn_ref,
-                            obj,
                             index,
                         });
                     }

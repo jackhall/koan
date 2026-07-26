@@ -19,11 +19,11 @@ use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, Si
 use crate::machine::model::{Carried, ExpressionPart, KObject};
 #[cfg(test)]
 use crate::machine::FrameStorageExt;
+#[cfg(test)]
+use crate::machine::KFunction;
 use crate::machine::KoanRuntime;
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
-#[cfg(test)]
-use crate::machine::{DeliveredCarried, KFunction};
 use crate::machine::{FrameStorage, KError, Scope};
 use crate::parse::parse;
 #[cfg(test)]
@@ -365,19 +365,6 @@ pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
             crate::machine::core::FramePins::empty(),
         ),
     }
-}
-
-/// Build a delivery envelope around `value` (an empty-reach resident witness) pinned by `host` —
-/// for tests that only need a real `DeliveredCarried` to drive a mint, not any particular reach
-/// content. `Delivered::seal` requires the true owner in hand, so the caller supplies `host`
-/// exactly as a scheduler pull or a resident seal would.
-#[cfg(test)]
-pub(crate) fn delivered_with_host(value: Carried<'_>, host: Rc<FrameStorage>) -> DeliveredCarried {
-    Delivered::seal(
-        Witnessed::resident(value),
-        host,
-        crate::machine::core::FramePins::empty(),
-    )
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.

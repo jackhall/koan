@@ -83,10 +83,11 @@ impl<'run> KoanRuntime<'run> {
                     id,
                     Witnessed::<DestHandleFamily, CarrierWitness>::resident(root.brand().handle()),
                 ) {
-                    // Mint the rehomed terminal's reach into the run root's arena so those regions stay
-                    // alive past scheduler teardown, from the value's own owned foreign bundle the
-                    // relocation threaded back.
-                    let _ = root.resident_reach_of(&witnessed, &pins);
+                    // Fold the rehomed terminal's own owned bundle — threaded back by the
+                    // relocation — into the run root region's union, so those regions stay alive
+                    // past scheduler teardown. The rehomed value is resident for the region's life,
+                    // which is the schedule that retention runs on.
+                    root.retain_reach(pins);
                     self.sched.rehome_terminal(id, Ok(witnessed));
                 }
             }

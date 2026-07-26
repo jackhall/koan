@@ -71,12 +71,12 @@ def slate_names() -> list[str]:
     return out.split()
 
 
-def list_lib_tests() -> list[str]:
+def list_lib_tests(features: list[str]) -> list[str]:
     """Full `module::path::leaf` names of every lib unit test, via a normal (non-Miri)
     `cargo test --list`. Cheap (normal profile, already cached) and the name set is
     identical to the Miri build, so it's a sound source for resolving slate names."""
     out = subprocess.run(
-        ["cargo", "test", "--lib", "--quiet", "--", "--list"],
+        ["cargo", "test", "--lib", "--quiet", *_feature_args(features), "--", "--list"],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -87,13 +87,13 @@ def list_lib_tests() -> list[str]:
     return [ln[: -len(": test")] for ln in out.splitlines() if ln.endswith(": test")]
 
 
-def resolve_slate(names: list[str]) -> list[str]:
+def resolve_slate(names: list[str], features: list[str]) -> list[str]:
     """Map each slate leaf name to its full `module::path::leaf`, requiring an exact
     leaf match to exactly one test. Catches a renamed/removed slate entry (0 matches)
     and an ambiguous one (>1) loudly, before the ~25-min Miri run — and the full paths
     let the run filter with `--exact`, so a slate name that is a prefix of another test
     (e.g. `…_alloc` vs `…_alloc_via_raw_ptr_roundtrip`) can't silently pull in siblings."""
-    all_tests = list_lib_tests()
+    all_tests = list_lib_tests(features)
     by_leaf: dict[str, list[str]] = {}
     for full in all_tests:
         by_leaf.setdefault(full.rsplit("::", 1)[-1], []).append(full)
@@ -108,16 +108,22 @@ def resolve_slate(names: list[str]) -> list[str]:
         raise SystemExit(
             "ERROR: slate name(s) did not resolve to exactly one lib test "
             "(renamed, removed, or ambiguous):\n" + "\n".join(problems)
+            + "\n(a feature-gated test needs its feature: --features <name>)"
         )
     return resolved
 
 
-def run_miri(names: list[str], track: int | None, exact: bool) -> tuple[int, str, float]:
+def run_miri(
+    names: list[str], track: int | None, exact: bool, features: list[str]
+) -> tuple[int, str, float]:
     miriflags = MIRIFLAGS
     if track is not None:
         miriflags += f" -Zmiri-track-alloc-id={track}"
     filt = ["--exact", *names] if exact else list(names)
-    cmd = ["cargo", "+nightly", "miri", "test", "--lib", "--quiet", "--", *filt]
+    cmd = [
+        "cargo", "+nightly", "miri", "test", "--lib", "--quiet",
+        *_feature_args(features), "--", *filt,
+    ]
     start = time.monotonic()
     proc = subprocess.run(
         cmd,
@@ -128,6 +134,13 @@ def run_miri(names: list[str], track: int | None, exact: bool) -> tuple[int, str
     )
     elapsed = time.monotonic() - start
     return proc.returncode, proc.stdout + proc.stderr, elapsed
+
+
+def _feature_args(features: list[str]) -> list[str]:
+    """Cargo's `--features` argument, or nothing when the default feature set covers the run.
+    A slate test behind a Cargo feature is invisible to both the name resolution and the run
+    unless its feature is on, so the two share one spelling."""
+    return ["--features", ",".join(features)] if features else []
 
 
 def _env() -> dict:
@@ -167,6 +180,8 @@ def main() -> int:
                     help="triage: run these tests instead of the full slate")
     ap.add_argument("--track", type=int, metavar="ID",
                     help="add -Zmiri-track-alloc-id=ID (triage)")
+    ap.add_argument("--features", nargs="+", metavar="NAME", default=[],
+                    help="cargo features to enable; needed for slate tests behind a feature gate")
     ap.add_argument("--log", action="store_true",
                     help="on a clean full-slate run, prepend the duration entry to the slate doc")
     args = ap.parse_args()
@@ -180,12 +195,12 @@ def main() -> int:
     # fails fast (before the long Miri build) rather than as a post-run miscount; triage
     # keeps substring matching so a partial name still works interactively.
     if is_slate:
-        names = resolve_slate(names)
+        names = resolve_slate(names, args.features)
     expected = len(names)
 
     label = "slate" if is_slate else f"triage ({expected} test(s))"
     print(f"running Miri {label} under {MIRIFLAGS} (--lib)…", file=sys.stderr)
-    code, output, seconds = run_miri(names, args.track, exact=is_slate)
+    code, output, seconds = run_miri(names, args.track, exact=is_slate, features=args.features)
 
     log_path = ROOT / "observe" / "miri-last-run.log"
     log_path.write_text(output)

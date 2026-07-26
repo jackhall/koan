@@ -21,12 +21,7 @@ fn functor_returns_a_module() {
     test_run.run("LET set_value = (MAKESET int_ord_a)");
 
     let m = lookup_module(scope, "set_value", &test_run.types);
-    let inner = m
-        .child_scope()
-        .bindings()
-        .data()
-        .get("inner")
-        .map(|(_, r)| r.value());
+    let inner = m.child_scope().lookup("inner");
     assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -46,12 +41,7 @@ fn functor_body_reads_signature_typed_parameter() {
     test_run.run("LET set_value = (MAKESET int_ord_a)");
 
     let m = lookup_module(scope, "set_value", &test_run.types);
-    let sample = m
-        .child_scope()
-        .bindings()
-        .data()
-        .get("sample")
-        .map(|(_, r)| r.value());
+    let sample = m.child_scope().lookup("sample");
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
@@ -150,12 +140,7 @@ fn functor_admits_unascribed_module_structurally() {
     test_run.run("LET set_value = (MAKESET unascribed)");
 
     let m = lookup_module(scope, "set_value", &test_run.types);
-    let inner = m
-        .child_scope()
-        .bindings()
-        .data()
-        .get("inner")
-        .map(|(_, r)| r.value());
+    let inner = m.child_scope().lookup("inner");
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
         "generated module should carry inner=1, got {:?}",
@@ -218,18 +203,8 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
 
     let mo = lookup_module(scope, "ord_set", &test_run.types);
     let mh = lookup_module(scope, "hash_set", &test_run.types);
-    let to = mo
-        .child_scope()
-        .bindings()
-        .data()
-        .get("tag")
-        .map(|(_, r)| r.value());
-    let th = mh
-        .child_scope()
-        .bindings()
-        .data()
-        .get("tag")
-        .map(|(_, r)| r.value());
+    let to = mo.child_scope().lookup("tag");
+    let th = mh.child_scope().lookup("tag");
     assert!(
         matches!(to, Some(KObject::Number(n)) if *n == 1.0),
         "Ordered call should pick body with tag=1, got {:?}",
@@ -260,12 +235,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
     test_run.run("LET set_value = (MAKESET int_view)");
 
     let m = lookup_module(scope, "set_value", &test_run.types);
-    let sample = m
-        .child_scope()
-        .bindings()
-        .data()
-        .get("sample")
-        .map(|(_, r)| r.value());
+    let sample = m.child_scope().lookup("sample");
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
@@ -343,12 +313,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
     test_run.run("LET set_value = (MAKESET int_ord_a)");
 
     let m = lookup_module(scope, "set_value", &test_run.types);
-    let sample = m
-        .child_scope()
-        .bindings()
-        .data()
-        .get("sample")
-        .map(|(_, r)| r.value());
+    let sample = m.child_scope().lookup("sample");
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
@@ -445,16 +410,12 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     test_run.run("LET held2 = (int_ord :| Ordered)");
 
     let child = held.child_scope();
-    let inner = child.bindings().data();
     assert!(
-        matches!(inner.get("compare").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 7.0),
+        matches!(child.lookup("compare"), Some(KObject::Number(n)) if *n == 7.0),
         "held.child_scope().compare must still read 7.0 after subsequent churn",
     );
     assert!(
-        matches!(
-            inner.get("helper").map(|(_, r)| r.value()),
-            Some(KObject::KFunction(_))
-        ),
+        matches!(child.lookup("helper"), Some(KObject::KFunction(_))),
         "held.child_scope().helper must still resolve to a KFunction after churn",
     );
 }

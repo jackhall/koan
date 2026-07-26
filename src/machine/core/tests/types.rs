@@ -4,9 +4,8 @@
 use std::rc::Rc;
 
 use super::super::Scope;
-use crate::builtins::test_support::{delivered_with_host, mock_declaration_site, run_root_bare};
-use crate::machine::core::Reached;
-use crate::machine::core::{run_root_storage, FrameStorageExt};
+use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
+use crate::machine::core::{run_root_storage, FramePins, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, DeclarationSite};
@@ -55,7 +54,7 @@ fn resolve_type_inner_scope_shadows_outer() {
 #[test]
 fn adopt_sealed_reanchors_the_same_value_copy_free() {
     use crate::machine::model::{Carried, KObject};
-    use crate::witnessed::{Delivered, Sealed};
+    use crate::witnessed::Delivered;
 
     let storage = run_root_storage();
     let producer = run_root_bare(&storage);
@@ -63,13 +62,7 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
     // by the frame that owns that region.
     let obj: &KObject = producer.brand().alloc_object(KObject::Number(42.0));
     let cell = Delivered::hosted(
-        Sealed::seal(producer.resident_value_carrier(
-            obj,
-            crate::machine::core::StoredReach {
-                foreign: None,
-                borrows_into_home: false,
-            },
-        )),
+        producer.seal_resident_value(Carried::Object(obj), None, false),
         std::rc::Rc::clone(&storage),
         crate::machine::core::FramePins::empty(),
     );
@@ -124,13 +117,14 @@ fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
     }
 }
 
-/// `child_module_reach`'s foreign half mints the seal-time **union** of a child scope's own region
-/// plus every one of its binding entries' hosted reaches — not just the child's own region — into the
-/// parent's arena. A member whose stored reach names a region foreign to *both* the child and the
-/// parent (the shape a transparent `:!` ascription's nested member reach has) must survive that union:
-/// the parent's own minted set becomes an independent pin once the member's source frame drops.
+/// `child_module_reach` mints the child scope's **own region alone** into the parent's arena: a
+/// module value's only region borrow is its child scope, and that child region owns the union bundle
+/// covering everything its members reach. So a member whose reach names a region foreign to *both*
+/// the child and the parent (the shape a transparent `:!` ascription's nested member reach has) is
+/// absent from the parent's description yet still pinned — transitively, through the child region's
+/// own union — once every direct handle drops.
 #[test]
-fn child_module_reach_unions_member_entry_reaches_across_regions() {
+fn child_module_reach_names_the_child_region_which_owns_its_members_reaches() {
     use crate::machine::core::arena::KoanRegion;
     use crate::machine::model::KObject;
 
@@ -143,53 +137,50 @@ fn child_module_reach_unions_member_entry_reaches_across_regions() {
     let source_weak = Rc::downgrade(&source_storage);
     let source_scope = run_root_bare(&source_storage);
 
-    // Bind a member into `source_scope` whose stored reach names `inner_storage` — mirrors a nested
-    // module member reaching into another module's own region.
+    // Bind a member into `source_scope` whose reach names `inner_storage` — mirrors a nested module
+    // member reaching into another module's own region. The mint folds the owning bundle into
+    // `source_scope`'s region union, so nothing but that region keeps `inner_storage` alive.
     let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
-    let cell = delivered_with_host(Carried::Object(obj), Rc::clone(&inner_storage));
-    let (stored, host_pins) = source_scope.envelope_reach_of(&cell);
-    // Drop the envelope now: it must not be what keeps `inner_storage` alive below — the binding's
-    // owned `host_pins` bundle (and, downstream, `parent`'s union folding it in) is what the test
-    // exercises.
-    drop(cell);
+    let (reach, borrows_home) =
+        source_scope.mint_retained(&FramePins::singleton(Rc::clone(&inner_storage)));
+    let sealed = source_scope.seal_resident_value(Carried::Object(obj), reach, borrows_home);
     source_scope
-        .bind_value(
-            "m".to_string(),
-            Reached::for_test(obj, stored, host_pins),
-            BindingIndex::value(0),
-        )
+        .bind_value("m".to_string(), sealed, None, BindingIndex::value(0))
         .expect("bind should succeed");
     let source_region_ptr: *const KoanRegion = source_scope.region();
 
     let parent_storage = run_root_storage();
     let parent = run_root_bare(&parent_storage);
-    let (child_reach, _module_pins) = parent.child_module_reach(source_scope);
-    let reach = child_reach.foreign;
+    let (child_reach, _borrows_into_parent) = parent.child_module_reach(source_scope);
 
-    let members: Vec<*const KoanRegion> = reach
-        .expect("a member reach + the child's own region must yield a non-empty union")
+    let members: Vec<*const KoanRegion> = child_reach
+        .expect(
+            "the child's own region is a foreign member of the parent, so the mint is non-empty",
+        )
         .members()
         .iter()
         .map(|m| m.region() as *const KoanRegion)
         .collect();
-    assert!(
-        members.contains(&source_region_ptr),
-        "the union names the child scope's own region"
+    assert_eq!(
+        members.as_slice(),
+        &[source_region_ptr],
+        "the description names the child scope's own region and nothing else",
     );
     assert!(
-        members.contains(&inner_region_ptr),
-        "the union names the member's foreign reach"
+        !members.contains(&inner_region_ptr),
+        "the member's foreign reach rides the child region's own union, not the parent's description",
     );
 
-    // Drop every other handle: the parent's minted union is now the sole pin on both regions.
+    // Drop every other handle: the parent's minted bundle is the sole pin on the child region, and
+    // that region's own union is the sole pin on the member's foreign region.
     drop(source_storage);
     drop(inner_storage);
     assert!(
         source_weak.upgrade().is_some(),
-        "the parent's minted union still pins the child's own region"
+        "the parent's minted bundle still pins the child's own region"
     );
     assert!(
         inner_weak.upgrade().is_some(),
-        "the parent's minted union still pins the member's foreign region"
+        "the child region's own union still pins the member's foreign region"
     );
 }

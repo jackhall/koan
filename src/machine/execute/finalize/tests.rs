@@ -29,10 +29,9 @@ fn resident_scalar(
 ) {
     let carrier = producer.with_scope(|child| {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
-        child.resident_value_carrier(
-            obj,
-            crate::machine::core::StoredReach::for_test(None, borrows_into_home),
-        )
+        child
+            .seal_resident_value(Carried::Object(obj), None, borrows_into_home)
+            .unseal()
     });
     let weak = Rc::downgrade(&producer.storage_rc());
     (carrier, weak)
@@ -388,10 +387,9 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
         let addr = obj as *const KObject as usize;
         (
-            child.resident_value_carrier(
-                obj,
-                crate::machine::core::StoredReach::for_test(None, false),
-            ),
+            child
+                .seal_resident_value(Carried::Object(obj), None, false)
+                .unseal(),
             addr,
         )
     });

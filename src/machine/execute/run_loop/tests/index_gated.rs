@@ -98,9 +98,8 @@ fn nested_block_cutoff_is_per_scope() {
          MODULE mo = ((LET a = 2) (LET b = a))",
     );
     let m = lookup_module(test_run.scope, "mo", &test_run.types);
-    let data = m.child_scope().bindings().data();
     assert!(
-        matches!(data.get("b").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 2.0),
+        matches!(m.child_scope().lookup("b"), Some(KObject::Number(n)) if *n == 2.0),
         "inner backward ref `b = a` should resolve a from the same module body",
     );
 }

@@ -18,19 +18,11 @@ fn module_returning_fn_binds_value_side() {
     let scope = test_run.scope;
     test_run.run(SETUP);
 
-    let bound = scope
-        .bindings()
-        .data()
-        .get("make_set")
-        .map(|(_, r)| r.value());
+    let bound = scope.lookup("make_set");
     assert!(
         matches!(bound, Some(KObject::KFunction(_))),
-        "make_set must bind value-side in bindings.data as a KFunction, got {:?}",
+        "make_set must bind value-side as a KFunction, got {:?}",
         bound.map(|object| object.ktype()),
-    );
-    assert!(
-        scope.lookup("make_set").is_some(),
-        "make_set must resolve through the ordinary value channel",
     );
 }
 
@@ -66,12 +58,7 @@ fn module_returning_fn_applies_by_the_keyworded_call_convention() {
             other.summarize(&test_run.types),
         ),
     };
-    let inner = module
-        .child_scope()
-        .bindings()
-        .data()
-        .get("inner")
-        .map(|(_, r)| r.value());
+    let inner = module.child_scope().lookup("inner");
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
         "the returned module must carry inner = 1, got {:?}",

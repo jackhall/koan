@@ -5,11 +5,7 @@
 
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::Reached;
-use crate::machine::core::StoredReach;
-use crate::machine::core::{
-    run_root_storage, BindingIndex, FramePins, FrameStorageExt, NameLookup,
-};
+use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, NameLookup};
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
@@ -22,13 +18,9 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
     let scope = run_root_bare(&region);
     let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value(
-            "late".to_string(),
-            Reached::for_test(value, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::value(99),
-        )
+        .bind_resident_for_test("late".to_string(), value, BindingIndex::value(99))
         .unwrap();
-    match scope.bindings().lookup_value("late", None) {
+    match scope.lookup_value_here_for_test("late", None) {
         Some(NameLookup::Bound(KObject::Number(n))) => assert_eq!(*n, 7.0),
         _ => panic!("expected Value(Number(7.0))"),
     }
@@ -40,11 +32,7 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
     let scope = run_root_bare(&region);
     let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value(
-            "later".to_string(),
-            Reached::for_test(value, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::value(5),
-        )
+        .bind_resident_for_test("later".to_string(), value, BindingIndex::value(5))
         .unwrap();
     assert!(scope.bindings().lookup_value("later", Some(3)).is_none());
 }
@@ -55,13 +43,9 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
     let scope = run_root_bare(&region);
     let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value(
-            "earlier".to_string(),
-            Reached::for_test(value, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::value(2),
-        )
+        .bind_resident_for_test("earlier".to_string(), value, BindingIndex::value(2))
         .unwrap();
-    match scope.bindings().lookup_value("earlier", Some(5)) {
+    match scope.lookup_value_here_for_test("earlier", Some(5)) {
         Some(NameLookup::Bound(KObject::Number(n))) => assert_eq!(*n, 7.0),
         _ => panic!("expected Value(Number(7.0))"),
     }
@@ -121,12 +105,8 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         false,
         &types,
     ));
-    let obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function("FOO".to_string(), f, obj, BindingIndex::value(99))
+        .register_function("FOO".to_string(), f, BindingIndex::value(99))
         .unwrap();
     let key = f.signature.untyped_key();
     let lookup = scope.bindings().lookup_function(&key, None);
@@ -178,24 +158,11 @@ fn lookup_function_filters_per_overload_visibility() {
         false,
         &types,
     ));
-    let obj_early = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f_early), &types)
-        .expect("f was just allocated into region\'s own region");
-    let obj_late = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f_late), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function(
-            "BAR".to_string(),
-            f_early,
-            obj_early,
-            BindingIndex::value(2),
-        )
+        .register_function("BAR".to_string(), f_early, BindingIndex::value(2))
         .unwrap();
     scope
-        .register_function("BAR".to_string(), f_late, obj_late, BindingIndex::value(7))
+        .register_function("BAR".to_string(), f_late, BindingIndex::value(7))
         .unwrap();
     let visible_early = scope.bindings().lookup_function(&key, Some(5));
     assert_eq!(
@@ -240,12 +207,8 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
         false,
         &types,
     ));
-    let obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function("FOO".to_string(), f, obj, BindingIndex::value(2))
+        .register_function("FOO".to_string(), f, BindingIndex::value(2))
         .unwrap();
     let key = f.signature.untyped_key();
     // A pending sibling is recorded alongside a finalized overload (no longer a
@@ -270,12 +233,8 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
         false,
         &types,
     ));
-    let obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function("FOO".to_string(), f, obj, BindingIndex::value(9))
+        .register_function("FOO".to_string(), f, BindingIndex::value(9))
         .unwrap();
     let key = f.signature.untyped_key();
     // Empty-after-filter must surface an empty `overloads` with no pending, so

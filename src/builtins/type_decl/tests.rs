@@ -298,7 +298,7 @@ fn fn_return_type_constructor_apply_root_scope() {
         Ok(()) => {}
         Err(e) => panic!("FN with :(Number AS Wrap) return failed: {}", e),
     }
-    let pure = scope.bindings().expect_value("pure");
+    let pure = scope.expect_value("pure");
     let f = match pure {
         KObject::KFunction(f) => *f,
         other => panic!("pure not KFunction: {:?}", other.ktype()),

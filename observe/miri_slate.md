@@ -352,15 +352,15 @@ moment a `Copied` fold re-pins a producer it copied out of. The only `unsafe` ro
 
 - `aggregate_of_call_results_releases_every_producer_frame`
 
-**`Scope::child_module_reach` seal-time union** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
-— a module's stored reach is minted once at seal time as the union of its child scope's own region
-plus every one of the child's **binding-entry** hosted reaches (not just the child's own region), via
-`Bindings::entry_reaches`. This test binds a member into a child scope whose stored reach names a
-region foreign to both the child and the parent, then mints the parent's union and drops every other
-handle on both regions — tree borrows catches a use-after-free if the union drops a member's reach or
-the mint's home-omission fires on the wrong side.
+**`Scope::child_module_reach` seal-time mint** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
+— a module value's only region borrow is its child scope, so the mint names the child's **own
+region** alone; that region owns the deduped union covering everything its members reach. This test
+binds a member into a child scope whose reach names a region foreign to both the child and the
+parent, mints the parent's description, and drops every other handle on both regions — tree borrows
+catches a use-after-free if the child region's union drops a member's reach or the mint's self rule
+fires on the wrong side.
 
-- `child_module_reach_unions_member_entry_reaches_across_regions`
+- `child_module_reach_names_the_child_region_which_owns_its_members_reaches`
 
 **`USING … SCOPE` transparent-window aliasing** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
 `ScopeBindings::Borrowed` window reads another scope's `RefCell` maps through a

@@ -3,88 +3,101 @@
 //! makes the `data`/`types` partition structural (no name in both).
 
 use super::*;
+use crate::machine::core::arena::RegionBrand;
 use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
+use crate::machine::core::{CarrierWitness, FramePins, FrameReach, FrameStorage};
+use crate::machine::model::values::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
+use workgraph::scheduler::Sealed;
 
-/// A value binding round-trips the exact reach it was bound with: a carrier-oriented
-/// read hands back exactly the `FrameReach` stored at bind time, so the read wrapper can name the
-/// value's reach without reconstructing it from the value.
+/// Seal `obj` as resident in `region` under a description naming `foreign` — the shape a bind
+/// door produces once its mint has run, assembled here without a `Scope`.
+fn sealed_reaching<'a>(
+    region: RegionBrand<'a>,
+    obj: &'a KObject<'a>,
+    foreign: &Rc<FrameStorage>,
+) -> (SealedValue, &'a FrameReach) {
+    // Mint a description naming `foreign` (foreign to `region`, so the self rule keeps it in the
+    // owned bundle) to stand in for the reach a value borrows. The owned bundle is dropped: these
+    // tests assert on the description the seal carries, and `foreign` outlives them on the stack.
+    let foreign_bundle = FramePins::singleton(Rc::clone(foreign));
+    let (minted, _pins, _) = region.mint(&[&foreign_bundle]);
+    let reach_set = minted.expect("a foreign member mints a single-member reach");
+    let sealed = Sealed::seal(region.seal_resident(
+        Carried::Object(obj),
+        CarrierWitness::new(false, Some(reach_set)),
+    ));
+    (sealed, reach_set)
+}
+
+/// The sole member of the description a bound entry's seal carries. The reach is readable only
+/// under a pin, so the caller's own hold on the hosting frame opens the seal.
+fn sole_reach_member(sealed: &SealedValue, pin: &Rc<FrameStorage>) -> Rc<FrameStorage> {
+    sealed.open_at(pin).with_reach(|reach| {
+        let members = reach.expect("non-empty reach").members();
+        match members.as_slice() {
+            [only] => Rc::clone(only),
+            _ => panic!("expected a single-member reach"),
+        }
+    })
+}
+
+/// A value binding round-trips the exact reach it was sealed with: the entry stores the seal
+/// verbatim, so a read hands back a carrier naming the value's reach without reconstructing it
+/// from the value.
 #[test]
-fn data_binding_round_trips_stored_reach() {
+fn data_binding_round_trips_sealed_reach() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
-    // A synthetic foreign frame the value "reaches" — stored on the binding as its reach.
+    // A synthetic foreign frame the value "reaches" — carried on the seal as its reach.
     let foreign = run_root_storage();
-    // Mint a description naming `foreign` (foreign to `region`, so the self rule keeps it in the
-    // owned bundle) to stand in for the reach a value borrows. `_pins` keeps the
-    // minted description's members alive for the scope.
-    let foreign_bundle = FramePins::singleton(Rc::clone(&foreign));
-    let (minted, _pins, _) = region.mint(&[&foreign_bundle]);
-    let reach_set = minted.expect("a foreign member mints a single-member reach");
-    let reach = StoredReach::for_test(Some(reach_set), false);
+    let (sealed, _) = sealed_reaching(region, obj, &foreign);
     bindings
-        .try_bind_value(
-            "x",
-            BindingIndex::BUILTIN,
-            Reached::for_test(obj, reach, FramePins::empty()),
-        )
+        .try_bind_value("x", BindingIndex::BUILTIN, sealed, None)
         .expect("value bind should succeed");
-    match bindings.lookup_value_carrier("x", None) {
-        Some(NameLookup::Bound(hit)) => {
-            assert!(std::ptr::eq(hit.obj, obj));
-            assert!(
-                hit.stored.foreign.is_some_and(
-                    |f| matches!(f.members().as_slice(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
-                ),
-                "stored reach should round-trip the foreign frame",
-            );
-        }
-        _ => panic!("expected a bound value carrier hit"),
+    match bindings.lookup_value("x", None) {
+        Some(NameLookup::Bound(hit)) => assert!(
+            Rc::ptr_eq(&sole_reach_member(&hit, &storage), &foreign),
+            "the sealed reach should round-trip the foreign frame",
+        ),
+        _ => panic!("expected a bound value hit"),
     }
 }
 
-/// A carrier-oriented read copies the stored `Option<&FrameReach>` reference — no per-hit clone. Two
-/// independent reads of the same binding hand back the *same* `&FrameReach` pointer, proving the read
+/// A read duplicates the entry's seal, which copies the hosted `&FrameReach` reference — no per-hit
+/// clone. Two independent reads of the same binding name the *same* description, proving the read
 /// path reuses the arena-hosted set rather than cloning a fresh one on every hit (the type-binding
 /// memo relies on the same no-clone copy).
 #[test]
-fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
+fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
     let foreign = run_root_storage();
-    let foreign_bundle = FramePins::singleton(Rc::clone(&foreign));
-    let (minted, _pins, _) = region.mint(&[&foreign_bundle]);
-    let reach_set = minted.expect("a foreign member mints a single-member reach");
-    let reach = StoredReach::for_test(Some(reach_set), false);
+    let (sealed, reach_set) = sealed_reaching(region, obj, &foreign);
     bindings
-        .try_bind_value(
-            "x",
-            BindingIndex::BUILTIN,
-            Reached::for_test(obj, reach, FramePins::empty()),
-        )
+        .try_bind_value("x", BindingIndex::BUILTIN, sealed, None)
         .expect("value bind should succeed");
 
-    let first = match bindings.lookup_value_carrier("x", None) {
-        Some(NameLookup::Bound(hit)) => hit.stored.foreign.expect("non-empty reach"),
-        _ => panic!("expected a bound value carrier hit"),
+    let read = |label: &str| match bindings.lookup_value("x", None) {
+        Some(NameLookup::Bound(hit)) => hit
+            .open_at(&storage)
+            .with_reach(|reach| reach.expect("non-empty reach") as *const _),
+        _ => panic!("expected a bound value hit for {label}"),
     };
-    let second = match bindings.lookup_value_carrier("x", None) {
-        Some(NameLookup::Bound(hit)) => hit.stored.foreign.expect("non-empty reach"),
-        _ => panic!("expected a bound value carrier hit"),
-    };
+    let (first, second) = (read("first"), read("second"));
     assert!(
         std::ptr::eq(first, second),
-        "two reads of the same binding must return the same &FrameReach — a clone would allocate a \
+        "two reads of the same binding must name the same &FrameReach — a clone would allocate a \
          fresh Vec at a distinct address on every hit",
     );
     assert!(
         std::ptr::eq(first, reach_set),
-        "the stored reach is the exact reference bound in, not a copy of it",
+        "the carried reach is the exact reference sealed in, not a copy of it",
     );
 }
 
@@ -295,7 +308,8 @@ fn type_token_may_not_bind_value_side() {
     let error = match bindings.try_bind_value(
         "IntOrd",
         BindingIndex::BUILTIN,
-        Reached::for_test(val, StoredReach::for_test(None, false), FramePins::empty()),
+        Sealed::seal(region.seal_resident(Carried::Object(val), CarrierWitness::new(false, None))),
+        None,
     ) {
         Err(e) => e,
         Ok(_) => panic!("a Type token names a type, not a value"),

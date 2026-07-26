@@ -123,9 +123,8 @@ fn fn_body_call_with_spacers_produces_value() {
          LET c = 3\n\
          LET r = (DBL 5)",
     );
-    let data = scope.bindings().data();
     use crate::machine::model::KObject;
-    assert!(matches!(data.get("r").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 5.0));
+    assert!(matches!(scope.lookup("r"), Some(KObject::Number(n)) if *n == 5.0));
 }
 
 #[test]

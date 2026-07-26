@@ -5,11 +5,9 @@
 
 use super::{Scope, ScopeKind};
 use crate::machine::core::bindings::{
-    ApplyOutcome, BindKind, BindingIndex, DeclarationSite, NameLookup,
+    ApplyOutcome, BindKind, BindingIndex, DeclarationSite, SealedValue,
 };
-use crate::machine::core::{
-    FramePins, KError, KErrorKind, KFunction, NodeId, Reached, StoredReach,
-};
+use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
 use crate::machine::model::{probe_key, Carried, KObject, OperatorGroup, TypeRegistry};
 use crate::machine::DeliveredCarried;
 
@@ -42,14 +40,16 @@ impl<'a> Scope<'a> {
     /// iff a borrow conflict would otherwise panic.
     ///
     /// The private tail the fused value doors ([`Self::bind_delivered`], [`Self::bind_checked`])
-    /// call after fusing the value with the stored reach its mint verb derived: it takes the fused
-    /// [`Reached`] vehicle, so it is crate-internal — every production value bind routes through a
-    /// fused door that derives the pairing rather than asserting it here, and no caller can pair a
-    /// value with a reach derived for a different value.
+    /// call after sealing the value under the reach its mint verb derived: it takes the dormant
+    /// [`SealedValue`] carrier, so it is crate-internal — every production value bind routes through
+    /// a fused door that derives the pairing rather than asserting it here, and no caller can pair a
+    /// value with a reach derived for a different value. `function` is what the value wraps, if
+    /// anything, classified by that same door while it still holds the value resident.
     pub(crate) fn bind_value(
         &self,
         name: String,
-        reached: Reached<'a, &'a KObject<'a>>,
+        sealed: SealedValue,
+        function: Option<&'a KFunction<'a>>,
         index: BindingIndex,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
@@ -57,49 +57,51 @@ impl<'a> Scope<'a> {
             // site, so a local bind whose name is already a surfaced module member
             // would be silently shadowed. Reject it; otherwise forward to the call
             // site under the caller's `index` (the bind belongs to the call site's
-            // block, at the call site's statement position), carrying the value fused
-            // to its reach and owning pin bundle.
-            if matches!(
-                self.bindings.get().lookup_value(&name, None),
-                Some(NameLookup::Bound(_))
-            ) {
+            // block, at the call site's statement position), carrying the value sealed
+            // together with its reach.
+            if self.bindings.get().has_value(&name, None) {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "USING: local bind `{name}` collides with a surfaced module member; \
                      rename it to avoid silently shadowing the module's `{name}`",
                 ))));
             }
-            return self.write_target().bind_value(name, reached, index);
+            return self
+                .write_target()
+                .bind_value(name, sealed, function, index);
         }
         self.assert_open(&name);
-        // Clone the fused evidence for the attempt, keeping the original for the defer path: on a
-        // borrow `Conflict` the attempt's clone is dropped and the retained original rides the
-        // deferred write, so the eventual entry owns exactly one bundle either way.
+        // Duplicate the seal for the attempt, keeping the original for the defer path: on a borrow
+        // `Conflict` the attempt's duplicate is dropped and the retained original rides the deferred
+        // write. Both name the same arena-hosted description and neither owns pins, so the entry is
+        // the same either way.
         match self
             .bindings
             .get()
-            .try_bind_value(&name, index, reached.clone())?
+            .try_bind_value(&name, index, sealed.duplicate(), function)?
         {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
-                self.pending.defer_value(name, index, reached);
+                self.pending.defer_value(name, index, sealed, function);
                 Ok(())
             }
         }
     }
 
-    /// Fused value bind: derive the bound value's stored reach off the delivered `cell` (copied
-    /// mode — the value is copied into this scope's own region), copy the `project`ed value in under
-    /// that derived evidence, bind it, and return the resident reference paired with the same token
-    /// (the caller seals its terminal carrier from it via [`Self::resident_value_carrier`]). `project`
-    /// selects what to copy out of the delivered value (identity for a whole-value bind, the Ok/Err
-    /// payload for TRY) under the envelope's own pin. The bind itself preserves [`Self::bind_value`]'s
-    /// USING-window forwarding and conditional-defer behavior.
+    /// Fused value bind: mint the bound value's exact reach off the delivered `cell` (copied
+    /// mode — the value is copied into this scope's own region) into this scope's arena, fold the
+    /// owning bundle into the region's union, copy the `project`ed value in under that derived
+    /// evidence, seal the two together, and bind. Returns a duplicate of the entry's own
+    /// [`SealedValue`], from which the caller lifts its terminal carrier
+    /// ([`Self::lift_resident_parts`]). `project` selects what to copy out of the delivered value
+    /// (identity for a whole-value bind, the Ok/Err payload for TRY) under the envelope's own pin.
+    /// The bind itself preserves [`Self::bind_value`]'s USING-window forwarding and
+    /// conditional-defer behavior.
     ///
     /// A projection that **embeds a record** (a bare record, or one behind a `Tagged`/`Wrapped`
     /// spine) routes the escape-seam cost chooser through [`Self::copy_delivered_substrate`]. A rebuilt
     /// record lands in this scope's region through the record door at its release-exact seam mode; a
     /// projection the chooser selects to **pin** instead rides the producer region by hold (its
-    /// pointer-copied substrate covered by the binding's `Kept`-minted stored reach), the copy-free
+    /// pointer-copied substrate covered by the whole-envelope minted reach), the copy-free
     /// path a bound closure's captured foreign region already takes. Every other projection
     /// deep-clones its top node under the cell's copied-mode reach — the mint runs *before* the copy
     /// so the copy's own residence audit sees the evidence.
@@ -110,7 +112,7 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
         project: impl for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, StoredReach<'a>, FramePins), KError> {
+    ) -> Result<SealedValue, KError> {
         let projected_embeds_substrate = cell.open(|live| {
             project(&live)
                 .map(|object| object.embeds_substrate())
@@ -120,38 +122,58 @@ impl<'a> Scope<'a> {
         // so the binding entry can never pair the value with a reach some other value derived. A
         // record-embedding projection routes the escape-seam chooser; every other deep-clones its top
         // node under the copied-mode reach.
-        let reached = if projected_embeds_substrate {
-            self.copy_delivered_substrate(cell, project, types)?
+        let (sealed, function) = if projected_embeds_substrate {
+            // A projection that embeds a substrate is a `Record` / `List` / `Dict` / `Tagged` /
+            // `Wrapped`, never a `KFunction`, so the mirror has nothing to write.
+            (self.copy_delivered_substrate(cell, project, types)?, None)
         } else {
-            self.store_object_adopted(cell, project, types)?
+            let (object, reach, borrows_home) = self.store_object_adopted(cell, project, types)?;
+            (
+                self.seal_resident_value(Carried::Object(object), reach, borrows_home),
+                object.as_function(),
+            )
         };
-        // Clone the fused pair: one copy binds into the entry (pinning the value's reach for the
-        // entry's life), the other's parts ride the caller's terminal carrier out of the step (the
-        // Done-arm seal), so the reach is owned end-to-end on both the resident and in-transit paths.
-        self.bind_value(name, reached.clone(), index)?;
-        Ok(reached.into_parts())
+        // Duplicate the seal: one binds into the entry, the other rides the caller's terminal
+        // carrier out of the step (the Done-arm seal). Neither owns pins — the region's union bundle
+        // does — so the reach is covered on both the resident and in-transit paths.
+        self.bind_value(name, sealed.duplicate(), function, index)?;
+        Ok(sealed)
     }
 
     /// Fused region-pure / fresh-value bind: checked move-in of `value` into this scope's own
-    /// region with a `(None, bit)` token derived from the checked audit's own saw-a-region-pointer
+    /// region with a `(None, bit)` reach derived from the checked audit's own saw-a-region-pointer
     /// walk ([`Self::alloc_object_checked_stored`]), then bind — one call, no caller-asserted reach.
-    /// Returns the resident reference paired with the same derived token (the pure-value twin of
-    /// [`Self::bind_delivered`]'s return, so a caller seals its terminal carrier from it via
-    /// [`Self::resident_value_carrier`]). Preserves [`Self::bind_value`]'s USING-window forwarding and
-    /// conditional-defer behavior.
+    /// Returns a duplicate of the entry's own [`SealedValue`] (the pure-value twin of
+    /// [`Self::bind_delivered`]'s return). Preserves [`Self::bind_value`]'s USING-window forwarding
+    /// and conditional-defer behavior.
     pub(crate) fn bind_checked(
         &self,
         name: String,
         value: KObject<'_>,
         index: BindingIndex,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, StoredReach<'a>, FramePins), KError> {
-        let (obj, stored) = self.alloc_object_checked_stored(value, types)?;
-        // A checked bind is region-pure (`foreign: None`) — its borrows reach no foreign region — so
-        // the entry and the caller's terminal both own the empty bundle: nothing to pin beyond this
-        // scope's own region.
-        self.bind_value(name, Reached::mint(obj, stored, FramePins::empty()), index)?;
-        Ok((obj, stored, FramePins::empty()))
+    ) -> Result<SealedValue, KError> {
+        // A checked bind is region-pure — its borrows reach no foreign region — so there is no
+        // description to host and nothing to fold into the region's union bundle.
+        let (obj, (_, borrows_home)) = self.alloc_object_checked_stored(value, types)?;
+        let sealed = self.seal_resident_value(Carried::Object(obj), None, borrows_home);
+        self.bind_value(name, sealed.duplicate(), obj.as_function(), index)?;
+        Ok(sealed)
+    }
+
+    /// Test affordance: bind an already-arena-resident `obj` under a region-pure reach, for an
+    /// assertion suite that allocated the value itself and only needs it findable by name.
+    /// `#[cfg(test)]`-gated so production value binds keep going through a fused door that derives
+    /// the reach from the value it seals.
+    #[cfg(test)]
+    pub(crate) fn bind_resident_for_test(
+        &self,
+        name: String,
+        obj: &'a KObject<'a>,
+        index: BindingIndex,
+    ) -> Result<(), KError> {
+        let sealed = self.seal_resident_value(Carried::Object(obj), None, false);
+        self.bind_value(name, sealed, obj.as_function(), index)
     }
 
     /// Add `fn_ref` to the `functions` bucket keyed by its untyped signature. `data[name]` is
@@ -165,13 +187,10 @@ impl<'a> Scope<'a> {
         &self,
         name: String,
         fn_ref: &'a KFunction<'a>,
-        obj: &'a KObject<'a>,
         index: BindingIndex,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
-            return self
-                .write_target()
-                .register_function(name, fn_ref, obj, index);
+            return self.write_target().register_function(name, fn_ref, index);
         }
         self.assert_open(&name);
         // A user overload may not join a builtin's bucket — builtins are immutable and
@@ -185,11 +204,11 @@ impl<'a> Scope<'a> {
         match self
             .bindings
             .get()
-            .try_register_function(&name, fn_ref, obj, index)?
+            .try_register_function(&name, fn_ref, index)?
         {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
-                self.pending.defer_function(name, fn_ref, obj, index);
+                self.pending.defer_function(name, fn_ref, index);
                 Ok(())
             }
         }
@@ -210,23 +229,22 @@ impl<'a> Scope<'a> {
         &self,
         name: String,
         fn_ref: &'a KFunction<'a>,
-        obj: &'a KObject<'a>,
         index: BindingIndex,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
             return self
                 .write_target()
-                .register_operator_function(name, fn_ref, obj, index);
+                .register_operator_function(name, fn_ref, index);
         }
         self.assert_open(&name);
         match self
             .bindings
             .get()
-            .try_register_function(&name, fn_ref, obj, index)?
+            .try_register_function(&name, fn_ref, index)?
         {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
-                self.pending.defer_function(name, fn_ref, obj, index);
+                self.pending.defer_function(name, fn_ref, index);
                 Ok(())
             }
         }
@@ -399,10 +417,11 @@ impl<'a> Scope<'a> {
         child: &Scope<'a>,
         index: BindingIndex,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, StoredReach<'a>, FramePins), KError> {
-        let reached = self.store_module_object(module, child, types)?;
-        self.bind_value(name, reached.clone(), index)?;
-        Ok(reached.into_parts())
+    ) -> Result<SealedValue, KError> {
+        let sealed = self.store_module_object(module, child, types)?;
+        // A `KObject::Module` wraps no `KFunction`, so the mirror has nothing to write.
+        self.bind_value(name, sealed.duplicate(), None, index)?;
+        Ok(sealed)
     }
 
     /// Builtin type registration: [`Self::register_type`] at [`DeclarationSite::BUILTIN`], same

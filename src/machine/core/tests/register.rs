@@ -3,9 +3,8 @@
 use super::super::{BindingIndex, DeclarationSite, NameLookup, Scope};
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::Reached;
-use crate::machine::core::StoredReach;
-use crate::machine::core::{run_root_storage, FramePins, FrameStorageExt};
+use crate::machine::core::{run_root_storage, FrameStorageExt};
+use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
@@ -23,18 +22,10 @@ fn bind_value_errors_on_same_scope_rebind() {
     let v1 = region.brand().alloc_object(KObject::Number(1.0));
     let v2 = region.brand().alloc_object(KObject::Number(2.0));
     scope
-        .bind_value(
-            "x".to_string(),
-            Reached::for_test(v1, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("x".to_string(), v1, BindingIndex::BUILTIN)
         .unwrap();
     let err = scope
-        .bind_value(
-            "x".to_string(),
-            Reached::for_test(v2, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("x".to_string(), v2, BindingIndex::BUILTIN)
         .unwrap_err();
     match &err.kind {
         crate::machine::core::KErrorKind::Rebind { name } => assert_eq!(name, "x"),
@@ -48,20 +39,12 @@ fn bind_value_allows_shadowing_in_child_scope() {
     let outer = run_root_bare(&region);
     let v1 = region.brand().alloc_object(KObject::Number(1.0));
     outer
-        .bind_value(
-            "x".to_string(),
-            Reached::for_test(v1, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("x".to_string(), v1, BindingIndex::BUILTIN)
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
     let v2 = region.brand().alloc_object(KObject::Number(2.0));
     inner
-        .bind_value(
-            "x".to_string(),
-            Reached::for_test(v2, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("x".to_string(), v2, BindingIndex::BUILTIN)
         .unwrap();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
     assert!(matches!(outer.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
@@ -73,11 +56,7 @@ fn close_marks_scope_and_is_idempotent_reads_still_work() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_value(
-            "x".to_string(),
-            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("x".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
     assert!(!scope.is_closed());
     scope.close();
@@ -96,11 +75,7 @@ fn bind_after_close_panics() {
     let scope = run_root_bare(&region);
     scope.close();
     let v = region.brand().alloc_object(KObject::Number(1.0));
-    let _ = scope.bind_value(
-        "x".to_string(),
-        Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-        BindingIndex::BUILTIN,
-    );
+    let _ = scope.bind_resident_for_test("x".to_string(), v, BindingIndex::BUILTIN);
 }
 
 #[test]
@@ -111,11 +86,7 @@ fn close_is_per_scope_open_child_still_binds() {
     let inner = region.brand().alloc_scope(outer.child_for_call());
     let v = region.brand().alloc_object(KObject::Number(2.0));
     inner
-        .bind_value(
-            "x".to_string(),
-            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("x".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
     assert!(!inner.is_closed());
@@ -133,12 +104,8 @@ fn register_function_dedupes_exact_signature() {
         false,
         &types,
     ));
-    let obj1 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f1), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function("FOO".to_string(), f1, obj1, BindingIndex::BUILTIN)
+        .register_function("FOO".to_string(), f1, BindingIndex::BUILTIN)
         .unwrap();
     let f2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -147,12 +114,8 @@ fn register_function_dedupes_exact_signature() {
         false,
         &types,
     ));
-    let obj2 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f2), &types)
-        .expect("f was just allocated into region\'s own region");
     let err = scope
-        .register_function("FOO".to_string(), f2, obj2, BindingIndex::BUILTIN)
+        .register_function("FOO".to_string(), f2, BindingIndex::BUILTIN)
         .unwrap_err();
     assert!(
         matches!(&err.kind, crate::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "FOO"),
@@ -175,12 +138,8 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         false,
         &types,
     ));
-    let obj1 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f1), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function("FOO".to_string(), f1, obj1, BindingIndex::BUILTIN)
+        .register_function("FOO".to_string(), f1, BindingIndex::BUILTIN)
         .unwrap();
     let f2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -192,13 +151,9 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
     let obj2 = region
         .brand()
         .alloc_object_checked(KObject::KFunction(f2), &types)
-        .expect("f was just allocated into region\'s own region");
+        .expect("f was just allocated into region's own region");
     let err = scope
-        .bind_value(
-            "OTHER_NAME".to_string(),
-            Reached::for_test(obj2, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("OTHER_NAME".to_string(), obj2, BindingIndex::BUILTIN)
         .unwrap_err();
     assert!(
         matches!(&err.kind, crate::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "OTHER_NAME"),
@@ -224,24 +179,16 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
     let obj1 = region
         .brand()
         .alloc_object_checked(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region\'s own region");
+        .expect("f was just allocated into region's own region");
     let obj2 = region
         .brand()
         .alloc_object_checked(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region\'s own region");
+        .expect("f was just allocated into region's own region");
     scope
-        .bind_value(
-            "FIRST".to_string(),
-            Reached::for_test(obj1, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("FIRST".to_string(), obj1, BindingIndex::BUILTIN)
         .unwrap();
     scope
-        .bind_value(
-            "ALIAS".to_string(),
-            Reached::for_test(obj2, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("ALIAS".to_string(), obj2, BindingIndex::BUILTIN)
         .unwrap();
 }
 
@@ -284,19 +231,11 @@ fn register_function_allows_overload_with_different_arg_types() {
         false,
         &types,
     ));
-    let obj1 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f1), &types)
-        .expect("f was just allocated into region\'s own region");
-    let obj2 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f2), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function("BAR".to_string(), f1, obj1, BindingIndex::BUILTIN)
+        .register_function("BAR".to_string(), f1, BindingIndex::BUILTIN)
         .unwrap();
     scope
-        .register_function("BAR".to_string(), f2, obj2, BindingIndex::BUILTIN)
+        .register_function("BAR".to_string(), f2, BindingIndex::BUILTIN)
         .unwrap();
 }
 
@@ -309,11 +248,7 @@ fn register_function_coexists_with_same_name_value() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_value(
-            "FOO".to_string(),
-            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("FOO".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -322,16 +257,10 @@ fn register_function_coexists_with_same_name_value() {
         false,
         &types,
     ));
-    let obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function("FOO".to_string(), f, obj, BindingIndex::BUILTIN)
+        .register_function("FOO".to_string(), f, BindingIndex::BUILTIN)
         .expect("bare FN registration must not collide with a same-name value");
-    assert!(
-        matches!(scope.bindings().data().get("FOO").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 1.0)
-    );
+    assert!(matches!(scope.lookup("FOO"), Some(KObject::Number(n)) if *n == 1.0));
     let key = f.signature.untyped_key();
     assert!(scope
         .bindings()
@@ -357,12 +286,8 @@ fn register_function_coexists_with_same_name_type() {
         false,
         &types,
     ));
-    let obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function("Foo".to_string(), f, obj, BindingIndex::BUILTIN)
+        .register_function("Foo".to_string(), f, BindingIndex::BUILTIN)
         .expect("bare FN registration must not collide with a same-name type");
     assert!(scope.bindings().types().get("Foo").is_some());
     let key = f.signature.untyped_key();
@@ -384,17 +309,14 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_value(
-            "val".to_string(),
-            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("val".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
     scope.register_type("Ty".to_string(), KType::NUMBER, DeclarationSite::BUILTIN);
     let bindings = scope.bindings();
     assert!(matches!(
         bindings.lookup_member("val", None),
-        Some(MemberResolution::Value { obj: KObject::Number(n), .. }) if *n == 1.0
+        Some(MemberResolution::Value(sealed))
+            if matches!(sealed.open_at(&region).value(), Carried::Object(KObject::Number(n)) if *n == 1.0)
     ));
     assert!(matches!(
         bindings.lookup_member("Ty", None),
@@ -427,11 +349,7 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
     let outer = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     outer
-        .bind_value(
-            "x".to_string(),
-            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("x".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
     inner
@@ -469,11 +387,7 @@ fn bind_value_clears_own_placeholder() {
         .unwrap();
     let v = region.brand().alloc_object(KObject::Number(42.0));
     scope
-        .bind_value(
-            "x".to_string(),
-            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("x".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
     assert!(scope.bindings().placeholders().get("x").is_none());
     assert!(
@@ -493,11 +407,7 @@ fn visibility_chain_none_sees_every_entry() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value(
-            "late".to_string(),
-            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::value(99),
-        )
+        .bind_resident_for_test("late".to_string(), v, BindingIndex::value(99))
         .unwrap();
     // A chain whose `index_for(scope.id) = None` treats the scope as complete:
     // every entry is visible regardless of index.
@@ -517,11 +427,7 @@ fn visibility_strict_less_than_hides_later_sibling() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value(
-            "later".to_string(),
-            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::value(5),
-        )
+        .bind_resident_for_test("later".to_string(), v, BindingIndex::value(5))
         .unwrap();
     // Cutoff 3, producer at 5 → `5 < 3` is false → invisible.
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
@@ -536,11 +442,7 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value(
-            "earlier".to_string(),
-            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::value(2),
-        )
+        .bind_resident_for_test("earlier".to_string(), v, BindingIndex::value(2))
         .unwrap();
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 5);
     assert!(matches!(
@@ -557,11 +459,7 @@ fn visibility_self_index_hidden_under_strict_less_than() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value(
-            "self_idx".to_string(),
-            Reached::for_test(v, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::value(3),
-        )
+        .bind_resident_for_test("self_idx".to_string(), v, BindingIndex::value(3))
         .unwrap();
     // Cutoff equal to producer idx (e.g. `LET x = x`): `3 < 3` is false.
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);

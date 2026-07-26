@@ -31,13 +31,13 @@ use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode}
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{ExpressionSignature, KKind};
 use crate::machine::model::{Held, KObject, KType, Record};
+use crate::machine::BindingIndex;
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
 use crate::machine::{
     arg_held, require_kexpression, Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal,
     FinishCtx, OwnedDispatch,
 };
-use crate::machine::{BindingIndex, StoredReach};
 use crate::machine::{Body, CarrierWitness, KError, KErrorKind, NodeId, Scope};
 use crate::scheduler::DepResults;
 use crate::scheduler::Deps;
@@ -336,7 +336,7 @@ impl<'a> OpPlan<'a> {
             in_group,
             bind_index,
         } = self;
-        let (obj, stored) = match kind {
+        let carrier = match kind {
             OpKind::Binary => {
                 let elements = vec![arg(LEFT, operand), kw(&sym), arg(RIGHT, operand)];
                 let result_type = result.unwrap_or(operand);
@@ -395,7 +395,7 @@ impl<'a> OpPlan<'a> {
                 )?
             }
         };
-        Ok(scope.resident_value_carrier(obj, stored))
+        Ok(carrier)
     }
 }
 
@@ -431,7 +431,7 @@ pub(super) fn register_unary_operator<'a>(
     in_group: bool,
     bind_index: BindingIndex,
     types: &TypeRegistry,
-) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     let OperatorForm {
         signature: list_signature,
         body: list_body,
@@ -459,14 +459,14 @@ pub(super) fn register_unary_operator<'a>(
     );
     // The list body first: its function is the operator's primary value, the one an `OP`
     // declaration evaluates to.
-    let (obj, stored) = register_body(scope, sym, list_signature, list_body, bind_index, types)?;
+    let carrier = register_body(scope, sym, list_signature, list_body, bind_index, types)?;
     register_body(scope, sym, binary_signature, binary_body, bind_index, types)?;
     let members = std::iter::once(sym.to_string()).collect();
     let group = scope
         .brand()
         .alloc_operator_group(OperatorGroup::new(members, ReductionMode::Unary));
     scope.register_group_under_all_subsets(&[sym], group, bind_index)?;
-    Ok((obj, stored))
+    Ok(carrier)
 }
 
 /// Allocate one operator body as a `KFunction` capturing `scope`, and register it in `scope`'s
@@ -480,15 +480,12 @@ fn register_body<'a>(
     body: Body<'a>,
     bind_index: BindingIndex,
     types: &TypeRegistry,
-) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     let f: &'a KFunction<'a> = scope
         .brand()
         .alloc_function(KFunction::new(signature, body, scope, false, types));
-    let (obj, stored) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f), types)
-        .expect("f was just allocated into scope's own region");
-    scope.register_operator_function(sym.to_string(), f, obj, bind_index)?;
-    Ok((obj, stored))
+    scope.register_operator_function(sym.to_string(), f, bind_index)?;
+    scope.seal_fresh_object(KObject::KFunction(f), types)
 }
 
 /// The bridge body `sym [left right]` — a keyword-first call over a two-element list literal, which

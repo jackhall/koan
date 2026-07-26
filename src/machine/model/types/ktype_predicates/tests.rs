@@ -224,19 +224,16 @@ fn spliced_cell_classifies_by_opening() {
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::run_root_storage;
     use crate::machine::model::ast::KExpression;
+    use crate::machine::model::values::Carried;
     use crate::machine::model::values::KObject;
-    use crate::witnessed::{Delivered, Sealed};
+    use crate::witnessed::Delivered;
 
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
     let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
-    let carrier = scope.resident_value_carrier(
-        obj,
-        crate::machine::core::StoredReach::for_test(None, false),
-    );
     let cell_part = ExpressionPart::Spliced {
         cell: Delivered::hosted(
-            Sealed::seal(carrier),
+            scope.seal_resident_value(Carried::Object(obj), None, false),
             std::rc::Rc::clone(&storage),
             crate::machine::core::FramePins::empty(),
         ),

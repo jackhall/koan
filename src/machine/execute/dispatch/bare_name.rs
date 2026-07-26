@@ -4,13 +4,13 @@
 //! seal — owned by [`resolve_bare_carrier`]. Its [`BareCarrier`] result carries
 //! exactly the states a consumer observes (sealed / parked / unbound); a producer
 //! error is absorbed at the resolution surface as `Err`, so no consumer carries an
-//! arm for a pre-excluded state. [`resolve_name_part`] is the admission-cache twin:
-//! it keeps the raw-`&KObject` value read [`resolve_dispatch`](super::resolve_dispatch)
-//! needs for `accepts_carried`, sharing the type channel and screening with the ladder.
+//! arm for a pre-excluded state. [`resolve_name_part`] is the admission-cache twin: it caches the
+//! same delivered carrier, which [`resolve_dispatch`](super::resolve_dispatch) opens under the
+//! envelope's own pins for `accepts_carried`, sharing the type channel and screening with the
+//! ladder.
 
 use std::rc::Rc;
 
-use crate::machine::model::Carried;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{ExpressionPart, KType, TypeIdentifier, TypeRegistry};
 use crate::machine::{
@@ -76,10 +76,8 @@ pub(in crate::machine::execute) fn resolve_bare_carrier(
 ) -> Result<BareCarrier, KError> {
     match part {
         ExpressionPart::Identifier(name) => {
-            match scope.resolve_value_carrier(name, chain.map(|c| &**c)) {
-                Some(NameLookup::Bound((carrier, pins))) => Ok(BareCarrier::Sealed(
-                    scope.seal_resident_delivered(carrier, pins),
-                )),
+            match scope.resolve_value_delivered(name, chain.map(|c| &**c)) {
+                Some(NameLookup::Bound(delivered)) => Ok(BareCarrier::Sealed(delivered)),
                 Some(NameLookup::Parked(producer)) => screen(scheduler, producer, name.clone()),
                 None => Ok(BareCarrier::Unbound(name.clone())),
             }
@@ -114,29 +112,28 @@ fn screen(
 }
 
 /// Resolve a bare-name `ExpressionPart` (`Identifier` or leaf `Type`) into the
-/// admission-cache currency. The value channel reads the raw `&KObject`
-/// ([`resolve_with_chain`](Scope::resolve_with_chain)) so admission can call
-/// `accepts_carried`; the type channel and screening are shared with the ladder.
-/// A producer error absorbs into `Err`, surfacing before `resolve_dispatch` is
-/// consulted.
-pub(in crate::machine::execute) fn resolve_name_part<'step>(
-    scope: &Scope<'step>,
-    part: &ExpressionPart<'step>,
+/// admission-cache currency. The value channel lifts the binding into a delivery envelope, which
+/// admission opens under its own pins to call `accepts_carried`; the type channel and screening are
+/// shared with the ladder. A producer error absorbs into `Err`, surfacing before `resolve_dispatch`
+/// is consulted.
+pub(in crate::machine::execute) fn resolve_name_part(
+    scope: &Scope<'_>,
+    part: &ExpressionPart<'_>,
     scheduler: &Scheduler<KoanWorkload>,
     active_chain: Option<&Rc<LexicalFrame>>,
     types: &TypeRegistry,
-) -> Result<NameOutcome<'step>, KError> {
+) -> Result<NameOutcome, KError> {
     let (name, is_type) = match part {
         ExpressionPart::Identifier(n) => (n.as_str(), None),
         ExpressionPart::Type(t) => (t.as_str(), Some(t)),
         _ => unreachable!("resolve_name_part only called on bare-name parts"),
     };
     let chain = active_chain.map(|c| &**c);
-    match scope.resolve_with_chain(name, chain) {
+    match scope.resolve_value_delivered(name, chain) {
         Some(NameLookup::Parked(producer)) => return screen_outcome(scheduler, producer, name),
         // An Identifier part reads the value channel; a Type part takes the type ladder below.
-        Some(NameLookup::Bound(obj)) if is_type.is_none() => {
-            return Ok(NameOutcome::Resolved(Carried::Object(obj)));
+        Some(NameLookup::Bound(delivered)) if is_type.is_none() => {
+            return Ok(NameOutcome::Resolved(delivered));
         }
         Some(NameLookup::Bound(_)) | None => {}
     }
@@ -145,7 +142,12 @@ pub(in crate::machine::execute) fn resolve_name_part<'step>(
         // same first-producer fold and ready/errored/park screen the value-side placeholder arm
         // applies.
         Some(t) => match type_channel(scope, t, active_chain.cloned(), types) {
-            TypeChannel::Done(kt) => Ok(NameOutcome::Resolved(Carried::Type(kt))),
+            // A `KType` is a `Copy` registry handle with no reach, so the admission cache carries
+            // it in the same envelope currency under an empty foreign bundle.
+            TypeChannel::Done(kt) => Ok(NameOutcome::Resolved(scope.seal_resident_delivered(
+                scope.resident_type_carrier(kt),
+                crate::machine::core::FramePins::empty(),
+            ))),
             TypeChannel::Unbound(n) => Ok(NameOutcome::Unbound(n)),
             TypeChannel::Parked(producer) => screen_outcome(scheduler, producer, name),
         },
@@ -155,11 +157,11 @@ pub(in crate::machine::execute) fn resolve_name_part<'step>(
 
 /// Fold a parked name's producer standing into a [`NameOutcome`] — the
 /// admission-cache twin of [`screen`].
-fn screen_outcome<'step>(
+fn screen_outcome(
     scheduler: &Scheduler<KoanWorkload>,
     producer: NodeId,
     name: &str,
-) -> Result<NameOutcome<'step>, KError> {
+) -> Result<NameOutcome, KError> {
     match producer_standing(scheduler, producer) {
         ProducerStanding::Errored(e) => Err(e.clone_for_propagation()),
         ProducerStanding::Ready => Ok(NameOutcome::Unbound(name.to_string())),

@@ -29,12 +29,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
     test_run.run("LET other_set = (MAKESET (int_ord_a))");
 
     let m = lookup_module(scope, "held_set", &test_run.types);
-    let inner = m
-        .child_scope()
-        .bindings()
-        .data()
-        .get("inner")
-        .map(|(_, r)| r.value());
+    let inner = m.child_scope().lookup("inner");
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
         "held_set.inner must still read 1.0 after subsequent churn"

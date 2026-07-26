@@ -216,7 +216,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     pub(super) fn build_bare_outcomes(
         &self,
         parts: &[Spanned<ExpressionPart<'step>>],
-    ) -> Result<Vec<Option<NameOutcome<'step>>>, KError> {
+    ) -> Result<Vec<Option<NameOutcome>>, KError> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         parts
             .iter()

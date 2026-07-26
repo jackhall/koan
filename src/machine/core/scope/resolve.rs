@@ -5,10 +5,9 @@
 
 use super::Scope;
 use crate::machine::core::bindings::{Bindings, NameLookup};
-use crate::machine::core::{FramePins, KFunction, LexicalFrame};
-use crate::machine::model::{CarriedFamily, KObject, KType, OperatorGroup};
-use crate::machine::{CarrierWitness, DeliveredCarried};
-use crate::witnessed::Witnessed;
+use crate::machine::core::LexicalFrame;
+use crate::machine::model::{KObject, KType, OperatorGroup};
+use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
     /// True iff `name` is a builtin type. The builtins live once in the immutable
@@ -29,9 +28,15 @@ impl<'a> Scope<'a> {
         self.root_scope().bindings().has_builtin_function(key)
     }
 
-    /// Nearest value binding of `name` up the `outer` chain. Collapses a `Parked`
-    /// producer and a miss to `None`. Visibility unfiltered — use
-    /// [`Self::lookup_with_chain`] from a dispatch-driven path.
+    /// Nearest value binding of `name` up the `outer` chain, **adopted** into this scope's own
+    /// region ([`Self::adopt_sealed`] mints the binding's reach here and retains it, so the returned
+    /// reference outlives the read). Collapses a `Parked` producer and a miss to `None`. Visibility
+    /// unfiltered.
+    ///
+    /// The adoption is the price of a bare `&KObject`: every production read that only *inspects* a
+    /// binding takes [`Self::lookup_value_delivered`] instead and reads under the envelope's own
+    /// pins, retaining nothing. This ladder survives for the assertion suites and for a consumer
+    /// that genuinely needs the value to outlive the read.
     pub fn lookup(&self, name: &str) -> Option<&'a KObject<'a>> {
         self.lookup_with_chain(name, None)
     }
@@ -53,7 +58,7 @@ impl<'a> Scope<'a> {
     /// and the consumer must park rather than read through.
     ///
     /// Type-side bindings are not consulted — see [`Self::resolve_type`].
-    /// Visibility unfiltered; dispatch-driven reads use [`Self::resolve_with_chain`].
+    /// Visibility unfiltered; the adoption cost is [`Self::lookup`]'s.
     pub fn resolve(&self, name: &str) -> Option<NameLookup<&'a KObject<'a>>> {
         self.resolve_with_chain(name, None)
     }
@@ -107,65 +112,59 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
+        self.resolve_value_delivered(name, chain)
+            .map(|hit| hit.map(|delivered| self.adopt_sealed(&delivered).object()))
+    }
+
+    /// Resolve `name` down the outer chain and **lift** the hit into a delivery envelope pinned by
+    /// its declaring scope's region owner — the read form of a binding, its exact reach upgraded
+    /// `Weak → Rc` so the value's whole reach travels owned. Walks the same chain as every other
+    /// value ladder, so shadowing agrees; the lift happens at the **binding** scope, whose arena
+    /// hosts the description. The non-`Bound` dispositions mirror the bare resolution.
+    pub(crate) fn resolve_value_delivered(
+        &self,
+        name: &str,
+        chain: Option<&LexicalFrame>,
+    ) -> Option<NameLookup<DeliveredCarried>> {
         self.walk_chain(|scope| {
             scope
                 .bindings()
                 .lookup_value(name, scope.binding_cutoff(chain))
+                .map(|hit| hit.map(|sealed| scope.lift_resident(sealed)))
         })
     }
 
-    /// Carrier-returning twin of [`Self::resolve_with_chain`]: resolve `name` to the bound value
-    /// wrapped in a [`Witnessed`] carrier naming its reach, so an object-value read embeds a carrier
-    /// by construction instead of reconstructing the reach from the value. Walks the same `outer`
-    /// chain, but at the **binding** scope wraps the value via [`Self::resident_value_carrier`] — the
-    /// witness is that scope's home frame, not the reading scope's. The non-`Bound` dispositions mirror
-    /// [`Self::resolve_with_chain`].
-    pub(crate) fn resolve_value_carrier(
+    /// [`Self::resolve_value_delivered`] unfiltered, with a still-finalizing placeholder collapsed
+    /// to `None` — the fold-operand form of a binding read.
+    pub(crate) fn lookup_value_delivered(&self, name: &str) -> Option<DeliveredCarried> {
+        self.resolve_value_delivered(name, None)
+            .and_then(NameLookup::bound)
+    }
+
+    /// Test affordance: [`Self::lookup`], panicking when `name` is unbound — the assertion-suite
+    /// form for a binding the test just wrote and expects to find.
+    #[cfg(test)]
+    pub(crate) fn expect_value(&self, name: &str) -> &'a KObject<'a> {
+        self.lookup(name)
+            .unwrap_or_else(|| panic!("expected `{name}` to be bound"))
+    }
+
+    /// Test affordance: probe **this scope's own** `data` at an explicit visibility `cutoff` and
+    /// adopt the hit — the per-scope step [`Self::resolve_value_delivered`] composes into a chain
+    /// walk, exposed for the suites that assert on cutoff gating directly rather than through a
+    /// [`LexicalFrame`].
+    #[cfg(test)]
+    pub(crate) fn lookup_value_here_for_test(
         &self,
         name: &str,
-        chain: Option<&LexicalFrame>,
-    ) -> Option<NameLookup<(Witnessed<CarriedFamily, CarrierWitness>, FramePins)>> {
-        self.walk_chain(|scope| {
-            scope
-                .bindings()
-                .lookup_value_carrier(name, scope.binding_cutoff(chain))
-                .map(|hit| {
-                    // Carry a clone of the binding entry's owned foreign pins alongside the
-                    // reference-only carrier, so a reader that seals or Done-arms it threads the
-                    // reach's ownership rather than re-deriving it from the description.
-                    hit.map(|value| {
-                        (
-                            scope.resident_value_carrier(value.obj, value.stored),
-                            value.pins,
-                        )
-                    })
-                })
+        cutoff: Option<usize>,
+    ) -> Option<NameLookup<&'a KObject<'a>>> {
+        self.bindings().lookup_value(name, cutoff).map(|hit| {
+            hit.map(|sealed| {
+                let delivered = self.lift_resident(sealed);
+                self.adopt_sealed(&delivered).object()
+            })
         })
-    }
-
-    /// Resolve `name` down the outer chain like [`Self::lookup`], and seal the hit as a resident
-    /// delivered operand of its declaring scope — the fold-operand form of a binding read, its
-    /// stored reach and home bit riding the envelope. Walks the same chain as
-    /// [`Self::resolve_with_chain`] (the value-side `lookup_value_carrier` twin of `lookup_value`,
-    /// so shadowing agrees with `lookup`), wraps the hit at its **binding** scope via
-    /// [`Self::resident_value_carrier`], then seals it into a [`DeliveredCarried`] envelope pinned by
-    /// that scope's home frame. A still-finalizing placeholder collapses to `None`, exactly as
-    /// [`Self::lookup`].
-    pub(crate) fn lookup_value_delivered(&self, name: &str) -> Option<DeliveredCarried> {
-        self.walk_chain(|scope| {
-            scope
-                .bindings()
-                .lookup_value_carrier(name, scope.binding_cutoff(None))
-                .map(|hit| {
-                    hit.map(|value| {
-                        scope.seal_resident_delivered(
-                            scope.resident_value_carrier(value.obj, value.stored),
-                            value.pins,
-                        )
-                    })
-                })
-        })
-        .and_then(NameLookup::bound)
     }
 
     /// Resolve a *finalized* type, unfiltered. The `Option<KType>` adapter over
@@ -219,12 +218,5 @@ impl<'a> Scope<'a> {
                 .bindings()
                 .lookup_operator_group(probe, scope.binding_cutoff(chain))
         })
-    }
-
-    pub fn lookup_kfunction(&self, name: &str) -> Option<&'a KFunction<'a>> {
-        match self.lookup(name)? {
-            KObject::KFunction(f) => Some(*f),
-            _ => None,
-        }
     }
 }

@@ -2,9 +2,7 @@
 
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction};
-use crate::machine::core::Reached;
-use crate::machine::core::StoredReach;
-use crate::machine::core::{run_root_storage, FramePins, FrameStorageExt};
+use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
@@ -20,11 +18,7 @@ fn add_during_active_data_borrow_queues_and_drains() {
     let scope = run_root_bare(&region);
     let pre = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_value(
-            "pre".to_string(),
-            Reached::for_test(pre, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("pre".to_string(), pre, BindingIndex::BUILTIN)
         .unwrap();
 
     let new_entry = region.brand().alloc_object(KObject::Number(2.0));
@@ -32,20 +26,13 @@ fn add_during_active_data_borrow_queues_and_drains() {
         let snapshot = scope.bindings().data();
         assert!(snapshot.contains_key("pre"));
         scope
-            .bind_value(
-                "during".to_string(),
-                Reached::for_test(new_entry, StoredReach::empty(), FramePins::empty()),
-                BindingIndex::BUILTIN,
-            )
+            .bind_resident_for_test("during".to_string(), new_entry, BindingIndex::BUILTIN)
             .unwrap();
         assert!(!snapshot.contains_key("during"));
     }
     assert!(scope.bindings().data().get("during").is_none());
     scope.drain_pending();
-    let after = scope.bindings().data();
-    assert!(
-        matches!(after.get("during").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 2.0)
-    );
+    assert!(matches!(scope.lookup("during"), Some(KObject::Number(n)) if *n == 2.0));
 }
 
 /// `PendingQueue::drain`'s `debug_assert!` must fire when a deferred `Value` write
@@ -65,10 +52,6 @@ fn drain_debug_asserts_on_invariant_violation() {
         false,
         &types,
     ));
-    let obj1 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(kfn1), &types)
-        .expect("f was just allocated into region\'s own region");
     let kfn2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -76,22 +59,17 @@ fn drain_debug_asserts_on_invariant_violation() {
         false,
         &types,
     ));
-    let obj2 = region
+    let obj1 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(kfn2), &types)
-        .expect("f was just allocated into region\'s own region");
-
+        .alloc_object_checked(KObject::KFunction(kfn1), &types)
+        .expect("f was just allocated into region's own region");
     let snapshot = scope.bindings().data();
     scope
-        .bind_value(
-            "a".to_string(),
-            Reached::for_test(obj1, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("a".to_string(), obj1, BindingIndex::BUILTIN)
         .unwrap();
     drop(snapshot);
     scope
-        .register_function("b".to_string(), kfn2, obj2, BindingIndex::BUILTIN)
+        .register_function("b".to_string(), kfn2, BindingIndex::BUILTIN)
         .unwrap();
     scope.drain_pending();
 }
@@ -111,15 +89,11 @@ fn register_function_defers_and_drains_through_function_arm() {
         false,
         &types,
     ));
-    let obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(kfn), &types)
-        .expect("f was just allocated into region\'s own region");
     let key = kfn.signature.untyped_key();
     {
         let snapshot = scope.bindings().functions();
         scope
-            .register_function("g".to_string(), kfn, obj, BindingIndex::BUILTIN)
+            .register_function("g".to_string(), kfn, BindingIndex::BUILTIN)
             .unwrap();
         assert!(snapshot.get(&key).map(|b| b.is_empty()).unwrap_or(true));
     }
@@ -140,19 +114,13 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
 
     let snapshot = scope.bindings().data();
     scope
-        .bind_value(
-            "v".to_string(),
-            Reached::for_test(obj, StoredReach::empty(), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("v".to_string(), obj, BindingIndex::BUILTIN)
         .unwrap();
     scope.drain_pending();
     assert!(!snapshot.contains_key("v"));
     drop(snapshot);
     scope.drain_pending();
-    assert!(
-        matches!(scope.bindings().data().get("v").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 7.0)
-    );
+    assert!(matches!(scope.lookup("v"), Some(KObject::Number(n)) if *n == 7.0));
 }
 
 /// `Function`-arm `Conflict` re-queue — same shape as the `Value` variant, but the
@@ -169,15 +137,11 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
         false,
         &types,
     ));
-    let obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(kfn), &types)
-        .expect("f was just allocated into region\'s own region");
     let key = kfn.signature.untyped_key();
 
     let snapshot = scope.bindings().functions();
     scope
-        .register_function("g".to_string(), kfn, obj, BindingIndex::BUILTIN)
+        .register_function("g".to_string(), kfn, BindingIndex::BUILTIN)
         .unwrap();
     scope.drain_pending();
     assert!(snapshot.get(&key).map(|b| b.is_empty()).unwrap_or(true));
@@ -220,10 +184,6 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         false,
         &types,
     ));
-    let obj1 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(kfn1), &types)
-        .expect("f was just allocated into region\'s own region");
     let kfn2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -231,18 +191,13 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         false,
         &types,
     ));
-    let obj2 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(kfn2), &types)
-        .expect("f was just allocated into region\'s own region");
-
     let snapshot = scope.bindings().functions();
     scope
-        .register_function("a".to_string(), kfn1, obj1, BindingIndex::BUILTIN)
+        .register_function("a".to_string(), kfn1, BindingIndex::BUILTIN)
         .unwrap();
     drop(snapshot);
     scope
-        .register_function("b".to_string(), kfn2, obj2, BindingIndex::BUILTIN)
+        .register_function("b".to_string(), kfn2, BindingIndex::BUILTIN)
         .unwrap();
     scope.drain_pending();
 }

@@ -1,6 +1,4 @@
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::Reached;
-use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::execute::dispatch::{
     producer_disposition, resolve_name_part, ProducerDisposition,
@@ -18,15 +16,7 @@ fn resolve_name_part_identifier_resolved() {
     let scope = test_run.scope;
     let bound = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value(
-            "x".to_string(),
-            Reached::for_test(
-                bound,
-                StoredReach::for_test(None, false),
-                crate::machine::core::FramePins::empty(),
-            ),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("x".to_string(), bound, BindingIndex::BUILTIN)
         .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());
     match resolve_name_part(
@@ -36,7 +26,10 @@ fn resolve_name_part_identifier_resolved() {
         None,
         &test_run.types,
     ) {
-        Ok(NameOutcome::Resolved(Carried::Object(KObject::Number(n)))) => assert_eq!(*n, 7.0),
+        Ok(NameOutcome::Resolved(delivered)) => assert!(
+            matches!(delivered.open_at().value(), Carried::Object(KObject::Number(n)) if *n == 7.0),
+            "expected NameOutcome::Resolved(Number(7.0))",
+        ),
         _ => panic!("expected NameOutcome::Resolved(Number)"),
     }
 }
@@ -54,7 +47,8 @@ fn resolve_name_part_type_resolved() {
         None,
         &test_run.types,
     ) {
-        Ok(NameOutcome::Resolved(Carried::Type(KType::NUMBER))) => {}
+        Ok(NameOutcome::Resolved(ref delivered))
+            if matches!(delivered.open_at().value(), Carried::Type(KType::NUMBER)) => {}
         other => {
             let kind = match other {
                 Ok(NameOutcome::Resolved(_)) => "Resolved(other)",

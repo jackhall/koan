@@ -36,15 +36,23 @@ use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::machine::core::arena::{FramePins, FrameReach};
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::core::RunId;
-use crate::machine::model::KObject;
+use crate::machine::model::CarriedFamily;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::TypeIdentifier;
 use crate::machine::model::{KType, UntypedKey};
+use crate::machine::CarrierWitness;
+use crate::witnessed::Sealed;
 
 use super::kerror::{KError, KErrorKind};
+
+/// A value binding's dormant carrier: the bound value fused to the exact reach description minted
+/// for it at bind time. The entry owns no pins — the binding scope's **region** owns the one deduped
+/// union bundle that keeps every reached region alive for the region's life, so a read hands out a
+/// bit-copy of this seal with no refcount traffic and the value can only be re-anchored under a pin
+/// ([`Sealed::open_at`], the [`Delivered`](crate::machine::DeliveredCarried) lift).
+pub type SealedValue = Sealed<CarriedFamily, CarrierWitness>;
 
 pub use crate::machine::model::BindKind;
 
@@ -83,174 +91,53 @@ impl<T> NameLookup<T> {
     }
 }
 
-/// A binding's stored reach plus the one-bit answer to "does the bound value borrow into **this**
-/// scope's own region?" ([`Self::borrows_into_home`]). `foreign` is a reference to a set hosted in
-/// the binding scope's own region arena — minted at bind time via
-/// [`ReachDescription::mint`](crate::witnessed::ReachDescription::mint), never owned
-/// here — and exact: every region the value borrows into is a member, the scope's own included.
-/// Membership is `Weak`, so naming the scope's own home frame closes no
-/// `frame → region → scope → bindings → frame` cycle; the strong `Rc` on that frame is what the
-/// mint's self rule strips from the owned bundle. `None` is the faithful encoding of the empty set
-/// (a region-pure value pins nothing), not a missing value.
+/// A value binding entry: its lexical [`BindingIndex`], the dormant [`SealedValue`] carrier fusing
+/// the bound value with the exact reach description minted for it, and — while the `functions`
+/// mirror still stores a bare reference — the [`KFunction`] that value wraps, if any.
 ///
-/// [`Self::empty`] defaults the bit to `false`: a value delivered by a region-pure or foreign
-/// carrier borrows into no home region, which is every builtin registration and every test bind.
-/// Only a production bind whose delivered carrier's reach covers the binding scope's region sets it
-/// `true`.
-#[derive(Clone, Copy)]
-pub struct StoredReach<'a> {
-    pub(in crate::machine::core) foreign: Option<&'a FrameReach>,
-    pub(in crate::machine::core) borrows_into_home: bool,
-}
-
-impl<'a> StoredReach<'a> {
-    /// The empty reach that borrows into no home — the region-pure / no-carrier default.
-    ///
-    /// Deliberately **not** a [`Default`] impl, and deliberately not visible outside
-    /// `crate::machine::core`. A `Default` would be a public trait method on a public struct, which
-    /// hands the whole crate the power to mint a reach out of thin air and pair it with a value it
-    /// was never derived from — the exact forgery the reach-token discipline exists to prevent. The
-    /// only reaches code outside `core` can hold are ones a fused door derived for a specific value
-    /// (a [`ValueHit`], a delivered carrier's bind), so it cannot assert coverage it has no evidence
-    /// for. Keep it that way: a `#[derive(Default)]` here silently reopens that door.
-    pub(in crate::machine::core) fn empty() -> Self {
-        StoredReach {
-            foreign: None,
-            borrows_into_home: false,
-        }
-    }
-
-    /// Narrow test affordance: assemble a token from explicit parts for in-crate `mod tests` only.
-    #[cfg(test)]
-    pub(crate) fn for_test(foreign: Option<&'a FrameReach>, borrows_into_home: bool) -> Self {
-        StoredReach {
-            foreign,
-            borrows_into_home,
-        }
-    }
-}
-
-/// A stored value fused to the reach evidence derived *for it*: the value `T`, its `Copy`
-/// [`StoredReach`] claim (exact reach reference + home-borrow bit), and the owned
-/// [`FramePins`] bundle that pins every region the value reaches. The three travel as one unit, so a
-/// binding entry can never pair a value with a claim or bundle derived for a *different* value — the
-/// re-pairing the reach-token discipline exists to prevent.
-///
-/// Construction is confined to `crate::machine::core`: the bind doors ([`Scope::bind_delivered`] and
-/// its siblings) fuse a freshly allocated value with the reach its mint verb derived, and `Clone`
-/// preserves that pairing rather than reassembling it. There is no field-wise constructor outside
-/// core, and deliberately no `Default` — a value + claim + bundle a caller happens to hold side by
-/// side cannot be assembled into one. The sibling `fused-reach-alloc-doors` item extends the same
-/// vehicle to the alloc-door audit signatures, so the entry is not re-surgeried.
-///
-/// [`Scope::bind_delivered`]: crate::machine::core::Scope::bind_delivered
-#[derive(Clone)]
-pub struct Reached<'a, T> {
-    value: T,
-    claim: StoredReach<'a>,
-    pins: FramePins,
-}
-
-impl<'a, T> Reached<'a, T> {
-    /// Fuse a value with the reach evidence a mint verb derived for it — the derivation-site
-    /// constructor. Confined to `crate::machine::core` (the bind doors), so no caller can assemble a
-    /// pair from a value and a reach it holds side by side.
-    pub(in crate::machine::core) fn mint(
-        value: T,
-        claim: StoredReach<'a>,
-        pins: FramePins,
-    ) -> Self {
-        Reached { value, claim, pins }
-    }
-
-    /// The fused-empty pair for a value that reaches nothing foreign — a bare-`FN` registration's
-    /// unused entry (empty claim, empty bundle). Confined like [`Self::mint`].
-    pub(in crate::machine::core) fn empty(value: T) -> Self {
-        Reached {
-            value,
-            claim: StoredReach::empty(),
-            pins: FramePins::empty(),
-        }
-    }
-
-    /// Narrow test affordance mirroring [`StoredReach::for_test`]: fuse explicit parts for tests
-    /// only. `#[cfg(test)]`-gated so it is not a production back door around the derivation-site
-    /// confinement (the route a `Default` impl would silently reopen).
-    #[cfg(test)]
-    pub(crate) fn for_test(value: T, claim: StoredReach<'a>, pins: FramePins) -> Self {
-        Reached { value, claim, pins }
-    }
-
-    /// Consume the fused pair into its owned parts — the value, its reach claim, and its owning
-    /// pins. For a fused door's caller that needs the triple (a bind door forwarding its resident
-    /// reference and stored reach onward). Reading is unrestricted — only *constructing* a pair is
-    /// confined.
-    pub(crate) fn into_parts(self) -> (T, StoredReach<'a>, FramePins) {
-        (self.value, self.claim, self.pins)
-    }
-}
-
-#[cfg_attr(not(feature = "ascription"), allow(dead_code))]
-impl<'a, T: Copy> Reached<'a, T> {
-    /// The stored value (a `Copy` handle — `&KObject` for the binding entry). Reading the fused
-    /// value is unrestricted — only *constructing* a pair is confined.
-    pub(crate) fn value(&self) -> T {
-        self.value
-    }
-
-    /// The fused reach claim (a `Copy` witness), for a reader that seals a terminal carrier from the
-    /// resident value under the same reach the store audited it against.
-    pub(crate) fn claim(&self) -> StoredReach<'a> {
-        self.claim
-    }
-}
-
-/// A value binding entry: its lexical [`BindingIndex`] plus the [`Reached`] vehicle fusing the bound
-/// value, its `Copy` [`StoredReach`] claim (exact reach reference + home-borrow bit),
-/// and the owned [`FramePins`] bundle that pins every region the value reaches — the bundle released
-/// by ordinary `Drop` at the entry's death (scope/region death, evacuation). The claim is handed out
-/// on reads (refcount-free); the pins stay owned in the fused vehicle, so a read is enveloped under
-/// the entry's own liveness (holder rule 3). Fusing the three keeps the write door from ever pairing
+/// The entry owns **nothing**: liveness for every region the value reaches lives in the binding
+/// scope's region-owned union bundle
+/// ([`Scope::retain_reach`](crate::machine::core::Scope::retain_reach)), folded in at bind time and
+/// dropped whole at region death. Bindings are bind-once and an entry never dies before its scope,
+/// so region death and entry death are the same schedule — the entry is `Copy`-cheap to read out
+/// and carries no `Drop`. Fusing value and reach in the seal keeps the write door from ever pairing
 /// a value with a reach derived for a different value.
-type DataEntry<'a> = (BindingIndex, Reached<'a, &'a KObject<'a>>);
+pub(crate) struct DataEntry<'a> {
+    index: BindingIndex,
+    sealed: SealedValue,
+    /// The `KFunction` the bound value wraps, or `None`. Read by the function-mirror write path and
+    /// the overload-add rebind gate, which classify the entry without re-anchoring its value; it
+    /// retires with the `functions` table's own bare reference in the functions-table phase.
+    function: Option<&'a KFunction<'a>>,
+}
+
+impl<'a> DataEntry<'a> {
+    /// A bit-copy of the entry — the dormant seal duplicated (value bit-copy + reference-only
+    /// witness clone, no refcount traffic) beside the `Copy` index and mirror reference. Every read
+    /// hands one of these out so no caller holds the `data` `RefCell` borrow across a carrier build.
+    fn duplicate(&self) -> Self {
+        DataEntry {
+            index: self.index,
+            sealed: self.sealed.duplicate(),
+            function: self.function,
+        }
+    }
+}
 
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature
 /// member access. Produced by [`crate::machine::core::Scope::lookup_member`], which checks the
 /// module-own value side then the type side in one call. The `data`/`types` cross-kind exclusion
 /// keeps the two arms from ever both matching within a scope.
-pub enum MemberResolution<'a> {
-    Value {
-        obj: &'a KObject<'a>,
-        /// The member's stored reach (the exact reach + the home-borrow bit), copied
-        /// whole off the module's own `data` entry — so an ATTR read replays the same opaque token
-        /// into a resident carrier rather than re-asserting single-frame co-location.
-        stored: StoredReach<'a>,
-        /// A clone of the member entry's owned foreign pin bundle — threaded into a delivery
-        /// envelope when the ATTR read's carrier escapes to a new holder (the resident seal).
-        pins: FramePins,
-    },
+pub enum MemberResolution {
+    /// The member's dormant carrier, duplicated off the module's own `data` entry — so an ATTR read
+    /// replays the *stored* claim (value and reach as one unit) rather than re-asserting
+    /// single-frame co-location.
+    Value(SealedValue),
     Type {
         /// The member type as a `Copy` handle — interned in the run frame's registry, so an ATTR
         /// type read copies the handle with no reach to replay.
         kt: KType,
     },
-}
-
-/// The value-side reach-carrying payload of a `NameLookup<ValueHit>`: the bound value plus the
-/// binding's exact reach, copied out (a `&'a FrameReach` reference, not a clone) so
-/// the read wrapper does not hold the `data` `RefCell` borrow across the carrier build. Produced by
-/// [`Bindings::lookup_value_carrier`] so a name read builds a self-contained witness from the
-/// stored reach.
-pub struct ValueHit<'a> {
-    pub obj: &'a KObject<'a>,
-    /// The binding's stored reach (the exact reach + the home-borrow bit), copied whole
-    /// off the `data` entry so the read wrapper does not hold the `RefCell` borrow across the
-    /// carrier build.
-    pub stored: StoredReach<'a>,
-    /// A clone of the binding entry's **owned** foreign pin bundle — the ownership the read threads
-    /// into a delivery envelope when the carrier escapes to a new holder (the resident seal), so the
-    /// reached regions are owned end-to-end rather than re-derived from the description.
-    pub pins: FramePins,
 }
 
 /// Outcome of a per-scope `lookup_function` call. Visibility (per
@@ -341,13 +228,13 @@ pub struct Bindings<'a> {
     /// read copies the handle under the home-frame pin alone, and the same handle names the same
     /// type in every region.
     types: RefCell<HashMap<String, (KType, DeclarationSite)>>,
-    /// Each value entry stores its bound value, its lexical [`BindingIndex`], and its **reach** —
-    /// the exact [`FrameReach`] the value borrows into, captured at bind time from the
-    /// delivered carrier. A carrier-oriented read ([`Self::lookup_value_carrier`]) hands the reach
-    /// back so the read wraps the value in a self-contained witness built from its stored reach,
-    /// rather than re-asserting single-frame co-location. Members are `Weak`, and the mint's self
-    /// rule keeps the region's own home frame `Rc` out of the owned bundle — either would close a
-    /// `frame → region → scope → bindings → frame` strong cycle and leak the region.
+    /// Each value entry stores its bound value fused to its exact reach in one dormant
+    /// [`SealedValue`], plus its lexical [`BindingIndex`]. Reads hand out a bit-copy of the seal
+    /// ([`Self::lookup_value`]) and re-anchor the value only under a pin, so a read replays the
+    /// stored claim rather than re-asserting single-frame co-location. Description members are
+    /// `Weak`, and the owning pins live in the region's union bundle rather than here — either a
+    /// strong member or a per-entry `Rc` on the scope's own frame would close a
+    /// `frame → region → scope → bindings → frame` cycle and leak the region.
     data: RefCell<HashMap<String, DataEntry<'a>>>,
     functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,
     placeholders: RefCell<HashMap<String, (NodeId, BindingIndex, BindKind)>>,
@@ -416,19 +303,28 @@ impl<'a> Bindings<'a> {
         &self,
         name: &str,
         chain_cutoff: Option<usize>,
-    ) -> Option<NameLookup<&'a KObject<'a>>> {
-        if let Some((idx, reached)) = self.data.borrow().get(name) {
-            if Self::visible(*idx, chain_cutoff) {
-                return Some(NameLookup::Bound(reached.value));
+    ) -> Option<NameLookup<SealedValue>> {
+        if let Some(entry) = self.data.borrow().get(name) {
+            if Self::visible(entry.index, chain_cutoff) {
+                return Some(NameLookup::Bound(entry.sealed.duplicate()));
             }
         }
         self.value_placeholder(name, chain_cutoff)
             .map(NameLookup::Parked)
     }
 
-    /// The value-side placeholder producer for `name`, or `None` — shared by
-    /// [`Self::lookup_value`] and [`Self::lookup_value_carrier`], which differ only in the
-    /// `data` arm.
+    /// Whether a **visible** value entry named `name` exists at this scope — the presence-only
+    /// probe, for a write gate that must not read the bound value (the USING-window collision
+    /// check). A still-finalizing placeholder is not an entry and reads `false`.
+    pub fn has_value(&self, name: &str, chain_cutoff: Option<usize>) -> bool {
+        self.data
+            .borrow()
+            .get(name)
+            .is_some_and(|entry| Self::visible(entry.index, chain_cutoff))
+    }
+
+    /// The value-side placeholder producer for `name`, or `None` — the placeholder arm
+    /// [`Self::lookup_value`] falls through to.
     fn value_placeholder(&self, name: &str, chain_cutoff: Option<usize>) -> Option<NodeId> {
         if let Some((id, idx, kind)) = self.placeholders.borrow().get(name).copied() {
             if kind == BindKind::Value && Self::visible(idx, chain_cutoff) {
@@ -476,14 +372,10 @@ impl<'a> Bindings<'a> {
         &self,
         name: &str,
         chain_cutoff: Option<usize>,
-    ) -> Option<MemberResolution<'a>> {
-        if let Some((idx, reached)) = self.data.borrow().get(name) {
-            if Self::visible(*idx, chain_cutoff) {
-                return Some(MemberResolution::Value {
-                    obj: reached.value,
-                    stored: reached.claim,
-                    pins: reached.pins.clone(),
-                });
+    ) -> Option<MemberResolution> {
+        if let Some(entry) = self.data.borrow().get(name) {
+            if Self::visible(entry.index, chain_cutoff) {
+                return Some(MemberResolution::Value(entry.sealed.duplicate()));
             }
         }
         if let Some((kt, site)) = self.types.borrow().get(name) {
@@ -492,27 +384,6 @@ impl<'a> Bindings<'a> {
             }
         }
         None
-    }
-
-    /// Carrier-oriented value lookup — the reach-carrying twin of [`Self::lookup_value`]. A `data`
-    /// hit returns [`NameLookup::Bound`] with the binding's stored reach (cloned out); otherwise a
-    /// visible value placeholder or a miss, mirroring `lookup_value`'s data-then-placeholder order.
-    pub fn lookup_value_carrier(
-        &self,
-        name: &str,
-        chain_cutoff: Option<usize>,
-    ) -> Option<NameLookup<ValueHit<'a>>> {
-        if let Some((idx, reached)) = self.data.borrow().get(name) {
-            if Self::visible(*idx, chain_cutoff) {
-                return Some(NameLookup::Bound(ValueHit {
-                    obj: reached.value,
-                    stored: reached.claim,
-                    pins: reached.pins.clone(),
-                }));
-            }
-        }
-        self.value_placeholder(name, chain_cutoff)
-            .map(NameLookup::Parked)
     }
 
     /// The producer `NodeId` of a still-finalizing **type** binder named `name`, read straight
@@ -614,25 +485,14 @@ impl<'a> Bindings<'a> {
         Ok(ApplyOutcome::Applied)
     }
 
-    /// Every value binding entry's **owned** foreign pin bundle, cloned for the seal-time
-    /// module-reach union. Type entries carry no reach — a bound `KType` is owned data — so `data`
-    /// is the whole union. The clones are owned (not borrowed from the `RefCell`), so they outlive
-    /// the returned `Vec`; the union folds their strong members, never a description's `Weak`.
-    pub(crate) fn entry_bundles(&self) -> Vec<FramePins> {
-        self.data
-            .borrow()
-            .values()
-            .map(|(_, reached)| reached.pins.clone())
-            .collect()
-    }
-
-    /// Snapshot every `(name, value)` pair in `data`, ignoring visibility.
-    /// For chain-gated single-name reads use [`Self::lookup_value`].
-    pub fn iter_data(&self) -> Vec<(String, &'a KObject<'a>)> {
+    /// Snapshot every `(name, dormant carrier)` pair in `data`, ignoring visibility. Each seal is a
+    /// bit-copy; the caller re-anchors what it needs under its own pin. For chain-gated single-name
+    /// reads use [`Self::lookup_value`].
+    pub fn iter_data(&self) -> Vec<(String, SealedValue)> {
         self.data
             .borrow()
             .iter()
-            .map(|(name, (_, reached))| (name.clone(), reached.value))
+            .map(|(name, entry)| (name.clone(), entry.sealed.duplicate()))
             .collect()
     }
 
@@ -699,7 +559,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn data(&self) -> Ref<'_, HashMap<String, DataEntry<'a>>> {
+    pub(crate) fn data(&self) -> Ref<'_, HashMap<String, DataEntry<'a>>> {
         self.data.borrow()
     }
 
@@ -723,15 +583,6 @@ impl<'a> Bindings<'a> {
     #[cfg(test)]
     pub fn types(&self) -> Ref<'_, HashMap<String, (KType, DeclarationSite)>> {
         self.types.borrow()
-    }
-
-    #[cfg(test)]
-    pub fn expect_value(&self, name: &str) -> &'a KObject<'a> {
-        self.data
-            .borrow()
-            .get(name)
-            .map(|(_, reached)| reached.value)
-            .unwrap_or_else(|| panic!("expected bindings.data[{name:?}] to be present"))
     }
 
     #[cfg(test)]
@@ -765,18 +616,20 @@ impl<'a> Bindings<'a> {
     /// When the bound value wraps a `KFunction` it is also mirrored into
     /// `functions[signature.untyped_key()]` so dispatch finds it (`LET f = (FN ...)`).
     ///
-    /// The value, its reach claim, and its owned pins arrive fused in one [`Reached`] — the write
-    /// door cannot pair a value with a reach derived for a different value.
+    /// The value and its exact reach arrive fused in one [`SealedValue`] — the write door cannot
+    /// pair a value with a reach derived for a different value. `function` is the `KFunction` that
+    /// value wraps, classified by the bind door that still holds it resident, so the mirror write
+    /// needs no re-anchor of the sealed value.
     ///
     /// `Conflict` means borrow contention (caller queues); `Err` is semantic rejection.
     pub fn try_bind_value(
         &self,
         name: &str,
         index: BindingIndex,
-        reached: Reached<'a, &'a KObject<'a>>,
+        sealed: SealedValue,
+        function: Option<&'a KFunction<'a>>,
     ) -> Result<ApplyOutcome, KError> {
-        let fn_part = reached.value.as_function();
-        self.try_apply(name, fn_part, true, index, reached)
+        self.try_apply(name, function, index, Some(sealed))
     }
 
     /// Bare-`FN` overload registration: adds `fn_ref` to the `functions`
@@ -786,18 +639,16 @@ impl<'a> Bindings<'a> {
     ///
     /// Per-overload `index` tagging matters because overloads sharing a bucket
     /// can sit at different lexical positions (the dispatch picker filters
-    /// per-overload). `obj` is unused on the write side but keeps the call
-    /// site uniform with [`Bindings::try_bind_value`].
+    /// per-overload).
     pub fn try_register_function(
         &self,
         name: &str,
         fn_ref: &'a KFunction<'a>,
-        obj: &'a KObject<'a>,
         index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
-        // A bare-`FN` registration writes `functions` only, not `data`, so its entry never lands:
-        // the fused-empty `Reached` carries no reach and the empty bundle pins nothing.
-        self.try_apply(name, Some(fn_ref), false, index, Reached::empty(obj))
+        // A bare-`FN` registration writes `functions` only, not `data`: no sealed value, so no
+        // entry lands and nothing is minted or retained.
+        self.try_apply(name, Some(fn_ref), index, None)
     }
 
     /// Register `name` → `kt` in `types`. Errors `Rebind` if already present in `types`, or
@@ -883,8 +734,8 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
         kind: BindKind,
     ) -> Result<(), KError> {
-        if let Some((_, reached)) = self.data.borrow().get(&name) {
-            if matches!(reached.value, KObject::KFunction(_)) {
+        if let Some(entry) = self.data.borrow().get(&name) {
+            if entry.function.is_some() {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
@@ -932,18 +783,19 @@ impl<'a> Bindings<'a> {
     /// `src.functions` separately. Panics on `Conflict` — a fresh `Bindings`
     /// should never hit a borrow conflict against itself.
     pub fn try_bulk_install_from(&self, src: &Bindings<'a>) -> Result<(), KError> {
-        // Clone each entry's owning pin bundle into the snapshot: the replay installs an independent
-        // copy of the source's reach, so the target owns its members for its own entry's life while
-        // the source keeps its own.
-        let snapshot: Vec<(String, BindingIndex, Reached<'a, &'a KObject<'a>>)> = src
+        // Duplicate each entry into the snapshot: the seal is a bit-copy naming the source's own
+        // minted description, so the replayed entry replays that same claim. The reached regions
+        // stay owned by the *source* scope's region union — the replay target's own region must
+        // already outlive it (a bulk install is same-run re-entrant ascription).
+        let snapshot: Vec<(String, DataEntry<'a>)> = src
             .data
             .borrow()
             .iter()
-            .map(|(k, (idx, reached))| (k.clone(), *idx, reached.clone()))
+            .map(|(k, entry)| (k.clone(), entry.duplicate()))
             .collect();
-        for (name, index, reached) in snapshot {
-            let fn_part = reached.value.as_function();
-            match self.try_apply(&name, fn_part, true, index, reached)? {
+        for (name, entry) in snapshot {
+            let index = entry.index;
+            match self.try_apply(&name, entry.function, index, Some(entry.sealed))? {
                 ApplyOutcome::Applied => {}
                 ApplyOutcome::Conflict => {
                     unreachable!(
@@ -1020,24 +872,21 @@ impl<'a> Bindings<'a> {
     /// borrow otherwise keeps non-fn binds deadlock-free under callers that
     /// hold a live outer `functions` borrow.
     ///
-    /// `write_data`: `true` for value-carrying paths (LET, LET-binds-FN);
-    /// `false` for bare-`FN` (dispatch-only, no `data` insert). The only
-    /// combinations that occur are `(None, true)`, `(Some, true)`, `(Some, false)`.
+    /// `sealed`: `Some` for value-carrying paths (LET, LET-binds-FN) — the fused value+reach the
+    /// entry stores; `None` for bare-`FN` (dispatch-only, no `data` insert). The only combinations
+    /// that occur are `(None, Some)`, `(Some, Some)`, `(Some, None)`.
     ///
     /// Dedupe when `fn_part.is_some()`: `ptr::eq` is a silent-success
     /// short-circuit (preserves intentional aliases like `LET g = (f)`);
     /// `indistinguishable_from` raises `DuplicateOverload`.
-    // Each argument names one irreducible input to the shared value-write path: the fused
-    // value+reach+pins evidence ([`Reached`]), the function mirror, the write-data gate, and the
-    // lexical position. The value is read out of `reached` where the insert and the mirror need it.
     fn try_apply(
         &self,
         name: &str,
         fn_part: Option<&'a KFunction<'a>>,
-        write_data: bool,
         index: BindingIndex,
-        reached: Reached<'a, &'a KObject<'a>>,
+        sealed: Option<SealedValue>,
     ) -> Result<ApplyOutcome, KError> {
+        let write_data = sealed.is_some();
         // Cross-kind exclusion: a value name may not collide with a committed type — the
         // `data`/`types` partition is structural, not convention. Probe `types` first (borrow
         // order `types → functions → data`); a bare-`FN` registration (`write_data == false`)
@@ -1076,7 +925,7 @@ impl<'a> Bindings<'a> {
         // `fn_part.is_some()` + existing `KFunction` falls through to bucket dedupe
         // (overload-add path); everything else is a rebind error.
         if let Some(data) = data.as_ref() {
-            if let Some((_, existing)) = data.get(name) {
+            if let Some(existing) = data.get(name) {
                 match fn_part {
                     None => {
                         return Err(KError::new(KErrorKind::Rebind {
@@ -1084,7 +933,7 @@ impl<'a> Bindings<'a> {
                         }))
                     }
                     Some(_) => {
-                        if !matches!(existing.value, KObject::KFunction(_)) {
+                        if existing.function.is_none() {
                             return Err(KError::new(KErrorKind::Rebind {
                                 name: name.to_string(),
                             }));
@@ -1115,8 +964,15 @@ impl<'a> Bindings<'a> {
             }
             cleared_overload_bucket = Some(key);
         }
-        if let Some(data) = data.as_mut() {
-            data.insert(name.to_string(), (index, reached));
+        if let (Some(data), Some(sealed)) = (data.as_mut(), sealed) {
+            data.insert(
+                name.to_string(),
+                DataEntry {
+                    index,
+                    sealed,
+                    function: fn_part,
+                },
+            );
         }
         drop(data);
         drop(functions_handle);

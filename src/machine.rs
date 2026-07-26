@@ -20,7 +20,7 @@ pub(crate) use core::{
     require_kexpression, require_ktype, split_body_statements, Action, ActionFn, AwaitContinue,
     BlockEntry, BodyCtx, CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx,
     FoldingBrand, FramePlacement, FrameStorageExt, OwnedDispatch, ReturnContract, StepAllocator,
-    StoredReach, TailContract,
+    TailContract,
 };
 pub use core::{
     run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, Scope, ScopeId,

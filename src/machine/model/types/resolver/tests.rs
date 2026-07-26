@@ -1,9 +1,8 @@
 use super::*;
 use crate::builtins::test_support::{mock_declaration_site, TestRun};
-use crate::machine::core::Reached;
-use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::ast::TypeIdentifier;
+use crate::machine::model::values::Carried;
 use crate::machine::model::Record;
 use crate::machine::{BindingIndex, DeclarationSite};
 
@@ -23,11 +22,12 @@ fn type_token_cannot_bind_value_side() {
     let error = scope
         .bind_value(
             "Gee".into(),
-            Reached::for_test(
-                region.brand().alloc_object(KObject::Number(7.0)),
-                StoredReach::for_test(None, false),
-                crate::machine::core::FramePins::empty(),
+            scope.seal_resident_value(
+                Carried::Object(region.brand().alloc_object(KObject::Number(7.0))),
+                None,
+                false,
             ),
+            None,
             BindingIndex::BUILTIN,
         )
         .expect_err("a Type token names a type; it may not bind a value");

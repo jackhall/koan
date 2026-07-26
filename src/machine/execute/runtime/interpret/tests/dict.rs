@@ -43,8 +43,7 @@ fn let_binds_an_empty_record_literal() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run("LET d = {}", &region, captured);
     let scope = test_run.scope;
-    let data = scope.bindings().data();
-    match data.get("d").map(|(_, r)| r.value()) {
+    match scope.lookup("d") {
         Some(KObject::Record(substrate, _)) => {
             assert!(substrate.fields().is_empty(), "expected empty record")
         }
@@ -61,8 +60,7 @@ fn let_binds_a_dict_with_string_keys() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run(r#"LET d = {"a": 1, "b": 2}"#, &region, captured);
     let scope = test_run.scope;
-    let data = scope.bindings().data();
-    match data.get("d").map(|(_, r)| r.value()) {
+    match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
             let entries = substrate.entries();
             assert_eq!(entries.len(), 2);
@@ -83,8 +81,7 @@ fn let_binds_a_dict_with_number_keys() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run(r#"LET d = {1: "a", 2: "b"}"#, &region, captured);
     let scope = test_run.scope;
-    let data = scope.bindings().data();
-    match data.get("d").map(|(_, r)| r.value()) {
+    match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
             let entries = substrate.entries();
             assert_eq!(entries.len(), 2);
@@ -105,8 +102,7 @@ fn let_binds_a_dict_with_bool_keys() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run("LET d = {true: 1, false: 0}\n", &region, captured);
     let scope = test_run.scope;
-    let data = scope.bindings().data();
-    match data.get("d").map(|(_, r)| r.value()) {
+    match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
             let entries = substrate.entries();
             assert_eq!(entries.len(), 2);
@@ -131,8 +127,7 @@ fn bare_identifier_key_is_looked_up() {
         captured,
     );
     let scope = test_run.scope;
-    let data = scope.bindings().data();
-    match data.get("d").map(|(_, r)| r.value()) {
+    match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
             let entries = substrate.entries();
             assert_eq!(entries.len(), 1);
@@ -151,8 +146,7 @@ fn sub_expression_as_value_evaluates_eagerly() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run(r#"LET d = {"a": (2 + 5)}"#, &region, captured);
     let scope = test_run.scope;
-    let data = scope.bindings().data();
-    match data.get("d").map(|(_, r)| r.value()) {
+    match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
             let entries = substrate.entries();
             assert!(
@@ -184,8 +178,7 @@ fn sub_expression_as_key_evaluates() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run("LET k = \"x\"\nLET d = {(k): 1}\n", &region, captured);
     let scope = test_run.scope;
-    let data = scope.bindings().data();
-    match data.get("d").map(|(_, r)| r.value()) {
+    match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
             let entries = substrate.entries();
             assert!(
@@ -202,8 +195,7 @@ fn multiline_dict_binds_correctly() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run("LET d = {\n  \"a\": 1\n  \"b\": 2\n}\n", &region, captured);
     let scope = test_run.scope;
-    let data = scope.bindings().data();
-    match data.get("d").map(|(_, r)| r.value()) {
+    match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
             let entries = substrate.entries();
             assert_eq!(entries.len(), 2);
@@ -224,8 +216,7 @@ fn nested_dict_in_list_binds_correctly() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run(r#"LET xs = [{"a": 1} {"b": 2}]"#, &region, captured);
     let scope = test_run.scope;
-    let data = scope.bindings().data();
-    match data.get("xs").map(|(_, r)| r.value()) {
+    match scope.lookup("xs") {
         Some(KObject::List(outer, _)) => {
             assert_eq!(outer.elements().len(), 2);
             match &outer.elements()[0] {

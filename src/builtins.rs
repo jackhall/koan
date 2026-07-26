@@ -1,5 +1,4 @@
 use crate::machine::model::KKind;
-use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::{BindingIndex, FrameStorageExt, Scope};
@@ -89,10 +88,7 @@ pub(crate) fn register_builtin_full<'a>(
         binder,
         types,
     ));
-    let obj: &'a KObject<'a> = region
-        .alloc_object_checked(KObject::KFunction(f), types)
-        .expect("f was just allocated into region's own region");
-    let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
+    let _ = scope.register_function(name.into(), f, BindingIndex::BUILTIN);
 }
 
 /// Common-case [`register_builtin_full`]: not a binder builtin.
@@ -127,11 +123,8 @@ pub(crate) fn register_overload_at<'a>(
         false,
         types,
     ));
-    let obj: &'a KObject<'a> = region
-        .alloc_object_checked(KObject::KFunction(f), types)
-        .expect("f was just allocated into region's own region");
     scope
-        .register_function(name.into(), f, obj, index)
+        .register_function(name.into(), f, index)
         .expect("register_overload_at: user-index overload should not collide with a builtin");
 }
 

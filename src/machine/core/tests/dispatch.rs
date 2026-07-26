@@ -428,7 +428,6 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
 fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let types = TypeRegistry::new();
     use crate::machine::core::kfunction::{Body, KFunction};
-    use crate::machine::model::KObject;
     use crate::machine::NodeId;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -452,17 +451,8 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         false,
         &types,
     ));
-    let pick_num_obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(pick_num_fn), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function(
-            "pick_num".to_string(),
-            pick_num_fn,
-            pick_num_obj,
-            BindingIndex::value(1),
-        )
+        .register_function("pick_num".to_string(), pick_num_fn, BindingIndex::value(1))
         .expect("register pick_num overload");
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("PICK".into())),
@@ -506,17 +496,8 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         false,
         &types,
     ));
-    let sibling_obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(sibling), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function(
-            "pick_str".to_string(),
-            sibling,
-            sibling_obj,
-            BindingIndex::value(3),
-        )
+        .register_function("pick_str".to_string(), sibling, BindingIndex::value(3))
         .expect("register sibling overload");
 
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {

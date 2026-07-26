@@ -8,14 +8,21 @@
 use std::cell::Cell;
 
 use super::{FrameReach, KoanRegion, KoanRegionExt, KoanStorageProfile};
-use crate::machine::core::{KError, KErrorKind, KFunction, Reached, Scope, StoredReach};
+use crate::machine::core::bindings::SealedValue;
+use crate::machine::core::{KError, KErrorKind, KFunction, Scope};
 use crate::machine::model::{
     Carried, CarriedFamily, ContainerSubstrate, KObject, Module, TypeRegistry,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried};
 use crate::witnessed::{AuditedStored, Witnessed};
 
-/// The evidence-tier move-ins live on [`Scope`], not [`super::RegionBrand`]: a [`StoredReach`] is
+/// A move-in's minted reach evidence: the arena-hosted description (`None` == the empty set) and
+/// the borrows-into-this-region bit, both derived by [`Scope::mint_retained`] from the same source
+/// claim the value is copied under. It is meaningful only relative to the scope that minted it, so
+/// it never leaves the door that derived it.
+type MintedReach<'a> = (Option<&'a FrameReach>, bool);
+
+/// The evidence-tier move-ins live on [`Scope`], not [`super::RegionBrand`]: a minted reach is
 /// meaningful only relative to the scope that minted it — its description is hosted in that
 /// scope's own arena — so the audit that consumes one must run against that same scope's region.
 /// Taking the destination from `self` makes it the minting scope's own region by construction;
@@ -35,55 +42,55 @@ impl<'a> Scope<'a> {
         cell: &DeliveredCarried,
         project: P,
         types: &TypeRegistry,
-    ) -> Result<Reached<'a, &'a KObject<'a>>, KError>
+    ) -> Result<(&'a KObject<'a>, Option<&'a FrameReach>, bool), KError>
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
-        let (stored, pins) = self.copied_reach_of(cell);
-        let obj = self.store_projection_reaching(cell, &project, stored, types)?;
-        Ok(Reached::mint(obj, stored, pins))
+        let minted = self.copied_reach_of(cell);
+        let obj = self.store_projection_reaching(cell, &project, minted, types)?;
+        Ok((obj, minted.0, minted.1))
     }
 
-    /// The pin twin of [`Self::store_object_adopted`]: derive the whole-envelope stored reach
-    /// ([`Self::envelope_reach_of`], naming every region the record borrows so the audit's
-    /// `any_member_region` arm evidences the foreign substrate), copy the projection in under it, and
-    /// fuse. Used by the bind seam's pin verb, where the binding retains the reach.
+    /// The pin twin of [`Self::store_object_adopted`]: mint the whole-envelope reach (naming every
+    /// region the record borrows so the audit's `any_member_region` arm evidences the foreign
+    /// substrate) and copy the projection in under it. Used by the bind seam's pin verb, where the
+    /// region's union bundle holds the reach.
     pub(crate) fn store_object_pinned<P>(
         &self,
         cell: &DeliveredCarried,
         project: P,
         types: &TypeRegistry,
-    ) -> Result<Reached<'a, &'a KObject<'a>>, KError>
+    ) -> Result<(&'a KObject<'a>, Option<&'a FrameReach>, bool), KError>
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
-        let (stored, pins) = self.envelope_reach_of(cell);
-        let obj = self.store_projection_reaching(cell, &project, stored, types)?;
-        Ok(Reached::mint(obj, stored, pins))
+        let minted = self.mint_retained(cell.pins());
+        let obj = self.store_projection_reaching(cell, &project, minted, types)?;
+        Ok((obj, minted.0, minted.1))
     }
 
-    /// Fuse a resident `Module` value with the reach its own `child` scope mints — the object-arm
-    /// module bind ([`Scope::bind_module`]) and an opaque ascription view. Derives the child's stored
-    /// reach ([`Self::child_module_reach`]), audits the wrapping `KObject::Module` against it (the
+    /// Seal a resident `Module` value under the reach its own `child` scope mints — the object-arm
+    /// module bind ([`Scope::bind_module`]) and an opaque ascription view. Derives the child's reach
+    /// ([`Self::child_module_reach`]), audits the wrapping `KObject::Module` against it (the
     /// module's child scope may live in a region other than this scope's own — a co-located `MODULE`
-    /// child, or a foreign source reused by a view), and fuses. Value and reach are both derived from
+    /// child, or a foreign source reused by a view), and seals. Value and reach are both derived from
     /// `child` inside this door, so no caller can pair the module with a foreign reach.
     pub(crate) fn store_module_object(
         &self,
         module: &'a Module<'a>,
         child: &Scope<'a>,
         types: &TypeRegistry,
-    ) -> Result<Reached<'a, &'a KObject<'a>>, KError> {
-        let (stored, pins) = self.child_module_reach(child);
-        let obj = self.store_value_reaching(KObject::Module(module), stored, types)?;
-        Ok(Reached::mint(obj, stored, pins))
+    ) -> Result<SealedValue, KError> {
+        let minted = self.child_module_reach(child);
+        let obj = self.store_value_reaching(KObject::Module(module), minted, types)?;
+        Ok(self.seal_resident_value(Carried::Object(obj), minted.0, minted.1))
     }
 
     /// The transparent-ascription store: a fresh re-tagged `Module` reusing a *foreign* source
-    /// module's child scope, whose region is not this scope's own. Derives one stored reach off that
+    /// module's child scope, whose region is not this scope's own. Derives one reach off that
     /// `source_child` ([`Self::child_module_reach`]), allocates the re-tagged `Module` reaching it,
     /// runs `seal` on the resident module (the view's self-sig), then audits the wrapping
-    /// `KObject::Module` against the *same* reach and fuses. Both audits ride one derived reach, so
+    /// `KObject::Module` against the *same* reach and seals. Both audits ride one derived reach, so
     /// value and reach cannot be mispaired.
     #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     pub(crate) fn store_transparent_view(
@@ -92,9 +99,9 @@ impl<'a> Scope<'a> {
         source_child: &Scope<'a>,
         seal: impl FnOnce(&'a Module<'a>),
         types: &TypeRegistry,
-    ) -> Result<Reached<'a, &'a KObject<'a>>, KError> {
-        let (stored, pins) = self.child_module_reach(source_child);
-        let sets: &[&FrameReach] = stored_sets(&stored);
+    ) -> Result<SealedValue, KError> {
+        let minted = self.child_module_reach(source_child);
+        let sets: &[&FrameReach] = stored_sets(&minted);
         let new_module: &'a Module<'a> = self
             .brand()
             .0
@@ -104,8 +111,8 @@ impl<'a> Scope<'a> {
                  derived reach",
             );
         seal(new_module);
-        let obj = self.store_value_reaching(KObject::Module(new_module), stored, types)?;
-        Ok(Reached::mint(obj, stored, pins))
+        let obj = self.store_value_reaching(KObject::Module(new_module), minted, types)?;
+        Ok(self.seal_resident_value(Carried::Object(obj), minted.0, minted.1))
     }
 
     /// Audit a projection of the delivered `cell` (deep-cloned into this scope's region) against
@@ -119,7 +126,7 @@ impl<'a> Scope<'a> {
         &self,
         cell: &DeliveredCarried,
         project: &P,
-        stored: StoredReach<'_>,
+        minted: MintedReach<'_>,
         types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError>
     where
@@ -127,7 +134,7 @@ impl<'a> Scope<'a> {
     {
         cell.open(|live| {
             let projected = project(&live)?;
-            self.store_value_reaching(projected.deep_clone(), stored, types)
+            self.store_value_reaching(projected.deep_clone(), minted, types)
         })
     }
 
@@ -140,11 +147,11 @@ impl<'a> Scope<'a> {
     fn store_value_reaching(
         &self,
         o: KObject<'_>,
-        stored: StoredReach<'_>,
+        minted: MintedReach<'_>,
         types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError> {
         let kt = o.ktype();
-        let sets: &[&FrameReach] = stored_sets(&stored);
+        let sets: &[&FrameReach] = stored_sets(&minted);
         self.brand()
             .0
             .alloc_resident_checked::<KObject<'static>>(o, ResidenceEvidence::reaching(sets))
@@ -157,15 +164,15 @@ impl<'a> Scope<'a> {
     }
 
     /// Checked move-in of a fresh object into this scope's own region ([`super::RegionBrand::alloc_object_checked`]'s
-    /// dest-only audit), paired with its derived [`StoredReach`]: `foreign` is `None` — a value that
-    /// passes the dest-only audit borrows no foreign region — and `borrows_into_home` is the audit
+    /// dest-only audit), paired with its derived reach: the description is `None` — a value that
+    /// passes the dest-only audit borrows no foreign region — and the bit is the audit
     /// walk's saw-a-region-pointer flag ([`Residence::dest_only_seen`]), so the home-borrow bit is
     /// derived from the value's own borrows, never asserted.
     pub(crate) fn alloc_object_checked_stored(
         &self,
         value: KObject<'_>,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+    ) -> Result<(&'a KObject<'a>, MintedReach<'a>), KError> {
         let kt = value.ktype();
         let seen = Cell::new(false);
         let obj = self
@@ -181,13 +188,7 @@ impl<'a> Scope<'a> {
                     kt.name(types)
                 )))
             })?;
-        Ok((
-            obj,
-            StoredReach {
-                foreign: None,
-                borrows_into_home: seen.get(),
-            },
-        ))
+        Ok((obj, (None, seen.get())))
     }
 
     /// Checked alloc of a fresh object into this scope's region, derive its `(None, bit)` witness,
@@ -198,31 +199,34 @@ impl<'a> Scope<'a> {
         value: KObject<'_>,
         types: &TypeRegistry,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
-        let (obj, stored) = self.alloc_object_checked_stored(value, types)?;
-        Ok(self.resident_value_carrier(obj, stored))
+        let (obj, (_, borrows_home)) = self.alloc_object_checked_stored(value, types)?;
+        Ok(self.brand().seal_resident(
+            Carried::Object(obj),
+            CarrierWitness::new(borrows_home, None),
+        ))
     }
 
-    /// Test affordance mirroring [`StoredReach::for_test`]: drive the reaching/delivered residence
-    /// audit directly from a value in hand and a fabricated `StoredReach`, for a unit test
-    /// exercising the audit predicate in isolation. `#[cfg(test)]`-gated so production keeps value
-    /// and reach fused inside a store door — the mispairing a bare `(value, StoredReach)` door would
-    /// allow is not reachable outside tests.
+    /// Test affordance: drive the reaching/delivered residence audit directly from a value in hand
+    /// and a fabricated reach, for a unit test exercising the audit predicate in isolation.
+    /// `#[cfg(test)]`-gated so production keeps value and reach derived together inside a store
+    /// door — the mispairing a bare `(value, reach)` door would allow is not reachable outside
+    /// tests.
     #[cfg(test)]
     pub(crate) fn store_value_reaching_for_test(
         &self,
         o: KObject<'_>,
-        stored: StoredReach<'_>,
+        minted: MintedReach<'_>,
         types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError> {
-        self.store_value_reaching(o, stored, types)
+        self.store_value_reaching(o, minted, types)
     }
 }
 
-/// A single stored reach's foreign set as an audit slice: a one-element slice naming the foreign
-/// reach, or empty when the value reaches nothing foreign. The reaching audits take a slice so one
-/// audit shape covers both the reach-bearing and region-pure cases.
-fn stored_sets<'s, 'r>(stored: &'s StoredReach<'r>) -> &'s [&'r FrameReach] {
-    match &stored.foreign {
+/// A minted reach's description as an audit slice: a one-element slice naming it, or empty when the
+/// value reaches nothing. The reaching audits take a slice so one audit shape covers both the
+/// reach-bearing and region-pure cases.
+fn stored_sets<'s, 'r>(minted: &'s MintedReach<'r>) -> &'s [&'r FrameReach] {
+    match &minted.0 {
         Some(fs) => std::slice::from_ref(fs),
         None => &[],
     }

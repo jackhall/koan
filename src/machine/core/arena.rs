@@ -275,7 +275,7 @@ impl<'a> RegionBrand<'a> {
     /// (the delivery envelope's host) carries the pin. Confines [`Witnessed::resident`] to this arena
     /// surface, so no read / define builtin reaches for it. `witness` must name the value's
     /// exact reach; the caller
-    /// ([`Scope::resident_value_carrier`](crate::machine::core::Scope)) folds it. The brand is the
+    /// ([`Scope::seal_resident_value`](crate::machine::core::Scope)) folds it. The brand is the
     /// capability marker: only a handle into the region the value lives in may re-seal it resident.
     pub(crate) fn seal_resident(
         self,

@@ -10,9 +10,6 @@
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::core::run_root_storage;
-use crate::machine::core::FramePins;
-use crate::machine::core::Reached;
-use crate::machine::core::StoredReach;
 use crate::machine::core::{arg_object, Action, BodyCtx};
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
@@ -93,11 +90,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
         .alloc_object_checked(KObject::KFunction(f), types)
         .expect("f was just allocated into region\'s own region");
     scope
-        .bind_value(
-            "f".to_string(),
-            Reached::for_test(obj, StoredReach::for_test(None, false), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
+        .bind_resident_for_test("f".to_string(), obj, BindingIndex::BUILTIN)
         .expect("bind_value should succeed");
 }
 
@@ -536,13 +529,9 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     // clean. `f` is then a backward-visible placeholder pointing at it.
     let producer_target = scope.brand().alloc_object(KObject::Number(42.0));
     scope
-        .bind_value(
+        .bind_resident_for_test(
             "producer_target".to_string(),
-            Reached::for_test(
-                producer_target,
-                StoredReach::for_test(None, false),
-                FramePins::empty(),
-            ),
+            producer_target,
             BindingIndex::BUILTIN,
         )
         .expect("bind_value should succeed");

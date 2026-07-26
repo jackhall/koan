@@ -3,10 +3,8 @@
 //! — these tests fail when Miri reports UB, not on values.
 
 use super::*;
-use crate::builtins::test_support::{delivered_with_host, run_root_bare, TestRun};
+use crate::builtins::test_support::{run_root_bare, TestRun};
 use crate::machine::core::Bindings;
-use crate::machine::core::Reached;
-use crate::machine::core::StoredReach;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::model::TypeRegistry;
@@ -111,12 +109,8 @@ fn with_scope_opens_child_scope_at_brand() {
     // In-place bind + lookup, all at the brand `'b` (value allocated via the opened scope's region).
     frame.with_scope(|s| {
         let v = s.brand().alloc_object(KObject::Number(7.0));
-        s.bind_value(
-            "k".to_string(),
-            Reached::for_test(v, StoredReach::for_test(None, false), FramePins::empty()),
-            BindingIndex::BUILTIN,
-        )
-        .unwrap();
+        s.bind_resident_for_test("k".to_string(), v, BindingIndex::BUILTIN)
+            .unwrap();
         assert!(matches!(s.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
     });
 }
@@ -147,15 +141,7 @@ fn with_scope_relocates_seed_value_into_brand() {
             .alloc_object_checked(it_value, &types)
             .expect("a deep-cloned Number is always resident-in-self");
         child
-            .bind_value(
-                "it".to_string(),
-                Reached::for_test(
-                    it_obj,
-                    StoredReach::for_test(None, false),
-                    FramePins::empty(),
-                ),
-                BindingIndex::BUILTIN,
-            )
+            .bind_resident_for_test("it".to_string(), it_obj, BindingIndex::BUILTIN)
             .unwrap();
         assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 99.0));
     });
@@ -195,15 +181,7 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
         let it_obj: &KObject<'_> = child_ref.brand().alloc_object(KObject::Number(42.0));
         assert!(std::ptr::eq(inner_region, child_ref.region()));
         child_ref
-            .bind_value(
-                "it".to_string(),
-                Reached::for_test(
-                    it_obj,
-                    StoredReach::for_test(None, false),
-                    FramePins::empty(),
-                ),
-                BindingIndex::BUILTIN,
-            )
+            .bind_resident_for_test("it".to_string(), it_obj, BindingIndex::BUILTIN)
             .unwrap();
         assert!(matches!(child_ref.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
     });
@@ -603,47 +581,51 @@ fn mint_keeps_every_source_member_and_dedups_by_region() {
     );
 }
 
-/// Retention-timeline acceptance (claim: *binding-entry pins release at entry death*). A value
-/// binding entry owns its foreign [`FramePins`] fused into its [`Reached`] vehicle; the bundle pins
-/// every region the value reaches for the entry's life and drops by ordinary `Drop` when the entry
-/// dies — here, when the owning [`Bindings`] drops. Bind an entry whose owned bundle is the sole
-/// strong owner of a foreign region and confirm the region stays live while bound, released at entry
-/// death.
+/// Retention-timeline acceptance (claim: *reach pins release at region death*). A binding entry
+/// owns nothing: the mint that derives a bound value's reach folds the owning [`FramePins`] bundle
+/// into the destination **region's** deduped union, which pins every region anything resident there
+/// reaches and drops with the region itself. Mint a reach whose owned bundle is the sole strong
+/// owner of a foreign region, then confirm the foreign region outlives both the entry and the
+/// binding table, and is released only when the destination region dies.
 #[test]
-fn binding_entry_foreign_pins_release_at_entry_death() {
-    let region = run_root_storage();
-    let dest = run_root_storage();
+fn region_union_foreign_pins_release_at_region_death() {
     let foreign = run_root_storage();
     let weak = Rc::downgrade(&foreign);
+    let dest = run_root_storage();
+    {
+        let scope = run_root_bare(&dest);
+        let obj = scope.brand().alloc_object(KObject::Number(1.0));
+        // The bind-door mint: derive the exact reach into `dest`'s arena and fold the owning bundle
+        // into `dest`'s region union. `foreign` is not the dest, so the self rule keeps it.
+        let (reach, borrows_home) = scope.mint_retained(&FramePins::singleton(Rc::clone(&foreign)));
+        let bindings: Bindings = Bindings::new();
+        bindings
+            .try_bind_value(
+                "x",
+                BindingIndex::BUILTIN,
+                scope.seal_resident_value(Carried::Object(obj), reach, borrows_home),
+                None,
+            )
+            .expect("a fresh value bind lands");
 
-    // A value living in `region`, and an owned foreign bundle naming `foreign` (minted into a
-    // neutral dest, so the self rule does not strip the member).
-    let obj = region.brand().alloc_object(KObject::Number(1.0));
-    let (_reach, pins) = FrameReach::mint(
-        dest.brand().0,
-        &[&FramePins::singleton(Rc::clone(&foreign))],
-    );
+        // The region's union is now the sole strong owner of `foreign`.
+        drop(foreign);
+        assert!(
+            weak.upgrade().is_some(),
+            "the region's union keeps the reached region alive",
+        );
 
-    let bindings: Bindings = Bindings::new();
-    bindings
-        .try_bind_value(
-            "x",
-            BindingIndex::BUILTIN,
-            Reached::for_test(obj, StoredReach::for_test(None, false), pins),
-        )
-        .expect("a fresh value bind lands");
+        drop(bindings);
+        assert!(
+            weak.upgrade().is_some(),
+            "an entry owns nothing, so entry death releases no pin",
+        );
+    }
 
-    // The entry's owned bundle is now the sole strong owner of `foreign`.
-    drop(foreign);
-    assert!(
-        weak.upgrade().is_some(),
-        "the bound entry's owned pins keep the reached region alive for the entry's life",
-    );
-
-    drop(bindings);
+    drop(dest);
     assert!(
         weak.upgrade().is_none(),
-        "the entry's foreign pins release at entry death (the owning Bindings drop)",
+        "the union's foreign pins release with the region that owns them",
     );
 }
 
@@ -769,15 +751,13 @@ fn delivered_closure(home: &Rc<CallFrame>) -> DeliveredCarried {
 
 /// A closure element as the LET-bind → entry-re-read pipeline delivers it: the closure lives whole in
 /// `home` (its captured scope co-located, `alloc_function`'s invariant), and a *reader* scope in a
-/// different region binds it — `host_reach_of` mints `home` into the reader's arena as the entry's
-/// stored reach, the re-read seal (`resident_value_carrier`) rides that reach, and the element's
-/// envelope host is the reader's frame. The closure's captured scope is thus foreign to both the
-/// element's host and any destination the element folds into: its region rides the element's *reach*,
-/// never its residence host — the pin `host_reach_of` documents for a closure's captured scope (a
-/// per-call frame carries no storage `outer` under TCO).
+/// different region binds it — `mint_retained` mints `home` into the reader's arena as the entry's
+/// reach, the entry's seal rides that reach, and the read lifts it into an envelope hosted by the
+/// reader's frame. The closure's captured scope is thus foreign to both the element's host and any
+/// destination the element folds into: its region rides the element's *reach*, never its residence
+/// host (a per-call frame carries no storage `outer` under TCO).
 fn delivered_reread_closure<'run>(
     home: &'run Rc<FrameStorage>,
-    reader: &'run Rc<FrameStorage>,
     reader_scope: &'run Scope<'run>,
 ) -> DeliveredCarried {
     let types = TypeRegistry::new();
@@ -787,15 +767,12 @@ fn delivered_reread_closure<'run>(
         .brand()
         .alloc_object_checked(KObject::KFunction(kf_ref), &types)
         .expect("closure co-located with its captured scope");
-    // The bind-time mint: `home` materializes into the reader's arena as the entry's stored reach.
-    let bind_cell = delivered_with_host(Carried::Object(obj), Rc::clone(home));
-    let (stored, pins) = reader_scope.envelope_reach_of(&bind_cell);
-    drop(bind_cell);
-    Delivered::seal(
-        reader_scope.resident_value_carrier(obj, stored),
-        Rc::clone(reader),
-        pins,
-    )
+    // The bind-time mint: `home` materializes into the reader's arena as the entry's reach, with
+    // the owning bundle folded into the reader region's union. The read then lifts that entry —
+    // upgrading the description's members `Weak → Rc` — into an envelope hosted by the reader.
+    let (reach, borrows_home) = reader_scope.mint_retained(&FramePins::singleton(Rc::clone(home)));
+    let sealed = reader_scope.seal_resident_value(Carried::Object(obj), reach, borrows_home);
+    reader_scope.lift_resident(sealed)
 }
 
 /// Record-fold accumulator family: the dest region plus the named field cells built so far — the record
@@ -835,7 +812,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
     // Fold each re-read element into the accumulator; the temporary source carrier drops after each
     // statement, leaving only the aggregate witness (reach union + materialized reader hosts)
     // holding the four regions.
-    let source_a = delivered_reread_closure(&home_a, &reader_a, reader_a_scope);
+    let source_a = delivered_reread_closure(&home_a, reader_a_scope);
     let (acc1, bundle1) = source_a.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc0,
         &FramePins::empty(),
@@ -845,7 +822,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
             (region, cells)
         },
     );
-    let source_b = delivered_reread_closure(&home_b, &reader_b, reader_b_scope);
+    let source_b = delivered_reread_closure(&home_b, reader_b_scope);
     let (acc2, _bundle2) = source_b.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc1,
         &bundle1,
@@ -958,13 +935,9 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                     let list_obj =
                         region.alloc_object_folded(KObject::list_of_held(region, cells, &types));
                     kf.captured_scope()
-                        .bind_value(
+                        .bind_resident_for_test(
                             "inners".to_string(),
-                            Reached::for_test(
-                                list_obj,
-                                StoredReach::for_test(None, false),
-                                FramePins::empty(),
-                            ),
+                            list_obj,
                             BindingIndex::BUILTIN,
                         )
                         .expect("bind the inners list into the outer closure's scope");
@@ -1625,7 +1598,7 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
         &[&FramePins::singleton(Rc::clone(&producer))],
     );
     let covering = covering.expect("producer is foreign to the consumer region");
-    let covering_evidence = StoredReach::for_test(Some(covering), false);
+    let covering_evidence = (Some(covering), false);
     let moved = consumer_scope
         .store_value_reaching_for_test(list_obj.deep_clone(), covering_evidence, &types)
         .expect("evidence naming the record's home region covers it via owns_substrate membership");
@@ -1650,7 +1623,7 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
     // Uncovered: no evidence names the record's home region, and it is foreign to `consumer`'s
     // own region too — the audit must reject rather than silently accept. An empty reach is the
     // `None` foreign case (a region-pure evidence naming nothing).
-    let no_evidence = StoredReach::for_test(None, false);
+    let no_evidence = (None, false);
     let rejected =
         consumer_scope.store_value_reaching_for_test(list_obj.deep_clone(), no_evidence, &types);
     assert!(

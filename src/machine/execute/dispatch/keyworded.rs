@@ -94,7 +94,7 @@ fn walk_and_invoke<'step>(
     resolved: Resolved<'step>,
     parts: Vec<crate::source::Spanned<crate::machine::model::ExpressionPart<'step>>>,
     covered_mask: Option<&'static [bool]>,
-    bare_outcomes: &[Option<NameOutcome<'step>>],
+    bare_outcomes: &[Option<NameOutcome>],
     idx: usize,
     park: impl FnOnce(Vec<NodeId>, KExpression<'step>) -> Outcome<'step>,
 ) -> Outcome<'step> {
@@ -367,7 +367,7 @@ fn part_walk<'step>(
     ctx: &SchedulerView<'step, '_>,
     parts: Vec<crate::source::Spanned<crate::machine::model::ExpressionPart<'step>>>,
     covered_mask: Option<&'static [bool]>,
-    bare_outcomes: &[Option<NameOutcome<'step>>],
+    bare_outcomes: &[Option<NameOutcome>],
     slots: &crate::machine::core::ClassifiedSlots,
     idx: usize,
 ) -> Result<PartWalkResult<'step>, KError> {

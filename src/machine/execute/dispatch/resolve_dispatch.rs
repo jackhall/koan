@@ -14,11 +14,10 @@
 
 use crate::machine::core::{ClassifiedSlots, KFunction};
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
-use crate::machine::model::Carried;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
-use crate::machine::NodeId;
+use crate::machine::{DeliveredCarried, NodeId};
 
 use super::is_eager_part;
 
@@ -27,8 +26,11 @@ use super::is_eager_part;
 /// non-bare-name parts) and consumed by strict admission and the relaxed pass.
 /// A producer error absorbs into the builder's `Err` before the cache is built,
 /// so it never appears as an outcome here.
-pub enum NameOutcome<'step> {
-    Resolved(Carried<'step>),
+pub enum NameOutcome {
+    /// The bound value lifted into a delivery envelope pinned by its binding scope — admission
+    /// opens it under those pins to classify the value, so a speculative probe re-anchors nothing
+    /// and retains nothing.
+    Resolved(DeliveredCarried),
     Parked(NodeId),
     Unbound(String),
 }
@@ -88,7 +90,7 @@ impl<'step> Scope<'step> {
         &self,
         expr: &KExpression<'e>,
         chain: Option<&LexicalFrame>,
-        bare_outcomes: &[Option<NameOutcome<'e>>],
+        bare_outcomes: &[Option<NameOutcome>],
         types: &TypeRegistry,
     ) -> DispatchOutcome<'step> {
         #[cfg(test)]
@@ -154,7 +156,7 @@ enum ScopeDecision<'step> {
 fn decide_scope<'step, 'e>(
     lookup: &FunctionLookup<'step>,
     expr: &KExpression<'e>,
-    bare_outcomes: &[Option<NameOutcome<'e>>],
+    bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
     let bucket = OverloadBucket {
@@ -199,7 +201,7 @@ fn decide_scope<'step, 'e>(
 fn decide_relaxed<'step, 'e>(
     bucket: &OverloadBucket<'step, '_>,
     expr: &KExpression<'e>,
-    bare_outcomes: &[Option<NameOutcome<'e>>],
+    bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
     let mut parked: Vec<NodeId> = Vec::new();
@@ -247,7 +249,7 @@ impl<'step> OverloadBucket<'step, '_> {
     fn pick_strict<'e>(
         &self,
         expr: &KExpression<'e>,
-        bare_outcomes: &[Option<NameOutcome<'e>>],
+        bare_outcomes: &[Option<NameOutcome>],
         types: &TypeRegistry,
     ) -> PickPass<'step> {
         let survivors: Vec<&'step KFunction<'step>> = self
@@ -270,7 +272,7 @@ impl<'step> OverloadBucket<'step, '_> {
     fn relaxed_parked_producers<'e>(
         &self,
         expr: &KExpression<'e>,
-        bare_outcomes: &[Option<NameOutcome<'e>>],
+        bare_outcomes: &[Option<NameOutcome>],
         types: &TypeRegistry,
     ) -> Vec<NodeId> {
         let mut producers: Vec<NodeId> = Vec::new();
@@ -313,7 +315,7 @@ enum Lean {
 fn signature_admits_strict<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &KExpression<'e>,
-    bare_outcomes: &[Option<NameOutcome<'e>>],
+    bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> bool {
     if sig.elements.len() != expr.parts.len() {
@@ -353,7 +355,7 @@ fn signature_admits_strict<'e>(
 fn relaxed_admits<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &KExpression<'e>,
-    bare_outcomes: &[Option<NameOutcome<'e>>],
+    bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> Option<Vec<Lean>> {
     if sig.elements.len() != expr.parts.len() {
@@ -415,7 +417,7 @@ fn slot_admits_strict<'e>(
     part_value: &ExpressionPart<'e>,
     i: usize,
     has_lazy_kexpr_slot: bool,
-    bare_outcomes: &[Option<NameOutcome<'e>>],
+    bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> bool {
     match (el, part_value) {
@@ -471,7 +473,9 @@ fn slot_admits_strict<'e>(
                 return true;
             }
             match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
-                Some(NameOutcome::Resolved(c)) => arg.ktype.accepts_carried(*c, types),
+                Some(NameOutcome::Resolved(delivered)) => arg
+                    .ktype
+                    .accepts_carried(delivered.open_at().value(), types),
                 // Speculative admit so the splice/park walk can surface the
                 // precise per-slot diagnostic.
                 Some(NameOutcome::Parked(_)) | Some(NameOutcome::Unbound(_)) => {
