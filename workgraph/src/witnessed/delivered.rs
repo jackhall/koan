@@ -5,71 +5,67 @@
 //!
 //! Liveness *at rest* is the scheduler's retention table (a producer frame stays held while any
 //! consumer edge is undischarged). Liveness *in transit* — from a pull to its adoption — is this
-//! envelope: it bundles the dormant [`Sealed`] carrier with the retained `Rc<F>` that owns the
-//! region the carrier's value and its hosted reach set live in, so a consumer reads the value under
-//! a pin it does not have to thread separately. The fields are private and every constructor is a
-//! surface that has the true owner in hand, so an envelope whose pin disagrees with its payload is
-//! not constructible — the co-location the carrier's owned host arm once kept by convention is
-//! enforcement by construction.
+//! envelope: it bundles the dormant [`Sealed`] carrier with one owned [`PinBundle`] holding an
+//! `Rc<F>` for every region the value reaches, **its home among them as an ordinary member**, so a
+//! consumer reads the value under a pin it does not have to thread separately. The field is private
+//! and every constructor is a surface that has the true home owner in hand, so an envelope whose
+//! pins disagree with its payload is not constructible — the co-location the carrier's owned host
+//! arm once kept by convention is enforcement by construction.
 //!
-//! The envelope is also where a value's **residence becomes a named reach member**: the carrier is
-//! reference-only (it has no `Rc` to materialize), so the envelope-bearing mint verbs —
-//! [`Delivered::mint_reach`] and [`Delivered::transfer_into`] — are the only places a producer
-//! frame is folded into a minted destination set, gated on the [`Residence`] mode (unconditionally
-//! for a value that keeps living in the producer's region; on `borrows_host` for a value copied
-//! out). See [design/witness-hosting.md § Composition](../../../design/witness-hosting.md#composition-minting-a-description-and-retaining-its-pins).
+//! Home riding as an ordinary member is what lets the envelope-bearing mint verbs —
+//! [`Delivered::mint_reach`] and [`Delivered::transfer_into`] — fold a producer frame into a minted
+//! destination set with no separate materialization arm and no residence mode: the home pin is
+//! already in the bundle the composition folds. What a relocation site still chooses is *which*
+//! bundle it hands the fold — its own pins to keep the producer alive, or the empty bundle for a
+//! true deep copy that must let the producer die. See
+//! [design/witness-hosting.md § Composition](../../../design/witness-hosting.md#composition-minting-a-description-and-retaining-its-pins).
 //!
-//! [`Delivered::mint_reach`] is the sole envelope-bearing mint entry a consumer routes; a value with
-//! no envelope in hand instead mints through [`Witnessed::mint_resident_reach`](super::Witnessed::mint_resident_reach).
-//! Both are thin callers over the crate-internal [`Carrier::mint_into`](super::Carrier::mint_into)
-//! core. [`Delivered::adopt_into`] fuses that mint with the re-anchor it justifies into one
-//! copy-free adoption verb, so a caller cannot split the pin from the reattach it pins.
+//! [`Delivered::mint_reach`] is the envelope-bearing mint entry a consumer routes, a thin caller
+//! over the crate-internal [`Carrier::mint_into`](super::Carrier::mint_into) core.
+//! [`Delivered::adopt_into`] fuses that mint with the re-anchor it justifies into one copy-free
+//! adoption verb, so a caller cannot split the pin from the reattach it pins.
 
 use std::rc::Rc;
 
 use super::{
     Carrier, Erased, FoldToken, FoldedPlacement, HasRegionHandle, Opened, PinBundle, PinsRegion,
-    ReachDescription, Reattachable, Region, RegionHandle, RegionHandleFamily, RegionOwner,
-    Residence, Sealed, StorageProfile, Witnessed,
+    ReachDescription, Reattachable, Region, RegionHandle, RegionHandleFamily, RegionOwner, Sealed,
+    StorageProfile, Witnessed,
 };
 
-/// A sealed carrier paired with the retained frame owner that pins its value's backing in transit,
-/// plus the owned foreign [`PinBundle`] that pins every other region the value reaches. `T` is the
-/// carrier's value family, `W` its reach witness, `F` the workload's frame-owner type (`Rc<F>` is
-/// the residence pin). The carrier's reach description is non-owning; the envelope's `host` + `foreign`
-/// are the ownership that keeps the value's whole reach alive across transit — from a scheduler pull
-/// to the point a consumer adopts or re-homes it.
+/// A sealed carrier paired with the owned [`PinBundle`] that pins every region its value reaches —
+/// the value's home region among them, as an ordinary member. `T` is the carrier's value family,
+/// `W` its reach witness, `F` the workload's frame-owner type. The carrier's reach description is
+/// non-owning; the envelope's bundle is the ownership that keeps the value's whole reach alive
+/// across transit — from a scheduler pull to the point a consumer adopts or re-homes it.
 pub struct Delivered<T: Reattachable, W, F: PinsRegion> {
     /// The dormant carrier — value and reach description as one unit.
     cell: Sealed<T, W>,
-    /// The retained frame owner whose region the value lives in. Every producer seeds a retention
-    /// hold at finalize (the run frame's storage owns the run region), so the owner always exists;
-    /// a resident seal pairs the home region's owner.
-    host: Rc<F>,
-    /// The owned pin bundle for every **foreign** region the value's borrows reach — the ownership
-    /// counterpart of the carrier's non-owning reach description, derived from it at construction
-    /// (under the host pin, while the reached regions are still covered). It is what keeps those
-    /// regions alive while the envelope sits parked in a scheduler slot, where the description's
-    /// `Weak` members alone would not. [`duplicate`](Self::duplicate) clones it, so every fan-out
-    /// consumer holds its own pins.
-    foreign: PinBundle<F>,
+    /// The owned pins for every region the value's borrows reach, **home included** — the ownership
+    /// counterpart of the carrier's non-owning reach description, composed at construction from the
+    /// home owner the constructor is handed and the reach bundle threaded in with it. It is what
+    /// keeps those regions alive while the envelope sits parked in a scheduler slot, where the
+    /// description's `Weak` members alone would not, and what covers the reads
+    /// ([`open`](Self::open) / [`open_at`](Self::open_at)) the envelope serves.
+    /// [`duplicate`](Self::duplicate) clones it, so every fan-out consumer holds its own pins.
+    pins: PinBundle<F>,
 }
 
 impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
-    /// Read the delivered value at a **rank-2** (`for<'b>`) brand, pinned by the retained frame
-    /// owner ([`Sealed::open_with`]) — the single read verb for a delivered value, whose carrier
-    /// witness bundles no pin of its own. The `for<'b>` quantifier confines the re-anchored value
-    /// exactly as [`Sealed::open`] does.
+    /// Read the delivered value at a **rank-2** (`for<'b>`) brand, pinned by the envelope's own
+    /// owned pins ([`Sealed::open_with`]) — the single read verb for a delivered value, whose
+    /// carrier witness bundles no pin of its own. The `for<'b>` quantifier confines the re-anchored
+    /// value exactly as [`Sealed::open`] does.
     pub fn open<R>(&self, f: impl for<'b> FnOnce(T::At<'b>) -> R) -> R
     where
         T::At<'static>: Copy,
     {
-        self.cell.open_with(&self.host, f)
+        self.cell.open_with(&self.pins, f)
     }
 
     /// Open the delivered value into the **in-use** [`Opened`] state at the step lifetime `'b`,
-    /// pinned by the envelope's own retained host — the one-line convenience over
-    /// [`Sealed::open_at`] that supplies its own owned coverage (the envelope already holds the pin
+    /// pinned by the envelope's own owned pins — the one-line convenience over
+    /// [`Sealed::open_at`] that supplies its own owned coverage (the envelope already holds the pins
     /// its value's backing needs). Returns an [`Opened<'b, T, W>`] the step reads freely and
     /// [`reseal`](Opened::reseal)s or lifts at step end.
     pub fn open_at<'b>(&'b self) -> Opened<'b, T, W>
@@ -77,7 +73,7 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
         T::At<'static>: Copy,
         W: Clone,
     {
-        self.cell.open_at(&self.host)
+        self.cell.open_at(&self.pins)
     }
 
     /// The reference-only reach witness — the value's reach description, for a reach query or a
@@ -86,24 +82,20 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
         self.cell.witness()
     }
 
-    /// The retained frame owner pinning this delivery in transit.
-    pub fn host(&self) -> &Rc<F> {
-        &self.host
+    /// The owned [`PinBundle`] pinning every region the value reaches, home included — the
+    /// ownership counterpart of the carrier's non-owning reach description, and the coverage a
+    /// relocation site hands the fold to keep this value's whole reach alive. A consumer that
+    /// re-seeds a retention hold from an envelope it already holds (the value-terminal finalize)
+    /// clones it.
+    pub fn pins(&self) -> &PinBundle<F> {
+        &self.pins
     }
 
-    /// The owned foreign [`PinBundle`] pinning every region the value reaches beyond its home — the
-    /// ownership counterpart of the carrier's non-owning reach description. A consumer that re-seeds
-    /// a retention hold from an envelope it already holds (the value-terminal finalize) clones it.
-    pub fn foreign(&self) -> &PinBundle<F> {
-        &self.foreign
-    }
-
-    /// Consume the envelope into its parts — the dormant carrier, the retained host, and the owned
-    /// foreign bundle — for a consumer that re-seeds a hold or re-envelopes the value under the same
-    /// ownership it already holds (the value-terminal finalize keeps `foreign` and re-seals the
-    /// carrier).
-    pub fn into_parts(self) -> (Sealed<T, W>, Rc<F>, PinBundle<F>) {
-        (self.cell, self.host, self.foreign)
+    /// Consume the envelope into its parts — the dormant carrier and the owned pins — for a
+    /// consumer that re-seeds a hold or re-envelopes the value under the same ownership it already
+    /// holds (the value-terminal finalize keeps the pins and re-seals the carrier).
+    pub fn into_parts(self) -> (Sealed<T, W>, PinBundle<F>) {
+        (self.cell, self.pins)
     }
 
     /// The dormant carrier cell — for a consumer that reads the erased inner (a `SealedExtern`
@@ -120,10 +112,9 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
     }
 
     /// Duplicate the envelope: [`duplicate`](Sealed::duplicate) the sealed carrier (bit-copy value +
-    /// witness clone), clone the host `Rc`, and clone the owned foreign [`PinBundle`], leaving the
-    /// source intact — the producer keeps its terminal for other consumers, and the retained hold
-    /// (host + every foreign pin) gains one clone each, dropped when this duplicate's consumer is
-    /// done.
+    /// witness clone) and clone the owned [`PinBundle`], leaving the source intact — the producer
+    /// keeps its terminal for other consumers, and every pinned region (home among them) gains one
+    /// `Rc` clone, dropped when this duplicate's consumer is done.
     pub fn duplicate(&self) -> Self
     where
         Erased<T>: Copy,
@@ -131,93 +122,78 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
     {
         Delivered {
             cell: self.cell.duplicate(),
-            host: Rc::clone(&self.host),
-            foreign: self.foreign.clone(),
+            pins: self.pins.clone(),
         }
     }
 }
 
-/// The envelope-bearing verbs over the reference-only [`Carrier`] witness — the **only** places a
-/// value's residence host materializes as a member of a minted set, because only the envelope has
-/// the true owner in hand. Everything here reads the carrier's reach under the retained host pin.
+/// The envelope-bearing verbs over the reference-only [`Carrier`] witness. The envelope is the
+/// holder that owns the value's pins, so it is what a mint folds and what covers every read here.
 impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
-    /// Pair a sealed carrier with the retained frame owner that pins its value's backing and the
-    /// owned foreign [`PinBundle`] pinning every other region it reaches. The caller supplies the
-    /// true owner and the owned bundle — threaded from the mint, never re-derived from the carrier's
-    /// description: the scheduler's retention hold (which carries `owner` + `foreign` as one unit)
-    /// for a delivered dep, or the region owner + the entry's pins for a resident seal — so the
-    /// pairing is co-located by construction.
-    pub fn hosted(cell: Sealed<T, Carrier<F>>, host: Rc<F>, foreign: PinBundle<F>) -> Self {
+    /// Pair a sealed carrier with the owner of the region its value lives in and the owned
+    /// [`PinBundle`] pinning every other region it reaches, unioning the two into the envelope's
+    /// single member set — this is where a value's home becomes an ordinary reach member. The
+    /// caller supplies the true home owner and the owned bundle threaded from the mint, never
+    /// re-derived from the carrier's description: the scheduler's retention hold (which carries
+    /// `owner` + `reach` as one unit) for a delivered dep, or the region owner + the entry's pins
+    /// for a resident seal — so the pairing is co-located by construction.
+    pub fn hosted(cell: Sealed<T, Carrier<F>>, home: Rc<F>, reach: PinBundle<F>) -> Self {
         Delivered {
             cell,
-            host,
-            foreign,
+            pins: PinBundle::union(&PinBundle::singleton(home), &reach),
         }
     }
 
     /// **Lift** a [`Sealed`] carrier at rest into a delivery envelope in transit (`Sealed →
     /// Delivered`): upgrade the sealed carrier's reach description `Weak → Rc` into an owned inline
-    /// [`PinBundle`] under `host`, then bundle it with `host` as the transit pin. The owned set is
-    /// what lets the value travel after its source frame dies — an arena-hosted `&ReachDescription`
-    /// would dangle in transit, so the lift re-owns the claimed subset while the reached regions are
-    /// still covered (the holder rule under `host`). `host` is the value's residence owner, covering
-    /// both its backing and its description's hosting arena.
-    pub fn lift(cell: Sealed<T, Carrier<F>>, host: Rc<F>) -> Self {
-        let foreign = cell.witness().upgrade_bundle(&host);
+    /// [`PinBundle`] under `home`, and union `home` itself in. The owned set is what lets the value
+    /// travel after its source frame dies — an arena-hosted `&ReachDescription` would dangle in
+    /// transit, so the lift re-owns the claimed subset while the reached regions are still covered
+    /// (the holder rule under `home`). `home` is the value's residence owner, covering both its
+    /// backing and its description's hosting arena; it is unioned in explicitly because the self
+    /// rule strips it from the bundle a mint into that same region hands back.
+    pub fn lift(cell: Sealed<T, Carrier<F>>, home: Rc<F>) -> Self {
+        let reach = cell.witness().upgrade_bundle(&home);
         Delivered {
             cell,
-            host,
-            foreign,
+            pins: PinBundle::union(&PinBundle::singleton(home), &reach),
         }
     }
 
-    /// Seal a live [`Witnessed`] carrier into a delivery envelope pinned by `host` and the owned
-    /// foreign [`PinBundle`] `foreign` — the resident / Done-arm seal veneer's library half. Bundles
-    /// the born-witnessed carrier with the region owner the caller already holds and the owned bundle
+    /// Seal a live [`Witnessed`] carrier into a delivery envelope pinned by `home` and the owned
+    /// [`PinBundle`] `reach` — the resident / Done-arm seal veneer's library half. Bundles the
+    /// born-witnessed carrier with the region owner the caller already holds and the owned bundle
     /// threaded in (the binding entry's pins, the Done-arm carrier's pins), so a resident value
     /// travels as an envelope pinned by its home frame, identical in shape to a delivered dep.
-    pub fn seal(witnessed: Witnessed<T, Carrier<F>>, host: Rc<F>, foreign: PinBundle<F>) -> Self {
+    pub fn seal(witnessed: Witnessed<T, Carrier<F>>, home: Rc<F>, reach: PinBundle<F>) -> Self {
         Delivered {
             cell: Sealed::seal(witnessed),
-            host,
-            foreign,
+            pins: PinBundle::union(&PinBundle::singleton(home), &reach),
         }
     }
 
-    /// Collapse to a plain [`PinBundle`] pinning every region this delivery keeps alive — the
-    /// retained host ∪ the owned foreign bundle. The step-open liveness pin a consumer folds when it
-    /// has no arena to host-mint against (the run-loop step pin, the head-deferred callable's reach).
-    /// Owned throughout: no description upgrade, since `foreign` already holds the reached regions.
-    pub fn liveness_bundle(&self) -> PinBundle<F> {
-        PinBundle::union(&PinBundle::singleton(Rc::clone(&self.host)), &self.foreign)
-    }
-
-    /// Mint this value's reach into `dest`, materializing the retained host per `mode`
-    /// ([`Residence::Kept`]: unconditionally — the value keeps living there; [`Residence::Copied`]:
-    /// only when its borrows genuinely reach it, the internal home-membership signal), under `omit` —
-    /// the embedder's omission policy (regions the destination's container already pins). Returns the
-    /// minted description (`None` == empty, no allocation) hosted in `dest`, the owned [`PinBundle`]
-    /// the binding entry keeps to pin its members, and the borrows-into-dest bit. The reach read runs
-    /// under the retained host pin.
+    /// Mint this value's reach into `dest` under `omit` — the embedder's omission policy (regions
+    /// the destination's container already pins). The envelope's own pins are the source the
+    /// composition folds, so the value's home rides in as an ordinary member and the self rule
+    /// alone decides whether it survives into the returned bundle. Returns the minted description
+    /// (`None` == empty, no allocation) hosted in `dest`, the owned [`PinBundle`] the binding entry
+    /// keeps to pin its members, and the borrows-into-dest bit.
     pub fn mint_reach<'d, P>(
         &self,
         dest: RegionHandle<'d, P>,
-        mode: Residence,
         omit: impl Fn(&Region<P>) -> bool,
     ) -> (Option<&'d ReachDescription<F>>, PinBundle<F>, bool)
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
-        self.witness()
-            .mint_into(&self.foreign, dest, Some(&self.host), mode, omit)
+        self.witness().mint_into(&self.pins, dest, omit)
     }
 
-    /// Copy-free adoption: mints this envelope's reach — residence host
-    /// materialized (`Residence::Kept`) — into `dest`'s region, **retains** the
-    /// resulting owned [`PinBundle`] for the region's life, then re-anchors the
-    /// sealed value at `dest`'s lifetime. Fused so the re-anchor cannot be reached
-    /// without the pin that keeps it live: the minted description names the value's
+    /// Copy-free adoption: mints this envelope's reach — home included, as an ordinary member —
+    /// into `dest`'s region, **retains** the resulting owned [`PinBundle`] for the region's life,
+    /// then re-anchors the sealed value at `dest`'s lifetime. Fused so the re-anchor cannot be
+    /// reached without the pin that keeps it live: the minted description names the value's
     /// reach and the retained bundle owns it for the region's life ⊇ `'d`, so every
     /// region the value reaches (its home included) outlives the returned borrow.
     /// `omit` names regions the caller's context covers ambiently, as in
@@ -232,7 +208,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         F: RegionOwner<Region = Region<P>>,
         T::At<'static>: Copy,
     {
-        let (_desc, bundle, _borrows_into_dest) = self.mint_reach(dest, Residence::Kept, omit);
+        let (_desc, bundle, _borrows_into_dest) = self.mint_reach(dest, omit);
         // The description is non-owning; the adopted value lives for the region's life, so the
         // region retains the owning bundle (dropped only at region death) — the liveness the old
         // arena-hosted owning set provided, now carried by the region's retention list.
@@ -245,51 +221,62 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
     }
 
     /// **Adopt** the delivered value into `dest`, dropping to rest as a [`Sealed`] (`Delivered →
-    /// Sealed`): mint the value's reach into `dest`'s arena (home materialized as an ordinary member,
-    /// with `dest`'s own region omitted by the never-pin-a-region-into-itself rule), **retain** the
-    /// resulting owned [`PinBundle`] into `dest`'s liveness for the region's life, and re-seal the
-    /// value under a resident [`Carrier`] that references the minted (now weak) description. The
-    /// value keeps its identity in the producer's region; the minted set is what pins that region for
-    /// `dest`'s life, so the resident seal reads soundly under `dest`'s ambient coverage. `omit`
-    /// names regions `dest`'s context covers ambiently, as in [`Self::mint_reach`].
+    /// Sealed`): mint the value's reach into `dest`'s arena (home an ordinary member, with `dest`'s
+    /// own region stripped from the owned bundle by the never-pin-a-region-into-itself rule) and
+    /// re-seal the value under a resident [`Carrier`] that references the minted (now weak)
+    /// description. The value keeps its identity in the producer's region.
     ///
-    /// The dual of [`Self::adopt_into`] (which re-anchors to a live `T::At<'d>`): `adopt` hands back a
-    /// dormant seal for a table entry / node slot instead.
+    /// Hands the owned [`PinBundle`] **back to the caller** rather than retaining it into `dest`'s
+    /// region: the bind seam that adopts a value is the holder of the scope's union bundle (design
+    /// § Threading), and folding the adopted pins there is what makes them drop at scope death
+    /// instead of at region death. The seal is only readable while that bundle is held.
+    ///
+    /// The dual of [`Self::adopt_into`] (which re-anchors to a live `T::At<'d>` and retains into the
+    /// region, having no holder to hand pins to): `adopt` hands back a dormant seal for a table
+    /// entry / node slot instead. `omit` names regions `dest`'s context covers ambiently, as in
+    /// [`Self::mint_reach`].
     pub fn adopt<'d, P>(
         &self,
         dest: RegionHandle<'d, P>,
         omit: impl Fn(&Region<P>) -> bool,
-    ) -> Sealed<T, Carrier<F>>
+    ) -> (Sealed<T, Carrier<F>>, PinBundle<F>)
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
         T::At<'static>: Copy,
     {
-        let (minted, bundle, _borrows_into_dest) = self.mint_reach(dest, Residence::Kept, omit);
-        // The description is non-owning; the adopted value keeps living in the producer region, so
-        // `dest` retains the owning bundle (dropped only at region death) to pin every region the
-        // value reaches for `dest`'s life ⊇ the resident seal's reads.
-        dest.region().retain_reach(bundle);
+        let (minted, bundle, borrows_into_dest) = self.mint_reach(dest, omit);
         let erased: Erased<T> = self.open(Erased::<T>::erase);
-        // A resident value's home is its residence (pinned by `dest`'s retained bundle), so the
-        // reference-only carrier carries no home-borrow signal — home membership rides the minted
-        // set, exact by construction.
-        Sealed::seal(Witnessed::from_erased(erased, Carrier::new(false, minted)))
+        let sealed = Sealed::seal(Witnessed::from_erased(
+            erased,
+            Carrier::new(borrows_into_dest, minted),
+        ));
+        (sealed, bundle)
     }
 
     /// Relocate the delivered value into a destination and re-seal it under the composed carrier
     /// that names everything it reaches from there — the envelope-bearing form of the witnessed
     /// transfer, and the only relocation verb for a carrier-witnessed value. The sealed carrier is
     /// duplicated (the envelope keeps its cell for other consumers), re-anchored at a shared
-    /// `for<'b>` brand with `dest`'s live form under the retained host pin, and handed to
+    /// `for<'b>` brand with `dest`'s live form under the envelope's own pins, and handed to
     /// `relocate` — the workload's structural copy/fold, which builds into `dest` at the brand
-    /// natively. The composed witness mints both operands' reach into `dest`'s own arena and
-    /// materializes the retained host per `mode` — birth-frame-as-member happens exactly here.
+    /// natively. The composed witness mints both operands' reach into `dest`'s own arena.
+    ///
+    /// `source_pins` is what the relocated product is claimed to reach *from the source side*, and
+    /// it is where the site prices copy against pin (design § Escape):
+    ///
+    /// - [`self.pins()`](Self::pins) — the product still borrows into this value's regions, home
+    ///   among them, so the fold keeps the producer alive. The copy-free re-anchor and any copy
+    ///   whose leaves still point back.
+    /// - [`PinBundle::empty()`] — a true deep copy with no surviving borrow into the source. The
+    ///   producer's region is free to die at retention release (the tail-loop turnover rule). The
+    ///   caller asserts the copy left no leaf behind; passing the empty bundle for a product that
+    ///   does still borrow is a dangling read.
     pub fn transfer_into<B: Reattachable, P: Reattachable, Pr>(
         &self,
         dest: Witnessed<B, Carrier<F>>,
         dest_bundle: &PinBundle<F>,
-        mode: Residence,
+        source_pins: &PinBundle<F>,
         relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> (Witnessed<P, Carrier<F>>, PinBundle<F>)
     where
@@ -298,20 +285,13 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
         T::At<'static>: Copy,
     {
-        let host = &self.host;
+        // The re-anchor runs under the envelope's own pins, whatever `source_pins` claims the
+        // product reaches: reading the source value is always covered here.
         self.cell.duplicate().unseal().merge_composed(
             dest,
-            host,
-            |left, right, live_dest| {
-                Carrier::compose_into(
-                    left,
-                    right,
-                    &self.foreign,
-                    dest_bundle,
-                    live_dest.region_handle(),
-                    Some(host),
-                    mode,
-                )
+            &self.pins,
+            |_left, right, live_dest| {
+                Carrier::compose_into(right, source_pins, dest_bundle, live_dest.region_handle())
             },
             relocate,
         )
@@ -326,7 +306,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         &self,
         dest: Witnessed<B, Carrier<F>>,
         dest_bundle: &PinBundle<F>,
-        mode: Residence,
+        source_pins: &PinBundle<F>,
         relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P::At<'b>,
     ) -> (Witnessed<P, Carrier<F>>, PinBundle<F>)
     where
@@ -335,40 +315,36 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
         T::At<'static>: Copy,
     {
-        let host = &self.host;
         self.cell.duplicate().unseal().merge_composed(
             dest,
-            host,
-            |left, right, live_dest| {
-                Carrier::compose_into(
-                    left,
-                    right,
-                    &self.foreign,
-                    dest_bundle,
-                    live_dest.region_handle(),
-                    Some(host),
-                    mode,
-                )
+            &self.pins,
+            |_left, right, live_dest| {
+                Carrier::compose_into(right, source_pins, dest_bundle, live_dest.region_handle())
             },
             super::place_over_dest::<T, B, P, Pr>(relocate),
         )
     }
 
-    /// Re-stamp the delivered value **in place, in its own producer region** — the single-seam
-    /// escape verb. The destination is the retained host's own region (not an ancestor), so
-    /// `relocate` re-anchors the value where it already resides: no bytes move and nothing re-homes.
-    /// `relocate` builds the re-stamped value into that region through the folded placement — for a
-    /// koan declared return, re-tagging the top node while sharing its substrate borrow verbatim.
-    /// Its second operand is the same producer-region handle the placement covers, redundant with it
-    /// (a caller ignores it), retained only to match the transfer fold's shape.
+    /// Re-stamp the delivered value **in place, in its own home region** — the single-seam escape
+    /// verb. The destination is `home`'s own region (not an ancestor), so `relocate` re-anchors the
+    /// value where it already resides: no bytes move and nothing re-homes. `relocate` builds the
+    /// re-stamped value into that region through the folded placement — for a koan declared return,
+    /// re-tagging the top node while sharing its substrate borrow verbatim. Its second operand is
+    /// the same home-region handle the placement covers, redundant with it (a caller ignores it),
+    /// retained only to match the transfer fold's shape.
+    ///
+    /// `home` is passed in rather than read off the envelope: the envelope's pins are one flat
+    /// antichain with no distinguished home, and the single-seam caller holds the frame it is
+    /// re-stamping into anyway. It must be the owner of the region the value lives in — re-stamping
+    /// against any other region would re-anchor the value into storage that does not hold it.
     ///
     /// The composed witness is identical to the input's: the destination is the value's own home
-    /// region, so home-omission drops the [`Residence::Kept`]-materialized host from the minted set,
-    /// leaving exactly the value's foreign reach, and the composed `borrows_host` bit reduces to the
-    /// input's. Host, producer pin, and residence coincide by construction — an envelope stating
-    /// otherwise has no constructor.
+    /// region, so the self rule drops home from the composed bundle, leaving exactly the value's
+    /// foreign reach — which the transfer retains into that same region, covering the restamped
+    /// value read in place.
     pub fn restamp_in_place<P: Reattachable, Pr>(
         &self,
+        home: &Rc<F>,
         relocate: impl for<'b> FnOnce(
             T::At<'b>,
             RegionHandle<'b, Pr>,
@@ -380,22 +356,21 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         F: RegionOwner<Region = Region<Pr>>,
         T::At<'static>: Copy,
     {
-        // The destination operand is the producer's own region, yoked out of the retained host — the
-        // region the value already lives in. Re-stamping into it re-anchors, never relocates.
+        // The destination operand is the value's own region, yoked out of `home` — the region the
+        // value already lives in. Re-stamping into it re-anchors, never relocates.
         let dest: Witnessed<RegionHandleFamily<Pr>, Carrier<F>> =
-            Witnessed::<RegionHandleFamily<Pr>, Rc<F>>::yoke_handle(
-                Rc::clone(&self.host),
-                |handle| handle,
-            )
+            Witnessed::<RegionHandleFamily<Pr>, Rc<F>>::yoke_handle(Rc::clone(home), |handle| {
+                handle
+            })
             .into_reference_only();
         // The destination is a bare region handle (empty reach), so the destination operand bundle
-        // is empty. The composed bundle the transfer retains in the producer region covers the
-        // restamped value read in place; the caller re-seals under the input's own `foreign`
-        // (identical by construction — home-omission drops the `Kept` host), so it is discarded here.
+        // is empty; the source claim is the envelope's own pins, since nothing is copied out. The
+        // composed bundle the transfer retains in the home region covers the restamped value read
+        // in place, so it is discarded here.
         let (restamped, _composed) = self.transfer_into_placing::<RegionHandleFamily<Pr>, P, Pr>(
             dest,
             &PinBundle::empty(),
-            Residence::Kept,
+            &self.pins,
             relocate,
         );
         restamped

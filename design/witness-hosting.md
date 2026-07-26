@@ -39,8 +39,8 @@ owned set.
 ## The carrier states
 
 There is **one** value family — objects via
-[`CarriedFamily`](../workgraph/src/witnessed/carrier.rs), functions via
-[`KFunctionFamily`](../workgraph/src/witnessed/carrier.rs) (the witnessed
+[`CarriedFamily`](../src/machine/model/values/carried.rs), functions via
+[`KFunctionFamily`](../src/machine/core/kfunction.rs) (the witnessed
 library is generic over `Reattachable` families, so a function is a family, not
 a carrier variant). A carrier moves through **three states**, distinguished by
 pointer strength and borrow posture and connected by *transform verbs* — never
@@ -49,8 +49,8 @@ by wrapping one in another:
 | State | Reach members | Posture | Where it lives |
 |---|---|---|---|
 | [`Delivered`](../workgraph/src/witnessed/delivered.rs) | **owned** — `Rc`s in an inline set | in transit, borrows nothing | scheduler slots, cross-frame escapes, `ReturnContract` |
-| [`Sealed`](../workgraph/src/witnessed/carrier.rs) | **weak** — a reference to the arena-hosted description | at rest, borrows nothing | binding-table entries, parked node slots |
-| [`Opened<'b>`](../workgraph/src/witnessed/carrier.rs) | weak, read under a pin | in use at a step lifetime `'b` | within a step (`Resolved<'step>`, ATTR / schema reads) |
+| [`Sealed`](../workgraph/src/witnessed.rs) | **weak** — a reference to the arena-hosted description | at rest, borrows nothing | binding-table entries, parked node slots |
+| [`Opened<'b>`](../workgraph/src/witnessed.rs) | weak, read under a pin | in use at a step lifetime `'b` | within a step (`Resolved<'step>`, ATTR / schema reads) |
 
 - `Delivered` owns its members outright, so it can **walk between frames**: the
   producer frame may die in transit, and an arena-hosted description reference

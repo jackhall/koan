@@ -45,7 +45,7 @@ pub use host::RegionHost;
 pub use host::{region_metrics, reset_region_metrics, RegionMetrics};
 
 mod carrier;
-pub use carrier::{Carrier, HasRegionHandle, Residence};
+pub use carrier::{Carrier, HasRegionHandle};
 
 mod delivered;
 pub use delivered::Delivered;
@@ -429,9 +429,11 @@ unsafe impl<F: RegionOwner> WitnessRegion for Rc<F> {
 ///
 /// Deliberately **not** `: Witness` — a reference-only witness composes too. [`PinBundle`] (a
 /// pinning witness) composes by plain union, ignoring `dest`; [`Carrier`] (reference-only) composes
-/// by minting both operands' reach into `dest`'s own arena and deriving the borrows-into-dest bit —
-/// the pure reach mint, since it has no residence pin in hand to materialize (that is the
-/// envelope-bearing [`Delivered::transfer_into`](delivered::Delivered::transfer_into)'s job).
+/// by minting both operands' reach into `dest`'s own arena and deriving the borrows-into-dest bit.
+/// The carrier owns no pin, so the *owned* bundles the mint folds are threaded in by the holder
+/// that does — the envelope-bearing
+/// [`Delivered::transfer_into`](delivered::Delivered::transfer_into), or a resident merge's entry
+/// pins.
 ///
 /// # Safety
 ///
@@ -636,7 +638,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// The composed witness
     /// still comes from [`ComposeWitness::compose`], so a caller cannot forge coverage; what the
     /// caller supplies is liveness: `pin` covers the *source* (`self`) carrier's backing for the
-    /// whole call — the delivery envelope's retained host, the retention hold — while `other` (the
+    /// whole call — the delivery envelope's own pins, the retention hold — while `other` (the
     /// destination operand being built into) is covered by its own live destination, which the
     /// caller necessarily holds to be composing into it.
     pub fn merge_pinned<B: Reattachable, P: Reattachable, Pin: Witness>(

@@ -9,13 +9,21 @@
 //! [`witnessed`] — the lifetime-erasure carrier substrate:
 //! - The carrier types: [`witnessed::Witnessed`], [`witnessed::Sealed`],
 //!   [`witnessed::SealedExtern`], and the raw-retype currency [`witnessed::Erased`].
+//! - One value family in three states, connected by transform verbs rather than by wrapping:
+//!   [`witnessed::Delivered`] in transit (owned pins), [`witnessed::Sealed`] at rest (weak members
+//!   via an arena-hosted description), and [`witnessed::Opened`] in use (borrowed at a step
+//!   lifetime under a presented pin — the only state that answers a membership query). The
+//!   reference-only reach witness they carry is [`witnessed::Carrier`].
 //! - The witness traits an embedder implements for its own region-owner type:
 //!   [`witnessed::Witness`], [`witnessed::WitnessRegion`], [`witnessed::RegionOwner`] (the
 //!   `Rc<F>` blanket-impl seam for [`witnessed::WitnessRegion`]), and the reference-only
 //!   composition seam [`witnessed::ComposeWitness`].
 //! - The reach-evidence types [`witnessed::ReachDescription`] (non-owning, side-table hosted) and
 //!   [`witnessed::PinBundle`] (owned), generic over the member trait [`witnessed::PinsRegion`] an
-//!   embedder implements for its own frame-owner type.
+//!   embedder implements for its own frame-owner type. Both are frozen together at a
+//!   [`witnessed::ReachDescription::mint`], and a value's home region rides them as an ordinary
+//!   member — the sole asymmetry is the self rule, which strips `dest`'s own region from the owned
+//!   bundle (a region pinning itself is a cycle) while leaving it in the description.
 //! - The lifetime family contract: [`witnessed::Reattachable`] and the
 //!   [`witnessed::reattachable`] macro that discharges its `unsafe` obligation once per family.
 //! - The generic region engine: [`witnessed::Region`], [`witnessed::StorageProfile`],

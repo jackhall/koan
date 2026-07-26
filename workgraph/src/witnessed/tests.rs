@@ -12,9 +12,9 @@ use std::rc::Rc;
 
 use super::*;
 
-/// The abstract-shape slate: the carrier's residence/reach channels, the
-/// `Residence` × `borrows_host` matrix, duplication, home-omission, and the finish-surface fold,
-/// over a library-only profile.
+/// The abstract-shape slate: home as an ordinary member of the envelope's pins, the copy-versus-pin
+/// source claim, duplication, the mint's self rule, the three carrier states and their transform
+/// verbs, and the finish-surface fold — over a library-only profile.
 mod shapes;
 
 /// Covariant stand-in: a plain shared reference. `At<'r>` is a `&'r u32`, whose lifetime the borrow
@@ -454,11 +454,11 @@ fn step_frame() -> Rc<StepFrame> {
     })
 }
 
-/// [`StepContext::alloc_with`]: each dep folds through its delivery envelope at `Residence::Kept`,
-/// so the built value's carrier names every dep's residence host as a minted reach member, and the
-/// dep views arrive at `build` in the same order as `deps`.
+/// [`StepContext::alloc_with`]: each dep folds through its delivery envelope claiming that
+/// envelope's own pins, so the built value's carrier names every dep's home as a minted reach
+/// member, and the dep views arrive at `build` in the same order as `deps`.
 #[test]
-fn step_context_alloc_with_mints_dep_hosts_and_preserves_dep_order() {
+fn step_context_alloc_with_mints_dep_homes_and_preserves_dep_order() {
     static ONE: u32 = 1;
     static TWO: u32 = 2;
     let own = step_frame();
@@ -484,13 +484,16 @@ fn step_context_alloc_with_mints_dep_hosts_and_preserves_dep_order() {
                 &ONE
             },
         );
-    // Both dep hosts materialized as members of the set minted into `own`'s arena (Kept mode: the
-    // views keep living in their producers), and the consumer's own region is home-omitted.
-    w.witness().with_reach(None, |reach| {
-        let reach = reach.expect("dep hosts materialize as reach members");
+    // Both dep homes composed into the set minted into `own`'s arena — they arrived as ordinary
+    // members of each dep envelope's pins. `own` itself is not a member: nothing composed it in
+    // (the accumulator is region-pure), so the built value borrows into no region of its own.
+    let sealed: Sealed<RefFamily, Carrier<StepFrame>> = Sealed::seal(w);
+    let opened = sealed.open_at(&own);
+    opened.with_reach(|reach| {
+        let reach = reach.expect("dep homes compose as reach members");
         assert!(reach.pins_region(dep_a.region()));
         assert!(reach.pins_region(dep_b.region()));
-        assert!(!reach.pins_region(own.region()), "home is omitted");
+        assert!(!reach.pins_region(own.region()));
     });
-    assert!(!w.witness().borrows_host());
+    assert!(!opened.witness().borrows_host());
 }

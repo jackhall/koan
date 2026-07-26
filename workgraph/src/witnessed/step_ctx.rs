@@ -2,7 +2,8 @@
 //! finish, whose two verbs are guarantees 3 and 5 of the scheduler-library design made structural.
 //! [`StepContext::alloc`] builds a value reachable only through the held frame's own region (reach =
 //! own region only, by the `yoke` brand); [`StepContext::alloc_with`] folds a set of delivered dep
-//! envelopes in first, so the built value's carrier names every dep's reach *and* residence host,
+//! envelopes in first, so the built value's carrier names every dep's whole reach — its home region
+//! among the ordinary members of the envelope's pins —
 //! and a dep's payload is viewable only inside the build closure's brand — it cannot be smuggled out
 //! and stored unwitnessed.
 
@@ -11,7 +12,7 @@ use std::rc::Rc;
 
 use super::{
     Carrier, Delivered, FoldToken, FoldedPlacement, PinBundle, PinsRegion, Reattachable, Region,
-    RegionHandle, RegionOwner, Residence, StorageProfile, Witnessed,
+    RegionHandle, RegionOwner, StorageProfile, Witnessed,
 };
 
 /// The step construction context — handed to a finish by the step loop, whose held region owner is
@@ -83,13 +84,13 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     }
 
     /// Build a value whose carrier names the held frame's own region implicitly plus every named
-    /// dep's reach **and residence host**, folded by the call shape (guarantee 5). Each dep arrives
-    /// as its delivery envelope, and each fold is an envelope-bearing
-    /// [`transfer_into`](Delivered::transfer_into) at [`Residence::Kept`] — the dep's payload keeps
-    /// living in its producer's region while its view is embedded, so the producer host
-    /// materializes as a member of the minted set. A dep's payload is handed to `build` only inside
-    /// the shared `for<'b>` brand — the [`compile_fail`] guard below pins that a view cannot be
-    /// smuggled out of the closure and stored unwitnessed.
+    /// dep's whole reach, folded by the call shape (guarantee 5). Each dep arrives as its delivery
+    /// envelope, and each fold is an envelope-bearing
+    /// [`transfer_into`](Delivered::transfer_into) claiming the dep's own pins — the dep's payload
+    /// keeps living in its producer's region while its view is embedded, so the producer's frame
+    /// (an ordinary member of those pins) composes into the minted set. A dep's payload is handed
+    /// to `build` only inside the shared `for<'b>` brand — the [`compile_fail`] guard below pins
+    /// that a view cannot be smuggled out of the closure and stored unwitnessed.
     ///
     /// ```
     /// use std::rc::Rc;
@@ -157,7 +158,9 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
                     dep.transfer_into::<AllocViews<V, F::Region>, AllocViews<V, F::Region>, P>(
                         acc,
                         &acc_bundle,
-                        Residence::Kept,
+                        // The view rides the accumulator un-copied, so the built value genuinely
+                        // borrows into the dep's regions: the dep's own pins are the claim.
+                        dep.pins(),
                         fold_dep_view::<V, F::Region>(),
                     )
                 });
@@ -237,9 +240,9 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
 /// handing back only the finished opaque `impl for<'b> FnOnce(..)` value sidesteps it: `alloc_with`
 /// itself never binds a `V::At<'b>` value, only moves this closure around.
 ///
-/// The folded views ride the accumulator un-copied — sound because each fold ran at
-/// [`Residence::Kept`], so every view's producer host is a member of the accumulator's minted set,
-/// pinned by the consumer's own arena for the built value's life.
+/// The folded views ride the accumulator un-copied — sound because each fold claimed the dep's own
+/// pins, so every view's producer frame is a member of the accumulator's minted set, pinned by the
+/// consumer's own arena for the built value's life.
 #[allow(clippy::type_complexity)]
 fn fold_dep_view<V: Reattachable, R: ?Sized + 'static>(
 ) -> impl for<'b> FnOnce(V::At<'b>, (&'b R, Vec<V::At<'b>>), FoldToken<'b>) -> (&'b R, Vec<V::At<'b>>)
