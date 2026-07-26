@@ -22,7 +22,6 @@ use crate::machine::{
     RegionTypeFamily,
 };
 use crate::source::Spanned;
-use crate::witnessed::Residence;
 use crate::witnessed::{reattachable, RegionHandle, Witnessed};
 
 use super::super::outcome::DepTerminal;
@@ -397,7 +396,7 @@ fn finish_witnessed<'step>(
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     &FramePins::empty(),
-                    Residence::Copied,
+                    terminals[0].delivered.pins(),
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         let wrapped = if collapse {
@@ -442,7 +441,7 @@ fn finish_witnessed<'step>(
                         .transfer_into::<RecordFieldsFamily, RecordFieldsFamily, _>(
                             acc,
                             &acc_bundle,
-                            Residence::Copied,
+                            term.delivered.pins(),
                             move |value, (region, mut fields), _brand| {
                                 fields.push((name, value.object().deep_clone()));
                                 (region, fields)
@@ -511,7 +510,7 @@ fn finish_witnessed<'step>(
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     &FramePins::empty(),
-                    Residence::Copied,
+                    terminals[0].delivered.pins(),
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         Carried::Object(region.alloc_object_folded(KObject::tagged(
@@ -548,7 +547,7 @@ fn finish_witnessed<'step>(
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     &FramePins::empty(),
-                    Residence::Copied,
+                    terminals[0].delivered.pins(),
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         // Stamp the value's FULL type — including a `Wrapped` payload's own

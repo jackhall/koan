@@ -62,9 +62,9 @@ impl<'step, T: Reattachable> StepCarried<'step, T> {
     /// step open's rank-2 brand.
     pub(crate) fn born(inner: Witnessed<T, CarrierWitness>) -> Self {
         debug_assert!(
-            !inner.witness().has_foreign_reach(),
-            "StepCarried::born is for carriers with no foreign reach (empty owned pins); a \
-             foreign-reach-carrying producer must thread its owned pins through born_pinned"
+            !inner.witness().has_reach_members(),
+            "StepCarried::born is for carriers that name no reach members (empty owned pins); a \
+             reach-carrying producer must thread its owned pins through born_pinned"
         );
         StepCarried {
             inner,

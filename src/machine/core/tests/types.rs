@@ -147,7 +147,7 @@ fn child_module_reach_unions_member_entry_reaches_across_regions() {
     // module member reaching into another module's own region.
     let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
     let cell = delivered_with_host(Carried::Object(obj), Rc::clone(&inner_storage));
-    let (stored, host_pins) = source_scope.host_reach_of(&cell);
+    let (stored, host_pins) = source_scope.envelope_reach_of(&cell);
     // Drop the envelope now: it must not be what keeps `inner_storage` alive below — the binding's
     // owned `host_pins` bundle (and, downstream, `parent`'s union folding it in) is what the test
     // exercises.

@@ -154,12 +154,12 @@ impl<'run> KoanRuntime<'run> {
         let pin: FramePins = dep_sources
             .iter()
             .fold(FramePins::empty(), |acc, src| match src {
-                // The dep's liveness pin: its retained producer frame (the envelope's host, sourced from
-                // the retention hold since the reference-only carrier carries no pin of its own) unioned
-                // with the value's own owned foreign reach — `Delivered::liveness_bundle`, host ∪ reach
-                // members. An errored dep carries no value the step reads — its error owns its data — so
-                // it contributes nothing.
-                Ok(t) => FramePins::union(&acc, &t.delivered.liveness_bundle()),
+                // The dep's liveness pin: the envelope's own owned member set — its retained producer
+                // frame (sourced from the retention hold, since the reference-only carrier carries no
+                // pin of its own) riding as an ordinary member alongside every other region the value
+                // reaches. An errored dep carries no value the step reads — its error owns its data —
+                // so it contributes nothing.
+                Ok(t) => FramePins::union(&acc, t.delivered.pins()),
                 Err(_) => acc,
             });
         // The open witness: the anchor's projected region owner (pinning the continuation and dest
@@ -243,8 +243,11 @@ impl<'run> KoanRuntime<'run> {
                         // `finalize_terminal` surfaces the terminal's owned foreign bundle alongside
                         // the sealed carrier; the scheduler seeds the retention hold with it, so no
                         // pull re-derives the reach.
-                        match self.finalize_terminal(envelope, frame.and(post.obligation.as_ref()))
-                        {
+                        match self.finalize_terminal(
+                            envelope,
+                            anchor.owner(),
+                            frame.and(post.obligation.as_ref()),
+                        ) {
                             Ok((witnessed, foreign)) => {
                                 self.sched.finalize(idx, Ok(witnessed), foreign);
                             }

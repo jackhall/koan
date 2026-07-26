@@ -1,4 +1,6 @@
-use crate::machine::core::{FoldingBrand, FramePins, KoanStorageProfile};
+use std::rc::Rc;
+
+use crate::machine::core::{FoldingBrand, FramePins, FrameStorage, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{Carried, KType, TypeNode, TypeRegistry};
 use crate::machine::{CarrierWitness, DeliveredCarried, KError, KErrorKind};
@@ -39,9 +41,15 @@ pub(in crate::machine::execute) trait NodeFinalize {
     /// to the declared type **in place, in the producer's own region** ([`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place)) —
     /// no bytes move, residence is unchanged — while a union return and a type value pass through
     /// un-restamped and a mismatch raises.
+    ///
+    /// `home` is the owner of the region the value lives in — the slot's anchor owner, the same one
+    /// the envelope was sealed under. It is passed in rather than read off the envelope: the
+    /// envelope's members are one flat antichain in which home is an ordinary member, and the
+    /// re-stamp's destination must be exactly the region the value already resides in.
     fn finalize_terminal(
         &self,
         envelope: DeliveredCarried,
+        home: &Rc<FrameStorage>,
         contract: Option<&ReturnObligation>,
     ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError>;
 }
@@ -50,14 +58,18 @@ impl NodeFinalize for KoanRuntime<'_> {
     fn finalize_terminal(
         &self,
         envelope: DeliveredCarried,
+        home: &Rc<FrameStorage>,
         contract: Option<&ReturnObligation>,
     ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError> {
-        // The terminal's owned foreign bundle is invariant across finalize: pass-through keeps the
-        // value verbatim, and restamp re-stamps *in place in the producer's own region*, so
-        // home-omission drops the `Kept` host and the foreign reach is identical to the input's.
-        // Clone it out of the envelope up front to seed the scheduler's retention hold — never
-        // re-derived from the (re-sealed) carrier's description.
-        let foreign = envelope.foreign().clone();
+        // The terminal's owned member set is invariant across finalize: pass-through keeps the
+        // value verbatim, and restamp re-stamps *in place in the producer's own region*, so the
+        // member set is identical to the input's. Clone it out of the envelope up front to seed the
+        // scheduler's retention hold — never re-derived from the (re-sealed) carrier's description.
+        //
+        // `home` is stripped by the self rule: the retention hold owns the producer frame as its
+        // own `owner` field, so re-listing it here would be a second `Rc` on the very frame the
+        // hold's release is supposed to free — a tail loop's retiring region would never turn over.
+        let foreign = envelope.pins().without_region(home.region());
         // No per-call return obligation (frameless / run producer, or a framed producer with no
         // obligation) or nothing declared: recover the sealed carrier as-is via the seal→unseal
         // round-trip — retention owns the frame's lifetime, so the Done boundary makes no memory
@@ -112,6 +124,7 @@ impl NodeFinalize for KoanRuntime<'_> {
             // identical to the delivered one.
             Disposition::Restamp => Ok((
                 envelope.restamp_in_place::<CarriedFamily, KoanStorageProfile>(
+                    home,
                     |value, _handle, placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         Carried::Object(region.alloc_object_folded(

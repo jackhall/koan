@@ -13,7 +13,7 @@ use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
-use super::super::lift::{copy_carried, seam_verb};
+use super::super::lift::{copy_carried, seam_source_pins, seam_verb};
 use super::super::run_loop::{dest_brand, DestHandleFamily};
 use super::super::StepCarried;
 use super::super::WitnessedDepFinish;
@@ -146,12 +146,13 @@ pub(super) fn literal_pass_through<'step>(
         // rather than re-wrapping the read-back value under a freshly-asserted witness. Strictly
         // better witnessing: the value arrives with the exact reach its producer named.
         ExpressionPart::Spliced { cell } => {
-            // The spliced cell is the producer's own delivery envelope; recover its owned foreign
-            // bundle before unsealing so the recovered carrier's reach is threaded, not re-derived.
-            let foreign = cell.foreign().clone();
+            // The spliced cell is the producer's own delivery envelope; recover its owned member
+            // set — the producer's own region among them — before unsealing, so the recovered
+            // carrier's reach is threaded, not re-derived.
+            let pins = cell.pins().clone();
             Outcome::Done(Ok(StepCarried::born_pinned(
                 cell.into_cell().unseal(),
-                foreign,
+                pins,
             )))
         }
         // A quote is its body as data: seal the `KObject::KExpression` into this scope's region
@@ -191,7 +192,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
             .transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
                 dest,
                 &crate::machine::core::FramePins::empty(),
-                verb.residence(),
+                &seam_source_pins(delivered, verb),
                 |value, _region, placement| {
                     copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
                 },

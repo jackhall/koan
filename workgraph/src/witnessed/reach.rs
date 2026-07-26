@@ -268,6 +268,16 @@ impl<F: PinsRegion> PinBundle<F> {
         self.members.iter().any(|m| m.pins_region(region))
     }
 
+    /// Whether any member's own region satisfies `pred` — the bundle-side twin of
+    /// [`ReachDescription::any_member_region`], for a holder with no single named target region to
+    /// test (an address-table membership check against a raw stored pointer: "which member region
+    /// hosts this value?"). This is how a holder locates a value's **home** now that home is an
+    /// ordinary member with no distinguished field. No member reference escapes: `pred` runs
+    /// against each member's region internally, so the bundle stays unenumerable.
+    pub fn any_member_region(&self, mut pred: impl FnMut(&F::Region) -> bool) -> bool {
+        self.members.iter().any(|m| pred(m.region()))
+    }
+
     /// Insert `owner` under outer-chain subsumption: skip it when an existing member already pins
     /// its region (dedup + the newcomer-is-an-ancestor case), else drop every existing member the
     /// newcomer subsumes and add it. Keeps the bundle an antichain of the deepest owners.

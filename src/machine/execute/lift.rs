@@ -1,6 +1,7 @@
 //! The witnessed-transfer copy hooks: the [`copy_carried`] relocate callback, the value-level
 //! [`relocate_object_into`] / cell-level [`copy_held_from_carried`] copies, the value-level escape
-//! seam's [`seam_verb`] chooser, and the container-cell seam's [`copied_seam_mode`] selection. The
+//! seam's [`seam_verb`] chooser, and the container-cell seam's [`copied_seam_source_pins`]
+//! selection. The
 //! cost decision itself ([`copy_or_pin`](crate::machine::model::copy_or_pin)), the
 //! total-rebuild verb ([`copy_object_into`](crate::machine::model::copy_object_into)), and the
 //! host-release probe ([`still_borrows_host`](crate::machine::model::still_borrows_host))
@@ -8,11 +9,13 @@
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
 use crate::machine::core::FoldingBrand;
+use crate::machine::core::{
+    copied_source_pins, source_pins_releasing_home, with_home_region, FramePins,
+};
 use crate::machine::model::{
     copy_object_into, copy_or_pin, still_borrows_host, Carried, Held, KObject, RegionEscape,
 };
 use crate::machine::DeliveredCarried;
-use crate::witnessed::Residence;
 
 /// The structural-copy callback a witnessed transfer's fold runs
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered)): copy a [`Carried`] into `dest`'s
@@ -97,9 +100,11 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
 /// ([`copy_or_pin`](crate::machine::model::copy_or_pin)); every other value copies unconditionally
 /// (`Copy { released: false }` → `Residence::Copied`, the behavior for non-substrate carriers).
 pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> RegionEscape {
-    let host = delivered.host().region();
     delivered.open(|carried| match carried {
-        Carried::Object(value) => match value {
+        // The crossing is priced against the region the value *lives in* — the envelope member
+        // whose address table recorded its top node ([`with_home_region`]). An unlocatable home
+        // prices nothing: copy and keep the source pinned.
+        Carried::Object(value) => with_home_region(delivered, value, |host| match value {
             KObject::Record(substrate, _) => copy_or_pin(substrate, value, host),
             KObject::List(substrate, _) => copy_or_pin(substrate, value, host),
             KObject::Dict(substrate, _) => copy_or_pin(substrate, value, host),
@@ -110,23 +115,48 @@ pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> Re
                 inner: substrate, ..
             } => copy_or_pin(substrate, value, host),
             _ => RegionEscape::Copy { released: false },
-        },
+        })
+        .unwrap_or(RegionEscape::Copy { released: false }),
         _ => RegionEscape::Copy { released: false },
     })
 }
 
-/// The [`Residence`] mode for relocating `delivered` across the container-cell seam whose relocate
-/// hook is [`copy_held_from_carried`]. A top-level substrate carrier (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) whose total
-/// copy no longer borrows its producer host is [`Residence::Released`] — the retiring producer frees
-/// at retention discharge rather than riding the destination's reach; a carrier that genuinely still
-/// borrows the host, or any non-substrate value, keeps [`Residence::Copied`] (the seal bit's
-/// conservative pin then materializes the host). This is the exact answer that reconciles with
-/// `force_substrate_borrows_host`'s conservative seal bit: at a copy seam a still-borrowing carrier
-/// stays `Copied` + pinned, and a plain-data carrier is `Released`, its bit overridden by the copy
-/// pass's exact release.
-pub(in crate::machine::execute) fn copied_seam_mode(delivered: &DeliveredCarried) -> Residence {
-    let host = delivered.host().region();
-    delivered.open(|carried| match carried {
+/// The **source claim** a value-level relocation of `delivered` hands its fold, given the verb
+/// [`seam_verb`] chose:
+///
+/// - **Pin** — the record stays in the region it lived in and the relocation pointer-copies it, so
+///   the claim is the envelope's whole member set: the producer transfers by hold.
+/// - **Copy, released** — the rebuild provably leaves nothing pointing back, so the claim drops the
+///   producer region and the retiring frame frees at retention discharge.
+/// - **Copy, unreleased** — no exact probe ran, so the carrier's borrows-home bit decides
+///   ([`copied_source_pins`]).
+pub(in crate::machine::execute) fn seam_source_pins(
+    delivered: &DeliveredCarried,
+    verb: RegionEscape,
+) -> FramePins {
+    match verb {
+        RegionEscape::Pin => delivered.pins().clone(),
+        RegionEscape::Copy { released: true } => source_pins_releasing_home(delivered),
+        RegionEscape::Copy { released: false } => copied_source_pins(delivered),
+    }
+}
+
+/// The **source claim** a relocation of `delivered` across the container-cell seam hands its fold
+/// (whose relocate hook is [`copy_held_from_carried`]) — what the copy is claimed to still reach on
+/// the source side (design § Escape). A top-level substrate carrier (`Record` / `List` / `Dict` /
+/// `Tagged` / `Wrapped`) whose total copy no longer borrows the region it lived in claims the
+/// **empty** bundle: the retiring producer frees at retention discharge instead of riding the
+/// destination's reach. A carrier that genuinely still borrows its home, any non-substrate value,
+/// and any value whose home is not locatable among the envelope's members all claim the envelope's
+/// own pins, so the fold keeps every source region alive.
+///
+/// This is the exact answer that reconciles with `force_substrate_borrows_host`'s conservative seal
+/// bit: at a copy seam a still-borrowing carrier keeps its pins, and a plain-data carrier releases,
+/// its bit overridden by the copy pass's exact release.
+pub(in crate::machine::execute) fn copied_seam_source_pins(
+    delivered: &DeliveredCarried,
+) -> FramePins {
+    let released = delivered.open(|carried| match carried {
         Carried::Object(value)
             if matches!(
                 value,
@@ -137,14 +167,16 @@ pub(in crate::machine::execute) fn copied_seam_mode(delivered: &DeliveredCarried
                     | KObject::Wrapped { .. }
             ) =>
         {
-            if still_borrows_host(value, host) {
-                Residence::Copied
-            } else {
-                Residence::Released
-            }
+            with_home_region(delivered, value, |host| !still_borrows_host(value, host))
+                .unwrap_or(false)
         }
-        _ => Residence::Copied,
-    })
+        _ => false,
+    });
+    if released {
+        source_pins_releasing_home(delivered)
+    } else {
+        copied_source_pins(delivered)
+    }
 }
 
 #[cfg(test)]

@@ -191,13 +191,13 @@ fn using_window_value_read_reach_survives_under_module_root() {
     let module_scope = run_root_bare(&module_storage);
 
     // Bind a value in the module scope whose stored reach names the foreign frame -- minted for
-    // real into the module's own arena via `host_reach_of`, the same primitive `adopt_sealed` uses
+    // real into the module's own arena via `envelope_reach_of`, the same primitive `adopt_sealed` uses
     // to root a functor result's reach at module-bind time.
     let value_obj = module_scope.brand().alloc_object(KObject::Number(1.0));
     let cell = delivered_with_host(Carried::Object(value_obj), Rc::clone(&foreign_storage));
-    let (stored_reach, pins) = module_scope.host_reach_of(&cell);
+    let (stored_reach, pins) = module_scope.envelope_reach_of(&cell);
     // Drop the envelope now: it must not be what keeps `foreign_storage` alive below — the owning
-    // pin bundle `host_reach_of` minted, carried into the binding, is what the test exercises.
+    // pin bundle `envelope_reach_of` minted, carried into the binding, is what the test exercises.
     drop(cell);
     module_scope
         .bind_value(
@@ -225,7 +225,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
         Rc::clone(&module_storage),
     );
     // The owning pin bundle is what roots the module's region transitively; hold it to end of scope.
-    let (_window_reach, _window_pins) = window.host_reach_of(&window_root_cell);
+    let (_window_reach, _window_pins) = window.envelope_reach_of(&window_root_cell);
     drop(window_root_cell);
 
     let (carrier, _carrier_pins) = window
@@ -247,10 +247,13 @@ fn using_window_value_read_reach_survives_under_module_root() {
     );
 
     let foreign_region_owner = foreign_weak.upgrade().unwrap();
+    // The membership query lives on the **in-use** carrier state: seal the read carrier and open it
+    // at the call-site frame's pin, whose borrow is the coverage the reach re-anchor needs.
+    let sealed = crate::witnessed::Sealed::seal(carrier);
     assert!(
-        carrier
-            .witness()
-            .reach_covers(None, foreign_region_owner.region()),
+        sealed
+            .open_at(&call_site_storage)
+            .reach_covers(foreign_region_owner.region()),
         "the read carrier's reach still covers the foreign region after every other handle drops"
     );
 }

@@ -140,6 +140,11 @@ pub struct CallFrame {
     /// construction invariant of the envelope, and dropping the sealed carrier never dereferences the
     /// child pointer, so no drop-order rule is left to hand-maintain.
     envelope: Delivered<ScopeRefFamily, CarrierWitness, FrameStorage>,
+    /// This frame's own [`FrameStorage`] — the owner of the region its child scope lives in, and
+    /// the pin every escapee extends ([`Self::storage_rc`]). Held beside the envelope rather than
+    /// read off it: the envelope's members are one flat antichain in which a value's home is an
+    /// ordinary member, so the frame's own storage is not recoverable from it by identity.
+    storage: Rc<FrameStorage>,
     /// True only for the scheduler-owned run frame, which carries the top-level run scope and
     /// never drops mid-run. Its `region` is empty (top-level values live in the externally-owned
     /// run region, reached via `scope.region`), so there is nothing to lift out of it: the Done
@@ -191,7 +196,8 @@ impl CallFrame {
             // The child scope seals under the empty (`resident`) carrier witness — its cross-region
             // borrow into the parent rides `FrameStorage`'s own `outer` `Rc` chain, not the reach
             // system — so the envelope's foreign bundle is empty.
-            envelope: Delivered::hosted(scope_carrier, storage, FramePins::empty()),
+            envelope: Delivered::hosted(scope_carrier, Rc::clone(&storage), FramePins::empty()),
+            storage,
             non_dying: false,
             owner: Cell::new(None),
             type_registry: None,
@@ -220,7 +226,8 @@ impl CallFrame {
         Rc::new(CallFrame {
             // The run scope lives in the run region (empty reach), so the envelope's foreign bundle
             // is empty.
-            envelope: Delivered::hosted(scope_carrier, run_storage, FramePins::empty()),
+            envelope: Delivered::hosted(scope_carrier, Rc::clone(&run_storage), FramePins::empty()),
+            storage: run_storage,
             non_dying: true,
             owner: Cell::new(None),
             type_registry: Some(Rc::new(TypeRegistry::new())),
@@ -251,10 +258,10 @@ impl CallFrame {
         self.owner.get()
     }
 
-    /// This frame's own `FrameStorage` — the envelope's retained host, which every constructor
-    /// pairs with the child scope.
+    /// This frame's own `FrameStorage` — the owner of the region its child scope lives in, which
+    /// every constructor pairs with that scope.
     pub(crate) fn storage(&self) -> &Rc<FrameStorage> {
-        self.envelope.host()
+        &self.storage
     }
 
     /// The child scope's externally-witnessed carrier by value (`SealedExtern<ScopeRefFamily>` is

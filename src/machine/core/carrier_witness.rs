@@ -5,10 +5,11 @@
 
 use std::rc::Rc;
 
-use crate::machine::model::{Carried, CarriedFamily};
+use crate::machine::core::FramePins;
+use crate::machine::model::{Carried, CarriedFamily, KObject};
 use crate::witnessed::{Erased, Witnessed};
 
-use super::arena::FrameStorage;
+use super::arena::{FrameStorage, KoanRegion, KoanRegionExt};
 
 /// Koan's value-carrier witness: the library [`Carrier`](crate::witnessed::Carrier) over koan's
 /// frame owner — one `borrows_host` bit plus a reference to the value's hosted reach set. It pins
@@ -22,14 +23,45 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// [`CarrierWitness`]-witnessed value carrier paired with its retained [`FrameStorage`] owner. The
 /// in-transit form of a value's liveness — from a scheduler pull (or a resident seal) to its
 /// adoption — and the only surface that materializes a producer frame into a minted reach set
-/// (`mint_reach` / `transfer_into`), so koan never holds a bare frame pin at a consumer site. Every
-/// envelope-bearing mint routes through `Delivered::mint_reach` (koan's `Scope::envelope_reach_of`
-/// funnel); the one envelope-free case — a value already resident in a region the caller's context
-/// covers ambiently — routes through
-/// [`Witnessed::mint_resident_reach`](crate::witnessed::Witnessed::mint_resident_reach) (koan's
-/// `Scope::resident_reach_of`) instead.
+/// (`mint_reach` / `transfer_into`), so koan never holds a bare frame pin at a consumer site. The
+/// envelope's member set names the value's home region as an ordinary member — there is no
+/// distinguished host field — so a site that needs the home back locates it by residence
+/// ([`with_home_region`]), and a relocation's only choice is *which bundle* it hands the fold.
 pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
+
+/// Run `f` against the region that **hosts** `object` among `envelope`'s pinned members — the
+/// value's own home region. Home is an ordinary member of the envelope's flat member set with no
+/// distinguished field, so it is recovered here the way residence is defined: by *where the value
+/// lives*, i.e. the member whose address side table recorded the value's top node
+/// ([`KoanRegionExt::owns_object`]). No member reference escapes — the probe runs inside
+/// [`PinBundle::any_member_region`](crate::witnessed::PinBundle::any_member_region).
+///
+/// The escape-seam probes are the callers: [`copy_or_pin`](crate::machine::model::copy_or_pin) and
+/// [`still_borrows_host`](crate::machine::model::still_borrows_host) each price a crossing *out of
+/// the region the value lives in*, which is exactly that member.
+///
+/// `None` when no pinned member owns the top node — a value whose home was subsumed out of the
+/// antichain by an outer member, or one built into a region the envelope does not pin. Every
+/// caller reads `None` conservatively: copy the value and keep its source pinned.
+pub(crate) fn with_home_region<R>(
+    envelope: &DeliveredCarried,
+    object: &KObject<'_>,
+    f: impl FnOnce(&KoanRegion) -> R,
+) -> Option<R> {
+    let ptr = object as *const KObject<'_>;
+    let mut found = None;
+    let mut f = Some(f);
+    envelope.pins().any_member_region(|region| {
+        if region.owns_object(ptr) {
+            found = f.take().map(|f| f(region));
+            true
+        } else {
+            false
+        }
+    });
+    found
+}
 
 /// The step-terminal seal's variant bit (design/value-substrates.md § Escape): force
 /// `borrows_host = true` on `witnessed` when its carried value is a substrate carrier (`Record` /
@@ -58,4 +90,35 @@ pub(crate) fn force_substrate_borrows_host(
         Some(erased) => Witnessed::from_erased(erased, CarrierWitness::new(true, None)),
         None => witnessed,
     }
+}
+
+/// The **source claim** for a copy that leaves nothing pointing back at the region the value lived
+/// in: `envelope`'s own members minus that home region. Every other member survives — a copy can
+/// drop its producer and still borrow elsewhere. Falls back to the whole set when the home is not
+/// locatable among the members ([`with_home_region`]), which over-retains rather than dangles.
+///
+/// Dropping the producer from the claim is what frees a tail loop's retiring region once its
+/// delivered carrier drops, instead of chaining it into every successor region's arena.
+pub(crate) fn source_pins_releasing_home(envelope: &DeliveredCarried) -> FramePins {
+    envelope
+        .open(|live| {
+            live.as_object().and_then(|object| {
+                with_home_region(envelope, object, |home| {
+                    envelope.pins().without_region(home)
+                })
+            })
+        })
+        .unwrap_or_else(|| envelope.pins().clone())
+}
+
+/// The **source claim** for a value copied out of `envelope` with no per-value release probe run:
+/// [`source_pins_releasing_home`] when the carrier reports its borrows do not reach its own home
+/// (the borrows-home bit, the pin-free form of that membership query), else the whole member set.
+/// The copy-bind doors and the non-substrate copy seams take this; a seam that runs the exact
+/// `still_borrows_host` probe overrides the bit with its own answer.
+pub(crate) fn copied_source_pins(envelope: &DeliveredCarried) -> FramePins {
+    if envelope.witness().borrows_host() {
+        return envelope.pins().clone();
+    }
+    source_pins_releasing_home(envelope)
 }

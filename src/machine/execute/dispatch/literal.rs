@@ -12,7 +12,7 @@ use crate::machine::{
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Delivered, RegionHandle, Witnessed};
 
-use super::super::lift::{copied_seam_mode, copy_held_from_carried};
+use super::super::lift::{copied_seam_source_pins, copy_held_from_carried};
 use super::super::outcome::DepTerminal;
 use super::super::runtime::KoanRuntime;
 use super::super::{StepCarried, WitnessedDepFinish};
@@ -83,11 +83,11 @@ fn fold_cells(
     // its reach into the aggregate region and hands back the composed carrier + bundle. The empty
     // seed pins nothing.
     cells.fold((acc0, FramePins::empty()), |(acc, acc_bundle), cell| {
-        let mode = copied_seam_mode(&cell);
+        let source_pins = copied_seam_source_pins(&cell);
         cell.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
             acc,
             &acc_bundle,
-            mode,
+            &source_pins,
             |value, (region, mut cells), placement| {
                 cells.push(copy_held_from_carried(
                     value,

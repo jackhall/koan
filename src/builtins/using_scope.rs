@@ -75,7 +75,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let seed: Option<BlockSeed<'a>> = ctx.arg_carrier("m").map(|carrier| {
         let carrier = carrier.duplicate();
         let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope, _types: &TypeRegistry| {
-            let (_stored, pins) = overlay.host_reach_of(&carrier);
+            let (_stored, pins) = overlay.envelope_reach_of(&carrier);
             overlay.retain_reach(pins);
         });
         seed

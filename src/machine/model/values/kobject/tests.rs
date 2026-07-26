@@ -335,9 +335,9 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
 
     // Mint a description naming `foreign`'s region into `dest`'s side table (foreign to `dest`, so it
     // survives home-omission as a member). `_pins` keeps its members alive for the assertion.
-    let (minted, _pins, _) = dest.brand().mint(&[], &[Rc::clone(&foreign)], |_| false);
-    let foreign_reach =
-        minted.expect("a foreign materialize-host mints a member naming its region");
+    let foreign_bundle = crate::machine::core::FramePins::singleton(Rc::clone(&foreign));
+    let (minted, _pins, _) = dest.brand().mint(&[&foreign_bundle], |_| false);
+    let foreign_reach = minted.expect("a foreign member mints a member naming its region");
     assert!(o.resident_in_delivered(dest.region(), &[foreign_reach]));
 }
 

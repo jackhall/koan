@@ -42,7 +42,7 @@ impl<'a> Scope<'a> {
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
-        let (stored, pins) = self.adopted_reach_of(cell);
+        let (stored, pins) = self.copied_reach_of(cell);
         let obj = self.store_projection_reaching(cell, &project, stored, types)?;
         Ok(Reached::mint(obj, stored, pins))
     }
@@ -247,11 +247,11 @@ fn stored_sets<'s, 'r>(stored: &'s StoredReach<'r>) -> &'s [&'r FrameReach] {
 /// arena of some member of `reach`, or a region `ambient` reports as already covered" —
 /// [`KObject::resident_in`](KObject::resident_in)'s dest-only check is the `reach: &[]`,
 /// `ambient: None` case; the object delivered tier widens it. Each `reach` set was minted into `dest`'s own arena by
-/// the same scope the audit runs against (`Scope::host_reach_of` / `adopted_reach_of`), so
+/// the same scope the audit runs against (`Scope::envelope_reach_of`), so
 /// membership here is dest-relative by construction — no separate "is this evidence dest-relative"
 /// check is needed. `ambient`, when supplied, is the destination scope's own
 /// [`Scope::covers_region_ambiently`](super::scope::Scope::covers_region_ambiently) — the exact
-/// predicate every `host_reach_of` / `adopted_reach_of` mint omits by, so a region the mint left
+/// predicate every `envelope_reach_of` mint omits by, so a region the mint left
 /// out of `reach` is still resident — omitted from the *reach set*, never from *residence*. Only
 /// [`Scope`]'s own evidence-tier methods construct the `ambient` form, binding the predicate to
 /// the destination scope by construction.

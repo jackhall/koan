@@ -47,7 +47,6 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use crate::machine::FoldingBrand;
     use crate::machine::RegionTypeFamily;
     use crate::machine::{require_kexpression, Action, CatchContinue, DepPlacement, DepRequest};
-    use crate::witnessed::Residence;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.
@@ -73,7 +72,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // an asserted singleton; the handle itself borrows no region.
         let frame = fctx.ctx.frame();
         let home = build_type_operand(fctx.scope, Rc::clone(&frame), result_member);
-        // Both arms fold a delivery envelope into `home` at `Residence::Copied` — the watched
+        // Both arms fold a delivery envelope into `home` claiming the envelope's own pins — the watched
         // carrier for `Ok`, `to_tagged`'s freshly-born envelope (its record substrate can only be
         // built through a fold door, so it is sealed as a delivered carrier rather than routed
         // through the checked/audited move-in tier) for `Err` — so the two arms share one shape.
@@ -92,7 +91,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                 home,
                 &crate::machine::core::FramePins::empty(),
-                Residence::Copied,
+                carrier.pins(),
                 |value, (_region, identity), placement| {
                     let region = FoldingBrand::in_fold_closure(placement);
                     Carried::Object(region.alloc_object_folded(build_result(

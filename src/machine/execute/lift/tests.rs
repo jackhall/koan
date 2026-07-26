@@ -416,7 +416,7 @@ fn type_recursive_member_relocates_and_navigates() {
 /// Build-time accumulator for the aggregate-fold mirrors below: the destination region plus the
 /// partial cell vector — a local twin of `dispatch::literal::AggBuildFamily` (private to that
 /// module), reattached here so the tests can drive `fold_cells`'s own mechanism
-/// (`copied_seam_mode` + `transfer_into_placing` + `copy_held_from_carried`) directly.
+/// (`copied_seam_source_pins` + `transfer_into_placing` + `copy_held_from_carried`) directly.
 struct RecordAggFamily;
 reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
 
@@ -446,10 +446,10 @@ fn alloc_home_closure_record<'run>(
     door.alloc_object_folded(KObject::record_of_held(door, fields, types))
 }
 
-/// Escape with **copy**: `fold_cells`'s exact aggregate loop (`copied_seam_mode` +
+/// Escape with **copy**: `fold_cells`'s exact aggregate loop (`copied_seam_source_pins` +
 /// `transfer_into_placing` + `copy_held_from_carried`), mirrored here for `DEPTH` independent
 /// producers each contributing a plain-data record — no field borrows anything, so
-/// `still_borrows_host` answers false and every cell selects `Residence::Released`: the
+/// `still_borrows_host` answers false and every cell claims the empty source bundle: the
 /// record is totally rebuilt into the aggregate's own region and every producer frame is dropped
 /// *before* the read, proving the seam genuinely releases rather than conservatively pinning.
 #[test]
@@ -480,8 +480,8 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
                 door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
             // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
             // conservatively forces `borrows_host = true` at construction, regardless of its own
-            // contents — `copied_seam_mode`'s exact `still_borrows_host` answer is what
-            // actually decides Released vs. Copied below; the seal bit only matters if `Copied` wins.
+            // contents — `copied_seam_source_pins`'s exact `still_borrows_host` answer is what
+            // actually decides release vs. retain below; the seal bit only matters if the source is retained.
             let sealed = force_substrate_borrows_host(
                 Witnessed::from_erased(
                     Erased::erase(Carried::Object(obj)),
@@ -491,16 +491,16 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
             );
             let dep: DeliveredCarried =
                 Delivered::seal(sealed, producer.storage_rc(), FramePins::empty());
-            let mode = copied_seam_mode(&dep);
+            let source_pins = copied_seam_source_pins(&dep);
             assert!(
-                matches!(mode, Residence::Released),
-                "a plain-data record cell must select Released"
+                source_pins.is_empty(),
+                "a plain-data record cell must claim the empty source bundle (released)"
             );
             producers.push(producer);
             dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
                 acc,
                 &acc_bundle,
-                mode,
+                &source_pins,
                 |value, (region, mut cells), placement| {
                     cells.push(copy_held_from_carried(
                         value,
@@ -539,7 +539,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
 /// Escape with **pin**: the same `fold_cells` mechanism, but each of the `DEPTH` producers
 /// contributes a record whose field is a genuine borrow leaf into its own producer (a closure
 /// captured in that same frame) — `still_borrows_host` answers true (the leaf's home IS the
-/// delivered cell's own host), so every cell selects `Residence::Copied` and its producer
+/// delivered cell's own home), so every cell claims its envelope's pins and its producer
 /// materializes into the aggregate's reach. Dropping every producer shell and reading each
 /// closure's captured scope back is the no-use-after-free check under tree borrows; a regression
 /// that instead released these producers (mistaking the record for plain data) would dangle here.
@@ -572,9 +572,9 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
                 other => panic!("expected a Record, got {}", other.ktype().name(&types)),
             });
             // The seal chokepoint (Ruling 5): every record's carrier conservatively forces
-            // `borrows_host = true` at construction — without it, `Residence::Copied`'s
+            // `borrows_host = true` at construction — without it, the retained-source claim's
             // `materialize_hosts` arm (`iff borrows_host`) would skip materializing the producer even
-            // though `copied_seam_mode` below correctly selects `Copied`, dangling the read at the end.
+            // though `copied_seam_source_pins` below correctly retains the source, dangling the read at the end.
             let sealed = force_substrate_borrows_host(
                 Witnessed::from_erased(
                     Erased::erase(Carried::Object(obj)),
@@ -584,16 +584,16 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
             );
             let dep: DeliveredCarried =
                 Delivered::seal(sealed, producer.storage_rc(), FramePins::empty());
-            let mode = copied_seam_mode(&dep);
+            let source_pins = copied_seam_source_pins(&dep);
             assert!(
-                matches!(mode, Residence::Copied),
-                "a closure-embedding record cell must select Copied"
+                !source_pins.is_empty(),
+                "a closure-embedding record cell must claim its envelope's pins"
             );
             producers.push(producer);
             dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
                 acc,
                 &acc_bundle,
-                mode,
+                &source_pins,
                 |value, (region, mut cells), placement| {
                     cells.push(copy_held_from_carried(
                         value,
@@ -629,9 +629,9 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
 }
 
 /// Escape with the **cost-chooser-selected pin** verb at the value-level seam (`seam_verb` →
-/// [`RegionEscape::Pin`] → `Residence::Kept` + [`copy_carried`]), the shape `relocate_terminal` /
+/// [`RegionEscape::Pin`] → the envelope's own pins + [`copy_carried`]), the shape `relocate_terminal` /
 /// `single_poll` / `finalize` take for a top-level record — distinct from the two container-cell
-/// cases above, which route `copied_seam_mode` (never a pin). Each of the `DEPTH` producers
+/// cases above, which route `copied_seam_source_pins` (never a pin). Each of the `DEPTH` producers
 /// contributes a record whose only field is a closure captured in that same frame: priceable (the
 /// closure leaf costs zero) with `borrows_home` set, so the chooser returns `Pin`. Under the verb's
 /// `Kept` residence the producer host is minted into the destination reach unconditionally, and
@@ -683,7 +683,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
             dep.transfer_into_placing::<PinAggFamily, PinAggFamily, _>(
                 acc,
                 &acc_bundle,
-                verb.residence(),
+                &seam_source_pins(&dep, verb),
                 |value, (region, mut cells), placement| {
                     cells.push(copy_carried(
                         value,

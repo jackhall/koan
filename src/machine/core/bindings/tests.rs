@@ -21,8 +21,9 @@ fn data_binding_round_trips_stored_reach() {
     // Mint a description naming `foreign` (foreign to `region`, so it survives home-omission as a
     // member) to stand in for the home-omitted foreign reach a value borrows. `_pins` keeps the
     // minted description's members alive for the scope.
-    let (minted, _pins, _) = region.mint(&[], std::slice::from_ref(&foreign), |_| false);
-    let reach_set = minted.expect("a foreign materialize-host mints a single-member reach");
+    let foreign_bundle = FramePins::singleton(Rc::clone(&foreign));
+    let (minted, _pins, _) = region.mint(&[&foreign_bundle], |_| false);
+    let reach_set = minted.expect("a foreign member mints a single-member reach");
     let reach = StoredReach::for_test(Some(reach_set), false);
     bindings
         .try_bind_value(
@@ -56,8 +57,9 @@ fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
     let bindings: Bindings<'_> = Bindings::new();
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
     let foreign = run_root_storage();
-    let (minted, _pins, _) = region.mint(&[], std::slice::from_ref(&foreign), |_| false);
-    let reach_set = minted.expect("a foreign materialize-host mints a single-member reach");
+    let foreign_bundle = FramePins::singleton(Rc::clone(&foreign));
+    let (minted, _pins, _) = region.mint(&[&foreign_bundle], |_| false);
+    let reach_set = minted.expect("a foreign member mints a single-member reach");
     let reach = StoredReach::for_test(Some(reach_set), false);
     bindings
         .try_bind_value(

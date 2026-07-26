@@ -51,7 +51,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
 
     let (carrier, weak) = resident_scalar(&producer, false);
     assert!(
-        !carrier.witness().reach_covers(None, producer.region()),
+        !carrier.witness().has_reach_members(),
         "a region-pure scalar's reach names nothing"
     );
     assert!(
@@ -63,6 +63,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
         .runtime
         .finalize_terminal(
             Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            &producer.storage_rc(),
             None,
         )
         .expect("no declared return, no error");
@@ -143,6 +144,7 @@ fn home_borrowing_value_keeps_its_bit_and_rides_retention() {
         .runtime
         .finalize_terminal(
             Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            &producer.storage_rc(),
             None,
         )
         .expect("no declared return, no error");
@@ -337,6 +339,7 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
         .runtime
         .finalize_terminal(
             Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            &producer.storage_rc(),
             None,
         )
         .expect("no declared return, no error");
@@ -399,6 +402,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
         .runtime
         .finalize_terminal(
             Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            &producer.storage_rc(),
             None,
         )
         .expect("no declared return, no error");

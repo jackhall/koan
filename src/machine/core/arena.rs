@@ -203,18 +203,19 @@ impl<'a> RegionBrand<'a> {
     /// Mint a frozen reach description into this brand's region side table — the Koan veneer over
     /// [`ReachDescription::mint_with_dest_bit`]. `sources` are the composition's owned pin bundles
     /// (strong members — the union folds them, never a description's `Weak`). `omit` is the scope's
-    /// home/lexical-ancestor policy predicate; home-omission (self-cycle) is handled by the library.
+    /// home/lexical-ancestor policy predicate; the self rule (never pin a region into itself) is
+    /// handled by the library. A value's home region rides `sources` as an ordinary member, so
+    /// there is no separate host-materialization arm.
     /// Returns the minted description (`None` when the composed reach is empty — a region-pure value
     /// pins nothing), the owned [`FramePins`] the holder keeps to pin its members, and the
-    /// pre-omission destination-coverage bit (`true` iff a source bundle or materialized host reaches
-    /// this brand's own region before home-omission drops it).
+    /// pre-omission destination-coverage bit (`true` iff a source bundle reaches this brand's own
+    /// region before the self rule strips it from the owned bundle).
     pub(crate) fn mint(
         self,
         sources: &[&FramePins],
-        materialize_hosts: &[Rc<FrameStorage>],
         omit: impl Fn(&KoanRegion) -> bool,
     ) -> (Option<&'a FrameReach>, FramePins, bool) {
-        ReachDescription::mint_with_dest_bit(self.0, sources, materialize_hosts, omit)
+        ReachDescription::mint_with_dest_bit(self.0, sources, omit)
     }
 
     /// The witnessed-allocation surface for an owned object built fresh inside the brand: born

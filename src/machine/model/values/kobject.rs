@@ -712,27 +712,13 @@ fn held_borrows_host(cell: &Held<'_>, host: &KoanRegion) -> bool {
 /// producer host's allocated total. Non-record values never reach this — they always copy.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum RegionEscape {
-    /// Borrow rides, the producer region transfers by hold (`Residence::Kept`); the relocate hook
-    /// pointer-copies the record (its substrate borrow rides, covered by the Kept-minted reach).
+    /// Borrow rides, the producer region transfers by hold; the relocate hook pointer-copies the
+    /// record (its substrate borrow rides, covered by the reach the transfer mints).
     Pin,
     /// Total rebuild of the value's reachable structure at the destination brand. `released`: the
-    /// rebuild provably frees the retiring producer host (`Residence::Released` vs
-    /// `Residence::Copied`).
+    /// rebuild provably frees the retiring producer region, so the transfer claims the empty
+    /// source bundle.
     Copy { released: bool },
-}
-
-impl RegionEscape {
-    /// The residence mode this verb transfers under: `Pin` keeps the producer region (the substrate
-    /// borrow rides its unconditionally-minted reach); a released copy frees the retiring host; an
-    /// unreleased copy leaves the host to its conservative materialization.
-    pub(crate) fn residence(self) -> crate::witnessed::Residence {
-        use crate::witnessed::Residence as SeamResidence;
-        match self {
-            RegionEscape::Pin => SeamResidence::Kept,
-            RegionEscape::Copy { released: true } => SeamResidence::Released,
-            RegionEscape::Copy { released: false } => SeamResidence::Copied,
-        }
-    }
 }
 
 /// A seam tuning constant: copy a priceable home-crossing record only when its exact rebuild cost
