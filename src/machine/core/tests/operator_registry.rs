@@ -35,7 +35,7 @@ fn register_then_resolve_group_by_probe() {
     let key = probe_key(&["+", "-"]);
     assert_eq!(key, "+ -");
     scope
-        .register_operator_group(key.clone(), group, BindingIndex::value(1))
+        .register_operator_group_direct(key.clone(), group, BindingIndex::value(1))
         .unwrap();
     let resolved = scope
         .resolve_operator_group_with_chain(&key, None)
@@ -51,7 +51,7 @@ fn undeclared_probe_misses() {
     let scope = run_root_bare(&region);
     let group = Rc::new(arithmetic_group());
     scope
-        .register_operator_group("+".to_string(), group, BindingIndex::value(1))
+        .register_operator_group_direct("+".to_string(), group, BindingIndex::value(1))
         .unwrap();
     // `*` was never registered.
     assert!(scope.resolve_operator_group_with_chain("*", None).is_none());
@@ -64,13 +64,13 @@ fn cross_group_probe_misses() {
     let group = Rc::new(arithmetic_group());
     // Only the within-group subsets are registered.
     scope
-        .register_operator_group("+".to_string(), Rc::clone(&group), BindingIndex::value(1))
+        .register_operator_group_direct("+".to_string(), Rc::clone(&group), BindingIndex::value(1))
         .unwrap();
     scope
-        .register_operator_group("-".to_string(), Rc::clone(&group), BindingIndex::value(1))
+        .register_operator_group_direct("-".to_string(), Rc::clone(&group), BindingIndex::value(1))
         .unwrap();
     scope
-        .register_operator_group(probe_key(&["+", "-"]), group, BindingIndex::value(1))
+        .register_operator_group_direct(probe_key(&["+", "-"]), group, BindingIndex::value(1))
         .unwrap();
     // A chain mixing `+` with an operator from a different (unregistered) group
     // produces the probe "+ |", which nothing registered — a clean miss.
@@ -90,10 +90,10 @@ fn innermost_scope_shadows_outer() {
     let inner_group = Rc::new(OperatorGroup::new(inner_members, ReductionMode::FoldRight));
 
     outer
-        .register_operator_group("+".to_string(), outer_group, BindingIndex::value(1))
+        .register_operator_group_direct("+".to_string(), outer_group, BindingIndex::value(1))
         .unwrap();
     inner
-        .register_operator_group("+".to_string(), inner_group, BindingIndex::value(1))
+        .register_operator_group_direct("+".to_string(), inner_group, BindingIndex::value(1))
         .unwrap();
 
     // The inner registration wins the chain walk.
@@ -115,7 +115,7 @@ fn visibility_cutoff_hides_later_sibling_registration() {
     let scope = run_root_bare(&region);
     let group = Rc::new(arithmetic_group());
     scope
-        .register_operator_group("+".to_string(), group, BindingIndex::value(5))
+        .register_operator_group_direct("+".to_string(), group, BindingIndex::value(5))
         .unwrap();
     // A consumer at cutoff 3 can't see a registration at index 5.
     assert!(scope
@@ -150,7 +150,7 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
 
     let group = Rc::new(singleton_group("+", ReductionMode::FoldRight));
     inner
-        .register_operator_group("+".to_string(), group, BindingIndex::value(1))
+        .register_operator_group_direct("+".to_string(), group, BindingIndex::value(1))
         .expect("a builtin probe is shadowable, not a rebind");
 
     let inside = inner
@@ -179,13 +179,13 @@ fn re_registering_an_equal_record_is_a_no_op() {
     let first = Rc::new(singleton_group("+", ReductionMode::FoldLeft));
     let second = Rc::new(singleton_group("+", ReductionMode::FoldLeft));
     scope
-        .register_operator_group("+".to_string(), Rc::clone(&first), BindingIndex::value(1))
+        .register_operator_group_direct("+".to_string(), Rc::clone(&first), BindingIndex::value(1))
         .unwrap();
     scope
-        .register_operator_group("+".to_string(), first, BindingIndex::value(2))
+        .register_operator_group_direct("+".to_string(), first, BindingIndex::value(2))
         .expect("an `Rc`-identical re-register is idempotent");
     scope
-        .register_operator_group("+".to_string(), second, BindingIndex::value(3))
+        .register_operator_group_direct("+".to_string(), second, BindingIndex::value(3))
         .expect("an equal mode + member set is the same record");
 
     // The first registration's index stands, so the entry stays visible where it was declared.
@@ -205,10 +205,10 @@ fn re_registering_a_conflicting_mode_errors() {
     let fold = Rc::new(singleton_group("+", ReductionMode::FoldLeft));
     let unary = Rc::new(singleton_group("+", ReductionMode::Unary));
     scope
-        .register_operator_group("+".to_string(), fold, BindingIndex::value(1))
+        .register_operator_group_direct("+".to_string(), fold, BindingIndex::value(1))
         .unwrap();
     let error = scope
-        .register_operator_group("+".to_string(), unary, BindingIndex::value(2))
+        .register_operator_group_direct("+".to_string(), unary, BindingIndex::value(2))
         .expect_err("a different chaining mode under one probe is a conflict");
     let message = error.to_string();
     assert!(
@@ -230,7 +230,7 @@ fn using_window_surfaces_the_modules_operator_group() {
         .alloc_scope(Scope::child_under_module(root, "vec_ops".to_string()));
     let group = Rc::new(singleton_group("+", ReductionMode::FoldRight));
     module
-        .register_operator_group("+".to_string(), group, BindingIndex::value(1))
+        .register_operator_group_direct("+".to_string(), group, BindingIndex::value(1))
         .unwrap();
 
     // Outside the module the probe is undeclared.
@@ -254,7 +254,7 @@ fn subset_registration_covers_every_probe_of_the_member_set() {
     let scope = run_root_bare(&region);
     let group = Rc::new(arithmetic_group());
     scope
-        .register_group_under_all_subsets(&["+", "-"], &group, BindingIndex::value(1))
+        .register_group_under_all_subsets_direct(&["+", "-"], &group, BindingIndex::value(1))
         .unwrap();
 
     for probe in ["+", "-", "+ -"] {

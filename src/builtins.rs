@@ -88,7 +88,7 @@ pub(crate) fn register_builtin_full<'a>(
         binder,
         types,
     ));
-    let _ = scope.register_function(name.into(), f, BindingIndex::BUILTIN);
+    let _ = scope.register_function_direct(name.into(), f, BindingIndex::BUILTIN);
 }
 
 /// Common-case [`register_builtin_full`]: not a binder builtin.
@@ -124,7 +124,7 @@ pub(crate) fn register_overload_at<'a>(
         types,
     ));
     scope
-        .register_function(name.into(), f, index)
+        .register_function_direct(name.into(), f, index)
         .expect("register_overload_at: user-index overload should not collide with a builtin");
 }
 

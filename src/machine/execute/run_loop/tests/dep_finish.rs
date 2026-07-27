@@ -211,10 +211,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
                 .alloc_object(KObject::KString("from-combine".into()));
             Action::done_resident(Carried::Object(v))
         });
-        Action::AwaitDeps {
-            deps: crate::scheduler::Deps::new(),
-            finish,
-        }
+        Action::await_deps(crate::scheduler::Deps::new(), finish)
     }
 
     let region = run_root_storage();

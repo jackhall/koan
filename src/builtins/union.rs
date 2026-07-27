@@ -1,6 +1,7 @@
 use crate::machine::model::KKind;
 use std::rc::Rc;
 
+use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
@@ -23,7 +24,7 @@ fn finalize_union<'a>(
     window: Rc<RecursiveGroupWindow>,
     fields: Vec<(String, KType)>,
     site: DeclarationSite,
-) -> Result<StepCarried<'a>, KError> {
+) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "UNION schema must have at least one tag".to_string(),
@@ -56,13 +57,19 @@ fn finalize_union<'a>(
     };
 
     let union_ty = fctx.types.union_of(sealed.members);
-    match scope.register_nominal_upsert(name.clone(), union_ty, site) {
-        // `register_nominal_upsert` hands back the `Copy` `KType` handle. Cross it as a declared
-        // operand and fold the variant carriers' reach onto the placement's witness, rather than
-        // capturing the union type into a fold closure.
-        Ok(kt_ref) => Ok(seal_type_identity(scope, kt_ref)),
-        Err(e) => Err(e),
-    }
+    // The union type is a `Copy` handle: cross it as a declared operand and fold the variant
+    // carriers' reach onto the placement's witness, rather than capturing it into a fold closure.
+    // The `types` write installing it under the binder name rides the outcome.
+    Ok((
+        seal_type_identity(scope, union_ty),
+        vec![WriteOp::Type {
+            name,
+            kt: union_ty,
+            site,
+            policy: TypeWritePolicy::UpsertEqual,
+            builtin_shadow_guard: true,
+        }],
+    ))
 }
 
 /// Elaborate the variant schema, folding synchronously via [`finalize_union`] or deferring through
@@ -77,7 +84,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let schema_expr = match arg_object(ctx.args, "schema") {
         Some(KObject::KExpression(e)) => e.clone(),
         _ => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "UNION schema slot must be a parenthesized dict literal".to_string(),
             ))))
         }
@@ -87,7 +94,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // fill. The binder itself is not a member — it denotes the union of them all.
     let tags = match pair_list_names(&schema_expr, "UNION schema", FieldNameKind::Type) {
         Ok(tags) => tags,
-        Err(message) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(message)))),
+        Err(message) => return Action::done(Err(KError::new(KErrorKind::ShapeError(message)))),
     };
     let window = RecursiveGroupWindow::new(
         tags.into_iter().map(|tag| (tag, KKind::NewType)).collect(),
@@ -293,10 +300,16 @@ mod tests {
         // One declaration's identity: both finalize calls simulate a parallel finalize of the
         // same statement, so they share one site.
         let site = mock_declaration_site(1, 0);
-        // First finalize: no prior binding, so a fresh set of pending members is minted, sealed,
-        // and registered.
-        let first = super::finalize_union(&fctx, "Maybe".into(), make_window(), fields(), site);
-        assert!(first.is_ok());
+        // First finalize: no prior binding, so a fresh set of pending members is minted and
+        // sealed. The finalize writes nothing itself — the ops it hands back are what install the
+        // identity, exactly as the run loop applies them after the declaring step returns.
+        let (_, writes) =
+            super::finalize_union(&fctx, "Maybe".into(), make_window(), fields(), site)
+                .expect("the first finalize seals");
+        assert!(scope.bindings().types().get("Maybe").is_none());
+        for write in writes {
+            write.apply(scope).expect("the first install lands");
+        }
         assert_eq!(
             variant_repr(scope, "Maybe", "Some", &test_run.types),
             KType::NUMBER
@@ -308,7 +321,12 @@ mod tests {
         // Second finalize: the sealed window refills to the same handles and the upsert sees the
         // same installing handle, so it overwrites idempotently and returns the bound union type.
         let second = super::finalize_union(&fctx, "Maybe".into(), make_window(), fields(), site);
-        let is_union = second.map(|carrier| {
+        let is_union = second.map(|(carrier, writes)| {
+            for write in writes {
+                write
+                    .apply(scope)
+                    .expect("a same-handle re-install overwrites idempotently");
+            }
             carrier.inspect_pinned(&crate::witnessed::NoPins, |c| {
                 matches!(c, Carried::Type(kt)
                     if matches!(types.node(*kt), TypeNode::Union { members } if members.len() == 2))

@@ -3,12 +3,11 @@
 //! failures. `kfunction` lives here because scope holds functions and functions capture scope.
 
 mod arena;
-mod bindings;
+pub(crate) mod bindings;
 mod carrier_witness;
 mod kerror;
 pub(crate) mod kfunction;
 mod lexical_frame;
-mod pending;
 mod run_id;
 mod scope;
 mod scope_id;
@@ -36,7 +35,7 @@ pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub(crate) use kfunction::action::{
     arg_held, arg_object, arg_type, arg_unresolved_type, require_bare_type_name,
-    require_identifier_name, require_kexpression, require_ktype, scope_frame, Action,
+    require_identifier_name, require_kexpression, require_ktype, scope_frame, Action, ActionKind,
     AwaitContinue, BlockEntry, BodyCtx, BodyPlacement, CatchContinue, DepPlacement, DepRequest,
     DepTerminal, FinishCtx, FramePlacement, OwnedDispatch, TailContract,
 };

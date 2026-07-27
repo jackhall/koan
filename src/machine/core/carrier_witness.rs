@@ -121,19 +121,6 @@ impl FunctionMirror {
             summary: f.summarize(),
         }
     }
-
-    /// A second bundle naming the same callable: the dormant seal bit-copied beside owned copies of
-    /// the derived data. The conditional-defer write doors duplicate before attempting so the
-    /// original still rides a deferred retry.
-    pub(crate) fn duplicate(&self) -> Self {
-        FunctionMirror {
-            sealed: self.sealed.duplicate(),
-            key: self.key.clone(),
-            token: self.token.clone(),
-            identity: self.identity,
-            summary: self.summary.clone(),
-        }
-    }
 }
 
 /// Project a bound value's dormant carrier onto the `KFunction` it wraps, under `pin` — the write

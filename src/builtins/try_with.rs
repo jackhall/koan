@@ -64,25 +64,25 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             // without an `Ok` or `_` arm.
             Ok(None) => {
                 return match original_error {
-                    Some(e) => Action::Done(Err(e)),
-                    None => Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                    Some(e) => Action::done(Err(e)),
+                    None => Action::done(Err(KError::new(KErrorKind::ShapeError(
                         "TRY missing Ok arm".to_string(),
                     )))),
                 };
             }
-            Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+            Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         };
         arm_tail(fctx.scope, it_source, body_expr, contract, fctx.types)
     });
-    Action::Catch {
-        watched: DepRequest::Dispatch {
+    Action::catch(
+        DepRequest::Dispatch {
             expr: expr_inner,
             placement: DepPlacement::InScope(body_scope),
             // The watched body enters a fresh block (`InScope`) — a statement position.
             binder_covered: false,
         },
         finish,
-    }
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {

@@ -413,29 +413,47 @@ Both arms ride a grouped `NodePayload` (scope handle + lexical chain) *inside* t
 slot-storage scope handle and the seed-side `with_scope` re-anchor are documented in
 [per-call-region/scope-handles.md § Slot-table scope handle](per-call-region/scope-handles.md#slot-table-scope-handle).
 
-## Re-entrant scope writes
+## Binding writes ride the step outcome
 
-[`Scope::bind_value`](../src/machine/core/scope.rs),
-[`Scope::register_function`](../src/machine/core/scope.rs), and
-[`Scope::register_type`](../src/machine/core/scope.rs) route through
-the embedded [`Bindings`](../src/machine/core/bindings.rs) façade's
-validated write primitives (`try_apply` / `try_register_function` /
-`try_register_type`), which `try_borrow_mut` the relevant map
-(`data` / `functions` / `types`) and return
-`ApplyOutcome::Conflict` when a borrow is already held. The scope then defers
-the write through the embedded
-[`PendingQueue`](../src/machine/core/pending.rs) façade
-(`defer_value` / `defer_function` / `defer_type`); the queue is drained by
-[`Scope::drain_pending`](../src/machine/core/scope.rs), invoked by the
-scheduler between dispatch nodes, which calls `PendingQueue::drain(&Bindings)`
-to replay each deferred write through the same validated `Bindings` write path
-as a direct insert. The hot path (no concurrent borrow) is one direct insert
-with the function-mirror write folded in. Re-entrant writes queue silently and
-become visible after the iterating borrow releases, with snapshot-iteration
-semantics for the iterator. Drain-time `Err` returns trip a `debug_assert!`
-in debug builds (by drain time these are invariant violations); release
-builds keep the legacy silent-drop behavior so dispatch nodes never see
-surfaced errors.
+A builtin body never mutates a published scope's binding tables. It builds its value under the
+step brand through one of the `seal_*` construction doors on
+[`Scope`](../src/machine/core/scope/registry.rs) — mint the exact reach, copy the value in under
+it, seal the two together — and returns the table write it decided as a
+[`WriteOp`](../src/machine/core/bindings/ops.rs) on its
+[`Action`](../src/machine/core/kfunction/action.rs). One variant per channel: `Value` / `Callable`
+(a `data` entry, with the function-bucket mirror when the value wraps a callable), `Overload` (a
+bare `FN` / `OP` bucket entry), `Type` (a `types` entry under a
+[`TypeWritePolicy`](../src/machine/core/bindings/ops.rs)), `Group` (one operator-registry probe
+key), and `SigSlot` (a `VAL` slot in the nearest enclosing SIG decl scope).
+
+`run_action` deposits each interpreted `Action`'s effects into a run-loop-owned sink — a private
+field on [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) with one deposit method the
+execute layer alone can reach, so a builtin (which receives a `BodyCtx`) cannot touch it. The sink
+is created per step by [`run_step`](../src/machine/execute/run_loop.rs) and drained there, after
+the step's continuation has returned and before its outcome is realized. `WriteOp::apply` is the
+single interpreter: it resolves the write target once (forwarding through a transparent `USING`
+window to the call site, with that window's surfaced-member collision check), runs the
+builtin-shadow consult where the door asks for it, and mutates the table. Because nothing but the
+run loop reaches this point, every map borrow is a firm `borrow_mut` — there is no koan frame on
+the stack to hold a competing one, so contention is unrepresentable rather than tolerated.
+
+Ops apply in `Vec` order, which is program order within the step. On the first failure the
+remaining ops are dropped and the step becomes the node's error terminal, so the ordinary finalize
+arms clear the producer's placeholders and attribute the error exactly as for an in-step error. A
+body that errors before deciding its write installs nothing at all: the writes are outcome data,
+and an error terminal carries none.
+
+Consumers synchronize through the dep graph, not through write timing: a binder's placeholder and
+pending-overload stamps go in at *submission* (already run-loop-owned — moving them later would let
+a concurrent sibling see `UnboundName` instead of parking), and a parked reader wakes only at the
+producer's finalize, which follows the drain position.
+
+Writes into a scope no other node can reach need no such discipline and stay direct, through the
+`*_direct` doors — which route through the same `WriteOp::apply` interpreter, so the table-write
+rules exist once. Those are: startup builtin registration into the run-global root; parameter binds
+and MATCH / TRY `it` into a not-yet-published per-call scope; a `GROUP` binder's registry seeding
+into its own freshly minted child scope, before its body dispatches; an ascription view's bulk
+install into a freshly minted view scope; and test fixtures.
 
 ## Structural invariants
 
@@ -494,9 +512,11 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
 
 ## Verification
 
-- [`add_during_active_data_borrow_queues_and_drains`](../src/machine/core/scope.rs)
-  holds a `data` borrow, calls `bind_value`, drops the borrow, drains, and
-  confirms the queued write applied — exercising the conditional-defer path.
+- [`a_rejected_binding_write_is_the_binders_error_terminal`](../src/machine/execute/run_loop/tests/statement_binder_install.rs)
+  submits two colliding `OP` declarations as one block and confirms the second one's rejected
+  bucket write surfaces on its own binder slot; its sibling
+  `a_binder_that_errors_installs_nothing` confirms a body that errors before deciding its write
+  leaves no binding behind.
 - Per-call-region protocol verification (escaping-value relocation and retention, TCO
   frame reuse, MATCH `FrameStorage.outer` chain) is enumerated in
   [per-call-region/scope-handles.md § Verification](per-call-region/scope-handles.md#verification).

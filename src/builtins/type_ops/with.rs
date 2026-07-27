@@ -25,7 +25,7 @@ use crate::machine::{KError, KErrorKind};
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{arg_held, arg_object, arg_type, Action};
 
-    let done_err = |e: KError| Action::Done(Err(e));
+    let done_err = |e: KError| Action::done(Err(e));
     let mismatch = |got: String| {
         KError::new(KErrorKind::TypeMismatch {
             arg: "sig".to_string(),
@@ -116,7 +116,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         })
         .collect();
     let folded = schema.fold_pins(&pins, ctx.types);
-    Action::Done(Ok(ctx.ctx.type_carried(ctx.types.signature(folded))))
+    Action::done(Ok(ctx.ctx.type_carried(ctx.types.signature(folded))))
 }
 
 #[cfg(test)]

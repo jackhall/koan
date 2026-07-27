@@ -19,6 +19,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{DepPlacement, FinishCtx};
 use crate::machine::core::{LexicalFrame, PendingBinderGuard, StepAllocator};
 use crate::machine::model::Carried;
@@ -45,12 +46,15 @@ pub(crate) type BrandCompose<'step> = Box<
     dyn for<'r> FnOnce(Vec<(String, KType)>, &'r TypeRegistry) -> Result<KType, KError> + 'step,
 >;
 
-/// `Action`-path finalize, returning a witnessed carrier — used by
-/// [`FieldListDeferral::action`], whose finish lifts the result straight into
-/// [`Action::Done(Ok)`](crate::machine::core::Action::Done). Takes the
+/// `Action`-path finalize, returning a witnessed carrier beside the binding writes the declarator
+/// decided — used by [`FieldListDeferral::action`], whose finish lifts the pair straight into
+/// [`Action::done_writing`](crate::machine::core::Action::done_writing). Takes the
 /// [`FinishCtx`] the `AwaitContinue` wrapper already holds, for the same reason.
 pub(crate) type FieldListFinalizeAction<'a> = Box<
-    dyn for<'r> FnOnce(&FinishCtx<'a, 'r>, Vec<(String, KType)>) -> Result<StepCarried<'a>, KError>
+    dyn for<'r> FnOnce(
+            &FinishCtx<'a, 'r>,
+            Vec<(String, KType)>,
+        ) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError>
         + 'a,
 >;
 
@@ -279,8 +283,9 @@ impl<'a> FieldListDeferral<'a> {
             .finish_terminal(finish)
     }
 
-    /// Finish into the `Action` currency: an [`Action::AwaitDeps`](crate::machine::core::Action) whose
-    /// re-walk of `expr` lifts the `finalize` result into `Action::Done`.
+    /// Finish into the `Action` currency: an [`ActionKind::AwaitDeps`](crate::machine::core::ActionKind)
+    /// whose re-walk of `expr` lifts the `finalize` result — terminal plus binding writes — into the
+    /// step's `Done` outcome.
     pub(crate) fn action(
         self,
         finalize: FieldListFinalizeAction<'a>,
@@ -294,13 +299,13 @@ impl<'a> FieldListDeferral<'a> {
             // re-walk; the parks are notify-only waits on a forward reference. Each field type the
             // walk yields is cloned out as owned data, so the composed type needs no operand fold.
             let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
-            Action::Done(
+            Action::done_writing(
                 rewalk
                     .run(fctx.scope, &owned, fctx.types)
                     .and_then(|fields| finalize(fctx, fields)),
             )
         });
-        Action::AwaitDeps { deps, finish }
+        Action::await_deps(deps, finish)
     }
 
     /// Finish into the `Action` currency through a [`BrandCompose`], adapting `compose` into a
@@ -310,7 +315,11 @@ impl<'a> FieldListDeferral<'a> {
         compose: BrandCompose<'a>,
     ) -> crate::machine::core::Action<'a> {
         self.action(Box::new(move |fctx, fields| {
-            Ok(fctx.ctx.type_carried(compose(fields, fctx.types)?))
+            // A composed structural type declares no binder, so it writes nothing.
+            Ok((
+                fctx.ctx.type_carried(compose(fields, fctx.types)?),
+                Vec::new(),
+            ))
         }))
     }
 }

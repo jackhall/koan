@@ -107,16 +107,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // `frame`, which the step's own seal re-pins, so only its foreign coverage rides on.
         let coverage = product.coverage_releasing_home();
         let witnessed = force_substrate_borrows_host(product.into_cell().unseal(), &frame);
-        Action::Done(Ok(StepCarried::born_pinned(witnessed, coverage)))
+        Action::done(Ok(StepCarried::born_pinned(witnessed, coverage)))
     });
-    Action::Catch {
-        watched: DepRequest::Dispatch {
+    Action::catch(
+        DepRequest::Dispatch {
             expr: expr_inner,
             placement: DepPlacement::OwnScope,
             binder_covered: false,
         },
         finish,
-    }
+    )
 }
 
 #[cfg(test)]

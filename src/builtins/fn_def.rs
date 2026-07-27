@@ -46,7 +46,7 @@ pub(crate) fn build_fn_like<'a>(
     let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator, ctx.types) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
         ParamListOutcome::Err(msg) => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg))))
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))))
         }
         ParamListOutcome::Pending {
             park_producers,
@@ -98,7 +98,7 @@ pub fn body_value_named_return<'a>(
         "FN",
         ctx.types
     ));
-    Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+    Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "FN return-type slot names a type, but `{name}` is a value. For the type of a value — a \
          module-valued parameter, say — write `-> :(TYPE OF {name})`"
     )))))
@@ -122,14 +122,14 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
         Some(kt) => match ctx.types.node(kt) {
             TypeNode::Record { fields } => fields,
             _ => {
-                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
                     kt.name(ctx.types),
                 )))))
             }
         },
         None => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "anonymous FN signature slot must be a record schema `:{…}`".to_string(),
             ))))
         }

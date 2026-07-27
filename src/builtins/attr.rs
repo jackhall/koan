@@ -25,13 +25,13 @@ use super::{arg, kw, sig};
 use crate::machine::DeliveredCarried;
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
-/// seals as a [`StepCarried`] carrier naming its reach ([`Action::Done(Ok)`]), an error as a
-/// [`Action::Done(Err)`]. Both channels are witnessed: an object value re-projected at the fold
+/// seals as a [`StepCarried`] carrier naming its reach ([`Action::done(Ok)`]), an error as a
+/// [`Action::done(Err)`]. Both channels are witnessed: an object value re-projected at the fold
 /// brand from the lhs operand's view (its reach folded by construction), a type identity witnessed
 /// in place from its stored reach via [`Scope::resident_type_carrier`] (or, for a projected type
 /// field, re-projected and sealed under the folded lhs reach).
 fn route<'a>(result: Result<StepCarried<'a>, KError>) -> crate::machine::Action<'a> {
-    crate::machine::Action::Done(result)
+    crate::machine::Action::done(result)
 }
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
@@ -67,13 +67,13 @@ pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mach
     let s_name = match arg_object(ctx.args, "s") {
         Some(KObject::KString(s)) => s.clone(),
         Some(other) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
                 expected: "Identifier".to_string(),
                 got: other.ktype().name(ctx.types),
             })));
         }
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
     let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
     // `s` is a bound name: cross the binding's own carrier as the field read's lhs operand, so the
@@ -84,10 +84,10 @@ pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mach
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name) {
         if let TypeNode::AbstractType { name, .. } = ctx.types.node(kt) {
-            return Action::Done(Err(abstract_type_has_no_members(&name)));
+            return Action::done(Err(abstract_type_has_no_members(&name)));
         }
     }
-    Action::Done(Err(KError::new(KErrorKind::UnboundName(s_name))))
+    Action::done(Err(KError::new(KErrorKind::UnboundName(s_name))))
 }
 
 /// `ATTR <s:ProperType> <field:_>` — entry for a type-channel lhs, e.g. a first-class signature
@@ -105,10 +105,10 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
                 route(access_type_member(ctx.scope, kt, &field_name, ctx.types))
             }
             TypeResolution::Unbound(name) => {
-                Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
+                Action::done(Err(KError::new(KErrorKind::UnboundName(name))))
             }
             TypeResolution::Park(producers) => {
-                Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "ATTR lhs type `{}` resolved to a still-finalizing type \
                      (parked on {} producer(s)); the type argument should already be sealed \
                      at body entry",
@@ -121,7 +121,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
     let s_kt = match arg_type(ctx.args, "s") {
         Some(kt) => kt,
         None => {
-            return Action::Done(Err(match arg_object(ctx.args, "s") {
+            return Action::done(Err(match arg_object(ctx.args, "s") {
                 Some(other) => KError::new(KErrorKind::TypeMismatch {
                     arg: "s".to_string(),
                     expected: "ProperType".to_string(),
@@ -140,7 +140,7 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine
     use crate::machine::{arg_object, Action};
     let target = match arg_object(ctx.args, "s") {
         Some(obj) => obj,
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
     let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
@@ -157,7 +157,7 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine
                     witnessed,
                     crate::machine::core::FrameCoverage::empty(),
                 ),
-                Err(e) => return Action::Done(Err(e)),
+                Err(e) => return Action::done(Err(e)),
             };
             route(access_field(&ctx.ctx, &field_name, &resident, ctx.types))
         }
@@ -170,14 +170,14 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     let m = match arg_object(ctx.args, "s") {
         Some(KObject::Module(module)) => *module,
         Some(other) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
                 expected: "Module".to_string(),
                 got: other.ktype().name(ctx.types),
             })));
         }
         None => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
                 expected: "Module".to_string(),
                 got: "Type".to_string(),

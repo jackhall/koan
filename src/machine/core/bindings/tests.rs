@@ -1,4 +1,4 @@
-//! Unit coverage for the `types` map write primitive `try_register_type`, plus
+//! Unit coverage for the `types` map write primitive `write_type`, plus
 //! the `pending_types` RAII guard lifecycle and the cross-kind exclusion that
 //! makes the `data`/`types` partition structural (no name in both).
 
@@ -57,7 +57,7 @@ fn data_binding_round_trips_sealed_reach() {
     let foreign = run_root_storage();
     let (sealed, _) = sealed_reaching(region, obj, &foreign);
     bindings
-        .try_bind_value("x", BindingIndex::BUILTIN, sealed, None)
+        .write_value("x", BindingIndex::BUILTIN, Some(sealed), None)
         .expect("value bind should succeed");
     match bindings.lookup_value("x", None) {
         Some(NameLookup::Bound(hit)) => assert!(
@@ -80,7 +80,7 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
     let foreign = run_root_storage();
     let (sealed, reach_set) = sealed_reaching(region, obj, &foreign);
     bindings
-        .try_bind_value("x", BindingIndex::BUILTIN, sealed, None)
+        .write_value("x", BindingIndex::BUILTIN, Some(sealed), None)
         .expect("value bind should succeed");
 
     let read = |label: &str| match bindings.lookup_value("x", None) {
@@ -102,13 +102,12 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
 }
 
 #[test]
-fn try_register_type_inserts_into_types_map() {
+fn write_type_inserts_into_types_map() {
     let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
-    let outcome = bindings
-        .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
-        .expect("try_register_type should succeed on fresh bindings");
-    assert!(matches!(outcome, ApplyOutcome::Applied));
+    bindings
+        .write_type("Foo", kt, DeclarationSite::BUILTIN, TypeWritePolicy::Insert)
+        .expect("write_type should succeed on fresh bindings");
     let stored = bindings
         .types()
         .get("Foo")
@@ -119,14 +118,24 @@ fn try_register_type_inserts_into_types_map() {
 }
 
 #[test]
-fn try_register_type_rejects_collision_with_rebind() {
+fn write_type_rejects_collision_with_rebind() {
     let bindings: Bindings = Bindings::new();
     let kt1: KType = KType::NUMBER;
     let kt2: KType = KType::STR;
     bindings
-        .try_register_type("Foo", kt1, DeclarationSite::BUILTIN)
+        .write_type(
+            "Foo",
+            kt1,
+            DeclarationSite::BUILTIN,
+            TypeWritePolicy::Insert,
+        )
         .expect("first register should succeed");
-    let err = match bindings.try_register_type("Foo", kt2, DeclarationSite::BUILTIN) {
+    let err = match bindings.write_type(
+        "Foo",
+        kt2,
+        DeclarationSite::BUILTIN,
+        TypeWritePolicy::Insert,
+    ) {
         Err(e) => e,
         Ok(_) => panic!("second register on same name should error, not succeed"),
     };
@@ -140,23 +149,11 @@ fn try_register_type_rejects_collision_with_rebind() {
 }
 
 #[test]
-fn try_register_type_yields_conflict_on_live_types_borrow() {
-    let bindings: Bindings = Bindings::new();
-    let kt: KType = KType::NUMBER;
-    let _r = bindings.types();
-    let outcome = bindings
-        .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
-        .expect("conflict path returns Ok(Conflict), not Err");
-    assert!(matches!(outcome, ApplyOutcome::Conflict));
-    assert!(_r.get("Foo").is_none());
-}
-
-#[test]
-fn try_register_type_clears_matching_placeholder() {
+fn write_type_clears_matching_placeholder() {
     let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     bindings
-        .try_install_placeholder(
+        .install_placeholder(
             "Bar".to_string(),
             NodeId(7),
             BindingIndex::BUILTIN,
@@ -165,23 +162,23 @@ fn try_register_type_clears_matching_placeholder() {
         .expect("placeholder install should succeed on fresh bindings");
     assert!(bindings.placeholders().contains_key("Bar"));
     bindings
-        .try_register_type("Bar", kt, DeclarationSite::BUILTIN)
+        .write_type("Bar", kt, DeclarationSite::BUILTIN, TypeWritePolicy::Insert)
         .expect("type register should succeed and clear placeholder");
     assert!(!bindings.placeholders().contains_key("Bar"));
 }
 
 #[test]
-fn try_register_type_does_not_touch_data_or_functions() {
+fn write_type_does_not_touch_data_or_functions() {
     let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     bindings
-        .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
+        .write_type("Foo", kt, DeclarationSite::BUILTIN, TypeWritePolicy::Insert)
         .expect("register should succeed");
     assert!(bindings.data().is_empty());
     assert!(bindings.functions().is_empty());
 }
 
-/// Declaration identity is run-qualified: two `try_register_type_upsert`s of one name whose
+/// Declaration identity is run-qualified: two `UpsertEqual write`s of one name whose
 /// [`NodeHandle`]s share a `NodeId` but carry distinct [`RunId`]s are two declarations, because
 /// `NodeId`s are scheduler-local and restart per run — only the pair identifies a declaration
 /// statement across the lifetime of a persistent scope. The same-run re-entry (identical handle) is
@@ -202,20 +199,33 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
         index: BindingIndex::value(0),
     };
 
-    let first = bindings
-        .try_register_type_upsert("Maybe", KType::NUMBER, site(first_run))
+    bindings
+        .write_type(
+            "Maybe",
+            KType::NUMBER,
+            site(first_run),
+            TypeWritePolicy::UpsertEqual,
+        )
         .expect("the first declaration should install");
-    assert!(matches!(first, ApplyOutcome::Applied));
 
     // Same handle re-entering (a parallel finalize of the first declaration): idempotent overwrite.
-    let reentry = bindings
-        .try_register_type_upsert("Maybe", KType::NUMBER, site(first_run))
+    bindings
+        .write_type(
+            "Maybe",
+            KType::NUMBER,
+            site(first_run),
+            TypeWritePolicy::UpsertEqual,
+        )
         .expect("a same-handle parallel finalize should overwrite idempotently");
-    assert!(matches!(reentry, ApplyOutcome::Applied));
 
     // A later run over the persistent scope reuses the NodeId but carries a fresh RunId, so its
     // handle differs from the stored entry's and the install is a second declaration: Rebind.
-    let error = match bindings.try_register_type_upsert("Maybe", KType::STR, site(second_run)) {
+    let error = match bindings.write_type(
+        "Maybe",
+        KType::STR,
+        site(second_run),
+        TypeWritePolicy::UpsertEqual,
+    ) {
         Err(e) => e,
         Ok(_) => panic!("a cross-run redeclaration of Maybe must Rebind, not overwrite"),
     };
@@ -236,9 +246,9 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
 
 // --- Cross-kind exclusion (AC1/AC4) -----------------------------------------
 // Each declarator routes to one of these write primitives (LET-value →
-// `try_bind_value`; LET-type-alias / VAL / NEWTYPE-sigil → `try_register_type`;
+// `write_value`; LET-type-alias / VAL / NEWTYPE-sigil → `write_type`;
 // MODULE / SIG / UNION / NEWTYPE-record / RECURSIVE-finalize →
-// `try_register_type_upsert`; module/USING replay → `try_bulk_install_from`).
+// `UpsertEqual write`; module/USING replay → `try_bulk_install_from`).
 // `partition_guard` is the single enforcement point every one of these primitives calls, so
 // `value_token_may_not_bind_type_side` / `type_token_may_not_bind_value_side` below — exercised
 // against a plain `Bindings::new()` — prove the exclusion for every bind site: a name's token
@@ -285,7 +295,12 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
 fn value_token_may_not_bind_type_side() {
     let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
-    let error = match bindings.try_register_type("int_ord", kt, DeclarationSite::BUILTIN) {
+    let error = match bindings.write_type(
+        "int_ord",
+        kt,
+        DeclarationSite::BUILTIN,
+        TypeWritePolicy::Insert,
+    ) {
         Err(e) => e,
         Ok(_) => panic!("a value token names a value, not a type"),
     };
@@ -305,10 +320,13 @@ fn type_token_may_not_bind_value_side() {
     let region = storage.brand();
     let bindings: Bindings = Bindings::new();
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
-    let error = match bindings.try_bind_value(
+    let error = match bindings.write_value(
         "IntOrd",
         BindingIndex::BUILTIN,
-        Sealed::seal(region.seal_resident(Carried::Object(val), CarrierWitness::new(false, None))),
+        Some(Sealed::seal(region.seal_resident(
+            Carried::Object(val),
+            CarrierWitness::new(false, None),
+        ))),
         None,
     ) {
         Err(e) => e,

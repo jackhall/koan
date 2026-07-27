@@ -71,7 +71,7 @@ mod action_bodies {
             ctx.types
         ));
         let list = ctx.types.list(elem);
-        Action::Done(Ok(ctx.ctx.type_carried(list)))
+        Action::done(Ok(ctx.ctx.type_carried(list)))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -80,7 +80,7 @@ mod action_bodies {
         crate::try_action!(require_proper_type(k, "the key type of `MAP`", ctx.types));
         crate::try_action!(require_proper_type(v, "the value type of `MAP`", ctx.types));
         let dict = ctx.types.dict(k, v);
-        Action::Done(Ok(ctx.ctx.type_carried(dict)))
+        Action::done(Ok(ctx.ctx.type_carried(dict)))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -88,13 +88,13 @@ mod action_bodies {
         let ctor = crate::try_action!(require_ktype(ctx.args, "ctor", ctx.types));
         // A declared family and a SIG's abstract constructor slot both name their parameters.
         let Some(param_names) = constructor_param_names(ctor, ctx.types) else {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "right-hand side of `AS` must be a type constructor, got `{}`",
                 ctor.name(ctx.types),
             )))));
         };
         let [param_name] = &param_names[..] else {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`{}` takes {} type arguments; the `AS` form supplies one, so \
                  multi-parameter application is not yet supported",
                 ctor.name(ctx.types),
@@ -105,7 +105,7 @@ mod action_bodies {
         // `:(Number AS Wrap)` elaborates exactly as `:(Wrap {Elem = Number})` does.
         let args = Record::from_pairs([(param_name.clone(), applied)]);
         let apply = ctx.types.constructor_apply(ctor, args);
-        Action::Done(Ok(ctx.ctx.type_carried(apply)))
+        Action::done(Ok(ctx.ctx.type_carried(apply)))
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -148,9 +148,9 @@ fn build_carrier<'a>(
     ) {
         FieldListOutcome::Done(fields) => {
             let carrier = finalize_carrier(fields, ret, ctx.types);
-            Action::Done(Ok(ctx.ctx.type_carried(carrier)))
+            Action::done(Ok(ctx.ctx.type_carried(carrier)))
         }
-        FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+        FieldListOutcome::Err(msg) => Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,

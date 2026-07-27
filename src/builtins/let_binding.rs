@@ -1,3 +1,4 @@
+use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
@@ -16,7 +17,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use crate::machine::model::Held;
     use crate::machine::{arg_held, arg_object, arg_type, arg_unresolved_type, Action};
 
-    let done_err = |e: KError| Action::Done(Err(e));
+    let done_err = |e: KError| Action::done(Err(e));
     let bind_index = ctx.bind_index();
     let rhs = match arg_held(ctx.args, "value") {
         Some(v) => v,
@@ -117,18 +118,17 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         ))));
     }
     if let Some(kt) = type_for_types_map {
-        // Register the RHS type handle under `name` in this scope's bindings.
-        let registered =
-            match ctx
-                .scope
-                .register_user_type_delivered(name, kt, ctx.declaration_site())
-            {
-                Ok(registered) => registered,
-                Err(e) => return done_err(e),
-            };
-        // The terminal witnesses the registered handle — the wrapper a later read uses.
-        let carrier = ctx.scope.resident_type_carrier(registered);
-        Action::Done(Ok(StepCarried::born(carrier)))
+        // The handle names the same interned type in every region — `kt` is already this binder's
+        // copy out of the RHS envelope — so the terminal witnesses it directly and the `types`
+        // write rides the outcome.
+        let carrier = ctx.scope.resident_type_carrier(kt);
+        Action::done(Ok(StepCarried::born(carrier))).with_effect(WriteOp::Type {
+            name,
+            kt,
+            site: ctx.declaration_site(),
+            policy: TypeWritePolicy::Insert,
+            builtin_shadow_guard: true,
+        })
     } else {
         let value = rhs
             .as_object()
@@ -143,34 +143,32 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                  non-empty literal",
             ))));
         }
-        // Fused mint + copy + bind. A delivered RHS carrier derives the copy's stored reach in copied
+        // Fused mint + copy + seal. A delivered RHS carrier derives the copy's stored reach in copied
         // mode — the deep-clone lands in this scope's own region, so a residence-only host is dropped
         // (`adopted_reach_of`, the same split the parameter and MATCH `it` binds apply) — and copies
         // the value in under it. A carrier-less region-pure RHS takes the checked tier, its
         // `(None, bit)` reach derived from the checked audit's own saw-a-region-pointer walk. Either
-        // returns the resident reference plus the same token, from which the terminal witnesses the
-        // bound value in place — the same reach-aware wrapper a later read uses.
-        let bound = match ctx.arg_carrier("value") {
-            Some(carrier) => ctx.scope.bind_delivered(
-                name,
-                carrier,
-                bind_index,
-                |carried| Ok(carried.object()),
-                ctx.types,
-            ),
-            None => ctx
-                .scope
-                .bind_checked(name, value.deep_clone(), bind_index, ctx.types),
+        // returns the sealed value plus the mirror bundle of the callable it wraps, from which the
+        // terminal witnesses the bound value in place — the same reach-aware wrapper a later read
+        // uses — while the table write rides the outcome.
+        let sealed = match ctx.arg_carrier("value") {
+            Some(carrier) => {
+                ctx.scope
+                    .seal_delivered(carrier, |carried| Ok(carried.object()), ctx.types)
+            }
+            None => ctx.scope.seal_checked(value.deep_clone(), ctx.types),
         };
-        let sealed = match bound {
-            Ok(sealed) => sealed,
+        let (sealed, mirror) = match sealed {
+            Ok(pair) => pair,
             Err(e) => return done_err(e),
         };
         // The bound value's own reach rides the terminal carrier out of the step: the lift upgrades
         // the entry's exact description into owned pins, so the reached regions stay pinned across
-        // transit (the delivery envelope) rather than being re-derived at the seal.
+        // transit (the delivery envelope) rather than being re-derived at the seal. The write takes
+        // its own duplicate of the seal, so the finish never reads its own write back out.
+        let write = WriteOp::value(name, bind_index, sealed.duplicate(), mirror);
         let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
-        Action::Done(Ok(StepCarried::born_pinned(carrier, pins)))
+        Action::done(Ok(StepCarried::born_pinned(carrier, pins))).with_effect(write)
     }
 }
 

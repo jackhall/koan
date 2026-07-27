@@ -27,6 +27,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::bindings::{operator_group_ops, WriteOp};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
@@ -277,7 +278,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
         };
         op_action(plan.finalize(fctx.scope, operand, result, fctx.types))
     });
-    Action::AwaitDeps { deps, finish }
+    Action::await_deps(deps, finish)
 }
 
 /// The surface rules an operator declaration's *context* decides (see
@@ -326,16 +327,17 @@ struct OpPlan<'a> {
 }
 
 impl<'a> OpPlan<'a> {
-    /// Synthesize the operator's `KFunction`(s), register them in `scope`'s function bucket, and —
-    /// outside a group — write the size-1 registry entry that makes a run of three or more operands
-    /// reduce. Returns the declared function's value.
+    /// Synthesize the operator's `KFunction`(s) and describe the writes they imply — the function
+    /// bucket overloads and, outside a group, the size-1 registry entry that makes a run of three or
+    /// more operands reduce. Returns the declared function's value beside those writes, which ride
+    /// the step outcome.
     fn finalize(
         self,
         scope: &'a Scope<'a>,
         operand: KType,
         result: Option<KType>,
         types: &TypeRegistry,
-    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError> {
         let OpPlan {
             sym,
             kind,
@@ -343,11 +345,12 @@ impl<'a> OpPlan<'a> {
             in_group,
             bind_index,
         } = self;
+        let mut writes: Vec<WriteOp> = Vec::new();
         let carrier = match kind {
             OpKind::Binary => {
                 let elements = vec![arg(LEFT, operand), kw(&sym), arg(RIGHT, operand)];
                 let result_type = result.unwrap_or(operand);
-                let registered = register_body(
+                let (registered, overload) = register_body(
                     scope,
                     &sym,
                     sig(result_type, elements),
@@ -355,10 +358,11 @@ impl<'a> OpPlan<'a> {
                     bind_index,
                     types,
                 )?;
+                writes.push(overload);
                 if !in_group {
                     let members = std::iter::once(sym.clone()).collect();
                     let group = Rc::new(OperatorGroup::new(members, ReductionMode::FoldLeft));
-                    scope.register_group_under_all_subsets(&[sym.as_str()], &group, bind_index)?;
+                    writes.extend(operator_group_ops(&[sym.as_str()], &group, bind_index));
                 }
                 registered
             }
@@ -383,7 +387,7 @@ impl<'a> OpPlan<'a> {
                 // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
                 // built, so `in_group` cannot hold here; the door asserts that rather than take
                 // it on trust, since it writes the single-member group unconditionally.
-                register_unary_operator(
+                let (registered, unary_writes) = register_unary_operator(
                     scope,
                     &sym,
                     OperatorForm {
@@ -397,10 +401,12 @@ impl<'a> OpPlan<'a> {
                     in_group,
                     bind_index,
                     types,
-                )?
+                )?;
+                writes.extend(unary_writes);
+                registered
             }
         };
-        Ok(carrier)
+        Ok((carrier, writes))
     }
 }
 
@@ -425,7 +431,7 @@ pub(super) struct OperatorForm<'a> {
 ///
 /// `in_group` is the caller's group context, and must be `false`: a single-member group is the only
 /// group a unary operator can be in, because its reduction hands the whole run to one body as a
-/// single list, which presupposes the run names no other operator. The door writes that group
+/// single list, which presupposes the run names no other operator. The door describes that group
 /// unconditionally, so it asserts the context rather than trusting it — a grouped caller would
 /// write a size-1 `Unary` record under the very key its `GROUP` already claims.
 pub(super) fn register_unary_operator<'a>(
@@ -436,7 +442,7 @@ pub(super) fn register_unary_operator<'a>(
     in_group: bool,
     bind_index: BindingIndex,
     types: &TypeRegistry,
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError> {
     let OperatorForm {
         signature: list_signature,
         body: list_body,
@@ -464,18 +470,27 @@ pub(super) fn register_unary_operator<'a>(
     );
     // The list body first: its function is the operator's primary value, the one an `OP`
     // declaration evaluates to.
-    let carrier = register_body(scope, sym, list_signature, list_body, bind_index, types)?;
-    register_body(scope, sym, binary_signature, binary_body, bind_index, types)?;
+    let (carrier, list_overload) =
+        register_body(scope, sym, list_signature, list_body, bind_index, types)?;
+    let (_, binary_overload) =
+        register_body(scope, sym, binary_signature, binary_body, bind_index, types)?;
     let members = std::iter::once(sym.to_string()).collect();
     let group = Rc::new(OperatorGroup::new(members, ReductionMode::Unary));
-    scope.register_group_under_all_subsets(&[sym], &group, bind_index)?;
-    Ok(carrier)
+    let mut writes = vec![list_overload, binary_overload];
+    writes.extend(operator_group_ops(&[sym], &group, bind_index));
+    Ok((carrier, writes))
 }
 
-/// Allocate one operator body as a `KFunction` capturing `scope`, and register it in `scope`'s
-/// function bucket through the operator door. The `KFunction` is allocated into `scope`'s own
-/// region, so the checked seal always passes and the paired token carries the home-borrow bit the
-/// audit walk derives (the captured `&Scope` into home).
+/// Allocate one operator body as a `KFunction` capturing `scope`, and describe its bucket write
+/// through the operator door — [`WriteOp::Overload`] without the builtin-shadow guard, so a user
+/// module may declare an operator the root already declares (`OP #(+) OVER :(LIST OF Number)`).
+/// Shadowing an operator is **type-gated**, not free: dispatch consults the immutable root bucket
+/// first, so the builtin `+` still wins for the operand types it declares and only other operand
+/// types reach the module's body. Ordinary user `FN`s keep the guard.
+///
+/// The `KFunction` is allocated into `scope`'s own region, so the checked seal always passes and the
+/// paired token carries the home-borrow bit the audit walk derives (the captured `&Scope` into
+/// home). Bare-`FN` style: the overload lands in `functions` only, never in `data`.
 fn register_body<'a>(
     scope: &'a Scope<'a>,
     sym: &str,
@@ -483,12 +498,20 @@ fn register_body<'a>(
     body: Body<'a>,
     bind_index: BindingIndex,
     types: &TypeRegistry,
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, WriteOp), KError> {
     let f: &'a KFunction<'a> = scope
         .brand()
         .alloc_function(KFunction::new(signature, body, scope, false, types));
-    scope.register_operator_function(sym.to_string(), f, bind_index)?;
-    scope.seal_fresh_object(KObject::KFunction(f), types)
+    let write = WriteOp::Overload {
+        name: sym.to_string(),
+        index: bind_index,
+        mirror: scope.seal_resident_function(f),
+        builtin_shadow_guard: false,
+    };
+    Ok((
+        scope.seal_fresh_object(KObject::KFunction(f), types)?,
+        write,
+    ))
 }
 
 /// The bridge body `sym [left right]` — a keyword-first call over a two-element list literal, which
@@ -513,10 +536,14 @@ fn bridge_body<'a>(sym: &str) -> KExpression<'a> {
 
 /// Seal a finalize result as the slot's terminal — the operator function value, built witnessed in
 /// its declaring scope's region.
-fn op_action<'a>(result: Result<Witnessed<CarriedFamily, CarrierWitness>, KError>) -> Action<'a> {
+fn op_action<'a>(
+    result: Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError>,
+) -> Action<'a> {
     match result {
-        Ok(witnessed) => Action::Done(Ok(StepCarried::born(witnessed))),
-        Err(e) => Action::Done(Err(e)),
+        Ok((witnessed, writes)) => {
+            Action::done(Ok(StepCarried::born(witnessed))).with_effects(writes)
+        }
+        Err(e) => Action::done(Err(e)),
     }
 }
 
@@ -534,7 +561,7 @@ fn body_unary<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 /// dispatch miss.
 fn body_unary_missing_result<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", "symbol"));
-    Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+    Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "`UNARY OP #({sym})` must declare its result type: \
          `UNARY OP #({sym}) OVER <Operand> -> <Result> = (…)`",
     )))))

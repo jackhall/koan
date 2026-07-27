@@ -76,12 +76,9 @@ pub(crate) fn resolve_or_await<'a>(
                 let kt = crate::try_action!(resolve_at_wake(fctx.scope, slot, resolve));
                 on_resolved(fctx, kt)
             });
-            Action::AwaitDeps {
-                deps: Deps::from_parks(producers),
-                finish,
-            }
+            Action::await_deps(Deps::from_parks(producers), finish)
         }
-        TypeResolution::Unbound(detail) => Action::Done(Err(unbound_error(slot, &detail))),
+        TypeResolution::Unbound(detail) => Action::done(Err(unbound_error(slot, &detail))),
     }
 }
 
@@ -113,11 +110,11 @@ pub(crate) fn dispatch_type_then<'a>(
         let kt = crate::try_action!(expect_type_terminal(&results, 0, slot, fctx.types));
         on_resolved(fctx, kt)
     });
-    Action::AwaitDeps {
-        deps: Deps::from_owned([OwnedDispatch {
+    Action::await_deps(
+        Deps::from_owned([OwnedDispatch {
             expr,
             placement: DepPlacement::OwnScope,
         }]),
         finish,
-    }
+    )
 }

@@ -1,5 +1,5 @@
 //! Lexical binding façade: co-mutating `RefCell` maps (`types`, `data`,
-//! `functions`, `placeholders`, `pending_overloads`) behind validated write
+//! `functions`, `placeholders`, `pending_overloads`, `operators`) behind validated write
 //! paths that keep the function-mirror invariant — every `data[name]` wrapping
 //! a `KFunction` lives in `functions[signature.untyped_key()]`. Nominal type
 //! declarations (NEWTYPE / UNION / SIG) install their identity into `types`
@@ -7,6 +7,11 @@
 //! `data`. The `data` and `types` maps
 //! are a structural partition: a name is committed to one xor the other, never
 //! both, enforced by the cross-kind check the value and type write paths run.
+//!
+//! The write verbs here take firm `borrow_mut`s: every one of them is reached through
+//! [`WriteOp::apply`], which the run loop drives after a step's continuation has returned, so no
+//! koan frame can hold a competing borrow and contention is unrepresentable. See
+//! [`ops`] for the currency and [design/memory-model.md](../../../design/memory-model.md).
 //!
 //! Borrow discipline across the maps: `types → functions → data`.
 //!
@@ -47,6 +52,10 @@ use crate::machine::CarrierWitness;
 use crate::witnessed::Sealed;
 
 use super::kerror::{KError, KErrorKind};
+
+mod ops;
+
+pub(crate) use ops::{operator_group_ops, TypeWritePolicy, WriteOp};
 
 /// A value binding's dormant carrier: the bound value fused to the exact reach description minted
 /// for it at bind time. The entry owns no pins — the binding scope's **region** owns the one deduped
@@ -462,22 +471,19 @@ impl Bindings {
     ///
     /// Upsert: an existing entry whose record is the one being registered — the same `Rc`,
     /// or an equal mode + member set (two `OP` statements over the same symbol and distinct
-    /// operand types are two bucket overloads but one registry entry) — is a no-op
-    /// `Applied`, keeping the first entry's index. A record that disagrees is a chaining-mode
+    /// operand types are two bucket overloads but one registry entry) — is a silent no-op,
+    /// keeping the first entry's index. A record that disagrees is a chaining-mode
     /// conflict on `probe`: the same scope cannot say the symbol both folds and pairs.
-    pub fn try_register_operator_group(
+    pub(crate) fn write_operator_group(
         &self,
         probe: String,
         group: Rc<OperatorGroup>,
         index: BindingIndex,
-    ) -> Result<ApplyOutcome, KError> {
-        let mut operators = match self.operators.try_borrow_mut() {
-            Ok(o) => o,
-            Err(_) => return Ok(ApplyOutcome::Conflict),
-        };
+    ) -> Result<(), KError> {
+        let mut operators = self.operators.borrow_mut();
         if let Some((existing, _)) = operators.get(&probe) {
             if Rc::ptr_eq(existing, &group) || **existing == *group {
-                return Ok(ApplyOutcome::Applied);
+                return Ok(());
             }
             return Err(KError::new(KErrorKind::ShapeError(format!(
                 "operator `{probe}` is already declared in this scope with a different \
@@ -485,7 +491,7 @@ impl Bindings {
             ))));
         }
         operators.insert(probe, (group, index));
-        Ok(ApplyOutcome::Applied)
+        Ok(())
     }
 
     /// Snapshot every `(name, dormant carrier)` pair in `data`, ignoring visibility. Each seal is a
@@ -607,107 +613,50 @@ impl Bindings {
         self.pending.remove(name);
     }
 
-    /// LET-style value bind. Errors `Rebind` if `data[name]` already exists, or if `name`
-    /// is a committed type (`types[name]`) — the value/type partition is mutually exclusive.
-    /// When the bound value wraps a `KFunction` it is also mirrored into
-    /// `functions[signature.untyped_key()]` so dispatch finds it (`LET f = (FN ...)`).
+    /// Write `name` → `kt` into `types` under `policy`. [`TypeWritePolicy::Insert`] is strict
+    /// insert-if-absent; [`TypeWritePolicy::UpsertEqual`] admits a re-entry of the *same*
+    /// declaration — declaration identity is the installing [`NodeHandle`], so an existing entry
+    /// whose handle differs from `site`'s is a different declaration of the name and `Rebind`s,
+    /// while a same-handle hit is the same slot in the same run re-entering (a parallel nominal
+    /// finalize), whose re-elaboration cannot differ, so it overwrites idempotently. Content plays
+    /// no part in the same-declaration decision.
     ///
-    /// The value and its exact reach arrive fused in one [`SealedValue`] — the write door cannot
-    /// pair a value with a reach derived for a different value. `mirror` is that same value's
-    /// **mirror bundle** ([`Scope::seal_function_mirror`](crate::machine::core::Scope)): the
-    /// callable's seal plus the bucket key, dedupe token and identity computed where the callable
-    /// was open, so the bucket write re-anchors nothing itself.
-    ///
-    /// `Conflict` means borrow contention (caller queues); `Err` is semantic rejection.
-    pub(crate) fn try_bind_value(
-        &self,
-        name: &str,
-        index: BindingIndex,
-        sealed: SealedValue,
-        mirror: Option<FunctionMirror>,
-    ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, mirror, index, Some(sealed))
-    }
-
-    /// Bare-`FN` overload registration: adds `fn_ref` to the `functions`
-    /// bucket only — `data[name]` is left untouched, so a bare FN keyword is
-    /// dispatchable but not nameable as a value (use `LET f = (FN …)` for that).
-    /// Errors `DuplicateOverload` on an exact-signature collision.
-    ///
-    /// Per-overload `index` tagging matters because overloads sharing a bucket
-    /// can sit at different lexical positions (the dispatch picker filters
-    /// per-overload).
-    pub(crate) fn try_register_function(
-        &self,
-        name: &str,
-        mirror: FunctionMirror,
-        index: BindingIndex,
-    ) -> Result<ApplyOutcome, KError> {
-        // A bare-`FN` registration writes `functions` only, not `data`: no sealed value, so no
-        // entry lands and nothing is minted or retained.
-        self.try_apply(name, Some(mirror), index, None)
-    }
-
-    /// Register `name` → `kt` in `types`. Errors `Rebind` if already present in `types`, or
-    /// if `name` is a committed value (`data[name]`) — the partition is mutually exclusive.
-    /// `Ok(Conflict)` on borrow contention. Best-effort placeholder clear on success.
-    pub fn try_register_type(
+    /// A committed value at `data[name]` is a `Rebind` under either policy — the value/type
+    /// partition is mutually exclusive. On success the matching type-side placeholder is removed.
+    pub(crate) fn write_type(
         &self,
         name: &str,
         kt: KType,
         site: DeclarationSite,
-    ) -> Result<ApplyOutcome, KError> {
-        self.try_apply_type(name, kt, site)
-    }
-
-    /// Upsert `name` → `kt` in `types` for nominal finalize. Declaration identity is the
-    /// installing [`NodeHandle`]: an existing entry whose handle differs from `site`'s is a
-    /// different declaration of the name — `Err(Rebind)` — as is a committed value at `data[name]`
-    /// (the value/type partition is mutually exclusive). A same-handle hit is the same slot in the
-    /// same run re-entering (a parallel finalize), whose re-elaboration cannot differ, so it
-    /// overwrites idempotently. Content plays no part in the same-declaration decision.
-    ///
-    /// Distinct from [`Self::try_register_type`], whose strict insert-if-absent arm would `Rebind`
-    /// on a parallel finalize rather than overwrite it.
-    /// `Ok(Conflict)` on borrow contention. Best-effort placeholder clear on success.
-    pub fn try_register_type_upsert(
-        &self,
-        name: &str,
-        kt: KType,
-        site: DeclarationSite,
-    ) -> Result<ApplyOutcome, KError> {
+        policy: TypeWritePolicy,
+    ) -> Result<(), KError> {
         self.partition_guard(name, BindKind::Type)?;
-        let mut types = match self.types.try_borrow_mut() {
-            Ok(t) => t,
-            Err(_) => return Ok(ApplyOutcome::Conflict),
-        };
+        let mut types = self.types.borrow_mut();
         // Cross-kind exclusion: a type name may not collide with a committed value. `types`
         // is already held, so probing `data` next preserves the `types → data` borrow order.
-        match self.data.try_borrow() {
-            Ok(data) => {
-                if data.contains_key(name) {
-                    return Err(KError::new(KErrorKind::Rebind {
-                        name: name.to_string(),
-                    }));
-                }
-            }
-            Err(_) => return Ok(ApplyOutcome::Conflict),
+        if self.data.borrow().contains_key(name) {
+            return Err(KError::new(KErrorKind::Rebind {
+                name: name.to_string(),
+            }));
         }
-        match types.get(name).map(|(_, s)| *s) {
-            Some(existing) if existing.node != site.node => {
+        match (policy, types.get(name).map(|(_, s)| *s)) {
+            (TypeWritePolicy::Insert, Some(_)) => {
                 return Err(KError::new(KErrorKind::Rebind {
                     name: name.to_string(),
                 }));
             }
-            // Absent, or the same slot in the same run re-entering (a parallel finalize): write the
-            // identity, an idempotent overwrite.
-            _ => {
-                types.insert(name.to_string(), (kt, site));
+            (TypeWritePolicy::UpsertEqual, Some(existing)) if existing.node != site.node => {
+                return Err(KError::new(KErrorKind::Rebind {
+                    name: name.to_string(),
+                }));
             }
+            // Absent, or the same declaration re-entering: write the identity.
+            _ => {}
         }
+        types.insert(name.to_string(), (kt, site));
         drop(types);
-        self.clear_placeholder_best_effort(name, BindKind::Type);
-        Ok(ApplyOutcome::Applied)
+        self.clear_placeholder(name, BindKind::Type);
+        Ok(())
     }
 
     /// Install a dispatch-time placeholder for `name` → producer slot `idx`.
@@ -718,13 +667,13 @@ impl Bindings {
     /// non-function or if `placeholders[name]` maps to a different `NodeId`;
     /// idempotent on same-`NodeId` re-entry.
     ///
-    /// The eventual `try_bind_value` / `try_register_*` call must carry the
+    /// The eventual [`Self::write_value`] / [`Self::write_type`] call must carry the
     /// same `index` so the consumer's visibility test stays consistent across
     /// the placeholder → finalized transition. `kind` records which language the
     /// forward reference resolves in, so a value bind never satisfies a type
     /// placeholder (or the reverse) — see [`Bindings::lookup_value`] /
     /// [`Bindings::lookup_type`], each of which surfaces only its own kind.
-    pub fn try_install_placeholder(
+    pub fn install_placeholder(
         &self,
         name: String,
         idx: NodeId,
@@ -755,14 +704,14 @@ impl Bindings {
     /// **Append, never deduplicate**: sibling FN binders sharing one
     /// inner-call bucket key — `FN (PICK xs :A) -> ...` then
     /// `FN (PICK xs :B) -> ...` — each install their own entry at their own
-    /// [`BindingIndex`]. The entry is removed in [`Bindings::try_apply`] when
+    /// [`BindingIndex`]. The entry is removed in [`Bindings::write_value`] when
     /// the producing binder lands in `functions[bucket]`; other siblings stay
     /// pending as wake sources.
     ///
     /// Recorded even when the bucket is already live in `functions`: a pending
     /// sibling sits *alongside* a finalized overload so the scope walk can park
     /// the bucket until the sibling finalizes.
-    pub fn try_install_pending_overload(
+    pub fn install_pending_overload(
         &self,
         bucket: UntypedKey,
         idx: NodeId,
@@ -773,19 +722,18 @@ impl Bindings {
         Ok(())
     }
 
-    /// Replay another `Bindings`'s `data` through `try_apply` on self.
+    /// Replay another `Bindings`'s `data` through [`Self::write_value`] on self.
     /// Snapshots `src.data` and releases the source `Ref` before the replay so
-    /// re-entrant ascription cannot deadlock. Routing through `try_apply`
+    /// re-entrant ascription cannot deadlock. Routing through the shared write path
     /// re-mirrors `KFunction` entries into `functions`, so callers do not walk
-    /// `src.functions` separately. Panics on `Conflict` — a fresh `Bindings`
-    /// should never hit a borrow conflict against itself.
+    /// `src.functions` separately.
     ///
     /// A replayed entry stores only its callable's bucket key, so the mirror bundle the bucket
     /// write needs is re-derived per entry by `mirror_of` — the `Scope` layer's
     /// [`seal_function_mirror`](crate::machine::core::Scope::seal_function_mirror), the one place
     /// that holds a pin to open the seal under.
     #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
-    pub(crate) fn try_bulk_install_from(
+    pub(crate) fn bulk_install_from(
         &self,
         src: &Bindings,
         mirror_of: impl Fn(&SealedValue) -> Option<FunctionMirror>,
@@ -803,14 +751,7 @@ impl Bindings {
         for (name, entry) in snapshot {
             let index = entry.index;
             let mirror = mirror_of(&entry.sealed);
-            match self.try_apply(&name, mirror, index, Some(entry.sealed))? {
-                ApplyOutcome::Applied => {}
-                ApplyOutcome::Conflict => {
-                    unreachable!(
-                        "try_bulk_install_from on a fresh Bindings should not hit borrow conflict",
-                    );
-                }
-            }
+            self.write_value(&name, index, Some(entry.sealed), mirror)?;
         }
         Ok(())
     }
@@ -820,8 +761,8 @@ impl Bindings {
     /// type a field, a value token names something a field can hold — so a write whose name classifies
     /// against the map it is entering is a hard error, not a convention, with no exception: every
     /// value-token write to `types` and every Type-token write to `data` is rejected. This is the single
-    /// enforcement point: every binder reaches its map through [`Bindings::try_apply`] /
-    /// [`Bindings::try_apply_type`], so no caller can bind across the line, and none needs its own check.
+    /// enforcement point: every binder reaches its map through [`Bindings::write_value`] /
+    /// [`Bindings::write_type`], so no caller can bind across the line, and none needs its own check.
     /// A keyword-class name (all-uppercase, no lowercase) is not a Type token, so a builtin's dispatch
     /// registration passes the value-side gate. See [design/typing/tokens.md](../../../design/typing/tokens.md).
     fn partition_guard(&self, name: &str, into: BindKind) -> Result<(), KError> {
@@ -839,46 +780,9 @@ impl Bindings {
         }
     }
 
-    /// Shared write path for type-only bindings.
-    /// `Conflict` is borrow contention; `Err(Rebind)` is semantic rejection.
-    fn try_apply_type(
-        &self,
-        name: &str,
-        kt: KType,
-        site: DeclarationSite,
-    ) -> Result<ApplyOutcome, KError> {
-        self.partition_guard(name, BindKind::Type)?;
-        let mut types = match self.types.try_borrow_mut() {
-            Ok(t) => t,
-            Err(_) => return Ok(ApplyOutcome::Conflict),
-        };
-        if types.contains_key(name) {
-            return Err(KError::new(KErrorKind::Rebind {
-                name: name.to_string(),
-            }));
-        }
-        // Cross-kind exclusion: a type name may not collide with a committed value. `types`
-        // is already held, so probing `data` next preserves the `types → data` borrow order.
-        match self.data.try_borrow() {
-            Ok(data) => {
-                if data.contains_key(name) {
-                    return Err(KError::new(KErrorKind::Rebind {
-                        name: name.to_string(),
-                    }));
-                }
-            }
-            Err(_) => return Ok(ApplyOutcome::Conflict),
-        }
-        types.insert(name.to_string(), (kt, site));
-        drop(types);
-        self.clear_placeholder_best_effort(name, BindKind::Type);
-        Ok(ApplyOutcome::Applied)
-    }
-
     /// Shared write path for `data`/`functions`. Borrows `functions` first
     /// (only when `mirror.is_some()`), then `data` — skipping the `functions`
-    /// borrow otherwise keeps non-fn binds deadlock-free under callers that
-    /// hold a live outer `functions` borrow.
+    /// borrow otherwise keeps the borrow discipline `types → functions → data` minimal.
     ///
     /// `sealed`: `Some` for value-carrying paths (LET, LET-binds-FN) — the fused value+reach the
     /// entry stores; `None` for bare-`FN` (dispatch-only, no `data` insert). The only combinations
@@ -893,13 +797,13 @@ impl Bindings {
     /// Dedupe when `mirror.is_some()`: identity equality is a silent-success short-circuit
     /// (preserves intentional aliases like `LET g = (f)`); token equality raises
     /// `DuplicateOverload`.
-    fn try_apply(
+    pub(crate) fn write_value(
         &self,
         name: &str,
-        mirror: Option<FunctionMirror>,
         index: BindingIndex,
         sealed: Option<SealedValue>,
-    ) -> Result<ApplyOutcome, KError> {
+        mirror: Option<FunctionMirror>,
+    ) -> Result<(), KError> {
         let write_data = sealed.is_some();
         // Cross-kind exclusion: a value name may not collide with a committed type — the
         // `data`/`types` partition is structural, not convention. Probe `types` first (borrow
@@ -907,35 +811,16 @@ impl Bindings {
         // binds no value, so it is exempt from both this and the token-class gate.
         if write_data {
             self.partition_guard(name, BindKind::Value)?;
-            match self.types.try_borrow() {
-                Ok(types) => {
-                    if types.contains_key(name) {
-                        return Err(KError::new(KErrorKind::Rebind {
-                            name: name.to_string(),
-                        }));
-                    }
-                }
-                Err(_) => return Ok(ApplyOutcome::Conflict),
+            if self.types.borrow().contains_key(name) {
+                return Err(KError::new(KErrorKind::Rebind {
+                    name: name.to_string(),
+                }));
             }
         }
-        let mut functions_handle = if mirror.is_some() {
-            match self.functions.try_borrow_mut() {
-                Ok(g) => Some(g),
-                Err(_) => return Ok(ApplyOutcome::Conflict),
-            }
-        } else {
-            None
-        };
+        let mut functions_handle = mirror.is_some().then(|| self.functions.borrow_mut());
         // Bare FN: skip the `data` borrow, pre-check, and insert entirely — the
         // dispatch surface lives in `functions` only.
-        let mut data = if write_data {
-            match self.data.try_borrow_mut() {
-                Ok(d) => Some(d),
-                Err(_) => return Ok(ApplyOutcome::Conflict),
-            }
-        } else {
-            None
-        };
+        let mut data = write_data.then(|| self.data.borrow_mut());
         // `mirror.is_some()` + existing `KFunction` falls through to bucket dedupe
         // (overload-add path); everything else is a rebind error.
         if let Some(data) = data.as_ref() {
@@ -1002,25 +887,23 @@ impl Bindings {
         }
         drop(data);
         drop(functions_handle);
-        self.clear_placeholder_best_effort(name, BindKind::Value);
+        self.clear_placeholder(name, BindKind::Value);
         if let Some(bucket) = bucket_key {
             // Remove only this binder's pending entry; siblings stay as wake sources.
-            self.clear_pending_overload_best_effort(&bucket, index);
+            self.clear_pending_overload(&bucket, index);
         }
-        Ok(ApplyOutcome::Applied)
+        Ok(())
     }
 
     /// Shared tail of every successful write path. Removes a *matching-kind* placeholder
     /// for `name`: a value write clears only a [`BindKind::Value`] entry, a type write only
     /// a [`BindKind::Type`] one, so a value bind never clears an in-flight type producer's
-    /// placeholder (or the reverse). `try_borrow_mut().ok()` tolerates a caller holding a
-    /// placeholder borrow up the stack — a hard `borrow_mut()` would panic on legitimate
-    /// reads across a write.
-    fn clear_placeholder_best_effort(&self, name: &str, kind: BindKind) {
-        if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
-            if matches!(ph.get(name), Some((_, _, k)) if *k == kind) {
-                ph.remove(name);
-            }
+    /// placeholder (or the reverse). A firm `borrow_mut` — every table write runs from the
+    /// run loop's op-apply, with no koan frame on the stack to hold a competing borrow.
+    fn clear_placeholder(&self, name: &str, kind: BindKind) {
+        let mut ph = self.placeholders.borrow_mut();
+        if matches!(ph.get(name), Some((_, _, k)) if *k == kind) {
+            ph.remove(name);
         }
     }
 
@@ -1028,24 +911,22 @@ impl Bindings {
     /// paths clear a binder's placeholder by name on finalize; this is the error-path
     /// companion, called when `producer`'s node finalizes with an error so a binder body
     /// that failed before its write path does not leak a scheduler-local [`NodeId`] into
-    /// a later run on a persistent scope. Same tolerant `try_borrow_mut`.
+    /// a later run on a persistent scope.
     pub fn clear_placeholders_for_producer(&self, producer: NodeId) {
-        if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
-            ph.retain(|_, (id, _, _)| *id != producer);
-        }
+        self.placeholders
+            .borrow_mut()
+            .retain(|_, (id, _, _)| *id != producer);
     }
 
-    /// Bucket-keyed companion to [`Self::clear_placeholder_best_effort`].
+    /// Bucket-keyed companion to [`Self::clear_placeholder`].
     /// Removes only the entry whose `BindingIndex` matches — sibling binders
-    /// stay as wake sources. Empties drop the map entry. Same tolerant
-    /// `try_borrow_mut` pattern.
-    fn clear_pending_overload_best_effort(&self, bucket: &UntypedKey, index: BindingIndex) {
-        if let Ok(mut p) = self.pending_overloads.try_borrow_mut() {
-            if let Some(entries) = p.get_mut(bucket) {
-                entries.retain(|(_, idx)| *idx != index);
-                if entries.is_empty() {
-                    p.remove(bucket);
-                }
+    /// stay as wake sources. Empties drop the map entry.
+    fn clear_pending_overload(&self, bucket: &UntypedKey, index: BindingIndex) {
+        let mut p = self.pending_overloads.borrow_mut();
+        if let Some(entries) = p.get_mut(bucket) {
+            entries.retain(|(_, idx)| *idx != index);
+            if entries.is_empty() {
+                p.remove(bucket);
             }
         }
     }
@@ -1055,13 +936,6 @@ impl Default for Bindings {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// `Conflict` is the queueable borrow-contention signal; semantic errors come
-/// through `Err(KError)`.
-pub enum ApplyOutcome {
-    Applied,
-    Conflict,
 }
 
 // In-flight named-type binder tracking. [`Bindings`] embeds a [`PendingTypes`] by value and
@@ -1128,11 +1002,6 @@ impl Default for PendingTypes {
 
 /// RAII handle returned by [`PendingTypes::insert`]. Dropping the guard removes
 /// the matching name; this is the *only* removal path outside `#[cfg(test)]`.
-///
-/// `try_borrow_mut` in Drop is defensive: no caller is expected to hold the
-/// pending-types borrow when a guard drops. Silent skip is safe — the name
-/// persists until the next drain point, and no later code observes a stale
-/// name once the matching binder has finalized.
 #[must_use = "PendingBinderGuard removes the pending-types entry on drop; \
               bind it for the elaboration's lifetime"]
 pub struct PendingBinderGuard {
@@ -1142,9 +1011,7 @@ pub struct PendingBinderGuard {
 
 impl Drop for PendingBinderGuard {
     fn drop(&mut self) {
-        if let Ok(mut map) = self.map.try_borrow_mut() {
-            map.remove(&self.name);
-        }
+        self.map.borrow_mut().remove(&self.name);
     }
 }
 

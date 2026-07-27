@@ -106,10 +106,15 @@ pub(crate) fn arm_tail<'a>(
         // the payload lives inside the carried value, so its reach is a subset of the envelope's.
         match it_source {
             ItSource::Pure(value) => {
-                let _ = child.bind_checked("it".to_string(), value, BindingIndex::value(0), types);
+                let _ = child.bind_checked_direct(
+                    "it".to_string(),
+                    value,
+                    BindingIndex::value(0),
+                    types,
+                );
             }
             ItSource::Carrier(carrier, projection) => {
-                let _ = child.bind_delivered(
+                let _ = child.bind_delivered_direct(
                     "it".to_string(),
                     &carrier,
                     BindingIndex::value(0),

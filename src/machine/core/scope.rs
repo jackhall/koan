@@ -9,7 +9,6 @@ use crate::machine::model::RecursiveGroupWindow;
 
 use super::arena::{FrameStorage, FrameStorageExt, KoanRegion, RegionBrand};
 use super::bindings::Bindings;
-use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
 
 mod reach;
@@ -21,8 +20,8 @@ mod resolve;
 ///
 /// All mutable binding state lives in the embedded [`Bindings`] façade
 /// (interior-mutable `RefCell`s), so a `&'a Scope<'a>` is shareable across scheduler
-/// nodes. Writes that hit a borrow conflict route through [`PendingQueue`];
-/// `drain_pending` replays them between dispatch nodes.
+/// nodes. A write into a published scope is not performed in place: it rides the step
+/// outcome as a [`WriteOp`](crate::machine::core::bindings::WriteOp) the run loop applies.
 pub struct Scope<'a> {
     /// Lexical parent, read through [`Scope::outer`]. Held as `&'a Scope<'a>` (not a shorter borrow)
     /// so `Scope<'a>` stays invariant in `'a`; a per-call child couples to a longer-lived parent at
@@ -57,7 +56,6 @@ pub struct Scope<'a> {
     /// Position-independent origin id, recorded on an `AbstractType` node's `source` so
     /// dispatch on SIG-declared members compares ids rather than scope pointers.
     pub id: ScopeId,
-    pending: PendingQueue,
     pub kind: ScopeKind,
     /// Set iff this is a `RECURSIVE TYPES` block's child scope: the open
     /// [`RecursiveGroupWindow`] whose members are co-declared and elaborate together. The
@@ -155,7 +153,6 @@ impl<'a> Scope<'a> {
             brand: storage.brand(),
             region_owner: Rc::downgrade(storage),
             id: ScopeId::next(),
-            pending: PendingQueue::new(),
             kind: ScopeKind::Root,
             recursive_window: None,
             group: None,
@@ -247,7 +244,6 @@ impl<'a> Scope<'a> {
             brand: outer.brand,
             region_owner: outer.region_owner.clone(),
             id: ScopeId::next(),
-            pending: PendingQueue::new(),
             kind,
             recursive_window,
             group: None,
@@ -289,7 +285,6 @@ impl<'a> Scope<'a> {
             brand,
             region_owner,
             id: ScopeId::next(),
-            pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
             recursive_window: None,
             group: None,

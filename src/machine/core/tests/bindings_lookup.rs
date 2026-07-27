@@ -77,7 +77,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
 fn lookup_type_chain_cutoff_none_admits_every_index() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type("Tee".into(), KType::NUMBER, mock_declaration_site(1, 99));
+    let _ = scope.register_type_direct("Tee".into(), KType::NUMBER, mock_declaration_site(1, 99));
     assert!(matches!(
         scope.bindings().lookup_type("Tee", None),
         Some(NameLookup::Bound(kt)) if kt == KType::NUMBER,
@@ -88,7 +88,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
 fn lookup_type_strict_less_than_hides_later_sibling() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type("TyLate".into(), KType::NUMBER, mock_declaration_site(1, 5));
+    let _ = scope.register_type_direct("TyLate".into(), KType::NUMBER, mock_declaration_site(1, 5));
     assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
     assert!(scope.bindings().lookup_type("TyLate", Some(9)).is_some());
 }
@@ -106,7 +106,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         &types,
     ));
     scope
-        .register_function("FOO".to_string(), f, BindingIndex::value(99))
+        .register_function_direct("FOO".to_string(), f, BindingIndex::value(99))
         .unwrap();
     let key = f.signature.untyped_key();
     let lookup = scope.bindings().lookup_function(&key, None);
@@ -162,10 +162,10 @@ fn lookup_function_filters_per_overload_visibility() {
         &types,
     ));
     scope
-        .register_function("BAR".to_string(), f_early, BindingIndex::value(2))
+        .register_function_direct("BAR".to_string(), f_early, BindingIndex::value(2))
         .unwrap();
     scope
-        .register_function("BAR".to_string(), f_late, BindingIndex::value(7))
+        .register_function_direct("BAR".to_string(), f_late, BindingIndex::value(7))
         .unwrap();
     let visible_early = scope.bindings().lookup_function(&key, Some(5));
     assert_eq!(
@@ -214,7 +214,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
         &types,
     ));
     scope
-        .register_function("FOO".to_string(), f, BindingIndex::value(2))
+        .register_function_direct("FOO".to_string(), f, BindingIndex::value(2))
         .unwrap();
     let key = f.signature.untyped_key();
     // A pending sibling is recorded alongside a finalized overload (no longer a
@@ -240,7 +240,7 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
         &types,
     ));
     scope
-        .register_function("FOO".to_string(), f, BindingIndex::value(9))
+        .register_function_direct("FOO".to_string(), f, BindingIndex::value(9))
         .unwrap();
     let key = f.signature.untyped_key();
     // Empty-after-filter must surface an empty `overloads` with no pending, so

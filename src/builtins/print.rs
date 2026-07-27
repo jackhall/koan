@@ -12,7 +12,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // `Held::summarize`.
     let rendered = match arg_held(ctx.args, "msg") {
         Some(value) => value.summarize(ctx.types),
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
     };
     let line = format!("{rendered}\n");
     ctx.scope.write_out(line.as_bytes());
@@ -23,7 +23,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         .scope
         .brand()
         .alloc_object_witnessed(KObject::KString(rendered));
-    Action::Done(Ok(carrier))
+    Action::done(Ok(carrier))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {

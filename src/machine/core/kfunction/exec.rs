@@ -104,7 +104,7 @@ where
                     // deep clone into the frame region, so the carrier's residence-only host is not
                     // part of its reach (a tail call's retiring frame must not ride this binding).
                     Some(cell) => {
-                        child.bind_delivered(
+                        child.bind_delivered_direct(
                             name.clone(),
                             cell,
                             BindingIndex::value(0),
@@ -113,7 +113,7 @@ where
                         )?;
                     }
                     None => {
-                        child.bind_checked(
+                        child.bind_checked_direct(
                             name.clone(),
                             object.deep_clone(),
                             BindingIndex::value(0),
@@ -136,7 +136,7 @@ where
                         },
                         index: BindingIndex::value(0),
                     };
-                    child.register_type_delivered(name.clone(), kt, site)?;
+                    child.register_type_direct(name.clone(), kt, site)?;
                 }
                 // Dispatch resolves every type-denoting argument before the call, so a name that
                 // is still unlowered here names nothing bindable.

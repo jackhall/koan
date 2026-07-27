@@ -452,7 +452,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         &types,
     ));
     scope
-        .register_function("pick_num".to_string(), pick_num_fn, BindingIndex::value(1))
+        .register_function_direct("pick_num".to_string(), pick_num_fn, BindingIndex::value(1))
         .expect("register pick_num overload");
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("PICK".into())),
@@ -497,7 +497,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         &types,
     ));
     scope
-        .register_function("pick_str".to_string(), sibling, BindingIndex::value(3))
+        .register_function_direct("pick_str".to_string(), sibling, BindingIndex::value(3))
         .expect("register sibling overload");
 
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {

@@ -38,14 +38,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         match &part.value {
             ExpressionPart::Identifier(name) => {
                 if names.iter().any(|n| n == name) {
-                    return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                         "FROM field list has duplicate field `{name}`",
                     )))));
                 }
                 names.push(name.clone());
             }
             other => {
-                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "FROM field list must be bare field names, got `{}`",
                     other.summarize(),
                 )))));
@@ -58,13 +58,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // The `:{}` slot shape-gates to records, so a non-record argument is a
         // dispatch non-match that never reaches the body. Defensive arm only.
         Some(other) => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM record operand must be a record, got `{}`",
                 other.ktype().name(ctx.types),
             )))));
         }
         None => {
-            return Action::Done(Err(KError::new(KErrorKind::MissingArg(
+            return Action::done(Err(KError::new(KErrorKind::MissingArg(
                 "record".to_string(),
             ))));
         }
@@ -82,7 +82,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     };
     for name in &names {
         if record_fields.get(name).is_none() {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM: record has no field `{name}`",
             )))));
         }
@@ -117,7 +117,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                     witnessed,
                     crate::machine::core::FrameCoverage::empty(),
                 ),
-                Err(e) => return Action::Done(Err(e)),
+                Err(e) => return Action::done(Err(e)),
             };
             &resident
         }
@@ -126,7 +126,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // `record` operand reaches. Built at the fold brand from the operand's own view — the narrowed
     // type map re-read from the view, the backing substrate shared whole — so the result's witness
     // names the read-site home frame plus that reach by construction.
-    Action::Done(Ok(ctx.ctx.alloc_carried_with(&[lhs], move |b, views| {
+    Action::done(Ok(ctx.ctx.alloc_carried_with(&[lhs], move |b, views| {
         let record = match views[0] {
             Carried::Object(o) => o,
             Carried::Type(_) | Carried::UnresolvedType(_) => {

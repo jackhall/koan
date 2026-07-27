@@ -89,7 +89,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
     // body resolves the group — including above the `OP` declarations it names, which park on the
     // still-finalizing declarations through the ordinary pending-overload machinery.
     let member_refs: Vec<&str> = members.iter().map(|s| s.as_str()).collect();
-    crate::try_action!(child_scope.register_group_under_all_subsets(
+    crate::try_action!(child_scope.register_group_under_all_subsets_direct(
         &member_refs,
         &group,
         BindingIndex::value(0),

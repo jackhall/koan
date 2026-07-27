@@ -16,7 +16,7 @@ use super::{body_no_op, unit_signature};
 // chain-gated `Scope::resolve` path.
 
 #[test]
-fn bind_value_errors_on_same_scope_rebind() {
+fn bind_value_direct_errors_on_same_scope_rebind() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v1 = region.brand().alloc_object(KObject::Number(1.0));
@@ -34,7 +34,7 @@ fn bind_value_errors_on_same_scope_rebind() {
 }
 
 #[test]
-fn bind_value_allows_shadowing_in_child_scope() {
+fn bind_value_direct_allows_shadowing_in_child_scope() {
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     let v1 = region.brand().alloc_object(KObject::Number(1.0));
@@ -105,7 +105,7 @@ fn register_function_dedupes_exact_signature() {
         &types,
     ));
     scope
-        .register_function("FOO".to_string(), f1, BindingIndex::BUILTIN)
+        .register_function_direct("FOO".to_string(), f1, BindingIndex::BUILTIN)
         .unwrap();
     let f2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -115,7 +115,7 @@ fn register_function_dedupes_exact_signature() {
         &types,
     ));
     let err = scope
-        .register_function("FOO".to_string(), f2, BindingIndex::BUILTIN)
+        .register_function_direct("FOO".to_string(), f2, BindingIndex::BUILTIN)
         .unwrap_err();
     assert!(
         matches!(&err.kind, crate::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "FOO"),
@@ -124,10 +124,10 @@ fn register_function_dedupes_exact_signature() {
 }
 
 /// Routing a structurally identical but pointer-distinct `KFunction` through the LET
-/// path (`bind_value(KObject::KFunction(...))`) must also trip `DuplicateOverload` —
+/// path (a `WriteOp::Callable` over a `KObject::KFunction`) must also trip `DuplicateOverload` —
 /// the unified `try_apply` shares the FN dedupe rule.
 #[test]
-fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
+fn bind_value_direct_with_kfunction_dedupes_exact_signature_with_existing_fn() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -139,7 +139,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         &types,
     ));
     scope
-        .register_function("FOO".to_string(), f1, BindingIndex::BUILTIN)
+        .register_function_direct("FOO".to_string(), f1, BindingIndex::BUILTIN)
         .unwrap();
     let f2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -165,7 +165,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
 /// name must succeed — bucket dedupe is silent-success on pointer-equal entries and
 /// structural-rejection only on pointer-distinct ones.
 #[test]
-fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
+fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -232,10 +232,10 @@ fn register_function_allows_overload_with_different_arg_types() {
         &types,
     ));
     scope
-        .register_function("BAR".to_string(), f1, BindingIndex::BUILTIN)
+        .register_function_direct("BAR".to_string(), f1, BindingIndex::BUILTIN)
         .unwrap();
     scope
-        .register_function("BAR".to_string(), f2, BindingIndex::BUILTIN)
+        .register_function_direct("BAR".to_string(), f2, BindingIndex::BUILTIN)
         .unwrap();
 }
 
@@ -258,7 +258,7 @@ fn register_function_coexists_with_same_name_value() {
         &types,
     ));
     scope
-        .register_function("FOO".to_string(), f, BindingIndex::BUILTIN)
+        .register_function_direct("FOO".to_string(), f, BindingIndex::BUILTIN)
         .expect("bare FN registration must not collide with a same-name value");
     assert!(matches!(scope.lookup("FOO"), Some(KObject::Number(n)) if *n == 1.0));
     let key = f.signature.untyped_key();
@@ -278,7 +278,7 @@ fn register_function_coexists_with_same_name_type() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type("Foo".to_string(), KType::NUMBER, DeclarationSite::BUILTIN);
+    let _ = scope.register_type_direct("Foo".to_string(), KType::NUMBER, DeclarationSite::BUILTIN);
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -287,7 +287,7 @@ fn register_function_coexists_with_same_name_type() {
         &types,
     ));
     scope
-        .register_function("Foo".to_string(), f, BindingIndex::BUILTIN)
+        .register_function_direct("Foo".to_string(), f, BindingIndex::BUILTIN)
         .expect("bare FN registration must not collide with a same-name type");
     assert!(scope.bindings().types().get("Foo").is_some());
     let key = f.signature.untyped_key();
@@ -311,7 +311,7 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
     scope
         .bind_resident_for_test("val".to_string(), v, BindingIndex::BUILTIN)
         .unwrap();
-    scope.register_type("Ty".to_string(), KType::NUMBER, DeclarationSite::BUILTIN);
+    let _ = scope.register_type_direct("Ty".to_string(), KType::NUMBER, DeclarationSite::BUILTIN);
     let bindings = scope.bindings();
     assert!(matches!(
         bindings.lookup_member("val", None),
@@ -374,7 +374,7 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
 }
 
 #[test]
-fn bind_value_clears_own_placeholder() {
+fn bind_value_direct_clears_own_placeholder() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope
@@ -497,7 +497,7 @@ fn visibility_type_side_gate_mirrors_value_side() {
     use std::rc::Rc;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type(
+    let _ = scope.register_type_direct(
         "TyLate".to_string(),
         KType::NUMBER,
         mock_declaration_site(1, 5),
@@ -523,14 +523,15 @@ fn sig_scope_bindings_reject_value_token_type_write() {
         .brand()
         .alloc_scope(Scope::child_under_sig(outer, "S".to_string()));
     let kt: KType = KType::NUMBER;
-    let error =
-        match sig_scope
-            .bindings()
-            .try_register_type("compare", kt, DeclarationSite::BUILTIN)
-        {
-            Err(e) => e,
-            Ok(_) => panic!("a value-token key must never enter `types`, even on a SIG decl scope"),
-        };
+    let error = match sig_scope.bindings().write_type(
+        "compare",
+        kt,
+        DeclarationSite::BUILTIN,
+        crate::machine::core::bindings::TypeWritePolicy::Insert,
+    ) {
+        Err(e) => e,
+        Ok(_) => panic!("a value-token key must never enter `types`, even on a SIG decl scope"),
+    };
     assert!(
         matches!(&error.kind, crate::machine::core::KErrorKind::ShapeError(msg) if msg.contains("is a value token")),
         "expected the token-class partition error, got {error}",
@@ -570,7 +571,7 @@ fn function_mirror_seals_the_data_entrys_own_claim() {
         .seal_function_mirror(&sealed)
         .expect("the bound value wraps a callable");
     scope
-        .bind_value("f".to_string(), sealed, Some(mirror), BindingIndex::BUILTIN)
+        .bind_value_direct("f".to_string(), sealed, Some(mirror), BindingIndex::BUILTIN)
         .expect("a fresh callable bind lands");
 
     let lookup = scope
@@ -601,7 +602,7 @@ fn bare_fn_registration_seals_the_empty_reach() {
         &types,
     ));
     scope
-        .register_function("FOO".to_string(), f, BindingIndex::BUILTIN)
+        .register_function_direct("FOO".to_string(), f, BindingIndex::BUILTIN)
         .unwrap();
     let foreign = run_root_storage();
     let lookup = scope

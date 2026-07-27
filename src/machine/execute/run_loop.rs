@@ -9,6 +9,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
@@ -22,7 +23,7 @@ use crate::witnessed::{
 use super::dispatch::SchedulerView;
 use super::finalize::{finalize_error, NodeFinalize};
 use super::nodes::{ChainOp, NodePayload, NodeScope, NodeStep, NodeWork};
-use super::outcome::DepTerminal;
+use super::outcome::{DepTerminal, Outcome};
 use super::runtime::{KoanRuntime, KoanWorkload};
 use crate::scheduler::Anchor;
 
@@ -117,6 +118,11 @@ impl<'run> KoanRuntime<'run> {
         anchor: Rc<super::nodes::SlotFrame>,
     ) {
         let idx = id.index();
+        // The step's binding-write sink: every `Action` the step interprets deposits its `WriteOp`s
+        // here through `run_action`, and the drain below applies them against the step scope. Owned
+        // by the run loop and confined to this call, so nothing crosses steps — a wake-time finish
+        // runs inside its own step and fills that step's sink.
+        let step_effects: std::cell::RefCell<Vec<WriteOp>> = std::cell::RefCell::new(Vec::new());
         // Source the step's context off the scheduler-held anchor: the cart, the slot's scope
         // handle, and its lexical chain. Read as values up front so nothing holds a scope borrow
         // across the step's `&mut self` work or a tail hop's frame swap.
@@ -204,18 +210,36 @@ impl<'run> KoanRuntime<'run> {
                                     run: rt.run,
                                     node: id,
                                 },
+                                &step_effects,
                             ),
                             deps.results(&dep_sources),
                             idx,
                         );
                         rt.sched.reclaim_deps(idx, owned_indices);
+                        // Apply the step's binding writes against the step scope, in the order the
+                        // bodies decided them. This is the **only** path that mutates a published
+                        // binding table: it runs after the continuation returned — so no koan frame
+                        // holds a competing borrow — and before the outcome is realized, so the
+                        // writes land while the scope is still open and before any graph edge an
+                        // errored step would strand is installed. On the first failure the
+                        // remaining ops are dropped and the step becomes the node's error terminal,
+                        // so the finalize arms below clear the producer's placeholders and
+                        // attribute the error exactly as for an in-step error. A body that errors
+                        // before deciding its write installs nothing at all: the writes are outcome
+                        // data, and an error terminal carries none.
+                        let outcome = match step_effects
+                            .borrow_mut()
+                            .drain(..)
+                            .try_for_each(|op| op.apply(scope))
+                        {
+                            Ok(()) => outcome,
+                            Err(error) => Outcome::Done(Err(error)),
+                        };
                         // Realize the outcome into a `NodeStep`; a ready `Outcome::Forward` becomes
                         // a `ForwardReady` relocated below into this same `dest`.
                         rt.apply_outcome(outcome, idx)
                     },
                 );
-                // Drain re-entrant writes against the step scope (unchanged by the step).
-                scope.drain_pending();
                 // The producer's per-call frame, gated to a *dying* producer (a frameless / run-frame
                 // producer folds in nothing): it gates the per-call return obligation (the contract
                 // label and the finalize fold) and selects a `ForwardReady` relocation's destination

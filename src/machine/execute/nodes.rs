@@ -223,7 +223,7 @@ mod tests {
         let scope = test_run.scope;
         let types = test_run.types.clone();
         scope
-            .bind_checked(
+            .bind_checked_direct(
                 "k".to_string(),
                 KObject::Number(7.0),
                 BindingIndex::BUILTIN,

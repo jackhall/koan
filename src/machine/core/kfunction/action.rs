@@ -8,6 +8,7 @@
 use std::rc::Rc;
 
 use super::body::ReturnContract;
+use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::carrier_witness::SealedFunction;
 use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, StepAllocator};
 use crate::machine::execute::StepCarried;
@@ -25,8 +26,8 @@ use crate::scheduler::Deps;
 use crate::witnessed::Witnessed;
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
-/// `Action::Done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
-/// pervasive `match helper(…) { Ok(v) => v, Err(e) => return Action::Done(Err(e)) }` envelope.
+/// `Action::done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
+/// pervasive `match helper(…) { Ok(v) => v, Err(e) => return Action::done(Err(e)) }` envelope.
 /// `#[macro_export]` hoists it to the crate root, so call it as `crate::try_action!(…)` from
 /// anywhere with no import.
 #[macro_export]
@@ -34,7 +35,7 @@ macro_rules! try_action {
     ($expr:expr) => {
         match $expr {
             Ok(value) => value,
-            Err(error) => return $crate::machine::core::kfunction::action::Action::Done(Err(error)),
+            Err(error) => return $crate::machine::core::kfunction::action::Action::done(Err(error)),
         }
     };
 }
@@ -363,8 +364,83 @@ pub enum TailContract {
     FromLastResult { func: SealedFunction },
 }
 
+/// What a builtin body (or a wake-time finish) returns: the binding-table writes it decided on,
+/// plus what happens next for the slot.
+///
+/// `effects` is the outcome-ops channel — a body never mutates a published scope's binding tables
+/// itself. It seals its value through a `seal_*` construction door and describes the write as a
+/// [`WriteOp`]; the run loop drains the step's effects after the continuation returns and applies
+/// them in program order, before finalize. An apply error becomes the node's error terminal, so
+/// per-step writes are all-or-nothing.
+pub struct Action<'a> {
+    pub(crate) effects: Vec<WriteOp>,
+    pub next: ActionKind<'a>,
+}
+
+impl<'a> Action<'a> {
+    /// An `Action` writing nothing.
+    pub fn from_kind(next: ActionKind<'a>) -> Self {
+        Action {
+            effects: Vec::new(),
+            next,
+        }
+    }
+
+    /// Produce this slot's terminal. See [`ActionKind::Done`].
+    pub fn done(result: Result<StepCarried<'a>, KError>) -> Self {
+        Action::from_kind(ActionKind::Done(result))
+    }
+
+    /// Tail-replace into `tail`. See [`ActionKind::Tail`].
+    pub fn tail(
+        leading: Vec<KExpression<'a>>,
+        tail: KExpression<'a>,
+        contract: TailContract,
+        frame_placement: FramePlacement<'a>,
+        block_entry: BlockEntry<'a>,
+    ) -> Self {
+        Action::from_kind(ActionKind::Tail {
+            leading,
+            tail,
+            contract,
+            frame_placement,
+            block_entry,
+        })
+    }
+
+    /// Dispatch `deps`, then continue through `finish`. See [`ActionKind::AwaitDeps`].
+    pub fn await_deps(deps: Deps<OwnedDispatch<'a>>, finish: AwaitContinue<'a>) -> Self {
+        Action::from_kind(ActionKind::AwaitDeps { deps, finish })
+    }
+
+    /// Watch `watched`, recover via `finish`. See [`ActionKind::Catch`].
+    pub fn catch(watched: DepRequest<'a>, finish: CatchContinue<'a>) -> Self {
+        Action::from_kind(ActionKind::Catch { watched, finish })
+    }
+
+    /// A `Done` terminal paired with the binding-table writes the body decided, or the error
+    /// terminal — the shape every binder's finalize helper returns.
+    pub(crate) fn done_writing(result: Result<(StepCarried<'a>, Vec<WriteOp>), KError>) -> Self {
+        match result {
+            Ok((carrier, effects)) => Action::done(Ok(carrier)).with_effects(effects),
+            Err(error) => Action::done(Err(error)),
+        }
+    }
+
+    /// Attach the binding-table writes this step decided on, in program order.
+    pub(crate) fn with_effects(mut self, effects: Vec<WriteOp>) -> Self {
+        self.effects.extend(effects);
+        self
+    }
+
+    /// Attach one binding-table write.
+    pub(crate) fn with_effect(self, effect: WriteOp) -> Self {
+        self.with_effects(vec![effect])
+    }
+}
+
 /// What happens next for a slot — the four shapes the builtin survey reduced everything to.
-pub enum Action<'a> {
+pub enum ActionKind<'a> {
     /// Produce this slot's terminal (after any direct scope mutation the builtin did): a witnessed
     /// value or an error. The `Ok` carrier is built **inside the witness closure** — already bundled
     /// with the set of regions it reaches ([`yoke`](crate::witnessed::Witnessed::yoke) / `merge` at
@@ -408,7 +484,7 @@ impl<'a> Action<'a> {
     /// alloc site (`alloc_carried`/`alloc_carried_with` / `yoke` / `merge` / `resident_*_carrier`), so
     /// this stays behind `cfg(test)`.
     pub(crate) fn done_resident(value: Carried<'a>) -> Self {
-        Action::Done(Ok(StepCarried::born(Witnessed::resident(value))))
+        Action::done(Ok(StepCarried::born(Witnessed::resident(value))))
     }
 }
 

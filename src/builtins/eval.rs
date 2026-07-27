@@ -21,13 +21,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let inner = match arg_object(ctx.args, "expr") {
         Some(KObject::KExpression(e)) => e.clone(),
         Some(other) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "expr".to_string(),
                 expected: "KExpression".to_string(),
                 got: other.ktype().name(ctx.types),
             })))
         }
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
     };
     // Chain the call-site frame Rc onto the new frame (keeps the parent region alive past the
     // new frame's `outer` pointer) — matching a normal call frame. The tail is the whole quoted

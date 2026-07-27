@@ -21,7 +21,7 @@ use std::rc::Rc;
 
 use crate::machine::core::{split_body_statements, ReturnContract};
 use crate::machine::core::{
-    Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
+    Action, ActionKind, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
 };
 use crate::machine::core::{FoldingBrand, ScopeRefFamily};
 use crate::machine::model::Carried;
@@ -262,12 +262,17 @@ pub(in crate::machine::execute) fn run_action<'step>(
     view: &SchedulerView<'step, '_>,
     action: Action<'step>,
 ) -> Outcome<'step> {
-    match action {
+    // The step's binding-table writes travel as outcome data: deposit them into the run-loop-owned
+    // sink in the order the bodies decided them, before interpreting what happens next. Every
+    // recursive arm below (a wake-time finish's `Action`) deposits through this same call, so a
+    // chain of finishes contributes its writes in program order.
+    view.deposit_effects(action.effects);
+    match action.next {
         // Already a step-branded carrier (or error): `finalize` seals it as-is, no co-location
         // bundle.
-        Action::Done(result) => Outcome::Done(result),
+        ActionKind::Done(result) => Outcome::Done(result),
 
-        Action::Tail {
+        ActionKind::Tail {
             leading,
             tail,
             contract,
@@ -385,7 +390,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
             .finish_terminal(finish)
         }
 
-        Action::AwaitDeps { deps, finish } => {
+        ActionKind::AwaitDeps { deps, finish } => {
             // The builtin assembled the structural `[park..., owned...]` split itself: parks keep
             // first-occurrence order, owned insertion order, and the builder delivers results
             // `[park..., owned...]`. This arm maps each owned sub-dispatch into the library dep
@@ -409,7 +414,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 .finish_terminal(wrapped)
         }
 
-        Action::Catch { watched, finish } => {
+        ActionKind::Catch { watched, finish } => {
             // `watched` is realized (and owned) at apply time — an `InScope` watched enters a
             // fresh single-statement block, distinct from a dep-finish body's fan-out.
             let wrapped: CatchFinish<'step> = Box::new(move |view, result| {

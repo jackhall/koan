@@ -11,7 +11,7 @@ fn binder_name_extracts_let_name() {
 }
 
 /// End-to-end install-then-clear: statement submission installs the placeholder from the
-/// cached binder plan before the body runs; `bind_value` clears it on finalize.
+/// cached binder plan before the body runs; the value write clears it at apply.
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::builtins::test_support::TestRun;

@@ -13,7 +13,7 @@
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KKind, SigSchema};
-use crate::machine::{Scope, TraceFrame};
+use crate::machine::Scope;
 
 use super::{arg, kw, sig};
 
@@ -42,16 +42,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         move |fctx| {
             let schema = SigSchema::project_decl(decl_scope, fctx.types);
             let identity = fctx.types.signature(schema);
-            match fctx
-                .scope
-                .register_nominal_upsert(name_for_finish.clone(), identity, site)
-            {
-                Ok(kt_ref) => Action::Done(Ok(fctx.ctx.type_carried(kt_ref))),
-                Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
-                    "<signature>",
-                    format!("SIG {} body", name_for_finish),
-                )))),
-            }
+            Action::done(Ok(fctx.ctx.type_carried(identity))).with_effect(
+                crate::machine::core::bindings::WriteOp::Type {
+                    name: name_for_finish,
+                    kt: identity,
+                    site,
+                    policy: crate::machine::core::bindings::TypeWritePolicy::UpsertEqual,
+                    builtin_shadow_guard: true,
+                },
+            )
         },
     )
 }

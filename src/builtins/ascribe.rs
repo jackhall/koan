@@ -21,7 +21,7 @@ use super::{arg, kw, sig};
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
 /// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
-/// witnessed [`Action::Done(Ok)`](Action::Done) carrier ([`Scope::resident_type_carrier`] seals it under the
+/// witnessed [`Action::done(Ok)`](Action::Done) carrier ([`Scope::resident_type_carrier`] seals it under the
 /// child scope's token, derived via [`Scope::child_module_reach`]).
 pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
@@ -41,11 +41,11 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // that holds a pin to open a seal under — the binding table itself opens nothing.
     if let Err(e) = new_scope
         .bindings()
-        .try_bulk_install_from(src.bindings(), |sealed| {
+        .bulk_install_from(src.bindings(), |sealed| {
             new_scope.seal_function_mirror(sealed)
         })
     {
-        return Action::Done(Err(e));
+        return Action::done(Err(e));
     }
 
     // The view's members are all bulk-installed into `new_scope` above, and nothing binds into it
@@ -131,7 +131,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     seal_view_self_sig(new_module, &s_schema, ctx.types);
 
     if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types) {
-        return Action::Done(Err(e));
+        return Action::done(Err(e));
     }
 
     // The view's token is derived from `new_scope` held directly here (co-located, so it names only
@@ -149,7 +149,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
         .scope
         .store_module_object(new_module, new_scope, ctx.types));
     let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
-    Action::Done(Ok(StepCarried::born_pinned(carrier, pins)))
+    Action::done(Ok(StepCarried::born_pinned(carrier, pins)))
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
@@ -163,7 +163,7 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     let (s_schema, s_digest) = signature_schema(s, ctx.types);
     let s_name = s.name(ctx.types);
     if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types) {
-        return Action::Done(Err(e));
+        return Action::done(Err(e));
     }
     // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
     // to this frame — so its token folds that source's region and reach and derives its home-borrow
@@ -186,7 +186,7 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
         ctx.types,
     ));
     let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
-    Action::Done(Ok(StepCarried::born_pinned(carrier, pins)))
+    Action::done(Ok(StepCarried::born_pinned(carrier, pins)))
 }
 
 /// Seal an ascription view's self-sig. The raw derivation captures the view's members; each

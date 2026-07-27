@@ -7,6 +7,7 @@
 //! field-name policy, error frame) and the `finalize` that folds the sealed `(name, KType)` pairs
 //! into the right carrier (`finalize_union` / `finalize_record_newtype`).
 
+use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KType;
 use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
@@ -16,8 +17,8 @@ use crate::machine::{Action, BodyCtx, FinishCtx};
 use crate::machine::{DeclarationSite, KError, KErrorKind, TraceFrame};
 use crate::machine::{FieldListDeferral, StepCarried};
 
-/// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
-/// and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
+/// Fold the sealed `(name, KType)` pairs into the declarator's carrier and the `types` write that
+/// installs its identity; shared by the synchronous and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
 /// and the deferred finish without `Clone`.
 pub(crate) type SchemaFinalize<'a> = fn(
     &FinishCtx<'a, '_>,
@@ -25,7 +26,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
     std::rc::Rc<crate::machine::model::RecursiveGroupWindow>,
     Vec<(String, KType)>,
     DeclarationSite,
-) -> Result<StepCarried<'a>, KError>;
+) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError>;
 
 /// Elaborate `schema_expr` as the named declarator's field list and fold or defer it.
 /// `context` / `name_kind` / `error_frame` parameterize the diagnostic and seal shape; `finalize`
@@ -66,9 +67,9 @@ pub(crate) fn nominal_schema_action<'a>(
         ctx.types,
     ) {
         FieldListOutcome::Done(fields) => {
-            Action::Done(finalize(&ctx.finish_ctx(), name, window, fields, site))
+            Action::done_writing(finalize(&ctx.finish_ctx(), name, window, fields, site))
         }
-        FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+        FieldListOutcome::Err(msg) => Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,

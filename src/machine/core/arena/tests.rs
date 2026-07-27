@@ -572,10 +572,10 @@ fn region_union_foreign_pins_release_at_region_death() {
         let (reach, borrows_home) = scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
         let bindings: Bindings = Bindings::new();
         bindings
-            .try_bind_value(
+            .write_value(
                 "x",
                 BindingIndex::BUILTIN,
-                scope.seal_resident_value(Carried::Object(obj), reach, borrows_home),
+                Some(scope.seal_resident_value(Carried::Object(obj), reach, borrows_home)),
                 None,
             )
             .expect("a fresh value bind lands");

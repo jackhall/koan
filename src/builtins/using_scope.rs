@@ -8,7 +8,7 @@
 //! allocated in the **call-site region** — not a per-call frame — so forwarded
 //! binds and functions defined in the block stay live after the block ends.
 //! A bind colliding with a surfaced member is rejected in
-//! [`Scope::bind_value`](crate::machine::Scope)'s borrowed-window arm.
+//! the value-write op's transparent-window arm.
 //!
 //! Only `data` and `functions` are surfaced; `Module::type_members` is not in
 //! `Bindings`, so abstract ascriptions stay opaque inside the block.
@@ -39,27 +39,27 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // A module reaches USING on the value channel's Object arm.
         Some(Held::Object(KObject::Module(m))) => *m,
         Some(Held::Type(other)) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
                 expected: "Module".to_string(),
                 got: other.name(ctx.types),
             })))
         }
         Some(Held::UnresolvedType(ti)) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
                 expected: "Module".to_string(),
                 got: ti.render(),
             })))
         }
         Some(Held::Object(other)) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
                 expected: "Module".to_string(),
                 got: other.ktype().name(ctx.types).to_string(),
             })))
         }
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
     };
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
     let module_bindings = module.child_scope().bindings();

@@ -39,8 +39,8 @@ fn using_block_bind_persists_at_call_site() {
     assert!(matches!(result, KObject::Number(n) if *n == 5.0));
 }
 
-/// Without the guard in `bind_value`'s borrowed-window arm, the surfaced
-/// member would silently shadow the bind.
+/// Without the guard the op-apply runs before forwarding a value write through a transparent
+/// window, the surfaced member would silently shadow the bind.
 #[test]
 fn using_block_bind_colliding_with_member_errors() {
     let region = run_root_storage();
@@ -197,7 +197,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
         module_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign_storage))]);
     let sealed = module_scope.seal_resident_value(Carried::Object(value_obj), reach, borrows_home);
     module_scope
-        .bind_value("val".to_string(), sealed, None, BindingIndex::value(0))
+        .bind_value_direct("val".to_string(), sealed, None, BindingIndex::value(0))
         .expect("fresh binding name in an unborrowed scope");
 
     let call_site_storage = run_root_storage();

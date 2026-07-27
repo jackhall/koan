@@ -14,6 +14,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::core::{LexicalFrame, NameLookup, Scope};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::NodeId;
@@ -176,9 +177,11 @@ pub fn elaborate_type_identifier(
 
 /// Outcome of [`finalize_nominal_member`].
 pub enum SealOutcome {
-    /// The member sealed (or was already sealed); the `Copy` handle is its interned member
-    /// handle, ready to wrap in a `Carried::Type`.
-    Sealed(KType),
+    /// The member sealed (or was already sealed): the `Copy` handle is its interned member handle,
+    /// ready to wrap in a `Carried::Type`, beside the `types` write installing it under the
+    /// binder's name. The write rides the step outcome — a redeclaration surfaces as the binder's
+    /// error terminal when the run loop applies it.
+    Sealed { kt: KType, write: WriteOp },
     /// The member's schema filled, but its window still holds unfilled members, so no member has
     /// an identity yet. Only a `RECURSIVE TYPES` block reaches this: the block's own finish is the
     /// seal barrier, and it binds every member once the last one fills.
@@ -186,9 +189,6 @@ pub enum SealOutcome {
     /// A reference named no member of the window — a sealing bug surfaced as a shape error rather
     /// than a dangling reference.
     DanglingRef(String),
-    /// The name already binds a different type (a redeclaration); the install raised
-    /// `Rebind`, propagated to the binder.
-    Rebind(crate::machine::core::KError),
 }
 
 /// Fill a nominal type's elaborated schema into its window member and, once the window seals,
@@ -202,12 +202,10 @@ pub enum SealOutcome {
 ///    own one-member window (or a fresh one for a declarator that needs no elaboration): filling
 ///    its only member seals it, and a self-reference was already interned as `Sibling(0)`.
 /// 3. **Already sealed** — a parallel finalize of this same declaration ran first; the window
-///    hands back the same handles, and the upsert recognizes the re-entry by its installing
-///    [`NodeHandle`](crate::machine::core::NodeHandle) matching the stored entry's, so the
-///    overwrite is idempotent.
-#[allow(clippy::result_large_err)]
-pub fn finalize_nominal_member<'a>(
-    scope: &Scope<'a>,
+///    hands back the same handles, and [`TypeWritePolicy::UpsertEqual`] recognizes the re-entry by
+///    its installing [`NodeHandle`](crate::machine::core::NodeHandle) matching the stored entry's,
+///    so the overwrite is idempotent.
+pub fn finalize_nominal_member(
     window: &Rc<RecursiveGroupWindow>,
     name: &str,
     build_schema: impl FnOnce(&Rc<RecursiveGroupWindow>) -> RelativeSchema,
@@ -225,10 +223,17 @@ pub fn finalize_nominal_member<'a>(
         Some(sealed) => sealed,
         None => return SealOutcome::Deferred,
     };
-    // A non-equal existing entry (a redeclaration) surfaces as `Rebind`, propagated to the binder.
-    match scope.register_nominal_upsert(name.to_string(), sealed.members[index], site) {
-        Ok(kt_ref) => SealOutcome::Sealed(kt_ref),
-        Err(e) => SealOutcome::Rebind(e),
+    // A non-equal existing entry (a redeclaration) surfaces as `Rebind` when the run loop applies
+    // this op, which makes it the binder's error terminal.
+    SealOutcome::Sealed {
+        kt: sealed.members[index],
+        write: WriteOp::Type {
+            name: name.to_string(),
+            kt: sealed.members[index],
+            site,
+            policy: TypeWritePolicy::UpsertEqual,
+            builtin_shadow_guard: true,
+        },
     }
 }
 

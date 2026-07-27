@@ -116,7 +116,8 @@ mod bare_leaf_resolution {
     fn builtin_synthesizes_type_carrier() {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
-        scope.register_type("Number".into(), KType::NUMBER, DeclarationSite::BUILTIN);
+        let _ =
+            scope.register_type_direct("Number".into(), KType::NUMBER, DeclarationSite::BUILTIN);
         let types = TypeRegistry::new();
         let leaf = TypeIdentifier::leaf("Number".to_string());
         match scope.resolve_type_identifier(&leaf, None, &types) {
@@ -193,13 +194,15 @@ mod bare_leaf_resolution {
             )
             .expect("the only member's fill seals the window");
         drop(pending_guard);
-        scope
-            .register_nominal_upsert(
-                "Node".into(),
-                sealed.members[0],
-                mock_declaration_site(7, 0),
-            )
-            .expect("install the sealed identity");
+        crate::machine::core::bindings::WriteOp::Type {
+            name: "Node".into(),
+            kt: sealed.members[0],
+            site: mock_declaration_site(7, 0),
+            policy: crate::machine::core::bindings::TypeWritePolicy::UpsertEqual,
+            builtin_shadow_guard: true,
+        }
+        .apply(scope)
+        .expect("install the sealed identity");
 
         match scope.resolve_type_identifier(&leaf, None, &types) {
             TypeResolution::Done(resolved) => assert_eq!(resolved, sealed.members[0]),

@@ -10,8 +10,10 @@
 //! scheduler only through `cx.foo(...)`, never by naming its fields, so a scheduler-internal rename
 //! stays inside `scheduler/`.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::{scope_frame, DepPlacement};
 use crate::machine::core::{FrameStorage, StepAllocator};
@@ -92,6 +94,14 @@ pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
     /// reads it through [`Self::node_handle`] to stamp the installing declaration's identity onto
     /// its `types` entry.
     node: NodeHandle,
+    /// The step's binding-write sink, owned by [`run_step`](super::super::run_loop) for the step's
+    /// duration and drained by it after the continuation returns. **Private**, with one
+    /// `pub(in crate::machine::execute)` deposit method, so only [`run_action`] can reach it: a
+    /// builtin receives a [`BodyCtx`](crate::machine::BodyCtx), which does not carry it, and nothing
+    /// outside the execute layer can deposit. The asymmetry is deliberate — builtins express writes
+    /// as outcome *data* on their `Action`; this is a harness-internal hop from `run_action` to the
+    /// run loop's apply point, not a channel bodies write through.
+    effects: &'view RefCell<Vec<WriteOp>>,
 }
 
 impl<'step, 'view> SchedulerView<'step, 'view> {
@@ -101,6 +111,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         scope: &'step Scope<'step>,
         dest_frame: Rc<FrameStorage>,
         node: NodeHandle,
+        effects: &'view RefCell<Vec<WriteOp>>,
     ) -> Self {
         Self {
             sched,
@@ -108,7 +119,15 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             scope,
             dest_frame,
             node,
+            effects,
         }
+    }
+
+    /// Append this step's next batch of binding writes to the run-loop-owned sink, preserving the
+    /// order the bodies decided them in. The only way into `effects`; called once per interpreted
+    /// `Action` by [`run_action`](super::super::runtime::run_action).
+    pub(in crate::machine::execute) fn deposit_effects(&self, ops: Vec<WriteOp>) {
+        self.effects.borrow_mut().extend(ops);
     }
 
     /// The run-qualified slot stepping this view — the installing declaration's identity a

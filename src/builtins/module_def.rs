@@ -6,6 +6,7 @@
 //! [`await_module_body`] is the body-dispatch-and-bind tail, shared with `GROUP`
 //! ([`super::group_def`]) — a group *is* a module, so it differs only in the child scope it mints.
 
+use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
 use crate::machine::model::Module;
@@ -66,7 +67,7 @@ pub(super) fn await_module_body<'a>(
                 fctx.scope.bindings().lookup_value(&name_for_finish, None)
             {
                 let (carrier, pins) = fctx.scope.lift_resident_parts(sealed);
-                return Action::Done(Ok(StepCarried::born_pinned(carrier, pins)));
+                return Action::done(Ok(StepCarried::born_pinned(carrier, pins)));
             }
             let module: &'a Module<'a> = fctx
                 .scope
@@ -85,24 +86,21 @@ pub(super) fn await_module_body<'a>(
             // Seal the module's self-sig now that `type_members` reflects the body — a plain
             // module carries no SIG, so the raw derivation is the whole signature.
             module.seal_self_sig(SigSchema::raw_self_sig(module), fctx.types);
-            // Fused MODULE-finish bind: the module's stored reach is derived off the child scope held
-            // **directly** here (never by walking the built value) — the home-borrow bit included,
-            // `true` because the same-region child's own region owner covers this scope's region
-            // — and the Object-arm module value is allocated and bound
-            // value-side (`bindings.data`) under it. The returned terminal witnesses that same value
-            // from the same stored reach.
-            match fctx.scope.bind_module(
-                name_for_finish.clone(),
-                module,
-                child_scope,
-                bind_index,
-                fctx.types,
-            ) {
+            // Fused MODULE-finish seal: the module's stored reach is derived off the child scope
+            // held **directly** here (never by walking the built value) — the home-borrow bit
+            // included, `true` because the same-region child's own region owner covers this scope's
+            // region — and the Object-arm module value is allocated under it. The returned terminal
+            // witnesses that same value from the same stored reach; the value-side
+            // (`bindings.data`) write rides the outcome.
+            match fctx.scope.seal_module(module, child_scope, fctx.types) {
                 Ok(sealed) => {
+                    // A `KObject::Module` wraps no `KFunction`, so the mirror has nothing to write.
+                    let write =
+                        WriteOp::value(name_for_finish, bind_index, sealed.duplicate(), None);
                     let (carrier, pins) = fctx.scope.lift_resident_parts(sealed);
-                    Action::Done(Ok(StepCarried::born_pinned(carrier, pins)))
+                    Action::done(Ok(StepCarried::born_pinned(carrier, pins))).with_effect(write)
                 }
-                Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
+                Err(e) => Action::done(Err(e.with_frame(TraceFrame::bare(
                     "<module>",
                     format!("{surface} {name_for_finish} body"),
                 )))),
@@ -121,7 +119,7 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let name = crate::try_action!(require_bare_type_name(
         ctx.args, "name", "MODULE", ctx.types
     ));
-    Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+    Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{name}` is named with a Type token, but a module is a value — the Type-token \
          namespace names what can type a field. Name it snake_case, e.g. `{suggestion}`",
         suggestion = super::let_binding::snake_case_identifier(&name),
@@ -424,14 +422,11 @@ mod tests {
         // Every mint seals its self-sig (2d eager-seal invariant), so a manually pre-seeded
         // module seals its (empty) interface before it is bound and its `ktype()` is read.
         module.seal_self_sig(SigSchema::raw_self_sig(module), &test_run.types);
+        let sealed = scope
+            .seal_module(module, child, &test_run.types)
+            .expect("seal the module value");
         scope
-            .bind_module(
-                "foo".into(),
-                module,
-                child,
-                BindingIndex::value(0),
-                &test_run.types,
-            )
+            .bind_value_direct("foo".into(), sealed, None, BindingIndex::value(0))
             .expect("pre-seed the module value binding");
         test_run.run("MODULE foo = (LET y = 2)");
         let foo = lookup_module(scope, "foo", &test_run.types);

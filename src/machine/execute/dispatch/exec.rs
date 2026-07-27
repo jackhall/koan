@@ -162,13 +162,13 @@ pub(super) fn invoke<'step>(
             // leading statements into it.
             super::super::runtime::run_action(
                 view,
-                Action::Tail {
-                    leading: leading.into_iter().map(|e| (*e).clone()).collect(),
-                    tail: tail.clone(),
-                    contract: TailContract::Eager(Some(contract)),
-                    frame_placement: FramePlacement::Inherit,
-                    block_entry: BlockEntry::FrameScope(frame),
-                },
+                Action::tail(
+                    leading.into_iter().map(|e| (*e).clone()).collect(),
+                    tail.clone(),
+                    TailContract::Eager(Some(contract)),
+                    FramePlacement::Inherit,
+                    BlockEntry::FrameScope(frame),
+                ),
             )
         }
         ExecOutcome::DeferredExprTail {
@@ -186,15 +186,15 @@ pub(super) fn invoke<'step>(
             statements.push(type_expr.clone());
             super::super::runtime::run_action(
                 view,
-                Action::Tail {
-                    leading: statements,
-                    tail: tail.clone(),
-                    contract: TailContract::FromLastResult {
+                Action::tail(
+                    statements,
+                    tail.clone(),
+                    TailContract::FromLastResult {
                         func: picked.reseal(),
                     },
-                    frame_placement: FramePlacement::Inherit,
-                    block_entry: BlockEntry::FrameScope(frame),
-                },
+                    FramePlacement::Inherit,
+                    BlockEntry::FrameScope(frame),
+                ),
             )
         }
         ExecOutcome::Errored(e) => Outcome::Done(Err(e)),

@@ -20,6 +20,7 @@ use crate::machine::model::TypeRegistry;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::{
@@ -46,7 +47,7 @@ fn finalize_newtype<'a>(
     name: String,
     repr: KType,
     site: DeclarationSite,
-) -> Result<StepCarried<'a>, KError> {
+) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
     // The repr types the values the NEWTYPE wraps, so it must be a proper type; a bare
     // constructor of kind `* -> *` standing unapplied is a kind error.
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
@@ -59,7 +60,6 @@ fn finalize_newtype<'a>(
     let scope = fctx.scope;
     let window = declarator_window(scope, &name, KKind::NewType);
     let outcome = finalize_nominal_member(
-        scope,
         &window,
         &name,
         |_window| RelativeSchema::NewType(repr),
@@ -81,15 +81,13 @@ fn finalize_record_newtype<'a>(
     window: Rc<RecursiveGroupWindow>,
     fields: Vec<(String, KType)>,
     site: DeclarationSite,
-) -> Result<StepCarried<'a>, KError> {
+) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE record repr must have at least one field".to_string(),
         )));
     }
-    let scope = fctx.scope;
     let outcome = finalize_nominal_member(
-        scope,
         &window,
         &name,
         |_window| {
@@ -102,25 +100,28 @@ fn finalize_record_newtype<'a>(
     seal_outcome_into_carrier(fctx, &name, outcome)
 }
 
-/// Map a [`SealOutcome`] into the declarator's per-statement result. A sealed member crosses as a
-/// resident type carrier. A member whose window has not sealed — only a `RECURSIVE TYPES` block
-/// member reaches this — has no identity yet; the block's own finish binds every member, so this
-/// per-statement result is discarded, and a benign `Null` stands in without fabricating a handle.
+/// Map a [`SealOutcome`] into the declarator's per-statement result: the terminal carrier plus the
+/// `types` write that installs the sealed identity. A sealed member crosses as a resident type
+/// carrier. A member whose window has not sealed — only a `RECURSIVE TYPES` block member reaches
+/// this — has no identity yet and writes nothing; the block's own finish binds every member, so
+/// this per-statement result is discarded and a benign `Null` stands in without fabricating a
+/// handle.
 fn seal_outcome_into_carrier<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: &str,
     outcome: SealOutcome,
-) -> Result<StepCarried<'a>, KError> {
+) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(seal_type_identity(fctx.scope, kt_ref)),
-        SealOutcome::Deferred => Ok(fctx
-            .ctx
-            .alloc_object_scalar(&KObject::Null)
-            .expect("Null is a shallow scalar carrier")),
+        SealOutcome::Sealed { kt, write } => Ok((seal_type_identity(fctx.scope, kt), vec![write])),
+        SealOutcome::Deferred => Ok((
+            fctx.ctx
+                .alloc_object_scalar(&KObject::Null)
+                .expect("Null is a shallow scalar carrier"),
+            Vec::new(),
+        )),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` references unsealed type `{missing}`",
         )))),
-        SealOutcome::Rebind(e) => Err(e),
     }
 }
 
@@ -148,15 +149,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 )
             },
             // A bare-leaf name resolved against scope bindings, not a dep terminal.
-            move |fctx, kt| Action::Done(finalize_newtype(fctx, name, kt, site)),
+            move |fctx, kt| Action::done_writing(finalize_newtype(fctx, name, kt, site)),
             ctx.types,
         )
     } else if let Some(repr_kt) = arg_type(ctx.args, "repr") {
-        Action::Done(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
+        Action::done_writing(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
         defer_resolved_sigil(name, inner.clone(), site)
     } else {
-        Action::Done(Err(KError::new(KErrorKind::ShapeError(
+        Action::done(Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
         ))))
     }
@@ -175,7 +176,7 @@ fn defer_resolved_sigil<'a>(
         Box::new(inner),
     ))]);
     dispatch_type_then(wrapped, "NEWTYPE repr slot", move |fctx, kt| {
-        Action::Done(finalize_newtype(fctx, name, kt, site))
+        Action::done_writing(finalize_newtype(fctx, name, kt, site))
     })
 }
 
@@ -192,7 +193,7 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     let fields = match arg_object(ctx.args, "repr") {
         Some(KObject::KExpression(e)) => e.clone(),
         _ => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "NEWTYPE record repr slot must be a record type `:{…}`".to_string(),
             ))))
         }
@@ -245,24 +246,23 @@ pub fn body_constructor_family<'a>(
 
     let decl = match require_kexpression(ctx.args, "NEWTYPE", "decl") {
         Ok(decl) => decl,
-        Err(e) => return Action::Done(Err(e)),
+        Err(e) => return Action::done(Err(e)),
     };
     let (param_names, member_name) = match crate::builtins::type_decl::parse_hk_decl(&decl) {
         Ok(pair) => pair,
-        Err(e) => return Action::Done(Err(e)),
+        Err(e) => return Action::done(Err(e)),
     };
     let kt = mint_type_constructor(member_name.clone(), param_names, ctx.types);
-    // Bind through the fused alloc + register path, mirroring `type_decl::bind_abstract_member`.
-    let site = ctx.declaration_site();
-    let kt_ref = match ctx
-        .scope
-        .register_user_type_delivered(member_name, kt, site)
-    {
-        Ok(kt_ref) => kt_ref,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let carrier = ctx.scope.resident_type_carrier(kt_ref);
-    Action::Done(Ok(StepCarried::born(carrier)))
+    // The handle names the same interned type in every region, so the terminal seals from it
+    // directly and the `types` write rides the outcome, mirroring `type_decl::bind_abstract_member`.
+    let carrier = ctx.scope.resident_type_carrier(kt);
+    Action::done(Ok(StepCarried::born(carrier))).with_effect(WriteOp::Type {
+        name: member_name,
+        kt,
+        site: ctx.declaration_site(),
+        policy: TypeWritePolicy::Insert,
+        builtin_shadow_guard: true,
+    })
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {

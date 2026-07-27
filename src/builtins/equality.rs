@@ -60,7 +60,7 @@ fn compare(ctx: &BodyCtx<'_, '_>, op: &str) -> Result<bool, KError> {
 
 pub fn body_eq<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let equal = crate::try_action!(compare(ctx, "=="));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(equal))))
@@ -68,7 +68,7 @@ pub fn body_eq<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_ne<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let equal = crate::try_action!(compare(ctx, "!="));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(!equal))))

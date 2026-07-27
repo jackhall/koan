@@ -81,11 +81,11 @@ pub(crate) fn block_tail<'a>(
             (statements, tail)
         }
     };
-    Action::Tail {
+    Action::tail(
         leading,
         tail,
-        contract: TailContract::Eager(contract),
+        TailContract::Eager(contract),
         frame_placement,
         block_entry,
-    }
+    )
 }

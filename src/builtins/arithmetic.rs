@@ -73,7 +73,7 @@ fn bool_operands(args: &Record<Held<'_>>, types: &TypeRegistry) -> Result<(bool,
 
 pub fn body_add<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Number(left + right))))
@@ -81,7 +81,7 @@ pub fn body_add<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_sub<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Number(left - right))))
@@ -89,7 +89,7 @@ pub fn body_sub<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_mul<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Number(left * right))))
@@ -102,11 +102,11 @@ pub fn body_mul<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 pub fn body_div<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     if right == 0.0 {
-        return Action::Done(Err(KError::new(KErrorKind::User(
+        return Action::done(Err(KError::new(KErrorKind::User(
             "/ : division by zero".to_string(),
         ))));
     }
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Number(left / right))))
@@ -114,7 +114,7 @@ pub fn body_div<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_lt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left < right))))
@@ -122,7 +122,7 @@ pub fn body_lt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_le<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left <= right))))
@@ -130,7 +130,7 @@ pub fn body_le<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_gt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left > right))))
@@ -138,7 +138,7 @@ pub fn body_gt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_ge<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left >= right))))
@@ -146,7 +146,7 @@ pub fn body_ge<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_and<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(bool_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left && right))))
@@ -244,7 +244,7 @@ pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>, _types: &TypeR
 /// One builtin seed: the group's powerset keys, at [`BindingIndex::BUILTIN`].
 fn seed<'a>(scope: &'a Scope<'a>, members: &[&str], group: &Rc<OperatorGroup>) {
     scope
-        .register_group_under_all_subsets(members, group, BindingIndex::BUILTIN)
+        .register_group_under_all_subsets_direct(members, group, BindingIndex::BUILTIN)
         .expect("builtin operator-group seeding must not collide");
 }
 

@@ -62,7 +62,7 @@ fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
                 .alloc_object_checked(obj.deep_clone(), ctx.types)
                 .expect("a deep-cloned Number is always resident-in-self"),
         )),
-        None => Action::Done(Err(crate::machine::KError::new(
+        None => Action::done(Err(crate::machine::KError::new(
             crate::machine::KErrorKind::MissingArg("n".to_string()),
         ))),
     }
@@ -821,7 +821,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let members: HashSet<String> = ["-"].iter().map(|s| s.to_string()).collect();
     let group = Rc::new(OperatorGroup::new(members, ReductionMode::FoldRight));
     inner
-        .register_operator_group("-".to_string(), group, BindingIndex::value(0))
+        .register_operator_group_direct("-".to_string(), group, BindingIndex::value(0))
         .expect("an inner scope may register a builtin operator's probe");
 
     // Both dispatches ride the bundle's run frame: `inner` is a child of the run root, so the
@@ -878,7 +878,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     let members: HashSet<String> = ["~"].iter().map(|s| s.to_string()).collect();
     let group = Rc::new(OperatorGroup::new(members, ReductionMode::Unary));
     scope
-        .register_operator_group("~".to_string(), group, BindingIndex::BUILTIN)
+        .register_operator_group_direct("~".to_string(), group, BindingIndex::BUILTIN)
         .expect("register operator group");
     test_run.run("FN (~ xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
 
