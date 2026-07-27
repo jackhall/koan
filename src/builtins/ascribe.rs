@@ -37,7 +37,14 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     ));
 
     let src = m.child_scope();
-    if let Err(e) = new_scope.bindings().try_bulk_install_from(src.bindings()) {
+    // The replay re-derives each callable entry's mirror bundle through the view scope, the layer
+    // that holds a pin to open a seal under — the binding table itself opens nothing.
+    if let Err(e) = new_scope
+        .bindings()
+        .try_bulk_install_from(src.bindings(), |sealed| {
+            new_scope.seal_function_mirror(sealed)
+        })
+    {
         return Action::Done(Err(e));
     }
 

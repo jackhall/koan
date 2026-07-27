@@ -9,9 +9,10 @@ pub use operators::{
 };
 pub use types::TypeRegistry;
 pub use types::{
-    is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, ExpressionSignature, KKind,
-    KType, NodeSchema, Parseable, PendingMember, Record, RecursiveGroupWindow, RelativeSchema,
-    ReturnType, SealedGroup, SignatureElement, TypeNode, UntypedElement, UntypedKey,
+    is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, DispatchToken,
+    DispatchTokenElement, ExpressionSignature, KKind, KType, NodeSchema, Parseable, PendingMember,
+    Record, RecursiveGroupWindow, RelativeSchema, ReturnType, SealedGroup, SignatureElement,
+    TypeNode, UntypedElement, UntypedKey,
 };
 pub use values::{Carried, ContainerSubstrate, Held, KKey, KObject, ValueEqualityError};
 

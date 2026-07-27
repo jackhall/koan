@@ -26,6 +26,27 @@ pub enum UntypedElement {
 /// uppercases lowercase registered tokens so the two sides agree on spelling.
 pub type UntypedKey = Vec<UntypedElement>;
 
+/// The definition-time identity of a signature for bucket dedupe: element shape plus the
+/// per-slot argument type. Two signatures are indistinguishable at dispatch iff their tokens
+/// are equal — the pairing invariant [`ExpressionSignature::indistinguishable_from`] documents
+/// (reject exactly what [`ExpressionSignature::specificity_vs`] can never split) holds for token
+/// equality by construction, because the token is built from the same elements those predicates
+/// read.
+///
+/// A token is owned data with no region lifetime, so a callable's dedupe identity is computed
+/// once where the callable is open and travels as plain data to every write path.
+#[derive(Clone, PartialEq, Debug)]
+pub struct DispatchToken(Vec<DispatchTokenElement>);
+
+/// One position of a [`DispatchToken`]: a fixed token, or an argument slot carrying its declared
+/// type. `KType` is a `Copy` handle interned in the run registry, so slot equality is meaningful
+/// across regions.
+#[derive(Clone, PartialEq, Debug)]
+pub enum DispatchTokenElement {
+    Keyword(String),
+    Slot(KType),
+}
+
 /// True iff `s` classifies as a keyword (fixed token). See
 /// [tokens.md](../../../../design/typing/tokens.md): pure-symbol tokens (no ASCII letters)
 /// are always keywords; alphabetic tokens are keywords iff they have ≥2 ASCII-uppercase
@@ -205,6 +226,22 @@ impl<'a> ExpressionSignature<'a> {
             .collect()
     }
 
+    /// The stored form of [`Self::indistinguishable_from`]: slot types are kept, so two
+    /// signatures compare equal here exactly when that predicate holds. The write path keys its
+    /// dedupe on this rather than on a live signature comparison, so a bucket write never has to
+    /// re-anchor the callables already stored there.
+    pub fn dispatch_token(&self) -> DispatchToken {
+        DispatchToken(
+            self.elements
+                .iter()
+                .map(|el| match el {
+                    SignatureElement::Keyword(s) => DispatchTokenElement::Keyword(s.clone()),
+                    SignatureElement::Argument(a) => DispatchTokenElement::Slot(a.ktype),
+                })
+                .collect(),
+        )
+    }
+
     /// Uppercases lowercase fixed tokens so the bucket key matches what dispatch computes
     /// from incoming expressions. TODO(monadic-effects): emit a warning instead of silently
     /// rewriting once effects exist — rejecting would lose the "drop in a builtin without
@@ -272,7 +309,8 @@ impl<'a> ExpressionSignature<'a> {
     /// they distinguish nothing. Independent of `Argument::name`.
     /// `other` is free in its own lifetime: the comparison reads `elements` alone, which carries
     /// none, so a bucket's dormant overload opened at some other brand compares against a live one
-    /// without the two regions having to be the same.
+    /// without the two regions having to be the same. [`DispatchToken`] equality is the stored
+    /// form of this same predicate.
     pub fn indistinguishable_from(&self, other: &ExpressionSignature<'_>) -> bool {
         if self.elements.len() != other.elements.len() {
             return false;

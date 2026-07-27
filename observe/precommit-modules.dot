@@ -518,7 +518,6 @@ digraph {
     "koan::machine::core::kfunction::pick" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::lexical_frame" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::core::pending" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::model" [label="uses", style="dashed"];

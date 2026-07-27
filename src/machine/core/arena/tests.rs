@@ -577,7 +577,6 @@ fn region_union_foreign_pins_release_at_region_death() {
                 BindingIndex::BUILTIN,
                 scope.seal_resident_value(Carried::Object(obj), reach, borrows_home),
                 None,
-                &dest,
             )
             .expect("a fresh value bind lands");
 

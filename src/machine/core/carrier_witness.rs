@@ -5,11 +5,13 @@
 
 use std::rc::Rc;
 
-use crate::machine::model::{still_borrows_host, Carried, CarriedFamily, KObject};
+use crate::machine::model::{
+    still_borrows_host, Carried, CarriedFamily, DispatchToken, KObject, UntypedKey,
+};
 use crate::witnessed::{Erased, Witnessed};
 
 use super::arena::{FrameStorage, KoanRegion};
-use super::kfunction::KFunctionFamily;
+use super::kfunction::{KFunction, KFunctionFamily};
 
 /// Koan's value-carrier witness: the library [`Carrier`](crate::witnessed::Carrier) over koan's
 /// frame owner — one `borrows_host` bit plus a reference to the value's hosted reach set. It pins
@@ -74,23 +76,99 @@ pub(crate) fn force_substrate_borrows_host(
     }
 }
 
+/// Address identity of a callable, for the write path's intentional-alias short-circuit
+/// (`LET g = (f)` registers the same callable twice; the bucket keeps its first entry). Captured
+/// from the `&KFunction` at seal time — the one moment it is open — and thereafter **compared,
+/// never dereferenced**, and never used for ordering or hashing.
+///
+/// Sound because identities are only ever compared against other identities captured from
+/// callables in the same live region set: exactly what a `ptr::eq` over two re-anchored references
+/// compares, minus the re-anchor.
+#[derive(Copy, Clone, PartialEq)]
+pub(crate) struct CallableIdentity(*const ());
+
+impl CallableIdentity {
+    fn of(f: &KFunction<'_>) -> Self {
+        CallableIdentity(f as *const KFunction<'_> as *const ())
+    }
+}
+
+/// Everything a table write path needs about a callable, computed at mirror-seal time — the one
+/// moment the callable is open under its home pin — so no write verb ever opens a carrier.
+/// `sealed` is what the `functions` bucket stores; the rest is plain data with no region lifetime.
+pub(crate) struct FunctionMirror {
+    /// The dormant callable carrier the dispatch bucket stores.
+    pub sealed: SealedFunction,
+    /// `signature.untyped_key()` — the bucket this callable belongs in.
+    pub key: UntypedKey,
+    /// `signature.dispatch_token()` — the stored form of the duplicate-overload predicate.
+    pub token: DispatchToken,
+    /// The callable's address identity, for the intentional-alias short-circuit.
+    pub identity: CallableIdentity,
+    /// `KFunction::summarize()`, rendered here so the `DuplicateOverload` diagnostic can name the
+    /// colliding overload without re-opening it.
+    pub summary: String,
+}
+
+impl FunctionMirror {
+    /// The bundle for a callable held live, computed straight off the reference.
+    pub(crate) fn of_live(f: &KFunction<'_>, sealed: SealedFunction) -> Self {
+        FunctionMirror {
+            sealed,
+            key: f.signature.untyped_key(),
+            token: f.signature.dispatch_token(),
+            identity: CallableIdentity::of(f),
+            summary: f.summarize(),
+        }
+    }
+
+    /// A second bundle naming the same callable: the dormant seal bit-copied beside owned copies of
+    /// the derived data. The conditional-defer write doors duplicate before attempting so the
+    /// original still rides a deferred retry.
+    pub(crate) fn duplicate(&self) -> Self {
+        FunctionMirror {
+            sealed: self.sealed.duplicate(),
+            key: self.key.clone(),
+            token: self.token.clone(),
+            identity: self.identity,
+            summary: self.summary.clone(),
+        }
+    }
+}
+
 /// Project a bound value's dormant carrier onto the `KFunction` it wraps, under `pin` — the write
-/// door's **mirror seal**. The witness rides across verbatim, so the `functions` bucket entry and its
-/// `data` twin state one claim about one value; a value that is not a callable yields `None` and
-/// mirrors nothing. The projected reference is re-erased inside the pinned read, so nothing anchored
+/// door's **mirror seal**, bundled with everything the table write path keys on. The witness rides
+/// across verbatim, so the `functions` bucket entry and its `data` twin state one claim about one
+/// value; a value that is not a callable yields `None` and mirrors nothing. The projected reference
+/// is re-erased inside the pinned read and the derived fields are owned data, so nothing anchored
 /// at the read's brand escapes it.
 pub(crate) fn function_mirror_of(
     sealed: &crate::witnessed::Sealed<CarriedFamily, CarrierWitness>,
     pin: &Rc<FrameStorage>,
-) -> Option<SealedFunction> {
-    let projected = sealed.open_with(pin, |carried: Carried<'_>| match carried {
-        Carried::Object(object) => object.as_function().map(Erased::erase),
-        _ => None,
-    })?;
-    Some(crate::witnessed::Sealed::seal(Witnessed::from_erased(
-        projected,
-        *sealed.witness(),
-    )))
+) -> Option<FunctionMirror> {
+    let (projected, key, token, identity, summary) =
+        sealed.open_with(pin, |carried: Carried<'_>| match carried {
+            Carried::Object(object) => object.as_function().map(|f| {
+                (
+                    Erased::erase(f),
+                    f.signature.untyped_key(),
+                    f.signature.dispatch_token(),
+                    CallableIdentity::of(f),
+                    f.summarize(),
+                )
+            }),
+            _ => None,
+        })?;
+    Some(FunctionMirror {
+        sealed: crate::witnessed::Sealed::seal(Witnessed::from_erased(
+            projected,
+            *sealed.witness(),
+        )),
+        key,
+        token,
+        identity,
+        summary,
+    })
 }
 
 /// Koan's **retention predicate** for a copying relocation of `envelope`

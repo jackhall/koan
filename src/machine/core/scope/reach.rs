@@ -5,7 +5,9 @@
 
 use super::Scope;
 use crate::machine::core::bindings::SealedValue;
-use crate::machine::core::carrier_witness::{function_mirror_of, OpenedFunction, SealedFunction};
+use crate::machine::core::carrier_witness::{
+    function_mirror_of, FunctionMirror, OpenedFunction, SealedFunction,
+};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::{
     product_still_borrows, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
@@ -101,20 +103,24 @@ impl<'a> Scope<'a> {
     /// function-family twin of [`Self::seal_resident_value`], for the bare-`FN` door, which binds no
     /// value and so has no mirrored `data` seal to derive its claim from. The reach is the exact
     /// empty set: `FN` allocates the callable into the very scope it captures, so its only region
-    /// borrow is home, which every read of it already pins.
-    pub(crate) fn seal_resident_function(&self, f: &'a KFunction<'a>) -> SealedFunction {
-        Sealed::seal(
+    /// borrow is home, which every read of it already pins. Returns the whole
+    /// [`FunctionMirror`] bundle — the callable is held live here, so everything the bucket write
+    /// keys on is read straight off the reference and travels as plain data.
+    pub(crate) fn seal_resident_function(&self, f: &'a KFunction<'a>) -> FunctionMirror {
+        let sealed = Sealed::seal(
             self.brand()
                 .seal_resident::<KFunctionFamily>(f, CarrierWitness::new(false, None)),
-        )
+        );
+        FunctionMirror::of_live(f, sealed)
     }
 
     /// The **mirror seal**: project a bound value's dormant carrier onto the `KFunction` it wraps,
     /// carrying that value's own witness across unchanged — so a `functions` bucket entry states
     /// exactly the claim its `data` twin does instead of holding a reference with no reach at all.
     /// `None` when the value is not a callable. The projection reads under this scope's own region
-    /// owner, which is where the value it seals lives.
-    pub(crate) fn seal_function_mirror(&self, sealed: &SealedValue) -> Option<SealedFunction> {
+    /// owner, which is where the value it seals lives, and computes everything the bucket write
+    /// keys on inside that one open, so the write path itself opens nothing.
+    pub(crate) fn seal_function_mirror(&self, sealed: &SealedValue) -> Option<FunctionMirror> {
         let home = self
             .region_owner()
             .upgrade()

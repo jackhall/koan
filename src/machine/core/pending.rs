@@ -5,10 +5,7 @@
 
 use std::cell::RefCell;
 
-use std::rc::Rc;
-
-use crate::machine::core::arena::FrameStorage;
-use crate::machine::core::carrier_witness::SealedFunction;
+use crate::machine::core::carrier_witness::FunctionMirror;
 
 use super::bindings::{ApplyOutcome, BindingIndex, Bindings, DeclarationSite, SealedValue};
 
@@ -24,12 +21,12 @@ enum PendingWrite {
         /// The bound value fused to its exact reach, carried through the deferred write so a
         /// drained bind stores exactly what a direct bind would (see [`Bindings::try_bind_value`]).
         sealed: SealedValue,
-        /// The value's mirror seal, if it wraps a callable — the mirror the drained write replays.
-        function: Option<SealedFunction>,
+        /// The value's mirror bundle, if it wraps a callable — what the drained write replays.
+        mirror: Option<FunctionMirror>,
     },
     Function {
         name: String,
-        fn_ref: SealedFunction,
+        mirror: FunctionMirror,
         index: BindingIndex,
     },
     Type {
@@ -55,20 +52,20 @@ impl PendingQueue {
         name: String,
         index: BindingIndex,
         sealed: SealedValue,
-        function: Option<SealedFunction>,
+        mirror: Option<FunctionMirror>,
     ) {
         self.pending.borrow_mut().push(PendingWrite::Value {
             name,
             index,
             sealed,
-            function,
+            mirror,
         });
     }
 
-    pub fn defer_function(&self, name: String, fn_ref: SealedFunction, index: BindingIndex) {
+    pub fn defer_function(&self, name: String, mirror: FunctionMirror, index: BindingIndex) {
         self.pending.borrow_mut().push(PendingWrite::Function {
             name,
-            fn_ref,
+            mirror,
             index,
         });
     }
@@ -95,7 +92,7 @@ impl PendingQueue {
     /// `std::mem::take` is load-bearing: `Bindings::try_*` may itself contend and
     /// re-entrantly `defer_*` during retry, so the queue must move out before the
     /// loop or the inner borrow would deadlock.
-    pub fn drain(&self, bindings: &Bindings<'_>, pin: &Rc<FrameStorage>) {
+    pub fn drain(&self, bindings: &Bindings<'_>) {
         if self.pending.borrow().is_empty() {
             return;
         }
@@ -107,7 +104,7 @@ impl PendingQueue {
                     name,
                     index,
                     sealed,
-                    function,
+                    mirror,
                 } => {
                     // Duplicate the seal for the attempt, keeping the original for a re-defer on a
                     // repeat conflict, mirroring the direct-bind path (the duplicate preserves the
@@ -116,8 +113,7 @@ impl PendingQueue {
                         &name,
                         index,
                         sealed.duplicate(),
-                        function.as_ref().map(SealedFunction::duplicate),
-                        pin,
+                        mirror.as_ref().map(FunctionMirror::duplicate),
                     ) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
@@ -125,7 +121,7 @@ impl PendingQueue {
                                 name,
                                 index,
                                 sealed,
-                                function,
+                                mirror,
                             });
                         }
                         // `_e`: format string only reads it in debug.
@@ -139,14 +135,14 @@ impl PendingQueue {
                 }
                 PendingWrite::Function {
                     name,
-                    fn_ref,
+                    mirror,
                     index,
-                } => match bindings.try_register_function(&name, fn_ref.duplicate(), index, pin) {
+                } => match bindings.try_register_function(&name, mirror.duplicate(), index) {
                     Ok(ApplyOutcome::Applied) => {}
                     Ok(ApplyOutcome::Conflict) => {
                         still_pending.push(PendingWrite::Function {
                             name,
-                            fn_ref,
+                            mirror,
                             index,
                         });
                     }
@@ -189,13 +185,12 @@ mod tests {
 
     #[test]
     fn defer_type_queues_and_drain_replays_into_types() {
-        let storage = crate::machine::core::run_root_storage();
         let bindings: Bindings<'_> = Bindings::new();
         let queue: PendingQueue = PendingQueue::new();
         let kt = KType::NUMBER;
         queue.defer_type("Foo".to_string(), kt, DeclarationSite::BUILTIN);
         assert!(bindings.types().get("Foo").is_none());
-        queue.drain(&bindings, &storage);
+        queue.drain(&bindings);
         let stored = bindings
             .types()
             .get("Foo")
@@ -206,10 +201,9 @@ mod tests {
 
     #[test]
     fn default_yields_empty_queue() {
-        let storage = crate::machine::core::run_root_storage();
         let queue: PendingQueue = PendingQueue::default();
         let bindings: Bindings<'_> = Bindings::new();
-        queue.drain(&bindings, &storage);
+        queue.drain(&bindings);
         assert!(bindings.data().is_empty());
         assert!(bindings.types().is_empty());
     }

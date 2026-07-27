@@ -174,3 +174,55 @@ fn return_type_matches_value_deferred_always_true_resolved_delegates() {
     let r_bool = ReturnType::Resolved(KType::BOOL);
     assert!(!r_bool.matches_value(&obj, &types));
 }
+
+/// [`DispatchToken`] equality is the stored form of [`ExpressionSignature::indistinguishable_from`]:
+/// the write path keys its bucket dedupe on precomputed tokens, so the two must agree on every
+/// pair — same shape and same slot types, differing slot types, differing keywords, and differing
+/// arity alike.
+#[test]
+fn dispatch_token_equality_matches_indistinguishable_from() {
+    fn keyworded<'a>(keyword: &str, slots: &[KType]) -> ExpressionSignature<'a> {
+        let mut elements = vec![SignatureElement::Keyword(keyword.into())];
+        elements.extend(slots.iter().map(|kt| {
+            SignatureElement::Argument(Argument {
+                name: "v".into(),
+                ktype: *kt,
+            })
+        }));
+        ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::ANY),
+            elements,
+        }
+    }
+
+    let signatures = [
+        one_slot(KType::ANY),
+        one_slot(KType::NUMBER),
+        // Same shape and slot type as the previous, different slot *name* — the predicate is
+        // independent of `Argument::name`, so both must call these indistinguishable.
+        ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::BOOL),
+            elements: vec![SignatureElement::Argument(Argument {
+                name: "other".into(),
+                ktype: KType::NUMBER,
+            })],
+        },
+        keyworded("TAKE", &[KType::NUMBER]),
+        keyworded("TAKE", &[KType::ANY]),
+        keyworded("DROP", &[KType::NUMBER]),
+        keyworded("TAKE", &[KType::NUMBER, KType::NUMBER]),
+        ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::ANY),
+            elements: vec![],
+        },
+    ];
+    for (i, a) in signatures.iter().enumerate() {
+        for (j, b) in signatures.iter().enumerate() {
+            assert_eq!(
+                a.indistinguishable_from(b),
+                a.dispatch_token() == b.dispatch_token(),
+                "signatures {i} and {j} disagree between the live predicate and the stored token",
+            );
+        }
+    }
+}

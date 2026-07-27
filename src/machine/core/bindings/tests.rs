@@ -57,7 +57,7 @@ fn data_binding_round_trips_sealed_reach() {
     let foreign = run_root_storage();
     let (sealed, _) = sealed_reaching(region, obj, &foreign);
     bindings
-        .try_bind_value("x", BindingIndex::BUILTIN, sealed, None, &storage)
+        .try_bind_value("x", BindingIndex::BUILTIN, sealed, None)
         .expect("value bind should succeed");
     match bindings.lookup_value("x", None) {
         Some(NameLookup::Bound(hit)) => assert!(
@@ -81,7 +81,7 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
     let foreign = run_root_storage();
     let (sealed, reach_set) = sealed_reaching(region, obj, &foreign);
     bindings
-        .try_bind_value("x", BindingIndex::BUILTIN, sealed, None, &storage)
+        .try_bind_value("x", BindingIndex::BUILTIN, sealed, None)
         .expect("value bind should succeed");
 
     let read = |label: &str| match bindings.lookup_value("x", None) {
@@ -311,7 +311,6 @@ fn type_token_may_not_bind_value_side() {
         BindingIndex::BUILTIN,
         Sealed::seal(region.seal_resident(Carried::Object(val), CarrierWitness::new(false, None))),
         None,
-        &storage,
     ) {
         Err(e) => e,
         Ok(_) => panic!("a Type token names a type, not a value"),
