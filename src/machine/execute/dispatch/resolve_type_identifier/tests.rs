@@ -3,7 +3,7 @@ use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
 
 #[test]
-fn resolve_type_expr_builtin_leaf_caches() {
+fn resolve_type_expr_builtin_leaf_resolves_stably() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
@@ -18,7 +18,7 @@ fn resolve_type_expr_builtin_leaf_caches() {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on second call"),
     };
-    assert_eq!(first, second, "second call should hit the memo");
+    assert_eq!(first, second, "a re-resolve yields the same handle");
 }
 
 #[test]
@@ -34,10 +34,10 @@ fn resolve_type_expr_unbound_returns_unbound() {
     }
 }
 
-/// Pins the post-finalize memo path: a user type reached after a declaration finalizes lands in
-/// the cache as its sealed member handle.
+/// Pins the post-finalize path: a user type reached after a declaration finalizes resolves to
+/// its sealed member handle, and re-resolves to the same one.
 #[test]
-fn resolve_type_expr_user_struct_caches_after_finalize() {
+fn resolve_type_expr_user_struct_resolves_after_finalize() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
@@ -54,7 +54,7 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
     }
     let kt2 = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
-        _ => panic!("expected Done on memo hit"),
+        _ => panic!("expected Done on re-resolve"),
     };
     assert_eq!(kt, kt2);
 }
@@ -143,9 +143,9 @@ mod bare_leaf_resolution {
     }
 
     /// A bare leaf naming a member of an open window resolves to that member's relative sibling
-    /// handle, which the gate refuses to memoize: it parks on the declaration's producer instead,
-    /// then admits once the window seals and the in-flight guard clears. Caching the relative
-    /// handle would leak a window-scoped index into a later, window-free lookup.
+    /// handle, which the gate refuses to admit: it parks on the declaration's producer instead,
+    /// then admits once the window seals and the in-flight guard clears. Handing the relative
+    /// handle to a consumer would leak a window-scoped index into a window-free context.
     #[test]
     fn mid_window_member_parks_then_resolves() {
         use crate::machine::core::Bindings;

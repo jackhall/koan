@@ -42,7 +42,6 @@ use crate::machine::core::RunId;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DispatchToken;
 use crate::machine::model::OperatorGroup;
-use crate::machine::model::TypeIdentifier;
 use crate::machine::model::{KType, UntypedKey};
 use crate::machine::CarrierWitness;
 use crate::witnessed::Sealed;
@@ -286,18 +285,7 @@ pub struct Bindings {
     /// earlier still-finalizing type parks on its producer node; this set marks which names
     /// are in flight. See [`pending`] for the surface methods.
     pending: PendingTypes,
-    /// Scope-bound `TypeIdentifier` → `KType` resolution cache. Monotonic — entries are written
-    /// only when the elaborated `KType` and every user-type it references are fully
-    /// finalized; the finalize gate prevents caching a not-yet-sealed type.
-    /// Keyed by `(TypeIdentifier, chain cutoff)`: a forward consumer (smaller cutoff) and a
-    /// backward consumer (larger cutoff) at the same scope resolve the same name to
-    /// different verdicts under lexical gating, so they must not share a cache entry.
-    type_identifier_memo: RefCell<HashMap<(TypeIdentifier, Option<usize>), TypeMemoEntry>>,
 }
-
-/// A `type_identifier_memo` value: the cached `KType` handle, so a memo hit rebuilds the read
-/// carrier without re-walking the chain.
-type TypeMemoEntry = KType;
 
 impl Bindings {
     pub fn new() -> Self {
@@ -309,19 +297,7 @@ impl Bindings {
             pending_overloads: RefCell::new(HashMap::new()),
             operators: RefCell::new(HashMap::new()),
             pending: PendingTypes::new(),
-            type_identifier_memo: RefCell::new(HashMap::new()),
         }
-    }
-
-    pub fn type_identifier_memo_get(
-        &self,
-        te: &TypeIdentifier,
-        cutoff: Option<usize>,
-    ) -> Option<KType> {
-        self.type_identifier_memo
-            .borrow()
-            .get(&(te.clone(), cutoff))
-            .copied()
     }
 
     /// Per-scope value-side lookup. Consults `data` then `placeholders`,
@@ -578,19 +554,6 @@ impl Bindings {
             None => true,
             Some(c) => b.idx < c,
         }
-    }
-
-    /// Insert `(te → kt)` into the resolution cache. Caller region-allocates `kt` and gates on
-    /// finalize. Monotonic: a collision means equal values, so we keep the existing entry rather
-    /// than panic.
-    pub fn type_identifier_memo_insert(
-        &self,
-        te: TypeIdentifier,
-        cutoff: Option<usize>,
-        kt: KType,
-    ) {
-        let mut memo = self.type_identifier_memo.borrow_mut();
-        memo.entry((te, cutoff)).or_insert(kt);
     }
 
     #[cfg(test)]

@@ -6,11 +6,10 @@
 //!
 //! ## Invariant pinned here
 //!
-//! **The `type_identifier_memo` is monotonic and never caches a not-yet-sealed type.**
-//! An entry is written only on the `Done` arm AND only when every user-type the
-//! elaborated result references is finalized (absent from its owning scope's
-//! `pending_types`). The `Park` arm — a referenced type still in flight — never writes the
-//! cache, so a half-built identity cannot leak into a later memo hit.
+//! **No consumer observes a not-yet-sealed type identity.** A `Done` result survives only
+//! when every user-type the elaborated result references is finalized (absent from its
+//! owning scope's `pending_types`); a referenced type still in flight demotes it to a
+//! `Park` on that type's producer, so a half-built identity cannot reach a consumer.
 //!
 //! In-flight-ness is decided per reference kind. A nominal member in flight is named by a relative
 //! `Sibling` handle, which is meaningful only against the **declaration window** that minted it —
@@ -27,10 +26,10 @@ use crate::machine::model::TypeIdentifier;
 use crate::machine::model::{KType, TypeNode, TypeRegistry, TypeResolution};
 
 impl<'step> Scope<'step> {
-    /// Layer-2 scope-bound TypeIdentifier resolution memo. On miss, elaborates against
-    /// `self` and writes the cache only when a [`FinalizeGate`] admits the result. The
-    /// Park arm — elaborator-parked or gate-rejected — never writes the cache: caching
-    /// mid-window would observe pre-seal opaque identity.
+    /// Layer-2 scope-bound TypeIdentifier resolution: elaborates against `self` and admits
+    /// the result only when a [`FinalizeGate`] passes it. The Park arm — elaborator-parked
+    /// or gate-rejected — is what keeps a mid-window consumer from observing pre-seal
+    /// opaque identity.
     pub fn resolve_type_identifier(
         &self,
         te: &TypeIdentifier,
@@ -38,19 +37,12 @@ impl<'step> Scope<'step> {
         types: &TypeRegistry,
     ) -> TypeResolution<KType> {
         use crate::machine::model::{elaborate_type_identifier, Elaborator};
-        // The cutoff this scope's bindings are gated against — also the memo key, so a
-        // forward and a backward consumer never share a cached verdict.
-        let cutoff = chain.as_ref().and_then(|c| c.index_for(self.id));
-        if let Some(kt) = self.type_identifier_memo_get(te, cutoff) {
-            return TypeResolution::Done(kt);
-        }
         let mut elaborator = Elaborator::new(self).with_chain(chain);
         // A referenced type still in flight demotes this `Done` to a `Park`; `Park` /
         // `Unbound` forward unchanged.
         elaborate_type_identifier(&mut elaborator, te, types).and_then_done(|kt| {
             let pending = FinalizeGate { scope: self, types }.pending_producers(kt);
             if pending.is_empty() {
-                self.type_identifier_memo_insert(te.clone(), cutoff, kt);
                 TypeResolution::Done(kt)
             } else {
                 TypeResolution::Park(pending)
@@ -59,8 +51,8 @@ impl<'step> Scope<'step> {
     }
 }
 
-/// Precondition value for the `type_identifier_memo` cache, naming the load-bearing
-/// invariant *"no not-yet-sealed type may enter the memo"* as a type.
+/// Precondition value for a resolved identity, naming the load-bearing invariant
+/// *"no not-yet-sealed type may reach a consumer"* as a type.
 ///
 /// Admits a `KType` iff every top-level user-type it references is finalized in
 /// its owning scope (absent from that scope's `pending_types`); otherwise returns

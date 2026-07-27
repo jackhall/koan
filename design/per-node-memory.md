@@ -333,9 +333,8 @@ the existing `&'a KObject` **in place**.
 
 The `types` channel stores no reach: a `KType` owns all its content, so a bound type borrows nothing
 beyond the region it was allocated into. A type read witnesses the existing `&'a KType` in place under
-the home-frame pin alone (`resident_type_carrier`), and a bare type leaf rides the resolve chain (the
-`type_identifier_memo` and `resolve_type_identifier`) as a bare reference with nothing to replay at a
-memo miss. The value-side stored reach is
+the home-frame pin alone (`resident_type_carrier`), and a bare type leaf rides the resolve chain
+(`resolve_type_identifier`) as a bare reference with nothing to replay. The value-side stored reach is
 home-omitted for the same cycle-safety rule every mint obeys — the region's own home frame `Rc` never
 lands in-region, so no `frame → region → scope → bindings → frame` strong cycle forms. A freshly-built
 FN-def / LET-object registers its reference through the scope's frame-lifetime `&'a` and seals only its

@@ -385,36 +385,6 @@ impl<'a> Scope<'a> {
         self.bindings.get()
     }
 
-    /// Scope-bound `TypeIdentifier → KType` memo read. A transparent `USING` window returns
-    /// `None`: its resolutions depend on the call-site chain, so caching them into the
-    /// module's shared memo would poison the module's own def-site resolution.
-    pub(crate) fn type_identifier_memo_get(
-        &self,
-        te: &crate::machine::model::TypeIdentifier,
-        cutoff: Option<usize>,
-    ) -> Option<crate::machine::model::KType> {
-        if self.bindings.is_borrowed() {
-            return None;
-        }
-        self.bindings.get().type_identifier_memo_get(te, cutoff)
-    }
-
-    /// Memo write — no-op on a transparent `USING` window (see
-    /// [`Self::type_identifier_memo_get`]).
-    pub(crate) fn type_identifier_memo_insert(
-        &self,
-        te: crate::machine::model::TypeIdentifier,
-        cutoff: Option<usize>,
-        kt: crate::machine::model::KType,
-    ) {
-        if self.bindings.is_borrowed() {
-            return;
-        }
-        self.bindings
-            .get()
-            .type_identifier_memo_insert(te, cutoff, kt);
-    }
-
     /// The lexical parent — a bare field read of the stored `&'a Scope<'a>`, already at `'a` because
     /// the holder was re-anchored to `'a` (the substrate retype that produced this `&Scope<'a>`)
     /// before this read.

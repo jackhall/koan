@@ -70,8 +70,7 @@ fn data_binding_round_trips_sealed_reach() {
 
 /// A read duplicates the entry's seal, which copies the hosted `&FrameReach` reference — no per-hit
 /// clone. Two independent reads of the same binding name the *same* description, proving the read
-/// path reuses the arena-hosted set rather than cloning a fresh one on every hit (the type-binding
-/// memo relies on the same no-clone copy).
+/// path reuses the arena-hosted set rather than cloning a fresh one on every hit.
 #[test]
 fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
     let storage = run_root_storage();
