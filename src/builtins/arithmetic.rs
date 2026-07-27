@@ -19,6 +19,7 @@
 //! the per-operator bodies above.
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::model::{Held, KObject, KType, Record, TypeRegistry};
@@ -196,7 +197,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 
 /// Seeds the three builtin operator groups: comparison (`< <= > >=`, pairwise, combined by
 /// `AND`), additive (`+ -`, fold-left), and multiplicative (`* /`, fold-left). Each group is
-/// allocated once and registered — through [`Scope::register_group_under_all_subsets`] — under
+/// built once and registered — through [`Scope::register_group_under_all_subsets`] — under
 /// every nonempty subset of its member set, so any chain probe drawn from that set resolves to
 /// the same shared record.
 ///
@@ -207,43 +208,41 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 /// pairwise reducer (`operator_chain::reduce_pairwise`): each adjacent pair dispatches through its
 /// own operator's body above, and the pair results fold left through the `AND` keyword combiner.
 pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>, _types: &TypeRegistry) {
-    let region = scope.brand();
-
     let comparison_operators = ["<", "<=", ">", ">="];
     let comparison_members: HashSet<String> =
         comparison_operators.iter().map(|s| s.to_string()).collect();
-    let comparison_group = region.alloc_operator_group(OperatorGroup::new(
+    let comparison_group = Rc::new(OperatorGroup::new(
         comparison_members,
         ReductionMode::Pairwise {
             combiner: "AND".to_string(),
             direction: FoldDirection::Left,
         },
     ));
-    seed(scope, &comparison_operators, comparison_group);
+    seed(scope, &comparison_operators, &comparison_group);
 
     let additive_operators = ["+", "-"];
     let additive_members: HashSet<String> =
         additive_operators.iter().map(|s| s.to_string()).collect();
-    let additive_group = region.alloc_operator_group(OperatorGroup::new(
+    let additive_group = Rc::new(OperatorGroup::new(
         additive_members,
         ReductionMode::FoldLeft,
     ));
-    seed(scope, &additive_operators, additive_group);
+    seed(scope, &additive_operators, &additive_group);
 
     let multiplicative_operators = ["*", "/"];
     let multiplicative_members: HashSet<String> = multiplicative_operators
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let multiplicative_group = region.alloc_operator_group(OperatorGroup::new(
+    let multiplicative_group = Rc::new(OperatorGroup::new(
         multiplicative_members,
         ReductionMode::FoldLeft,
     ));
-    seed(scope, &multiplicative_operators, multiplicative_group);
+    seed(scope, &multiplicative_operators, &multiplicative_group);
 }
 
 /// One builtin seed: the group's powerset keys, at [`BindingIndex::BUILTIN`].
-fn seed<'a>(scope: &'a Scope<'a>, members: &[&str], group: &'a OperatorGroup) {
+fn seed<'a>(scope: &'a Scope<'a>, members: &[&str], group: &Rc<OperatorGroup>) {
     scope
         .register_group_under_all_subsets(members, group, BindingIndex::BUILTIN)
         .expect("builtin operator-group seeding must not collide");

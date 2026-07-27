@@ -92,7 +92,7 @@ impl PendingQueue {
     /// `std::mem::take` is load-bearing: `Bindings::try_*` may itself contend and
     /// re-entrantly `defer_*` during retry, so the queue must move out before the
     /// loop or the inner borrow would deadlock.
-    pub fn drain(&self, bindings: &Bindings<'_>) {
+    pub fn drain(&self, bindings: &Bindings) {
         if self.pending.borrow().is_empty() {
             return;
         }
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn defer_type_queues_and_drain_replays_into_types() {
-        let bindings: Bindings<'_> = Bindings::new();
+        let bindings: Bindings = Bindings::new();
         let queue: PendingQueue = PendingQueue::new();
         let kt = KType::NUMBER;
         queue.defer_type("Foo".to_string(), kt, DeclarationSite::BUILTIN);
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn default_yields_empty_queue() {
         let queue: PendingQueue = PendingQueue::default();
-        let bindings: Bindings<'_> = Bindings::new();
+        let bindings: Bindings = Bindings::new();
         queue.drain(&bindings);
         assert!(bindings.data().is_empty());
         assert!(bindings.types().is_empty());

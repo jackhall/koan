@@ -3,6 +3,8 @@
 //! builtin-shadow consults. Split out of the parent `scope` module; the `Scope` struct,
 //! its constructors, and small accessors live there.
 
+use std::rc::Rc;
+
 use super::Scope;
 use crate::machine::core::bindings::{Bindings, NameLookup};
 use crate::machine::core::LexicalFrame;
@@ -93,8 +95,8 @@ impl<'a> Scope<'a> {
     /// so a synthetic root-position user entry still resolves by the chain walk below.
     fn resolve_builtin_first<T>(
         &self,
-        is_builtin: impl Fn(&Bindings<'a>) -> bool,
-        root_hit: impl FnOnce(&Bindings<'a>) -> Option<T>,
+        is_builtin: impl Fn(&Bindings) -> bool,
+        root_hit: impl FnOnce(&Bindings) -> Option<T>,
         probe: impl Fn(&Scope<'a>) -> Option<T>,
     ) -> Option<T> {
         let root = self.root_scope().bindings();
@@ -212,7 +214,7 @@ impl<'a> Scope<'a> {
         &self,
         probe: &str,
         chain: Option<&LexicalFrame>,
-    ) -> Option<&'a OperatorGroup> {
+    ) -> Option<Rc<OperatorGroup>> {
         self.walk_chain(|scope| {
             scope
                 .bindings()

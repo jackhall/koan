@@ -69,9 +69,9 @@ pub struct Scope<'a> {
     recursive_window: Option<Rc<RecursiveGroupWindow>>,
     /// Set iff this is a `GROUP` body's child scope: the one shared [`OperatorGroup`] record its
     /// member `OP` declarations belong to, read through [`Scope::nearest_group_context`]. The record
-    /// is lifetime-free (member set + mode + combiner *name*), so holding it costs the scope no
-    /// region borrow.
-    group: Option<&'a OperatorGroup>,
+    /// is lifetime-free (member set + mode + combiner *name*), so the scope shares it by plain `Rc`
+    /// — the same record its registry entries hold — and holds no region borrow for it.
+    group: Option<Rc<OperatorGroup>>,
     /// SIG-decl-scope slot collector: `VAL <name> :Type` records `name → declared type`
     /// here — a schema in progress, not a binding universe (nothing resolves
     /// names in it; no visibility index). `Some` only for scopes minted by
@@ -99,16 +99,15 @@ pub struct Scope<'a> {
 // read path; inlining the large variant is the deliberate trade.
 #[allow(clippy::large_enum_variant)]
 enum ScopeBindings<'a> {
-    Owned(Bindings<'a>),
-    /// `&'a Bindings<'a>` (not a shorter borrow) keeps `Scope<'a>` invariant in `'a`.
+    Owned(Bindings),
     /// The borrowed façade lives in the opened module's child-scope region; the
     /// `USING` builtin keeps that region alive by rooting the module value in the
     /// call-site region.
-    Borrowed(&'a Bindings<'a>),
+    Borrowed(&'a Bindings),
 }
 
-impl<'a> ScopeBindings<'a> {
-    fn get(&self) -> &Bindings<'a> {
+impl ScopeBindings<'_> {
+    fn get(&self) -> &Bindings {
         match self {
             ScopeBindings::Owned(b) => b,
             ScopeBindings::Borrowed(b) => b,
@@ -330,7 +329,7 @@ impl<'a> Scope<'a> {
     pub fn child_under_group(
         outer: &'a Scope<'a>,
         name: String,
-        group: &'a OperatorGroup,
+        group: Rc<OperatorGroup>,
     ) -> Scope<'a> {
         let mut child = Self::child_inheriting(
             outer,
@@ -373,7 +372,7 @@ impl<'a> Scope<'a> {
     /// `module_bindings`. Reads consult the window first then walk `outer`; writes
     /// forward to `outer`. `region` is `outer.region` so block-body allocations outlive
     /// the block (forwarded binds are sound).
-    pub fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
+    pub fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Borrowed(module_bindings),
@@ -382,7 +381,7 @@ impl<'a> Scope<'a> {
         )
     }
 
-    pub fn bindings(&self) -> &Bindings<'a> {
+    pub fn bindings(&self) -> &Bindings {
         self.bindings.get()
     }
 
@@ -458,10 +457,10 @@ impl<'a> Scope<'a> {
     /// `Sig` or `Module` scope short-circuits to `None`. The `group` field is consulted
     /// **before** the kind, because a group body is itself stamped `Module` (a group is a
     /// module) — a plain module nested inside a group body still short-circuits.
-    pub fn nearest_group_context(&self) -> Option<&'a OperatorGroup> {
+    pub fn nearest_group_context(&self) -> Option<Rc<OperatorGroup>> {
         self.ancestors()
-            .find_map(|s| match (s.group, &s.kind) {
-                (Some(group), _) => Some(Some(group)),
+            .find_map(|s| match (&s.group, &s.kind) {
+                (Some(group), _) => Some(Some(Rc::clone(group))),
                 (None, ScopeKind::Sig { .. } | ScopeKind::Module { .. }) => Some(None),
                 (None, ScopeKind::Root | ScopeKind::Anonymous) => None,
             })

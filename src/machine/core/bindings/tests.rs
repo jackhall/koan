@@ -51,7 +51,7 @@ fn sole_reach_member(sealed: &SealedValue, pin: &Rc<FrameStorage>) -> Rc<FrameSt
 fn data_binding_round_trips_sealed_reach() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
     // A synthetic foreign frame the value "reaches" — carried on the seal as its reach.
     let foreign = run_root_storage();
@@ -76,7 +76,7 @@ fn data_binding_round_trips_sealed_reach() {
 fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
     let foreign = run_root_storage();
     let (sealed, reach_set) = sealed_reaching(region, obj, &foreign);
@@ -104,7 +104,7 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
 
 #[test]
 fn try_register_type_inserts_into_types_map() {
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     let outcome = bindings
         .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
@@ -121,7 +121,7 @@ fn try_register_type_inserts_into_types_map() {
 
 #[test]
 fn try_register_type_rejects_collision_with_rebind() {
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let kt1: KType = KType::NUMBER;
     let kt2: KType = KType::STR;
     bindings
@@ -142,7 +142,7 @@ fn try_register_type_rejects_collision_with_rebind() {
 
 #[test]
 fn try_register_type_yields_conflict_on_live_types_borrow() {
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     let _r = bindings.types();
     let outcome = bindings
@@ -154,7 +154,7 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
 
 #[test]
 fn try_register_type_clears_matching_placeholder() {
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     bindings
         .try_install_placeholder(
@@ -173,7 +173,7 @@ fn try_register_type_clears_matching_placeholder() {
 
 #[test]
 fn try_register_type_does_not_touch_data_or_functions() {
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     bindings
         .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
@@ -192,7 +192,7 @@ fn try_register_type_does_not_touch_data_or_functions() {
 /// idempotent arm on the cross-run install and this test would fail.
 #[test]
 fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let first_run = RunId::next();
     let second_run = RunId::next();
     assert_ne!(first_run, second_run, "two runs must mint distinct RunIds");
@@ -249,7 +249,7 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
 
 #[test]
 fn new_bindings_has_empty_pending_types() {
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     assert!(bindings.pending_types().is_empty());
 }
 
@@ -257,8 +257,8 @@ fn new_bindings_has_empty_pending_types() {
 /// for a `pending_types` entry outside `#[cfg(test)]`.
 #[test]
 fn pending_binder_guard_drop_removes_entry() {
-    let bindings: Box<Bindings<'static>> = Box::default();
-    let bindings: &'static Bindings<'static> = Box::leak(bindings);
+    let bindings: Box<Bindings> = Box::default();
+    let bindings: &'static Bindings = Box::leak(bindings);
     {
         let _guard = bindings.insert_pending_type("Foo".into());
         assert!(bindings.pending_types().contains("Foo"));
@@ -272,8 +272,8 @@ fn pending_binder_guard_drop_removes_entry() {
 /// Guard Drop must tolerate an already-removed entry without panicking.
 #[test]
 fn pending_binder_guard_drop_tolerates_absent_entry() {
-    let bindings: Box<Bindings<'static>> = Box::default();
-    let bindings: &'static Bindings<'static> = Box::leak(bindings);
+    let bindings: Box<Bindings> = Box::default();
+    let bindings: &'static Bindings = Box::leak(bindings);
     let guard = bindings.insert_pending_type("Foo".into());
     bindings.pending_remove("Foo");
     drop(guard);
@@ -284,7 +284,7 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
 /// decides which one it belongs to. A value token may not name a type…
 #[test]
 fn value_token_may_not_bind_type_side() {
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     let error = match bindings.try_register_type("int_ord", kt, DeclarationSite::BUILTIN) {
         Err(e) => e,
@@ -304,7 +304,7 @@ fn value_token_may_not_bind_type_side() {
 fn type_token_may_not_bind_value_side() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
     let error = match bindings.try_bind_value(
         "IntOrd",

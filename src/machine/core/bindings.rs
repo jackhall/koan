@@ -245,9 +245,8 @@ impl DeclarationSite {
 /// dispatch parks by the full bucket key keeps `(MAKESET _)` and
 /// `(MAKESET _ USING _)` from colliding.
 ///
-/// Borrow discipline: `types → functions → data`. Lifetime `'a` is the region
-/// lifetime of the stored references.
-pub struct Bindings<'a> {
+/// Borrow discipline: `types → functions → data`.
+pub struct Bindings {
     /// Each type entry stores its bound type and its [`DeclarationSite`] — the installing
     /// [`NodeHandle`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
     /// `KType` is a `Copy` handle into the run frame's registry, so an entry carries no reach: a
@@ -279,10 +278,10 @@ pub struct Bindings<'a> {
     /// Per-scope operator registry: a chain's sorted-joined operator probe key →
     /// the shared [`OperatorGroup`] it resolves to. A module installs one record per
     /// size-≥2 subset of its declared operators (the per-group powerset), each subset
-    /// key pointing at the same region-allocated group, so any subset used in one
+    /// key holding an `Rc` clone of the same group, so any subset used in one
     /// expression resolves in a single hit and a cross-group mix simply misses.
     /// Walked through the scope chain like every other name (innermost visible wins).
-    operators: RefCell<HashMap<String, (&'a OperatorGroup, BindingIndex)>>,
+    operators: RefCell<HashMap<String, (Rc<OperatorGroup>, BindingIndex)>>,
     /// In-flight named-type binders (STRUCT / named-UNION). A consumer referencing an
     /// earlier still-finalizing type parks on its producer node; this set marks which names
     /// are in flight. See [`pending`] for the surface methods.
@@ -300,7 +299,7 @@ pub struct Bindings<'a> {
 /// carrier without re-walking the chain.
 type TypeMemoEntry = KType;
 
-impl<'a> Bindings<'a> {
+impl Bindings {
     pub fn new() -> Self {
         Self {
             types: RefCell::new(HashMap::new()),
@@ -471,21 +470,21 @@ impl<'a> Bindings<'a> {
         &self,
         probe: &str,
         chain_cutoff: Option<usize>,
-    ) -> Option<&'a OperatorGroup> {
+    ) -> Option<Rc<OperatorGroup>> {
         let operators = self.operators.borrow();
-        let (group, idx) = operators.get(probe).copied()?;
-        if Self::visible(idx, chain_cutoff) {
-            Some(group)
+        let (group, idx) = operators.get(probe)?;
+        if Self::visible(*idx, chain_cutoff) {
+            Some(Rc::clone(group))
         } else {
             None
         }
     }
 
     /// Register `probe → group` in the operator registry. The `OP` / `GROUP` binder
-    /// installs one entry per nonempty subset of the declared operators (all pointing at
+    /// installs one entry per nonempty subset of the declared operators (all `Rc` clones of
     /// the same `group`); test fixtures register the subsets they exercise.
     ///
-    /// Upsert: an existing entry whose record is the one being registered — pointer-equal,
+    /// Upsert: an existing entry whose record is the one being registered — the same `Rc`,
     /// or an equal mode + member set (two `OP` statements over the same symbol and distinct
     /// operand types are two bucket overloads but one registry entry) — is a no-op
     /// `Applied`, keeping the first entry's index. A record that disagrees is a chaining-mode
@@ -493,15 +492,15 @@ impl<'a> Bindings<'a> {
     pub fn try_register_operator_group(
         &self,
         probe: String,
-        group: &'a OperatorGroup,
+        group: Rc<OperatorGroup>,
         index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
         let mut operators = match self.operators.try_borrow_mut() {
             Ok(o) => o,
             Err(_) => return Ok(ApplyOutcome::Conflict),
         };
-        if let Some((existing, _)) = operators.get(&probe).copied() {
-            if std::ptr::eq(existing, group) || existing == group {
+        if let Some((existing, _)) = operators.get(&probe) {
+            if Rc::ptr_eq(existing, &group) || **existing == *group {
                 return Ok(ApplyOutcome::Applied);
             }
             return Err(KError::new(KErrorKind::ShapeError(format!(
@@ -825,7 +824,7 @@ impl<'a> Bindings<'a> {
     #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     pub(crate) fn try_bulk_install_from(
         &self,
-        src: &Bindings<'a>,
+        src: &Bindings,
         mirror_of: impl Fn(&SealedValue) -> Option<FunctionMirror>,
     ) -> Result<(), KError> {
         // Duplicate each entry into the snapshot: the seal is a bit-copy naming the source's own
@@ -1089,7 +1088,7 @@ impl<'a> Bindings<'a> {
     }
 }
 
-impl<'a> Default for Bindings<'a> {
+impl Default for Bindings {
     fn default() -> Self {
         Self::new()
     }

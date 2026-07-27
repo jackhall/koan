@@ -143,7 +143,8 @@ Resolution is the ordinary scope walk at the chain's use site, so a combiner tha
 is missing, non-callable, or of the wrong arity surfaces as an ordinary error
 *there*, not at declaration. Storing a name rather than a function is also what
 keeps [`OperatorGroup`](../src/machine/model/operators.rs) lifetime-free: the
-record borrows no region, so its allocation door stays a trivial no-op gate.
+record borrows no region, so the registry shares it by plain `Rc` and it needs no
+region allocation door at all.
 
 ## Shadowing is type-gated, not forbidden
 

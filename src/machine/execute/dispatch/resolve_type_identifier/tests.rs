@@ -161,7 +161,7 @@ mod bare_leaf_resolution {
             .alloc_scope(Scope::child_recursive_group(outer, window.clone()));
         // Mark the binder in-flight (the `pending_types` name the finalize gate reads) and install
         // a value-side placeholder for the producer node to park on.
-        let bindings: &Bindings<'_> = scope.bindings();
+        let bindings: &Bindings = scope.bindings();
         let pending_guard = bindings.insert_pending_type("Node".into());
         scope
             .install_placeholder(
@@ -230,7 +230,7 @@ mod bare_leaf_resolution {
         let outer = root
             .brand()
             .alloc_scope(Scope::child_recursive_group(root, other_window));
-        let outer_bindings: &Bindings<'_> = outer.bindings();
+        let outer_bindings: &Bindings = outer.bindings();
         let _outer_guard = outer_bindings.insert_pending_type("Node".into());
         outer
             .install_placeholder(

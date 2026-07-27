@@ -8,6 +8,7 @@
 //! `(14 - 5) - 1` = 8 and right to `14 - (5 - 1)` = 10.
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::core::run_root_storage;
@@ -27,7 +28,7 @@ fn register_pairwise_fixture<'a>(
 ) {
     let scope = test_run.scope;
     let members: HashSet<String> = ["%"].iter().map(|s| s.to_string()).collect();
-    let group = scope.brand().alloc_operator_group(OperatorGroup::new(
+    let group = Rc::new(OperatorGroup::new(
         members,
         ReductionMode::Pairwise {
             combiner: combiner.to_string(),

@@ -3,6 +3,8 @@
 //! forwarding + conditional-defer shape they share. Split out of the parent `scope`
 //! module.
 
+use std::rc::Rc;
+
 use super::{Scope, ScopeKind};
 use crate::machine::core::bindings::{
     ApplyOutcome, BindKind, BindingIndex, DeclarationSite, SealedValue,
@@ -517,7 +519,7 @@ impl<'a> Scope<'a> {
     pub fn register_operator_group(
         &self,
         probe: String,
-        group: &'a OperatorGroup,
+        group: Rc<OperatorGroup>,
         index: BindingIndex,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
@@ -547,7 +549,7 @@ impl<'a> Scope<'a> {
     pub fn register_group_under_all_subsets(
         &self,
         members: &[&str],
-        group: &'a OperatorGroup,
+        group: &Rc<OperatorGroup>,
         index: BindingIndex,
     ) -> Result<(), KError> {
         let subset_count = 1usize << members.len();
@@ -559,7 +561,7 @@ impl<'a> Scope<'a> {
                 .map(|(_, op)| *op)
                 .collect();
             let key = probe_key(&subset);
-            self.register_operator_group(key, group, index)?;
+            self.register_operator_group(key, Rc::clone(group), index)?;
         }
         Ok(())
     }

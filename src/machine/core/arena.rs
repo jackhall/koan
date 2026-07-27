@@ -20,7 +20,6 @@ use crate::machine::execute::StepCarried;
 
 use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::model::OperatorGroup;
 use crate::machine::model::{
     Carried, CarriedFamily, ContainerSubstrate, DictSubstrate, Held, KObject, ListSubstrate,
     Module, PayloadSubstrate, Record, RecordSubstrate,
@@ -44,8 +43,7 @@ pub use step_allocator::StepAllocator;
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
 /// [`FamilyArena`] cell per family. The `KType` cell backs per-type identity binding storage
-/// (`Bindings::types`); the `OperatorGroup` cell backs the per-scope operator registry
-/// (`Bindings::operators`); the `TypeIdentifier` cell backs the type channel's unlowered-name
+/// (`Bindings::types`); the `TypeIdentifier` cell backs the type channel's unlowered-name
 /// carrier ([`Carried::UnresolvedType`]).
 pub struct KoanStorageProfile;
 
@@ -61,15 +59,12 @@ impl StorageProfile for KoanStorageProfile {
                     (
                         KType,
                         (
-                            OperatorGroup,
+                            TypeIdentifier,
                             (
-                                TypeIdentifier,
+                                RecordSubstrate<'static>,
                                 (
-                                    RecordSubstrate<'static>,
-                                    (
-                                        ListSubstrate<'static>,
-                                        (DictSubstrate<'static>, (PayloadSubstrate<'static>, ())),
-                                    ),
+                                    ListSubstrate<'static>,
+                                    (DictSubstrate<'static>, (PayloadSubstrate<'static>, ())),
                                 ),
                             ),
                         ),
@@ -193,12 +188,6 @@ impl<'a> RegionBrand<'a> {
         self.0
             .alloc_resident_checked::<Module<'static>>(m, ResidenceEvidence::dest_only())
             .expect("alloc_module: a Module must be allocated into its own child scope's region")
-    }
-
-    /// Allocate an [`OperatorGroup`]. Lifetime-free and anchor-free, so the gate is a no-op, but it
-    /// routes the same engine for a single uniform allocation path.
-    pub fn alloc_operator_group(self, g: OperatorGroup) -> &'a OperatorGroup {
-        self.0.alloc_resident::<OperatorGroup>(g)
     }
 
     /// The witnessed-allocation surface for an owned object built fresh inside the brand: born
@@ -338,16 +327,15 @@ impl<'a> FoldingBrand<'a> {
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
 // `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
 // Each family is one type generic only in a single lifetime, so its layout is identical for every
-// choice of that lifetime; `KType`, `OperatorGroup` and `TypeIdentifier` are lifetime-free,
-// trivially invariant. The shared
-// `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its docs).
+// choice of that lifetime; `KType` and `TypeIdentifier` are lifetime-free, trivially invariant. The
+// shared `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its
+// docs).
 reattachable! {
     KObject<'static> => KObject<'r>,
     KType => KType,
     KFunction<'static> => KFunction<'r>,
     Scope<'static> => Scope<'r>,
     Module<'static> => Module<'r>,
-    OperatorGroup => OperatorGroup,
     TypeIdentifier => TypeIdentifier,
     ContainerSubstrate<Record<Held<'static>>> => ContainerSubstrate<Record<Held<'r>>>,
     ContainerSubstrate<Vec<Held<'static>>> => ContainerSubstrate<Vec<Held<'r>>>,
@@ -411,15 +399,9 @@ impl Stored<KoanStorageProfile> for KType {
     }
 }
 
-impl Stored<KoanStorageProfile> for OperatorGroup {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .0
-    }
-}
-
 impl Stored<KoanStorageProfile> for TypeIdentifier {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .1 .0
+        &s.1 .1 .1 .1 .1 .0
     }
 }
 
@@ -442,10 +424,10 @@ macro_rules! koan_substrate_family {
     };
 }
 
-koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
 
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
@@ -586,7 +568,6 @@ impl KoanRegionExt for KoanRegion {
             + weigh::<Scope<'static>>(self)
             + weigh::<Module<'static>>(self)
             + weigh::<KType>(self)
-            + weigh::<OperatorGroup>(self)
             + weigh::<TypeIdentifier>(self)
             + weigh::<RecordSubstrate<'static>>(self)
             + weigh::<ListSubstrate<'static>>(self)
@@ -612,7 +593,6 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<Scope<'static>>()
             + self.family_len::<Module<'static>>()
             + self.family_len::<KType>()
-            + self.family_len::<OperatorGroup>()
             + self.family_len::<RecordSubstrate<'static>>()
             + self.family_len::<ListSubstrate<'static>>()
             + self.family_len::<DictSubstrate<'static>>()

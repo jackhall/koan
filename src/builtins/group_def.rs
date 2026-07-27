@@ -38,6 +38,7 @@
 
 use crate::machine::model::TypeRegistry;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::machine::body_statement_refs;
 use crate::machine::model::KKind;
@@ -76,14 +77,12 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
     let members = crate::try_action!(scan_members(&body_expr, &name));
 
     let member_set: HashSet<String> = members.iter().cloned().collect();
-    let group: &'a OperatorGroup = ctx
-        .scope
-        .brand()
-        .alloc_operator_group(OperatorGroup::new(member_set, mode));
-    let child_scope =
-        ctx.scope
-            .brand()
-            .alloc_scope(Scope::child_under_group(ctx.scope, name.clone(), group));
+    let group = Rc::new(OperatorGroup::new(member_set, mode));
+    let child_scope = ctx.scope.brand().alloc_scope(Scope::child_under_group(
+        ctx.scope,
+        name.clone(),
+        Rc::clone(&group),
+    ));
 
     // Index-0 visibility, like parameters and `USING` imports: the registry entries carry no
     // lexical-ordering relationship to the body statement reading them, so a run anywhere in the
@@ -92,7 +91,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
     let member_refs: Vec<&str> = members.iter().map(|s| s.as_str()).collect();
     crate::try_action!(child_scope.register_group_under_all_subsets(
         &member_refs,
-        group,
+        &group,
         BindingIndex::value(0),
     ));
 

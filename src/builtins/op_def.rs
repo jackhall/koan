@@ -25,6 +25,8 @@
 //!
 //! Surface design: [design/operators.md](../../design/operators.md).
 
+use std::rc::Rc;
+
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
@@ -186,7 +188,12 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", "body"));
     let has_result = arg_held(ctx.args, "return_type").is_some();
     let group = ctx.scope.nearest_group_context();
-    crate::try_action!(check_group_context(kind, has_result, group, &sym));
+    crate::try_action!(check_group_context(
+        kind,
+        has_result,
+        group.as_deref(),
+        &sym
+    ));
 
     let operand_raw = crate::try_action!(extract_type_slot_raw(ctx.args, "operand", OPERAND_SLOT));
     let operand_state = crate::try_action!(classify_return_type(
@@ -350,10 +357,8 @@ impl<'a> OpPlan<'a> {
                 )?;
                 if !in_group {
                     let members = std::iter::once(sym.clone()).collect();
-                    let group = scope
-                        .brand()
-                        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::FoldLeft));
-                    scope.register_group_under_all_subsets(&[sym.as_str()], group, bind_index)?;
+                    let group = Rc::new(OperatorGroup::new(members, ReductionMode::FoldLeft));
+                    scope.register_group_under_all_subsets(&[sym.as_str()], &group, bind_index)?;
                 }
                 registered
             }
@@ -462,10 +467,8 @@ pub(super) fn register_unary_operator<'a>(
     let carrier = register_body(scope, sym, list_signature, list_body, bind_index, types)?;
     register_body(scope, sym, binary_signature, binary_body, bind_index, types)?;
     let members = std::iter::once(sym.to_string()).collect();
-    let group = scope
-        .brand()
-        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::Unary));
-    scope.register_group_under_all_subsets(&[sym], group, bind_index)?;
+    let group = Rc::new(OperatorGroup::new(members, ReductionMode::Unary));
+    scope.register_group_under_all_subsets(&[sym], &group, bind_index)?;
     Ok(carrier)
 }
 

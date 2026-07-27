@@ -10,8 +10,9 @@ pin-versus-copy escape policy — is pinned in
 
 ## Storage shape: a graph of region slots
 
-A `KoanRegion` holds six `typed_arena`-backed sub-arenas — for `KObject`,
-`KFunction`, `Scope`, `Module`, `KType`, and `OperatorGroup`. Slots have stable
+A `KoanRegion` holds one `typed_arena`-backed sub-arena per stored family — `KObject`,
+`KFunction`, `Scope`, `Module`, `KType`, `TypeIdentifier`, and the four value
+substrates (record, list, dict, payload). Slots have stable
 heap addresses; the runtime carries cross-references between them rather
 than ownership trees. The structural edges:
 

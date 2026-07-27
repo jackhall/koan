@@ -810,6 +810,7 @@ fn operator_chain_undeclared_errors_cleanly() {
 fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     use crate::machine::model::{OperatorGroup, ReductionMode};
     use std::collections::HashSet;
+    use std::rc::Rc;
 
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
@@ -818,9 +819,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let inner = scope.brand().alloc_scope(scope.child_for_call());
 
     let members: HashSet<String> = ["-"].iter().map(|s| s.to_string()).collect();
-    let group = scope
-        .brand()
-        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::FoldRight));
+    let group = Rc::new(OperatorGroup::new(members, ReductionMode::FoldRight));
     inner
         .register_operator_group("-".to_string(), group, BindingIndex::value(0))
         .expect("an inner scope may register a builtin operator's probe");
@@ -870,15 +869,14 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
 fn operator_chain_registered_unary_group_hands_body_the_list() {
     use crate::machine::model::{OperatorGroup, ReductionMode};
     use std::collections::HashSet;
+    use std::rc::Rc;
 
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let members: HashSet<String> = ["~"].iter().map(|s| s.to_string()).collect();
-    let group = scope
-        .brand()
-        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::Unary));
+    let group = Rc::new(OperatorGroup::new(members, ReductionMode::Unary));
     scope
         .register_operator_group("~".to_string(), group, BindingIndex::BUILTIN)
         .expect("register operator group");
