@@ -1,7 +1,7 @@
 //! Shared `Action`-harness elaboration for a nominal type declarator's field-list schema —
-//! the path UNION and NEWTYPE's record repr both walk: mark the binder in-flight, elaborate the
-//! `(tag/field :Type, …)` list threading the binder name, then either fold the sealed pairs into
-//! the carrier synchronously or defer one dep-finish over the parked producers + sigil sub-Dispatches.
+//! the path UNION and NEWTYPE's record repr both walk: elaborate the `(tag/field :Type, …)` list
+//! threading the binder name, then either fold the sealed pairs into the carrier synchronously or
+//! defer one dep-finish over the parked producers + sigil sub-Dispatches.
 //!
 //! The two callers differ only in the parameters threaded through here (diagnostic context,
 //! field-name policy, error frame) and the `finalize` that folds the sealed `(name, KType)` pairs
@@ -48,10 +48,6 @@ pub(crate) fn nominal_schema_action<'a>(
 ) -> Action<'a> {
     let site = ctx.declaration_site();
     let chain = ctx.chain.clone();
-    // Mark this binder in-flight so a consumer referencing it (an earlier sibling still finalizing)
-    // can park on our producer node. The guard's Drop removes the name; the Pending path moves it
-    // into the dep-finish closure.
-    let pending_guard = ctx.scope.bindings().insert_pending_type(name.clone());
     // Seed the threaded set with this binder's name so a self-recursive declaration resolves
     // through the window rather than parking on its own placeholder.
     let mut elaborator = Elaborator::new(ctx.scope)
@@ -86,7 +82,6 @@ pub(crate) fn nominal_schema_action<'a>(
             .with_threaded([name])
             .with_window(window)
             .with_chain(chain)
-            .with_pending_guard(pending_guard)
             .with_error_frame(error_frame)
             .action(Box::new(move |fctx, fields| {
                 finalize(fctx, finish_name, finish_window, fields, site)

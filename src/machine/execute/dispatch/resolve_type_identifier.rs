@@ -1,21 +1,25 @@
 //! Scope-bound resolution of a surface [`TypeIdentifier`] into an interned `KType` handle.
 //!
-//! Read-only consumer of the bindings façade: never touches `data`, `functions`,
-//! `placeholders`, `pending`, `out`, or `kind` — the read-only dependency is what
-//! justifies the split from `scope.rs`.
+//! Read-only consumer of the bindings façade: writes nothing, and of the tables reads only
+//! `types` (through the elaborator) and the type-side `placeholders` — the read-only dependency
+//! is what justifies the split from `scope.rs`.
 //!
 //! ## Invariant pinned here
 //!
 //! **No consumer observes a not-yet-sealed type identity.** A `Done` result survives only
-//! when every user-type the elaborated result references is finalized (absent from its
-//! owning scope's `pending_types`); a referenced type still in flight demotes it to a
-//! `Park` on that type's producer, so a half-built identity cannot reach a consumer.
+//! when every user-type the elaborated result references is finalized; a referenced type still
+//! in flight demotes it to a `Park` on that type's producer, so a half-built identity cannot
+//! reach a consumer.
 //!
-//! In-flight-ness is decided per reference kind. A nominal member in flight is named by a relative
-//! `Sibling` handle, which is meaningful only against the **declaration window** that minted it —
-//! the nearest one on this scope's chain. The gate resolves the index to a member name there, then
-//! walks for the scope that both carries that same window and holds the name in `pending_types`.
-//! Window identity is what the ptr-equality does here: it stops an unrelated same-named
+//! In-flight-ness *is* the type-side placeholder: stamped at the binder's submission, cleared
+//! atomically with the `types` insert when its write op applies. A name carrying a placeholder in
+//! some scope is a binder that has not yet installed its identity there.
+//!
+//! Which scope to probe is decided per reference kind. A nominal member in flight is named by a
+//! relative `Sibling` handle, which is meaningful only against the **declaration window** that
+//! minted it — the nearest one on this scope's chain. The gate resolves the index to a member name
+//! there, then walks for the scope that both carries that same window and holds a placeholder for
+//! the name. Window identity is what the ptr-equality does here: it stops an unrelated same-named
 //! declaration, which opens its own window, from capturing the reference. A sealed member carries
 //! an absolute handle and no window, so it is never in flight. A SIG-declared or abstract slot is
 //! identified by the declaring scope id its node records.
@@ -54,9 +58,9 @@ impl<'step> Scope<'step> {
 /// Precondition value for a resolved identity, naming the load-bearing invariant
 /// *"no not-yet-sealed type may reach a consumer"* as a type.
 ///
-/// Admits a `KType` iff every top-level user-type it references is finalized in
-/// its owning scope (absent from that scope's `pending_types`); otherwise returns
-/// the producer `NodeId`s the caller parks on.
+/// Admits a `KType` iff every top-level user-type it references is finalized in its owning scope
+/// (no type-side placeholder left there); otherwise returns the producer `NodeId`s the caller
+/// parks on.
 ///
 /// Both probes read the type placeholder straight from the kind-tagged map — not via
 /// `lookup_type`, which would prefer a binding this gate must look past to find the in-flight
@@ -95,9 +99,6 @@ impl FinalizeGate<'_, '_> {
         let window = self.scope.nearest_recursive_window()?;
         let name = window.member_names().into_iter().nth(index)?;
         self.scope.ancestors().find_map(|s| {
-            if !s.bindings().pending_types().contains(&name) {
-                return None;
-            }
             let carried = s.nearest_recursive_window()?;
             if std::rc::Rc::ptr_eq(&carried, &window) {
                 s.bindings().type_placeholder_producer(&name)
@@ -108,12 +109,9 @@ impl FinalizeGate<'_, '_> {
     }
 
     /// The in-flight producer of the scope that declared a SIG / abstract slot: find
-    /// that scope by id, park iff it holds `name` in `pending_types`.
+    /// that scope by id, park iff it still holds a type placeholder for `name`.
     fn declared_producer(&self, scope_id: ScopeId, name: &str) -> Option<NodeId> {
         let owner = self.scope.ancestors().find(|s| s.id == scope_id)?;
-        if !owner.bindings().pending_types().contains(name) {
-            return None;
-        }
         owner.bindings().type_placeholder_producer(name)
     }
 }

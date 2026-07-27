@@ -125,7 +125,8 @@ clears an in-flight type producer's placeholder (nor the reverse).
   compares the installing [`NodeHandle`](../../src/machine/core/bindings.rs) against the
   stored entry's. What this gate resolves is in-flight status, not identity: a nominal
   member named by a relative `Sibling` reference is in flight iff the scope carrying the
-  very group window that reference resolves against holds the name in `pending_types`
+  very group window that reference resolves against still holds a type-side placeholder for
+  the name
   ([resolve_type_identifier.rs](../../src/machine/execute/dispatch/resolve_type_identifier.rs)).
   The window match is what stops a same-named in-flight declaration of a
   different type from capturing the reference; a SIG-declared or abstract slot,

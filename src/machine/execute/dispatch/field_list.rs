@@ -21,7 +21,7 @@ use std::rc::Rc;
 
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{DepPlacement, FinishCtx};
-use crate::machine::core::{LexicalFrame, PendingBinderGuard, StepAllocator};
+use crate::machine::core::{LexicalFrame, StepAllocator};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::{
@@ -153,7 +153,6 @@ pub(crate) struct FieldListDeferral<'a> {
     threaded: Vec<String>,
     window: Option<std::rc::Rc<crate::machine::model::RecursiveGroupWindow>>,
     chain: Option<Rc<LexicalFrame>>,
-    pending_guard: Option<PendingBinderGuard>,
     error_frame: Option<TraceFrame>,
 }
 
@@ -177,7 +176,6 @@ impl<'a> FieldListDeferral<'a> {
             threaded: Vec::new(),
             window: None,
             chain: None,
-            pending_guard: None,
             error_frame: None,
         }
     }
@@ -205,29 +203,16 @@ impl<'a> FieldListDeferral<'a> {
         self
     }
 
-    /// Move the in-flight binder guard into the deferral so its `Drop` fires on every finish arm,
-    /// clearing the `pending_types` entry once the deferred walk resolves.
-    pub(crate) fn with_pending_guard(mut self, guard: PendingBinderGuard) -> Self {
-        self.pending_guard = Some(guard);
-        self
-    }
-
     /// Attach the trace frame the user-facing `Err` arm labels a shape error with.
     pub(crate) fn with_error_frame(mut self, frame: TraceFrame) -> Self {
         self.error_frame = Some(frame);
         self
     }
 
-    /// Split the deferral into the deferred re-walk, the shared `[park_producers ++ owned_subs]` dep
-    /// vector (parks first, then each sub-Dispatch owned in DFS order), and the pending guard the
-    /// finish closure carries. The one place the dep vector is assembled.
-    fn into_parts(
-        self,
-    ) -> (
-        FieldListRewalk<'a>,
-        Deps<OwnedDispatch<'a>>,
-        Option<PendingBinderGuard>,
-    ) {
+    /// Split the deferral into the deferred re-walk and the shared `[park_producers ++ owned_subs]`
+    /// dep vector (parks first, then each sub-Dispatch owned in DFS order). The one place the dep
+    /// vector is assembled.
+    fn into_parts(self) -> (FieldListRewalk<'a>, Deps<OwnedDispatch<'a>>) {
         let rewalk = FieldListRewalk {
             expr: self.expr,
             context: self.context,
@@ -244,17 +229,15 @@ impl<'a> FieldListDeferral<'a> {
                 placement: DepPlacement::OwnScope,
             });
         }
-        (rewalk, deps, self.pending_guard)
+        (rewalk, deps)
     }
 
     /// Finish into the scheduler currency: a [`Outcome::ParkThenContinue`] whose dep-finish re-walks
     /// `expr` once the parks and owned sub-Dispatches resolve, then composes the pairs through
     /// `compose`. A pure decide, no write.
     pub(in crate::machine::execute) fn outcome(self, compose: BrandCompose<'a>) -> Outcome<'a> {
-        let (rewalk, deps, pending_guard) = self.into_parts();
+        let (rewalk, deps) = self.into_parts();
         let finish: TerminalDepFinish<'a> = Box::new(move |view, terminals| {
-            // The guard's Drop clears the in-flight `pending_types` entry on every arm.
-            let _pending_guard = pending_guard;
             // The owned suffix — each sub-Dispatch's terminal read live at the step brand — is the
             // walk's feed; the parks are notify-only waits on a forward reference. Each field type the
             // walk yields is cloned out as owned data, so the composed type needs no operand fold.
@@ -291,10 +274,8 @@ impl<'a> FieldListDeferral<'a> {
         finalize: FieldListFinalizeAction<'a>,
     ) -> crate::machine::core::Action<'a> {
         use crate::machine::core::{Action, AwaitContinue};
-        let (rewalk, deps, pending_guard) = self.into_parts();
+        let (rewalk, deps) = self.into_parts();
         let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-            // The guard's Drop clears the in-flight `pending_types` entry on every arm.
-            let _pending_guard = pending_guard;
             // The owned suffix — each sub-Dispatch's terminal read live at the step brand — feeds the
             // re-walk; the parks are notify-only waits on a forward reference. Each field type the
             // walk yields is cloned out as owned data, so the composed type needs no operand fold.

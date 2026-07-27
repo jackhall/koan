@@ -216,7 +216,7 @@ src/
     │   │   ├── step_allocator.rs  StepAllocator — the step-branded construction doors (alloc_carried / alloc_type_* / alloc_object_scalar)
     │   │   └── residence.rs       Residence / ResidenceEvidence, the AuditedStored family audits, and the evidence-tier Scope move-in doors
     │   ├── region.rs  Region<W> — generic run-lifetime erase-store substrate (the cycle gate; escape held as an owning EscapeOwner, no unsafe), names no Koan type
-    │   ├── bindings.rs    Bindings façade — six-map (data/functions/placeholders/types/pending_overloads/operators) with the firm write_value / write_type / write_operator_group primitives, the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)]), and the PendingTypes in-flight binder map
+    │   ├── bindings.rs    Bindings façade — six-map (data/functions/placeholders/types/pending_overloads/operators) with the firm write_value / write_type / write_operator_group primitives, the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)]); one RefCell over all six maps, nothing else interior-mutable
     │   ├── bindings/
     │   │   └── ops.rs     WriteOp / TypeWritePolicy — a binding-table write as outcome data, and the single apply interpreter the run loop drives
     │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors

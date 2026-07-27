@@ -1,6 +1,5 @@
-//! Unit coverage for the `types` map write primitive `write_type`, plus
-//! the `pending_types` RAII guard lifecycle and the cross-kind exclusion that
-//! makes the `data`/`types` partition structural (no name in both).
+//! Unit coverage for the `types` map write primitive `write_type`, plus the cross-kind
+//! exclusion that makes the `data`/`types` partition structural (no name in both).
 
 use super::*;
 use crate::machine::core::arena::RegionBrand;
@@ -291,39 +290,6 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
 // class fixes which map it may ever enter, so the same name can never land in both. The reverse —
 // a bare `FN`, which binds neither `data` nor `types` — is exempt; that is covered Scope-side in
 // `core::tests::register`.
-
-#[test]
-fn new_bindings_has_empty_pending_types() {
-    let bindings: Bindings = Bindings::new();
-    assert!(bindings.pending_types().is_empty());
-}
-
-/// Dropping the value returned by `insert_pending_type` is the sole removal path
-/// for a `pending_types` entry outside `#[cfg(test)]`.
-#[test]
-fn pending_binder_guard_drop_removes_entry() {
-    let bindings: Box<Bindings> = Box::default();
-    let bindings: &'static Bindings = Box::leak(bindings);
-    {
-        let _guard = bindings.insert_pending_type("Foo".into());
-        assert!(bindings.pending_types().contains("Foo"));
-    }
-    assert!(
-        !bindings.pending_types().contains("Foo"),
-        "guard Drop should have removed the pending_types entry",
-    );
-}
-
-/// Guard Drop must tolerate an already-removed entry without panicking.
-#[test]
-fn pending_binder_guard_drop_tolerates_absent_entry() {
-    let bindings: Box<Bindings> = Box::default();
-    let bindings: &'static Bindings = Box::leak(bindings);
-    let guard = bindings.insert_pending_type("Foo".into());
-    bindings.pending_remove("Foo");
-    drop(guard);
-    assert!(!bindings.pending_types().contains("Foo"));
-}
 
 /// The token-class partition: `types` and `data` are different universes, and a name's token class
 /// decides which one it belongs to. A value token may not name a type…

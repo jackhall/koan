@@ -60,7 +60,8 @@ fn block_mutual_pair_seals_one_component_with_member_handle_cross_refs() {
     let bb_handle = scope.resolve_type("Bb").unwrap();
     assert_eq!(a_fields[0], ("b".to_string(), bb_handle));
     assert_eq!(b_fields[0], ("a".to_string(), aa_handle));
-    assert!(scope.bindings().pending_types().is_empty());
+    assert!(scope.bindings().type_placeholder_producer("Aa").is_none());
+    assert!(scope.bindings().type_placeholder_producer("Bb").is_none());
 }
 
 /// The group name binds a `Group` handle over the block's declared members.

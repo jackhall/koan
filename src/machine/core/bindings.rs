@@ -41,8 +41,10 @@
 //! `chain_cutoff` computed via [`crate::machine::core::LexicalFrame::index_for`].
 //! Raw map accessors are `#[cfg(test)]`.
 
-use std::cell::{Ref, RefCell};
-use std::collections::{HashMap, HashSet};
+#[cfg(test)]
+use std::cell::Ref;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::carrier_witness::{CallableIdentity, FunctionMirror, SealedFunction};
@@ -296,9 +298,7 @@ struct Tables {
     operators: HashMap<String, (Rc<OperatorGroup>, BindingIndex)>,
 }
 
-/// One scope's bindings: the six maps under a single [`RefCell`], plus the in-flight named-type
-/// set, which stays its own `Rc`-shared island because a [`PendingBinderGuard`] holds an owning
-/// stake in it past the borrow it was minted from.
+/// One scope's bindings: the six maps under a single [`RefCell`], and nothing else.
 ///
 /// One cell rather than one per map: with writes reachable only under a [`WriteGate`], a read can
 /// never overlap a write, so per-map cells bought nothing but a borrow-ordering rule to obey. Every
@@ -306,17 +306,12 @@ struct Tables {
 /// type insert plus its placeholder clear — is atomic under it.
 pub struct Bindings {
     tables: RefCell<Tables>,
-    /// In-flight named-type binders (STRUCT / named-UNION). A consumer referencing an
-    /// earlier still-finalizing type parks on its producer node; this set marks which names
-    /// are in flight. See [`pending`] for the surface methods.
-    pending: PendingTypes,
 }
 
 impl Bindings {
     pub fn new() -> Self {
         Self {
             tables: RefCell::new(Tables::default()),
-            pending: PendingTypes::new(),
         }
     }
 
@@ -619,23 +614,6 @@ impl Bindings {
             .get(name)
             .map(|(kt, _site)| *kt)
             .unwrap_or_else(|| panic!("expected bindings.types[{name:?}] to be present"))
-    }
-
-    /// In-flight named-type binder names. The sole non-test writer is
-    /// [`Bindings::insert_pending_type`] (the guard's Drop removes the name); a consumer
-    /// reads it to decide whether to park on an earlier still-finalizing type.
-    pub fn pending_types(&self) -> Ref<'_, HashSet<String>> {
-        self.pending.get()
-    }
-
-    pub fn insert_pending_type(&self, name: String) -> PendingBinderGuard {
-        self.pending.insert(name)
-    }
-
-    /// Exercises the guard Drop's "tolerates absent entry" path.
-    #[cfg(test)]
-    pub fn pending_remove(&self, name: &str) {
-        self.pending.remove(name);
     }
 
     /// Write `name` → `kt` into `types` under `policy`. [`TypeWritePolicy::Insert`] is strict
@@ -956,83 +934,6 @@ impl Tables {
 impl Default for Bindings {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// In-flight named-type binder tracking. [`Bindings`] embeds a [`PendingTypes`] by value and
-// delegates the surface methods. A binder records its name here for its body's duration so a
-// consumer referencing an *earlier* still-finalizing type can find the producer node to park
-// on (the finalize gate in `resolve_type_identifier`). Membership is the whole signal. MODULE
-// does not participate — module bodies park on the outer scheduler, not on type-name resolution
-// inside elaboration.
-
-/// The in-flight binder set, `Rc`-shared so a [`PendingBinderGuard`] can hold an *owning* stake
-/// in it rather than a borrow: the guard outlives the `&Scope` borrow it was minted from (it rides
-/// into the binder's combine finish and drops there), so refcounting — not a lifetime — is what
-/// keeps the set alive for the guard's Drop. Interior mutation stays sound via the inner `RefCell`.
-type PendingMap = Rc<RefCell<HashSet<String>>>;
-
-pub struct PendingTypes {
-    map: PendingMap,
-}
-
-impl PendingTypes {
-    pub fn new() -> Self {
-        Self {
-            map: Rc::new(RefCell::new(HashSet::new())),
-        }
-    }
-
-    pub fn get(&self) -> Ref<'_, HashSet<String>> {
-        self.map.borrow()
-    }
-
-    /// Record a binder as in-flight and return an RAII guard whose Drop removes
-    /// the name.
-    ///
-    /// Panics on borrow conflict — pending-type writes happen at body-entry,
-    /// outside the re-entrant `try_apply` hot path. Panics on duplicate name —
-    /// placeholders should block a second dispatch from reaching body-entry.
-    pub fn insert(&self, name: String) -> PendingBinderGuard {
-        let mut map = self.map.borrow_mut();
-        if map.contains(&name) {
-            panic!(
-                "insert_pending_type = `{name}` already in flight — duplicate dispatch \
-                 reached body-entry, which the placeholder install should have blocked",
-            );
-        }
-        map.insert(name.clone());
-        drop(map);
-        PendingBinderGuard {
-            map: Rc::clone(&self.map),
-            name,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn remove(&self, name: &str) {
-        self.map.borrow_mut().remove(name);
-    }
-}
-
-impl Default for PendingTypes {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// RAII handle returned by [`PendingTypes::insert`]. Dropping the guard removes
-/// the matching name; this is the *only* removal path outside `#[cfg(test)]`.
-#[must_use = "PendingBinderGuard removes the pending-types entry on drop; \
-              bind it for the elaboration's lifetime"]
-pub struct PendingBinderGuard {
-    map: PendingMap,
-    name: String,
-}
-
-impl Drop for PendingBinderGuard {
-    fn drop(&mut self) {
-        self.map.borrow_mut().remove(&self.name);
     }
 }
 

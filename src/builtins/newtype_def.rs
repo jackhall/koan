@@ -588,7 +588,7 @@ mod tests {
             Some(node_handle),
             "next seals to the member's own handle (a self-reference)",
         );
-        assert!(scope.bindings().pending_types().is_empty());
+        assert!(scope.bindings().type_placeholder_producer("Node").is_none());
     }
 
     /// A `:(LIST OF Self)` field threads the self-reference through the deferred sigil-field path:
@@ -615,7 +615,7 @@ mod tests {
             Some(types.list(tree_handle)),
             "children seals its self-reference to List of the member's own handle",
         );
-        assert!(scope.bindings().pending_types().is_empty());
+        assert!(scope.bindings().type_placeholder_producer("Tree").is_none());
     }
 
     /// A record type nested as a field type elaborates *inline* through the shared field
@@ -644,7 +644,10 @@ mod tests {
             ),
             _ => panic!("expected `inner` to be a record type, got {inner_ty:?}"),
         }
-        assert!(scope.bindings().pending_types().is_empty());
+        assert!(scope
+            .bindings()
+            .type_placeholder_producer("Outer")
+            .is_none());
     }
 
     /// A non-record sigil repr (`= :(LIST OF Number)`) routes through the same

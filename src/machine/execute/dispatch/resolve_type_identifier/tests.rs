@@ -149,11 +149,11 @@ mod bare_leaf_resolution {
 
     /// A bare leaf naming a member of an open window resolves to that member's relative sibling
     /// handle, which the gate refuses to admit: it parks on the declaration's producer instead,
-    /// then admits once the window seals and the in-flight guard clears. Handing the relative
-    /// handle to a consumer would leak a window-scoped index into a window-free context.
+    /// then admits once the window seals and the identity write clears the placeholder. Handing
+    /// the relative handle to a consumer would leak a window-scoped index into a window-free
+    /// context.
     #[test]
     fn mid_window_member_parks_then_resolves() {
-        use crate::machine::core::Bindings;
         use crate::machine::core::NodeId;
         use crate::machine::core::Scope;
         use crate::machine::model::Record;
@@ -164,10 +164,8 @@ mod bare_leaf_resolution {
         let scope = outer
             .brand()
             .alloc_scope(Scope::child_recursive_group(outer, window.clone()));
-        // Mark the binder in-flight (the `pending_types` name the finalize gate reads) and install
-        // a value-side placeholder for the producer node to park on.
-        let bindings: &Bindings = scope.bindings();
-        let pending_guard = bindings.insert_pending_type("Node".into());
+        // Mark the binder in-flight: the type-side placeholder the finalize gate reads, naming the
+        // producer node a consumer parks on.
         scope
             .install_placeholder(
                 "Node".into(),
@@ -187,8 +185,8 @@ mod bare_leaf_resolution {
             other => panic!("expected Park mid-window, got {:?}", outcome_tag(&other)),
         }
 
-        // Seal: fill the member, drop the in-flight guard, and bind the sealed handle where the
-        // declarator's finalize would. The re-resolve now admits.
+        // Seal: fill the member and bind the sealed handle where the declarator's finalize would —
+        // the `types` write clears the placeholder with it. The re-resolve now admits.
         let sealed = window
             .fill_member(
                 0,
@@ -198,7 +196,6 @@ mod bare_leaf_resolution {
                 &types,
             )
             .expect("the only member's fill seals the window");
-        drop(pending_guard);
         crate::machine::core::bindings::WriteOp::Type {
             name: "Node".into(),
             kt: sealed.members[0],
@@ -220,14 +217,11 @@ mod bare_leaf_resolution {
 
     /// Shadowing: an in-flight declaration of the *same name* in an unrelated window must not
     /// capture a sibling reference minted against this one. The gate resolves the index against
-    /// the nearest window and then requires the pending scope to carry that same window, so the
-    /// inner declaration's own window — which is a different allocation — never matches.
-    ///
-    /// This is what the pre-flip gate got from pointer-equality on the set allocation; window
-    /// identity carries exactly the same guarantee.
+    /// the nearest window and then requires the placeholder-holding scope to carry that same
+    /// window, so the inner declaration's own window — which is a different allocation — never
+    /// matches.
     #[test]
     fn a_same_named_declaration_in_another_window_does_not_capture() {
-        use crate::machine::core::Bindings;
         use crate::machine::core::NodeId;
         use crate::machine::core::Scope;
 
@@ -238,8 +232,6 @@ mod bare_leaf_resolution {
         let outer = root
             .brand()
             .alloc_scope(Scope::child_recursive_group(root, other_window));
-        let outer_bindings: &Bindings = outer.bindings();
-        let _outer_guard = outer_bindings.insert_pending_type("Node".into());
         outer
             .install_placeholder(
                 "Node".into(),
