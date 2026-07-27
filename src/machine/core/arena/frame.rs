@@ -29,14 +29,15 @@ use crate::witnessed::{
 /// on [`FrameStorageExt`] (an extension trait, since a type alias takes no inherent impls of its own).
 pub type FrameStorage = RegionHost<KoanStorageProfile>;
 
-/// The run-root storage: a fresh run region with no `outer` link. Held by `run_program` (and the
-/// test harness) so the run-root scope's region has an owning Rc; [`CallFrame::adopting`] reuses
-/// it as the run frame's storage and the run-root scope records a `Weak` to it as its
-/// `region_owner`. Public: it is the one Koan-side entry point a caller (production or an
-/// integration test) uses to obtain run-root storage — it mints nothing itself, only building the
-/// library's `RegionHost` shell whose region lazily mints on first allocation.
+/// The run-root storage: a fresh run region with no `outer` link, stamped at the run tier
+/// ([`RegionHost::is_run_root`]) so anything holding it can tell the run region from a per-call one.
+/// Held by `run_program` (and the test harness) so the run-root scope's region has an owning Rc;
+/// [`CallFrame::adopting`] reuses it as the run frame's storage and the run-root scope records a
+/// `Weak` to it as its `region_owner`. Public: it is the one Koan-side entry point a caller
+/// (production or an integration test) uses to obtain run-root storage — it mints nothing itself,
+/// only building the library's `RegionHost` shell whose region lazily mints on first allocation.
 pub fn run_root_storage() -> Rc<FrameStorage> {
-    RegionHost::fresh(None)
+    RegionHost::fresh_root()
 }
 
 /// Koan's [`RegionBrand`] mint over a [`FrameStorage`] — an extension trait because `FrameStorage`

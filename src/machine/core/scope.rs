@@ -64,13 +64,6 @@ pub struct Scope<'a> {
     /// already rejected; this also rejects *new* binds). The seal point for its reach-set. `Cell`
     /// because it flips once, late, outside the bind hot path.
     closed: Cell<bool>,
-    /// Whether this scope lives in the **run-root region** — the region the run storage owns, which
-    /// outlives the whole run. `true` for [`Self::run_root`] and inherited by every same-region
-    /// child; `false` for a per-call frame child ([`Self::child_for_frame_witnessed`]). The bit a
-    /// scope carries so [`Self::parent_frame_pin`] can tell "run-root region" from a per-call region:
-    /// `region_owner` upgrades in both, and a fresh-tail cart is per-call yet also has `outer = None`,
-    /// so neither the owner nor the frame's `outer` chain distinguishes the two.
-    root_region: bool,
 }
 
 /// A scope's binding storage. `Owned` is the default. `Borrowed` is the
@@ -162,25 +155,23 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             kind: ScopeKind::Root,
             closed: Cell::new(false),
-            root_region: true,
         }
     }
 
     /// The storage pin [`CallFrame::new`](super::arena::CallFrame::new) chains for a frame whose
     /// child scope borrows into this scope's region: the region's owning storage — or no pin when
-    /// this scope lives in the run-root region, which outlives the run and must not be strong-chained
-    /// (a root chain plus an escaping value's reach-set pin is the region↔value `Rc` cycle the frame
-    /// design excludes). The `expect` is discharged by [`Self::region_owner`]'s contract: the owner
-    /// upgrades while the region is live, and the caller holds `&Scope`, so it is.
+    /// that owner is the run root
+    /// ([`is_run_root`](crate::witnessed::RegionHost::is_run_root)), whose region outlives the run and
+    /// must not be strong-chained (a root chain plus an escaping value's reach-set pin is the
+    /// region↔value `Rc` cycle the frame design excludes). The owner answers its own tier, so the
+    /// two outcomes stay distinct: the `expect` reports a **dead owner**, which is a bug, while
+    /// `None` reports the run-root **policy**.
     pub(crate) fn parent_frame_pin(&self) -> Option<Rc<FrameStorage>> {
-        if self.root_region {
-            return None;
-        }
-        Some(
-            self.region_owner
-                .upgrade()
-                .expect("a live scope reference implies a live region owner"),
-        )
+        let owner = self
+            .region_owner
+            .upgrade()
+            .expect("a live scope reference implies a live region owner");
+        (!owner.is_run_root()).then_some(owner)
     }
 
     /// The [`FrameStorage`] (cloned `Weak`) whose region this scope lives in — see [`Self::brand`]'s
@@ -250,7 +241,6 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             kind,
             closed: Cell::new(false),
-            root_region: outer.root_region,
         }
     }
 
@@ -287,7 +277,6 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             kind: ScopeKind::Anonymous,
             closed: Cell::new(false),
-            root_region: false,
         }
     }
 

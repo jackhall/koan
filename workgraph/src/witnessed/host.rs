@@ -25,15 +25,39 @@ pub struct RegionHost<P: StorageProfile> {
     /// host's own borrows into it — and the link [`Self::pins_region`] walks for subsumption. Drop
     /// tears down the chain in order.
     outer: Option<Rc<RegionHost<P>>>,
+    /// The host's **tier**: `true` for the one run-root host ([`Self::fresh_root`]), whose region
+    /// outlives the whole run; `false` for every per-call host ([`Self::fresh`]). Not derivable from
+    /// the chain — a per-call host started at a fresh tail also has `outer: None` — so the owner
+    /// carries the bit, and a workload asking "is this the run root?" reads it here rather than
+    /// stamping a shadow copy on every structure the region backs.
+    run_root: bool,
 }
 
 impl<P: StorageProfile> RegionHost<P> {
-    /// Build a fresh host with no region minted yet, chained to `outer`.
+    /// Build a fresh **per-call** host with no region minted yet, chained to `outer`.
     pub fn fresh(outer: Option<Rc<RegionHost<P>>>) -> Rc<Self> {
         Rc::new(RegionHost {
             region: OnceCell::new(),
             outer,
+            run_root: false,
         })
+    }
+
+    /// Build the **run-root** host: no region minted yet, no ancestor, and marked as the run tier
+    /// ([`Self::is_run_root`]). A run has exactly one; every other host is a [`Self::fresh`] per-call.
+    pub fn fresh_root() -> Rc<Self> {
+        Rc::new(RegionHost {
+            region: OnceCell::new(),
+            outer: None,
+            run_root: true,
+        })
+    }
+
+    /// Whether this host is the run-root ([`Self::fresh_root`]) rather than a per-call frame. The
+    /// tier a caller consults to decide whether chaining a strong pin to this storage is meaningful:
+    /// the run-root region outlives the run, so pinning it buys nothing and closes an `Rc` cycle.
+    pub fn is_run_root(&self) -> bool {
+        self.run_root
     }
 
     /// The backing region, minting it on first call. This is the **sole** mint point: nothing else
@@ -188,6 +212,13 @@ mod tests {
         assert!(host.minted().is_none());
         let _ = host.region();
         assert!(host.minted().is_some());
+    }
+
+    #[test]
+    fn only_fresh_root_carries_the_run_tier() {
+        assert!(RegionHost::<TestProfile>::fresh_root().is_run_root());
+        // A per-call host with no ancestor — a fresh-tail frame — is still per-call.
+        assert!(!RegionHost::<TestProfile>::fresh(None).is_run_root());
     }
 
     #[test]
