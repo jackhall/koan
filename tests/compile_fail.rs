@@ -50,3 +50,13 @@ fn step_carrier_consumed_in_brand_compiles() {
     });
     assert_eq!(ran, 1);
 }
+
+/// `compile_fail` guard for the binding-table write gate: [`koan::machine::WriteGate`]'s mints are
+/// `pub(in crate::machine)`, so nothing outside the machine can produce one — and every write verb
+/// on `Bindings` (and every `*_direct` door on `Scope` that reaches one) requires one by value of
+/// `&mut`. The fixture compiles as an external crate, pinning the privacy error the gate rests on.
+#[test]
+fn write_gate_guard() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/compile_fail/write_gate_mint.rs");
+}

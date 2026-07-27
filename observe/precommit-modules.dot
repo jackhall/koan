@@ -4,7 +4,6 @@ digraph {
     "koan::builtins::arithmetic" [label="koan::builtins::arithmetic"];
     "koan::builtins::attr" [label="koan::builtins::attr"];
     "koan::builtins::await_body" [label="koan::builtins::await_body"];
-    "koan::builtins::block_tail" [label="koan::builtins::block_tail"];
     "koan::builtins::branch_walk" [label="koan::builtins::branch_walk"];
     "koan::builtins::catch" [label="koan::builtins::catch"];
     "koan::builtins::equality" [label="koan::builtins::equality"];
@@ -47,12 +46,14 @@ digraph {
     "koan::machine::core::arena::residence" [label="koan::machine::core::arena::residence"];
     "koan::machine::core::arena::step_allocator" [label="koan::machine::core::arena::step_allocator"];
     "koan::machine::core::bindings" [label="koan::machine::core::bindings"];
+    "koan::machine::core::bindings::gate" [label="koan::machine::core::bindings::gate"];
     "koan::machine::core::bindings::ops" [label="koan::machine::core::bindings::ops"];
     "koan::machine::core::carrier_witness" [label="koan::machine::core::carrier_witness"];
     "koan::machine::core::kerror" [label="koan::machine::core::kerror"];
     "koan::machine::core::kfunction" [label="koan::machine::core::kfunction"];
     "koan::machine::core::kfunction::action" [label="koan::machine::core::kfunction::action"];
     "koan::machine::core::kfunction::bind_by_name" [label="koan::machine::core::kfunction::bind_by_name"];
+    "koan::machine::core::kfunction::block_tail" [label="koan::machine::core::kfunction::block_tail"];
     "koan::machine::core::kfunction::body" [label="koan::machine::core::kfunction::body"];
     "koan::machine::core::kfunction::exec" [label="koan::machine::core::kfunction::exec"];
     "koan::machine::core::kfunction::pick" [label="koan::machine::core::kfunction::pick"];
@@ -140,7 +141,6 @@ digraph {
     "koan::builtins" -> "koan::builtins::arithmetic" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::attr" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::await_body" [label="owns", style="solid"];
-    "koan::builtins" -> "koan::builtins::block_tail" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::branch_walk" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::catch" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::equality" [label="owns", style="solid"];
@@ -191,9 +191,11 @@ digraph {
     "koan::machine::core::arena" -> "koan::machine::core::arena::frame" [label="owns", style="solid"];
     "koan::machine::core::arena" -> "koan::machine::core::arena::residence" [label="owns", style="solid"];
     "koan::machine::core::arena" -> "koan::machine::core::arena::step_allocator" [label="owns", style="solid"];
+    "koan::machine::core::bindings" -> "koan::machine::core::bindings::gate" [label="owns", style="solid"];
     "koan::machine::core::bindings" -> "koan::machine::core::bindings::ops" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::action" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::bind_by_name" [label="owns", style="solid"];
+    "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::block_tail" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::body" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::exec" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::pick" [label="owns", style="solid"];
@@ -278,10 +280,7 @@ digraph {
     "koan::builtins::await_body" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::await_body" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::await_body" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::block_tail" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::builtins::block_tail" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::builtins" [label="uses", style="dashed"];
-    "koan::builtins::branch_walk" -> "koan::builtins::block_tail" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::builtins" [label="uses", style="dashed"];
@@ -293,7 +292,6 @@ digraph {
     "koan::builtins::equality" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::equality" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::builtins" [label="uses", style="dashed"];
-    "koan::builtins::eval" -> "koan::builtins::block_tail" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -427,7 +425,6 @@ digraph {
     "koan::builtins::union" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::builtins::union" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::builtins" [label="uses", style="dashed"];
-    "koan::builtins::using_scope" -> "koan::builtins::block_tail" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -518,6 +515,9 @@ digraph {
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::block_tail" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::block_tail" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::block_tail" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::model" [label="uses", style="dashed"];

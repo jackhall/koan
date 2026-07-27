@@ -15,21 +15,22 @@ pub use core::kfunction::{KFunction, NodeId};
 #[cfg(test)]
 pub(crate) use core::KoanRegionTestExt;
 pub(crate) use core::{
-    arg_held, arg_object, arg_type, arg_unresolved_type, body_statement_refs,
+    arg_held, arg_object, arg_type, arg_unresolved_type, block_tail, body_statement_refs,
     force_substrate_borrows_host, kerror_ktype, require_bare_type_name, require_identifier_name,
     require_kexpression, require_ktype, split_body_statements, Action, ActionFn, AwaitContinue,
-    BlockEntry, BodyCtx, CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx,
-    FoldingBrand, FramePlacement, FrameStorageExt, OwnedDispatch, ReturnContract, StepAllocator,
-    TailContract,
+    BlockBody, BlockEntry, BlockScope, BlockSeed, BodyCtx, CatchContinue, DepPlacement, DepRequest,
+    DepTerminal, FinishCtx, FoldingBrand, FramePlacement, FrameStorageExt, OwnedDispatch,
+    ReturnContract, StepAllocator, TailContract,
 };
 pub use core::{
     run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, OpenedFunction,
-    Scope, ScopeId, SealedFunction,
+    Scope, ScopeId, SealedFunction, WriteGate,
 };
 pub(crate) use core::{
     BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, KoanRegion,
     LexicalFrame, MemberResolution, NameLookup, NodeHandle, RegionTypeFamily, RunId, TraceFrame,
 };
+pub(crate) use execute::seed_run_root;
 pub(crate) use execute::{
     build_type_operand, seal_type_identity, BrandCompose, DispatchOutcome, FieldListDeferral,
     NameOutcome, StepCarried,

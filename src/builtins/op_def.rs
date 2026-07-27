@@ -25,6 +25,7 @@
 //!
 //! Surface design: [design/operators.md](../../design/operators.md).
 
+use crate::machine::WriteGate;
 use std::rc::Rc;
 
 use crate::machine::core::bindings::{operator_group_ops, WriteOp};
@@ -576,7 +577,7 @@ fn type_carriers() -> [KType; 2] {
     [KType::of_kind(KKind::ProperType), KType::SIGILED_TYPE_EXPR]
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     use crate::builtins::register_builtin_full;
 
     // Declared return is `KType::ANY`: an operator declaration evaluates to the function it
@@ -641,7 +642,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     };
 
     for operand in type_carriers() {
-        register_builtin_full(scope, "OP", binary(operand), body_binary, true, types);
+        register_builtin_full(scope, "OP", binary(operand), body_binary, true, types, gate);
         register_builtin_full(
             scope,
             "OP",
@@ -649,6 +650,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             body_unary_missing_result,
             false,
             types,
+            gate,
         );
         for result in type_carriers() {
             register_builtin_full(
@@ -658,8 +660,17 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
                 body_binary,
                 true,
                 types,
+                gate,
             );
-            register_builtin_full(scope, "OP", unary(operand, result), body_unary, true, types);
+            register_builtin_full(
+                scope,
+                "OP",
+                unary(operand, result),
+                body_unary,
+                true,
+                types,
+                gate,
+            );
         }
     }
 }

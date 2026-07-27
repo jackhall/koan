@@ -1,4 +1,5 @@
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 
 use crate::machine::model::KKind;
 
@@ -83,7 +84,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     arm_tail(ctx.scope, it_source, selected.body, contract, ctx.types)
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let signature = sig(
         KType::ANY,
         vec![
@@ -95,7 +96,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("branches", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "MATCH", signature, body, types);
+    crate::builtins::register_builtin(scope, "MATCH", signature, body, types, gate);
 }
 
 #[cfg(test)]

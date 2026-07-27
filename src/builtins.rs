@@ -1,7 +1,7 @@
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
-use crate::machine::{BindingIndex, FrameStorageExt, Scope};
+use crate::machine::{BindingIndex, FrameStorageExt, Scope, WriteGate};
 use crate::machine::{Body, KFunction};
 
 pub(crate) mod arithmetic;
@@ -9,7 +9,6 @@ pub(crate) mod arithmetic;
 mod ascribe;
 mod attr;
 mod await_body;
-mod block_tail;
 mod branch_walk;
 mod catch;
 mod equality;
@@ -79,6 +78,7 @@ pub(crate) fn register_builtin_full<'a>(
     body: crate::machine::ActionFn,
     binder: bool,
     types: &TypeRegistry,
+    gate: &mut WriteGate,
 ) {
     let region = scope.brand();
     let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
@@ -88,7 +88,7 @@ pub(crate) fn register_builtin_full<'a>(
         binder,
         types,
     ));
-    let _ = scope.register_function_direct(name.into(), f, BindingIndex::BUILTIN);
+    let _ = scope.register_function_direct(name.into(), f, BindingIndex::BUILTIN, gate);
 }
 
 /// Common-case [`register_builtin_full`]: not a binder builtin.
@@ -98,8 +98,9 @@ pub(crate) fn register_builtin<'a>(
     signature: ExpressionSignature<'a>,
     body: crate::machine::ActionFn,
     types: &TypeRegistry,
+    gate: &mut WriteGate,
 ) {
-    register_builtin_full(scope, name, signature, body, false, types);
+    register_builtin_full(scope, name, signature, body, false, types, gate);
 }
 
 /// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
@@ -114,6 +115,7 @@ pub(crate) fn register_overload_at<'a>(
     body: crate::machine::ActionFn,
     index: BindingIndex,
     types: &TypeRegistry,
+    gate: &mut WriteGate,
 ) {
     let region = scope.brand();
     let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
@@ -124,7 +126,7 @@ pub(crate) fn register_overload_at<'a>(
         types,
     ));
     scope
-        .register_function_direct(name.into(), f, index)
+        .register_function_direct(name.into(), f, index, gate)
         .expect("register_overload_at: user-index overload should not collide with a builtin");
 }
 
@@ -149,45 +151,45 @@ pub fn unseeded_scopes<'a>(
 ///
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
-pub fn seed_builtins<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
-    scope.register_builtin_type("Number".into(), KType::NUMBER);
-    scope.register_builtin_type("Str".into(), KType::STR);
-    scope.register_builtin_type("Bool".into(), KType::BOOL);
-    scope.register_builtin_type("Null".into(), KType::NULL);
-    scope.register_builtin_type("List".into(), KType::LIST_OF_ANY);
-    scope.register_builtin_type("Dict".into(), KType::DICT_ANY_ANY);
-    scope.register_builtin_type("KExpression".into(), KType::KEXPRESSION);
-    scope.register_builtin_type("Type".into(), KType::of_kind(KKind::AnyType));
-    scope.register_builtin_type("Module".into(), KType::EMPTY_SIGNATURE);
-    scope.register_builtin_type("Signature".into(), KType::of_kind(KKind::Signature));
-    scope.register_builtin_type("Any".into(), KType::ANY);
+pub(crate) fn seed_builtins<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+    scope.register_builtin_type("Number".into(), KType::NUMBER, gate);
+    scope.register_builtin_type("Str".into(), KType::STR, gate);
+    scope.register_builtin_type("Bool".into(), KType::BOOL, gate);
+    scope.register_builtin_type("Null".into(), KType::NULL, gate);
+    scope.register_builtin_type("List".into(), KType::LIST_OF_ANY, gate);
+    scope.register_builtin_type("Dict".into(), KType::DICT_ANY_ANY, gate);
+    scope.register_builtin_type("KExpression".into(), KType::KEXPRESSION, gate);
+    scope.register_builtin_type("Type".into(), KType::of_kind(KKind::AnyType), gate);
+    scope.register_builtin_type("Module".into(), KType::EMPTY_SIGNATURE, gate);
+    scope.register_builtin_type("Signature".into(), KType::of_kind(KKind::Signature), gate);
+    scope.register_builtin_type("Any".into(), KType::ANY, gate);
 
-    let_binding::register(scope, types);
-    print::register(scope, types);
-    fn_def::register(scope, types);
-    union::register(scope, types);
-    result::register(scope, types);
-    newtype_def::register(scope, types);
-    recursive_types::register(scope, types);
-    match_case::register(scope, types);
-    try_with::register(scope, types);
-    using_scope::register(scope, types);
-    catch::register(scope, types);
-    attr::register(scope, types);
-    eval::register(scope, types);
-    module_def::register(scope, types);
-    sig_def::register(scope, types);
-    val_decl::register(scope, types);
-    type_decl::register(scope, types);
+    let_binding::register(scope, types, gate);
+    print::register(scope, types, gate);
+    fn_def::register(scope, types, gate);
+    union::register(scope, types, gate);
+    result::register(scope, types, gate);
+    newtype_def::register(scope, types, gate);
+    recursive_types::register(scope, types, gate);
+    match_case::register(scope, types, gate);
+    try_with::register(scope, types, gate);
+    using_scope::register(scope, types, gate);
+    catch::register(scope, types, gate);
+    attr::register(scope, types, gate);
+    eval::register(scope, types, gate);
+    module_def::register(scope, types, gate);
+    sig_def::register(scope, types, gate);
+    val_decl::register(scope, types, gate);
+    type_decl::register(scope, types, gate);
     #[cfg(feature = "ascription")]
-    ascribe::register(scope, types);
-    record_projection::register(scope, types);
-    type_ops::register(scope, types);
-    parameterized_types::register(scope, types);
-    type_union::register(scope, types);
-    op_def::register(scope, types);
-    group_def::register(scope, types);
-    arithmetic::register(scope, types);
-    arithmetic::register_builtin_operator_groups(scope, types);
-    equality::register(scope, types);
+    ascribe::register(scope, types, gate);
+    record_projection::register(scope, types, gate);
+    type_ops::register(scope, types, gate);
+    parameterized_types::register(scope, types, gate);
+    type_union::register(scope, types, gate);
+    op_def::register(scope, types, gate);
+    group_def::register(scope, types, gate);
+    arithmetic::register(scope, types, gate);
+    arithmetic::register_builtin_operator_groups(scope, types, gate);
+    equality::register(scope, types, gate);
 }

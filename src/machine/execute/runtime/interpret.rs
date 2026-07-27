@@ -9,9 +9,19 @@ use super::{DestHandleFamily, KoanRuntime};
 use crate::builtins::{seed_builtins, unseeded_scopes};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::KExpression;
-use crate::machine::{CarrierWitness, KError, KErrorKind, Scope};
+use crate::machine::model::TypeRegistry;
+use crate::machine::{CarrierWitness, KError, KErrorKind, Scope, WriteGate};
 use crate::parse::{parse, parse_with_path};
 use crate::witnessed::Witnessed;
+
+/// The run-root seeding door. The run-global root is unreachable by any node until the program
+/// starts, so the builtin registration is a construction-time write: this mints the
+/// [`WriteGate`] for it and threads that one gate through every `register_*` call the seed makes.
+/// `crate::builtins` cannot mint one itself — which is exactly why the seeding entry point takes
+/// the gate as a parameter rather than helping itself to a write verb.
+pub(crate) fn seed_run_root<'a>(root: &'a Scope<'a>, types: &TypeRegistry) {
+    seed_builtins(root, types, &mut WriteGate::for_unpublished_scope());
+}
 
 /// Parse Koan source and run it on a fresh `KoanRegion`; all values allocated by the
 /// program die when this returns.
@@ -51,7 +61,7 @@ pub fn interpret_with_writer_path(
     let types = runtime
         .type_registry()
         .expect("run frame was just established");
-    seed_builtins(root, &types);
+    seed_run_root(root, &types);
     runtime.run_program(top, exprs)
 }
 

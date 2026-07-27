@@ -4,6 +4,7 @@ use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KObject, KType};
 use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -207,7 +208,7 @@ fn capitalize_identifier(name: &str) -> String {
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let identifier_sig = || {
         sig(
             KType::ANY,
@@ -230,8 +231,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             ],
         )
     };
-    crate::builtins::register_builtin_full(scope, "LET", identifier_sig(), body, true, types);
-    crate::builtins::register_builtin_full(scope, "LET", type_sig(), body, true, types);
+    crate::builtins::register_builtin_full(scope, "LET", identifier_sig(), body, true, types, gate);
+    crate::builtins::register_builtin_full(scope, "LET", type_sig(), body, true, types, gate);
 }
 
 #[cfg(test)]

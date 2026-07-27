@@ -17,6 +17,7 @@
 
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -265,7 +266,7 @@ pub fn body_constructor_family<'a>(
     })
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     // Three overloads, selected by the repr part-kind. Construction lives in the `TypeCall`
     // fast lane via `constructors::dispatch_construct_newtype`.
     let scalar_sig = || {
@@ -304,8 +305,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     use crate::builtins::register_builtin_full;
     // Scalar / bare-leaf repr (`= Number`, `= Foo`) and non-record sigil repr (`= :(LIST OF T)`)
     // share `body`; the record repr (`= :{…}`) routes to `body_record_repr`.
-    register_builtin_full(scope, "NEWTYPE", scalar_sig(), body, true, types);
-    register_builtin_full(scope, "NEWTYPE", sigil_sig(), body, true, types);
+    register_builtin_full(scope, "NEWTYPE", scalar_sig(), body, true, types, gate);
+    register_builtin_full(scope, "NEWTYPE", sigil_sig(), body, true, types, gate);
     register_builtin_full(
         scope,
         "NEWTYPE",
@@ -313,6 +314,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         body_record_repr,
         true,
         types,
+        gate,
     );
     // Constructor-family declarator `NEWTYPE (Type AS Wrapper)`. Its keyword set is `{NEWTYPE}`
     // (no `=`), so it lands in its own dispatch bucket, disjoint from the three `{NEWTYPE, =}`
@@ -329,6 +331,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         body_constructor_family,
         true,
         types,
+        gate,
     );
 }
 
@@ -1125,7 +1128,11 @@ mod tests {
             param_names: vec!["Type".into()],
             nonce: None,
         });
-        scope.register_builtin_type("Abstract".into(), kt);
+        scope.register_builtin_type(
+            "Abstract".into(),
+            kt,
+            &mut crate::machine::WriteGate::for_test(),
+        );
         let err = test_run.run_one_err(parse_one("Abstract (3.0)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)

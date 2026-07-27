@@ -23,6 +23,7 @@ use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -140,17 +141,25 @@ pub(crate) fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(Vec<String>, Stri
     Ok((param_names, member_name))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let bare_signature = sig(
         KType::ANY,
         vec![kw("TYPE"), arg("name", KType::of_kind(KKind::ProperType))],
     );
-    crate::builtins::register_builtin_full(scope, "TYPE", bare_signature, body_bare, true, types);
+    crate::builtins::register_builtin_full(
+        scope,
+        "TYPE",
+        bare_signature,
+        body_bare,
+        true,
+        types,
+        gate,
+    );
     let hk_signature = sig(
         KType::ANY,
         vec![kw("TYPE"), arg("decl", KType::KEXPRESSION)],
     );
-    crate::builtins::register_builtin_full(scope, "TYPE", hk_signature, body_hk, true, types);
+    crate::builtins::register_builtin_full(scope, "TYPE", hk_signature, body_hk, true, types, gate);
 }
 
 #[cfg(test)]

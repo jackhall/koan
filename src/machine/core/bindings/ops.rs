@@ -6,7 +6,9 @@
 //! The run loop drains a step's ops after the continuation has returned and applies them in program
 //! order against the step scope, before finalize. So exactly one code path mutates a published
 //! binding table, and it is run-loop-owned: no builtin holds a `Bindings` borrow across user code,
-//! which is what lets every write verb here take a firm `borrow_mut`.
+//! which is what lets every write verb here take a firm `borrow_mut`. [`WriteOp::apply`] takes the
+//! [`WriteGate`](super::WriteGate) the run loop mints, so a builtin cannot short-circuit its own op
+//! back through the interpreter either.
 //!
 //! An apply error is the node's error terminal — the run loop drops the step's remaining ops and
 //! turns the step into an error, so the ordinary finalize arms clear the producer's placeholders
@@ -15,11 +17,12 @@
 //!
 //! Writes into a scope no other node can reach — startup builtin registration into the run-global
 //! root, parameter binds into a not-yet-published per-call scope, an ascription view's bulk install
-//! — need no such discipline and stay direct (`*_direct` on [`Scope`]).
+//! — need no such discipline and stay direct (`*_direct` on [`Scope`]), under the construction-door
+//! mint of the same gate.
 
 use std::rc::Rc;
 
-use super::{BindingIndex, DeclarationSite, SealedValue};
+use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
 use crate::machine::core::carrier_witness::FunctionMirror;
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{probe_key, KType, OperatorGroup};
@@ -111,7 +114,7 @@ impl WriteOp {
     /// Apply this write against `scope` — the step scope the op was returned from. The single
     /// interpreter: resolve the write target (forwarding through a transparent `USING` window),
     /// run the guards the door used to run inline, then mutate the table.
-    pub(crate) fn apply(self, scope: &Scope<'_>) -> Result<(), KError> {
+    pub(crate) fn apply(self, scope: &Scope<'_>, gate: &mut WriteGate) -> Result<(), KError> {
         match self {
             WriteOp::Value {
                 name,
@@ -122,7 +125,7 @@ impl WriteOp {
                 target.assert_open(&name);
                 target
                     .bindings()
-                    .write_value(&name, index, Some(sealed), None)
+                    .write_value(&name, index, Some(sealed), None, gate)
             }
             WriteOp::Callable {
                 name,
@@ -134,7 +137,7 @@ impl WriteOp {
                 target.assert_open(&name);
                 target
                     .bindings()
-                    .write_value(&name, index, Some(sealed), Some(mirror))
+                    .write_value(&name, index, Some(sealed), Some(mirror), gate)
             }
             WriteOp::Overload {
                 name,
@@ -155,7 +158,7 @@ impl WriteOp {
                 }
                 target
                     .bindings()
-                    .write_value(&name, index, None, Some(mirror))
+                    .write_value(&name, index, None, Some(mirror), gate)
             }
             WriteOp::Type {
                 name,
@@ -169,7 +172,7 @@ impl WriteOp {
                     return Err(KError::new(KErrorKind::Rebind { name }));
                 }
                 target.assert_open(&name);
-                target.bindings().write_type(&name, kt, site, policy)
+                target.bindings().write_type(&name, kt, site, policy, gate)
             }
             WriteOp::Group {
                 probe,
@@ -178,7 +181,7 @@ impl WriteOp {
             } => scope
                 .write_scope()
                 .bindings()
-                .write_operator_group(probe, group, index),
+                .write_operator_group(probe, group, index, gate),
             WriteOp::SigSlot { name, kt } => scope.write_sig_slot(name, kt),
         }
     }

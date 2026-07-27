@@ -228,6 +228,7 @@ mod tests {
                 KObject::Number(7.0),
                 BindingIndex::BUILTIN,
                 &types,
+                &mut crate::machine::WriteGate::for_test(),
             )
             .unwrap();
 

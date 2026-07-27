@@ -9,7 +9,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::bindings::WriteOp;
+use crate::machine::core::bindings::{WriteGate, WriteOp};
 use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
@@ -227,10 +227,11 @@ impl<'run> KoanRuntime<'run> {
                         // attribute the error exactly as for an in-step error. A body that errors
                         // before deciding its write installs nothing at all: the writes are outcome
                         // data, and an error terminal carries none.
+                        let mut gate = WriteGate::for_run_loop();
                         let outcome = match step_effects
                             .borrow_mut()
                             .drain(..)
-                            .try_for_each(|op| op.apply(scope))
+                            .try_for_each(|op| op.apply(scope, &mut gate))
                         {
                             Ok(()) => outcome,
                             Err(error) => Outcome::Done(Err(error)),
@@ -270,7 +271,10 @@ impl<'run> KoanRuntime<'run> {
                                 self.sched.finalize(idx, Ok(witnessed), foreign);
                             }
                             Err(error) => {
-                                scope.clear_placeholders_for_producer(id);
+                                scope.clear_placeholders_for_producer(
+                                    id,
+                                    &mut WriteGate::for_run_loop(),
+                                );
                                 self.sched.finalize(idx, Err(error), FrameCoverage::empty());
                             }
                         }
@@ -279,7 +283,7 @@ impl<'run> KoanRuntime<'run> {
                         // An error finalizes bare (no value, no witness); the frame-gated
                         // obligation still labels it with the callee's trace frame.
                         let error = finalize_error(error, frame.and(post.obligation.as_ref()));
-                        scope.clear_placeholders_for_producer(id);
+                        scope.clear_placeholders_for_producer(id, &mut WriteGate::for_run_loop());
                         // A terminal error carries no value and no witness, so its retention hold's
                         // foreign bundle is empty; the producer frame still retains until its
                         // (short-circuiting) destinations pull.
@@ -308,7 +312,10 @@ impl<'run> KoanRuntime<'run> {
                                 self.sched.finalize(idx, Ok(witnessed), foreign);
                             }
                             Err(error) => {
-                                scope.clear_placeholders_for_producer(id);
+                                scope.clear_placeholders_for_producer(
+                                    id,
+                                    &mut WriteGate::for_run_loop(),
+                                );
                                 self.sched.finalize(idx, Err(error), FrameCoverage::empty());
                             }
                         }

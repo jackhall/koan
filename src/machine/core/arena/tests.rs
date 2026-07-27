@@ -88,8 +88,13 @@ fn with_scope_opens_child_scope_at_brand() {
     // In-place bind + lookup, all at the brand `'b` (value allocated via the opened scope's region).
     frame.with_scope(|s| {
         let v = s.brand().alloc_object(KObject::Number(7.0));
-        s.bind_resident_for_test("k".to_string(), v, BindingIndex::BUILTIN)
-            .unwrap();
+        s.bind_resident_for_test(
+            "k".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
+        .unwrap();
         assert!(matches!(s.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
     });
 }
@@ -120,7 +125,12 @@ fn with_scope_relocates_seed_value_into_brand() {
             .alloc_object_checked(it_value, &types)
             .expect("a deep-cloned Number is always resident-in-self");
         child
-            .bind_resident_for_test("it".to_string(), it_obj, BindingIndex::BUILTIN)
+            .bind_resident_for_test(
+                "it".to_string(),
+                it_obj,
+                BindingIndex::BUILTIN,
+                &mut crate::machine::WriteGate::for_test(),
+            )
             .unwrap();
         assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 99.0));
     });
@@ -160,7 +170,12 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
         let it_obj: &KObject<'_> = child_ref.brand().alloc_object(KObject::Number(42.0));
         assert!(std::ptr::eq(inner_region, child_ref.region()));
         child_ref
-            .bind_resident_for_test("it".to_string(), it_obj, BindingIndex::BUILTIN)
+            .bind_resident_for_test(
+                "it".to_string(),
+                it_obj,
+                BindingIndex::BUILTIN,
+                &mut crate::machine::WriteGate::for_test(),
+            )
             .unwrap();
         assert!(matches!(child_ref.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
     });
@@ -577,6 +592,7 @@ fn region_union_foreign_pins_release_at_region_death() {
                 BindingIndex::BUILTIN,
                 Some(scope.seal_resident_value(Carried::Object(obj), reach, borrows_home)),
                 None,
+                &mut crate::machine::WriteGate::for_test(),
             )
             .expect("a fresh value bind lands");
 
@@ -916,6 +932,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                             "inners".to_string(),
                             list_obj,
                             BindingIndex::BUILTIN,
+                            &mut crate::machine::WriteGate::for_test(),
                         )
                         .expect("bind the inners list into the outer closure's scope");
                 }

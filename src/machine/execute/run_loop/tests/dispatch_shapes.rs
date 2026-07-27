@@ -90,7 +90,12 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
         .alloc_object_checked(KObject::KFunction(f), types)
         .expect("f was just allocated into region\'s own region");
     scope
-        .bind_resident_for_test("f".to_string(), obj, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "f".to_string(),
+            obj,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("bind_value should succeed");
 }
 
@@ -533,6 +538,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             "producer_target".to_string(),
             producer_target,
             BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bind_value should succeed");
     let producer = runtime.dispatch_in_scope(parse_one("producer_target {y = 1}"), scope);
@@ -542,6 +548,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             producer,
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("install_placeholder should succeed");
 
@@ -821,7 +828,12 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let members: HashSet<String> = ["-"].iter().map(|s| s.to_string()).collect();
     let group = Rc::new(OperatorGroup::new(members, ReductionMode::FoldRight));
     inner
-        .register_operator_group_direct("-".to_string(), group, BindingIndex::value(0))
+        .register_operator_group_direct(
+            "-".to_string(),
+            group,
+            BindingIndex::value(0),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("an inner scope may register a builtin operator's probe");
 
     // Both dispatches ride the bundle's run frame: `inner` is a child of the run root, so the
@@ -878,7 +890,12 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     let members: HashSet<String> = ["~"].iter().map(|s| s.to_string()).collect();
     let group = Rc::new(OperatorGroup::new(members, ReductionMode::Unary));
     scope
-        .register_operator_group_direct("~".to_string(), group, BindingIndex::BUILTIN)
+        .register_operator_group_direct(
+            "~".to_string(),
+            group,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("register operator group");
     test_run.run("FN (~ xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
 

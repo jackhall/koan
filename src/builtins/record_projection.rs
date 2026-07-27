@@ -12,6 +12,7 @@
 //! [design/typing/ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance).
 
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 
 use crate::machine::model::Carried;
 use crate::machine::model::ExpressionPart;
@@ -141,7 +142,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     })))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     // Return type `:{}` is contract-only ("FROM returns a record"): a native
     // `Outcome::Done(Value)` flows straight to Done without being stamped against the
     // declared return, so the empty `:{}` does not coarsen the body's narrowed
@@ -155,7 +156,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("record", types.record(Record::new())),
         ],
     );
-    crate::builtins::register_builtin(scope, "FROM", signature, body, types);
+    crate::builtins::register_builtin(scope, "FROM", signature, body, types, gate);
 }
 
 #[cfg(test)]

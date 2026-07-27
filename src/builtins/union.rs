@@ -1,4 +1,5 @@
 use crate::machine::model::KKind;
+use crate::machine::WriteGate;
 use std::rc::Rc;
 
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
@@ -113,7 +114,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let signature = sig(
         KType::of_kind(KKind::AnyType),
         vec![
@@ -123,7 +124,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("schema", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin_full(scope, "UNION", signature, body, true, types);
+    crate::builtins::register_builtin_full(scope, "UNION", signature, body, true, types, gate);
 }
 
 #[cfg(test)]
@@ -308,7 +309,9 @@ mod tests {
                 .expect("the first finalize seals");
         assert!(scope.bindings().types().get("Maybe").is_none());
         for write in writes {
-            write.apply(scope).expect("the first install lands");
+            write
+                .apply(scope, &mut crate::machine::WriteGate::for_test())
+                .expect("the first install lands");
         }
         assert_eq!(
             variant_repr(scope, "Maybe", "Some", &test_run.types),
@@ -324,7 +327,7 @@ mod tests {
         let is_union = second.map(|(carrier, writes)| {
             for write in writes {
                 write
-                    .apply(scope)
+                    .apply(scope, &mut crate::machine::WriteGate::for_test())
                     .expect("a same-handle re-install overwrites idempotently");
             }
             carrier.inspect_pinned(&crate::witnessed::NoPins, |c| {

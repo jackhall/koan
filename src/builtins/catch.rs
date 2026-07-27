@@ -5,6 +5,7 @@
 //! either `Ok(v)` or `Error(KError::to_tagged())`.
 
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use std::rc::Rc;
 
 use crate::machine::model::{KObject, KType, Record};
@@ -14,7 +15,7 @@ use crate::machine::{force_substrate_borrows_host, kerror_ktype};
 
 use super::{arg, kw, sig};
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     // CATCH yields `Result {Ok :Any, Error :KError}` — `Any` covers only the unpredictable
     // `Ok` payload, the `Error` arm is the `KError` carrier. `result::register` runs first, so
     // the `Result` member resolves here. This is a documentary contract: the catch finish
@@ -35,7 +36,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         return_type,
         vec![kw("CATCH"), arg("expr", KType::KEXPRESSION)],
     );
-    crate::builtins::register_builtin(scope, "CATCH", signature, body, types);
+    crate::builtins::register_builtin(scope, "CATCH", signature, body, types, gate);
 }
 
 /// Watches the captured `expr` and recovers into a `Result` carrier

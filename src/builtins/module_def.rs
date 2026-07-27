@@ -14,6 +14,7 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KKind, SigSchema};
 use crate::machine::BindingIndex;
 use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::{Action, BodyCtx};
 use crate::machine::{NameLookup, Scope, TraceFrame};
 
@@ -126,7 +127,7 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     )))))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let module_sig = |name_kt: KType| {
         sig(
             KType::EMPTY_SIGNATURE,
@@ -145,6 +146,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         body,
         true,
         types,
+        gate,
     );
     crate::builtins::register_builtin_full(
         scope,
@@ -153,6 +155,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         body_type_named,
         false,
         types,
+        gate,
     );
 }
 
@@ -426,7 +429,13 @@ mod tests {
             .seal_module(module, child, &test_run.types)
             .expect("seal the module value");
         scope
-            .bind_value_direct("foo".into(), sealed, None, BindingIndex::value(0))
+            .bind_value_direct(
+                "foo".into(),
+                sealed,
+                None,
+                BindingIndex::value(0),
+                &mut crate::machine::WriteGate::for_test(),
+            )
             .expect("pre-seed the module value binding");
         test_run.run("MODULE foo = (LET y = 2)");
         let foo = lookup_module(scope, "foo", &test_run.types);

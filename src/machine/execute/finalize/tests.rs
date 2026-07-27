@@ -190,7 +190,14 @@ fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, types: &TypeRegistry
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Keyword("PROBE".into())],
     };
-    crate::builtins::register_builtin(scope, "PROBE", signature, probe_body, types);
+    crate::builtins::register_builtin(
+        scope,
+        "PROBE",
+        signature,
+        probe_body,
+        types,
+        &mut crate::machine::WriteGate::for_test(),
+    );
 }
 
 /// The number of captured frames still live — the retention census read.

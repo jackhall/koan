@@ -8,10 +8,13 @@
 //! are a structural partition: a name is committed to one xor the other, never
 //! both, enforced by the cross-kind check the value and type write paths run.
 //!
-//! The write verbs here take firm `borrow_mut`s: every one of them is reached through
-//! [`WriteOp::apply`], which the run loop drives after a step's continuation has returned, so no
-//! koan frame can hold a competing borrow and contention is unrepresentable. See
-//! [`ops`] for the currency and [design/memory-model.md](../../../design/memory-model.md).
+//! Every write verb here takes a [`WriteGate`] — the zero-sized capability minted only inside
+//! `crate::machine`, at the run loop's door and the construction-time door for scopes no other
+//! node can reach. A builtin body cannot mint one, so it cannot name a write verb: "one path
+//! mutates a published table" is a resolution rule, not a convention. That is what lets the verbs
+//! take firm `borrow_mut`s — no koan frame is on the stack to hold a competing borrow, so
+//! contention is unrepresentable. See [`gate`] for the capability, [`ops`] for the currency, and
+//! [design/memory-model.md](../../../design/memory-model.md).
 //!
 //! Borrow discipline across the maps: `types → functions → data`.
 //!
@@ -53,8 +56,10 @@ use crate::witnessed::Sealed;
 
 use super::kerror::{KError, KErrorKind};
 
+mod gate;
 mod ops;
 
+pub use gate::WriteGate;
 pub(crate) use ops::{operator_group_ops, TypeWritePolicy, WriteOp};
 
 /// A value binding's dormant carrier: the bound value fused to the exact reach description minted
@@ -479,6 +484,7 @@ impl Bindings {
         probe: String,
         group: Rc<OperatorGroup>,
         index: BindingIndex,
+        _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut operators = self.operators.borrow_mut();
         if let Some((existing, _)) = operators.get(&probe) {
@@ -629,6 +635,7 @@ impl Bindings {
         kt: KType,
         site: DeclarationSite,
         policy: TypeWritePolicy,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
         self.partition_guard(name, BindKind::Type)?;
         let mut types = self.types.borrow_mut();
@@ -655,7 +662,7 @@ impl Bindings {
         }
         types.insert(name.to_string(), (kt, site));
         drop(types);
-        self.clear_placeholder(name, BindKind::Type);
+        self.clear_placeholder(name, BindKind::Type, gate);
         Ok(())
     }
 
@@ -679,6 +686,7 @@ impl Bindings {
         idx: NodeId,
         index: BindingIndex,
         kind: BindKind,
+        _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         if let Some(entry) = self.data.borrow().get(&name) {
             if entry.callable.is_some() {
@@ -716,6 +724,7 @@ impl Bindings {
         bucket: UntypedKey,
         idx: NodeId,
         index: BindingIndex,
+        _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut pending = self.pending_overloads.borrow_mut();
         pending.entry(bucket).or_default().push((idx, index));
@@ -737,6 +746,7 @@ impl Bindings {
         &self,
         src: &Bindings,
         mirror_of: impl Fn(&SealedValue) -> Option<FunctionMirror>,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
         // Duplicate each entry into the snapshot: the seal is a bit-copy naming the source's own
         // minted description, so the replayed entry replays that same claim. The reached regions
@@ -751,7 +761,7 @@ impl Bindings {
         for (name, entry) in snapshot {
             let index = entry.index;
             let mirror = mirror_of(&entry.sealed);
-            self.write_value(&name, index, Some(entry.sealed), mirror)?;
+            self.write_value(&name, index, Some(entry.sealed), mirror, gate)?;
         }
         Ok(())
     }
@@ -803,6 +813,7 @@ impl Bindings {
         index: BindingIndex,
         sealed: Option<SealedValue>,
         mirror: Option<FunctionMirror>,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let write_data = sealed.is_some();
         // Cross-kind exclusion: a value name may not collide with a committed type — the
@@ -887,10 +898,10 @@ impl Bindings {
         }
         drop(data);
         drop(functions_handle);
-        self.clear_placeholder(name, BindKind::Value);
+        self.clear_placeholder(name, BindKind::Value, gate);
         if let Some(bucket) = bucket_key {
             // Remove only this binder's pending entry; siblings stay as wake sources.
-            self.clear_pending_overload(&bucket, index);
+            self.clear_pending_overload(&bucket, index, gate);
         }
         Ok(())
     }
@@ -900,7 +911,7 @@ impl Bindings {
     /// a [`BindKind::Type`] one, so a value bind never clears an in-flight type producer's
     /// placeholder (or the reverse). A firm `borrow_mut` — every table write runs from the
     /// run loop's op-apply, with no koan frame on the stack to hold a competing borrow.
-    fn clear_placeholder(&self, name: &str, kind: BindKind) {
+    fn clear_placeholder(&self, name: &str, kind: BindKind, _gate: &mut WriteGate) {
         let mut ph = self.placeholders.borrow_mut();
         if matches!(ph.get(name), Some((_, _, k)) if *k == kind) {
             ph.remove(name);
@@ -912,7 +923,7 @@ impl Bindings {
     /// companion, called when `producer`'s node finalizes with an error so a binder body
     /// that failed before its write path does not leak a scheduler-local [`NodeId`] into
     /// a later run on a persistent scope.
-    pub fn clear_placeholders_for_producer(&self, producer: NodeId) {
+    pub fn clear_placeholders_for_producer(&self, producer: NodeId, _gate: &mut WriteGate) {
         self.placeholders
             .borrow_mut()
             .retain(|_, (id, _, _)| *id != producer);
@@ -921,7 +932,12 @@ impl Bindings {
     /// Bucket-keyed companion to [`Self::clear_placeholder`].
     /// Removes only the entry whose `BindingIndex` matches — sibling binders
     /// stay as wake sources. Empties drop the map entry.
-    fn clear_pending_overload(&self, bucket: &UntypedKey, index: BindingIndex) {
+    fn clear_pending_overload(
+        &self,
+        bucket: &UntypedKey,
+        index: BindingIndex,
+        _gate: &mut WriteGate,
+    ) {
         let mut p = self.pending_overloads.borrow_mut();
         if let Some(entries) = p.get_mut(bucket) {
             entries.retain(|(_, idx)| *idx != index);

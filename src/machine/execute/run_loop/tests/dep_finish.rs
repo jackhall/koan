@@ -226,6 +226,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         },
         body,
         &test_run.types,
+        &mut crate::machine::WriteGate::for_test(),
     );
 
     let runtime = &mut test_run.runtime;

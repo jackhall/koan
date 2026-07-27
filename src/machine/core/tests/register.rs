@@ -22,10 +22,20 @@ fn bind_value_direct_errors_on_same_scope_rebind() {
     let v1 = region.brand().alloc_object(KObject::Number(1.0));
     let v2 = region.brand().alloc_object(KObject::Number(2.0));
     scope
-        .bind_resident_for_test("x".to_string(), v1, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "x".to_string(),
+            v1,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let err = scope
-        .bind_resident_for_test("x".to_string(), v2, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "x".to_string(),
+            v2,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap_err();
     match &err.kind {
         crate::machine::core::KErrorKind::Rebind { name } => assert_eq!(name, "x"),
@@ -39,12 +49,22 @@ fn bind_value_direct_allows_shadowing_in_child_scope() {
     let outer = run_root_bare(&region);
     let v1 = region.brand().alloc_object(KObject::Number(1.0));
     outer
-        .bind_resident_for_test("x".to_string(), v1, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "x".to_string(),
+            v1,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
     let v2 = region.brand().alloc_object(KObject::Number(2.0));
     inner
-        .bind_resident_for_test("x".to_string(), v2, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "x".to_string(),
+            v2,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
     assert!(matches!(outer.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
@@ -56,7 +76,12 @@ fn close_marks_scope_and_is_idempotent_reads_still_work() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_resident_for_test("x".to_string(), v, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "x".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     assert!(!scope.is_closed());
     scope.close();
@@ -75,7 +100,12 @@ fn bind_after_close_panics() {
     let scope = run_root_bare(&region);
     scope.close();
     let v = region.brand().alloc_object(KObject::Number(1.0));
-    let _ = scope.bind_resident_for_test("x".to_string(), v, BindingIndex::BUILTIN);
+    let _ = scope.bind_resident_for_test(
+        "x".to_string(),
+        v,
+        BindingIndex::BUILTIN,
+        &mut crate::machine::WriteGate::for_test(),
+    );
 }
 
 #[test]
@@ -86,7 +116,12 @@ fn close_is_per_scope_open_child_still_binds() {
     let inner = region.brand().alloc_scope(outer.child_for_call());
     let v = region.brand().alloc_object(KObject::Number(2.0));
     inner
-        .bind_resident_for_test("x".to_string(), v, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "x".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
     assert!(!inner.is_closed());
@@ -105,7 +140,12 @@ fn register_function_dedupes_exact_signature() {
         &types,
     ));
     scope
-        .register_function_direct("FOO".to_string(), f1, BindingIndex::BUILTIN)
+        .register_function_direct(
+            "FOO".to_string(),
+            f1,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let f2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -115,7 +155,12 @@ fn register_function_dedupes_exact_signature() {
         &types,
     ));
     let err = scope
-        .register_function_direct("FOO".to_string(), f2, BindingIndex::BUILTIN)
+        .register_function_direct(
+            "FOO".to_string(),
+            f2,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap_err();
     assert!(
         matches!(&err.kind, crate::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "FOO"),
@@ -139,7 +184,12 @@ fn bind_value_direct_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         &types,
     ));
     scope
-        .register_function_direct("FOO".to_string(), f1, BindingIndex::BUILTIN)
+        .register_function_direct(
+            "FOO".to_string(),
+            f1,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let f2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -153,7 +203,12 @@ fn bind_value_direct_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         .alloc_object_checked(KObject::KFunction(f2), &types)
         .expect("f was just allocated into region's own region");
     let err = scope
-        .bind_resident_for_test("OTHER_NAME".to_string(), obj2, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "OTHER_NAME".to_string(),
+            obj2,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap_err();
     assert!(
         matches!(&err.kind, crate::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "OTHER_NAME"),
@@ -185,10 +240,20 @@ fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
         .alloc_object_checked(KObject::KFunction(f), &types)
         .expect("f was just allocated into region's own region");
     scope
-        .bind_resident_for_test("FIRST".to_string(), obj1, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "FIRST".to_string(),
+            obj1,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     scope
-        .bind_resident_for_test("ALIAS".to_string(), obj2, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "ALIAS".to_string(),
+            obj2,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
 }
 
@@ -232,10 +297,20 @@ fn register_function_allows_overload_with_different_arg_types() {
         &types,
     ));
     scope
-        .register_function_direct("BAR".to_string(), f1, BindingIndex::BUILTIN)
+        .register_function_direct(
+            "BAR".to_string(),
+            f1,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     scope
-        .register_function_direct("BAR".to_string(), f2, BindingIndex::BUILTIN)
+        .register_function_direct(
+            "BAR".to_string(),
+            f2,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
 }
 
@@ -248,7 +323,12 @@ fn register_function_coexists_with_same_name_value() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_resident_for_test("FOO".to_string(), v, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "FOO".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -258,7 +338,12 @@ fn register_function_coexists_with_same_name_value() {
         &types,
     ));
     scope
-        .register_function_direct("FOO".to_string(), f, BindingIndex::BUILTIN)
+        .register_function_direct(
+            "FOO".to_string(),
+            f,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("bare FN registration must not collide with a same-name value");
     assert!(matches!(scope.lookup("FOO"), Some(KObject::Number(n)) if *n == 1.0));
     let key = f.signature.untyped_key();
@@ -278,7 +363,12 @@ fn register_function_coexists_with_same_name_type() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let _ = scope.register_type_direct("Foo".to_string(), KType::NUMBER, DeclarationSite::BUILTIN);
+    let _ = scope.register_type_direct(
+        "Foo".to_string(),
+        KType::NUMBER,
+        DeclarationSite::BUILTIN,
+        &mut crate::machine::WriteGate::for_test(),
+    );
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -287,7 +377,12 @@ fn register_function_coexists_with_same_name_type() {
         &types,
     ));
     scope
-        .register_function_direct("Foo".to_string(), f, BindingIndex::BUILTIN)
+        .register_function_direct(
+            "Foo".to_string(),
+            f,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("bare FN registration must not collide with a same-name type");
     assert!(scope.bindings().types().get("Foo").is_some());
     let key = f.signature.untyped_key();
@@ -309,9 +404,19 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_resident_for_test("val".to_string(), v, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "val".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
-    let _ = scope.register_type_direct("Ty".to_string(), KType::NUMBER, DeclarationSite::BUILTIN);
+    let _ = scope.register_type_direct(
+        "Ty".to_string(),
+        KType::NUMBER,
+        DeclarationSite::BUILTIN,
+        &mut crate::machine::WriteGate::for_test(),
+    );
     let bindings = scope.bindings();
     assert!(matches!(
         bindings.lookup_member("val", None),
@@ -335,6 +440,7 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
             NodeId(7),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     match scope.resolve("x") {
@@ -349,7 +455,12 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
     let outer = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     outer
-        .bind_resident_for_test("x".to_string(), v, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "x".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
     inner
@@ -358,6 +469,7 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
             NodeId(3),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     match inner.resolve("x") {
@@ -383,11 +495,17 @@ fn bind_value_direct_clears_own_placeholder() {
             NodeId(2),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let v = region.brand().alloc_object(KObject::Number(42.0));
     scope
-        .bind_resident_for_test("x".to_string(), v, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "x".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     assert!(scope.bindings().placeholders().get("x").is_none());
     assert!(
@@ -407,7 +525,12 @@ fn visibility_chain_none_sees_every_entry() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_resident_for_test("late".to_string(), v, BindingIndex::value(99))
+        .bind_resident_for_test(
+            "late".to_string(),
+            v,
+            BindingIndex::value(99),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     // A chain whose `index_for(scope.id) = None` treats the scope as complete:
     // every entry is visible regardless of index.
@@ -427,7 +550,12 @@ fn visibility_strict_less_than_hides_later_sibling() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_resident_for_test("later".to_string(), v, BindingIndex::value(5))
+        .bind_resident_for_test(
+            "later".to_string(),
+            v,
+            BindingIndex::value(5),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     // Cutoff 3, producer at 5 → `5 < 3` is false → invisible.
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
@@ -442,7 +570,12 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_resident_for_test("earlier".to_string(), v, BindingIndex::value(2))
+        .bind_resident_for_test(
+            "earlier".to_string(),
+            v,
+            BindingIndex::value(2),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 5);
     assert!(matches!(
@@ -459,7 +592,12 @@ fn visibility_self_index_hidden_under_strict_less_than() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_resident_for_test("self_idx".to_string(), v, BindingIndex::value(3))
+        .bind_resident_for_test(
+            "self_idx".to_string(),
+            v,
+            BindingIndex::value(3),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     // Cutoff equal to producer idx (e.g. `LET x = x`): `3 < 3` is false.
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
@@ -480,6 +618,7 @@ fn visibility_placeholder_filtered_same_as_value() {
             NodeId(2),
             BindingIndex::value(5),
             crate::machine::model::BindKind::Value,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
@@ -501,6 +640,7 @@ fn visibility_type_side_gate_mirrors_value_side() {
         "TyLate".to_string(),
         KType::NUMBER,
         mock_declaration_site(1, 5),
+        &mut crate::machine::WriteGate::for_test(),
     );
     let consumer_before: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
     assert!(scope
@@ -528,6 +668,7 @@ fn sig_scope_bindings_reject_value_token_type_write() {
         kt,
         DeclarationSite::BUILTIN,
         crate::machine::core::bindings::TypeWritePolicy::Insert,
+        &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
         Ok(_) => panic!("a value-token key must never enter `types`, even on a SIG decl scope"),
@@ -571,7 +712,13 @@ fn function_mirror_seals_the_data_entrys_own_claim() {
         .seal_function_mirror(&sealed)
         .expect("the bound value wraps a callable");
     scope
-        .bind_value_direct("f".to_string(), sealed, Some(mirror), BindingIndex::BUILTIN)
+        .bind_value_direct(
+            "f".to_string(),
+            sealed,
+            Some(mirror),
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("a fresh callable bind lands");
 
     let lookup = scope
@@ -602,7 +749,12 @@ fn bare_fn_registration_seals_the_empty_reach() {
         &types,
     ));
     scope
-        .register_function_direct("FOO".to_string(), f, BindingIndex::BUILTIN)
+        .register_function_direct(
+            "FOO".to_string(),
+            f,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let foreign = run_root_storage();
     let lookup = scope

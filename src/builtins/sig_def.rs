@@ -14,6 +14,7 @@ use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KKind, SigSchema};
 use crate::machine::Scope;
+use crate::machine::WriteGate;
 
 use super::{arg, kw, sig};
 
@@ -55,7 +56,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let signature = sig(
         KType::of_kind(KKind::Signature),
         vec![
@@ -65,7 +66,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("body", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin_full(scope, "SIG", signature, body, true, types);
+    crate::builtins::register_builtin_full(scope, "SIG", signature, body, true, types, gate);
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ use crate::machine::model::{Carried, Module};
 use crate::machine::model::{Held, KObject, KType, Record, TypeNode};
 use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
 use super::{arg, kw, sig};
@@ -405,7 +406,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let identifier_sig = || {
         sig(
             KType::ANY,
@@ -477,18 +478,40 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     };
 
     use crate::builtins::register_builtin;
-    register_builtin(scope, "ATTR", identifier_sig(), body_identifier, types);
-    register_builtin(scope, "ATTR", module_field_sig(), body_module, types);
-    register_builtin(scope, "ATTR", newtype_sig(), body_newtype, types);
+    register_builtin(
+        scope,
+        "ATTR",
+        identifier_sig(),
+        body_identifier,
+        types,
+        gate,
+    );
+    register_builtin(scope, "ATTR", module_field_sig(), body_module, types, gate);
+    register_builtin(scope, "ATTR", newtype_sig(), body_newtype, types, gate);
     register_builtin(
         scope,
         "ATTR",
         type_identifier_field_sig(),
         body_type_lhs,
         types,
+        gate,
     );
-    register_builtin(scope, "ATTR", type_type_field_sig(), body_type_lhs, types);
-    register_builtin(scope, "ATTR", module_type_field_sig(), body_module, types);
+    register_builtin(
+        scope,
+        "ATTR",
+        type_type_field_sig(),
+        body_type_lhs,
+        types,
+        gate,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        module_type_field_sig(),
+        body_module,
+        types,
+        gate,
+    );
 }
 
 #[cfg(test)]

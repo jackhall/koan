@@ -18,6 +18,7 @@
 //! [`crate::machine::model::operators`] — so seeding is a separate step from registering
 //! the per-operator bodies above.
 
+use crate::machine::WriteGate;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -152,7 +153,7 @@ pub fn body_and<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         .alloc_object_witnessed(KObject::Bool(left && right))))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let number_sig = |op: &str| {
         sig(
             KType::NUMBER,
@@ -174,15 +175,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         )
     };
 
-    crate::builtins::register_builtin(scope, "+", number_sig("+"), body_add, types);
-    crate::builtins::register_builtin(scope, "-", number_sig("-"), body_sub, types);
-    crate::builtins::register_builtin(scope, "*", number_sig("*"), body_mul, types);
-    crate::builtins::register_builtin(scope, "/", number_sig("/"), body_div, types);
+    crate::builtins::register_builtin(scope, "+", number_sig("+"), body_add, types, gate);
+    crate::builtins::register_builtin(scope, "-", number_sig("-"), body_sub, types, gate);
+    crate::builtins::register_builtin(scope, "*", number_sig("*"), body_mul, types, gate);
+    crate::builtins::register_builtin(scope, "/", number_sig("/"), body_div, types, gate);
 
-    crate::builtins::register_builtin(scope, "<", comparison_sig("<"), body_lt, types);
-    crate::builtins::register_builtin(scope, "<=", comparison_sig("<="), body_le, types);
-    crate::builtins::register_builtin(scope, ">", comparison_sig(">"), body_gt, types);
-    crate::builtins::register_builtin(scope, ">=", comparison_sig(">="), body_ge, types);
+    crate::builtins::register_builtin(scope, "<", comparison_sig("<"), body_lt, types, gate);
+    crate::builtins::register_builtin(scope, "<=", comparison_sig("<="), body_le, types, gate);
+    crate::builtins::register_builtin(scope, ">", comparison_sig(">"), body_gt, types, gate);
+    crate::builtins::register_builtin(scope, ">=", comparison_sig(">="), body_ge, types, gate);
 
     let and_sig = sig(
         KType::BOOL,
@@ -192,7 +193,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("right", KType::BOOL),
         ],
     );
-    crate::builtins::register_builtin(scope, "AND", and_sig, body_and, types);
+    crate::builtins::register_builtin(scope, "AND", and_sig, body_and, types, gate);
 }
 
 /// Seeds the three builtin operator groups: comparison (`< <= > >=`, pairwise, combined by
@@ -207,7 +208,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 /// A comparison chain (`1 < 2 < 3`, `1 <= x < 10`) resolves to this group and reduces through the
 /// pairwise reducer (`operator_chain::reduce_pairwise`): each adjacent pair dispatches through its
 /// own operator's body above, and the pair results fold left through the `AND` keyword combiner.
-pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>, _types: &TypeRegistry) {
+pub fn register_builtin_operator_groups<'a>(
+    scope: &'a Scope<'a>,
+    _types: &TypeRegistry,
+    gate: &mut WriteGate,
+) {
     let comparison_operators = ["<", "<=", ">", ">="];
     let comparison_members: HashSet<String> =
         comparison_operators.iter().map(|s| s.to_string()).collect();
@@ -218,7 +223,7 @@ pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>, _types: &TypeR
             direction: FoldDirection::Left,
         },
     ));
-    seed(scope, &comparison_operators, &comparison_group);
+    seed(scope, &comparison_operators, &comparison_group, gate);
 
     let additive_operators = ["+", "-"];
     let additive_members: HashSet<String> =
@@ -227,7 +232,7 @@ pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>, _types: &TypeR
         additive_members,
         ReductionMode::FoldLeft,
     ));
-    seed(scope, &additive_operators, &additive_group);
+    seed(scope, &additive_operators, &additive_group, gate);
 
     let multiplicative_operators = ["*", "/"];
     let multiplicative_members: HashSet<String> = multiplicative_operators
@@ -238,13 +243,23 @@ pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>, _types: &TypeR
         multiplicative_members,
         ReductionMode::FoldLeft,
     ));
-    seed(scope, &multiplicative_operators, &multiplicative_group);
+    seed(
+        scope,
+        &multiplicative_operators,
+        &multiplicative_group,
+        gate,
+    );
 }
 
 /// One builtin seed: the group's powerset keys, at [`BindingIndex::BUILTIN`].
-fn seed<'a>(scope: &'a Scope<'a>, members: &[&str], group: &Rc<OperatorGroup>) {
+fn seed<'a>(
+    scope: &'a Scope<'a>,
+    members: &[&str],
+    group: &Rc<OperatorGroup>,
+    gate: &mut WriteGate,
+) {
     scope
-        .register_group_under_all_subsets_direct(members, group, BindingIndex::BUILTIN)
+        .register_group_under_all_subsets_direct(members, group, BindingIndex::BUILTIN, gate)
         .expect("builtin operator-group seeding must not collide");
 }
 

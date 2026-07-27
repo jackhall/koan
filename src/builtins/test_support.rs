@@ -33,7 +33,7 @@ use crate::scheduler::NodeId;
 #[cfg(test)]
 use crate::witnessed::{Delivered, Sealed, Witnessed};
 
-use super::{seed_builtins, unseeded_scopes};
+use super::unseeded_scopes;
 
 /// Mint a test [`DeclarationSite`] with a fresh run and an explicit installing node and lexical
 /// index — the fixture stand-in for the run-qualified handle a scheduler-driven binder threads. A
@@ -79,7 +79,7 @@ impl<'a> TestRun<'a> {
         let types = runtime
             .type_registry()
             .expect("run frame was just established");
-        seed_builtins(root, &types);
+        crate::machine::seed_run_root(root, &types);
         Self {
             scope: child,
             runtime,

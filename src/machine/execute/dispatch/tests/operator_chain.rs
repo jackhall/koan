@@ -36,7 +36,12 @@ fn register_pairwise_fixture<'a>(
         },
     ));
     scope
-        .register_operator_group_direct("%".to_string(), group, BindingIndex::BUILTIN)
+        .register_operator_group_direct(
+            "%".to_string(),
+            group,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("register the pairwise operator group");
     test_run.run("FN (a :Number % b :Number) -> Number = (a + b)");
     test_run.run("OP #(MINUS) OVER Number = (left - right)");

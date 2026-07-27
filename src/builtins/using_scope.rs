@@ -23,6 +23,7 @@
 
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -31,9 +32,9 @@ use super::{arg, kw, sig};
 /// ordinary `DoneWitnessed` path, not a forwarded dep. Surfaced members resolve through
 /// [`Scope::binding_cutoff`]'s index-0 (no-cutoff) rule for a borrowed window.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
-    use super::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
     use crate::machine::model::{Held, KObject};
     use crate::machine::{arg_held, require_kexpression, Action, FramePlacement};
+    use crate::machine::{block_tail, BlockBody, BlockScope, BlockSeed};
 
     let module = match arg_held(ctx.args, "m") {
         // A module reaches USING on the value channel's Object arm.
@@ -74,7 +75,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // per-call region and a carrier-less module has no reach to root, so both fold nothing.
     let seed: Option<BlockSeed<'a>> = ctx.arg_carrier("m").map(|carrier| {
         let carrier = carrier.duplicate();
-        let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope, _types: &TypeRegistry| {
+        let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope, _types: &TypeRegistry, _gate| {
             overlay.mint_retained(&[carrier.coverage()]);
         });
         seed
@@ -89,7 +90,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let signature = sig(
         KType::ANY,
         vec![
@@ -99,7 +100,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("body", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "USING", signature, body, types);
+    crate::builtins::register_builtin(scope, "USING", signature, body, types, gate);
 }
 
 #[cfg(test)]

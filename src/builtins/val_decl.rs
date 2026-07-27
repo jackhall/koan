@@ -18,6 +18,7 @@ use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KKind, KObject, KType, TypeNode, TypeRegistry};
 use crate::machine::FinishCtx;
 use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
@@ -161,7 +162,7 @@ fn finalize_val<'a>(
     })
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     // Design-B sigil consumes `:`; no explicit colon keyword in the signature.
     let signature = sig(
         KType::ANY,
@@ -175,7 +176,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // any name lookup or forward-reference walk can see. Its `BINDER_SPECS` entry has empty
     // extractors, so `binder` is `false` — the flag drives dispatch's declaration-vs-reference
     // classification, and VAL declares no callable name to replay-park on.
-    crate::builtins::register_builtin_full(scope, "VAL", signature, body, false, types);
+    crate::builtins::register_builtin_full(scope, "VAL", signature, body, false, types, gate);
 }
 
 #[cfg(test)]

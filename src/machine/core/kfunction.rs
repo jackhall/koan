@@ -14,6 +14,7 @@ use crate::machine::model::{Held, NamedPairs};
 /// `machine::execute::runtime::run_action`.
 pub mod action;
 pub mod bind_by_name;
+pub mod block_tail;
 pub mod body;
 pub mod exec;
 pub mod pick;

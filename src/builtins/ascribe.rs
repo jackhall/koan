@@ -14,6 +14,7 @@ use crate::machine::model::{
 };
 use crate::machine::model::{Held, KObject, Module, Record};
 use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 use std::collections::HashMap;
 
@@ -31,22 +32,17 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     let s_name = s.name(ctx.types);
 
     let region = ctx.scope.brand();
-    let new_scope = region.alloc_scope(Scope::child_under_module(
+    // Allocate the view scope and replay the source module's members into it in one door: the
+    // scope is unreachable until the replay has landed, which is what lets the write happen at
+    // construction time rather than riding a step outcome.
+    let new_scope = match Scope::alloc_module_view(
         ctx.scope,
         format!("{} :| {}", m.path, s_name),
-    ));
-
-    let src = m.child_scope();
-    // The replay re-derives each callable entry's mirror bundle through the view scope, the layer
-    // that holds a pin to open a seal under — the binding table itself opens nothing.
-    if let Err(e) = new_scope
-        .bindings()
-        .bulk_install_from(src.bindings(), |sealed| {
-            new_scope.seal_function_mirror(sealed)
-        })
-    {
-        return Action::done(Err(e));
-    }
+        m.child_scope().bindings(),
+    ) {
+        Ok(scope) => scope,
+        Err(e) => return Action::done(Err(e)),
+    };
 
     // The view's members are all bulk-installed into `new_scope` above, and nothing binds into it
     // below (the type-member / slot-tag writes target `new_module`, not the scope) — so seal its
@@ -297,7 +293,7 @@ fn check_satisfies<'a>(
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     // Slots are typed `Module` / `Signature`. A bare module operand (`int_ord :| Ordered`) is an
     // Identifier that resolves value-side and rides the auto-wrap rails into a value-typed future,
     // so no parallel Type-Type overload is required.
@@ -317,8 +313,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("s", KType::of_kind(KKind::Signature)),
         ],
     );
-    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, types);
-    crate::builtins::register_builtin(scope, ":!", transparent_sig, body_transparent, types);
+    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, types, gate);
+    crate::builtins::register_builtin(scope, ":!", transparent_sig, body_transparent, types, gate);
 }
 
 #[cfg(test)]

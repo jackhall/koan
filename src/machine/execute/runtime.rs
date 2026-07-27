@@ -49,6 +49,7 @@ use crate::witnessed::{Delivered, Witnessed};
 mod interpret;
 mod submit;
 
+pub(crate) use interpret::seed_run_root;
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 
 /// The Koan instantiation of the scheduler's [`Workload`] interface — the marker that binds the

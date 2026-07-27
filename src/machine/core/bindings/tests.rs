@@ -57,7 +57,13 @@ fn data_binding_round_trips_sealed_reach() {
     let foreign = run_root_storage();
     let (sealed, _) = sealed_reaching(region, obj, &foreign);
     bindings
-        .write_value("x", BindingIndex::BUILTIN, Some(sealed), None)
+        .write_value(
+            "x",
+            BindingIndex::BUILTIN,
+            Some(sealed),
+            None,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("value bind should succeed");
     match bindings.lookup_value("x", None) {
         Some(NameLookup::Bound(hit)) => assert!(
@@ -80,7 +86,13 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
     let foreign = run_root_storage();
     let (sealed, reach_set) = sealed_reaching(region, obj, &foreign);
     bindings
-        .write_value("x", BindingIndex::BUILTIN, Some(sealed), None)
+        .write_value(
+            "x",
+            BindingIndex::BUILTIN,
+            Some(sealed),
+            None,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("value bind should succeed");
 
     let read = |label: &str| match bindings.lookup_value("x", None) {
@@ -106,7 +118,13 @@ fn write_type_inserts_into_types_map() {
     let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     bindings
-        .write_type("Foo", kt, DeclarationSite::BUILTIN, TypeWritePolicy::Insert)
+        .write_type(
+            "Foo",
+            kt,
+            DeclarationSite::BUILTIN,
+            TypeWritePolicy::Insert,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("write_type should succeed on fresh bindings");
     let stored = bindings
         .types()
@@ -128,6 +146,7 @@ fn write_type_rejects_collision_with_rebind() {
             kt1,
             DeclarationSite::BUILTIN,
             TypeWritePolicy::Insert,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("first register should succeed");
     let err = match bindings.write_type(
@@ -135,6 +154,7 @@ fn write_type_rejects_collision_with_rebind() {
         kt2,
         DeclarationSite::BUILTIN,
         TypeWritePolicy::Insert,
+        &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
         Ok(_) => panic!("second register on same name should error, not succeed"),
@@ -158,11 +178,18 @@ fn write_type_clears_matching_placeholder() {
             NodeId(7),
             BindingIndex::BUILTIN,
             BindKind::Type,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("placeholder install should succeed on fresh bindings");
     assert!(bindings.placeholders().contains_key("Bar"));
     bindings
-        .write_type("Bar", kt, DeclarationSite::BUILTIN, TypeWritePolicy::Insert)
+        .write_type(
+            "Bar",
+            kt,
+            DeclarationSite::BUILTIN,
+            TypeWritePolicy::Insert,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("type register should succeed and clear placeholder");
     assert!(!bindings.placeholders().contains_key("Bar"));
 }
@@ -172,7 +199,13 @@ fn write_type_does_not_touch_data_or_functions() {
     let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     bindings
-        .write_type("Foo", kt, DeclarationSite::BUILTIN, TypeWritePolicy::Insert)
+        .write_type(
+            "Foo",
+            kt,
+            DeclarationSite::BUILTIN,
+            TypeWritePolicy::Insert,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("register should succeed");
     assert!(bindings.data().is_empty());
     assert!(bindings.functions().is_empty());
@@ -205,6 +238,7 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
             KType::NUMBER,
             site(first_run),
             TypeWritePolicy::UpsertEqual,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("the first declaration should install");
 
@@ -215,6 +249,7 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
             KType::NUMBER,
             site(first_run),
             TypeWritePolicy::UpsertEqual,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("a same-handle parallel finalize should overwrite idempotently");
 
@@ -225,6 +260,7 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
         KType::STR,
         site(second_run),
         TypeWritePolicy::UpsertEqual,
+        &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
         Ok(_) => panic!("a cross-run redeclaration of Maybe must Rebind, not overwrite"),
@@ -300,6 +336,7 @@ fn value_token_may_not_bind_type_side() {
         kt,
         DeclarationSite::BUILTIN,
         TypeWritePolicy::Insert,
+        &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
         Ok(_) => panic!("a value token names a value, not a type"),
@@ -328,6 +365,7 @@ fn type_token_may_not_bind_value_side() {
             CarrierWitness::new(false, None),
         ))),
         None,
+        &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
         Ok(_) => panic!("a Type token names a type, not a value"),

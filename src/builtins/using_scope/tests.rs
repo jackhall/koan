@@ -197,7 +197,13 @@ fn using_window_value_read_reach_survives_under_module_root() {
         module_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign_storage))]);
     let sealed = module_scope.seal_resident_value(Carried::Object(value_obj), reach, borrows_home);
     module_scope
-        .bind_value_direct("val".to_string(), sealed, None, BindingIndex::value(0))
+        .bind_value_direct(
+            "val".to_string(),
+            sealed,
+            None,
+            BindingIndex::value(0),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("fresh binding name in an unborrowed scope");
 
     let call_site_storage = run_root_storage();

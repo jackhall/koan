@@ -76,7 +76,7 @@ pub(crate) enum ItSource<'a> {
 }
 
 /// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: the
-/// [`block_tail`](super::block_tail::block_tail) configuration for an arm — a fresh per-call frame
+/// [`block_tail`](crate::machine::block_tail) configuration for an arm — a fresh per-call frame
 /// (`root`-rooted, chained onto `outer_frame`) whose own scope is the block, seeded with `it` bound
 /// at idx 0 from `it_source`, running the arm body split into leading statements + a tail under
 /// `contract`.
@@ -87,8 +87,8 @@ pub(crate) fn arm_tail<'a>(
     contract: ReturnContract,
     types: &TypeRegistry,
 ) -> crate::machine::Action<'a> {
-    use super::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
     use crate::machine::FramePlacement;
+    use crate::machine::{block_tail, BlockBody, BlockScope, BlockSeed};
     use crate::machine::{BindingIndex, CallFrame};
     let frame: Rc<CallFrame> = CallFrame::new(root);
     // Bind `it` into the frame's own scope: `alloc_object` erases the caller-`'a` input and
@@ -96,7 +96,7 @@ pub(crate) fn arm_tail<'a>(
     // living in the arm frame, so the stored reach is the copy's (`adopted_reach_of` — a
     // residence-only host is not carried; a tail loop's retiring frame must not ride the arm's
     // binding), and a later read of `it` rebuilds its carrier from it.
-    let seed: BlockSeed<'a> = Box::new(move |child, types: &TypeRegistry| {
+    let seed: BlockSeed<'a> = Box::new(move |child, types: &TypeRegistry, gate| {
         // Fused mint + copy + bind of `it` at idx 0 in the fresh arm frame. A region-pure value
         // takes the checked tier (its purity is an audit at the bind brand); a delivered scrutinee
         // takes the copied-adoption tier — one structural copy made directly into the arm frame's
@@ -111,6 +111,7 @@ pub(crate) fn arm_tail<'a>(
                     value,
                     BindingIndex::value(0),
                     types,
+                    gate,
                 );
             }
             ItSource::Carrier(carrier, projection) => {
@@ -130,6 +131,7 @@ pub(crate) fn arm_tail<'a>(
                         })
                     },
                     types,
+                    gate,
                 );
             }
         }

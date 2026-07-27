@@ -16,7 +16,12 @@ fn resolve_name_part_identifier_resolved() {
     let scope = test_run.scope;
     let bound = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_resident_for_test("x".to_string(), bound, BindingIndex::BUILTIN)
+        .bind_resident_for_test(
+            "x".to_string(),
+            bound,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());
     match resolve_name_part(
@@ -76,6 +81,7 @@ fn resolve_name_part_parked() {
             producer,
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let part = ExpressionPart::Identifier("fwd".to_string());

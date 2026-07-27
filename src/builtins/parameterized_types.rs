@@ -16,6 +16,7 @@ use crate::machine::model::{
     FieldNameKind,
 };
 use crate::machine::model::{KType, Record};
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -165,7 +166,7 @@ fn build_carrier<'a>(
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     use crate::builtins::register_builtin;
     register_builtin(
         scope,
@@ -180,6 +181,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         ),
         action_bodies::body_list_of,
         types,
+        gate,
     );
     register_builtin(
         scope,
@@ -195,6 +197,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         ),
         action_bodies::body_map,
         types,
+        gate,
     );
     register_builtin(
         scope,
@@ -209,6 +212,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         ),
         action_bodies::body_apply_as,
         types,
+        gate,
     );
     register_builtin(
         scope,
@@ -226,6 +230,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         ),
         action_bodies::body_fn,
         types,
+        gate,
     );
 }
 
@@ -266,7 +271,11 @@ mod tests {
                 test_run.types(),
             )
             .expect("a singleton window seals on its sole fill");
-        scope.register_builtin_type("Wrap".into(), sealed.members[0]);
+        scope.register_builtin_type(
+            "Wrap".into(),
+            sealed.members[0],
+            &mut crate::machine::WriteGate::for_test(),
+        );
         let result = test_run.run_one_type(parse_one(":(Number AS Wrap)"));
         let types = test_run.types();
         match types.node(result) {

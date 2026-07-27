@@ -1,5 +1,6 @@
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KObject, KType};
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -26,7 +27,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     Action::done(Ok(carrier))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let signature = sig(KType::STR, vec![kw("PRINT"), arg("msg", KType::ANY)]);
-    crate::builtins::register_builtin(scope, "PRINT", signature, body, types);
+    crate::builtins::register_builtin(scope, "PRINT", signature, body, types, gate);
 }

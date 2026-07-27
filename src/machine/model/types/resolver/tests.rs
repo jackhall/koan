@@ -29,6 +29,7 @@ fn type_token_cannot_bind_value_side() {
             ),
             None,
             BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect_err("a Type token names a type; it may not bind a value");
     assert!(
@@ -159,7 +160,9 @@ fn block_member_defers_until_the_window_seals() {
     // The seal writes nothing itself — the op it hands back is what installs the identity, and
     // the run loop applies it after the declaring step returns.
     assert!(scope.bindings().types().get("Leaf").is_none());
-    write.apply(scope).expect("the first install lands");
+    write
+        .apply(scope, &mut crate::machine::WriteGate::for_test())
+        .expect("the first install lands");
 
     // A different statement declaring `Leaf` over different content is a redeclaration: its op
     // collides with the identity this window installed, so the apply — not the seal — errors.
@@ -175,7 +178,7 @@ fn block_member_defers_until_the_window_seals() {
         other => panic!("the singleton window seals, got {}", outcome_tag(&other)),
     };
     let error = redeclare
-        .apply(scope)
+        .apply(scope, &mut crate::machine::WriteGate::for_test())
         .expect_err("a redeclaration of Leaf must Rebind at apply");
     assert!(
         matches!(&error.kind, crate::machine::KErrorKind::Rebind { name } if name == "Leaf"),

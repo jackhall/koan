@@ -287,7 +287,11 @@ fn fn_return_type_constructor_apply_root_scope() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let wrap = wrap_type_constructor(scope, test_run.types());
-    scope.register_builtin_type("Wrap".into(), wrap);
+    scope.register_builtin_type(
+        "Wrap".into(),
+        wrap,
+        &mut crate::machine::WriteGate::for_test(),
+    );
     let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(
         parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),

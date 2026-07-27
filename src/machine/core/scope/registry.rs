@@ -9,6 +9,12 @@
 //! child scope before its body dispatches, test fixtures — and they route through the same
 //! [`WriteOp::apply`] interpreter, so the table-write rules exist once.
 //!
+//! Every door here takes a [`WriteGate`], which only `crate::machine` can mint. A builtin-side
+//! caller therefore never holds the capability: it either receives one as a parameter from the
+//! `machine`-side caller that owns the construction ([`crate::machine::block_tail`]'s seed, the
+//! builtin-seeding entry point) or calls an allocate-and-seed door — [`Scope::alloc_group_child`],
+//! [`Scope::alloc_module_view`] — which births the scope it writes into and so mints its own.
+//!
 //! Split out of the parent `scope` module.
 
 use std::rc::Rc;
@@ -16,7 +22,7 @@ use std::rc::Rc;
 use super::{Scope, ScopeKind};
 use crate::machine::core::bindings::operator_group_ops;
 use crate::machine::core::bindings::{
-    BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteOp,
+    BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
 };
 use crate::machine::core::carrier_witness::FunctionMirror;
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
@@ -139,8 +145,9 @@ impl<'a> Scope<'a> {
         sealed: SealedValue,
         mirror: Option<FunctionMirror>,
         index: BindingIndex,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        WriteOp::value(name, index, sealed, mirror).apply(self)
+        WriteOp::value(name, index, sealed, mirror).apply(self, gate)
     }
 
     /// [`Self::seal_delivered`] + [`Self::bind_value_direct`] — the construction-door spelling of a
@@ -153,12 +160,13 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
         project: impl for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
         types: &TypeRegistry,
+        gate: &mut WriteGate,
     ) -> Result<SealedValue, KError> {
         let (sealed, mirror) = self.seal_delivered(cell, project, types)?;
         // Duplicate the seal: one binds into the entry, the other rides the caller's terminal
         // carrier out of the step. Neither owns pins — the region's union bundle does — so the
         // reach is covered on both the resident and in-transit paths.
-        self.bind_value_direct(name, sealed.duplicate(), mirror, index)?;
+        self.bind_value_direct(name, sealed.duplicate(), mirror, index, gate)?;
         Ok(sealed)
     }
 
@@ -170,9 +178,10 @@ impl<'a> Scope<'a> {
         value: KObject<'_>,
         index: BindingIndex,
         types: &TypeRegistry,
+        gate: &mut WriteGate,
     ) -> Result<SealedValue, KError> {
         let (sealed, mirror) = self.seal_checked(value, types)?;
-        self.bind_value_direct(name, sealed.duplicate(), mirror, index)?;
+        self.bind_value_direct(name, sealed.duplicate(), mirror, index, gate)?;
         Ok(sealed)
     }
 
@@ -186,10 +195,11 @@ impl<'a> Scope<'a> {
         name: String,
         obj: &'a KObject<'a>,
         index: BindingIndex,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let sealed = self.seal_resident_value(Carried::Object(obj), None, false);
         let mirror = self.seal_function_mirror(&sealed);
-        self.bind_value_direct(name, sealed, mirror, index)
+        self.bind_value_direct(name, sealed, mirror, index, gate)
     }
 
     /// Construction-time overload registration: seal `fn_ref` and add it to this scope's
@@ -200,6 +210,7 @@ impl<'a> Scope<'a> {
         name: String,
         fn_ref: &'a KFunction<'a>,
         index: BindingIndex,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Overload {
             name,
@@ -207,7 +218,7 @@ impl<'a> Scope<'a> {
             mirror: self.seal_resident_function(fn_ref),
             builtin_shadow_guard: true,
         }
-        .apply(self)
+        .apply(self, gate)
     }
 
     /// Construction-time type registration (strict insert-if-absent, no builtin-shadow consult):
@@ -217,6 +228,7 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::KType,
         site: DeclarationSite,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Type {
             name,
@@ -225,14 +237,19 @@ impl<'a> Scope<'a> {
             policy: TypeWritePolicy::Insert,
             builtin_shadow_guard: false,
         }
-        .apply(self)
+        .apply(self, gate)
     }
 
     /// Builtin type registration: [`Self::register_type_direct`] at [`DeclarationSite::BUILTIN`].
     /// Infallible — a name collision at builtin registration is a programming error, so the
     /// [`KError`] is dropped.
-    pub(crate) fn register_builtin_type(&self, name: String, ktype: crate::machine::model::KType) {
-        let _ = self.register_type_direct(name, ktype, DeclarationSite::BUILTIN);
+    pub(crate) fn register_builtin_type(
+        &self,
+        name: String,
+        ktype: crate::machine::model::KType,
+        gate: &mut WriteGate,
+    ) {
+        let _ = self.register_type_direct(name, ktype, DeclarationSite::BUILTIN, gate);
     }
 
     /// Record a SIG value slot: insert `ktype` into the nearest enclosing SIG decl scope's slot
@@ -284,20 +301,21 @@ impl<'a> Scope<'a> {
         idx: NodeId,
         index: BindingIndex,
         kind: BindKind,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
         self.write_scope()
             .bindings()
-            .install_placeholder(name, idx, index, kind)
+            .install_placeholder(name, idx, index, kind, gate)
     }
 
     /// Error-path companion to [`Self::install_placeholder`]: remove any value-side
     /// placeholder pointing at `producer`. Routes to the same target the install used so a
     /// failed binder body can't leak a scheduler-local placeholder into a later run on a
     /// persistent scope. See [`Bindings::clear_placeholders_for_producer`].
-    pub fn clear_placeholders_for_producer(&self, producer: NodeId) {
+    pub fn clear_placeholders_for_producer(&self, producer: NodeId, gate: &mut WriteGate) {
         self.write_scope()
             .bindings()
-            .clear_placeholders_for_producer(producer);
+            .clear_placeholders_for_producer(producer, gate);
     }
 
     /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a
@@ -311,10 +329,11 @@ impl<'a> Scope<'a> {
         bucket: crate::machine::model::UntypedKey,
         idx: NodeId,
         index: BindingIndex,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
         self.write_scope()
             .bindings()
-            .install_pending_overload(bucket, idx, index)
+            .install_pending_overload(bucket, idx, index, gate)
     }
 
     /// Construction-time single-probe operator-registry write.
@@ -323,13 +342,65 @@ impl<'a> Scope<'a> {
         probe: String,
         group: Rc<OperatorGroup>,
         index: BindingIndex,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Group {
             probe,
             group,
             index,
         }
-        .apply(self)
+        .apply(self, gate)
+    }
+
+    /// Allocate an ascription view's scope under `outer` and replay `src`'s value bindings into it,
+    /// re-deriving each callable entry's mirror bundle **through the view scope** — the layer that
+    /// holds a pin to open a seal under, so the binding table itself opens nothing.
+    ///
+    /// Born-inside-the-door like [`Self::alloc_group_child`]: the view scope is returned only once
+    /// the replay has landed, and nothing else has a reference to it before then, so the door mints
+    /// its own [`WriteGate`]. `:|` / `:!` run builtin-side, where no gate can be minted.
+    #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
+    pub(crate) fn alloc_module_view(
+        outer: &'a Scope<'a>,
+        path: String,
+        src: &crate::machine::core::Bindings,
+    ) -> Result<&'a Scope<'a>, KError> {
+        let view = outer
+            .brand()
+            .alloc_scope(Scope::child_under_module(outer, path));
+        view.bindings().bulk_install_from(
+            src,
+            |sealed| view.seal_function_mirror(sealed),
+            &mut WriteGate::for_unpublished_scope(),
+        )?;
+        Ok(view)
+    }
+
+    /// Allocate the `GROUP` binder's child scope and pre-register the member powerset into it, at
+    /// index 0 — the same no-lexical-ordering visibility parameters and `USING` imports take, so a
+    /// run anywhere in the body resolves the group, including above the `OP` declarations naming it.
+    ///
+    /// The child is **born inside this door** and handed back only once the registry seeding has
+    /// landed, so no other node can have reached it while it was written. That is what lets the door
+    /// mint its own [`WriteGate`]: the "unpublished scope" premise is structural here, not a claim
+    /// the caller makes. The `GROUP` binder runs builtin-side, where no gate can be minted.
+    pub(crate) fn alloc_group_child(
+        outer: &'a Scope<'a>,
+        name: String,
+        group: Rc<OperatorGroup>,
+        members: &[&str],
+    ) -> Result<&'a Scope<'a>, KError> {
+        let child =
+            outer
+                .brand()
+                .alloc_scope(Scope::child_under_group(outer, name, Rc::clone(&group)));
+        child.register_group_under_all_subsets_direct(
+            members,
+            &group,
+            BindingIndex::value(0),
+            &mut WriteGate::for_unpublished_scope(),
+        )?;
+        Ok(child)
     }
 
     /// Construction-time operator-registry seeding: apply [`operator_group_ops`] immediately. The
@@ -340,9 +411,10 @@ impl<'a> Scope<'a> {
         members: &[&str],
         group: &Rc<OperatorGroup>,
         index: BindingIndex,
+        gate: &mut WriteGate,
     ) -> Result<(), KError> {
         for op in operator_group_ops(members, group, index) {
-            op.apply(self)?;
+            op.apply(self, gate)?;
         }
         Ok(())
     }

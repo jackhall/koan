@@ -8,6 +8,7 @@ use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, SignatureElement};
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -178,7 +179,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     // Declared return is `KType::ANY`: a function's structural type only exists
     // once its signature is known. The constructed `KObject::KFunction` projects
     // its full signature through `ktype()` at the call site.
@@ -267,8 +268,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         )
     };
     use crate::builtins::register_builtin_full;
-    register_builtin_full(scope, "FN", typeexpr_sig(), body, true, types);
-    register_builtin_full(scope, "FN", sigil_sig(), body, true, types);
+    register_builtin_full(scope, "FN", typeexpr_sig(), body, true, types, gate);
+    register_builtin_full(scope, "FN", sigil_sig(), body, true, types, gate);
     register_builtin_full(
         scope,
         "FN",
@@ -276,8 +277,17 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         body_value_named_return,
         true,
         types,
+        gate,
     );
-    register_builtin_full(scope, "FN", record_sig(), body_record_schema, false, types);
+    register_builtin_full(
+        scope,
+        "FN",
+        record_sig(),
+        body_record_schema,
+        false,
+        types,
+        gate,
+    );
 }
 
 #[cfg(test)]

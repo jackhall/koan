@@ -7,6 +7,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::bindings::WriteGate;
 use crate::machine::model::KExpression;
 use crate::machine::model::TypeRegistry;
 use crate::machine::Scope;
@@ -39,7 +40,13 @@ pub(crate) enum BlockScope<'a> {
 /// block scope arrives as a short `with_scope` borrow (`FrameOwn`) or the `'a` overlay (`Overlay`).
 /// The run's type registry arrives as a parameter rather than a capture: [`block_tail`] runs the
 /// seed before it returns, so the seed borrows the registry for that call instead of owning a share.
-pub(crate) type BlockSeed<'a> = Box<dyn for<'b> FnOnce(&Scope<'b>, &TypeRegistry) + 'a>;
+///
+/// The [`WriteGate`] arrives the same way. A seed binds into a block scope that has not dispatched
+/// a statement yet — the construction door — but the seed itself is written builtin-side, where no
+/// gate can be minted. [`block_tail`] mints one for the duration of the seed call and hands it in,
+/// so the capability is the caller's to give, never the builtin's to take.
+pub(crate) type BlockSeed<'a> =
+    Box<dyn for<'b> FnOnce(&Scope<'b>, &TypeRegistry, &mut WriteGate) + 'a>;
 
 /// Run a block and yield its last statement as the tail — the shared constructor.
 pub(crate) fn block_tail<'a>(
@@ -60,13 +67,17 @@ pub(crate) fn block_tail<'a>(
                 unreachable!("a FrameOwn block is the FreshChild frame's own scope");
             };
             if let Some(seed) = seed {
-                frame.with_scope(|child| seed(child, types));
+                // The frame is freshly minted and its scope has run nothing, so the seed writes
+                // through the construction door.
+                frame.with_scope(|child| {
+                    seed(child, types, &mut WriteGate::for_unpublished_scope())
+                });
             }
             BlockEntry::FrameScope(Rc::clone(frame))
         }
         BlockScope::Overlay(overlay) => {
             if let Some(seed) = seed {
-                seed(overlay, types);
+                seed(overlay, types, &mut WriteGate::for_unpublished_scope());
             }
             BlockEntry::Overlay(overlay)
         }

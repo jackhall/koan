@@ -25,7 +25,7 @@ pub use arena::{
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
 pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
-    NodeHandle, PendingBinderGuard,
+    NodeHandle, PendingBinderGuard, WriteGate,
 };
 pub(crate) use carrier_witness::{
     clone_still_borrows, force_substrate_borrows_host, product_still_borrows,
@@ -39,6 +39,7 @@ pub(crate) use kfunction::action::{
     AwaitContinue, BlockEntry, BodyCtx, BodyPlacement, CatchContinue, DepPlacement, DepRequest,
     DepTerminal, FinishCtx, FramePlacement, OwnedDispatch, TailContract,
 };
+pub(crate) use kfunction::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
 pub(crate) use kfunction::body::{body_statement_refs, split_body_statements, ReturnContract};
 pub(crate) use kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction, NodeId};

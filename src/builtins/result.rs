@@ -14,12 +14,13 @@
 //! to the one identity.
 
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use std::collections::HashMap;
 
 use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema};
 use crate::machine::Scope;
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);
     schema.insert("Ok".into(), KType::ANY);
     schema.insert("Error".into(), KType::ANY);
@@ -37,7 +38,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Type-only: the variant schema rides the sealed member, so construction reads it via a
     // fresh `types["Result"]` lookup — no value-side carrier. Prelude build runs once; a
     // collision would be a programming error.
-    scope.register_builtin_type("Result".into(), identity);
+    scope.register_builtin_type("Result".into(), identity, gate);
 }
 
 #[cfg(test)]

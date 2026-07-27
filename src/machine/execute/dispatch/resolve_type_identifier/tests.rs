@@ -116,8 +116,12 @@ mod bare_leaf_resolution {
     fn builtin_synthesizes_type_carrier() {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
-        let _ =
-            scope.register_type_direct("Number".into(), KType::NUMBER, DeclarationSite::BUILTIN);
+        let _ = scope.register_type_direct(
+            "Number".into(),
+            KType::NUMBER,
+            DeclarationSite::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        );
         let types = TypeRegistry::new();
         let leaf = TypeIdentifier::leaf("Number".to_string());
         match scope.resolve_type_identifier(&leaf, None, &types) {
@@ -170,6 +174,7 @@ mod bare_leaf_resolution {
                 NodeId(7),
                 BindingIndex::value(0),
                 crate::machine::model::BindKind::Type,
+                &mut crate::machine::WriteGate::for_test(),
             )
             .expect("placeholder install");
 
@@ -201,7 +206,7 @@ mod bare_leaf_resolution {
             policy: crate::machine::core::bindings::TypeWritePolicy::UpsertEqual,
             builtin_shadow_guard: true,
         }
-        .apply(scope)
+        .apply(scope, &mut crate::machine::WriteGate::for_test())
         .expect("install the sealed identity");
 
         match scope.resolve_type_identifier(&leaf, None, &types) {
@@ -241,6 +246,7 @@ mod bare_leaf_resolution {
                 NodeId(11),
                 BindingIndex::value(0),
                 crate::machine::model::BindKind::Type,
+                &mut crate::machine::WriteGate::for_test(),
             )
             .expect("placeholder install");
 

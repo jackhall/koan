@@ -21,6 +21,7 @@
 
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -155,7 +156,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     })
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let signature = sig(
         KType::of_kind(KKind::AnyType),
         vec![
@@ -166,7 +167,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("body", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin_full(scope, "RECURSIVE TYPES", signature, body, true, types);
+    crate::builtins::register_builtin_full(
+        scope,
+        "RECURSIVE TYPES",
+        signature,
+        body,
+        true,
+        types,
+        gate,
+    );
 }
 
 #[cfg(test)]
