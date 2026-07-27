@@ -1,5 +1,5 @@
-//! Lexical binding façade: co-mutating `RefCell` maps (`types`, `data`,
-//! `functions`, `placeholders`, `pending_overloads`, `operators`) behind validated write
+//! Lexical binding façade: one `RefCell<Tables>` — `types`, `data`, `functions`, `placeholders`,
+//! `pending_overloads`, `operators` — behind validated write
 //! paths that keep the function-mirror invariant — every `data[name]` wrapping
 //! a `KFunction` lives in `functions[signature.untyped_key()]`. Nominal type
 //! declarations (NEWTYPE / UNION / SIG) install their identity into `types`
@@ -16,7 +16,8 @@
 //! contention is unrepresentable. See [`gate`] for the capability, [`ops`] for the currency, and
 //! [design/memory-model.md](../../../design/memory-model.md).
 //!
-//! Borrow discipline across the maps: `types → functions → data`.
+//! There is no borrow order to keep: reads never overlap the single gated write site, so every
+//! verb takes exactly one borrow of the one cell and a cross-map write is atomic under it.
 //!
 //! Every entry carries a [`BindingIndex`] naming its installing statement's lexical
 //! position, gated by the strict cutoff `idx < c`, so a forward reference (a
@@ -130,7 +131,7 @@ pub(crate) struct DataEntry {
 impl DataEntry {
     /// A bit-copy of the entry — the dormant seal duplicated (value bit-copy + reference-only
     /// witness clone, no refcount traffic) beside the `Copy` index and the bucket key. Every read
-    /// hands one of these out so no caller holds the `data` `RefCell` borrow across a carrier build.
+    /// hands one of these out so no caller holds the `tables` borrow across a carrier build.
     /// The one reader is the bulk-install snapshot, which is ascription-only.
     #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     fn duplicate(&self) -> Self {
@@ -251,50 +252,60 @@ impl DeclarationSite {
     };
 }
 
-/// Co-mutating `RefCell` maps backing every lexical binding. `placeholders`
-/// and `pending_overloads` are intentionally separate: the former is consulted
-/// by name (value/type forward references); the latter by full dispatch bucket
-/// key (a bare-arg call whose FN overload is still finalizing). Keying
-/// dispatch parks by the full bucket key keeps `(MAKESET _)` and
-/// `(MAKESET _ USING _)` from colliding.
-///
-/// Borrow discipline: `types → functions → data`.
-pub struct Bindings {
+/// Every lexical binding of one scope, in one cell. `placeholders` and `pending_overloads` are
+/// intentionally separate maps: the former is consulted by name (value/type forward references);
+/// the latter by full dispatch bucket key (a bare-arg call whose FN overload is still finalizing).
+/// Keying dispatch parks by the full bucket key keeps `(MAKESET _)` and `(MAKESET _ USING _)` from
+/// colliding.
+#[derive(Default)]
+struct Tables {
     /// Each type entry stores its bound type and its [`DeclarationSite`] — the installing
     /// [`NodeHandle`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
     /// `KType` is a `Copy` handle into the run frame's registry, so an entry carries no reach: a
     /// read copies the handle under the home-frame pin alone, and the same handle names the same
     /// type in every region.
-    types: RefCell<HashMap<String, (KType, DeclarationSite)>>,
+    types: HashMap<String, (KType, DeclarationSite)>,
     /// Each value entry stores its bound value fused to its exact reach in one dormant
     /// [`SealedValue`], plus its lexical [`BindingIndex`]. Reads hand out a bit-copy of the seal
-    /// ([`Self::lookup_value`]) and re-anchor the value only under a pin, so a read replays the
+    /// ([`Bindings::lookup_value`]) and re-anchor the value only under a pin, so a read replays the
     /// stored claim rather than re-asserting single-frame co-location. Description members are
     /// `Weak`, and the owning pins live in the region's union bundle rather than here — either a
     /// strong member or a per-entry `Rc` on the scope's own frame would close a
     /// `frame → region → scope → bindings → frame` cycle and leak the region.
-    data: RefCell<HashMap<String, DataEntry>>,
+    data: HashMap<String, DataEntry>,
     /// Each dispatch-bucket entry stores its callable fused to the same exact reach its mirrored
     /// `data` entry claims, in one dormant [`SealedFunction`], beside the precomputed data the
     /// write path dedupes on ([`FunctionBucketEntry`]). This is the **only** place a mirror seal is
     /// stored — bare `FN` has no `data` entry and dispatch reads buckets. Like `data`, the entry
     /// owns nothing: the reached regions are held by the region's union bundle, and a read hands
     /// out a bit-copy the caller re-anchors under a pin.
-    functions: RefCell<HashMap<UntypedKey, Vec<FunctionBucketEntry>>>,
-    placeholders: RefCell<HashMap<String, (NodeId, BindingIndex, BindKind)>>,
+    functions: HashMap<UntypedKey, Vec<FunctionBucketEntry>>,
+    placeholders: HashMap<String, (NodeId, BindingIndex, BindKind)>,
     /// Bucket-key → entries for FN overloads whose binder has
     /// dispatched but not finalized. Sibling binders sharing one inner-call
     /// bucket key each install their own entry; consumers park on the
     /// earliest-index visible one. On finalize only that entry is removed;
     /// other siblings remain as wake sources.
-    pending_overloads: RefCell<HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>>,
+    pending_overloads: HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>,
     /// Per-scope operator registry: a chain's sorted-joined operator probe key →
     /// the shared [`OperatorGroup`] it resolves to. A module installs one record per
     /// size-≥2 subset of its declared operators (the per-group powerset), each subset
     /// key holding an `Rc` clone of the same group, so any subset used in one
     /// expression resolves in a single hit and a cross-group mix simply misses.
     /// Walked through the scope chain like every other name (innermost visible wins).
-    operators: RefCell<HashMap<String, (Rc<OperatorGroup>, BindingIndex)>>,
+    operators: HashMap<String, (Rc<OperatorGroup>, BindingIndex)>,
+}
+
+/// One scope's bindings: the six maps under a single [`RefCell`], plus the in-flight named-type
+/// set, which stays its own `Rc`-shared island because a [`PendingBinderGuard`] holds an owning
+/// stake in it past the borrow it was minted from.
+///
+/// One cell rather than one per map: with writes reachable only under a [`WriteGate`], a read can
+/// never overlap a write, so per-map cells bought nothing but a borrow-ordering rule to obey. Every
+/// verb takes exactly one borrow, and a cross-map write — the `data`/`functions` mirror pair, a
+/// type insert plus its placeholder clear — is atomic under it.
+pub struct Bindings {
+    tables: RefCell<Tables>,
     /// In-flight named-type binders (STRUCT / named-UNION). A consumer referencing an
     /// earlier still-finalizing type parks on its producer node; this set marks which names
     /// are in flight. See [`pending`] for the surface methods.
@@ -304,12 +315,7 @@ pub struct Bindings {
 impl Bindings {
     pub fn new() -> Self {
         Self {
-            types: RefCell::new(HashMap::new()),
-            data: RefCell::new(HashMap::new()),
-            functions: RefCell::new(HashMap::new()),
-            placeholders: RefCell::new(HashMap::new()),
-            pending_overloads: RefCell::new(HashMap::new()),
-            operators: RefCell::new(HashMap::new()),
+            tables: RefCell::new(Tables::default()),
             pending: PendingTypes::new(),
         }
     }
@@ -325,29 +331,34 @@ impl Bindings {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<NameLookup<SealedValue>> {
-        if let Some(entry) = self.data.borrow().get(name) {
+        let tables = self.tables.borrow();
+        if let Some(entry) = tables.data.get(name) {
             if Self::visible(entry.index, chain_cutoff) {
                 return Some(NameLookup::Bound(entry.sealed.duplicate()));
             }
         }
-        self.value_placeholder(name, chain_cutoff)
-            .map(NameLookup::Parked)
+        Self::value_placeholder(&tables, name, chain_cutoff).map(NameLookup::Parked)
     }
 
     /// Whether a **visible** value entry named `name` exists at this scope — the presence-only
     /// probe, for a write gate that must not read the bound value (the USING-window collision
     /// check). A still-finalizing placeholder is not an entry and reads `false`.
     pub fn has_value(&self, name: &str, chain_cutoff: Option<usize>) -> bool {
-        self.data
+        self.tables
             .borrow()
+            .data
             .get(name)
             .is_some_and(|entry| Self::visible(entry.index, chain_cutoff))
     }
 
     /// The value-side placeholder producer for `name`, or `None` — the placeholder arm
     /// [`Self::lookup_value`] falls through to.
-    fn value_placeholder(&self, name: &str, chain_cutoff: Option<usize>) -> Option<NodeId> {
-        if let Some((id, idx, kind)) = self.placeholders.borrow().get(name).copied() {
+    fn value_placeholder(
+        tables: &Tables,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<NodeId> {
+        if let Some((id, idx, kind)) = tables.placeholders.get(name).copied() {
             if kind == BindKind::Value && Self::visible(idx, chain_cutoff) {
                 return Some(id);
             }
@@ -363,19 +374,23 @@ impl Bindings {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<NameLookup<KType>> {
-        if let Some((kt, site)) = self.types.borrow().get(name) {
+        let tables = self.tables.borrow();
+        if let Some((kt, site)) = tables.types.get(name) {
             if Self::visible(site.index, chain_cutoff) {
                 return Some(NameLookup::Bound(*kt));
             }
         }
-        self.type_placeholder(name, chain_cutoff)
-            .map(NameLookup::Parked)
+        Self::type_placeholder(&tables, name, chain_cutoff).map(NameLookup::Parked)
     }
 
     /// The type-side placeholder producer for `name`, or `None` — the placeholder arm
     /// [`Self::lookup_type`] falls through to.
-    fn type_placeholder(&self, name: &str, chain_cutoff: Option<usize>) -> Option<NodeId> {
-        if let Some((id, idx, kind)) = self.placeholders.borrow().get(name).copied() {
+    fn type_placeholder(
+        tables: &Tables,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<NodeId> {
+        if let Some((id, idx, kind)) = tables.placeholders.get(name).copied() {
             if kind == BindKind::Type && Self::visible(idx, chain_cutoff) {
                 return Some(id);
             }
@@ -394,12 +409,13 @@ impl Bindings {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<MemberResolution> {
-        if let Some(entry) = self.data.borrow().get(name) {
+        let tables = self.tables.borrow();
+        if let Some(entry) = tables.data.get(name) {
             if Self::visible(entry.index, chain_cutoff) {
                 return Some(MemberResolution::Value(entry.sealed.duplicate()));
             }
         }
-        if let Some((kt, site)) = self.types.borrow().get(name) {
+        if let Some((kt, site)) = tables.types.get(name) {
             if Self::visible(site.index, chain_cutoff) {
                 return Some(MemberResolution::Type { kt: *kt });
             }
@@ -414,7 +430,7 @@ impl Bindings {
     /// has already pre-installed the name's external identity into `types`. Visibility-unfiltered:
     /// this is producer-dependency tracking, not consumer-visibility enforcement.
     pub fn type_placeholder_producer(&self, name: &str) -> Option<NodeId> {
-        match self.placeholders.borrow().get(name).copied() {
+        match self.tables.borrow().placeholders.get(name).copied() {
             Some((id, _, BindKind::Type)) => Some(id),
             _ => None,
         }
@@ -425,9 +441,9 @@ impl Bindings {
     /// `pending_overloads[key]` producer together — one pass over each map. The
     /// scope walk decides pending-vs-finalized precedence with both in hand.
     pub fn lookup_function(&self, key: &UntypedKey, chain_cutoff: Option<usize>) -> FunctionLookup {
-        let overloads: Vec<SealedFunction> = self
+        let tables = self.tables.borrow();
+        let overloads: Vec<SealedFunction> = tables
             .functions
-            .borrow()
             .get(key)
             .map(|bucket| {
                 bucket
@@ -438,17 +454,13 @@ impl Bindings {
             })
             .unwrap_or_default();
         // Earliest-index visible producer: most likely to finalize first.
-        let pending = self
-            .pending_overloads
-            .borrow()
-            .get(key)
-            .and_then(|entries| {
-                entries
-                    .iter()
-                    .filter(|(_, idx)| Self::visible(*idx, chain_cutoff))
-                    .min_by_key(|(_, idx)| idx.idx)
-                    .map(|(producer, _)| *producer)
-            });
+        let pending = tables.pending_overloads.get(key).and_then(|entries| {
+            entries
+                .iter()
+                .filter(|(_, idx)| Self::visible(*idx, chain_cutoff))
+                .min_by_key(|(_, idx)| idx.idx)
+                .map(|(producer, _)| *producer)
+        });
         FunctionLookup { overloads, pending }
     }
 
@@ -461,8 +473,8 @@ impl Bindings {
         probe: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<Rc<OperatorGroup>> {
-        let operators = self.operators.borrow();
-        let (group, idx) = operators.get(probe)?;
+        let tables = self.tables.borrow();
+        let (group, idx) = tables.operators.get(probe)?;
         if Self::visible(*idx, chain_cutoff) {
             Some(Rc::clone(group))
         } else {
@@ -486,8 +498,8 @@ impl Bindings {
         index: BindingIndex,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let mut operators = self.operators.borrow_mut();
-        if let Some((existing, _)) = operators.get(&probe) {
+        let mut tables = self.tables.borrow_mut();
+        if let Some((existing, _)) = tables.operators.get(&probe) {
             if Rc::ptr_eq(existing, &group) || **existing == *group {
                 return Ok(());
             }
@@ -496,7 +508,7 @@ impl Bindings {
                  chaining mode or member set; one scope declares one chaining mode per operator",
             ))));
         }
-        operators.insert(probe, (group, index));
+        tables.operators.insert(probe, (group, index));
         Ok(())
     }
 
@@ -504,8 +516,9 @@ impl Bindings {
     /// bit-copy; the caller re-anchors what it needs under its own pin. For chain-gated single-name
     /// reads use [`Self::lookup_value`].
     pub fn iter_data(&self) -> Vec<(String, SealedValue)> {
-        self.data
+        self.tables
             .borrow()
+            .data
             .iter()
             .map(|(name, entry)| (name.clone(), entry.sealed.duplicate()))
             .collect()
@@ -513,8 +526,9 @@ impl Bindings {
 
     /// Snapshot every `(name, KType)` pair in `types`, ignoring visibility.
     pub fn iter_types(&self) -> Vec<(String, KType)> {
-        self.types
+        self.tables
             .borrow()
+            .types
             .iter()
             .map(|(name, (kt, _site))| (name.clone(), *kt))
             .collect()
@@ -524,8 +538,9 @@ impl Bindings {
     /// visibility. Each seal is a bit-copy; the caller re-anchors what it needs under its own pin.
     /// For chain-gated picks use [`Self::lookup_function`].
     pub fn iter_functions(&self) -> Vec<(UntypedKey, Vec<SealedFunction>)> {
-        self.functions
+        self.tables
             .borrow()
+            .functions
             .iter()
             .map(|(key, bucket)| {
                 (
@@ -543,8 +558,9 @@ impl Bindings {
     /// no-shadow consult gates on this — a genuine builtin, not a user type that a
     /// synthetic test happens to have placed in a root-position scope.
     pub fn has_builtin_type(&self, name: &str) -> bool {
-        self.types
+        self.tables
             .borrow()
+            .types
             .get(name)
             .is_some_and(|(_, site)| site.index == BindingIndex::BUILTIN)
     }
@@ -553,8 +569,9 @@ impl Bindings {
     /// [`BindingIndex::BUILTIN`] — a genuine builtin dispatch bucket, distinct from a
     /// user bucket the no-shadow consult must not gate.
     pub fn has_builtin_function(&self, key: &UntypedKey) -> bool {
-        self.functions
+        self.tables
             .borrow()
+            .functions
             .get(key)
             .is_some_and(|bucket| bucket.iter().any(|e| e.index == BindingIndex::BUILTIN))
     }
@@ -570,33 +587,34 @@ impl Bindings {
 
     #[cfg(test)]
     pub(crate) fn data(&self) -> Ref<'_, HashMap<String, DataEntry>> {
-        self.data.borrow()
+        Ref::map(self.tables.borrow(), |t| &t.data)
     }
 
     #[cfg(test)]
     pub(crate) fn functions(&self) -> Ref<'_, HashMap<UntypedKey, Vec<FunctionBucketEntry>>> {
-        self.functions.borrow()
+        Ref::map(self.tables.borrow(), |t| &t.functions)
     }
 
     #[cfg(test)]
     pub fn placeholders(&self) -> Ref<'_, HashMap<String, (NodeId, BindingIndex, BindKind)>> {
-        self.placeholders.borrow()
+        Ref::map(self.tables.borrow(), |t| &t.placeholders)
     }
 
     #[cfg(test)]
     pub fn pending_overloads(&self) -> Ref<'_, HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>> {
-        self.pending_overloads.borrow()
+        Ref::map(self.tables.borrow(), |t| &t.pending_overloads)
     }
 
     #[cfg(test)]
     pub fn types(&self) -> Ref<'_, HashMap<String, (KType, DeclarationSite)>> {
-        self.types.borrow()
+        Ref::map(self.tables.borrow(), |t| &t.types)
     }
 
     #[cfg(test)]
     pub fn expect_type(&self, name: &str) -> KType {
-        self.types
+        self.tables
             .borrow()
+            .types
             .get(name)
             .map(|(kt, _site)| *kt)
             .unwrap_or_else(|| panic!("expected bindings.types[{name:?}] to be present"))
@@ -635,18 +653,17 @@ impl Bindings {
         kt: KType,
         site: DeclarationSite,
         policy: TypeWritePolicy,
-        gate: &mut WriteGate,
+        _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         self.partition_guard(name, BindKind::Type)?;
-        let mut types = self.types.borrow_mut();
-        // Cross-kind exclusion: a type name may not collide with a committed value. `types`
-        // is already held, so probing `data` next preserves the `types → data` borrow order.
-        if self.data.borrow().contains_key(name) {
+        let mut tables = self.tables.borrow_mut();
+        // Cross-kind exclusion: a type name may not collide with a committed value.
+        if tables.data.contains_key(name) {
             return Err(KError::new(KErrorKind::Rebind {
                 name: name.to_string(),
             }));
         }
-        match (policy, types.get(name).map(|(_, s)| *s)) {
+        match (policy, tables.types.get(name).map(|(_, s)| *s)) {
             (TypeWritePolicy::Insert, Some(_)) => {
                 return Err(KError::new(KErrorKind::Rebind {
                     name: name.to_string(),
@@ -660,9 +677,8 @@ impl Bindings {
             // Absent, or the same declaration re-entering: write the identity.
             _ => {}
         }
-        types.insert(name.to_string(), (kt, site));
-        drop(types);
-        self.clear_placeholder(name, BindKind::Type, gate);
+        tables.types.insert(name.to_string(), (kt, site));
+        tables.clear_placeholder(name, BindKind::Type);
         Ok(())
     }
 
@@ -688,20 +704,20 @@ impl Bindings {
         kind: BindKind,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        if let Some(entry) = self.data.borrow().get(&name) {
+        let mut tables = self.tables.borrow_mut();
+        if let Some(entry) = tables.data.get(&name) {
             if entry.callable.is_some() {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        let mut ph = self.placeholders.borrow_mut();
-        if let Some((existing, _, _)) = ph.get(&name).copied() {
+        if let Some((existing, _, _)) = tables.placeholders.get(&name).copied() {
             if existing == idx {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        ph.insert(name, (idx, index, kind));
+        tables.placeholders.insert(name, (idx, index, kind));
         Ok(())
     }
 
@@ -726,8 +742,12 @@ impl Bindings {
         index: BindingIndex,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let mut pending = self.pending_overloads.borrow_mut();
-        pending.entry(bucket).or_default().push((idx, index));
+        self.tables
+            .borrow_mut()
+            .pending_overloads
+            .entry(bucket)
+            .or_default()
+            .push((idx, index));
         Ok(())
     }
 
@@ -753,8 +773,9 @@ impl Bindings {
         // stay owned by the *source* scope's region union — the replay target's own region must
         // already outlive it (a bulk install is same-run re-entrant ascription).
         let snapshot: Vec<(String, DataEntry)> = src
-            .data
+            .tables
             .borrow()
+            .data
             .iter()
             .map(|(k, entry)| (k.clone(), entry.duplicate()))
             .collect();
@@ -790,9 +811,8 @@ impl Bindings {
         }
     }
 
-    /// Shared write path for `data`/`functions`. Borrows `functions` first
-    /// (only when `mirror.is_some()`), then `data` — skipping the `functions`
-    /// borrow otherwise keeps the borrow discipline `types → functions → data` minimal.
+    /// Shared write path for `data`/`functions`, both maps mutated under the one borrow — so the
+    /// mirror pair is installed atomically or not at all.
     ///
     /// `sealed`: `Some` for value-carrying paths (LET, LET-binds-FN) — the fused value+reach the
     /// entry stores; `None` for bare-`FN` (dispatch-only, no `data` insert). The only combinations
@@ -813,50 +833,40 @@ impl Bindings {
         index: BindingIndex,
         sealed: Option<SealedValue>,
         mirror: Option<FunctionMirror>,
-        gate: &mut WriteGate,
+        _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let write_data = sealed.is_some();
-        // Cross-kind exclusion: a value name may not collide with a committed type — the
-        // `data`/`types` partition is structural, not convention. Probe `types` first (borrow
-        // order `types → functions → data`); a bare-`FN` registration (`write_data == false`)
-        // binds no value, so it is exempt from both this and the token-class gate.
+        // A bare-`FN` registration (`write_data == false`) binds no value, so it is exempt from
+        // both the token-class gate and the cross-kind probe below: its surface is `functions` only.
         if write_data {
             self.partition_guard(name, BindKind::Value)?;
-            if self.types.borrow().contains_key(name) {
-                return Err(KError::new(KErrorKind::Rebind {
-                    name: name.to_string(),
-                }));
-            }
         }
-        let mut functions_handle = mirror.is_some().then(|| self.functions.borrow_mut());
-        // Bare FN: skip the `data` borrow, pre-check, and insert entirely — the
-        // dispatch surface lives in `functions` only.
-        let mut data = write_data.then(|| self.data.borrow_mut());
-        // `mirror.is_some()` + existing `KFunction` falls through to bucket dedupe
-        // (overload-add path); everything else is a rebind error.
-        if let Some(data) = data.as_ref() {
-            if let Some(existing) = data.get(name) {
-                match mirror {
-                    None => {
-                        return Err(KError::new(KErrorKind::Rebind {
-                            name: name.to_string(),
-                        }))
-                    }
-                    Some(_) => {
-                        if existing.callable.is_none() {
-                            return Err(KError::new(KErrorKind::Rebind {
-                                name: name.to_string(),
-                            }));
-                        }
-                    }
+        let has_mirror = mirror.is_some();
+        let rebind = || {
+            KError::new(KErrorKind::Rebind {
+                name: name.to_string(),
+            })
+        };
+        let mut tables = self.tables.borrow_mut();
+        if write_data {
+            // Cross-kind exclusion: a value name may not collide with a committed type — the
+            // `data`/`types` partition is structural, not convention.
+            if tables.types.contains_key(name) {
+                return Err(rebind());
+            }
+            // A mirror over an existing callable entry falls through to bucket dedupe (the
+            // overload-add path); everything else is a rebind error.
+            if let Some(existing) = tables.data.get(name) {
+                if !has_mirror || existing.callable.is_none() {
+                    return Err(rebind());
                 }
             }
         }
         // The bucket this write touched, if any: the `data` entry's callable classification and the
         // pending-overload clear both name it.
         let mut bucket_key: Option<UntypedKey> = None;
-        if let (Some(mirror), Some(functions)) = (mirror, functions_handle.as_mut()) {
-            let bucket = functions.entry(mirror.key.clone()).or_default();
+        if let Some(mirror) = mirror {
+            let bucket = tables.functions.entry(mirror.key.clone()).or_default();
             let verdict = bucket.iter().find_map(|existing| {
                 if existing.identity == mirror.identity {
                     // The same callable is already registered (an intentional alias like
@@ -886,8 +896,8 @@ impl Bindings {
             }
             bucket_key = Some(mirror.key);
         }
-        if let (Some(data), Some(sealed)) = (data.as_mut(), sealed) {
-            data.insert(
+        if let Some(sealed) = sealed {
+            tables.data.insert(
                 name.to_string(),
                 DataEntry {
                     index,
@@ -896,26 +906,12 @@ impl Bindings {
                 },
             );
         }
-        drop(data);
-        drop(functions_handle);
-        self.clear_placeholder(name, BindKind::Value, gate);
+        tables.clear_placeholder(name, BindKind::Value);
         if let Some(bucket) = bucket_key {
             // Remove only this binder's pending entry; siblings stay as wake sources.
-            self.clear_pending_overload(&bucket, index, gate);
+            tables.clear_pending_overload(&bucket, index);
         }
         Ok(())
-    }
-
-    /// Shared tail of every successful write path. Removes a *matching-kind* placeholder
-    /// for `name`: a value write clears only a [`BindKind::Value`] entry, a type write only
-    /// a [`BindKind::Type`] one, so a value bind never clears an in-flight type producer's
-    /// placeholder (or the reverse). A firm `borrow_mut` — every table write runs from the
-    /// run loop's op-apply, with no koan frame on the stack to hold a competing borrow.
-    fn clear_placeholder(&self, name: &str, kind: BindKind, _gate: &mut WriteGate) {
-        let mut ph = self.placeholders.borrow_mut();
-        if matches!(ph.get(name), Some((_, _, k)) if *k == kind) {
-            ph.remove(name);
-        }
     }
 
     /// Remove every value-side placeholder pointing at `producer`. The success write
@@ -924,25 +920,33 @@ impl Bindings {
     /// that failed before its write path does not leak a scheduler-local [`NodeId`] into
     /// a later run on a persistent scope.
     pub fn clear_placeholders_for_producer(&self, producer: NodeId, _gate: &mut WriteGate) {
-        self.placeholders
+        self.tables
             .borrow_mut()
+            .placeholders
             .retain(|_, (id, _, _)| *id != producer);
+    }
+}
+
+impl Tables {
+    /// Shared tail of every successful write path. Removes a *matching-kind* placeholder
+    /// for `name`: a value write clears only a [`BindKind::Value`] entry, a type write only
+    /// a [`BindKind::Type`] one, so a value bind never clears an in-flight type producer's
+    /// placeholder (or the reverse). Runs under the write's own borrow, so a binding and its
+    /// placeholder clear land together.
+    fn clear_placeholder(&mut self, name: &str, kind: BindKind) {
+        if matches!(self.placeholders.get(name), Some((_, _, k)) if *k == kind) {
+            self.placeholders.remove(name);
+        }
     }
 
     /// Bucket-keyed companion to [`Self::clear_placeholder`].
     /// Removes only the entry whose `BindingIndex` matches — sibling binders
     /// stay as wake sources. Empties drop the map entry.
-    fn clear_pending_overload(
-        &self,
-        bucket: &UntypedKey,
-        index: BindingIndex,
-        _gate: &mut WriteGate,
-    ) {
-        let mut p = self.pending_overloads.borrow_mut();
-        if let Some(entries) = p.get_mut(bucket) {
+    fn clear_pending_overload(&mut self, bucket: &UntypedKey, index: BindingIndex) {
+        if let Some(entries) = self.pending_overloads.get_mut(bucket) {
             entries.retain(|(_, idx)| *idx != index);
             if entries.is_empty() {
-                p.remove(bucket);
+                self.pending_overloads.remove(bucket);
             }
         }
     }
