@@ -13,6 +13,7 @@ use crate::machine::core::{run_root_storage, CarrierWitness, FrameCoverage, Fram
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::AdoptSeam;
 use crate::machine::CallFrame;
 use crate::witnessed::Delivered;
 
@@ -30,7 +31,10 @@ fn resident_scalar(
     let carrier = producer.with_scope(|child| {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
         child
-            .seal_resident_value(Carried::Object(obj), None, borrows_into_home)
+            .seal_resident(
+                Carried::Object(obj),
+                CarrierWitness::new(borrows_into_home, None),
+            )
             .unseal()
     });
     let weak = Rc::downgrade(&producer.storage_rc());
@@ -329,12 +333,12 @@ fn aggregate_of_plain_record_results_releases_every_producer_frame() {
     );
 }
 
-/// `Scope::adopt_sealed` on a delivered object: the value rides its retention hold (the envelope's
+/// `Scope::adopt_carried` at the retaining seam, on a delivered object: the value rides its retention hold (the envelope's
 /// host) across the producer shell's drop, and the copy-free adoption materializes that host into
 /// the consumer's arena — so after the envelope itself drops, the consumer's minted set is the
 /// sole owner of the producer's storage and the adopted read stays live.
 #[test]
-fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
+fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
@@ -359,7 +363,7 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
 
     let consumer_storage = run_root_storage();
     let consumer = run_root_bare(&consumer_storage);
-    let adopted: Carried = consumer.adopt_sealed(&cell);
+    let adopted: Carried = consumer.adopt_carried(&cell, AdoptSeam::Retaining);
 
     // Drop the hold: the consumer's minted arena set (the materialized host member) is now the
     // sole owner of the producer's storage.
@@ -395,7 +399,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
         let addr = obj as *const KObject as usize;
         (
             child
-                .seal_resident_value(Carried::Object(obj), None, false)
+                .seal_resident(Carried::Object(obj), CarrierWitness::new(false, None))
                 .unseal(),
             addr,
         )

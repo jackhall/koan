@@ -9,6 +9,8 @@ use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
 use crate::machine::model::Record;
+use crate::machine::AdoptSeam;
+use crate::machine::CarrierWitness;
 use crate::machine::{NodeId, Scope};
 use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
@@ -228,14 +230,16 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
             }
             // A spliced cell is adopted into the elaborating scope (folding its reach),
             // then routed through type/non-type handling.
-            ExpressionPart::Spliced { cell, .. } => match elaborator.scope.adopt_sealed(cell) {
-                Carried::Type(kt) => checked(kt),
-                other @ (Carried::Object(_) | Carried::UnresolvedType(_)) => Err(format!(
-                    "{context_list} type for `{}` resolved to non-type value `{}`",
-                    name,
-                    other.summarize(types),
-                )),
-            },
+            ExpressionPart::Spliced { cell, .. } => {
+                match elaborator.scope.adopt_carried(cell, AdoptSeam::Retaining) {
+                    Carried::Type(kt) => checked(kt),
+                    other @ (Carried::Object(_) | Carried::UnresolvedType(_)) => Err(format!(
+                        "{context_list} type for `{}` resolved to non-type value `{}`",
+                        name,
+                        other.summarize(types),
+                    )),
+                }
+            }
             other => Err(format!(
                 "{context_list} type for `{}` must be a type name token, got {}",
                 name,
@@ -286,7 +290,7 @@ fn rewrite_threaded_self_refs<'e, 'a>(
                     // producer frame.
                     let sibling =
                         window.sibling(&t.render(), crate::machine::model::KKind::NewType, types);
-                    let carrier = scope.resident_type_carrier(sibling);
+                    let carrier = scope.resident(Carried::Type(sibling), CarrierWitness::default());
                     ExpressionPart::Spliced {
                         // A `KType` carrier has no foreign reach, so it seals under an empty bundle.
                         cell: scope.seal_resident_delivered(

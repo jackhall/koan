@@ -338,7 +338,7 @@ pub(crate) fn build_type_operand(
 /// [`finish_witnessed`]'s construction fold is the value-side counterpart, where the wrapped object
 /// genuinely reaches its deps' regions.
 pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: KType) -> StepCarried<'a> {
-    StepCarried::born(scope.resident_type_carrier(identity))
+    StepCarried::born(scope.resident(Carried::Type(identity), CarrierWitness::default()))
 }
 
 /// All value subs have resolved. Build the wrapped value **inside the witness closure**, folding the

@@ -8,6 +8,8 @@ use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::Carried;
+use crate::machine::CarrierWitness;
 
 /// `LET <name> = <value:Any>` — deep-clones the bound value into the region and inserts it
 /// under `name`. Two overloads share this body, differing only in the `name` slot's `KType`:
@@ -122,7 +124,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // The handle names the same interned type in every region — `kt` is already this binder's
         // copy out of the RHS envelope — so the terminal witnesses it directly and the `types`
         // write rides the outcome.
-        let carrier = ctx.scope.resident_type_carrier(kt);
+        let carrier = ctx
+            .scope
+            .resident(Carried::Type(kt), CarrierWitness::default());
         Action::done(Ok(StepCarried::born(carrier))).with_effect(WriteOp::Type {
             name,
             kt,

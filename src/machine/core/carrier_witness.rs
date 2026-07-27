@@ -12,6 +12,7 @@ use crate::witnessed::{Erased, Witnessed};
 
 use super::arena::{FrameStorage, KoanRegion};
 use super::kfunction::{KFunction, KFunctionFamily};
+use super::scope::Scope;
 
 /// Koan's value-carrier witness: the library [`Carrier`](crate::witnessed::Carrier) over koan's
 /// frame owner — one `borrows_host` bit plus a reference to the value's hosted reach set. It pins
@@ -111,6 +112,17 @@ pub(crate) struct FunctionMirror {
 }
 
 impl FunctionMirror {
+    /// The bundle for a callable **resident in `scope`'s own region** — the bare-`FN` door, which
+    /// binds no value and so has no mirrored `data` seal to derive its claim from. The reach is the
+    /// exact empty set: `FN` allocates the callable into the very scope it captures, so its only
+    /// region borrow is home, which every read of it already pins. The callable is held live here,
+    /// so everything the bucket write keys on is read straight off the reference and travels as
+    /// plain data.
+    pub(crate) fn of_resident<'a>(scope: &Scope<'a>, f: &'a KFunction<'a>) -> Self {
+        let sealed = scope.seal_resident::<KFunctionFamily>(f, CarrierWitness::default());
+        FunctionMirror::of_live(f, sealed)
+    }
+
     /// The bundle for a callable held live, computed straight off the reference.
     pub(crate) fn of_live(f: &KFunction<'_>, sealed: SealedFunction) -> Self {
         FunctionMirror {

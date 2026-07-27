@@ -590,7 +590,10 @@ fn region_union_foreign_pins_release_at_region_death() {
             .write_value(
                 "x",
                 BindingIndex::BUILTIN,
-                Some(scope.seal_resident_value(Carried::Object(obj), reach, borrows_home)),
+                Some(scope.seal_resident(
+                    Carried::Object(obj),
+                    CarrierWitness::new(borrows_home, reach),
+                )),
                 None,
                 &mut crate::machine::WriteGate::for_test(),
             )
@@ -759,7 +762,10 @@ fn delivered_reread_closure<'run>(
     // the owning bundle folded into the reader region's union. The read then lifts that entry —
     // upgrading the description's members `Weak → Rc` — into an envelope hosted by the reader.
     let (reach, borrows_home) = reader_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(home))]);
-    let sealed = reader_scope.seal_resident_value(Carried::Object(obj), reach, borrows_home);
+    let sealed = reader_scope.seal_resident(
+        Carried::Object(obj),
+        CarrierWitness::new(borrows_home, reach),
+    );
     reader_scope.lift_resident(sealed)
 }
 

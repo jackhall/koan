@@ -22,7 +22,7 @@ use super::{arg, kw, sig};
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
 /// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
-/// witnessed [`Action::done(Ok)`](Action::Done) carrier ([`Scope::resident_type_carrier`] seals it under the
+/// witnessed [`Action::done(Ok)`](Action::Done) carrier ([`Scope::resident`] seals it under the
 /// child scope's token, derived via [`Scope::child_module_reach`]).
 pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;

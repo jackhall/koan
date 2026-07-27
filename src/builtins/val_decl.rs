@@ -23,6 +23,8 @@ use crate::machine::{KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
+use crate::machine::model::Carried;
+use crate::machine::CarrierWitness;
 
 fn typeexpr_from_carrier(kt: KType, types: &TypeRegistry) -> CarrierForm {
     // The builtin leaf type names re-resolve against decl_scope through the same name path so a
@@ -138,7 +140,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 ///
 /// `declared_kt` arrives from a bind-time `ty` argument or a leaf re-dispatch's dep terminal. The
 /// [`WriteOp::SigSlot`](crate::machine::core::bindings::WriteOp) the outcome carries installs it in
-/// the SIG decl scope's slot collector; [`Scope::resident_type_carrier`] seals the same handle into
+/// the SIG decl scope's slot collector; [`Scope::resident`] seals the same handle into
 /// the terminal.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a, '_>,
@@ -154,7 +156,8 @@ fn finalize_val<'a>(
         return Action::done(Err(KError::new(KErrorKind::ShapeError(message))));
     }
     Action::done(Ok(StepCarried::born(
-        fctx.scope.resident_type_carrier(declared_kt),
+        fctx.scope
+            .resident(Carried::Type(declared_kt), CarrierWitness::default()),
     )))
     .with_effect(crate::machine::core::bindings::WriteOp::SigSlot {
         name,

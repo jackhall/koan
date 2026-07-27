@@ -23,13 +23,14 @@ use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
 /// seals as a [`StepCarried`] carrier naming its reach ([`Action::done(Ok)`]), an error as a
 /// [`Action::done(Err)`]. Both channels are witnessed: an object value re-projected at the fold
 /// brand from the lhs operand's view (its reach folded by construction), a type identity witnessed
-/// in place from its stored reach via [`Scope::resident_type_carrier`] (or, for a projected type
+/// in place from its stored reach via [`Scope::resident`] (or, for a projected type
 /// field, re-projected and sealed under the folded lhs reach).
 fn route<'a>(result: Result<StepCarried<'a>, KError>) -> crate::machine::Action<'a> {
     crate::machine::Action::done(result)
@@ -212,7 +213,9 @@ fn access_type_member<'a>(
                 .or_else(|| schema.abstract_members.get(field))
                 .or_else(|| schema.value_slots.get(field));
             match member {
-                Some(member) => Ok(StepCarried::born(scope.resident_type_carrier(*member))),
+                Some(member) => Ok(StepCarried::born(
+                    scope.resident(Carried::Type(*member), CarrierWitness::default()),
+                )),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     kt.name(types),
@@ -356,8 +359,10 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
         // `:|`-minted abstract type.
         return Ok(StepCarried::born(
             match module_scope.bindings().lookup_type(field, None) {
-                Some(NameLookup::Bound(kt)) => module_scope.resident_type_carrier(kt),
-                _ => module_scope.resident_type_carrier(minted),
+                Some(NameLookup::Bound(kt)) => {
+                    module_scope.resident(Carried::Type(kt), CarrierWitness::default())
+                }
+                _ => module_scope.resident(Carried::Type(minted), CarrierWitness::default()),
             },
         ));
     }
@@ -373,11 +378,11 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 // The re-tag allocates in the module region (not the read site's): both the value
                 // member and the re-tag identity `tag` cross as declared fold operands. The member
                 // is a binding seal lifted into an envelope pinned by the module scope's own region
-                // owner; `tag` is a Copy handle sealed resident via `resident_type_carrier`. Both
+                // owner; `tag` is a Copy handle sealed resident via `Scope::resident`. Both
                 // carriers union into the wrapped result's witness via `alloc_carried_with`.
                 let obj_carrier = module_scope.lift_resident(sealed);
                 let tag_carrier = module_scope.seal_resident_delivered(
-                    module_scope.resident_type_carrier(tag),
+                    module_scope.resident(Carried::Type(tag), CarrierWitness::default()),
                     crate::machine::core::FrameCoverage::empty(),
                 );
                 let ctx = StepAllocator::for_scope(module_scope);
@@ -396,9 +401,9 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
             let (carrier, pins) = module_scope.lift_resident_parts(sealed);
             Ok(StepCarried::born_pinned(carrier, pins))
         }
-        Some(MemberResolution::Type { kt }) => {
-            Ok(StepCarried::born(module_scope.resident_type_carrier(kt)))
-        }
+        Some(MemberResolution::Type { kt }) => Ok(StepCarried::born(
+            module_scope.resident(Carried::Type(kt), CarrierWitness::default()),
+        )),
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field

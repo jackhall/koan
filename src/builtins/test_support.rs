@@ -132,7 +132,7 @@ pub(crate) fn extract_terminal<'a>(
     // Reuse the production copy-then-audit adoption: a top-level record is totally rebuilt into
     // `scope`'s region through the seam copy verb (never pointer-copied past the checked audit), an
     // object deep-clones under its own minted reach, a type crosses by handle / clone.
-    scope.adopt_sealed_copied(&delivered, types)
+    scope.adopt_carried(&delivered, crate::machine::AdoptSeam::ReHome(types))
 }
 
 /// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read it back.

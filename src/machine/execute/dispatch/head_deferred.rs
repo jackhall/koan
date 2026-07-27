@@ -26,6 +26,7 @@ use crate::source::Spanned;
 use super::super::TerminalDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::{Await, DepRequest, Outcome};
+use crate::machine::AdoptSeam;
 use crate::scheduler::Deps;
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
@@ -73,7 +74,9 @@ fn park_on_head<'step>(
         {
             Some(function) => ResolvedCallable::Function(function),
             None => {
-                let head = ctx.current_scope().adopt_sealed(&head_terminal.delivered);
+                let head = ctx
+                    .current_scope()
+                    .adopt_carried(&head_terminal.delivered, AdoptSeam::Retaining);
                 match classify_head(head, type_only, ctx.types()) {
                     Ok(c) => c,
                     Err(e) => return Outcome::Done(Err(e)),

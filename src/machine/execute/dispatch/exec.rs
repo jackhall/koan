@@ -21,6 +21,7 @@ use crate::machine::core::{Body, KFunction, OpenedFunction};
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{Record, SignatureElement};
+use crate::machine::AdoptSeam;
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
 use crate::scheduler::ResolvedDeps;
 
@@ -127,7 +128,7 @@ pub(super) fn invoke<'step>(
         .expect("a user-fn invoke runs against the Continue-installed per-call cart");
     // Re-key onto parameter names so `run_user_fn` stores each binding's reach from its own carrier,
     // keyed to match `bound`. `extract_carried_args` already folded every delivered arg's reach into
-    // this same per-call scope (through `adopt_sealed`), so every foreign region an argument borrows
+    // this same per-call scope (through `adopt_carried`), so every foreign region an argument borrows
     // into is pinned for the call's life — no separate deposit here.
     let named_carriers = map_arg_carriers(function, arg_carriers);
     let exec_frame = ExecFrame {
@@ -287,9 +288,10 @@ fn extract_carried_args<'step>(
             // arena), a type copy-free with its host pinned. `view.current_scope()` *is* the call
             // scope (the run loop opens each step's scope from the Continue-installed cart), so the
             // fold never lands in the caller's scope.
-            ExpressionPart::Spliced { cell } => {
-                args.push(view.current_scope().adopt_sealed_copied(cell, view.types()))
-            }
+            ExpressionPart::Spliced { cell } => args.push(
+                view.current_scope()
+                    .adopt_carried(cell, AdoptSeam::ReHome(view.types())),
+            ),
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
             // the args as a `'step` `Carried`. A `#(...)` quote is a literal for this purpose: its
             // `KObject::KExpression` body is data, and the checked door's family audit passes it —

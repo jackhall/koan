@@ -5,6 +5,7 @@
 
 use std::rc::Rc;
 
+use super::AdoptSeam;
 use super::Scope;
 use crate::machine::core::bindings::{Bindings, NameLookup};
 use crate::machine::core::LexicalFrame;
@@ -31,7 +32,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Nearest value binding of `name` up the `outer` chain, **adopted** into this scope's own
-    /// region ([`Self::adopt_sealed`] mints the binding's reach here and retains it, so the returned
+    /// region ([`Self::adopt_carried`] mints the binding's reach here and retains it, so the returned
     /// reference outlives the read). Collapses a `Parked` producer and a miss to `None`. Visibility
     /// unfiltered.
     ///
@@ -114,8 +115,12 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
-        self.resolve_value_delivered(name, chain)
-            .map(|hit| hit.map(|delivered| self.adopt_sealed(&delivered).object()))
+        self.resolve_value_delivered(name, chain).map(|hit| {
+            hit.map(|delivered| {
+                self.adopt_carried(&delivered, AdoptSeam::Retaining)
+                    .object()
+            })
+        })
     }
 
     /// Resolve `name` down the outer chain and **lift** the hit into a delivery envelope pinned by
@@ -164,7 +169,8 @@ impl<'a> Scope<'a> {
         self.bindings().lookup_value(name, cutoff).map(|hit| {
             hit.map(|sealed| {
                 let delivered = self.lift_resident(sealed);
-                self.adopt_sealed(&delivered).object()
+                self.adopt_carried(&delivered, AdoptSeam::Retaining)
+                    .object()
             })
         })
     }

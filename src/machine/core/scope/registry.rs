@@ -27,6 +27,7 @@ use crate::machine::core::bindings::{
 use crate::machine::core::carrier_witness::FunctionMirror;
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
 use crate::machine::model::{Carried, KObject, OperatorGroup, TypeRegistry};
+use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
@@ -74,35 +75,20 @@ impl<'a> Scope<'a> {
     /// The door derives the value and the reach it is audited against from this one `cell`, so a
     /// binding entry can never pair the value with a reach some other value derived.
     ///
-    /// A projection that **embeds a record** (a bare record, or one behind a `Tagged`/`Wrapped`
-    /// spine) routes the escape-seam cost chooser through [`Self::copy_delivered_substrate`]. A
-    /// rebuilt record lands in this scope's region through the record door at its release-exact seam
-    /// mode; a projection the chooser selects to **pin** instead rides the producer region by hold
-    /// (its pointer-copied substrate covered by the whole-envelope minted reach), the copy-free path
-    /// a bound closure's captured foreign region already takes. Every other projection deep-clones
-    /// its top node under the cell's copied-mode reach — the mint runs *before* the copy so the
-    /// copy's own residence audit sees the evidence.
+    /// The move-in policy is the bind seam's, and it lives in one place —
+    /// [`Self::adopt_for_binding`]. A projection that **embeds a substrate** (a bare record, or one
+    /// behind a `Tagged`/`Wrapped` spine) routes the escape-seam cost chooser there; every other
+    /// projection deep-clones its top node under the cell's copied-mode reach. A substrate carrier
+    /// is never a `KFunction`, so the mirror seal over such a bind simply finds nothing to write.
     pub(crate) fn seal_delivered(
         &self,
         cell: &DeliveredCarried,
         project: impl for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
         types: &TypeRegistry,
     ) -> Result<(SealedValue, Option<FunctionMirror>), KError> {
-        let projected_embeds_substrate = cell.open(|live| {
-            project(&live)
-                .map(|object| object.embeds_substrate())
-                .unwrap_or(false)
-        });
-        if projected_embeds_substrate {
-            // A projection that embeds a substrate is a `Record` / `List` / `Dict` / `Tagged` /
-            // `Wrapped`, never a `KFunction`, so the mirror has nothing to write.
-            Ok((self.copy_delivered_substrate(cell, project, types)?, None))
-        } else {
-            let (object, reach, borrows_home) = self.store_object_adopted(cell, project, types)?;
-            let sealed = self.seal_resident_value(Carried::Object(object), reach, borrows_home);
-            let mirror = self.seal_function_mirror(&sealed);
-            Ok((sealed, mirror))
-        }
+        let sealed = self.adopt_for_binding(cell, project, types)?;
+        let mirror = self.seal_function_mirror(&sealed);
+        Ok((sealed, mirror))
     }
 
     /// Fused region-pure / fresh-value **construction**: checked move-in of `value` into this
@@ -117,7 +103,10 @@ impl<'a> Scope<'a> {
         // A checked bind is region-pure — its borrows reach no foreign region — so there is no
         // description to host and nothing to fold into the region's union bundle.
         let (obj, (_, borrows_home)) = self.alloc_object_checked_stored(value, types)?;
-        let sealed = self.seal_resident_value(Carried::Object(obj), None, borrows_home);
+        let sealed = self.seal_resident(
+            Carried::Object(obj),
+            CarrierWitness::new(borrows_home, None),
+        );
         let mirror = self.seal_function_mirror(&sealed);
         Ok((sealed, mirror))
     }
@@ -197,7 +186,7 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let sealed = self.seal_resident_value(Carried::Object(obj), None, false);
+        let sealed = self.seal_resident(Carried::Object(obj), CarrierWitness::new(false, None));
         let mirror = self.seal_function_mirror(&sealed);
         self.bind_value_direct(name, sealed, mirror, index, gate)
     }
@@ -215,7 +204,7 @@ impl<'a> Scope<'a> {
         WriteOp::Overload {
             name,
             index,
-            mirror: self.seal_resident_function(fn_ref),
+            mirror: FunctionMirror::of_resident(self, fn_ref),
             builtin_shadow_guard: true,
         }
         .apply(self, gate)

@@ -25,6 +25,7 @@ use super::return_type::{
     make_capture, resolve_capture_at_finish, ReturnTypeCapture, ReturnTypeState,
 };
 use super::signature::{parse_fn_param_list, ParamListOutcome};
+use crate::machine::FunctionMirror;
 
 /// How a finalized FN-def is wired into the scope:
 ///
@@ -269,7 +270,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         writes.push(WriteOp::Overload {
             name,
             index: bind_index,
-            mirror: scope.seal_resident_function(f),
+            mirror: FunctionMirror::of_resident(scope, f),
             builtin_shadow_guard: true,
         });
     }

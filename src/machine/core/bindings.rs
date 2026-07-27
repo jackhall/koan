@@ -576,8 +576,9 @@ impl Bindings {
             .is_some_and(|bucket| bucket.iter().any(|e| e.index == BindingIndex::BUILTIN))
     }
 
-    /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒ `b.idx < c`.
-    /// Mirrors [`crate::machine::core::scope::visible`].
+    /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒ `b.idx < c`. The cutoff
+    /// itself comes from [`Scope::binding_cutoff`](crate::machine::Scope); this is the only place
+    /// it is applied.
     fn visible(b: BindingIndex, chain_cutoff: Option<usize>) -> bool {
         match chain_cutoff {
             None => true,

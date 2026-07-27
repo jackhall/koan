@@ -10,6 +10,7 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 
 use super::{body_no_op, unit_signature};
+use crate::machine::CarrierWitness;
 
 // `BindingIndex::BUILTIN` is used throughout because these tests exercise the
 // `Bindings` write rules (rebind, dedupe, placeholder lifecycle) rather than the
@@ -707,7 +708,10 @@ fn function_mirror_seals_the_data_entrys_own_claim() {
     // scope's arena exactly as a bind door's mint would, so the seal carries a real reach.
     let foreign = run_root_storage();
     let (reach, borrows_home) = scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
-    let sealed = scope.seal_resident_value(Carried::Object(obj), reach, borrows_home);
+    let sealed = scope.seal_resident(
+        Carried::Object(obj),
+        CarrierWitness::new(borrows_home, reach),
+    );
     let mirror = scope
         .seal_function_mirror(&sealed)
         .expect("the bound value wraps a callable");

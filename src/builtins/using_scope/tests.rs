@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use crate::builtins::test_support::{parse_one, run_root_bare, TestRun};
 use crate::machine::model::{Carried, KObject};
+use crate::machine::CarrierWitness;
 use crate::machine::KErrorKind;
 use crate::machine::{run_root_storage, BindingIndex, FrameCoverage, Scope};
 
@@ -195,7 +196,10 @@ fn using_window_value_read_reach_survives_under_module_root() {
     let value_obj = module_scope.brand().alloc_object(KObject::Number(1.0));
     let (reach, borrows_home) =
         module_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign_storage))]);
-    let sealed = module_scope.seal_resident_value(Carried::Object(value_obj), reach, borrows_home);
+    let sealed = module_scope.seal_resident(
+        Carried::Object(value_obj),
+        CarrierWitness::new(borrows_home, reach),
+    );
     module_scope
         .bind_value_direct(
             "val".to_string(),

@@ -12,7 +12,7 @@
 //!   surface with the concrete arguments replaced by the parameter names. Opaque ascription
 //!   re-mints it as a fresh per-call constructor nonced on the view module's scope id.
 //!
-//! Both bind through the same fused `register_user_type_delivered` + `resident_type_carrier`
+//! Both bind through the same fused `register_user_type_delivered` + `Scope::resident`
 //! path the `LET` type route uses, so a `TYPE`-declared member rides the same
 //! `bindings.types` entry a manifest `LET` member does — value slots (`VAL`) live in the
 //! decl scope's own slot collector, a separate storage channel `bindings.types` never sees.
@@ -27,6 +27,8 @@ use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::Carried;
+use crate::machine::CarrierWitness;
 
 fn not_in_sig_body() -> KError {
     KError::new(KErrorKind::ShapeError(
@@ -45,7 +47,9 @@ fn bind_abstract_member<'a>(
     kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    let carrier = ctx.scope.resident_type_carrier(kt);
+    let carrier = ctx
+        .scope
+        .resident(Carried::Type(kt), CarrierWitness::default());
     Action::done(Ok(StepCarried::born(carrier))).with_effect(
         crate::machine::core::bindings::WriteOp::Type {
             name,

@@ -28,7 +28,7 @@ pub use bindings::{
     NodeHandle, PendingBinderGuard, WriteGate,
 };
 pub(crate) use carrier_witness::{
-    clone_still_borrows, force_substrate_borrows_host, product_still_borrows,
+    clone_still_borrows, force_substrate_borrows_host, product_still_borrows, FunctionMirror,
 };
 pub use carrier_witness::{CarrierWitness, DeliveredCarried, OpenedFunction, SealedFunction};
 pub(crate) use kerror::kerror_ktype;
@@ -45,6 +45,7 @@ pub(crate) use kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallRet
 pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction, NodeId};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
 pub use run_id::RunId;
+pub(crate) use scope::AdoptSeam;
 pub use scope::Scope;
 pub use scope_id::ScopeId;
 pub use scope_ptr::ScopeRefFamily;

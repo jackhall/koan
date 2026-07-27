@@ -445,7 +445,7 @@ pub enum ActionKind<'a> {
     /// value or an error. The `Ok` carrier is built **inside the witness closure** — already bundled
     /// with the set of regions it reaches ([`yoke`](crate::witnessed::Witnessed::yoke) / `merge` at
     /// the alloc site, or a step-context `alloc_carried`/`alloc_carried_with` (and their typed
-    /// wrappers) / `resident_type_carrier` sealing a constructed or read value) — so it is co-located
+    /// wrappers) / `Scope::resident` sealing a constructed or read value) — so it is co-located
     /// by construction rather than paired with an asserted witness at finalize. The construction
     /// terminal for **both** channels: a builtin that allocates a `KObject` or a `KType` seals it here.
     /// The carrier rides the step brand `'a` from the door that built it (a [`StepCarried`]), so it

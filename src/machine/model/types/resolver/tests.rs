@@ -4,6 +4,7 @@ use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::values::Carried;
 use crate::machine::model::Record;
+use crate::machine::CarrierWitness;
 use crate::machine::{BindingIndex, DeclarationSite};
 
 fn leaf(n: &str) -> TypeIdentifier {
@@ -22,10 +23,9 @@ fn type_token_cannot_bind_value_side() {
     let error = scope
         .bind_value_direct(
             "Gee".into(),
-            scope.seal_resident_value(
+            scope.seal_resident(
                 Carried::Object(region.brand().alloc_object(KObject::Number(7.0))),
-                None,
-                false,
+                CarrierWitness::default(),
             ),
             None,
             BindingIndex::BUILTIN,

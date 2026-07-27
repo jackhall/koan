@@ -82,6 +82,7 @@ enum OpKind {
 
 pub(super) use crate::machine::model::symbol_from_parts;
 use crate::machine::model::symbol_from_quote_body;
+use crate::machine::FunctionMirror;
 
 /// Body-side symbol read: a quoted slot's raw `KObject::KExpression` is the quote body. Shared with
 /// `GROUP`, whose pairwise `combiner` slot names an operator the same way (`super::group_def`).
@@ -506,7 +507,7 @@ fn register_body<'a>(
     let write = WriteOp::Overload {
         name: sym.to_string(),
         index: bind_index,
-        mirror: scope.seal_resident_function(f),
+        mirror: FunctionMirror::of_resident(scope, f),
         builtin_shadow_guard: false,
     };
     Ok((

@@ -90,7 +90,10 @@ impl<'a> Scope<'a> {
     ) -> Result<SealedValue, KError> {
         let minted = self.child_module_reach(child);
         let obj = self.store_value_reaching(KObject::Module(module), minted, types)?;
-        Ok(self.seal_resident_value(Carried::Object(obj), minted.0, minted.1))
+        Ok(self.seal_resident(
+            Carried::Object(obj),
+            CarrierWitness::new(minted.1, minted.0),
+        ))
     }
 
     /// The transparent-ascription store: a fresh re-tagged `Module` reusing a *foreign* source
@@ -119,7 +122,10 @@ impl<'a> Scope<'a> {
             );
         seal(new_module);
         let obj = self.store_value_reaching(KObject::Module(new_module), minted, types)?;
-        Ok(self.seal_resident_value(Carried::Object(obj), minted.0, minted.1))
+        Ok(self.seal_resident(
+            Carried::Object(obj),
+            CarrierWitness::new(minted.1, minted.0),
+        ))
     }
 
     /// Audit a projection of the delivered `cell` (deep-cloned into this scope's region) against

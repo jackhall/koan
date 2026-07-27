@@ -15,6 +15,8 @@ mod reach;
 mod registry;
 mod resolve;
 
+pub(crate) use reach::AdoptSeam;
+
 /// Lexical environment. Only the root scope holds a writer in `out`; child scopes
 /// have `None` and `write_out` walks `outer` to find one.
 ///

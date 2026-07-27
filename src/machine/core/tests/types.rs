@@ -8,6 +8,8 @@ use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::{run_root_storage, FrameCoverage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
+use crate::machine::AdoptSeam;
+use crate::machine::CarrierWitness;
 use crate::machine::{BindingIndex, DeclarationSite};
 
 #[test]
@@ -68,11 +70,11 @@ fn resolve_type_inner_scope_shadows_outer() {
     assert!(matches!(root.resolve_type("Foo"), Some(kt) if kt == KType::NUMBER));
 }
 
-/// `adopt_sealed` re-anchors a producer's sealed carrier at the consumer scope's brand **without
+/// `adopt_carried` under `AdoptSeam::Retaining` re-anchors a producer's sealed carrier at the consumer scope's brand **without
 /// copying**: the adopted borrow points at the very same object the producer sealed, and the
 /// consumer's fold pins the reached region for the value's new lifetime.
 #[test]
-fn adopt_sealed_reanchors_the_same_value_copy_free() {
+fn retaining_adopt_reanchors_the_same_value_copy_free() {
     use crate::machine::model::{Carried, KObject};
     use crate::witnessed::Delivered;
 
@@ -82,25 +84,25 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
     // by the frame that owns that region.
     let obj: &KObject = producer.brand().alloc_object(KObject::Number(42.0));
     let cell = Delivered::hosted(
-        producer.seal_resident_value(Carried::Object(obj), None, false),
+        producer.seal_resident(Carried::Object(obj), CarrierWitness::new(false, None)),
         std::rc::Rc::clone(&storage),
         crate::machine::core::FrameCoverage::empty(),
     );
 
     // A separate (open) consumer scope adopts the carrier.
     let consumer = producer.brand().alloc_scope(Scope::child_under(producer));
-    let adopted: Carried = consumer.adopt_sealed(&cell);
+    let adopted: Carried = consumer.adopt_carried(&cell, AdoptSeam::Retaining);
 
     // Copy-free: the adopted borrow points at the very same object, not a relocated clone.
     assert!(std::ptr::eq(adopted.object(), obj));
 }
 
-/// Miri pin shape for `adopt_sealed`'s reattach: a value produced in a **foreign** frame's region,
+/// Miri pin shape for a retaining adoption's reattach: a value produced in a **foreign** frame's region,
 /// sealed as its carrier, is adopted into a consumer scope in a different frame. After every direct
-/// producer handle is dropped, the consumer scope's reach-set (folded by `adopt_sealed`) is the sole
+/// producer handle is dropped, the consumer scope's reach-set (folded by `adopt_carried`) is the sole
 /// pin on the producer region the re-anchored borrow reads — so reading it must not dangle.
 #[test]
-fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
+fn retaining_adopt_reach_fold_pins_the_producer_region_after_drop() {
     use crate::machine::core::arena::KoanRegionExt;
     use crate::machine::core::KoanRegion;
     use crate::machine::model::{Carried, KObject};
@@ -123,7 +125,7 @@ fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
     // A consumer scope in a *different* frame adopts the carrier — its reach-set folds the producer.
     let consumer_frame = run_root_storage();
     let consumer = run_root_bare(&consumer_frame);
-    let adopted: Carried = consumer.adopt_sealed(&cell);
+    let adopted: Carried = consumer.adopt_carried(&cell, AdoptSeam::Retaining);
 
     // Drop every direct producer handle: the consumer scope's reach-set now solely pins the region
     // the adopted borrow reads into.
@@ -163,7 +165,10 @@ fn child_module_reach_names_the_child_region_which_owns_its_members_reaches() {
     let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
     let (reach, borrows_home) =
         source_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&inner_storage))]);
-    let sealed = source_scope.seal_resident_value(Carried::Object(obj), reach, borrows_home);
+    let sealed = source_scope.seal_resident(
+        Carried::Object(obj),
+        CarrierWitness::new(borrows_home, reach),
+    );
     source_scope
         .bind_value_direct(
             "m".to_string(),

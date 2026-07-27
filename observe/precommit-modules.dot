@@ -491,6 +491,7 @@ digraph {
     "koan::machine::core::carrier_witness" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
+    "koan::machine::core::carrier_witness" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::core" [label="uses", style="dashed"];

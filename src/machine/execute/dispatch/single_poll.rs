@@ -24,6 +24,7 @@ use super::{
     ProducerStanding, TypeChannel,
 };
 use crate::machine::model::CarriedFamily;
+use crate::machine::CarrierWitness;
 use crate::scheduler::Deps;
 
 /// Surfaces `UnboundName` directly when the name has no binding and
@@ -57,7 +58,9 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // A resolved type leaf is carried in place under `s` (the scope it was resolved
         // against): a `KType` is a `Copy` registry handle, so the read is a plain handle copy
         // — no reach to name, no re-home, no `child_scope()` walk.
-        TypeChannel::Done(kt) => Outcome::Done(Ok(StepCarried::born(s.resident_type_carrier(kt)))),
+        TypeChannel::Done(kt) => Outcome::Done(Ok(StepCarried::born(
+            s.resident(Carried::Type(kt), CarrierWitness::default()),
+        ))),
         TypeChannel::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS through the
         // bridge, so a bare leaf parks on exactly one producer. A bare leaf has no consumer id in
