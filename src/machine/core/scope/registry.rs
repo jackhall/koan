@@ -262,16 +262,15 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::KType,
     ) -> Result<(), KError> {
-        // Mirrors `is_in_sig_body`'s walk exactly: a scope with `sig_slots: Some` wins; a
-        // `Module` scope short-circuits (no SIG body encloses); `Root`/`Anonymous`/`Sig`
-        // (a `Sig` scope always carries `sig_slots: Some` by construction, so it never
-        // reaches the `None` arm in practice) fall through transparently.
-        let target = self
+        // Mirrors `is_in_sig_body`'s walk exactly: a `Sig` scope wins and hands back its own
+        // collector; a `Module` scope short-circuits (no SIG body encloses); `Root` / `Anonymous` /
+        // `RecursiveBlock` fall through transparently.
+        let (target, slots) = self
             .ancestors()
-            .find_map(|s| match (&s.sig_slots, &s.kind) {
-                (Some(_), _) => Some(Some(s)),
-                (None, ScopeKind::Module { .. }) => Some(None),
-                (None, ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Sig { .. }) => None,
+            .find_map(|s| match &s.kind {
+                ScopeKind::Sig { slots, .. } => Some(Some((s, slots))),
+                ScopeKind::Module { .. } => Some(None),
+                ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::RecursiveBlock { .. } => None,
             })
             .flatten()
             .ok_or_else(|| {
@@ -280,10 +279,6 @@ impl<'a> Scope<'a> {
                 ))
             })?;
         target.assert_open(&name);
-        let slots = target
-            .sig_slots
-            .as_ref()
-            .expect("the walk above selects only a scope with sig_slots: Some");
         if slots.borrow().contains_key(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }

@@ -56,26 +56,10 @@ pub struct Scope<'a> {
     /// Position-independent origin id, recorded on an `AbstractType` node's `source` so
     /// dispatch on SIG-declared members compares ids rather than scope pointers.
     pub id: ScopeId,
+    /// Lexical classification, and with it every per-kind payload — the SIG slot collector, a
+    /// `GROUP` body's operator record, a `RECURSIVE TYPES` block's open window. Every payload is
+    /// reached through the walking accessors below, never off a scope reference directly.
     pub kind: ScopeKind,
-    /// Set iff this is a `RECURSIVE TYPES` block's child scope: the open
-    /// [`RecursiveGroupWindow`] whose members are co-declared and elaborate together. The
-    /// elaborator lowers a bare leaf naming one of its members to that member's relative sibling
-    /// back-edge, so cross-references inside the block resolve regardless of lexical order — the
-    /// block is the one cross-order resolution that survives strict source-order type-name lookup.
-    /// The window rides the scope rather than the registry because several can be open at once
-    /// under the park-capable scheduler.
-    recursive_window: Option<Rc<RecursiveGroupWindow>>,
-    /// Set iff this is a `GROUP` body's child scope: the one shared [`OperatorGroup`] record its
-    /// member `OP` declarations belong to, read through [`Scope::nearest_group_context`]. The record
-    /// is lifetime-free (member set + mode + combiner *name*), so the scope shares it by plain `Rc`
-    /// — the same record its registry entries hold — and holds no region borrow for it.
-    group: Option<Rc<OperatorGroup>>,
-    /// SIG-decl-scope slot collector: `VAL <name> :Type` records `name → declared type`
-    /// here — a schema in progress, not a binding universe (nothing resolves
-    /// names in it; no visibility index). `Some` only for scopes minted by
-    /// [`Self::child_under_sig`]; the SIG finish projects it into the signature's stored
-    /// [`SigSchema`], and ATTR over the signature reads a slot's declared type back out of it.
-    sig_slots: Option<SigSlots>,
     /// Set once the scope's defining block / frame finishes: no further bind is legal (rebinds are
     /// already rejected; this also rejects *new* binds). The seal point for its reach-set. `Cell`
     /// because it flips once, late, outside the bind hot path.
@@ -117,25 +101,48 @@ impl ScopeBindings<'_> {
     }
 }
 
-/// name → declared type handle. Plain `borrow_mut` inside the single write door is fine:
-/// the cell is never held across calls.
-type SigSlots = RefCell<HashMap<String, KType>>;
-
-/// Lexical classification for a [`Scope`]. The SIG-body gate walks outward and
-/// pivots on the first non-`Anonymous` variant: `Sig` admits VAL declarators and
-/// rejects LET-by-example; `Module` is the opposite. The per-variant `name` field
-/// is the surface label for diagnostics.
+/// Lexical classification for a [`Scope`], carrying each kind's own payload — so a payload exists
+/// exactly when its kind does, by type rather than by prose. The SIG-body gate walks outward and
+/// pivots on the first opaque variant: `Sig` admits VAL declarators and rejects LET-by-example;
+/// `Module` is the opposite. The per-variant `name` field is the surface label for diagnostics.
 ///
-/// `Root` marks the immutable run-global scope holding the builtins. It is
-/// transparent to the SIG-body gate (like `Anonymous`); its distinct typing is the
-/// lever for routing builtin lookups and the no-shadow consult through a genuinely
-/// run-lived scope.
-#[derive(Debug, Clone)]
+/// `Root` marks the immutable run-global scope holding the builtins. It is transparent to the
+/// SIG-body gate (like `Anonymous`); its distinct typing is the lever for routing builtin lookups
+/// and the no-shadow consult through a genuinely run-lived scope.
+///
+/// Neither `Clone` nor `Debug`: `Sig`'s slot collector is a live `RefCell` that must not be
+/// silently duplicated, and nothing prints a kind.
 pub enum ScopeKind {
     Root,
     Anonymous,
-    Sig { name: String },
-    Module { name: String },
+    /// A SIG decl_scope. `slots` is its VAL slot collector: `VAL <name> :Type` records
+    /// `name → declared type` here — a schema in progress, not a binding universe (nothing
+    /// resolves names in it; no visibility index). The SIG finish projects it into the signature's
+    /// stored `SigSchema`, and ATTR over the signature reads a slot's declared type back out of it.
+    /// Plain `borrow_mut` inside the single write door is fine: the cell is never held across calls.
+    Sig {
+        name: String,
+        slots: RefCell<HashMap<String, KType>>,
+    },
+    /// A MODULE body (also the per-ascription view minted by `:|`). `group` is `Some` for a `GROUP`
+    /// body — a group *is* a module — naming the one shared [`OperatorGroup`] record its member `OP`
+    /// declarations belong to, read through [`Scope::nearest_group_context`]. The record is
+    /// lifetime-free (member set + mode + combiner *name*), so the scope shares it by plain `Rc` —
+    /// the same record its registry entries hold — and holds no region borrow for it.
+    Module {
+        name: String,
+        group: Option<Rc<OperatorGroup>>,
+    },
+    /// A `RECURSIVE TYPES` block body: transparent to the SIG-body gate like `Anonymous`, and
+    /// carrying the open [`RecursiveGroupWindow`] whose members are co-declared and elaborate
+    /// together. The elaborator lowers a bare leaf naming one of its members to that member's
+    /// relative sibling back-edge, so cross-references inside the block resolve regardless of
+    /// lexical order — the block is the one cross-order resolution that survives strict
+    /// source-order type-name lookup. The window rides the scope rather than the registry because
+    /// several can be open at once under the park-capable scheduler.
+    RecursiveBlock {
+        window: Rc<RecursiveGroupWindow>,
+    },
 }
 
 impl<'a> Scope<'a> {
@@ -154,9 +161,6 @@ impl<'a> Scope<'a> {
             region_owner: Rc::downgrade(storage),
             id: ScopeId::next(),
             kind: ScopeKind::Root,
-            recursive_window: None,
-            group: None,
-            sig_slots: None,
             closed: Cell::new(false),
             root_region: true,
         }
@@ -226,15 +230,15 @@ impl<'a> Scope<'a> {
 
     /// Shared skeleton for a **same-region** child of `outer`: inherits `outer`'s region, its
     /// `region_owner`, and its `root` handle, and takes a fresh id. The five public same-region
-    /// constructors below differ only in what they pass here — the binding storage, the kind stamp,
-    /// and any recursive-group window — so the inherit-from-`outer` field set lives in one place.
-    /// (The two cross-region constructors, [`Self::run_root`] and [`Self::child_for_frame_witnessed`], do not
-    /// route this: they set `root`/`region`/`region_owner` from a fresh frame, not from `outer`.)
+    /// constructors below differ only in what they pass here — the binding storage and the kind
+    /// stamp (which carries its own payload) — so the inherit-from-`outer` field set lives in one
+    /// place. (The two cross-region constructors, [`Self::run_root`] and
+    /// [`Self::child_for_frame_witnessed`], do not route this: they set `root`/`region`/
+    /// `region_owner` from a fresh frame, not from `outer`.)
     fn child_inheriting(
         outer: &'a Scope<'a>,
         bindings: ScopeBindings<'a>,
         kind: ScopeKind,
-        recursive_window: Option<Rc<RecursiveGroupWindow>>,
     ) -> Scope<'a> {
         Scope {
             outer: Some(outer),
@@ -245,9 +249,6 @@ impl<'a> Scope<'a> {
             region_owner: outer.region_owner.clone(),
             id: ScopeId::next(),
             kind,
-            recursive_window,
-            group: None,
-            sig_slots: None,
             closed: Cell::new(false),
             root_region: outer.root_region,
         }
@@ -260,7 +261,6 @@ impl<'a> Scope<'a> {
             outer,
             ScopeBindings::Owned(Bindings::new()),
             ScopeKind::Anonymous,
-            None,
         )
     }
 
@@ -286,24 +286,21 @@ impl<'a> Scope<'a> {
             region_owner,
             id: ScopeId::next(),
             kind: ScopeKind::Anonymous,
-            recursive_window: None,
-            group: None,
-            sig_slots: None,
             closed: Cell::new(false),
             root_region: false,
         }
     }
 
-    /// `child_under`, stamped as a SIG decl_scope.
+    /// `child_under`, stamped as a SIG decl_scope with an empty VAL slot collector.
     pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
-        let mut child = Self::child_inheriting(
+        Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
-            ScopeKind::Sig { name },
-            None,
-        );
-        child.sig_slots = Some(RefCell::new(HashMap::new()));
-        child
+            ScopeKind::Sig {
+                name,
+                slots: RefCell::new(HashMap::new()),
+            },
+        )
     }
 
     /// `child_under`, stamped as a MODULE body (also used for the per-ascription view
@@ -312,8 +309,7 @@ impl<'a> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
-            ScopeKind::Module { name },
-            None,
+            ScopeKind::Module { name, group: None },
         )
     }
 
@@ -326,14 +322,14 @@ impl<'a> Scope<'a> {
         name: String,
         group: Rc<OperatorGroup>,
     ) -> Scope<'a> {
-        let mut child = Self::child_inheriting(
+        Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
-            ScopeKind::Module { name },
-            None,
-        );
-        child.group = Some(group);
-        child
+            ScopeKind::Module {
+                name,
+                group: Some(group),
+            },
+        )
     }
 
     /// Child scope for a `RECURSIVE TYPES` block body: carries the open
@@ -348,8 +344,7 @@ impl<'a> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
-            ScopeKind::Anonymous,
-            Some(window),
+            ScopeKind::RecursiveBlock { window },
         )
     }
 
@@ -359,7 +354,13 @@ impl<'a> Scope<'a> {
     /// to ordinary resolution (that member's sealed handle), not a back-edge into the inner
     /// window.
     pub fn nearest_recursive_window(&self) -> Option<Rc<RecursiveGroupWindow>> {
-        self.ancestors().find_map(|s| s.recursive_window.clone())
+        self.ancestors().find_map(|s| match &s.kind {
+            ScopeKind::RecursiveBlock { window } => Some(Rc::clone(window)),
+            ScopeKind::Root
+            | ScopeKind::Anonymous
+            | ScopeKind::Sig { .. }
+            | ScopeKind::Module { .. } => None,
+        })
     }
 
     /// Transparent `USING … SCOPE` child scope. `outer` is the call site (the lexical
@@ -372,7 +373,6 @@ impl<'a> Scope<'a> {
             outer,
             ScopeBindings::Borrowed(module_bindings),
             ScopeKind::Anonymous,
-            None,
         )
     }
 
@@ -403,14 +403,14 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// True iff the nearest non-`Anonymous` enclosing scope is a SIG decl_scope. A
-    /// `Module` short-circuits to `false`; `Anonymous` frames are transparent.
+    /// True iff the nearest opaque enclosing scope is a SIG decl_scope. A `Module`
+    /// short-circuits to `false`; `Anonymous`, `Root` and `RecursiveBlock` frames are transparent.
     pub fn is_in_sig_body(&self) -> bool {
         self.ancestors()
             .find_map(|s| match &s.kind {
                 ScopeKind::Sig { .. } => Some(true),
                 ScopeKind::Module { .. } => Some(false),
-                ScopeKind::Root | ScopeKind::Anonymous => None,
+                ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::RecursiveBlock { .. } => None,
             })
             .unwrap_or(false)
     }
@@ -418,29 +418,35 @@ impl<'a> Scope<'a> {
     /// The [`OperatorGroup`] whose body this scope sits in, if any — the context an `OP`
     /// declaration reads to know it is a group member (its registry write belongs to the
     /// group, and a heterogeneous `->` is admissible only under a pairwise mode). Walks
-    /// outward like [`Self::is_in_sig_body`]: `Anonymous` frames are transparent, a
-    /// `Sig` or `Module` scope short-circuits to `None`. The `group` field is consulted
-    /// **before** the kind, because a group body is itself stamped `Module` (a group is a
-    /// module) — a plain module nested inside a group body still short-circuits.
+    /// outward like [`Self::is_in_sig_body`]: `Anonymous`, `Root` and `RecursiveBlock` frames are
+    /// transparent, a `Sig` or a group-less `Module` short-circuits to `None`. A group body *is* a
+    /// `Module { group: Some }`, so it answers on its own arm — and a plain module nested inside one
+    /// still short-circuits at its own `Module { group: None }`.
     pub fn nearest_group_context(&self) -> Option<Rc<OperatorGroup>> {
         self.ancestors()
-            .find_map(|s| match (&s.group, &s.kind) {
-                (Some(group), _) => Some(Some(Rc::clone(group))),
-                (None, ScopeKind::Sig { .. } | ScopeKind::Module { .. }) => Some(None),
-                (None, ScopeKind::Root | ScopeKind::Anonymous) => None,
+            .find_map(|s| match &s.kind {
+                ScopeKind::Module {
+                    group: Some(group), ..
+                } => Some(Some(Rc::clone(group))),
+                ScopeKind::Sig { .. } | ScopeKind::Module { group: None, .. } => Some(None),
+                ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::RecursiveBlock { .. } => None,
             })
             .flatten()
     }
 
-    /// Snapshot of every `(name, declared type)` slot pair — the schema projection's read.
+    /// Snapshot of every `(name, declared type)` slot pair — the schema projection's read. Empty
+    /// for any scope that is not a SIG decl_scope, which is the only kind carrying slots.
     pub(crate) fn sig_value_slots(&self) -> Vec<(String, KType)> {
-        match &self.sig_slots {
-            Some(slots) => slots
+        match &self.kind {
+            ScopeKind::Sig { slots, .. } => slots
                 .borrow()
                 .iter()
                 .map(|(name, kt)| (name.clone(), *kt))
                 .collect(),
-            None => Vec::new(),
+            ScopeKind::Root
+            | ScopeKind::Anonymous
+            | ScopeKind::Module { .. }
+            | ScopeKind::RecursiveBlock { .. } => Vec::new(),
         }
     }
 
