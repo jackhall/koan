@@ -590,11 +590,10 @@ fn region_union_foreign_pins_release_at_region_death() {
             .write_value(
                 "x",
                 BindingIndex::BUILTIN,
-                Some(scope.seal_resident(
+                scope.seal_resident(
                     Carried::Object(obj),
                     CarrierWitness::new(borrows_home, reach),
-                )),
-                None,
+                ),
                 &mut crate::machine::WriteGate::for_test(),
             )
             .expect("a fresh value bind lands");

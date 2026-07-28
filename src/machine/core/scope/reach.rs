@@ -7,9 +7,7 @@ use std::rc::Rc;
 
 use super::Scope;
 use crate::machine::core::bindings::SealedValue;
-use crate::machine::core::carrier_witness::{
-    function_mirror_of, FunctionMirror, OpenedFunction, SealedFunction,
-};
+use crate::machine::core::carrier_witness::{OpenedFunction, SealedFunction};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::{
     product_still_borrows, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
@@ -104,8 +102,8 @@ impl<'a> Scope<'a> {
     ///   and travels under the home-frame pin alone (the envelope host
     ///   [`Self::seal_resident_delivered`] pairs); the `Copy` handle rides in place, never
     ///   re-cloned into the region.
-    /// - **Callable** (`KFunctionFamily`): also the empty witness, for the bare-`FN` door, which
-    ///   binds no value and so has no mirrored `data` seal to derive a claim from. `FN` allocates
+    /// - **Callable** (`KFunctionFamily`): also the empty witness, for the `FN` / `OP`
+    ///   registration doors. `FN` allocates
     ///   the callable into the very scope it captures, so its only region borrow is home, which
     ///   every read of it already pins.
     pub(crate) fn resident<T: Reattachable>(
@@ -132,16 +130,6 @@ impl<'a> Scope<'a> {
         witness: CarrierWitness,
     ) -> Sealed<T, CarrierWitness> {
         Sealed::seal(self.resident(value, witness))
-    }
-
-    /// The **mirror seal**: project a bound value's dormant carrier onto the `KFunction` it wraps,
-    /// carrying that value's own witness across unchanged — so a `functions` bucket entry states
-    /// exactly the claim its `data` twin does instead of holding a reference with no reach at all.
-    /// `None` when the value is not a callable. The projection reads under this scope's own region
-    /// owner, which is where the value it seals lives, and computes everything the bucket write
-    /// keys on inside that one open, so the write path itself opens nothing.
-    pub(crate) fn seal_function_mirror(&self, sealed: &SealedValue) -> Option<FunctionMirror> {
-        function_mirror_of(sealed, &self.home())
     }
 
     /// **Open** a dormant function carrier at this scope's own region lifetime: lift it into a

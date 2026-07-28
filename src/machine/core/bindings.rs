@@ -1,7 +1,9 @@
 //! Lexical binding façade: one `RefCell<Tables>` — `types`, `data`, `functions`, `placeholders`,
-//! `pending_overloads`, `operators` — behind validated write
-//! paths that keep the function-mirror invariant — every `data[name]` wrapping
-//! a `KFunction` lives in `functions[signature.untyped_key()]`. Nominal type
+//! `pending_overloads`, `operators` — behind validated write paths. `data` and `functions` are
+//! separate surfaces: a `data` entry is a value binding, callable by **name** alone (the
+//! `FunctionValueCall` lane), while a `functions` bucket holds the keyworded overloads that only
+//! the `FN` / `OP` registration doors and the builtin seeds write — binding a function *value*
+//! publishes no keyworded expression. Nominal type
 //! declarations (NEWTYPE / UNION / SIG) install their identity into `types`
 //! only — there is no value-side carrier; a module is a value and binds into
 //! `data`. The `data` and `types` maps
@@ -47,7 +49,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::carrier_witness::{CallableIdentity, FunctionMirror, SealedFunction};
+use crate::machine::core::carrier_witness::{OverloadSeal, SealedFunction};
 use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::RunId;
 use crate::machine::model::CarriedFamily;
@@ -109,9 +111,8 @@ impl<T> NameLookup<T> {
     }
 }
 
-/// A value binding entry: its lexical [`BindingIndex`], the dormant [`SealedValue`] carrier fusing
-/// the bound value with the exact reach description minted for it, and the dispatch bucket the
-/// callable that value wraps was mirrored into, if any.
+/// A value binding entry: its lexical [`BindingIndex`] and the dormant [`SealedValue`] carrier
+/// fusing the bound value with the exact reach description minted for it.
 ///
 /// The entry owns **nothing**: liveness for every region the value reaches lives in the binding
 /// scope's region-owned union bundle
@@ -123,16 +124,11 @@ impl<T> NameLookup<T> {
 pub(crate) struct DataEntry {
     index: BindingIndex,
     sealed: SealedValue,
-    /// The dispatch bucket the value's callable was mirrored into, or `None` when the value wraps
-    /// no callable. The mirror **seal** is stored once — in that bucket, which is what dispatch
-    /// reads — so this side keeps only the classification: the overload-add rebind gate and the
-    /// placeholder leniency probe ask whether the entry is callable, never what it is.
-    callable: Option<UntypedKey>,
 }
 
 impl DataEntry {
     /// A bit-copy of the entry — the dormant seal duplicated (value bit-copy + reference-only
-    /// witness clone, no refcount traffic) beside the `Copy` index and the bucket key. Every read
+    /// witness clone, no refcount traffic) beside the `Copy` index. Every read
     /// hands one of these out so no caller holds the `tables` borrow across a carrier build.
     /// The one reader is the bulk-install snapshot, which is ascription-only.
     #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
@@ -140,14 +136,13 @@ impl DataEntry {
         DataEntry {
             index: self.index,
             sealed: self.sealed.duplicate(),
-            callable: self.callable.clone(),
         }
     }
 }
 
 /// One finalized overload in a dispatch bucket: the dormant callable carrier plus the plain data
-/// the write path dedupes on, all of it computed at mirror-seal time
-/// ([`FunctionMirror`]) where the callable was open. Overloads sharing a bucket sit at different
+/// the write path dedupes on, all of it computed at seal time
+/// ([`OverloadSeal`]) where the callable was open. Overloads sharing a bucket sit at different
 /// lexical positions, so each carries its own [`BindingIndex`] and the dispatch picker filters
 /// per-overload.
 pub(crate) struct FunctionBucketEntry {
@@ -155,11 +150,22 @@ pub(crate) struct FunctionBucketEntry {
     /// The stored form of the duplicate-overload predicate: token equality against an incoming
     /// callable is `DuplicateOverload`.
     token: DispatchToken,
-    /// Address identity, compared against an incoming callable's to spot an intentional alias.
-    identity: CallableIdentity,
     /// The overload's rendered signature, for the `DuplicateOverload` diagnostic.
     summary: String,
     pub(crate) sealed: SealedFunction,
+}
+
+impl FunctionBucketEntry {
+    /// A bit-copy of the entry, for the bulk-install snapshot — like [`DataEntry::duplicate`].
+    #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
+    fn duplicate(&self) -> Self {
+        FunctionBucketEntry {
+            index: self.index,
+            token: self.token.clone(),
+            summary: self.summary.clone(),
+            sealed: self.sealed.duplicate(),
+        }
+    }
 }
 
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature
@@ -275,10 +281,10 @@ struct Tables {
     /// strong member or a per-entry `Rc` on the scope's own frame would close a
     /// `frame → region → scope → bindings → frame` cycle and leak the region.
     data: HashMap<String, DataEntry>,
-    /// Each dispatch-bucket entry stores its callable fused to the same exact reach its mirrored
-    /// `data` entry claims, in one dormant [`SealedFunction`], beside the precomputed data the
-    /// write path dedupes on ([`FunctionBucketEntry`]). This is the **only** place a mirror seal is
-    /// stored — bare `FN` has no `data` entry and dispatch reads buckets. Like `data`, the entry
+    /// Each dispatch-bucket entry stores its callable fused to its reach claim in one dormant
+    /// [`SealedFunction`], beside the precomputed data the write path dedupes on
+    /// ([`FunctionBucketEntry`]). Written only by the `FN` / `OP` registration doors — an `FN`
+    /// registration binds no value, and a value bind writes no bucket. Like `data`, the entry
     /// owns nothing: the reached regions are held by the region's union bundle, and a read hands
     /// out a bit-copy the caller re-anchors under a pin.
     functions: HashMap<UntypedKey, Vec<FunctionBucketEntry>>,
@@ -302,8 +308,8 @@ struct Tables {
 ///
 /// One cell rather than one per map: with writes reachable only under a [`WriteGate`], a read can
 /// never overlap a write, so per-map cells bought nothing but a borrow-ordering rule to obey. Every
-/// verb takes exactly one borrow, and a cross-map write — the `data`/`functions` mirror pair, a
-/// type insert plus its placeholder clear — is atomic under it.
+/// verb takes exactly one borrow, and a cross-map write — a bucket insert plus its
+/// pending-overload clear, a type insert plus its placeholder clear — is atomic under it.
 pub struct Bindings {
     tables: RefCell<Tables>,
 }
@@ -663,10 +669,8 @@ impl Bindings {
 
     /// Install a dispatch-time placeholder for `name` → producer slot `idx`.
     ///
-    /// Lenient when `data[name]` already holds a `KObject::KFunction`: silent
-    /// no-op (a new FN overload joins the existing bucket on finalize without
-    /// consumers needing to park). Errors `Rebind` if `data[name]` holds a
-    /// non-function or if `placeholders[name]` maps to a different `NodeId`;
+    /// Errors `Rebind` if `data[name]` is already committed — bindings are
+    /// bind-once — or if `placeholders[name]` maps to a different `NodeId`;
     /// idempotent on same-`NodeId` re-entry.
     ///
     /// The eventual [`Self::write_value`] / [`Self::write_type`] call must carry the
@@ -684,10 +688,7 @@ impl Bindings {
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
-        if let Some(entry) = tables.data.get(&name) {
-            if entry.callable.is_some() {
-                return Ok(());
-            }
+        if tables.data.contains_key(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
         if let Some((existing, _, _)) = tables.placeholders.get(&name).copied() {
@@ -707,7 +708,7 @@ impl Bindings {
     /// **Append, never deduplicate**: sibling FN binders sharing one
     /// inner-call bucket key — `FN (PICK xs :A) -> ...` then
     /// `FN (PICK xs :B) -> ...` — each install their own entry at their own
-    /// [`BindingIndex`]. The entry is removed in [`Bindings::write_value`] when
+    /// [`BindingIndex`]. The entry is removed in [`Bindings::write_overload`] when
     /// the producing binder lands in `functions[bucket]`; other siblings stay
     /// pending as wake sources.
     ///
@@ -730,38 +731,41 @@ impl Bindings {
         Ok(())
     }
 
-    /// Replay another `Bindings`'s `data` through [`Self::write_value`] on self.
-    /// Snapshots `src.data` and releases the source `Ref` before the replay so
-    /// re-entrant ascription cannot deadlock. Routing through the shared write path
-    /// re-mirrors `KFunction` entries into `functions`, so callers do not walk
-    /// `src.functions` separately.
-    ///
-    /// A replayed entry stores only its callable's bucket key, so the mirror bundle the bucket
-    /// write needs is re-derived per entry by `mirror_of` — the `Scope` layer's
-    /// [`seal_function_mirror`](crate::machine::core::Scope::seal_function_mirror), the one place
-    /// that holds a pin to open the seal under.
+    /// Replay another `Bindings`'s `data` entries through [`Self::write_value`] on self, and its
+    /// `functions` buckets by direct entry duplication — a view of a module preserves the module's
+    /// keyworded dispatch surface as-is (keyword → keyword), it does not re-derive it from the
+    /// value bindings. Snapshots the source maps and releases the source `Ref` before the replay
+    /// so re-entrant ascription cannot deadlock.
     #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     pub(crate) fn bulk_install_from(
         &self,
         src: &Bindings,
-        mirror_of: impl Fn(&SealedValue) -> Option<FunctionMirror>,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        // Duplicate each entry into the snapshot: the seal is a bit-copy naming the source's own
+        // Duplicate each entry into the snapshot: each seal is a bit-copy naming the source's own
         // minted description, so the replayed entry replays that same claim. The reached regions
         // stay owned by the *source* scope's region union — the replay target's own region must
         // already outlive it (a bulk install is same-run re-entrant ascription).
-        let snapshot: Vec<(String, DataEntry)> = src
-            .tables
-            .borrow()
-            .data
-            .iter()
-            .map(|(k, entry)| (k.clone(), entry.duplicate()))
-            .collect();
-        for (name, entry) in snapshot {
-            let index = entry.index;
-            let mirror = mirror_of(&entry.sealed);
-            self.write_value(&name, index, Some(entry.sealed), mirror, gate)?;
+        let (data, functions) = {
+            let tables = src.tables.borrow();
+            let data: Vec<(String, DataEntry)> = tables
+                .data
+                .iter()
+                .map(|(k, entry)| (k.clone(), entry.duplicate()))
+                .collect();
+            let functions: Vec<(UntypedKey, Vec<FunctionBucketEntry>)> = tables
+                .functions
+                .iter()
+                .map(|(key, bucket)| (key.clone(), bucket.iter().map(|e| e.duplicate()).collect()))
+                .collect();
+            (data, functions)
+        };
+        for (name, entry) in data {
+            self.write_value(&name, entry.index, entry.sealed, gate)?;
+        }
+        let mut tables = self.tables.borrow_mut();
+        for (key, bucket) in functions {
+            tables.functions.entry(key).or_default().extend(bucket);
         }
         Ok(())
     }
@@ -790,106 +794,66 @@ impl Bindings {
         }
     }
 
-    /// Shared write path for `data`/`functions`, both maps mutated under the one borrow — so the
-    /// mirror pair is installed atomically or not at all.
-    ///
-    /// `sealed`: `Some` for value-carrying paths (LET, LET-binds-FN) — the fused value+reach the
-    /// entry stores; `None` for bare-`FN` (dispatch-only, no `data` insert). The only combinations
-    /// that occur are `(None, Some)`, `(Some, Some)`, `(Some, None)`.
-    ///
-    /// `mirror` arrives as plain data beside its dormant seal: the bucket key, dedupe token and
-    /// address identity were all computed at mirror-seal time, where the callable was open. The
-    /// bucket write is therefore pure table mutation — it stores the mirror's seal, so
-    /// `functions[key]` and `data[name]` carry one claim about one value, and no carrier is opened
-    /// and no bare reference crosses the door.
-    ///
-    /// Dedupe when `mirror.is_some()`: identity equality is a silent-success short-circuit
-    /// (preserves intentional aliases like `LET g = (f)`); token equality raises
-    /// `DuplicateOverload`.
+    /// The `data` write path: commit `name` → `sealed` as a bind-once value binding. Runs the
+    /// token-class partition guard and the cross-kind probe, inserts, and clears the matching
+    /// value-side placeholder — all under one borrow.
     pub(crate) fn write_value(
         &self,
         name: &str,
         index: BindingIndex,
-        sealed: Option<SealedValue>,
-        mirror: Option<FunctionMirror>,
+        sealed: SealedValue,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let write_data = sealed.is_some();
-        // A bare-`FN` registration (`write_data == false`) binds no value, so it is exempt from
-        // both the token-class gate and the cross-kind probe below: its surface is `functions` only.
-        if write_data {
-            self.partition_guard(name, BindKind::Value)?;
-        }
-        let has_mirror = mirror.is_some();
+        self.partition_guard(name, BindKind::Value)?;
         let rebind = || {
             KError::new(KErrorKind::Rebind {
                 name: name.to_string(),
             })
         };
         let mut tables = self.tables.borrow_mut();
-        if write_data {
-            // Cross-kind exclusion: a value name may not collide with a committed type — the
-            // `data`/`types` partition is structural, not convention.
-            if tables.types.contains_key(name) {
-                return Err(rebind());
-            }
-            // A mirror over an existing callable entry falls through to bucket dedupe (the
-            // overload-add path); everything else is a rebind error.
-            if let Some(existing) = tables.data.get(name) {
-                if !has_mirror || existing.callable.is_none() {
-                    return Err(rebind());
-                }
-            }
+        // Cross-kind exclusion: a value name may not collide with a committed type — the
+        // `data`/`types` partition is structural, not convention.
+        if tables.types.contains_key(name) {
+            return Err(rebind());
         }
-        // The bucket this write touched, if any: the `data` entry's callable classification and the
-        // pending-overload clear both name it.
-        let mut bucket_key: Option<UntypedKey> = None;
-        if let Some(mirror) = mirror {
-            let bucket = tables.functions.entry(mirror.key.clone()).or_default();
-            let verdict = bucket.iter().find_map(|existing| {
-                if existing.identity == mirror.identity {
-                    // The same callable is already registered (an intentional alias like
-                    // `LET g = (f)`), so the bucket keeps its first entry.
-                    Some(Ok(()))
-                } else if existing.token == mirror.token {
-                    Some(Err(existing.summary.clone()))
-                } else {
-                    None
-                }
-            });
-            match verdict {
-                Some(Err(signature)) => {
-                    return Err(KError::new(KErrorKind::DuplicateOverload {
-                        name: name.to_string(),
-                        signature,
-                    }));
-                }
-                Some(Ok(())) => {}
-                None => bucket.push(FunctionBucketEntry {
-                    index,
-                    token: mirror.token,
-                    identity: mirror.identity,
-                    summary: mirror.summary,
-                    sealed: mirror.sealed,
-                }),
-            }
-            bucket_key = Some(mirror.key);
+        if tables.data.contains_key(name) {
+            return Err(rebind());
         }
-        if let Some(sealed) = sealed {
-            tables.data.insert(
-                name.to_string(),
-                DataEntry {
-                    index,
-                    sealed,
-                    callable: bucket_key.clone(),
-                },
-            );
-        }
+        tables
+            .data
+            .insert(name.to_string(), DataEntry { index, sealed });
         tables.clear_placeholder(name, BindKind::Value);
-        if let Some(bucket) = bucket_key {
-            // Remove only this binder's pending entry; siblings stay as wake sources.
-            tables.clear_pending_overload(&bucket, index);
+        Ok(())
+    }
+
+    /// The `functions` write path: add `seal`'s callable to its dispatch bucket. The bucket key,
+    /// dedupe token and diagnostic summary were all computed at seal time, where the callable was
+    /// open — the write is pure table mutation, no carrier is opened and no bare reference crosses
+    /// the door. Token equality against a bucket sibling raises `DuplicateOverload`. On success
+    /// this binder's own `pending_overloads` entry is removed under the same borrow; siblings stay
+    /// as wake sources.
+    pub(crate) fn write_overload(
+        &self,
+        name: &str,
+        index: BindingIndex,
+        seal: OverloadSeal,
+        _gate: &mut WriteGate,
+    ) -> Result<(), KError> {
+        let mut tables = self.tables.borrow_mut();
+        let bucket = tables.functions.entry(seal.key.clone()).or_default();
+        if let Some(existing) = bucket.iter().find(|existing| existing.token == seal.token) {
+            return Err(KError::new(KErrorKind::DuplicateOverload {
+                name: name.to_string(),
+                signature: existing.summary.clone(),
+            }));
         }
+        bucket.push(FunctionBucketEntry {
+            index,
+            token: seal.token,
+            summary: seal.summary,
+            sealed: seal.sealed,
+        });
+        tables.clear_pending_overload(&seal.key, index);
         Ok(())
     }
 

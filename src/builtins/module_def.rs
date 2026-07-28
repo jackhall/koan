@@ -95,9 +95,11 @@ pub(super) fn await_module_body<'a>(
             // (`bindings.data`) write rides the outcome.
             match fctx.scope.seal_module(module, child_scope, fctx.types) {
                 Ok(sealed) => {
-                    // A `KObject::Module` wraps no `KFunction`, so the mirror has nothing to write.
-                    let write =
-                        WriteOp::value(name_for_finish, bind_index, sealed.duplicate(), None);
+                    let write = WriteOp::Value {
+                        name: name_for_finish,
+                        index: bind_index,
+                        sealed: sealed.duplicate(),
+                    };
                     let (carrier, pins) = fctx.scope.lift_resident_parts(sealed);
                     Action::done(Ok(StepCarried::born_pinned(carrier, pins))).with_effect(write)
                 }
@@ -432,7 +434,6 @@ mod tests {
             .bind_value_direct(
                 "foo".into(),
                 sealed,
-                None,
                 BindingIndex::value(0),
                 &mut crate::machine::WriteGate::for_test(),
             )

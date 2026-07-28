@@ -59,8 +59,7 @@ fn data_binding_round_trips_sealed_reach() {
         .write_value(
             "x",
             BindingIndex::BUILTIN,
-            Some(sealed),
-            None,
+            sealed,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("value bind should succeed");
@@ -88,8 +87,7 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
         .write_value(
             "x",
             BindingIndex::BUILTIN,
-            Some(sealed),
-            None,
+            sealed,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("value bind should succeed");
@@ -326,11 +324,7 @@ fn type_token_may_not_bind_value_side() {
     let error = match bindings.write_value(
         "IntOrd",
         BindingIndex::BUILTIN,
-        Some(Sealed::seal(region.seal_resident(
-            Carried::Object(val),
-            CarrierWitness::new(false, None),
-        ))),
-        None,
+        Sealed::seal(region.seal_resident(Carried::Object(val), CarrierWitness::new(false, None))),
         &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,

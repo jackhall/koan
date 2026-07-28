@@ -394,35 +394,38 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// True iff the nearest opaque enclosing scope is a SIG decl_scope. A `Module`
-    /// short-circuits to `false`; `Anonymous`, `Root` and `RecursiveBlock` frames are transparent.
+    /// The nearest **opaque** scope — `self` or the first `Sig` / `Module` ancestor; `Root`,
+    /// `Anonymous` and `RecursiveBlock` frames are transparent. The single home of the opacity
+    /// classification: the SIG-body gate, the group-context read and the VAL-slot door
+    /// ([`Self::write_sig_slot`]) all pivot on which opaque kind this finds, each reading the
+    /// result's `kind` rather than re-walking.
+    pub(crate) fn nearest_opaque(&self) -> Option<&Scope<'a>> {
+        self.ancestors().find(|s| match &s.kind {
+            ScopeKind::Sig { .. } | ScopeKind::Module { .. } => true,
+            ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::RecursiveBlock { .. } => false,
+        })
+    }
+
+    /// True iff the nearest opaque enclosing scope is a SIG decl_scope.
     pub fn is_in_sig_body(&self) -> bool {
-        self.ancestors()
-            .find_map(|s| match &s.kind {
-                ScopeKind::Sig { .. } => Some(true),
-                ScopeKind::Module { .. } => Some(false),
-                ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::RecursiveBlock { .. } => None,
-            })
-            .unwrap_or(false)
+        matches!(
+            self.nearest_opaque().map(|s| &s.kind),
+            Some(ScopeKind::Sig { .. })
+        )
     }
 
     /// The [`OperatorGroup`] whose body this scope sits in, if any — the context an `OP`
     /// declaration reads to know it is a group member (its registry write belongs to the
-    /// group, and a heterogeneous `->` is admissible only under a pairwise mode). Walks
-    /// outward like [`Self::is_in_sig_body`]: `Anonymous`, `Root` and `RecursiveBlock` frames are
-    /// transparent, a `Sig` or a group-less `Module` short-circuits to `None`. A group body *is* a
-    /// `Module { group: Some }`, so it answers on its own arm — and a plain module nested inside one
-    /// still short-circuits at its own `Module { group: None }`.
+    /// group, and a heterogeneous `->` is admissible only under a pairwise mode). A group body
+    /// *is* a `Module { group: Some }`, so it answers on the nearest opaque scope — a `Sig` or a
+    /// plain `Module` (a group-less module nested inside a group body included) answers `None`.
     pub fn nearest_group_context(&self) -> Option<Rc<OperatorGroup>> {
-        self.ancestors()
-            .find_map(|s| match &s.kind {
-                ScopeKind::Module {
-                    group: Some(group), ..
-                } => Some(Some(Rc::clone(group))),
-                ScopeKind::Sig { .. } | ScopeKind::Module { group: None, .. } => Some(None),
-                ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::RecursiveBlock { .. } => None,
-            })
-            .flatten()
+        match self.nearest_opaque().map(|s| &s.kind) {
+            Some(ScopeKind::Module {
+                group: Some(group), ..
+            }) => Some(Rc::clone(group)),
+            _ => None,
+        }
     }
 
     /// Snapshot of every `(name, declared type)` slot pair — the schema projection's read. Empty

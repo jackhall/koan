@@ -23,7 +23,7 @@
 use std::rc::Rc;
 
 use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
-use crate::machine::core::carrier_witness::FunctionMirror;
+use crate::machine::core::carrier_witness::OverloadSeal;
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{probe_key, KType, OperatorGroup};
 
@@ -41,27 +41,22 @@ pub(crate) enum TypeWritePolicy {
 
 /// One binding-table write, as data. Ops apply in `Vec` order — program order within the step.
 pub(crate) enum WriteOp {
-    /// LET binding a non-callable value.
+    /// LET binding a value. A value binding is callable by name alone — a function value binds
+    /// here like any other value and publishes no keyworded expression.
     Value {
         name: String,
         index: BindingIndex,
         sealed: SealedValue,
     },
-    /// `LET f = (FN …)`: the `data` entry plus its function-bucket mirror.
-    Callable {
-        name: String,
-        index: BindingIndex,
-        sealed: SealedValue,
-        mirror: FunctionMirror,
-    },
-    /// Bare `FN` / `OP` overload: bucket only, no `data` entry. `builtin_shadow_guard` is false
+    /// `FN` / `OP` overload registration: dispatch bucket only, no `data` entry — the only door a
+    /// keyworded expression becomes dispatchable through. `builtin_shadow_guard` is false
     /// only for the operator door — a user module may declare an operator the root already
     /// declares, because dispatch consults the immutable root bucket first and shadowing is
     /// type-gated there.
     Overload {
         name: String,
         index: BindingIndex,
-        mirror: FunctionMirror,
+        seal: OverloadSeal,
         builtin_shadow_guard: bool,
     },
     /// Type registration. `builtin_shadow_guard` is set by the user-facing doors (`LET <Type> =`,
@@ -87,30 +82,6 @@ pub(crate) enum WriteOp {
 }
 
 impl WriteOp {
-    /// The value-side op for a sealed value and the mirror bundle of the callable it wraps, if
-    /// any — the one place the `Value` / `Callable` split is decided, so a caller that sealed a
-    /// value through [`Scope::seal_delivered`] / [`Scope::seal_checked`] never restates it.
-    pub(crate) fn value(
-        name: String,
-        index: BindingIndex,
-        sealed: SealedValue,
-        mirror: Option<FunctionMirror>,
-    ) -> Self {
-        match mirror {
-            Some(mirror) => WriteOp::Callable {
-                name,
-                index,
-                sealed,
-                mirror,
-            },
-            None => WriteOp::Value {
-                name,
-                index,
-                sealed,
-            },
-        }
-    }
-
     /// Apply this write against `scope` — the step scope the op was returned from. The single
     /// interpreter: resolve the write target (forwarding through a transparent `USING` window),
     /// run the guards the door used to run inline, then mutate the table.
@@ -123,26 +94,12 @@ impl WriteOp {
             } => {
                 let target = value_write_target(scope, &name)?;
                 target.assert_open(&name);
-                target
-                    .bindings()
-                    .write_value(&name, index, Some(sealed), None, gate)
-            }
-            WriteOp::Callable {
-                name,
-                index,
-                sealed,
-                mirror,
-            } => {
-                let target = value_write_target(scope, &name)?;
-                target.assert_open(&name);
-                target
-                    .bindings()
-                    .write_value(&name, index, Some(sealed), Some(mirror), gate)
+                target.bindings().write_value(&name, index, sealed, gate)
             }
             WriteOp::Overload {
                 name,
                 index,
-                mirror,
+                seal,
                 builtin_shadow_guard,
             } => {
                 let target = scope.write_scope();
@@ -152,13 +109,11 @@ impl WriteOp {
                 // index is gated.
                 if builtin_shadow_guard
                     && index != BindingIndex::BUILTIN
-                    && target.shadows_builtin_function(&mirror.key)
+                    && target.shadows_builtin_function(&seal.key)
                 {
                     return Err(KError::new(KErrorKind::Rebind { name }));
                 }
-                target
-                    .bindings()
-                    .write_value(&name, index, None, Some(mirror), gate)
+                target.bindings().write_overload(&name, index, seal, gate)
             }
             WriteOp::Type {
                 name,

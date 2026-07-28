@@ -38,8 +38,8 @@ pub type DeliveredCarried =
 /// A callable's **dormant** carrier: the `KFunction` fused to the exact reach description minted for
 /// it, over the [`KFunctionFamily`] the library dispatches on. This is what a `functions` dispatch
 /// bucket stores and what a [`ReturnContract`](crate::machine::core::ReturnContract) carries across
-/// a tail chain: the seal states the same claim its mirrored `data` entry does, where a bare
-/// `&KFunction` would state no reach at all.
+/// a tail chain: the seal fuses the callable with its reach claim, where a bare `&KFunction` would
+/// state no reach at all.
 pub type SealedFunction = crate::witnessed::Sealed<KFunctionFamily, CarrierWitness>;
 
 /// A callable **in use**: re-anchored at a region's own lifetime, paired with the reach witness it
@@ -77,97 +77,40 @@ pub(crate) fn force_substrate_borrows_host(
     }
 }
 
-/// Address identity of a callable, for the write path's intentional-alias short-circuit
-/// (`LET g = (f)` registers the same callable twice; the bucket keeps its first entry). Captured
-/// from the `&KFunction` at seal time — the one moment it is open — and thereafter **compared,
-/// never dereferenced**, and never used for ordering or hashing.
-///
-/// Sound because identities are only ever compared against other identities captured from
-/// callables in the same live region set: exactly what a `ptr::eq` over two re-anchored references
-/// compares, minus the re-anchor.
-#[derive(Copy, Clone, PartialEq)]
-pub(crate) struct CallableIdentity(*const ());
-
-impl CallableIdentity {
-    fn of(f: &KFunction<'_>) -> Self {
-        CallableIdentity(f as *const KFunction<'_> as *const ())
-    }
-}
-
-/// Everything a table write path needs about a callable, computed at mirror-seal time — the one
-/// moment the callable is open under its home pin — so no write verb ever opens a carrier.
+/// Everything a dispatch-bucket registration needs about a callable, computed at seal time — the
+/// one moment the callable is open under its home pin — so no write verb ever opens a carrier.
 /// `sealed` is what the `functions` bucket stores; the rest is plain data with no region lifetime.
-pub(crate) struct FunctionMirror {
+///
+/// A keyworded expression becomes dispatchable **only** through one of these — the `FN` / `OP`
+/// registration doors and the builtin seeds. Binding a function *value* (`LET g = (f)`) publishes
+/// nothing here: a value binding is callable by name alone.
+pub(crate) struct OverloadSeal {
     /// The dormant callable carrier the dispatch bucket stores.
     pub sealed: SealedFunction,
     /// `signature.untyped_key()` — the bucket this callable belongs in.
     pub key: UntypedKey,
     /// `signature.dispatch_token()` — the stored form of the duplicate-overload predicate.
     pub token: DispatchToken,
-    /// The callable's address identity, for the intentional-alias short-circuit.
-    pub identity: CallableIdentity,
     /// `KFunction::summarize()`, rendered here so the `DuplicateOverload` diagnostic can name the
     /// colliding overload without re-opening it.
     pub summary: String,
 }
 
-impl FunctionMirror {
-    /// The bundle for a callable **resident in `scope`'s own region** — the bare-`FN` door, which
-    /// binds no value and so has no mirrored `data` seal to derive its claim from. The reach is the
-    /// exact empty set: `FN` allocates the callable into the very scope it captures, so its only
-    /// region borrow is home, which every read of it already pins. The callable is held live here,
-    /// so everything the bucket write keys on is read straight off the reference and travels as
-    /// plain data.
+impl OverloadSeal {
+    /// The bundle for a callable **resident in `scope`'s own region** — the `FN` / `OP`
+    /// registration doors. The reach is the exact empty set: `FN` allocates the callable into the
+    /// very scope it captures, so its only region borrow is home, which every read of it already
+    /// pins. The callable is held live here, so everything the bucket write keys on is read
+    /// straight off the reference and travels as plain data.
     pub(crate) fn of_resident<'a>(scope: &Scope<'a>, f: &'a KFunction<'a>) -> Self {
         let sealed = scope.seal_resident::<KFunctionFamily>(f, CarrierWitness::default());
-        FunctionMirror::of_live(f, sealed)
-    }
-
-    /// The bundle for a callable held live, computed straight off the reference.
-    pub(crate) fn of_live(f: &KFunction<'_>, sealed: SealedFunction) -> Self {
-        FunctionMirror {
+        OverloadSeal {
             sealed,
             key: f.signature.untyped_key(),
             token: f.signature.dispatch_token(),
-            identity: CallableIdentity::of(f),
             summary: f.summarize(),
         }
     }
-}
-
-/// Project a bound value's dormant carrier onto the `KFunction` it wraps, under `pin` — the write
-/// door's **mirror seal**, bundled with everything the table write path keys on. The witness rides
-/// across verbatim, so the `functions` bucket entry and its `data` twin state one claim about one
-/// value; a value that is not a callable yields `None` and mirrors nothing. The projected reference
-/// is re-erased inside the pinned read and the derived fields are owned data, so nothing anchored
-/// at the read's brand escapes it.
-pub(crate) fn function_mirror_of(
-    sealed: &crate::witnessed::Sealed<CarriedFamily, CarrierWitness>,
-    pin: &Rc<FrameStorage>,
-) -> Option<FunctionMirror> {
-    let (projected, key, token, identity, summary) =
-        sealed.open_with(pin, |carried: Carried<'_>| match carried {
-            Carried::Object(object) => object.as_function().map(|f| {
-                (
-                    Erased::erase(f),
-                    f.signature.untyped_key(),
-                    f.signature.dispatch_token(),
-                    CallableIdentity::of(f),
-                    f.summarize(),
-                )
-            }),
-            _ => None,
-        })?;
-    Some(FunctionMirror {
-        sealed: crate::witnessed::Sealed::seal(Witnessed::from_erased(
-            projected,
-            *sealed.witness(),
-        )),
-        key,
-        token,
-        identity,
-        summary,
-    })
 }
 
 /// Koan's **retention predicate** for a copying relocation of `envelope`

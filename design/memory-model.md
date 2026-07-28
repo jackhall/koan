@@ -420,9 +420,10 @@ step brand through one of the `seal_*` construction doors on
 [`Scope`](../src/machine/core/scope/registry.rs) — mint the exact reach, copy the value in under
 it, seal the two together — and returns the table write it decided as a
 [`WriteOp`](../src/machine/core/bindings/ops.rs) on its
-[`Action`](../src/machine/core/kfunction/action.rs). One variant per channel: `Value` / `Callable`
-(a `data` entry, with the function-bucket mirror when the value wraps a callable), `Overload` (a
-bare `FN` / `OP` bucket entry), `Type` (a `types` entry under a
+[`Action`](../src/machine/core/kfunction/action.rs). One variant per channel: `Value`
+(a `data` entry — a value binding, callable by name alone), `Overload` (a
+`FN` / `OP` dispatch-bucket entry, the only door a keyworded expression becomes dispatchable
+through), `Type` (a `types` entry under a
 [`TypeWritePolicy`](../src/machine/core/bindings/ops.rs)), `Group` (one operator-registry probe
 key), and `SigSlot` (a `VAL` slot in the nearest enclosing SIG decl scope).
 

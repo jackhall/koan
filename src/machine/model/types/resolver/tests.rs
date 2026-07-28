@@ -27,7 +27,6 @@ fn type_token_cannot_bind_value_side() {
                 Carried::Object(region.brand().alloc_object(KObject::Number(7.0))),
                 CarrierWitness::default(),
             ),
-            None,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )

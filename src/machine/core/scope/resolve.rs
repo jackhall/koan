@@ -1,5 +1,5 @@
 //! Name-resolution ladders on [`Scope`]: value / type / operator-group lookup, the shared
-//! `walk_chain` / `resolve_builtin_first` traversals, the visibility `binding_cutoff`, and the
+//! `walk_chain` traversal, the visibility `binding_cutoff`, and the
 //! builtin-shadow consults. Split out of the parent `scope` module; the `Scope` struct,
 //! its constructors, and small accessors live there.
 
@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use super::AdoptSeam;
 use super::Scope;
-use crate::machine::core::bindings::{Bindings, NameLookup};
+use crate::machine::core::bindings::NameLookup;
 use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType, OperatorGroup};
 use crate::machine::DeliveredCarried;
@@ -87,24 +87,6 @@ impl<'a> Scope<'a> {
     /// [`binding_cutoff`](Self::binding_cutoff); the innermost visible hit wins.
     fn walk_chain<T>(&self, probe: impl Fn(&Scope<'a>) -> Option<T>) -> Option<T> {
         self.ancestors().find_map(probe)
-    }
-
-    /// Builtin-first resolution: a builtin entry is unshadowable and authoritative, so consult the
-    /// immutable run-global root in one hop and return its hit; a non-builtin name finds nothing in
-    /// the root and falls through to the innermost-wins [`Self::walk_chain`]. The `is_builtin` gate is
-    /// the `idx == 0` [`Bindings::has_builtin_type`] / [`Bindings::has_builtin_function`] predicate,
-    /// so a synthetic root-position user entry still resolves by the chain walk below.
-    fn resolve_builtin_first<T>(
-        &self,
-        is_builtin: impl Fn(&Bindings) -> bool,
-        root_hit: impl FnOnce(&Bindings) -> Option<T>,
-        probe: impl Fn(&Scope<'a>) -> Option<T>,
-    ) -> Option<T> {
-        let root = self.root_scope().bindings();
-        if is_builtin(root) {
-            return root_hit(root);
-        }
-        self.walk_chain(probe)
     }
 
     /// Chain-gated companion to [`Self::resolve`]. Per-scope hits are filtered through the
@@ -195,15 +177,20 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<KType>> {
-        self.resolve_builtin_first(
-            |root| root.has_builtin_type(name),
-            |root| root.lookup_type(name, None),
-            |scope| {
-                scope
-                    .bindings()
-                    .lookup_type(name, scope.binding_cutoff(chain))
-            },
-        )
+        // Builtin-first: a builtin type is unshadowable and authoritative, so the immutable
+        // run-global root answers in one hop; a non-builtin name finds nothing there and falls
+        // through to the innermost-wins walk. The gate is the `idx == 0`
+        // [`Bindings::has_builtin_type`] predicate, so a synthetic root-position user entry still
+        // resolves by the chain walk below.
+        let root = self.root_scope().bindings();
+        if root.has_builtin_type(name) {
+            return root.lookup_type(name, None);
+        }
+        self.walk_chain(|scope| {
+            scope
+                .bindings()
+                .lookup_type(name, scope.binding_cutoff(chain))
+        })
     }
 
     /// Resolve a chain's operator-group probe against this scope and the `outer` chain:

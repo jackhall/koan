@@ -153,25 +153,29 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // (`adopted_reach_of`, the same split the parameter and MATCH `it` binds apply) — and copies
         // the value in under it. A carrier-less region-pure RHS takes the checked tier, its
         // `(None, bit)` reach derived from the checked audit's own saw-a-region-pointer walk. Either
-        // returns the sealed value plus the mirror bundle of the callable it wraps, from which the
+        // returns the sealed value, from which the
         // terminal witnesses the bound value in place — the same reach-aware wrapper a later read
         // uses — while the table write rides the outcome.
         let sealed = match ctx.arg_carrier("value") {
             Some(carrier) => {
                 ctx.scope
-                    .seal_delivered(carrier, |carried| Ok(carried.object()), ctx.types)
+                    .adopt_for_binding(carrier, |carried| Ok(carried.object()), ctx.types)
             }
             None => ctx.scope.seal_checked(value.deep_clone(), ctx.types),
         };
-        let (sealed, mirror) = match sealed {
-            Ok(pair) => pair,
+        let sealed = match sealed {
+            Ok(sealed) => sealed,
             Err(e) => return done_err(e),
         };
         // The bound value's own reach rides the terminal carrier out of the step: the lift upgrades
         // the entry's exact description into owned pins, so the reached regions stay pinned across
         // transit (the delivery envelope) rather than being re-derived at the seal. The write takes
         // its own duplicate of the seal, so the finish never reads its own write back out.
-        let write = WriteOp::value(name, bind_index, sealed.duplicate(), mirror);
+        let write = WriteOp::Value {
+            name,
+            index: bind_index,
+            sealed: sealed.duplicate(),
+        };
         let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
         Action::done(Ok(StepCarried::born_pinned(carrier, pins))).with_effect(write)
     }

@@ -24,7 +24,7 @@ use crate::machine::core::bindings::operator_group_ops;
 use crate::machine::core::bindings::{
     BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
 };
-use crate::machine::core::carrier_witness::FunctionMirror;
+use crate::machine::core::carrier_witness::OverloadSeal;
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
 use crate::machine::model::{Carried, KObject, OperatorGroup, TypeRegistry};
 use crate::machine::CarrierWitness;
@@ -63,58 +63,28 @@ impl<'a> Scope<'a> {
         target
     }
 
-    /// Fused value **construction**: mint the bound value's exact reach off the delivered `cell`
-    /// (copied mode — the value is copied into this scope's own region) into this scope's arena,
-    /// fold the owning bundle into the region's union, copy the `project`ed value in under that
-    /// derived evidence, and seal the two together. Returns the dormant [`SealedValue`] beside the
-    /// **mirror bundle** of the callable it wraps, if any — everything a [`WriteOp::Value`] /
-    /// [`WriteOp::Callable`] needs, with no table touched. `project` selects what to copy out of
-    /// the delivered value (identity for a whole-value bind, the Ok/Err payload for TRY) under the
-    /// envelope's own pin.
-    ///
-    /// The door derives the value and the reach it is audited against from this one `cell`, so a
-    /// binding entry can never pair the value with a reach some other value derived.
-    ///
-    /// The move-in policy is the bind seam's, and it lives in one place —
-    /// [`Self::adopt_for_binding`]. A projection that **embeds a substrate** (a bare record, or one
-    /// behind a `Tagged`/`Wrapped` spine) routes the escape-seam cost chooser there; every other
-    /// projection deep-clones its top node under the cell's copied-mode reach. A substrate carrier
-    /// is never a `KFunction`, so the mirror seal over such a bind simply finds nothing to write.
-    pub(crate) fn seal_delivered(
-        &self,
-        cell: &DeliveredCarried,
-        project: impl for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
-        types: &TypeRegistry,
-    ) -> Result<(SealedValue, Option<FunctionMirror>), KError> {
-        let sealed = self.adopt_for_binding(cell, project, types)?;
-        let mirror = self.seal_function_mirror(&sealed);
-        Ok((sealed, mirror))
-    }
-
     /// Fused region-pure / fresh-value **construction**: checked move-in of `value` into this
     /// scope's own region with a `(None, bit)` reach derived from the checked audit's own
-    /// saw-a-region-pointer walk ([`Self::alloc_object_checked_stored`]), sealed beside the mirror
-    /// bundle of the callable it wraps, if any. The pure-value twin of [`Self::seal_delivered`].
+    /// saw-a-region-pointer walk ([`Self::alloc_object_checked_stored`]), sealed. The pure-value
+    /// twin of [`Self::adopt_for_binding`], the delivered-value construction door.
     pub(crate) fn seal_checked(
         &self,
         value: KObject<'_>,
         types: &TypeRegistry,
-    ) -> Result<(SealedValue, Option<FunctionMirror>), KError> {
+    ) -> Result<SealedValue, KError> {
         // A checked bind is region-pure — its borrows reach no foreign region — so there is no
         // description to host and nothing to fold into the region's union bundle.
         let (obj, (_, borrows_home)) = self.alloc_object_checked_stored(value, types)?;
-        let sealed = self.seal_resident(
+        Ok(self.seal_resident(
             Carried::Object(obj),
             CarrierWitness::new(borrows_home, None),
-        );
-        let mirror = self.seal_function_mirror(&sealed);
-        Ok((sealed, mirror))
+        ))
     }
 
     /// Fused MODULE-finish value **construction**: derive the module's stored reach off its `child`
     /// scope ([`Self::child_module_reach`]) — never by walking the built value — and allocate the
     /// Object-arm module value under that evidence, sealed. The home-borrow bit is derived by the
-    /// mint, never hand-asserted. A `KObject::Module` wraps no `KFunction`, so there is no mirror.
+    /// mint, never hand-asserted.
     pub(crate) fn seal_module(
         &self,
         module: &'a crate::machine::model::Module<'a>,
@@ -124,7 +94,7 @@ impl<'a> Scope<'a> {
         self.store_module_object(module, child, types)
     }
 
-    /// Construction-time value bind: apply a [`WriteOp::value`] against this scope immediately.
+    /// Construction-time value bind: apply a [`WriteOp::Value`] against this scope immediately.
     /// For scopes no other node can reach — a not-yet-published per-call scope (parameters,
     /// MATCH / TRY `it`), the run-global root, test fixtures. A published-scope bind rides the
     /// step outcome instead.
@@ -132,16 +102,20 @@ impl<'a> Scope<'a> {
         &self,
         name: String,
         sealed: SealedValue,
-        mirror: Option<FunctionMirror>,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        WriteOp::value(name, index, sealed, mirror).apply(self, gate)
+        WriteOp::Value {
+            name,
+            index,
+            sealed,
+        }
+        .apply(self, gate)
     }
 
-    /// [`Self::seal_delivered`] + [`Self::bind_value_direct`] — the construction-door spelling of a
-    /// delivered value bind. Returns a duplicate of the entry's own [`SealedValue`], from which the
-    /// caller lifts its terminal carrier ([`Self::lift_resident_parts`]).
+    /// [`Self::adopt_for_binding`] + [`Self::bind_value_direct`] — the construction-door spelling
+    /// of a delivered value bind. Returns a duplicate of the entry's own [`SealedValue`], from
+    /// which the caller lifts its terminal carrier ([`Self::lift_resident_parts`]).
     pub(crate) fn bind_delivered_direct(
         &self,
         name: String,
@@ -151,11 +125,11 @@ impl<'a> Scope<'a> {
         types: &TypeRegistry,
         gate: &mut WriteGate,
     ) -> Result<SealedValue, KError> {
-        let (sealed, mirror) = self.seal_delivered(cell, project, types)?;
+        let sealed = self.adopt_for_binding(cell, project, types)?;
         // Duplicate the seal: one binds into the entry, the other rides the caller's terminal
         // carrier out of the step. Neither owns pins — the region's union bundle does — so the
         // reach is covered on both the resident and in-transit paths.
-        self.bind_value_direct(name, sealed.duplicate(), mirror, index, gate)?;
+        self.bind_value_direct(name, sealed.duplicate(), index, gate)?;
         Ok(sealed)
     }
 
@@ -169,8 +143,8 @@ impl<'a> Scope<'a> {
         types: &TypeRegistry,
         gate: &mut WriteGate,
     ) -> Result<SealedValue, KError> {
-        let (sealed, mirror) = self.seal_checked(value, types)?;
-        self.bind_value_direct(name, sealed.duplicate(), mirror, index, gate)?;
+        let sealed = self.seal_checked(value, types)?;
+        self.bind_value_direct(name, sealed.duplicate(), index, gate)?;
         Ok(sealed)
     }
 
@@ -187,8 +161,7 @@ impl<'a> Scope<'a> {
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let sealed = self.seal_resident(Carried::Object(obj), CarrierWitness::new(false, None));
-        let mirror = self.seal_function_mirror(&sealed);
-        self.bind_value_direct(name, sealed, mirror, index, gate)
+        self.bind_value_direct(name, sealed, index, gate)
     }
 
     /// Construction-time overload registration: seal `fn_ref` and add it to this scope's
@@ -204,7 +177,7 @@ impl<'a> Scope<'a> {
         WriteOp::Overload {
             name,
             index,
-            mirror: FunctionMirror::of_resident(self, fn_ref),
+            seal: OverloadSeal::of_resident(self, fn_ref),
             builtin_shadow_guard: true,
         }
         .apply(self, gate)
@@ -251,22 +224,15 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::KType,
     ) -> Result<(), KError> {
-        // Mirrors `is_in_sig_body`'s walk exactly: a `Sig` scope wins and hands back its own
-        // collector; a `Module` scope short-circuits (no SIG body encloses); `Root` / `Anonymous` /
-        // `RecursiveBlock` fall through transparently.
-        let (target, slots) = self
-            .ancestors()
-            .find_map(|s| match &s.kind {
-                ScopeKind::Sig { slots, .. } => Some(Some((s, slots))),
-                ScopeKind::Module { .. } => Some(None),
-                ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::RecursiveBlock { .. } => None,
-            })
-            .flatten()
-            .ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(
-                    "VAL slot outside a SIG body reached the slot door".to_string(),
-                ))
-            })?;
+        let outside_sig = || {
+            KError::new(KErrorKind::ShapeError(
+                "VAL slot outside a SIG body reached the slot door".to_string(),
+            ))
+        };
+        let target = self.nearest_opaque().ok_or_else(outside_sig)?;
+        let ScopeKind::Sig { slots, .. } = &target.kind else {
+            return Err(outside_sig());
+        };
         target.assert_open(&name);
         if slots.borrow().contains_key(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
@@ -336,9 +302,10 @@ impl<'a> Scope<'a> {
         .apply(self, gate)
     }
 
-    /// Allocate an ascription view's scope under `outer` and replay `src`'s value bindings into it,
-    /// re-deriving each callable entry's mirror bundle **through the view scope** — the layer that
-    /// holds a pin to open a seal under, so the binding table itself opens nothing.
+    /// Allocate an ascription view's scope under `outer` and replay `src`'s bindings into it —
+    /// value entries and dispatch buckets both, so the view preserves the source module's
+    /// keyworded surface as-is. The replay is pure seal duplication; the binding table opens
+    /// nothing.
     ///
     /// Born-inside-the-door like [`Self::alloc_group_child`]: the view scope is returned only once
     /// the replay has landed, and nothing else has a reference to it before then, so the door mints
@@ -352,11 +319,8 @@ impl<'a> Scope<'a> {
         let view = outer
             .brand()
             .alloc_scope(Scope::child_under_module(outer, path));
-        view.bindings().bulk_install_from(
-            src,
-            |sealed| view.seal_function_mirror(sealed),
-            &mut WriteGate::for_unpublished_scope(),
-        )?;
+        view.bindings()
+            .bulk_install_from(src, &mut WriteGate::for_unpublished_scope())?;
         Ok(view)
     }
 

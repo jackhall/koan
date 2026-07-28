@@ -204,7 +204,6 @@ fn using_window_value_read_reach_survives_under_module_root() {
         .bind_value_direct(
             "val".to_string(),
             sealed,
-            None,
             BindingIndex::value(0),
             &mut crate::machine::WriteGate::for_test(),
         )

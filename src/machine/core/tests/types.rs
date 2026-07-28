@@ -173,7 +173,6 @@ fn child_module_reach_names_the_child_region_which_owns_its_members_reaches() {
         .bind_value_direct(
             "m".to_string(),
             sealed,
-            None,
             BindingIndex::value(0),
             &mut crate::machine::WriteGate::for_test(),
         )

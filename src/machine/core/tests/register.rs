@@ -169,11 +169,11 @@ fn register_function_dedupes_exact_signature() {
     );
 }
 
-/// Routing a structurally identical but pointer-distinct `KFunction` through the LET
-/// path (a `WriteOp::Callable` over a `KObject::KFunction`) must also trip `DuplicateOverload` —
-/// the unified `try_apply` shares the FN dedupe rule.
+/// Binding a structurally identical but pointer-distinct `KFunction` as a *value* is not an
+/// overload: the LET path writes no dispatch bucket, so it cannot collide with the registered
+/// `FN` — the bind lands and the bucket keeps its single registered overload.
 #[test]
-fn bind_value_direct_with_kfunction_dedupes_exact_signature_with_existing_fn() {
+fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -203,23 +203,27 @@ fn bind_value_direct_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         .brand()
         .alloc_object_checked(KObject::KFunction(f2), &types)
         .expect("f was just allocated into region's own region");
-    let err = scope
+    scope
         .bind_resident_for_test(
             "OTHER_NAME".to_string(),
             obj2,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
-        .unwrap_err();
-    assert!(
-        matches!(&err.kind, crate::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "OTHER_NAME"),
-        "expected DuplicateOverload from LET path, got {err}",
+        .expect("a value bind of a callable is an ordinary bind, not an overload");
+    let lookup = scope
+        .bindings()
+        .lookup_function(&f1.signature.untyped_key(), None);
+    assert_eq!(
+        lookup.overloads.len(),
+        1,
+        "the bucket holds only the registered FN overload",
     );
 }
 
 /// Intentional aliasing: `LET g = (f)` binding the same `&KFunction` under a second
-/// name must succeed — bucket dedupe is silent-success on pointer-equal entries and
-/// structural-rejection only on pointer-distinct ones.
+/// name must succeed — a value bind touches no dispatch bucket, so two names sharing one
+/// callable never collide.
 #[test]
 fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
     let types = TypeRegistry::new();
@@ -680,15 +684,11 @@ fn sig_scope_bindings_reject_value_token_type_write() {
     );
 }
 
-/// The **mirror seal** states the `data` entry's own claim: a `LET`-bound callable's `functions`
-/// bucket entry carries the carrier projected off the very seal the value binds under, so the
-/// bucket names every region the callable reaches and dispatch's pick escapes with those pins
-/// proven.
+/// Binding a function **value** publishes no keyworded expression: the `data` entry lands, and
+/// the callable's dispatch bucket stays empty — keyworded dispatch comes only from the `FN` / `OP`
+/// registration doors.
 #[test]
-fn function_mirror_seals_the_data_entrys_own_claim() {
-    use crate::machine::core::FrameCoverage;
-    use std::rc::Rc;
-
+fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -703,41 +703,30 @@ fn function_mirror_seals_the_data_entrys_own_claim() {
         .brand()
         .alloc_object_checked(KObject::KFunction(f), &types)
         .expect("f was just allocated into this region");
-
-    // A foreign region the callable's captured environment stands for: minted into the binding
-    // scope's arena exactly as a bind door's mint would, so the seal carries a real reach.
-    let foreign = run_root_storage();
-    let (reach, borrows_home) = scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
-    let sealed = scope.seal_resident(
-        Carried::Object(obj),
-        CarrierWitness::new(borrows_home, reach),
-    );
-    let mirror = scope
-        .seal_function_mirror(&sealed)
-        .expect("the bound value wraps a callable");
+    let sealed = scope.seal_resident(Carried::Object(obj), CarrierWitness::new(false, None));
     scope
         .bind_value_direct(
             "f".to_string(),
             sealed,
-            Some(mirror),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("a fresh callable bind lands");
 
+    assert!(
+        scope.lookup("f").is_some(),
+        "the value binding lands in `data`",
+    );
     let lookup = scope
         .bindings()
         .lookup_function(&f.signature.untyped_key(), None);
-    assert_eq!(lookup.overloads.len(), 1, "the mirror wrote one overload");
     assert!(
-        scope
-            .open_function(&lookup.overloads[0])
-            .reach_covers(foreign.region()),
-        "the bucket entry names the foreign region the bound value reaches",
+        lookup.overloads.is_empty(),
+        "a value bind must not register a keyworded overload",
     );
 }
 
-/// A bare `FN` binds no value, so it has no `data` twin to derive a claim from: it seals the
+/// A `FN` registration binds no value, so it has no `data` twin to derive a claim from: it seals the
 /// **exact empty** reach. `FN` allocates the callable into the very scope it captures, so its only
 /// region borrow is home — which every read of it already pins.
 #[test]

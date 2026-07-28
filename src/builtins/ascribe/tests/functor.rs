@@ -392,8 +392,8 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    // Plain `LET` plus `LET = FN` so the re-bind walk hits both the `data` write
-    // and the `KFunction → functions` mirror.
+    // Plain `LET` plus `LET = FN` so the re-bind walk hits both the `data` replay
+    // and the `functions` bucket replay.
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = ((LET compare = 7) (LET helper = (FN (HELP x :Number) -> Number = (x))))\n\

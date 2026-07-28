@@ -25,7 +25,7 @@ use super::return_type::{
     make_capture, resolve_capture_at_finish, ReturnTypeCapture, ReturnTypeState,
 };
 use super::signature::{parse_fn_param_list, ParamListOutcome};
-use crate::machine::FunctionMirror;
+use crate::machine::OverloadSeal;
 
 /// How a finalized FN-def is wired into the scope:
 ///
@@ -254,7 +254,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just
     // allocated into `scope`'s own region above, so the checked audit always passes; the paired
     // token carries the home-borrow bit the audit walk derives (the captured `&Scope` into home).
-    // A keyworded FN's overload registration rides the step outcome: the mirror seals here, where
+    // A keyworded FN's overload registration rides the step outcome: the seal is built here, where
     // the callable is open under its home pin, and the bucket write lands at the run loop's apply.
     let mut writes: Vec<WriteOp> = Vec::new();
     if !matches!(kind, FnKind::Anonymous) {
@@ -270,7 +270,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         writes.push(WriteOp::Overload {
             name,
             index: bind_index,
-            mirror: FunctionMirror::of_resident(scope, f),
+            seal: OverloadSeal::of_resident(scope, f),
             builtin_shadow_guard: true,
         });
     }

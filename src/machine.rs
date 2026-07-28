@@ -19,7 +19,7 @@ pub(crate) use core::{
     force_substrate_borrows_host, kerror_ktype, require_bare_type_name, require_identifier_name,
     require_kexpression, require_ktype, split_body_statements, Action, ActionFn, AwaitContinue,
     BlockBody, BlockEntry, BlockScope, BlockSeed, BodyCtx, CatchContinue, DepPlacement, DepRequest,
-    DepTerminal, FinishCtx, FoldingBrand, FramePlacement, FrameStorageExt, FunctionMirror,
+    DepTerminal, FinishCtx, FoldingBrand, FramePlacement, FrameStorageExt, OverloadSeal,
     OwnedDispatch, ReturnContract, StepAllocator, TailContract,
 };
 pub use core::{
