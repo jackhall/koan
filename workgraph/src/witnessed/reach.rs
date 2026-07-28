@@ -5,7 +5,7 @@
 //! - [`ReachDescription<F>`] — the **non-owning** description: `Weak<F>` members, hosted in a
 //!   region's append-stable side table ([`Region::alloc_reach`]) and *referenced* (never owned) by
 //!   a [`Carrier`](super::Carrier). It keeps nothing alive; it answers membership queries
-//!   ([`Self::pins_region`] / [`Self::any_member_region`]) by upgrading its members under a pinned
+//!   ([`Self::pins_region`]) by upgrading its members under a pinned
 //!   read. Whoever holds a description's coverage also holds the owning [`PinBundle`] that pins its
 //!   members, so every upgrade succeeds under the holder rule — a failed upgrade is a coverage bug
 //!   (`debug_assert` in debug, treated as non-pinning in release).
@@ -21,6 +21,23 @@
 //! members, never a description's `Weak`). A description is never upgraded to build an owned bundle:
 //! ownership flows forward from a mint, threaded to every holder that needs pins. No constructor
 //! builds either type from loose parts.
+//!
+//! The two outputs of a mint differ in exactly one member, the **self rule**
+//! (design/witness-hosting.md § Composition): the description keeps every composed member,
+//! `dest`'s own region included, so membership is exact — a value's home rides it as an ordinary
+//! member rather than as a separate bit; the owned bundle drops any member whose region *is*
+//! `dest`'s, because a region owning a pin on itself is a reference cycle. The asymmetry is what
+//! makes the `Sealed → Delivered` lift correct for a value resting in its own scope's region —
+//! [`ReachDescription::to_bundle`] upgrades home along with everything else when the value travels
+//! out.
+//!
+//! The self rule bounds a *mint*. A second rule, the **eternal rule**
+//! ([`PinBundle::without_eternal`]), bounds a *region-lifetime retention*
+//! ([`Region::retain_reach`]): a member declaring [`PinsRegion::needs_no_pin`] — storage that
+//! already outlives every region — is dropped there. Between them they are what keeps the retention
+//! graph acyclic. Neither one alone suffices: an owner outside `dest`'s own region can still hold a
+//! chain back to it, and the two-region ring that closes when a run-root region retains a per-call
+//! owner while that owner's region retains the run root is exactly what the eternal rule cuts.
 
 use std::rc::{Rc, Weak};
 
@@ -42,6 +59,21 @@ use super::{
 pub unsafe trait PinsRegion: RegionOwner {
     /// Whether holding `self` keeps the storage of `region` alive.
     fn pins_region(&self, region: &Self::Region) -> bool;
+
+    /// Whether this owner's storage outlives every region that could retain it, so an owning pin on
+    /// it buys nothing and taking one only risks a cycle. `false` by default — the safe answer, an
+    /// extra pin never dangles. A workload overrides it for its eternal tier (Koan's run-root
+    /// [`RegionHost::is_run_root`](super::RegionHost::is_run_root)).
+    ///
+    /// # Safety
+    ///
+    /// Returning `true` asserts that `Self`'s storage — and every region its owner chain pins —
+    /// stays live and fixed-address for at least as long as any region that could retain it. A
+    /// lying answer drops the one pin holding a region alive, which is the dangle the whole reach
+    /// system exists to rule out.
+    fn needs_no_pin(&self) -> bool {
+        false
+    }
 }
 
 /// The non-owning reach description: the `Weak<F>` members naming the regions a carrier's value
@@ -116,6 +148,20 @@ impl<F: PinsRegion> ReachDescription<F> {
         hit
     }
 
+    /// Upgrade every member `Weak → Rc` under a pinned read, collecting the owned [`PinBundle`] that
+    /// pins each member region — the description-to-bundle upgrade the `Sealed → Delivered` **lift**
+    /// routes (a value read out of an arena-hosted seal is re-owned so the source frame may die in
+    /// transit). The one sanctioned production upgrade of a description into an owned bundle: it runs
+    /// under the holder rule (the caller holds a pin covering this description's hosting arena for the
+    /// whole call), so every member upgrade succeeds — a failure is the same coverage bug
+    /// [`Self::for_each_owner`] `debug_assert`s. Subsumption is re-applied through
+    /// [`PinBundle::insert`], so the result is an antichain of the deepest owners.
+    pub fn to_bundle(&self) -> PinBundle<F> {
+        let mut bundle = PinBundle::empty();
+        self.for_each_owner(|owner| bundle.insert(Rc::clone(owner)));
+        bundle
+    }
+
     /// The description's live members, upgraded under a pinned read — white-box reach introspection.
     /// No library-internal caller, so gated entirely behind `test-hooks` for an embedder's own
     /// white-box tests (mirroring `Scheduler::anchor_of`'s gate).
@@ -128,28 +174,31 @@ impl<F: PinsRegion> ReachDescription<F> {
 
     /// Mint a frozen description into `dest`'s side table and return it alongside the owned
     /// [`PinBundle`] the caller keeps to pin its members (design/witness-hosting.md § Composition).
-    /// Composes every source bundle in `sources` (its **exact** strong members — never "everything a
-    /// region reaches") plus any `materialize_hosts` (a source's old host, materialized when foreign
-    /// to `dest`), applying:
+    /// Composes every source bundle in `sources` — its **exact** strong members, never "everything a
+    /// region reaches" — applying exactly two rules, and no caller-supplied policy:
     ///
-    /// 1. **Home-omission** — `dest`'s own region is never a member (the self-cycle rule),
-    ///    enforced here unconditionally, *plus* whatever `omit` reports already-pinned.
-    /// 2. **Borrows-host materialization** — each `Rc<F>` in `materialize_hosts` becomes a member
-    ///    iff its region is foreign to `dest` (and not otherwise omitted).
-    /// 3. **Outer-chain subsumption** — via [`PinsRegion`], built into [`PinBundle::insert`]: a
+    /// 1. **Outer-chain subsumption** — via [`PinsRegion`], built into [`PinBundle::insert`]: a
     ///    member kept alive by another member's owner chain is dropped.
+    /// 2. **The self rule**, applied to the returned **bundle only**: a member whose region *is*
+    ///    `dest`'s is dropped from the owned bundle (a region owning a pin on itself is a cycle)
+    ///    while staying a member of the stored description, so membership remains exact. Every other
+    ///    member survives in both; a mint is not where eternal storage is filtered out — that is the
+    ///    retention's own eternal rule ([`PinBundle::without_eternal`]), applied at
+    ///    [`Region::retain_reach`], because only a region-lifetime pin can close a ring.
+    ///
+    /// A minted description is therefore **exact**: it is the value's whole reach, not a reach
+    /// narrowed against what some destination's container happened to pin, so every consumer reads
+    /// the answer off it directly instead of re-deriving what a narrowing dropped.
     ///
     /// The fold runs over the sources' **strong** `Rc` members (no `Weak` upgrade — ownership flows
-    /// forward from the mint, never recovered from a description), then the composed bundle is
-    /// downgraded into the stored description, so the description's members mirror the bundle's
-    /// antichain. The returned `&'a` description is co-located in `dest`'s side table; the returned
-    /// bundle is what keeps its members alive. `(None, empty bundle)` when the composed reach is
-    /// empty — a region-pure value mints nothing, encoded without an allocation.
+    /// forward from the mint, never recovered from a description), then the composed antichain is
+    /// downgraded into the stored description, so the description's members mirror it. The returned
+    /// `&'a` description is co-located in `dest`'s side table; the returned bundle is what keeps its
+    /// members alive. `(None, empty bundle)` when the composed reach is empty — a region-pure value
+    /// mints nothing, encoded without an allocation.
     pub fn mint<'a, W>(
         dest: RegionHandle<'a, W>,
         sources: &[&PinBundle<F>],
-        materialize_hosts: &[Rc<F>],
-        omit: impl Fn(&F::Region) -> bool,
     ) -> (Option<&'a ReachDescription<F>>, PinBundle<F>)
     where
         // `W::FrameOwner = F` ties the destination's reach side table to this member type, so the
@@ -159,54 +208,42 @@ impl<F: PinsRegion> ReachDescription<F> {
         W: StorageProfile<FrameOwner = F>,
         F: RegionOwner<Region = Region<W>>,
     {
-        let dest_region: *const Region<W> = dest.region();
-        // Rule 1 (self-cycle) folded together with the caller's policy predicate.
-        let omit_all = |r: &Region<W>| std::ptr::eq(r as *const _, dest_region) || omit(r);
-
-        let mut bundle = PinBundle::empty();
+        let mut composed = PinBundle::empty();
         for source in sources {
             for owner in &source.members {
-                if !omit_all(owner.region()) {
-                    bundle.insert(Rc::clone(owner)); // exact members + subsumption + omission
-                }
+                composed.insert(Rc::clone(owner)); // exact members + subsumption
             }
         }
-        for host in materialize_hosts {
-            if !omit_all(host.region()) {
-                bundle.insert(Rc::clone(host)); // rule 2 + subsumption
-            }
+        if composed.is_empty() {
+            return (None, composed);
         }
-        if bundle.is_empty() {
-            (None, bundle)
-        } else {
-            // Freeze the antichain's mirror into the region's side table; the owned bundle rides out
-            // to the caller (the binding entry, the delivery envelope, the region's own retention).
-            let stored = dest.region().alloc_reach(bundle.describe());
-            (Some(stored), bundle)
-        }
+        // Freeze the full antichain's mirror into the region's side table — membership is exact,
+        // `dest`'s own region included — then strip the self member from the owned copy that rides
+        // out to the caller (the binding entry, the delivery envelope, the region's own retention).
+        let stored = dest.region().alloc_reach(composed.describe());
+        let bundle = composed.without_region(dest.region());
+        (Some(stored), bundle)
     }
 
-    /// [`Self::mint`] paired with the pre-omission destination-coverage bit: `true` iff some
-    /// `sources` bundle or `materialize_hosts` owner pins `dest`'s own region *before*
-    /// home-omission drops it. Home-omission (rule 1) removes `dest`'s region from the stored
-    /// members, so the bit is the only surviving record that the value's borrows reach the
-    /// destination — the multi-source generalization of the `borrows_into_dest` companion
-    /// [`Carrier::mint_into`](super::Carrier::mint_into) computes for a single carrier.
+    /// [`Self::mint`] paired with the destination-coverage bit: `true` iff some `sources` bundle
+    /// pins `dest`'s own region. The bit is computed over the source bundles, so it is unaffected by
+    /// the self rule's strip of the returned bundle — the multi-source generalization of the
+    /// `borrows_into_dest` companion [`Carrier::mint_into`](super::Carrier::mint_into) computes for
+    /// a single carrier.
+    ///
+    /// It duplicates what the stored description now records directly (home is an ordinary member),
+    /// and is carried for call sites that read the bit off a carrier rather than querying
+    /// membership. Retired with those call sites.
     pub fn mint_with_dest_bit<'a, W>(
         dest: RegionHandle<'a, W>,
         sources: &[&PinBundle<F>],
-        materialize_hosts: &[Rc<F>],
-        omit: impl Fn(&F::Region) -> bool,
     ) -> (Option<&'a ReachDescription<F>>, PinBundle<F>, bool)
     where
         W: StorageProfile<FrameOwner = F>,
         F: RegionOwner<Region = Region<W>>,
     {
-        let borrows_into_dest = sources.iter().any(|s| s.pins_region(dest.region()))
-            || materialize_hosts
-                .iter()
-                .any(|h| h.pins_region(dest.region()));
-        let (stored, bundle) = Self::mint(dest, sources, materialize_hosts, omit);
+        let borrows_into_dest = sources.iter().any(|s| s.pins_region(dest.region()));
+        let (stored, bundle) = Self::mint(dest, sources);
         (stored, bundle, borrows_into_dest)
     }
 }
@@ -247,9 +284,10 @@ impl<F: PinsRegion> PinBundle<F> {
     }
 
     /// Whether any member's owner chain keeps `region`'s storage alive — the set-level lift of
-    /// [`PinsRegion::pins_region`] over the bundle's **strong** members. The pre-omission
-    /// destination-coverage query [`ReachDescription::mint_with_dest_bit`] runs before folding a
-    /// source into `dest`: no `Weak` upgrade, since the bundle already owns its members.
+    /// [`PinsRegion::pins_region`] over the bundle's **strong** members. The destination-coverage
+    /// query [`ReachDescription::mint_with_dest_bit`] runs over the source bundles, before the self
+    /// rule strips `dest` from the minted bundle: no `Weak` upgrade, since the bundle already owns
+    /// its members.
     pub fn pins_region(&self, region: &F::Region) -> bool {
         self.members.iter().any(|m| m.pins_region(region))
     }
@@ -257,12 +295,28 @@ impl<F: PinsRegion> PinBundle<F> {
     /// Insert `owner` under outer-chain subsumption: skip it when an existing member already pins
     /// its region (dedup + the newcomer-is-an-ancestor case), else drop every existing member the
     /// newcomer subsumes and add it. Keeps the bundle an antichain of the deepest owners.
-    fn insert(&mut self, owner: Rc<F>) {
+    ///
+    /// The in-place counterpart of [`Self::union`], for a holder that folds a lifted set into a
+    /// long-lived bundle it already owns (a scope's union bundle at each bind) rather than
+    /// rebuilding through a fresh allocation per fold.
+    pub fn insert(&mut self, owner: Rc<F>) {
         if self.members.iter().any(|m| m.pins_region(owner.region())) {
             return;
         }
         self.members.retain(|m| !owner.pins_region(m.region()));
         self.members.push(owner);
+    }
+
+    /// Fold every member of `other` in through [`Self::insert`], consuming it — the whole-bundle
+    /// in-place counterpart of [`Self::union`], as [`Self::insert`] is for a single owner. Consuming
+    /// `other` moves its `Rc`s rather than cloning them, so a retention that hands its pins over
+    /// adds no refcount traffic. This is how a long-lived holder accumulates one deduped bundle
+    /// across many folds (a region's [`retain_reach`](Region::retain_reach) list, collapsed to a
+    /// single antichain of the deepest owners) instead of keeping a bundle per fold.
+    pub fn absorb(&mut self, other: Self) {
+        for owner in other.members {
+            self.insert(owner);
+        }
     }
 
     /// The set union of `left` and `right` under outer-chain subsumption — the owner-side compose
@@ -273,6 +327,54 @@ impl<F: PinsRegion> PinBundle<F> {
             result.insert(Rc::clone(owner));
         }
         result
+    }
+
+    /// This bundle without any member whose region **is** `region` — the self rule
+    /// (design/witness-hosting.md § Composition), applied where a bundle is about to be owned by
+    /// `region` itself: a region holding a pin on its own owner is a reference cycle that frees
+    /// neither. Exact-region only, by pointer identity: an *ancestor* of `region` stays, since
+    /// owning a pin on an outer frame closes no cycle.
+    pub fn without_region(&self, region: &F::Region) -> Self {
+        PinBundle {
+            members: self
+                .members
+                .iter()
+                .filter(|m| !std::ptr::eq(m.region() as *const _, region as *const _))
+                .map(Rc::clone)
+                .collect(),
+        }
+    }
+
+    /// This bundle keeping only the members whose region satisfies `keep` — the **retention
+    /// predicate**'s filter (design/witness-hosting.md § Escape). A relocation verb derives a source
+    /// claim by running the embedder's `still_borrows` over the product against each member region
+    /// in turn, so a claim is a checked property of the folded bytes rather than a bundle assembled
+    /// by hand. No member reference escapes: `keep` sees each member's region, never its owner.
+    pub fn retaining(&self, mut keep: impl FnMut(&F::Region) -> bool) -> Self {
+        PinBundle {
+            members: self
+                .members
+                .iter()
+                .filter(|m| keep(m.region()))
+                .map(Rc::clone)
+                .collect(),
+        }
+    }
+
+    /// This bundle without any member whose storage already outlives every region
+    /// ([`PinsRegion::needs_no_pin`]) — the **eternal rule**, the region-lifetime companion to the
+    /// self rule. Applied where a bundle is about to be owned *for a region's whole life*
+    /// ([`Region::retain_reach`]): pinning storage that outlives the region buys nothing, and if
+    /// that storage's own region ever retains this one back, the pair pins each other forever.
+    pub(crate) fn without_eternal(&self) -> Self {
+        PinBundle {
+            members: self
+                .members
+                .iter()
+                .filter(|m| !m.needs_no_pin())
+                .map(Rc::clone)
+                .collect(),
+        }
     }
 
     /// The description mirror of this bundle's antichain — `Weak` members for side-table hosting.
@@ -319,3 +421,61 @@ unsafe impl<F: PinsRegion, B: Reattachable> ComposeWitness<B> for PinBundle<F> {
         Self::union(left, right)
     }
 }
+
+/// The **embedder-facing** owned-coverage holder: a [`PinBundle`] an embedder may hold, clone,
+/// thread and drop — but not compute with. It is the "step's coverage" of
+/// design/witness-hosting.md § Threading, and the shape every owned pin crosses the library
+/// boundary in: a step carries one from the fold that composed it to the seal that consumes it, a
+/// finalize hands one to the retention hold, a region retains one for its life.
+///
+/// The point is what it *lacks*. `PinBundle`'s arithmetic — [`union`](PinBundle::union),
+/// [`without_region`](PinBundle::without_region), [`retaining`](PinBundle::retaining),
+/// [`insert`](PinBundle::insert), [`absorb`](PinBundle::absorb) — is crate-private, so an embedder
+/// cannot narrow a claim, strip a member, or assemble a bundle by hand. Every set operation is a
+/// container verb on the holder that owns the pins, which is what makes the pinning invariant
+/// something the embedder has no vocabulary to break rather than a rule it is asked to honor.
+///
+/// It is a [`Witness`]: holding one keeps every member region live, so a read may run under it.
+pub struct StepCoverage<F: PinsRegion>(pub(crate) PinBundle<F>);
+
+impl<F: PinsRegion> StepCoverage<F> {
+    /// Coverage of nothing — the frameless / run-region terminal, and the seed a fold accumulates
+    /// from. Allocates nothing.
+    pub fn empty() -> Self {
+        StepCoverage(PinBundle::empty())
+    }
+
+    /// Coverage of one region, from an owner the caller already holds (a step's anchor frame, a
+    /// scope's own region owner). Handing in an `Rc` is not pin arithmetic: the caller already has
+    /// the pin, and this only names it as coverage.
+    pub fn of(owner: Rc<F>) -> Self {
+        StepCoverage(PinBundle::singleton(owner))
+    }
+
+    /// Widen this coverage to also cover everything `other` covers — the union a step assembles
+    /// across its deps. Consuming, so a hand-off clones no `Rc`.
+    pub fn absorb(&mut self, other: StepCoverage<F>) {
+        self.0.absorb(other.0);
+    }
+
+    /// Whether this coverage holds no region owner.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<F: PinsRegion> Clone for StepCoverage<F> {
+    fn clone(&self) -> Self {
+        StepCoverage(self.0.clone())
+    }
+}
+
+impl<F: PinsRegion> Default for StepCoverage<F> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+// SAFETY: the wrapped `PinBundle` is a `Witness` — holding it keeps every member region's storage
+// live at a fixed address — and this newtype adds nothing but the narrowed surface.
+unsafe impl<F: PinsRegion> Witness for StepCoverage<F> {}

@@ -60,7 +60,37 @@ fn block_mutual_pair_seals_one_component_with_member_handle_cross_refs() {
     let bb_handle = scope.resolve_type("Bb").unwrap();
     assert_eq!(a_fields[0], ("b".to_string(), bb_handle));
     assert_eq!(b_fields[0], ("a".to_string(), aa_handle));
-    assert!(scope.bindings().pending_types().is_empty());
+    assert!(scope.bindings().type_placeholder_producer("Aa").is_none());
+    assert!(scope.bindings().type_placeholder_producer("Bb").is_none());
+}
+
+/// A cross-reference wrapped in a union (`:(Aa | Null)`) reaches its sibling through the dispatch
+/// bare-name channel — the finalize gate — rather than the field-list elaborator alone. `Aa` has
+/// already filled its slot by the time `Bb` names it, while the group's identity write, and with it
+/// the placeholder clear, waits for the seal: the gate must read the slot, not the placeholder, or
+/// the reference parks on a producer that has already finished and screens to unbound.
+#[test]
+fn block_union_typed_cross_ref_to_a_filled_sibling_seals() {
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
+        "RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :(Aa | Null)}\n)",
+    );
+    let types = test_run.types();
+    let (a_scc, a_size, _) = member_scc_and_fields(scope, types, "Aa");
+    let (b_scc, _, b_fields) = member_scc_and_fields(scope, types, "Bb");
+    assert_eq!(a_scc, b_scc, "Aa and Bb seal into one component");
+    assert_eq!(a_size, 2);
+    let aa_handle = scope.resolve_type("Aa").unwrap();
+    match types.node(b_fields[0].1) {
+        TypeNode::Union { members } => assert_eq!(
+            members,
+            vec![aa_handle, KType::NULL],
+            "`a` unions Aa's absolute member handle with Null",
+        ),
+        _ => panic!("expected `a` to carry a union, got {:?}", b_fields[0].1),
+    }
 }
 
 /// The group name binds a `Group` handle over the block's declared members.

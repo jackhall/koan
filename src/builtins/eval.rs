@@ -1,4 +1,5 @@
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use std::rc::Rc;
 
 use crate::machine::model::KType;
@@ -14,20 +15,20 @@ use super::{arg, kw, sig};
 ///
 /// The `EVAL` head-keyword is not part of the surface; user code goes through the `$` sigil.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
-    use super::block_tail::{block_tail, BlockBody, BlockScope};
     use crate::machine::model::KObject;
     use crate::machine::{arg_object, Action, FramePlacement};
+    use crate::machine::{block_tail, BlockBody, BlockScope};
     use crate::machine::{KError, KErrorKind};
     let inner = match arg_object(ctx.args, "expr") {
         Some(KObject::KExpression(e)) => e.clone(),
         Some(other) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "expr".to_string(),
                 expected: "KExpression".to_string(),
                 got: other.ktype().name(ctx.types),
             })))
         }
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
     };
     // Chain the call-site frame Rc onto the new frame (keeps the parent region alive past the
     // new frame's `outer` pointer) — matching a normal call frame. The tail is the whole quoted
@@ -44,9 +45,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let signature = sig(KType::ANY, vec![kw("EVAL"), arg("expr", KType::ANY)]);
-    crate::builtins::register_builtin(scope, "EVAL", signature, body, types);
+    crate::builtins::register_builtin(scope, "EVAL", signature, body, types, gate);
 }
 
 #[cfg(test)]

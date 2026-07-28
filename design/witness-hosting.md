@@ -39,8 +39,8 @@ owned set.
 ## The carrier states
 
 There is **one** value family — objects via
-[`CarriedFamily`](../workgraph/src/witnessed/carrier.rs), functions via
-[`KFunctionFamily`](../workgraph/src/witnessed/carrier.rs) (the witnessed
+[`CarriedFamily`](../src/machine/model/values/carried.rs), functions via
+[`KFunctionFamily`](../src/machine/core/kfunction.rs) (the witnessed
 library is generic over `Reattachable` families, so a function is a family, not
 a carrier variant). A carrier moves through **three states**, distinguished by
 pointer strength and borrow posture and connected by *transform verbs* — never
@@ -48,9 +48,9 @@ by wrapping one in another:
 
 | State | Reach members | Posture | Where it lives |
 |---|---|---|---|
-| [`Delivered`](../workgraph/src/witnessed/delivered.rs) | **owned** — `Rc`s in an inline set | in transit, borrows nothing | scheduler slots, cross-frame escapes, `ReturnContract` |
-| [`Sealed`](../workgraph/src/witnessed/carrier.rs) | **weak** — a reference to the arena-hosted description | at rest, borrows nothing | binding-table entries, parked node slots |
-| [`Opened<'b>`](../workgraph/src/witnessed/carrier.rs) | weak, read under a pin | in use at a step lifetime `'b` | within a step (`Resolved<'step>`, ATTR / schema reads) |
+| [`Delivered`](../workgraph/src/witnessed/delivered.rs) | **owned** — `Rc`s in an inline set | in transit, borrows nothing | retention holds, node slots, dep terminals, and the pull / adopt / relocate verbs |
+| [`Sealed`](../workgraph/src/witnessed.rs) | **weak** — a reference to the arena-hosted description | at rest, borrows nothing | binding-table entries, parked node slots |
+| [`Opened<'b>`](../workgraph/src/witnessed.rs) | weak, read under a pin | in use at a step lifetime `'b` | within a step (`Resolved<'step>`, ATTR / schema reads) |
 
 - `Delivered` owns its members outright, so it can **walk between frames**: the
   producer frame may die in transit, and an arena-hosted description reference
@@ -61,6 +61,28 @@ by wrapping one in another:
 - `Opened<'b>` is a `Sealed` read **under a live pin**, borrowing at the pin's
   lifetime `'b`. It is the only state that can answer membership queries,
   because the pin it borrows is what makes reading the `Weak` members sound.
+
+**The embedder has no pin vocabulary.** `PinBundle` is crate-private to the
+library. Every owned pin lives in a library-owned holder — a retention hold, a
+region's union bundle, a step's coverage — and the only shape one crosses the
+boundary in is `StepCoverage`, an opaque holder the embedder may hold, thread and
+drop but cannot compute with: union, subsumption, narrowing and member removal
+have no public surface. Koan therefore cannot assemble, widen or narrow a claim.
+The pinning invariant below is not a rule Koan is asked to honor but one it has no
+vocabulary to break. What Koan supplies instead is *policy*: the retention
+predicate at the escape seam (§ Escape) and the value-model queries a cost
+decision runs on. Each of the transform verbs is exposed as a **container verb**
+on the holder that owns the pins — a node slot, a region, a step — so the
+container supplies the home owner the verb needs and Koan never has to recover a
+producer region from a member set.
+
+`Delivered` stays **nameable** by the embedder, and is the one state that is. An
+in-transit envelope has to appear in the embedder's own type positions — a parked
+node slot, a dep terminal, a finish callback's result — and a step's dep slice must
+*own* its envelopes across a step that mutably borrows the scheduler, so an
+`Opened<'b>` borrowed from the retention hold would not type. Nameable is not
+transparent: the envelope's pins have no public accessor, no constructor takes a
+bare bundle, and every operation on them is a verb on the envelope itself.
 
 The transform verbs:
 
@@ -80,6 +102,21 @@ The transform verbs:
 - **The adopt, `Delivered → Sealed`** — mint a frozen description into the
   destination arena, retain the owned members into the destination's liveness
   (§ The pin bundle), and resolve the resting carrier's members to weak.
+  `Delivered::open_adopted` is the same verb landing in `Opened<'d>` instead of
+  at rest: `'d` is the *destination region's* own lifetime rather than a pin
+  borrow, which is sound because the retained bundle covers that region's whole
+  life. That is what lets an adopted value ride a step-lifetime type position no
+  pin borrow reaches — dispatch's picked overload becomes an
+  `Opened<'step, KFunctionFamily>` this way, carried by `Resolved<'step>` across
+  argument evaluation and `reseal`ed into the `ReturnContract` that escapes into
+  the call chain.
+- **`Delivered::project`** re-families an envelope *in place* — no mint, no copy,
+  no relocation. The envelope keeps its residence, coverage and witness, which
+  stay correct because the projection selects a part **of** the value the
+  envelope already covers (the callable a bound value wraps), so it can reach
+  nothing the whole did not. It is how a family-specific carrier is reached
+  without splitting the value from its pins; a projection taken through a bare
+  read would arrive somewhere else with no proven reach at all.
 
 Home rides as an **ordinary member**, never a distinguished field. A carrier's
 reach is one flat set, and "the value borrows into the region it lives in" is
@@ -126,13 +163,18 @@ covered reach names. Where owned pins live:
   terminal lifted for a pull, a dep crossing steps — carries its own pins, so
   every fan-out consumer (staged-sub splices, catch continuations, spliced
   expression clones) holds its own liveness. Duplicating a `Delivered`
-  duplicates its pins.
-- **The scope union bundle.** A scope owns **one** deduped
-  `RefCell<PinBundle<F>>`; each bind door unions its adopted pins into it
-  (§ Scope and bindings). Binding entries themselves own nothing. This is the
-  liveness of every value resident in the scope: one owning pin per distinct
-  foreign region across all the scope's bindings, dropped whole when the scope's
-  region dies.
+  duplicates its pins. The set has no public accessor: it exists only for the
+  library verbs the envelope exposes.
+- **The region union bundle.** A region owns **one** deduped `PinBundle<F>`
+  ([`Region::retain_reach`](../workgraph/src/witnessed/region.rs)); each bind and
+  each copy-free adoption unions its pins into it, filtered by the eternal rule
+  (§ Composition). Binding entries themselves own nothing. This is the liveness of
+  every value resident in the region: one owning
+  pin per distinct foreign region across all of it, dropped whole at region
+  death. It is region-owned rather than scope-owned because bindings are
+  bind-once and a scope's entries never die before its region does, so the two
+  schedules coincide — and a region is a library type, which is what keeps the
+  union out of the embedder's hands.
 - **The retention hold.** A finalized node slot's hold pairs the producer frame
   owner with owned pins for every *other* region the terminal reaches —
   `{ owner, reach, pulls }` — released together at pull-count zero
@@ -153,27 +195,31 @@ implementors:
    "the description names region R, therefore R is alive" is wrong.
 2. Regions are kept alive by owned pins (and by a region's own internal
    containment). Holding a region's owner `Rc` keeps that region — its arena,
-   its side table, its scope's bindings — alive; that scope's own union bundle
+   its side table, its scope's bindings — alive; that region's own union bundle
    keeps *its* reaches alive, recursively. Transitive coverage flows through
-   **scope union bundles**, not through descriptions.
+   **region union bundles**, not through descriptions.
 3. Every holder of a carrier that can re-anchor its value either **owns pins
    covering the carrier's full reach** for its whole hold (a `Delivered`'s
-   inline set; a scope's union bundle covering its resident entries), or is
+   inline set; a region's union bundle covering its resident entries), or is
    **enveloped**: it lives strictly inside the lifetime of another holder's pins
    that cover the same reach (an `Opened<'b>` under a step pin, typed at the
    step's `'step` lifetime by
    [`StepCarried`](../src/machine/execute/step_carried.rs); an entry read under
-   its scope's own bundle). "Enveloped" is a lifetime claim the borrow checker
+   its region's own bundle). "Enveloped" is a lifetime claim the borrow checker
    can see, not a convention.
 4. The open and lift doors — and every constructor that stores ownership (the
-   retention hold, a scope's adopt) — take the pin (or the enveloping borrow) by
+   retention hold, a region's adopt) — take the pin (or the enveloping borrow) by
    signature. A `Sealed` carrier plus no coverage is inert data, and stays
    inert: no operation turns its description into pins without a live pin
    (§ Description and pins).
 5. Release is ordinary `Drop` of a pin bundle. There is no release verb, no
-   un-mint, no audit. When a scope's region dies, its union bundle drops and its
-   pins with it. Bindings are bind-once, so an entry never drops by overwrite;
-   scope pins drop as a whole at region death.
+   un-mint, no audit. When a region dies, its union bundle drops and its pins
+   with it. Bindings are bind-once, so an entry never drops by overwrite; a
+   region's pins drop as a whole at region death.
+
+Every one of these is a library-internal obligation: the holders rule 3 names are
+all library types (§ The carrier states), so an embedder has no way to construct a
+holder that could violate it.
 
 ## Composition: minting a description and retaining its pins
 
@@ -205,17 +251,66 @@ destination:
    [`PinsRegion`](../workgraph/src/witnessed/reach.rs) impl;
    `PinBundle::union` applies it on every insert.
 
+Those two are the **only** shrinks. A mint applies no destination-relative
+omission: a region the destination's frame or lexical chain already pins is
+still a member and still an owned pin. Pinning it costs a refcount and nothing
+else — the chain that made it ancestral holds it for at least as long as the
+destination's own region lives, so an ancestor pin lengthens no lifetime. In
+exchange a description is **exact**: it names the value's whole reach, not its
+reach relative to some destination's ambient coverage. That exactness is what
+makes a `Sealed` carrier self-describing — the lift can upgrade it to owned pins
+with no policy threaded in from the embedder, and a reach query answers about the
+value rather than about the pairing of a value with a reader. Subsumption still
+collapses the redundancy whenever the covering ancestor is *itself* a member,
+which is the common case.
+
 A **pure pass-through** — a value returned up the call stack unmodified — runs no
 mint: its carrier rides by reference (`Sealed`) or by ownership (`Delivered`)
 unchanged, so a closure handed up N frames costs zero mints and zero refcount
 traffic beyond the value's travel. A mint runs only where a value's reach is
 genuinely restated against a new region — a bind, an adoption, a merge.
 
-Acyclicity of the region ownership graph rests on two rules: the self rule (no
-owned self-edge) and the per-call frame rule that a frame's `outer` chain
+### The eternal rule
+
+The self rule bounds a *mint*. A second rule bounds a **region-lifetime
+retention**: a member whose owner declares
+[`PinsRegion::needs_no_pin`](../workgraph/src/witnessed/reach.rs) — storage that
+already outlives every region that could retain it — never enters a region's
+union bundle (`PinBundle::without_eternal`, applied at `Region::retain_reach`).
+Koan's eternal tier is the **run root**: `RegionHost::is_run_root` answers `true`
+for the storage `interpret_with_writer_path` holds for the program's whole run.
+
+The rule is applied at retention and nowhere else, because only a
+region-lifetime pin can close a ring. A transient bundle — a binding entry's
+lift, a delivery envelope, a step's coverage — is left alone; an extra refcount
+there closes nothing. The *description* is untouched either way, so reach
+membership stays exact and every residence audit still sees the run-root region
+as a named member.
+
+The self rule alone does not suffice, because an owner outside the destination's
+own region can still hold a chain back to it. The concrete ring: a per-call
+region adopting a run-root-resident module argument takes an owning `Rc` on the
+run-root host, while the run-root region adopting that call's result takes an
+owning `Rc` on the per-call host. Neither edge alone leaks; the pair is a cycle
+that no `outer`-chain walk sees, because the per-call frame's `outer` is `None`
+and the ring is expressed entirely through reach. The eternal rule cuts it at the
+run-root edge.
+
+Its correctness obligation is a **drop-order** one, and it is the reason
+`needs_no_pin` sits under the `unsafe PinsRegion` contract: answering `true`
+asserts that the owner's storage stays live and fixed-address for at least as
+long as any region that could retain it. Koan discharges it by construction — the
+run-root `Rc<FrameStorage>` is created before the runtime and dropped after it,
+so every per-call region dies first.
+
+Acyclicity of the region ownership graph therefore rests on three rules: the self
+rule (no owned self-edge), the eternal rule (no owned edge into eternal storage),
+and the per-call frame rule that a frame's `outer` chain
 strong-owns only a **strictly older** ancestor frame — a DAG, never a back-edge —
 so a dispatched frame chaining its (possibly per-call) captured parent forms no
-cycle ([per-call-region/](per-call-region/README.md)).
+cycle ([per-call-region/](per-call-region/README.md)). Regression coverage is
+[`region_liveness.rs`](../src/builtins/fn_def/tests/region_liveness.rs), which
+runs a program, drops the run, and asserts every `RegionHost` dropped with it.
 
 ## Threading: how pins reach each holder
 
@@ -227,10 +322,10 @@ same death schedule, so threading extends no region's lifetime — frames still
 free at last-holder drop, never at region death.
 
 - **Bind.** The adopt at the bind seam mints the destination description and
-  unions the value's owned pins into the scope's union bundle; the binding entry
-  stores the resting `Sealed` carrier and owns nothing (§ Scope and bindings). A
-  resident read that lifts the value onward opens it under the scope's coverage
-  and lifts to a fresh `Delivered`.
+  unions the value's owned pins into the destination region's union bundle; the
+  binding entry stores the resting `Sealed` carrier and owns nothing (§ Scope and
+  bindings). A resident read that lifts the value onward opens it under the
+  region's coverage and lifts internally to a `Delivered` for the verb's span.
 - **Merge / relocation.** The composition verbs return a `Delivered` whose
   inline set is the composed pins. A Done-arm product carries its `Delivered`
   across the step with its carrier
@@ -244,7 +339,7 @@ free at last-holder drop, never at region death.
   consumer pull lifts a fresh `Delivered` for travel by cloning `(owner, reach)`
   out of the hold. The hold releases both at pull-count zero — the same instant
   the bare `owner` release already implies, since the held owner pins the reach
-  members transitively (owner → region → resident scope bundle) for exactly that
+  members transitively (owner → region → its union bundle) for exactly that
   interval. Housing the pins in the hold makes the parked terminal's coverage
   owned rather than transitive; it does not lengthen it.
 - **Fan-out.** Duplicating a `Delivered` clones its inline pins (§ The pin
@@ -270,15 +365,36 @@ channel.
   frame; the scheduler's retention hold (§ Retention) keeps that frame alive
   until every consumer pulls.
 - At the bind seam the consumer prices **copy against pin**
-  ([`copy_delivered_substrate`](../src/machine/core/scope/reach.rs), the cost
+  ([`adopt_disposition`](../src/machine/core/scope/reach.rs), the single home of
+  the adoption rules, running the cost
   model of
   [value-substrates.md § Cost-driven copy](value-substrates.md#cost-driven-copy-the-optimization)):
   *copy* rebuilds the value in the destination region and lets the producer frame
-  free at retention discharge; *pin* adopts the `Delivered`'s pins into the
-  scope's union bundle, making the producer frame's region the value's residence
-  for the scope's life. Both are always legal; the choice is pure cost.
+  free at retention discharge; *pin* leaves the value in the producer's region and
+  unions its pins into the destination region's union bundle, making that region
+  the value's residence for the destination's life. Both are always legal; the
+  choice is pure cost.
 
-Because pins are scope-owned, a pinned residence ends when the scope's region
+The **retention predicate** is how that choice reaches the pin arithmetic. A
+relocation verb does not accept a claim about what the product still reaches — it
+*derives* one, by calling an embedder predicate on the product **after** the fold
+has built it:
+
+```
+still_borrows(product: T::At<'b>, source: &Region) -> bool
+```
+
+A `false` verdict drops the source region from the composed bundle, so the
+producer frees at retention discharge; a `true` verdict keeps it, so the producer
+transfers by hold. Deriving rather than accepting is the point: the claim is a
+checked property of the bytes that exist, not a promise made before they were
+written, and the one place a mistake would dangle is a predicate over a live value
+instead of a bundle assembled by hand. It is also where the embedder makes its own
+memory-versus-CPU tradeoff — a predicate that answers conservatively costs
+retention, never soundness, so a workload may tune it freely in either direction
+without the library having to trust an ownership decision it cannot see.
+
+Because pins are region-owned, a pinned residence ends when the binding's region
 dies. The canonical example, spelled out:
 
 ```
@@ -288,7 +404,7 @@ FN count : n = MATCH (n) (0 -> 0) (_ -> count : n - 1)
 Each tail hop retires its frame per retention. Bindings are bind-once and a tail
 call is not known to re-enter the same function with a congruent slot set, so
 each hop's `it` bind lands in a fresh scope: a loop-carried bind that priced to
-**pin** would chain — iteration N+1's scope bundle pins frame N, whose own scope
+**pin** would chain — iteration N+1's region bundle pins frame N, whose own region
 bundle pins frame N−1, transitively. Every pin in that chain is droppable (each
 dies with its scope's region), but a pinned loop holds O(N) retired regions until
 [region evacuation](../roadmap/untyped_arena/region-evacuation.md) collapses the
@@ -312,12 +428,12 @@ carrier, so the pins travel with the value to each consumer.
 
 - A **pass-through** value stays hosted in its birth frame and rides up by
   reference; the birth frame is retained across the whole return chain and freed
-  once the value is copied out or the last scope pinning it drops.
-- The **run region** is the residual: pins in a run-scope bundle keep their
+  once the value is copied out or the last region pinning it drops.
+- The **run region** is the residual: pins in the run region's bundle keep their
   members for the program. The lever that keeps this small is precision at the
   mint — a region-pure value's set is empty and pins nothing.
-- **Region death** drops the region's side table and its scope's union bundle —
-  and therefore every pin that bundle owns. Refcount decrements for a region's
+- **Region death** drops the region's side table and its union bundle — and
+  therefore every pin that bundle owns. Refcount decrements for a region's
   outbound pins batch at that teardown.
 
 **TCO** consumes retention directly: a tail call reinstalls the slot's work, the
@@ -328,34 +444,32 @@ adoption. The full design is
 
 ## Scope and bindings above the substrate
 
-The Koan layers compose the substrate; the scope holds exactly one piece of
-witness state — its union bundle — and binding entries hold none.
+The Koan layers compose the substrate; neither the scope nor its binding entries
+hold any witness state — the pins live one level down, in the library's region.
 
 - **Binding entries are `Copy` and `Drop`-free.** Both binding tables store one
   `Sealed`-shaped carrier beside a `BindingIndex` — `data: name → (BindingIndex,
   Sealed<CarriedFamily>)` and `functions: key → Vec<(BindingIndex,
   Sealed<KFunctionFamily>)>` — so a value is never separated from the reach that
-  proves it. An entry owns no pins; its liveness is the scope's union bundle.
-- **The scope owns one deduped union bundle.** Binding a delivered value mints
-  its description into the scope's region and unions the value's adopted pins
-  into the `RefCell<PinBundle<F>>`, applying the self rule before insertion.
+  proves it. An entry owns no pins; its liveness is the region's union bundle.
+- **The scope holds no pin state at all.** Binding a value mints its description
+  into the scope's region and unions its pins into that **region's** own deduped
+  bundle (§ The pin bundle), applying the self rule before insertion.
   `PinBundle::union` dedupes by region identity with outer-chain subsumption, so
-  the scope carries one pin per distinct foreign region, not one bundle per
-  entry. The mint and the store are **one fused door** (`Scope::bind_delivered` /
-  `bind_checked`, `bind_module`, `register_type_delivered` and siblings), so a
-  scope entry cannot state a reach the value's borrows don't back, and the scope
-  cannot claim pins it doesn't own.
+  the region carries one pin per distinct foreign region, not one bundle per
+  entry. The mint and the value's construction are **one fused door**
+  ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs),
+  `seal_checked`, `seal_module` and siblings), so a
+  scope entry cannot state a reach the value's borrows don't back, and the union
+  is written by the library rather than by the door's caller. The door's product
+  is a resting `Sealed`; the table write itself is a separate, run-loop-owned step
+  ([memory-model.md § Binding writes ride the step outcome](memory-model.md#binding-writes-ride-the-step-outcome)).
 - **Reads stay refcount-free.** A binding read opens the entry's `Sealed` under
-  the scope's own coverage (`open_at`) and hands out an `Opened<'b>` enveloped by
-  the scope's union bundle (holder rule 3); pins are adopted only when the value
-  genuinely escapes to a new holder — a fresh `Delivered`, a new scope.
+  the region's own coverage (`open_at`) and hands out an `Opened<'b>` enveloped by
+  the region's union bundle (holder rule 3); pins are adopted only when the value
+  genuinely escapes to a new holder — a new region.
 - **Module reach** is the union over the child scope's entries, minted once at
-  scope close; the parent scope's union bundle owns the resulting pins.
-- **Ambient coverage stays scope-derived.** Which regions a bind's adopt may skip
-  pinning (the home frame's storage pin chain, lexical-ancestor regions that
-  chain already pins) is computed by the scope
-  (`Scope::covers_region_ambiently`) and passed to the adopt as a predicate; the
-  retain mechanism itself is library code.
+  scope close; the parent region's union bundle owns the resulting pins.
 
 ## Residence enforcement
 
@@ -378,7 +492,7 @@ property no carrier lifetime captures, and each a **backstop** rather than the
 enforcement tier:
 
 - **Splice-free gate.** A `KObject::KExpression` moved in as data is vetted by
-  the dest-only [`resident_in`](../src/machine/model/values/kobject.rs) walk,
+  the dest-only [`resident_in_visiting`](../src/machine/model/values/kobject.rs) walk,
   which rejects a spliced expression carrying a producer reach the empty seal
   cannot name. Splice-freeness is a runtime data property no carrier lifetime
   distinguishes.
@@ -403,10 +517,14 @@ Per the [scheduler-library.md](scheduler-library.md) division:
   signature; the single-seam escape verb
   [`restamp_in_place`](../workgraph/src/witnessed/delivered.rs) (re-tags a
   delivered value's top node in its own producer region, composing to a witness
-  identical to the input's); and the scheduler's frame-retention (release at
-  pull-count zero).
+  identical to the input's); the scheduler's frame-retention (release at
+  pull-count zero); and **every owned pin** — the region union bundles, the
+  retention holds, the step coverages. `PinBundle` is crate-private and an
+  envelope's pins have no accessor, so the whole ownership tier is unreachable
+  from outside even though `Delivered` itself is nameable (§ The carrier states).
 - **Workload-supplied:** the frame-owner type `F` with its `PinsRegion`
-  subsumption hook and the ambient-coverage predicate at bind sites.
+  subsumption hook, and the retention predicate at relocation sites (§ Escape) —
+  policy inputs, never pins.
 
 ## Open work
 
@@ -414,7 +532,7 @@ Per the [scheduler-library.md](scheduler-library.md) division:
   — routes the reaching-tier move-ins through the fold-brand construction door
   (§ Residence enforcement) and deletes the runtime reaching audit; the backstops
   there are what remains.
-- [Binding tables as witnessed carriers](../roadmap/untyped_arena/binding-tables-witnessed-carriers.md)
-  — implements the three-carrier model this doc describes: both binding tables
-  store the `Sealed` carrier, home becomes an ordinary `Weak` member, and the
-  scope's single union bundle replaces per-entry pins.
+- [Home lives in the reach description](../roadmap/untyped_arena/home-lives-in-the-reach-description.md)
+  — collapses the two records of home that survive alongside the description: the
+  carrier's borrows-home bit, and the `with_home_region` /
+  `PinBundle::any_member_region` probes the relocation predicates read.

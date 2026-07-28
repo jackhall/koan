@@ -8,6 +8,7 @@ use crate::source::{FileId, Span, Spanned};
 use crate::machine::model::{
     BinderKey, Carried, Held, KObject, Parseable, UntypedElement, UntypedKey,
 };
+use crate::machine::AdoptSeam;
 use crate::witnessed::reattachable;
 
 #[cfg(test)]
@@ -258,7 +259,7 @@ impl<'a> ExpressionPart<'a> {
     ) -> Held<'a> {
         use crate::machine::model::types::KType;
         if let ExpressionPart::Spliced { cell, .. } = self {
-            return match scope.adopt_sealed(cell) {
+            return match scope.adopt_carried(cell, AdoptSeam::Retaining) {
                 Carried::Type(kt) => Held::Type(kt),
                 Carried::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
                 Carried::Object(obj) => Held::Object(obj.deep_clone()),

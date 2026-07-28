@@ -6,11 +6,11 @@
 
 use std::rc::Rc;
 
-use crate::builtins::test_support::{delivered_with_host, parse_one, run_root_bare, TestRun};
-use crate::machine::core::Reached;
+use crate::builtins::test_support::{parse_one, per_call_storage, run_root_bare, TestRun};
 use crate::machine::model::{Carried, KObject};
+use crate::machine::CarrierWitness;
 use crate::machine::KErrorKind;
-use crate::machine::{run_root_storage, BindingIndex, Scope};
+use crate::machine::{run_root_storage, BindingIndex, FrameCoverage, Scope};
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
@@ -40,8 +40,8 @@ fn using_block_bind_persists_at_call_site() {
     assert!(matches!(result, KObject::Number(n) if *n == 5.0));
 }
 
-/// Without the guard in `bind_value`'s borrowed-window arm, the surfaced
-/// member would silently shadow the bind.
+/// Without the guard the op-apply runs before forwarding a value write through a transparent
+/// window, the surfaced member would silently shadow the bind.
 #[test]
 fn using_block_bind_colliding_with_member_errors() {
     let region = run_root_storage();
@@ -183,27 +183,29 @@ fn using_on_non_module_fails_dispatch() {
 /// carrier's reach back; under Miri this is a use-after-free the moment that rooting is missing.
 #[test]
 fn using_window_value_read_reach_survives_under_module_root() {
-    let foreign_storage = run_root_storage();
+    let foreign_storage = per_call_storage();
     let foreign_weak = Rc::downgrade(&foreign_storage);
 
-    let module_storage = run_root_storage();
+    let module_storage = per_call_storage();
     let module_weak = Rc::downgrade(&module_storage);
     let module_scope = run_root_bare(&module_storage);
 
-    // Bind a value in the module scope whose stored reach names the foreign frame -- minted for
-    // real into the module's own arena via `host_reach_of`, the same primitive `adopt_sealed` uses
-    // to root a functor result's reach at module-bind time.
+    // Bind a value in the module scope whose reach names the foreign frame -- minted for real into
+    // the module's own arena via `mint_retained`, the same primitive every bind door uses, which
+    // folds the owning bundle into the module region's union.
     let value_obj = module_scope.brand().alloc_object(KObject::Number(1.0));
-    let cell = delivered_with_host(Carried::Object(value_obj), Rc::clone(&foreign_storage));
-    let (stored_reach, pins) = module_scope.host_reach_of(&cell);
-    // Drop the envelope now: it must not be what keeps `foreign_storage` alive below — the owning
-    // pin bundle `host_reach_of` minted, carried into the binding, is what the test exercises.
-    drop(cell);
+    let (reach, borrows_home) =
+        module_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign_storage))]);
+    let sealed = module_scope.seal_resident(
+        Carried::Object(value_obj),
+        CarrierWitness::new(borrows_home, reach),
+    );
     module_scope
-        .bind_value(
+        .bind_value_direct(
             "val".to_string(),
-            Reached::for_test(value_obj, stored_reach, pins),
+            sealed,
             BindingIndex::value(0),
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("fresh binding name in an unborrowed scope");
 
@@ -219,17 +221,12 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // Mirror `USING`'s own overlay fold (`builtins/using_scope.rs`): mint the opened module's own
     // carrier into the window's (call-site) arena at overlay construction, before any read through
     // the window -- the step that roots the module's region transitively.
-    let window_root_dummy = window.brand().alloc_object(KObject::Number(0.0));
-    let window_root_cell = delivered_with_host(
-        Carried::Object(window_root_dummy),
-        Rc::clone(&module_storage),
-    );
-    // The owning pin bundle is what roots the module's region transitively; hold it to end of scope.
-    let (_window_reach, _window_pins) = window.host_reach_of(&window_root_cell);
-    drop(window_root_cell);
+    // The window region's own union is what roots the module's region transitively.
+    let (_window_reach, _borrows) =
+        window.mint_retained(&[&FrameCoverage::of(Rc::clone(&module_storage))]);
 
-    let (carrier, _carrier_pins) = window
-        .resolve_value_carrier("val", None)
+    let delivered = window
+        .resolve_value_delivered("val", None)
         .expect("val is bound in the module scope, surfaced through the transparent window")
         .bound()
         .expect("val is fully bound, not a placeholder");
@@ -247,10 +244,12 @@ fn using_window_value_read_reach_survives_under_module_root() {
     );
 
     let foreign_region_owner = foreign_weak.upgrade().unwrap();
+    // The membership query lives on the **in-use** carrier state: the delivery envelope's own pins
+    // are the coverage the reach re-anchor needs, so it opens without an external witness.
     assert!(
-        carrier
-            .witness()
-            .reach_covers(None, foreign_region_owner.region()),
+        delivered
+            .open_at()
+            .reach_covers(foreign_region_owner.region()),
         "the read carrier's reach still covers the foreign region after every other handle drops"
     );
 }

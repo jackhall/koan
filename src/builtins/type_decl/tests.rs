@@ -284,7 +284,11 @@ fn fn_return_type_constructor_apply_root_scope() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let wrap = wrap_type_constructor(scope, test_run.types());
-    scope.register_builtin_type("Wrap".into(), wrap);
+    scope.register_builtin_type(
+        "Wrap".into(),
+        wrap,
+        &mut crate::machine::WriteGate::for_test(),
+    );
     let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(
         parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),
@@ -295,7 +299,7 @@ fn fn_return_type_constructor_apply_root_scope() {
         Ok(()) => {}
         Err(e) => panic!("FN with :(Number AS Wrap) return failed: {}", e),
     }
-    let pure = scope.bindings().expect_value("pure");
+    let pure = scope.expect_value("pure");
     let f = match pure {
         KObject::KFunction(f) => *f,
         other => panic!("pure not KFunction: {:?}", other.ktype()),

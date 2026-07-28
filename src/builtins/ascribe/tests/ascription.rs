@@ -126,12 +126,7 @@ fn roadmap_example_int_ord_with_ordered_sig() {
         KType::NUMBER,
         "opaque int_ord_abstract.Carrier must not equal Number"
     );
-    let compare = abstract_mod
-        .child_scope()
-        .bindings()
-        .data()
-        .get("compare")
-        .map(|(_, r)| r.value());
+    let compare = abstract_mod.child_scope().lookup("compare");
     assert!(matches!(compare, Some(KObject::Number(n)) if *n == 7.0));
 }
 

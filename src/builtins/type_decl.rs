@@ -12,7 +12,7 @@
 //!   surface with the concrete arguments replaced by the parameter names. Opaque ascription
 //!   re-mints it as a fresh per-call constructor nonced on the view module's scope id.
 //!
-//! Both bind through the same fused `register_user_type_delivered` + `resident_type_carrier`
+//! Both bind through the same fused `register_user_type_delivered` + `Scope::resident`
 //! path the `LET` type route uses, so a `TYPE`-declared member rides the same
 //! `bindings.types` entry a manifest `LET` member does — value slots (`VAL`) live in the
 //! decl scope's own slot collector, a separate storage channel `bindings.types` never sees.
@@ -23,9 +23,12 @@ use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::Carried;
+use crate::machine::CarrierWitness;
 
 fn not_in_sig_body() -> KError {
     KError::new(KErrorKind::ShapeError(
@@ -35,22 +38,27 @@ fn not_in_sig_body() -> KError {
     ))
 }
 
-/// Bind `kt` under `name` through the fused alloc + register path, returning the bound type's
-/// resident carrier. `kt` is owned data (an `AbstractType`) allocated into this scope's own
-/// region.
+/// Seal `kt`'s resident carrier as the slot's terminal and ride the `types` write installing it
+/// under `name` out on the outcome. `kt` is owned data (an `AbstractType`) interned in the run
+/// frame's registry, so the handle names the same type in every region.
 fn bind_abstract_member<'a>(
     ctx: &crate::machine::BodyCtx<'a, '_>,
     name: String,
     kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    let site = ctx.declaration_site();
-    let kt_ref = match ctx.scope.register_user_type_delivered(name, kt, site) {
-        Ok(kt_ref) => kt_ref,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    let carrier = ctx.scope.resident_type_carrier(kt_ref);
-    Action::Done(Ok(StepCarried::born(carrier)))
+    let carrier = ctx
+        .scope
+        .resident(Carried::Type(kt), CarrierWitness::default());
+    Action::done(Ok(StepCarried::born(carrier))).with_effect(
+        crate::machine::core::bindings::WriteOp::Type {
+            name,
+            kt,
+            site: ctx.declaration_site(),
+            policy: crate::machine::core::bindings::TypeWritePolicy::Insert,
+            builtin_shadow_guard: true,
+        },
+    )
 }
 
 /// `TYPE <name:ProperType>` — first-order abstract member. Binds `AbstractType { decl scope id, name }`.
@@ -58,11 +66,11 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::A
     use crate::machine::{require_bare_type_name, Action};
 
     if !ctx.scope.is_in_sig_body() {
-        return Action::Done(Err(not_in_sig_body()));
+        return Action::done(Err(not_in_sig_body()));
     }
     let name = match require_bare_type_name(ctx.args, "name", "TYPE", ctx.types) {
         Ok(name) => name,
-        Err(e) => return Action::Done(Err(e)),
+        Err(e) => return Action::done(Err(e)),
     };
     let kt = ctx.types.intern(TypeNode::AbstractType {
         source: ctx.scope.id,
@@ -80,15 +88,15 @@ pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Act
     use crate::machine::{require_kexpression, Action};
 
     if !ctx.scope.is_in_sig_body() {
-        return Action::Done(Err(not_in_sig_body()));
+        return Action::done(Err(not_in_sig_body()));
     }
     let decl = match require_kexpression(ctx.args, "TYPE", "decl") {
         Ok(decl) => decl,
-        Err(e) => return Action::Done(Err(e)),
+        Err(e) => return Action::done(Err(e)),
     };
     let (param_names, member_name) = match parse_hk_decl(&decl) {
         Ok(pair) => pair,
-        Err(e) => return Action::Done(Err(e)),
+        Err(e) => return Action::done(Err(e)),
     };
     let kt = ctx.types.intern(TypeNode::AbstractType {
         source: ctx.scope.id,
@@ -137,17 +145,25 @@ pub(crate) fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(Vec<String>, Stri
     Ok((param_names, member_name))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let bare_signature = sig(
         KType::ANY,
         vec![kw("TYPE"), arg("name", KType::of_kind(KKind::ProperType))],
     );
-    crate::builtins::register_builtin_full(scope, "TYPE", bare_signature, body_bare, true, types);
+    crate::builtins::register_builtin_full(
+        scope,
+        "TYPE",
+        bare_signature,
+        body_bare,
+        true,
+        types,
+        gate,
+    );
     let hk_signature = sig(
         KType::ANY,
         vec![kw("TYPE"), arg("decl", KType::KEXPRESSION)],
     );
-    crate::builtins::register_builtin_full(scope, "TYPE", hk_signature, body_hk, true, types);
+    crate::builtins::register_builtin_full(scope, "TYPE", hk_signature, body_hk, true, types, gate);
 }
 
 #[cfg(test)]

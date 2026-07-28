@@ -12,9 +12,9 @@ use std::rc::Rc;
 
 use super::*;
 
-/// The abstract-shape slate: the carrier's residence/reach channels, the
-/// `Residence` × `borrows_host` matrix, duplication, home-omission, and the finish-surface fold,
-/// over a library-only profile.
+/// The abstract-shape slate: home as an ordinary member of the envelope's pins, the copy-versus-pin
+/// source claim, duplication, the mint's self rule, the three carrier states and their transform
+/// verbs, and the finish-surface fold — over a library-only profile.
 mod shapes;
 
 /// Covariant stand-in: a plain shared reference. `At<'r>` is a `&'r u32`, whose lifetime the borrow
@@ -294,6 +294,38 @@ fn merge_pinned_keeps_unrelated_carts_as_a_two_member_set() {
     );
 }
 
+/// `Sealed::open_at` + `Opened::reseal`: the borrow-tied in-use state. A real borrow is sealed,
+/// opened at a step lifetime pinned by a separately-held `Rc`, read out of the `Opened`, then
+/// resealed; after every original handle drops the resealed carrier's own bundled witness keeps the
+/// pointee live and it reads back. The step lifetime `'b` rides the pin borrow (a `&'b Rc`), so the
+/// read cannot outlive the frame — Miri must stay clean across the reseal round-trip. (`open_at`
+/// copies the value out, so it is a `Copy`-family verb — the invariant-`Cell` stress lives on the
+/// rank-2 `with` / `map` round-trips.)
+#[test]
+fn open_at_reseal_roundtrip() {
+    let backing: Rc<Vec<u32>> = Rc::new(vec![5, 6, 7]);
+    let sealed: Sealed<RefFamily, Rc<Vec<u32>>> = {
+        let borrow: &u32 = &backing[2];
+        Sealed::seal(Witnessed::from_erased(
+            Erased::erase(borrow),
+            Rc::clone(&backing),
+        ))
+    };
+    // Pin held across the open; `'b` rides this borrow.
+    let pin = Rc::clone(&backing);
+    drop(backing); // the seal's bundled witness + `pin` keep the pointee live.
+    let resealed: Sealed<RefFamily, Rc<Vec<u32>>> = {
+        let opened = sealed.open_at(&pin);
+        assert_eq!(*opened.value(), 7);
+        opened.reseal()
+    };
+    // The resealed carrier carries its own cloned `Rc` witness, so it stays live after `pin` drops.
+    drop(pin);
+    assert_eq!(resealed.open(|r| *r), 7);
+    // Read again to catch a tree-borrows regression on the reattached view.
+    assert_eq!(resealed.open(|r| *r), 7);
+}
+
 /// `SealedExtern::open` — the **consuming, externally-witnessed** rank-2 open, distinct from the
 /// bundled-witness [`Sealed::open`] (which this slate covers via its own `compile_fail` doctest and
 /// the `Witnessed` round-trips). A real borrow is erased into the witness-less `SealedExtern`, opened
@@ -422,11 +454,11 @@ fn step_frame() -> Rc<StepFrame> {
     })
 }
 
-/// [`StepContext::alloc_with`]: each dep folds through its delivery envelope at `Residence::Kept`,
-/// so the built value's carrier names every dep's residence host as a minted reach member, and the
-/// dep views arrive at `build` in the same order as `deps`.
+/// [`StepContext::alloc_with`]: each dep folds through its delivery envelope claiming that
+/// envelope's own pins, so the built value's carrier names every dep's home as a minted reach
+/// member, and the dep views arrive at `build` in the same order as `deps`.
 #[test]
-fn step_context_alloc_with_mints_dep_hosts_and_preserves_dep_order() {
+fn step_context_alloc_with_mints_dep_homes_and_preserves_dep_order() {
     static ONE: u32 = 1;
     static TWO: u32 = 2;
     let own = step_frame();
@@ -435,30 +467,32 @@ fn step_context_alloc_with_mints_dep_hosts_and_preserves_dep_order() {
     let delivered_a: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
         Witnessed::<RefFamily, Carrier<StepFrame>>::resident(&ONE),
         Rc::clone(&dep_a),
-        PinBundle::empty(),
+        StepCoverage::empty(),
     );
     let delivered_b: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
         Witnessed::<RefFamily, Carrier<StepFrame>>::resident(&TWO),
         Rc::clone(&dep_b),
-        PinBundle::empty(),
+        StepCoverage::empty(),
     );
 
     let ctx: StepContext<StepFrame> = StepContext::new(Rc::clone(&own));
-    let (w, _bundle): (Witnessed<RefFamily, Carrier<StepFrame>>, _) = ctx
-        .alloc_with::<RefFamily, RefFamily, StepProfile>(
-            &[&delivered_a, &delivered_b],
-            |_region, views, _token| {
-                assert_eq!(views.iter().map(|v| **v).collect::<Vec<_>>(), vec![1, 2]);
-                &ONE
-            },
-        );
-    // Both dep hosts materialized as members of the set minted into `own`'s arena (Kept mode: the
-    // views keep living in their producers), and the consumer's own region is home-omitted.
-    w.witness().with_reach(None, |reach| {
-        let reach = reach.expect("dep hosts materialize as reach members");
+    let built = ctx.alloc_with::<RefFamily, RefFamily, StepProfile>(
+        &[&delivered_a, &delivered_b],
+        |_region, views, _token| {
+            assert_eq!(views.iter().map(|v| **v).collect::<Vec<_>>(), vec![1, 2]);
+            &ONE
+        },
+    );
+    // Both dep homes composed into the set minted into `own`'s arena — they arrived as ordinary
+    // members of each dep envelope's pins. `own` itself is not a member: nothing composed it in
+    // (the accumulator is region-pure), so the built value borrows into no region of its own.
+    let sealed: Sealed<RefFamily, Carrier<StepFrame>> = built.into_cell();
+    let opened = sealed.open_at(&own);
+    opened.with_reach(|reach| {
+        let reach = reach.expect("dep homes compose as reach members");
         assert!(reach.pins_region(dep_a.region()));
         assert!(reach.pins_region(dep_b.region()));
-        assert!(!reach.pins_region(own.region()), "home is omitted");
+        assert!(!reach.pins_region(own.region()));
     });
-    assert!(!w.witness().borrows_host());
+    assert!(!opened.witness().borrows_host());
 }

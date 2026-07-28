@@ -8,7 +8,7 @@
 use super::*;
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{
-    force_substrate_borrows_host, run_root_storage, FoldingBrand, FramePins, KoanRegion,
+    force_substrate_borrows_host, run_root_storage, FoldingBrand, FrameCoverage, KoanRegion,
     KoanRegionExt, KoanStorageProfile,
 };
 use crate::machine::model::Held;
@@ -416,7 +416,7 @@ fn type_recursive_member_relocates_and_navigates() {
 /// Build-time accumulator for the aggregate-fold mirrors below: the destination region plus the
 /// partial cell vector — a local twin of `dispatch::literal::AggBuildFamily` (private to that
 /// module), reattached here so the tests can drive `fold_cells`'s own mechanism
-/// (`copied_seam_mode` + `transfer_into_placing` + `copy_held_from_carried`) directly.
+/// (`cell_still_borrows` + `transfer_into_placing` + `copy_held_from_carried`) directly.
 struct RecordAggFamily;
 reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
 
@@ -446,10 +446,10 @@ fn alloc_home_closure_record<'run>(
     door.alloc_object_folded(KObject::record_of_held(door, fields, types))
 }
 
-/// Escape with **copy**: `fold_cells`'s exact aggregate loop (`copied_seam_mode` +
+/// Escape with **copy**: `fold_cells`'s exact aggregate loop (`cell_still_borrows` +
 /// `transfer_into_placing` + `copy_held_from_carried`), mirrored here for `DEPTH` independent
-/// producers each contributing a plain-data record — no field borrows anything, so
-/// `still_borrows_host` answers false and every cell selects `Residence::Released`: the
+/// producers each contributing a plain-data record — no field borrows anything, so the retention
+/// predicate answers false over the rebuilt cell and every producer is released: the
 /// record is totally rebuilt into the aggregate's own region and every producer frame is dropped
 /// *before* the read, proving the seam genuinely releases rather than conservatively pinning.
 #[test]
@@ -463,72 +463,80 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
     let dest_storage = dest_frame.storage_rc();
 
     let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
-    let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-        (region.handle(), Vec::with_capacity(DEPTH))
+    let acc0 = Delivered::seal(
+        KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+            (region.handle(), Vec::with_capacity(DEPTH))
+        }),
+        Rc::clone(&dest_storage),
+        FrameCoverage::empty(),
+    );
+    let acc_final = (0..DEPTH).fold(acc0, |acc, i| {
+        let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+            producer.brand().handle(),
+        ));
+        let fields = Record::from_pairs(vec![(
+            "acc".to_string(),
+            Held::Object(KObject::Number(i as f64)),
+        )]);
+        let obj: &KObject<'_> =
+            door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
+        // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
+        // conservatively forces `borrows_host = true` at construction, regardless of its own
+        // contents — the retention predicate's walk over the rebuilt cell is what actually
+        // decides release vs. retain below; the seal bit only matters if the source is retained.
+        let sealed = force_substrate_borrows_host(
+            Witnessed::from_erased(
+                Erased::erase(Carried::Object(obj)),
+                CarrierWitness::default(),
+            ),
+            &producer.storage_rc(),
+        );
+        let dep: DeliveredCarried =
+            Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+        producers.push(producer);
+        dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
+            acc,
+            cell_still_borrows(&dep),
+            |value, (region, mut cells), placement| {
+                cells.push(copy_held_from_carried(
+                    value,
+                    FoldingBrand::in_fold_closure(placement),
+                ));
+                (region, cells)
+            },
+        )
     });
-    let (acc_final, _final_bundle) =
-        (0..DEPTH).fold((acc0, FramePins::empty()), |(acc, acc_bundle), i| {
-            let producer: Rc<CallFrame> = CallFrame::new(scope);
-            let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
-                producer.brand().handle(),
-            ));
-            let fields = Record::from_pairs(vec![(
-                "acc".to_string(),
-                Held::Object(KObject::Number(i as f64)),
-            )]);
-            let obj: &KObject<'_> =
-                door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
-            // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
-            // conservatively forces `borrows_host = true` at construction, regardless of its own
-            // contents — `copied_seam_mode`'s exact `still_borrows_host` answer is what
-            // actually decides Released vs. Copied below; the seal bit only matters if `Copied` wins.
-            let sealed = force_substrate_borrows_host(
-                Witnessed::from_erased(
-                    Erased::erase(Carried::Object(obj)),
-                    CarrierWitness::default(),
-                ),
-                &producer.storage_rc(),
-            );
-            let dep: DeliveredCarried =
-                Delivered::seal(sealed, producer.storage_rc(), FramePins::empty());
-            let mode = copied_seam_mode(&dep);
-            assert!(
-                matches!(mode, Residence::Released),
-                "a plain-data record cell must select Released"
-            );
-            producers.push(producer);
-            dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
-                acc,
-                &acc_bundle,
-                mode,
-                |value, (region, mut cells), placement| {
-                    cells.push(copy_held_from_carried(
-                        value,
-                        FoldingBrand::in_fold_closure(placement),
-                    ));
-                    (region, cells)
-                },
-            )
-        });
+
+    assert!(
+        acc_final.coverage_releasing_home().is_empty(),
+        "every plain-data record cell releases its producer: beyond its own destination home, the \
+         accumulated envelope covers nothing"
+    );
 
     for producer in producers.drain(..) {
         drop(producer);
     }
 
-    let values: Vec<f64> = acc_final.with_pinned(&dest_storage, |(_region, cells)| {
-        cells
-            .iter()
-            .map(|h| match h.object() {
-                KObject::Record(substrate, _) => {
-                    match substrate.fields().get("acc").map(|h| h.object()) {
-                        Some(KObject::Number(n)) => *n,
-                        _ => panic!("expected field acc: Number"),
+    // The accumulator is not a `Copy` family, so the read goes through the carrier under a held
+    // pin; `_coverage` keeps everything the fold claimed alive across it.
+    let (acc_cell, _coverage) = acc_final.into_parts();
+    let values: Vec<f64> = acc_cell
+        .unseal()
+        .with_pinned(&dest_storage, |(_region, cells)| {
+            cells
+                .iter()
+                .map(|h| match h.object() {
+                    KObject::Record(substrate, _) => {
+                        match substrate.fields().get("acc").map(|h| h.object()) {
+                            Some(KObject::Number(n)) => *n,
+                            _ => panic!("expected field acc: Number"),
+                        }
                     }
-                }
-                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
-            })
-            .collect()
-    });
+                    other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+                })
+                .collect()
+        });
     assert_eq!(
         values,
         (0..DEPTH).map(|i| i as f64).collect::<Vec<_>>(),
@@ -539,7 +547,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
 /// Escape with **pin**: the same `fold_cells` mechanism, but each of the `DEPTH` producers
 /// contributes a record whose field is a genuine borrow leaf into its own producer (a closure
 /// captured in that same frame) — `still_borrows_host` answers true (the leaf's home IS the
-/// delivered cell's own host), so every cell selects `Residence::Copied` and its producer
+/// delivered cell's own home), so every cell claims its envelope's pins and its producer
 /// materializes into the aggregate's reach. Dropping every producer shell and reading each
 /// closure's captured scope back is the no-use-after-free check under tree borrows; a regression
 /// that instead released these producers (mistaking the record for plain data) would dangle here.
@@ -555,73 +563,81 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
 
     let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
     let mut expected_ids = Vec::with_capacity(DEPTH);
-    let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-        (region.handle(), Vec::with_capacity(DEPTH))
-    });
-    let (acc_final, _final_bundle) =
-        (0..DEPTH).fold((acc0, FramePins::empty()), |(acc, acc_bundle), _| {
-            let producer: Rc<CallFrame> = CallFrame::new(scope);
-            let obj = alloc_home_closure_record(&producer, &types);
-            expected_ids.push(match obj {
-                KObject::Record(substrate, _) => {
-                    match substrate.fields().get("f").map(|h| h.object()) {
-                        Some(KObject::KFunction(f)) => f.captured_scope().id,
-                        _ => panic!("expected field f: KFunction"),
-                    }
+    let acc0 = Delivered::seal(
+        KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+            (region.handle(), Vec::with_capacity(DEPTH))
+        }),
+        Rc::clone(&dest_storage),
+        FrameCoverage::empty(),
+    );
+    let acc_final = (0..DEPTH).fold(acc0, |acc, _| {
+        let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let obj = alloc_home_closure_record(&producer, &types);
+        expected_ids.push(match obj {
+            KObject::Record(substrate, _) => {
+                match substrate.fields().get("f").map(|h| h.object()) {
+                    Some(KObject::KFunction(f)) => f.captured_scope().id,
+                    _ => panic!("expected field f: KFunction"),
                 }
-                other => panic!("expected a Record, got {}", other.ktype().name(&types)),
-            });
-            // The seal chokepoint (Ruling 5): every record's carrier conservatively forces
-            // `borrows_host = true` at construction — without it, `Residence::Copied`'s
-            // `materialize_hosts` arm (`iff borrows_host`) would skip materializing the producer even
-            // though `copied_seam_mode` below correctly selects `Copied`, dangling the read at the end.
-            let sealed = force_substrate_borrows_host(
-                Witnessed::from_erased(
-                    Erased::erase(Carried::Object(obj)),
-                    CarrierWitness::default(),
-                ),
-                &producer.storage_rc(),
-            );
-            let dep: DeliveredCarried =
-                Delivered::seal(sealed, producer.storage_rc(), FramePins::empty());
-            let mode = copied_seam_mode(&dep);
-            assert!(
-                matches!(mode, Residence::Copied),
-                "a closure-embedding record cell must select Copied"
-            );
-            producers.push(producer);
-            dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
-                acc,
-                &acc_bundle,
-                mode,
-                |value, (region, mut cells), placement| {
-                    cells.push(copy_held_from_carried(
-                        value,
-                        FoldingBrand::in_fold_closure(placement),
-                    ));
-                    (region, cells)
-                },
-            )
+            }
+            other => panic!("expected a Record, got {}", other.ktype().name(&types)),
         });
+        // The seal chokepoint (Ruling 5): every record's carrier conservatively forces
+        // `borrows_host = true` at construction; the retention predicate below independently
+        // walks the rebuilt cell and finds the closure leaf, so the producer is retained either
+        // way.
+        let sealed = force_substrate_borrows_host(
+            Witnessed::from_erased(
+                Erased::erase(Carried::Object(obj)),
+                CarrierWitness::default(),
+            ),
+            &producer.storage_rc(),
+        );
+        let dep: DeliveredCarried =
+            Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+        producers.push(producer);
+        dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
+            acc,
+            cell_still_borrows(&dep),
+            |value, (region, mut cells), placement| {
+                cells.push(copy_held_from_carried(
+                    value,
+                    FoldingBrand::in_fold_closure(placement),
+                ));
+                (region, cells)
+            },
+        )
+    });
+
+    assert!(
+        !acc_final.coverage_releasing_home().is_empty(),
+        "every closure-embedding record cell keeps its producer: the accumulated envelope covers it \
+         beyond its own destination home"
+    );
 
     for producer in producers.drain(..) {
         drop(producer);
     }
 
-    let read_ids: Vec<_> = acc_final.with_pinned(&dest_storage, |(_region, cells)| {
-        cells
-            .iter()
-            .map(|h| match h.object() {
-                KObject::Record(substrate, _) => {
-                    match substrate.fields().get("f").map(|h| h.object()) {
-                        Some(KObject::KFunction(f)) => f.captured_scope().id,
-                        _ => panic!("expected field f: KFunction"),
+    // The accumulator is not a `Copy` family, so the read goes through the carrier under a held
+    // pin; `_coverage` keeps everything the fold claimed alive across it.
+    let (acc_cell, _coverage) = acc_final.into_parts();
+    let read_ids: Vec<_> = acc_cell
+        .unseal()
+        .with_pinned(&dest_storage, |(_region, cells)| {
+            cells
+                .iter()
+                .map(|h| match h.object() {
+                    KObject::Record(substrate, _) => {
+                        match substrate.fields().get("f").map(|h| h.object()) {
+                            Some(KObject::KFunction(f)) => f.captured_scope().id,
+                            _ => panic!("expected field f: KFunction"),
+                        }
                     }
-                }
-                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
-            })
-            .collect()
-    });
+                    other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+                })
+                .collect()
+        });
     assert_eq!(
         read_ids, expected_ids,
         "every closure's captured scope reads back unchanged after its producer frame freed"
@@ -629,9 +645,9 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
 }
 
 /// Escape with the **cost-chooser-selected pin** verb at the value-level seam (`seam_verb` →
-/// [`RegionEscape::Pin`] → `Residence::Kept` + [`copy_carried`]), the shape `relocate_terminal` /
+/// [`RegionEscape::Pin`] → the envelope's own pins + [`copy_carried`]), the shape `relocate_terminal` /
 /// `single_poll` / `finalize` take for a top-level record — distinct from the two container-cell
-/// cases above, which route `copied_seam_mode` (never a pin). Each of the `DEPTH` producers
+/// cases above, which route `cell_still_borrows` (never a pin). Each of the `DEPTH` producers
 /// contributes a record whose only field is a closure captured in that same frame: priceable (the
 /// closure leaf costs zero) with `borrows_home` set, so the chooser returns `Pin`. Under the verb's
 /// `Kept` residence the producer host is minted into the destination reach unconditionally, and
@@ -652,67 +668,86 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
 
     let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
     let mut expected_ids = Vec::with_capacity(DEPTH);
-    let acc0 = KoanRegion::yoke_branded::<PinAggFamily, _>(Rc::clone(&dest_storage), |region| {
-        (region.handle(), Vec::with_capacity(DEPTH))
-    });
-    let (acc_final, _final_bundle) =
-        (0..DEPTH).fold((acc0, FramePins::empty()), |(acc, acc_bundle), _| {
-            let producer: Rc<CallFrame> = CallFrame::new(scope);
-            let obj = alloc_home_closure_record(&producer, &types);
-            expected_ids.push(match obj {
-                KObject::Record(substrate, _) => {
-                    match substrate.fields().get("f").map(|h| h.object()) {
-                        Some(KObject::KFunction(f)) => f.captured_scope().id,
-                        _ => panic!("expected field f: KFunction"),
-                    }
+    let acc0 = Delivered::seal(
+        KoanRegion::yoke_branded::<PinAggFamily, _>(Rc::clone(&dest_storage), |region| {
+            (region.handle(), Vec::with_capacity(DEPTH))
+        }),
+        Rc::clone(&dest_storage),
+        FrameCoverage::empty(),
+    );
+    let acc_final = (0..DEPTH).fold(acc0, |acc, _| {
+        let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let obj = alloc_home_closure_record(&producer, &types);
+        expected_ids.push(match obj {
+            KObject::Record(substrate, _) => {
+                match substrate.fields().get("f").map(|h| h.object()) {
+                    Some(KObject::KFunction(f)) => f.captured_scope().id,
+                    _ => panic!("expected field f: KFunction"),
                 }
-                other => panic!("expected a Record, got {}", other.ktype().name(&types)),
-            });
-            let sealed = Witnessed::from_erased(
-                Erased::erase(Carried::Object(obj)),
-                CarrierWitness::default(),
-            );
-            let dep: DeliveredCarried =
-                Delivered::seal(sealed, producer.storage_rc(), FramePins::empty());
-            let verb = seam_verb(&dep);
-            assert!(
+            }
+            other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+        });
+        let sealed = Witnessed::from_erased(
+            Erased::erase(Carried::Object(obj)),
+            CarrierWitness::default(),
+        );
+        let dep: DeliveredCarried =
+            Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+        let verb = seam_verb(&dep);
+        assert!(
             matches!(verb, RegionEscape::Pin),
             "a priceable home-borrowing record must select the Pin verb at the value-level seam"
         );
-            producers.push(producer);
-            dep.transfer_into_placing::<PinAggFamily, PinAggFamily, _>(
-                acc,
-                &acc_bundle,
-                verb.residence(),
-                |value, (region, mut cells), placement| {
-                    cells.push(copy_carried(
-                        value,
-                        verb,
-                        FoldingBrand::in_fold_closure(placement),
-                    ));
-                    (region, cells)
-                },
-            )
-        });
+        producers.push(producer);
+        // The value-level predicate, lifted over this mirror's accumulator: it answers for the
+        // cell the fold just pushed, exactly as `relocate_terminal` answers for its lone
+        // product.
+        let mut still_borrows = seam_still_borrows(&dep, verb);
+        let cell_still_borrows =
+            move |product: &(RegionHandle<'_, KoanStorageProfile>, Vec<Carried<'_>>),
+                  region: &KoanRegion| {
+                product
+                    .1
+                    .last()
+                    .is_some_and(|cell| still_borrows(cell, region))
+            };
+        dep.transfer_into_placing::<PinAggFamily, PinAggFamily, _>(
+            acc,
+            cell_still_borrows,
+            |value, (region, mut cells), placement| {
+                cells.push(copy_carried(
+                    value,
+                    verb,
+                    FoldingBrand::in_fold_closure(placement),
+                ));
+                (region, cells)
+            },
+        )
+    });
 
     for producer in producers.drain(..) {
         drop(producer);
     }
 
-    let read_ids: Vec<_> = acc_final.with_pinned(&dest_storage, |(_region, cells)| {
-        cells
-            .iter()
-            .map(|carried| match carried.object() {
-                KObject::Record(substrate, _) => {
-                    match substrate.fields().get("f").map(|h| h.object()) {
-                        Some(KObject::KFunction(f)) => f.captured_scope().id,
-                        _ => panic!("expected field f: KFunction"),
+    // The accumulator is not a `Copy` family, so the read goes through the carrier under a held
+    // pin; `_coverage` keeps everything the fold claimed alive across it.
+    let (acc_cell, _coverage) = acc_final.into_parts();
+    let read_ids: Vec<_> = acc_cell
+        .unseal()
+        .with_pinned(&dest_storage, |(_region, cells)| {
+            cells
+                .iter()
+                .map(|carried| match carried.object() {
+                    KObject::Record(substrate, _) => {
+                        match substrate.fields().get("f").map(|h| h.object()) {
+                            Some(KObject::KFunction(f)) => f.captured_scope().id,
+                            _ => panic!("expected field f: KFunction"),
+                        }
                     }
-                }
-                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
-            })
-            .collect()
-    });
+                    other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+                })
+                .collect()
+        });
     assert_eq!(
         read_ids, expected_ids,
         "every pinned record's shared substrate reads its captured scope back after producer free"

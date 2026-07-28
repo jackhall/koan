@@ -180,8 +180,10 @@ impl<W: Workload> Scheduler<W> {
 
     /// A finalized dep as a **delivery envelope**: its duplicated sealed carrier
     /// ([`dep_carrier`](Self::dep_carrier)) paired with its retained producer-frame owner and the
-    /// terminal's owned foreign bundle, both cloned from the retention hold, so a consumer reads the
-    /// value under a pin sourced from the retention hold rather than threaded per call site. Sound because the retention hold is active
+    /// terminal's owned foreign bundle, both cloned from the retention hold and unioned by the
+    /// envelope into one member set (the producer frame becomes an ordinary member there), so a
+    /// consumer reads the value under a pin sourced from the retention hold rather than threaded
+    /// per call site. Sound because the retention hold is active
     /// while any consumer edge is undischarged (the pinning invariant) — and total for the same
     /// reason: every finalize seeds a hold (the run frame's storage owns the run region), so a
     /// pull-able dep always has a retained owner. Follows a bare-name-forward alias to the real
@@ -206,7 +208,11 @@ impl<W: Workload> Scheduler<W> {
             .deps
             .retained_foreign(target.index())
             .expect("a pull-able dep's retention hold carries its foreign bundle");
-        Ok(Delivered::hosted(cell, host, foreign))
+        Ok(Delivered::hosted(
+            cell,
+            host,
+            crate::witnessed::StepCoverage(foreign),
+        ))
     }
 
     /// Re-home a finalized terminal (relocated into a surviving region, bundled with the witness set
@@ -265,16 +271,16 @@ impl<W: Workload> Scheduler<W> {
     /// Seed a retention hold on a synthetically-finalized slot ([`Self::set_result`] writes the
     /// terminal but runs no finalize, so no hold exists) — [`Self::dep_delivered`] requires one for
     /// every pull-able dep. `foreign` is the hold's owned foreign bundle: pass
-    /// [`PinBundle::empty`](crate::witnessed::PinBundle::empty) for a slot that reaches nothing, or a
+    /// [`StepCoverage::empty`](crate::witnessed::StepCoverage::empty) for a slot that reaches nothing, or a
     /// real bundle to exercise the foreign half's pull-count-zero release timeline.
     pub fn seed_retention(
         &mut self,
         id: NodeId,
         owner: Rc<OwnerOf<W>>,
-        foreign: crate::witnessed::PinBundle<OwnerOf<W>>,
+        foreign: crate::witnessed::StepCoverage<OwnerOf<W>>,
         pulls: usize,
     ) {
-        self.deps.seed_retain(id.index(), owner, foreign, pulls);
+        self.deps.seed_retain(id.index(), owner, foreign.0, pulls);
     }
     pub fn result_is_none(&self, id: NodeId) -> bool {
         self.store.result_is_none(id)

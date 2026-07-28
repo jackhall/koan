@@ -11,7 +11,7 @@ fn binder_name_extracts_let_name() {
 }
 
 /// End-to-end install-then-clear: statement submission installs the placeholder from the
-/// cached binder plan before the body runs; `bind_value` clears it on finalize.
+/// cached binder plan before the body runs; the value write clears it at apply.
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::builtins::test_support::TestRun;
@@ -140,9 +140,7 @@ fn let_identifier_lhs_with_non_type_still_binds() {
         .expect("execute does not surface per-slot errors");
     let res = runtime.result_error(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
-    let data = scope.bindings().data();
-    let (_, reached) = data.get("foo").expect("expected binding 'foo'");
-    let entry = reached.value();
+    let entry = scope.lookup("foo").expect("expected binding 'foo'");
     assert!(
         matches!(entry, KObject::Number(n) if *n == 1.0),
         "expected Number(1.0), got {:?}",

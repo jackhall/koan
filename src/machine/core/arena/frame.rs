@@ -1,5 +1,5 @@
 //! The per-call allocation frame: [`FrameStorage`] (the Koan [`RegionHost`] alias), the run-root
-//! storage entry, the [`FrameReach`] / [`FramePins`] reach-evidence aliases, the witnessed
+//! storage entry, the [`FrameReach`] / [`FrameCoverage`] reach-evidence aliases, the witnessed
 //! child-scope construction door, and
 //! the [`CallFrame`] shell over a refcounted `FrameStorage` that holds the per-call child [`Scope`].
 //! The region/brand substrate these build on lives in the parent `arena` module.
@@ -13,8 +13,8 @@ use crate::machine::core::{Scope, ScopeId, ScopeRefFamily};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::CarrierWitness;
 use crate::witnessed::{
-    Delivered, PinBundle, ReachDescription, RegionHandle, RegionHandleFamily, RegionHost, Sealed,
-    SealedExtern, Witnessed,
+    Delivered, ReachDescription, RegionHandle, RegionHandleFamily, RegionHost, Sealed,
+    SealedExtern, StepCoverage, Witnessed,
 };
 
 /// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
@@ -29,14 +29,15 @@ use crate::witnessed::{
 /// on [`FrameStorageExt`] (an extension trait, since a type alias takes no inherent impls of its own).
 pub type FrameStorage = RegionHost<KoanStorageProfile>;
 
-/// The run-root storage: a fresh run region with no `outer` link. Held by `run_program` (and the
-/// test harness) so the run-root scope's region has an owning Rc; [`CallFrame::adopting`] reuses
-/// it as the run frame's storage and the run-root scope records a `Weak` to it as its
-/// `region_owner`. Public: it is the one Koan-side entry point a caller (production or an
-/// integration test) uses to obtain run-root storage — it mints nothing itself, only building the
-/// library's `RegionHost` shell whose region lazily mints on first allocation.
+/// The run-root storage: a fresh run region with no `outer` link, stamped at the run tier
+/// ([`RegionHost::is_run_root`]) so anything holding it can tell the run region from a per-call one.
+/// Held by `run_program` (and the test harness) so the run-root scope's region has an owning Rc;
+/// [`CallFrame::adopting`] reuses it as the run frame's storage and the run-root scope records a
+/// `Weak` to it as its `region_owner`. Public: it is the one Koan-side entry point a caller
+/// (production or an integration test) uses to obtain run-root storage — it mints nothing itself,
+/// only building the library's `RegionHost` shell whose region lazily mints on first allocation.
 pub fn run_root_storage() -> Rc<FrameStorage> {
-    RegionHost::fresh(None)
+    RegionHost::fresh_root()
 }
 
 /// Koan's [`RegionBrand`] mint over a [`FrameStorage`] — an extension trait because `FrameStorage`
@@ -58,16 +59,18 @@ impl FrameStorageExt for FrameStorage {
 
 /// The non-owning reach description backing carrier witnesses: names the regions a carrier's value
 /// reaches, hosted in the value's home region's side table and referenced (never owned) by the
-/// carrier. See [`ReachDescription`] for the shared mechanism (membership queries, home-omission);
+/// carrier. See [`ReachDescription`] for the shared mechanism (membership queries, the self rule);
 /// Koan's member semantics are the library's [`PinsRegion`](crate::witnessed::PinsRegion) impl for
-/// [`RegionHost`]. Its owning counterpart is [`FramePins`].
+/// [`RegionHost`]. Its owning counterpart is [`FrameCoverage`].
 pub type FrameReach = ReachDescription<FrameStorage>;
 
-/// The owned pin bundle a holder keeps to pin every region a value reaches — the ownership
-/// counterpart of [`FrameReach`], released by ordinary `Drop` (a binding entry drops it at entry
-/// death, the delivery envelope carries it across transit). See [`PinBundle`] for the shared
-/// mechanism (subsumption, union).
-pub type FramePins = PinBundle<FrameStorage>;
+/// The owned coverage a holder keeps to pin every region a value reaches — the ownership
+/// counterpart of [`FrameReach`], released by ordinary `Drop` (a step carries one from the fold that
+/// composed it to the seal that consumes it, the delivery envelope carries one across transit). See
+/// [`StepCoverage`] for the surface: Koan holds, clones, threads and drops coverage, and computes
+/// with it only through the container verbs on [`Delivered`] and
+/// [`RegionHandle`](crate::witnessed::RegionHandle).
+pub type FrameCoverage = StepCoverage<FrameStorage>;
 
 /// Build a per-call frame's child scope **witnessed**, sealing it to the externally-witnessed
 /// [`SealedExtern<ScopeRefFamily>`] the [`CallFrame`] holds — the construction door that re-anchors the
@@ -140,6 +143,11 @@ pub struct CallFrame {
     /// construction invariant of the envelope, and dropping the sealed carrier never dereferences the
     /// child pointer, so no drop-order rule is left to hand-maintain.
     envelope: Delivered<ScopeRefFamily, CarrierWitness, FrameStorage>,
+    /// This frame's own [`FrameStorage`] — the owner of the region its child scope lives in, and
+    /// the pin every escapee extends ([`Self::storage_rc`]). Held beside the envelope rather than
+    /// read off it: the envelope's members are one flat antichain in which a value's home is an
+    /// ordinary member, so the frame's own storage is not recoverable from it by identity.
+    storage: Rc<FrameStorage>,
     /// True only for the scheduler-owned run frame, which carries the top-level run scope and
     /// never drops mid-run. Its `region` is empty (top-level values live in the externally-owned
     /// run region, reached via `scope.region`), so there is nothing to lift out of it: the Done
@@ -191,7 +199,8 @@ impl CallFrame {
             // The child scope seals under the empty (`resident`) carrier witness — its cross-region
             // borrow into the parent rides `FrameStorage`'s own `outer` `Rc` chain, not the reach
             // system — so the envelope's foreign bundle is empty.
-            envelope: Delivered::hosted(scope_carrier, storage, FramePins::empty()),
+            envelope: Delivered::hosted(scope_carrier, Rc::clone(&storage), FrameCoverage::empty()),
+            storage,
             non_dying: false,
             owner: Cell::new(None),
             type_registry: None,
@@ -220,7 +229,12 @@ impl CallFrame {
         Rc::new(CallFrame {
             // The run scope lives in the run region (empty reach), so the envelope's foreign bundle
             // is empty.
-            envelope: Delivered::hosted(scope_carrier, run_storage, FramePins::empty()),
+            envelope: Delivered::hosted(
+                scope_carrier,
+                Rc::clone(&run_storage),
+                FrameCoverage::empty(),
+            ),
+            storage: run_storage,
             non_dying: true,
             owner: Cell::new(None),
             type_registry: Some(Rc::new(TypeRegistry::new())),
@@ -251,10 +265,10 @@ impl CallFrame {
         self.owner.get()
     }
 
-    /// This frame's own `FrameStorage` — the envelope's retained host, which every constructor
-    /// pairs with the child scope.
+    /// This frame's own `FrameStorage` — the owner of the region its child scope lives in, which
+    /// every constructor pairs with that scope.
     pub(crate) fn storage(&self) -> &Rc<FrameStorage> {
-        self.envelope.host()
+        &self.storage
     }
 
     /// The child scope's externally-witnessed carrier by value (`SealedExtern<ScopeRefFamily>` is

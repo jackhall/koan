@@ -87,7 +87,7 @@ fn dep_finish_short_circuits_on_dep_error() {
     store.seed_retention(
         dep_ok,
         std::rc::Rc::clone(&region),
-        crate::machine::core::FramePins::empty(),
+        crate::machine::core::FrameCoverage::empty(),
         1,
     );
     store.set_result(
@@ -155,7 +155,7 @@ fn retention_hold_foreign_bundle_releases_at_pull_zero() {
     store.seed_retention(
         dep_ok,
         Rc::clone(&region),
-        crate::machine::core::FramePins::singleton(Rc::clone(&foreign)),
+        crate::machine::core::FrameCoverage::of(Rc::clone(&foreign)),
         1,
     );
     // Drop our own strong handle: the hold's foreign bundle is now the sole owner of `foreign`.
@@ -211,10 +211,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
                 .alloc_object(KObject::KString("from-combine".into()));
             Action::done_resident(Carried::Object(v))
         });
-        Action::AwaitDeps {
-            deps: crate::scheduler::Deps::new(),
-            finish,
-        }
+        Action::await_deps(crate::scheduler::Deps::new(), finish)
     }
 
     let region = run_root_storage();
@@ -229,6 +226,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         },
         body,
         &test_run.types,
+        &mut crate::machine::WriteGate::for_test(),
     );
 
     let runtime = &mut test_run.runtime;

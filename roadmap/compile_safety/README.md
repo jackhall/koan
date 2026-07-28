@@ -51,15 +51,15 @@ by local discipline rather than by construction.
 | Hole | Direction | Loose surface | Call sites riding it |
 |---|---|---|---|
 | Residence side-table blind spots | under-pin | bare-`usize` `owns_addr` + default-no-op `Stored::record_local` ([region.rs](../../workgraph/src/witnessed/region.rs)) | 3 opt-in `record_local` impls in `arena.rs` (`KObject`, `KFunction`, `Module`); `Scope` is un-recorded |
-| [Cross-region pin cycles](../scheduler_library/region-debug-audits.md) | over-pin | reach sets holding `Rc<FrameStorage>` members with no cycle detection (`region.rs`) | 3 reach-mint doors in `scope.rs` (`mint_reach`, `mint_resident_reach`, `adopt_into`) |
+| [Cross-region pin cycles](../scheduler_library/region-debug-audits.md) | over-pin | pin bundles holding `Rc<FrameStorage>` members with no cycle detection — the self and eternal rules cut the two known ring shapes by construction, but nothing detects a third (`reach.rs`) | `Region::retain_reach` and every mint door reaching it (`Scope::mint_retained`, `Delivered::adopt_into` / `open_adopted`) |
 | Reach over-approximation ([fold side](../scheduler_library/region-debug-audits.md)) | over-pin | every fold audit is one-sided (catches under-pinning only) | every fold sink (`alloc_object_folded`, `arena.rs`); the scalar counter-gates live in `arena.rs` |
 | Side-table growth | retention | `membership` vec + linear-scan `owns_addr` (`region.rs`) | every recorded-family allocation feeds it; every `owns_addr` audit scans it |
 | Raw-handle reach | under-pin | `pub(crate)` `RegionBrand::handle()` hands koan code the raw `RegionHandle`, bypassing the veneer ([arena.rs](../../src/machine/core/arena.rs)) | 11 raw-handle reaches across `src/machine` |
-| Region-purity by fiat | under-pin | `StoredReach::empty()` minted inside the function-register door on a structural claim never audited ([bindings.rs](../../src/machine/core/bindings.rs)) | 1 production mint (`register_function`) plus test fixtures |
-| Carrier reach co-location | under-pin | `resident_value_carrier` accepts a `StoredReach<'r>` whose reach may be shorter-lived than the scope — co-location backed by the re-anchor pin, not the type ([scope.rs](../../src/machine/core/scope.rs)) | every `resident_value_carrier` reader |
+| Region-purity by fiat | under-pin | the empty `CarrierWitness` sealed by the bare-`FN` registration door on a structural claim never audited ([reach.rs](../../src/machine/core/scope/reach.rs)) | 1 production seal (`OverloadSeal` for a bare `FN`) plus test fixtures |
+| Carrier reach co-location | under-pin | [`Carrier`](../../workgraph/src/witnessed/carrier.rs) erases its reach reference, so co-location with the value is backed by the re-anchor pin, not the type | every `Sealed::open_at` / lift reader |
+| [Bit-only home borrow](../untyped_arena/home-lives-in-the-reach-description.md) | surface | a fold-born substrate carrier records its home borrow in `Carrier::borrows_host` with no description to hold home as a member ([carrier.rs](../../workgraph/src/witnessed/carrier.rs)) | every `force_substrate_borrows_host` site |
 | [Untyped re-anchor pins](typed-fold-pins.md) | under-pin | the pinned fold verbs take any `Pin: Witness`, unlinked to the operand backing the re-anchor needs ([witnessed.rs](../../workgraph/src/witnessed.rs)) | every koan `map_pinned*` / `merge_pinned*` call site (`catch.rs`, `constructors.rs`, `literal.rs`), incl. the possibly-empty pin in `build_type_operand` |
 | Evidence dead states | under-pin | `ResidenceEvidence` is a struct of `Option`s, so the meaningless ambient+seen state is representable and the family audits silently drop `seen` when `ambient` is present ([arena.rs](../../src/machine/core/arena.rs)) | every `alloc_resident_checked` evidence mint in `arena.rs` (none passes both today) |
-| Module reach union breadth | over-pin | `child_module_reach` unions every child binding-entry reach, including entries the module never exposes ([scope.rs](../../src/machine/core/scope.rs), `entry_reaches` in [bindings.rs](../../src/machine/core/bindings.rs)) | MODULE finish + both ascribe views |
 
 ### Under-pinning (dangle-capable)
 
@@ -89,22 +89,23 @@ by local discipline rather than by construction.
   recording choice explicitly, and stamp regions with a generation so a
   reused address cannot false-pass.
 
-- **Region-purity by fiat.** [`Bindings::register_function`](../../src/machine/core/bindings.rs)
-  mints `StoredReach::empty()` on the structural claim that the registered
-  reference holds no foreign region pointer. The claim is never audited; a
+- **Region-purity by fiat.** The bare-`FN` registration door
+  ([reach.rs](../../src/machine/core/scope/reach.rs)) seals its callable under the
+  empty `CarrierWitness`, on the structural claim that a function allocated into
+  the very scope it captures borrows only its home. The claim is never audited; a
   registration that ever embedded a foreign borrow would under-pin. Candidate:
   derive the empty reach from a residence walk rather than assert it. The type
-  channel no longer participates — a `KType` owns all its content, so a type
-  binding carries no reach to mint in the first place.
+  channel no longer participates — a `KType` is a `Copy` handle owning all its
+  content, so a type binding carries no reach to mint in the first place.
 
-- **Carrier reach co-location.** `resident_value_carrier`
-  ([scope.rs](../../src/machine/core/scope.rs)) accepts a `StoredReach<'r>` whose
-  reach reference may be shorter-lived than the binding scope. Sound because
-  `Carrier::new` erases the reference and liveness rests on the pin supplied at
-  re-anchor — but the type no longer enforces that the reach outlives its reader;
-  the re-anchor-pin discipline does. A read re-anchoring under a pin narrower than
-  the reach's backing arena would dangle. Candidate: a witness bound tying the
-  carried reach to its re-anchor pin, so co-location is typed rather than
+- **Carrier reach co-location.** [`Carrier`](../../workgraph/src/witnessed/carrier.rs)
+  stores its reach as an erased reference and re-anchors it only under an
+  externally supplied pin, so nothing in the type ties the reach's backing arena to
+  the pin a reader presents. A read re-anchoring under a pin narrower than that
+  arena would dangle. The exposure is much smaller than it was — a resting entry is
+  one `Sealed` fusing value and reach, and the open doors take coverage by
+  signature — but the residual bound is discipline. Candidate: a witness bound tying
+  the carried reach to its re-anchor pin, so co-location is typed rather than
   disciplined.
 
 - **Evidence dead states.** `ResidenceEvidence`
@@ -126,16 +127,16 @@ by local discipline rather than by construction.
   move-in item adds. Candidate: a sorted/hashed structure, or per-family
   tables sized to the sparse families that need them.
 
-- **Module reach union breadth.** `Scope::child_module_reach`
-  ([scope.rs](../../src/machine/core/scope.rs)) mints a module's stored reach as
-  the child scope's own region unioned with *every* binding-entry reach
-  (`Bindings::entry_reaches`, [bindings.rs](../../src/machine/core/bindings.rs)),
-  including entries the module value never exposes to a reader. A superset never
-  under-pins, but it pins more than the module's actual reach — a retention
-  candidate. Candidate: union only the entries reachable from the module's
-  exported surface.
-
 ### Surface debt (not fault-capable)
+
+- **Bit-only home borrow.** `Carrier::borrows_host`
+  ([carrier.rs](../../workgraph/src/witnessed/carrier.rs)) records whether a value's
+  borrows reach its own home region. Where the carrier references a description that
+  is a duplicate — home is an ordinary member — but a fold-born substrate carrier
+  references no description at all, so for it the bit is the sole record and the
+  duplication cannot be resolved by deleting it. Two description sites that can
+  disagree, kept alive by a birth path that cannot name its own home. Owned by
+  [substrate birth mints its home](../untyped_arena/home-lives-in-the-reach-description.md).
 
 - **Vestigial fold-token surface.** With `FoldedPlacement` the sole folded-store
   key, the token-form fold verbs (`map_pinned` / `merge_pinned` /

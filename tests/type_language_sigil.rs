@@ -15,7 +15,7 @@
 
 use std::rc::Rc;
 
-use koan::builtins::test_support::TestRun;
+use koan::builtins::test_support::{lookup_binding, TestRun};
 use koan::machine::model::{KKind, KObject, KType, NodeSchema, TypeNode, TypeRegistry};
 use koan::machine::{run_root_storage, FrameStorage, Scope};
 use koan::parse::parse;
@@ -340,7 +340,10 @@ fn user_functor_application_through_dispatch() {
     // `my_set` is a module bound under a Type-classed name — a module is a value, so it binds
     // on the value channel.
     assert!(
-        matches!(test_run.scope.lookup("my_set"), Some(KObject::Module(_))),
+        matches!(
+            lookup_binding(test_run.scope, "my_set"),
+            Some(KObject::Module(_))
+        ),
         "my_set must bind the produced module value",
     );
 }

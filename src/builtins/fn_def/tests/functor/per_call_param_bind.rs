@@ -29,12 +29,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
     test_run.run("LET other_set = (MAKESET (int_ord_a))");
 
     let m = lookup_module(scope, "held_set", &test_run.types);
-    let inner = m
-        .child_scope()
-        .bindings()
-        .data()
-        .get("inner")
-        .map(|(_, r)| r.value());
+    let inner = m.child_scope().lookup("inner");
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
         "held_set.inner must still read 1.0 after subsequent churn"
@@ -72,6 +67,8 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
 /// The per-call parameter bind survives closure escape: an inner FN returned from an outer functor
 /// reads its captured `er` from the outer's per-call `bindings.data` after the outer call has
 /// returned. The `KFunction(&fn, Some(Rc<CallFrame>))` lift pins the region the binding lives in.
+/// The escaped closure is invoked through its value binding (`maker {…}`, the value-call lane) —
+/// its keyworded form was registered in the dead per-call scope and does not travel with the value.
 #[test]
 fn functor_closure_escape_pins_type_class_bind() {
     let region = run_root_storage();
@@ -83,14 +80,14 @@ fn functor_closure_escape_pins_type_class_bind() {
     );
     test_run.run(
         "FN (MAKE_LOOKUP er :Ordered) -> Any = \
-            (FN (LOOKUP) -> Any = (er.Carrier))",
+            (FN (LOOKUP x :Number) -> Any = (er.Carrier))",
     );
-    test_run.run("LET _maker = (MAKE_LOOKUP int_ord_view)");
+    test_run.run("LET maker = (MAKE_LOOKUP int_ord_view)");
     // Churn the per-call region's drop discipline before invoking the inner FN.
     for _ in 0..5 {
         test_run.run_one(parse_one("PRINT 1"));
     }
-    let result = test_run.run_one_type(parse_one("LOOKUP"));
+    let result = test_run.run_one_type(parse_one("maker {x = 1}"));
     match test_run.types.node(result) {
         TypeNode::AbstractType { name, .. } => {
             assert_eq!(name, "Carrier");

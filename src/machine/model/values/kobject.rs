@@ -55,7 +55,7 @@ pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::CostDriven;
 /// A `KFunction` is a bare borrow into its defining region; the regions an escaping
 /// closure reaches are named by its carrier's reach description
 /// ([`FrameReach`](crate::machine::core::FrameReach)) and pinned by the holder's owned
-/// [`FramePins`](crate::machine::core::FramePins) bundle, not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
+/// [`FrameCoverage`](crate::machine::core::FrameCoverage) coverage, not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
 pub enum KObject<'a> {
     Number(f64),
     KString(String),
@@ -448,21 +448,14 @@ impl<'a> KObject<'a> {
         )
     }
 
-    /// True when every region borrow in `self` points into `dest`. Only value-channel borrows
-    /// are walked: `KFunction`, `Module`, `KExpression` splices, and a substrate carrier's
-    /// (`Record`/`List`/`Dict`/`Tagged`/`Wrapped`) substrate address (O(1), never its cells). The
-    /// `KType` tags (`List`/`Dict`/`Record` memos, `Tagged { identity }`, `Wrapped { type_id }`) are
-    /// not walked — a handle is one `u128` naming registry-owned content, so it borrows no region at
-    /// all.
-    pub(crate) fn resident_in(&self, dest: &KoanRegion) -> bool {
-        self.resident_in_visiting(&Residence::dest_only(dest))
-    }
-
-    /// The evidence-widened twin of [`Self::resident_in`], for a value built from (or embedding a
-    /// projection of) one or more delivered carriers: every walked borrow must point into
-    /// `dest` or be covered by one of `sets` — the object delivered tier's coverage predicate,
-    /// over the same borrows as [`Self::resident_in`]. The `StoredReach` tokens holding the
-    /// reach are opaque to this layer; core extracts the sets before calling.
+    /// True when every region borrow in `self` points into `dest` or is covered by one of `sets` —
+    /// the object delivered tier's coverage predicate, and with `sets` empty the plain
+    /// dest-residence check. Only value-channel borrows are walked: `KFunction`, `Module`,
+    /// `KExpression` splices, and a substrate carrier's (`Record`/`List`/`Dict`/`Tagged`/`Wrapped`)
+    /// substrate address (O(1), never its cells). The `KType` tags (`List`/`Dict`/`Record` memos,
+    /// `Tagged { identity }`, `Wrapped { type_id }`) are not walked — a handle is one `u128` naming
+    /// registry-owned content, so it borrows no region at all. The carriers holding the reach are
+    /// opaque to this layer; core extracts the sets before calling.
     pub(crate) fn resident_in_delivered(&self, dest: &KoanRegion, sets: &[&FrameReach]) -> bool {
         self.resident_in_visiting(&Residence::with_reach(dest, sets))
     }
@@ -712,27 +705,13 @@ fn held_borrows_host(cell: &Held<'_>, host: &KoanRegion) -> bool {
 /// producer host's allocated total. Non-record values never reach this — they always copy.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum RegionEscape {
-    /// Borrow rides, the producer region transfers by hold (`Residence::Kept`); the relocate hook
-    /// pointer-copies the record (its substrate borrow rides, covered by the Kept-minted reach).
+    /// Borrow rides, the producer region transfers by hold; the relocate hook pointer-copies the
+    /// record (its substrate borrow rides, covered by the reach the transfer mints).
     Pin,
     /// Total rebuild of the value's reachable structure at the destination brand. `released`: the
-    /// rebuild provably frees the retiring producer host (`Residence::Released` vs
-    /// `Residence::Copied`).
+    /// rebuild provably frees the retiring producer region, so the transfer claims the empty
+    /// source bundle.
     Copy { released: bool },
-}
-
-impl RegionEscape {
-    /// The residence mode this verb transfers under: `Pin` keeps the producer region (the substrate
-    /// borrow rides its unconditionally-minted reach); a released copy frees the retiring host; an
-    /// unreleased copy leaves the host to its conservative materialization.
-    pub(crate) fn residence(self) -> crate::witnessed::Residence {
-        use crate::witnessed::Residence as SeamResidence;
-        match self {
-            RegionEscape::Pin => SeamResidence::Kept,
-            RegionEscape::Copy { released: true } => SeamResidence::Released,
-            RegionEscape::Copy { released: false } => SeamResidence::Copied,
-        }
-    }
 }
 
 /// A seam tuning constant: copy a priceable home-crossing record only when its exact rebuild cost

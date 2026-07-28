@@ -348,3 +348,53 @@ fn val_slot_is_a_real_requirement() {
         "a module missing the VAL slot must fail shape-check naming `compare`, got {err}",
     );
 }
+
+/// A binding write rides its step's outcome and is applied by the run loop after the step's
+/// continuation returns. A write that the tables reject there is the **binder's own** error
+/// terminal — not a dropped error — and the rejected name stays unbound.
+///
+/// Two sibling `OP` declarations of one symbol at one operand type collide in the dispatch bucket:
+/// each seals its `KFunction` in-step and hands back a [`WriteOp::Overload`], and the second one's
+/// apply raises `DuplicateOverload` against the bucket the first installed. The declarations are
+/// submitted together as one block, so the collision is produced by concurrent siblings rather than
+/// by a sequential re-entry.
+#[test]
+fn a_rejected_binding_write_is_the_binders_error_terminal() {
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let exprs = parse("OP #(⊛) OVER Number = (left)\nOP #(⊛) OVER Number = (right)")
+        .expect("parse should succeed");
+    let runtime = &mut test_run.runtime;
+    let ids = runtime.enter_block(scope.id, exprs, scope);
+    runtime
+        .execute()
+        .expect("execute does not surface per-slot errors");
+    assert!(
+        runtime.result_error(ids[0]).is_ok(),
+        "the first declaration should install, got {:?}",
+        runtime.result_error(ids[0]).err(),
+    );
+    let error = runtime
+        .result_error(ids[1])
+        .expect_err("the colliding overload must surface on its own binder slot");
+    assert!(
+        matches!(
+            &error.kind,
+            crate::machine::KErrorKind::DuplicateOverload { .. }
+        ),
+        "expected DuplicateOverload from the op-apply, got {error}",
+    );
+}
+
+/// A binder body that errors *before* it decides its write installs nothing: the writes are outcome
+/// data, so an error terminal carries none of them.
+#[test]
+fn a_binder_that_errors_installs_nothing() {
+    let region = run_root_storage();
+    let test_run = run_block(&region, "LET x = nonexistent_name");
+    assert!(
+        test_run.scope.lookup("x").is_none(),
+        "a failed binder must leave no binding behind",
+    );
+}

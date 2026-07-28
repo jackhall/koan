@@ -9,14 +9,15 @@ use std::rc::{Rc, Weak};
 
 use super::NodeFinalize;
 use crate::builtins::test_support::{parse_one, run_root_bare, TestRun};
-use crate::machine::core::{run_root_storage, CarrierWitness, FramePins, FrameStorage};
+use crate::machine::core::{run_root_storage, CarrierWitness, FrameCoverage, FrameStorage};
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::AdoptSeam;
 use crate::machine::CallFrame;
 use crate::witnessed::Delivered;
 
-/// Build a scalar carrier residing in `producer`'s region with the given home-omitted foreign reach
+/// Build a scalar carrier residing in `producer`'s region with the given exact reach
 /// and `borrows_into_home` bit — the exact carrier a resident-value read hands to finalize. Returns
 /// the carrier (lifetime-erased, so it escapes the frame's rank-2 scope open) and a [`Weak`] to the
 /// producer's `FrameStorage` for the liveness census.
@@ -29,10 +30,12 @@ fn resident_scalar(
 ) {
     let carrier = producer.with_scope(|child| {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
-        child.resident_value_carrier(
-            obj,
-            crate::machine::core::StoredReach::for_test(None, borrows_into_home),
-        )
+        child
+            .seal_resident(
+                Carried::Object(obj),
+                CarrierWitness::new(borrows_into_home, None),
+            )
+            .unseal()
     });
     let weak = Rc::downgrade(&producer.storage_rc());
     (carrier, weak)
@@ -51,7 +54,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
 
     let (carrier, weak) = resident_scalar(&producer, false);
     assert!(
-        !carrier.witness().reach_covers(None, producer.region()),
+        !carrier.witness().has_reach_members(),
         "a region-pure scalar's reach names nothing"
     );
     assert!(
@@ -62,7 +65,8 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     let (sealed, sealed_pins) = test_run
         .runtime
         .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
+            &producer.storage_rc(),
             None,
         )
         .expect("no declared return, no error");
@@ -90,7 +94,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
 }
 
 /// Retention-timeline acceptance (claim: *envelope pins at envelope drop*). A delivery envelope now
-/// carries the terminal's owned **foreign** [`FramePins`] bundle alongside the host frame `Rc`; the
+/// carries the terminal's owned **foreign** [`FrameCoverage`] bundle alongside the host frame `Rc`; the
 /// bundle pins every region the value reaches and drops with the envelope. Seal an envelope whose
 /// foreign bundle is the sole strong owner of a distinct region and confirm the region stays live
 /// while the envelope lives, released when the envelope drops — the reach owned end-to-end, never
@@ -108,7 +112,7 @@ fn delivery_envelope_foreign_bundle_releases_at_envelope_drop() {
     let envelope = Delivered::seal(
         carrier,
         producer.storage_rc(),
-        FramePins::singleton(Rc::clone(&foreign)),
+        FrameCoverage::of(Rc::clone(&foreign)),
     );
     // The envelope's owned foreign bundle is now the sole strong owner of `foreign`.
     drop(foreign);
@@ -142,7 +146,8 @@ fn home_borrowing_value_keeps_its_bit_and_rides_retention() {
     let (sealed, sealed_pins) = test_run
         .runtime
         .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
+            &producer.storage_rc(),
             None,
         )
         .expect("no declared return, no error");
@@ -189,7 +194,14 @@ fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, types: &TypeRegistry
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Keyword("PROBE".into())],
     };
-    crate::builtins::register_builtin(scope, "PROBE", signature, probe_body, types);
+    crate::builtins::register_builtin(
+        scope,
+        "PROBE",
+        signature,
+        probe_body,
+        types,
+        &mut crate::machine::WriteGate::for_test(),
+    );
 }
 
 /// The number of captured frames still live — the retention census read.
@@ -321,12 +333,12 @@ fn aggregate_of_plain_record_results_releases_every_producer_frame() {
     );
 }
 
-/// `Scope::adopt_sealed` on a delivered object: the value rides its retention hold (the envelope's
+/// `Scope::adopt_carried` at the retaining seam, on a delivered object: the value rides its retention hold (the envelope's
 /// host) across the producer shell's drop, and the copy-free adoption materializes that host into
 /// the consumer's arena — so after the envelope itself drops, the consumer's minted set is the
 /// sole owner of the producer's storage and the adopted read stays live.
 #[test]
-fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
+fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
@@ -336,7 +348,8 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
     let (sealed, sealed_pins) = test_run
         .runtime
         .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
+            &producer.storage_rc(),
             None,
         )
         .expect("no declared return, no error");
@@ -350,7 +363,7 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
 
     let consumer_storage = run_root_storage();
     let consumer = run_root_bare(&consumer_storage);
-    let adopted: Carried = consumer.adopt_sealed(&cell);
+    let adopted: Carried = consumer.adopt_carried(&cell, AdoptSeam::Retaining);
 
     // Drop the hold: the consumer's minted arena set (the materialized host member) is now the
     // sole owner of the producer's storage.
@@ -385,10 +398,9 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
         let addr = obj as *const KObject as usize;
         (
-            child.resident_value_carrier(
-                obj,
-                crate::machine::core::StoredReach::for_test(None, false),
-            ),
+            child
+                .seal_resident(Carried::Object(obj), CarrierWitness::new(false, None))
+                .unseal(),
             addr,
         )
     });
@@ -398,7 +410,8 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let (sealed, sealed_pins) = test_run
         .runtime
         .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FramePins::empty()),
+            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
+            &producer.storage_rc(),
             None,
         )
         .expect("no declared return, no error");

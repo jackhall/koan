@@ -17,10 +17,11 @@ use super::SchedulerView;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
-use crate::machine::core::{Body, KFunction};
+use crate::machine::core::{Body, KFunction, OpenedFunction};
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{Record, SignatureElement};
+use crate::machine::AdoptSeam;
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
 use crate::scheduler::ResolvedDeps;
 
@@ -31,13 +32,13 @@ use crate::scheduler::ResolvedDeps;
 /// `picked`, so the builtin-vs-user-fn frame decision is made here, not in the harness.
 pub(super) fn invoke_continue<'step>(
     view: &SchedulerView<'step, '_>,
-    picked: &'step KFunction<'step>,
+    picked: OpenedFunction<'step>,
     working_expr: KExpression<'step>,
 ) -> Outcome<'step> {
-    let frame = match &picked.body {
+    let frame = match &picked.value().body {
         Body::Builtin(_) => FramePlacement::Inherit,
         _ => FramePlacement::FreshTail {
-            outer: picked.captured_scope(),
+            outer: picked.value().captured_scope(),
         },
     };
     // The invoke step carries no contract of its own — `picked`'s return is resolved inside `invoke`
@@ -57,7 +58,7 @@ pub(super) fn invoke_continue<'step>(
 /// wraps the invoke continuation (before the [`NodeWork::new`] erase) so a nested tail's invoke step
 /// re-deposits the established declared-return checker.
 fn invoke_work<'step>(
-    picked: &'step KFunction<'step>,
+    picked: OpenedFunction<'step>,
     working_expr: KExpression<'step>,
     obligation: Option<ReturnObligation>,
 ) -> NodeWork<KoanWorkload> {
@@ -80,16 +81,17 @@ fn invoke_work<'step>(
 /// and synchronous bind paths splice them first), so there is no fall-through.
 pub(super) fn invoke<'step>(
     view: &SchedulerView<'step, '_>,
-    picked: &'step KFunction<'step>,
+    picked: OpenedFunction<'step>,
     working_expr: KExpression<'step>,
 ) -> Outcome<'step> {
     // Per-argument reach carriers, read back off the spliced cells (value and reach as one unit). A
     // literal arg is region-pure and contributes no cell.
     let arg_carriers = carriers_from_expr(&working_expr);
-    if let Body::Builtin(f) = &picked.body {
+    let function = picked.value();
+    if let Body::Builtin(f) = &function.body {
         let f = *f;
-        let arg_carriers = map_arg_carriers(picked, arg_carriers);
-        let args = match picked.bind_args(&working_expr, view.current_scope(), view.types()) {
+        let arg_carriers = map_arg_carriers(function, arg_carriers);
+        let args = match function.bind_args(&working_expr, view.current_scope(), view.types()) {
             Ok(args) => args,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -99,7 +101,7 @@ pub(super) fn invoke<'step>(
     // A uniquely-picked call is admitted shape-only by dispatch, so validate each argument against
     // its declared parameter type before the type-trusting `bind_by_name` — a non-satisfying typed
     // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
-    if let Err(e) = picked.validate_call_args(&working_expr, view.types()) {
+    if let Err(e) = function.validate_call_args(&working_expr, view.types()) {
         return Outcome::Done(Err(e));
     }
 
@@ -114,7 +116,7 @@ pub(super) fn invoke<'step>(
         }
     };
 
-    let bound = match picked.bind_by_name(args) {
+    let bound = match function.bind_by_name(args) {
         Ok(record) => record,
         Err(e) => return Outcome::Done(Err(e)),
     };
@@ -126,9 +128,9 @@ pub(super) fn invoke<'step>(
         .expect("a user-fn invoke runs against the Continue-installed per-call cart");
     // Re-key onto parameter names so `run_user_fn` stores each binding's reach from its own carrier,
     // keyed to match `bound`. `extract_carried_args` already folded every delivered arg's reach into
-    // this same per-call scope (through `adopt_sealed`), so every foreign region an argument borrows
+    // this same per-call scope (through `adopt_carried`), so every foreign region an argument borrows
     // into is pinned for the call's life — no separate deposit here.
-    let named_carriers = map_arg_carriers(picked, arg_carriers);
+    let named_carriers = map_arg_carriers(function, arg_carriers);
     let exec_frame = ExecFrame {
         region: frame.clone(),
     };
@@ -136,7 +138,7 @@ pub(super) fn invoke<'step>(
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
     let in_chain = view.in_contract_chain();
     match run_user_fn(
-        picked,
+        function,
         bound,
         &named_carriers,
         &exec_frame,
@@ -149,8 +151,11 @@ pub(super) fn invoke<'step>(
             // checked + stamped at the lift boundary like any FN return, so a recursive deferred
             // body stays TCO-flat.
             let contract = match ret {
-                PerCallReturn::FromSignature => ReturnContract::Function(picked),
-                PerCallReturn::Resolved(ret) => ReturnContract::PerCall { func: picked, ret },
+                PerCallReturn::FromSignature => ReturnContract::Function(picked.reseal()),
+                PerCallReturn::Resolved(ret) => ReturnContract::PerCall {
+                    func: picked.reseal(),
+                    ret,
+                },
             };
             // The frame is already the slot's installed cart, so the tail re-enters it with
             // `Inherit` — a `FreshTail` here would mint a second cart, discarding the one already
@@ -158,13 +163,13 @@ pub(super) fn invoke<'step>(
             // leading statements into it.
             super::super::runtime::run_action(
                 view,
-                Action::Tail {
-                    leading: leading.into_iter().map(|e| (*e).clone()).collect(),
-                    tail: tail.clone(),
-                    contract: TailContract::Eager(Some(contract)),
-                    frame_placement: FramePlacement::Inherit,
-                    block_entry: BlockEntry::FrameScope(frame),
-                },
+                Action::tail(
+                    leading.into_iter().map(|e| (*e).clone()).collect(),
+                    tail.clone(),
+                    TailContract::Eager(Some(contract)),
+                    FramePlacement::Inherit,
+                    BlockEntry::FrameScope(frame),
+                ),
             )
         }
         ExecOutcome::DeferredExprTail {
@@ -182,13 +187,15 @@ pub(super) fn invoke<'step>(
             statements.push(type_expr.clone());
             super::super::runtime::run_action(
                 view,
-                Action::Tail {
-                    leading: statements,
-                    tail: tail.clone(),
-                    contract: TailContract::FromLastResult { func: picked },
-                    frame_placement: FramePlacement::Inherit,
-                    block_entry: BlockEntry::FrameScope(frame),
-                },
+                Action::tail(
+                    statements,
+                    tail.clone(),
+                    TailContract::FromLastResult {
+                        func: picked.reseal(),
+                    },
+                    FramePlacement::Inherit,
+                    BlockEntry::FrameScope(frame),
+                ),
             )
         }
         ExecOutcome::Errored(e) => Outcome::Done(Err(e)),
@@ -281,9 +288,10 @@ fn extract_carried_args<'step>(
             // arena), a type copy-free with its host pinned. `view.current_scope()` *is* the call
             // scope (the run loop opens each step's scope from the Continue-installed cart), so the
             // fold never lands in the caller's scope.
-            ExpressionPart::Spliced { cell } => {
-                args.push(view.current_scope().adopt_sealed_copied(cell, view.types()))
-            }
+            ExpressionPart::Spliced { cell } => args.push(
+                view.current_scope()
+                    .adopt_carried(cell, AdoptSeam::ReHome(view.types())),
+            ),
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
             // the args as a `'step` `Carried`. A `#(...)` quote is a literal for this purpose: its
             // `KObject::KExpression` body is data, and the checked door's family audit passes it —

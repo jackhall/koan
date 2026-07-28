@@ -1,0 +1,10 @@
+error[E0624]: associated function `for_unpublished_scope` is private
+ --> tests/compile_fail/write_gate_mint.rs:6:43
+  |
+6 |     let _gate = koan::machine::WriteGate::for_unpublished_scope();
+  |                                           ^^^^^^^^^^^^^^^^^^^^^ private associated function
+  |
+ ::: src/machine/core/bindings/gate.rs
+  |
+  |     pub(in crate::machine) fn for_unpublished_scope() -> Self {
+  |     --------------------------------------------------------- private associated function defined here

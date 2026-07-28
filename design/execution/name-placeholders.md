@@ -104,7 +104,7 @@ fixed by the name part its binder-name extractor reads: `type_part_binder_name`
 an `Identifier` part and tags `BindKind::Value`. `MODULE` binds a value under a
 value token, so its placeholder and its write sit on the same ladder — no binder
 straddles the two kinds, and no write clears a placeholder of the other kind
-([`Bindings::try_apply`](../../src/machine/core/bindings.rs)). A spec's extractors
+([`WriteOp::apply`](../../src/machine/core/bindings/ops.rs)). A spec's extractors
 run in order and the first `Some` wins, so an expression whose name part is of one
 class selects the correctly-classified channel — the value extractor misses a
 `Type` part, and vice versa

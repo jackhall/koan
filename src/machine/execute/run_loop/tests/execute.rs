@@ -57,8 +57,5 @@ fn later_expression_sees_earlier_binding_via_lookup() {
     runtime.enter_block(root.id, vec![let_expr("a", 10.0), lookup_a], root);
 
     runtime.execute().unwrap();
-    let data = root.bindings().data();
-    assert!(
-        matches!(data.get("b").map(|(_, r)| r.value()), Some(KObject::Number(n)) if *n == 10.0)
-    );
+    assert!(matches!(root.lookup("b"), Some(KObject::Number(n)) if *n == 10.0));
 }

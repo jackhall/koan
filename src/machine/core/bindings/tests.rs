@@ -1,99 +1,128 @@
-//! Unit coverage for the `types` map write primitive `try_register_type`, plus
-//! the `pending_types` RAII guard lifecycle and the cross-kind exclusion that
-//! makes the `data`/`types` partition structural (no name in both).
+//! Unit coverage for the `types` map write primitive `write_type`, plus the cross-kind
+//! exclusion that makes the `data`/`types` partition structural (no name in both).
 
 use super::*;
+use crate::machine::core::arena::RegionBrand;
 use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
+use crate::machine::core::{CarrierWitness, FrameCoverage, FrameReach, FrameStorage};
+use crate::machine::model::values::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
+use workgraph::scheduler::Sealed;
 
-/// A value binding round-trips the home-omitted foreign reach it was bound with: a carrier-oriented
-/// read hands back exactly the `FrameReach` stored at bind time, so the read wrapper can name the
-/// value's reach without reconstructing it from the value.
+/// Seal `obj` as resident in `region` under a description naming `foreign` — the shape a bind
+/// door produces once its mint has run, assembled here without a `Scope`.
+fn sealed_reaching<'a>(
+    region: RegionBrand<'a>,
+    obj: &'a KObject<'a>,
+    foreign: &Rc<FrameStorage>,
+) -> (SealedValue, &'a FrameReach) {
+    // Mint a description naming `foreign` (foreign to `region`, so the self rule keeps it in the
+    // owned bundle) to stand in for the reach a value borrows. The mint retains its own bundle in
+    // `region`; these tests assert on the description the seal carries, and `foreign` outlives them
+    // on the stack.
+    let foreign_bundle = FrameCoverage::of(Rc::clone(foreign));
+    let (minted, _) = region.handle().mint_retained(&[&foreign_bundle]);
+    let reach_set = minted.expect("a foreign member mints a single-member reach");
+    let sealed = Sealed::seal(region.seal_resident(
+        Carried::Object(obj),
+        CarrierWitness::new(false, Some(reach_set)),
+    ));
+    (sealed, reach_set)
+}
+
+/// The sole member of the description a bound entry's seal carries. The reach is readable only
+/// under a pin, so the caller's own hold on the hosting frame opens the seal.
+fn sole_reach_member(sealed: &SealedValue, pin: &Rc<FrameStorage>) -> Rc<FrameStorage> {
+    sealed.open_at(pin).with_reach(|reach| {
+        let members = reach.expect("non-empty reach").members();
+        match members.as_slice() {
+            [only] => Rc::clone(only),
+            _ => panic!("expected a single-member reach"),
+        }
+    })
+}
+
+/// A value binding round-trips the exact reach it was sealed with: the entry stores the seal
+/// verbatim, so a read hands back a carrier naming the value's reach without reconstructing it
+/// from the value.
 #[test]
-fn data_binding_round_trips_stored_reach() {
+fn data_binding_round_trips_sealed_reach() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
-    // A synthetic foreign frame the value "reaches" — stored on the binding as its reach.
+    // A synthetic foreign frame the value "reaches" — carried on the seal as its reach.
     let foreign = run_root_storage();
-    // Mint a description naming `foreign` (foreign to `region`, so it survives home-omission as a
-    // member) to stand in for the home-omitted foreign reach a value borrows. `_pins` keeps the
-    // minted description's members alive for the scope.
-    let (minted, _pins, _) = region.mint(&[], std::slice::from_ref(&foreign), |_| false);
-    let reach_set = minted.expect("a foreign materialize-host mints a single-member reach");
-    let reach = StoredReach::for_test(Some(reach_set), false);
+    let (sealed, _) = sealed_reaching(region, obj, &foreign);
     bindings
-        .try_bind_value(
+        .write_value(
             "x",
             BindingIndex::BUILTIN,
-            Reached::for_test(obj, reach, FramePins::empty()),
+            sealed,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("value bind should succeed");
-    match bindings.lookup_value_carrier("x", None) {
-        Some(NameLookup::Bound(hit)) => {
-            assert!(std::ptr::eq(hit.obj, obj));
-            assert!(
-                hit.stored.foreign.is_some_and(
-                    |f| matches!(f.members().as_slice(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
-                ),
-                "stored reach should round-trip the foreign frame",
-            );
-        }
-        _ => panic!("expected a bound value carrier hit"),
+    match bindings.lookup_value("x", None) {
+        Some(NameLookup::Bound(hit)) => assert!(
+            Rc::ptr_eq(&sole_reach_member(&hit, &storage), &foreign),
+            "the sealed reach should round-trip the foreign frame",
+        ),
+        _ => panic!("expected a bound value hit"),
     }
 }
 
-/// A carrier-oriented read copies the stored `Option<&FrameReach>` reference — no per-hit clone. Two
-/// independent reads of the same binding hand back the *same* `&FrameReach` pointer, proving the read
-/// path reuses the arena-hosted set rather than cloning a fresh one on every hit (the type-binding
-/// memo relies on the same no-clone copy).
+/// A read duplicates the entry's seal, which copies the hosted `&FrameReach` reference — no per-hit
+/// clone. Two independent reads of the same binding name the *same* description, proving the read
+/// path reuses the arena-hosted set rather than cloning a fresh one on every hit.
 #[test]
-fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
+fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
     let foreign = run_root_storage();
-    let (minted, _pins, _) = region.mint(&[], std::slice::from_ref(&foreign), |_| false);
-    let reach_set = minted.expect("a foreign materialize-host mints a single-member reach");
-    let reach = StoredReach::for_test(Some(reach_set), false);
+    let (sealed, reach_set) = sealed_reaching(region, obj, &foreign);
     bindings
-        .try_bind_value(
+        .write_value(
             "x",
             BindingIndex::BUILTIN,
-            Reached::for_test(obj, reach, FramePins::empty()),
+            sealed,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("value bind should succeed");
 
-    let first = match bindings.lookup_value_carrier("x", None) {
-        Some(NameLookup::Bound(hit)) => hit.stored.foreign.expect("non-empty reach"),
-        _ => panic!("expected a bound value carrier hit"),
+    let read = |label: &str| match bindings.lookup_value("x", None) {
+        Some(NameLookup::Bound(hit)) => hit
+            .open_at(&storage)
+            .with_reach(|reach| reach.expect("non-empty reach") as *const _),
+        _ => panic!("expected a bound value hit for {label}"),
     };
-    let second = match bindings.lookup_value_carrier("x", None) {
-        Some(NameLookup::Bound(hit)) => hit.stored.foreign.expect("non-empty reach"),
-        _ => panic!("expected a bound value carrier hit"),
-    };
+    let (first, second) = (read("first"), read("second"));
     assert!(
         std::ptr::eq(first, second),
-        "two reads of the same binding must return the same &FrameReach — a clone would allocate a \
+        "two reads of the same binding must name the same &FrameReach — a clone would allocate a \
          fresh Vec at a distinct address on every hit",
     );
     assert!(
         std::ptr::eq(first, reach_set),
-        "the stored reach is the exact reference bound in, not a copy of it",
+        "the carried reach is the exact reference sealed in, not a copy of it",
     );
 }
 
 #[test]
-fn try_register_type_inserts_into_types_map() {
-    let bindings: Bindings<'_> = Bindings::new();
+fn write_type_inserts_into_types_map() {
+    let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
-    let outcome = bindings
-        .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
-        .expect("try_register_type should succeed on fresh bindings");
-    assert!(matches!(outcome, ApplyOutcome::Applied));
+    bindings
+        .write_type(
+            "Foo",
+            kt,
+            DeclarationSite::BUILTIN,
+            TypeWritePolicy::Insert,
+            &mut crate::machine::WriteGate::for_test(),
+        )
+        .expect("write_type should succeed on fresh bindings");
     let stored = bindings
         .types()
         .get("Foo")
@@ -104,14 +133,26 @@ fn try_register_type_inserts_into_types_map() {
 }
 
 #[test]
-fn try_register_type_rejects_collision_with_rebind() {
-    let bindings: Bindings<'_> = Bindings::new();
+fn write_type_rejects_collision_with_rebind() {
+    let bindings: Bindings = Bindings::new();
     let kt1: KType = KType::NUMBER;
     let kt2: KType = KType::STR;
     bindings
-        .try_register_type("Foo", kt1, DeclarationSite::BUILTIN)
+        .write_type(
+            "Foo",
+            kt1,
+            DeclarationSite::BUILTIN,
+            TypeWritePolicy::Insert,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("first register should succeed");
-    let err = match bindings.try_register_type("Foo", kt2, DeclarationSite::BUILTIN) {
+    let err = match bindings.write_type(
+        "Foo",
+        kt2,
+        DeclarationSite::BUILTIN,
+        TypeWritePolicy::Insert,
+        &mut crate::machine::WriteGate::for_test(),
+    ) {
         Err(e) => e,
         Ok(_) => panic!("second register on same name should error, not succeed"),
     };
@@ -125,48 +166,49 @@ fn try_register_type_rejects_collision_with_rebind() {
 }
 
 #[test]
-fn try_register_type_yields_conflict_on_live_types_borrow() {
-    let bindings: Bindings<'_> = Bindings::new();
-    let kt: KType = KType::NUMBER;
-    let _r = bindings.types();
-    let outcome = bindings
-        .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
-        .expect("conflict path returns Ok(Conflict), not Err");
-    assert!(matches!(outcome, ApplyOutcome::Conflict));
-    assert!(_r.get("Foo").is_none());
-}
-
-#[test]
-fn try_register_type_clears_matching_placeholder() {
-    let bindings: Bindings<'_> = Bindings::new();
+fn write_type_clears_matching_placeholder() {
+    let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     bindings
-        .try_install_placeholder(
+        .install_placeholder(
             "Bar".to_string(),
             NodeId(7),
             BindingIndex::BUILTIN,
             BindKind::Type,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("placeholder install should succeed on fresh bindings");
     assert!(bindings.placeholders().contains_key("Bar"));
     bindings
-        .try_register_type("Bar", kt, DeclarationSite::BUILTIN)
+        .write_type(
+            "Bar",
+            kt,
+            DeclarationSite::BUILTIN,
+            TypeWritePolicy::Insert,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("type register should succeed and clear placeholder");
     assert!(!bindings.placeholders().contains_key("Bar"));
 }
 
 #[test]
-fn try_register_type_does_not_touch_data_or_functions() {
-    let bindings: Bindings<'_> = Bindings::new();
+fn write_type_does_not_touch_data_or_functions() {
+    let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     bindings
-        .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
+        .write_type(
+            "Foo",
+            kt,
+            DeclarationSite::BUILTIN,
+            TypeWritePolicy::Insert,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("register should succeed");
     assert!(bindings.data().is_empty());
     assert!(bindings.functions().is_empty());
 }
 
-/// Declaration identity is run-qualified: two `try_register_type_upsert`s of one name whose
+/// Declaration identity is run-qualified: two `UpsertEqual write`s of one name whose
 /// [`NodeHandle`]s share a `NodeId` but carry distinct [`RunId`]s are two declarations, because
 /// `NodeId`s are scheduler-local and restart per run — only the pair identifies a declaration
 /// statement across the lifetime of a persistent scope. The same-run re-entry (identical handle) is
@@ -176,7 +218,7 @@ fn try_register_type_does_not_touch_data_or_functions() {
 /// idempotent arm on the cross-run install and this test would fail.
 #[test]
 fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let first_run = RunId::next();
     let second_run = RunId::next();
     assert_ne!(first_run, second_run, "two runs must mint distinct RunIds");
@@ -187,20 +229,36 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
         index: BindingIndex::value(0),
     };
 
-    let first = bindings
-        .try_register_type_upsert("Maybe", KType::NUMBER, site(first_run))
+    bindings
+        .write_type(
+            "Maybe",
+            KType::NUMBER,
+            site(first_run),
+            TypeWritePolicy::UpsertEqual,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("the first declaration should install");
-    assert!(matches!(first, ApplyOutcome::Applied));
 
     // Same handle re-entering (a parallel finalize of the first declaration): idempotent overwrite.
-    let reentry = bindings
-        .try_register_type_upsert("Maybe", KType::NUMBER, site(first_run))
+    bindings
+        .write_type(
+            "Maybe",
+            KType::NUMBER,
+            site(first_run),
+            TypeWritePolicy::UpsertEqual,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("a same-handle parallel finalize should overwrite idempotently");
-    assert!(matches!(reentry, ApplyOutcome::Applied));
 
     // A later run over the persistent scope reuses the NodeId but carries a fresh RunId, so its
     // handle differs from the stored entry's and the install is a second declaration: Rebind.
-    let error = match bindings.try_register_type_upsert("Maybe", KType::STR, site(second_run)) {
+    let error = match bindings.write_type(
+        "Maybe",
+        KType::STR,
+        site(second_run),
+        TypeWritePolicy::UpsertEqual,
+        &mut crate::machine::WriteGate::for_test(),
+    ) {
         Err(e) => e,
         Ok(_) => panic!("a cross-run redeclaration of Maybe must Rebind, not overwrite"),
     };
@@ -221,9 +279,9 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
 
 // --- Cross-kind exclusion (AC1/AC4) -----------------------------------------
 // Each declarator routes to one of these write primitives (LET-value →
-// `try_bind_value`; LET-type-alias / VAL / NEWTYPE-sigil → `try_register_type`;
+// `write_value`; LET-type-alias / VAL / NEWTYPE-sigil → `write_type`;
 // MODULE / SIG / UNION / NEWTYPE-record / RECURSIVE-finalize →
-// `try_register_type_upsert`; module/USING replay → `try_bulk_install_from`).
+// `UpsertEqual write`; module/USING replay → `try_bulk_install_from`).
 // `partition_guard` is the single enforcement point every one of these primitives calls, so
 // `value_token_may_not_bind_type_side` / `type_token_may_not_bind_value_side` below — exercised
 // against a plain `Bindings::new()` — prove the exclusion for every bind site: a name's token
@@ -231,46 +289,19 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
 // a bare `FN`, which binds neither `data` nor `types` — is exempt; that is covered Scope-side in
 // `core::tests::register`.
 
-#[test]
-fn new_bindings_has_empty_pending_types() {
-    let bindings: Bindings<'_> = Bindings::new();
-    assert!(bindings.pending_types().is_empty());
-}
-
-/// Dropping the value returned by `insert_pending_type` is the sole removal path
-/// for a `pending_types` entry outside `#[cfg(test)]`.
-#[test]
-fn pending_binder_guard_drop_removes_entry() {
-    let bindings: Box<Bindings<'static>> = Box::default();
-    let bindings: &'static Bindings<'static> = Box::leak(bindings);
-    {
-        let _guard = bindings.insert_pending_type("Foo".into());
-        assert!(bindings.pending_types().contains("Foo"));
-    }
-    assert!(
-        !bindings.pending_types().contains("Foo"),
-        "guard Drop should have removed the pending_types entry",
-    );
-}
-
-/// Guard Drop must tolerate an already-removed entry without panicking.
-#[test]
-fn pending_binder_guard_drop_tolerates_absent_entry() {
-    let bindings: Box<Bindings<'static>> = Box::default();
-    let bindings: &'static Bindings<'static> = Box::leak(bindings);
-    let guard = bindings.insert_pending_type("Foo".into());
-    bindings.pending_remove("Foo");
-    drop(guard);
-    assert!(!bindings.pending_types().contains("Foo"));
-}
-
 /// The token-class partition: `types` and `data` are different universes, and a name's token class
 /// decides which one it belongs to. A value token may not name a type…
 #[test]
 fn value_token_may_not_bind_type_side() {
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
-    let error = match bindings.try_register_type("int_ord", kt, DeclarationSite::BUILTIN) {
+    let error = match bindings.write_type(
+        "int_ord",
+        kt,
+        DeclarationSite::BUILTIN,
+        TypeWritePolicy::Insert,
+        &mut crate::machine::WriteGate::for_test(),
+    ) {
         Err(e) => e,
         Ok(_) => panic!("a value token names a value, not a type"),
     };
@@ -288,12 +319,13 @@ fn value_token_may_not_bind_type_side() {
 fn type_token_may_not_bind_value_side() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings = Bindings::new();
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
-    let error = match bindings.try_bind_value(
+    let error = match bindings.write_value(
         "IntOrd",
         BindingIndex::BUILTIN,
-        Reached::for_test(val, StoredReach::for_test(None, false), FramePins::empty()),
+        Sealed::seal(region.seal_resident(Carried::Object(val), CarrierWitness::new(false, None))),
+        &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
         Ok(_) => panic!("a Type token names a type, not a value"),

@@ -15,12 +15,11 @@ against the consumer's lexical position by `idx < cutoff` — exactly the value
 language's rule. A type binding declared lexically later than its consumer is
 invisible, so a forward type reference is a *position error*, not a silent
 success or a park.
-[`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs) takes the chain and
-the `type_expr_memo` re-keys by `(TypeName, cutoff)`, so a forward and a backward
-consumer at the same scope never share a cached verdict. The `NameLookup::Parked`
-arm parks only on an *earlier still-finalizing* type (a binder visible at the
-consumer's position whose body has not finished); `pending_types` survives only
-to mark which binders are in flight. This composes with value-name forward
+[`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs) takes the chain, so a
+forward and a backward consumer at the same scope reach different verdicts. The
+`NameLookup::Parked` arm parks only on an *earlier still-finalizing* type (a binder visible
+at the consumer's position whose body has not finished); the binder's type-side placeholder
+is what marks it in flight. This composes with value-name forward
 references uniformly — both are lexically gated
 ([execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)).
 
@@ -110,18 +109,14 @@ cross-link this section rather than restating its slice.
   preserves the parser-side name verbatim until the park-capable
   `Scope::resolve_type_identifier` consumes it. Runs at `KFunction::bind` time, which has no
   `Scope` in hand, so it is builtin-only and scope-independent.
-- **Layer 2 — scope-bound elaboration memo (the sole cache tier)** in
-  [`bindings.rs`](../../src/machine/core/bindings.rs). A
-  `RefCell<HashMap<(TypeName, Option<usize>), KType>>` on `Bindings`
-  (`type_expr_memo`) caches resolved `(TypeName, cutoff) → KType` per scope,
-  gated by a finalize check on every embedded user-type. Keying by `cutoff` keeps
-  a forward consumer (which sees a name as unresolved) and a backward consumer
-  (which sees it bound) from sharing a verdict. Reached through
+- **Layer 2 — scope-bound resolution**, reached through
   [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs), which takes the
-  chain and returns the three-outcome
-  `TypeResolution<KType>::{Done, Park, Unbound}`. See
-  [Strict admission rules](#strict-admission-rules) for the gate and
-  the monotonicity argument.
+  consumer's chain and returns the three-outcome
+  `TypeResolution<KType>::{Done, Park, Unbound}`. It runs the elaborator on every call
+  and caches nothing: interning in the
+  [`TypeRegistry`](../../src/machine/model/types.rs) already makes a re-elaborated form
+  yield the *same* handle. A `Done` passes a finalize check on every embedded user-type
+  first — see [Strict admission rules](#strict-admission-rules) for the gate.
 - **Layer 3 — the elaborator** in
   [`resolver.rs`](../../src/machine/model/types/resolver.rs). Resolves a
   *bare-leaf* `TypeName` against the scope into a `KType` handle, carrying the
@@ -165,10 +160,11 @@ cross-link this section rather than restating its slice.
 
 Type bindings live in a separate map from value bindings — the type-side
 slice of the [lookup → admit protocol](lookup-protocol.md)'s Layer 2.
-The [`Bindings`](../../src/machine/core/bindings.rs) façade owns four
-maps: `data` for values, `functions` for registered overloads,
-`placeholders` for in-flight dispatch tasks, and `types` for type-name →
-`&KType` region pointers.
+The [`Bindings`](../../src/machine/core/bindings.rs) façade owns six
+maps under one `RefCell`: `data` for values, `functions` for registered overloads,
+`placeholders` for in-flight dispatch tasks, `pending_overloads` for in-flight
+dispatch buckets, `operators` for the operator-group registry, and `types` for
+type-name → `KType` handles.
 
 `types` and `data` are **different universes, and a name's token class decides which one it
 belongs to** — a Type token names something that can type a field, a value token names
@@ -176,7 +172,8 @@ something a field can hold. A write whose name classifies against the map it is 
 hard error, not a convention: `Bindings::partition_guard` refuses a value token entering
 `types` ("`int_ord` is a value token, so it names a value") and a Type token entering `data`
 ("`IntOrd` is a Type token, so it names a type"). It is the **single enforcement point** —
-every binder reaches a map through `try_apply` / `try_apply_type`, so no caller can bind
+every binder reaches a map through [`WriteOp::apply`](../../src/machine/core/bindings/ops.rs), so
+no caller can bind
 across the line and none needs its own check. A keyword-class name (all-uppercase, no
 lowercase — `PRINT`) is not a Type token, so builtin dispatch registration passes the
 value-side gate untouched.
@@ -312,12 +309,12 @@ a bare user name can still be pending:
 The single-part bare-`Type` lookup that those consumers' siblings need is
 folded into the dispatcher's `BareTypeLeaf` fast lane
 ([`dispatch/single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)),
-which calls the memoized, park-capable
+which calls the park-capable
 [`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
 bridge directly — the same bridge the keyworded splice walk's eager
 name-resolve pass calls
 ([`dispatch.rs`](../../src/machine/execute/dispatch.rs)).
-On a resolved leaf its `TypeResolution::Done(KType)` surfaces the bridge's cached
+On a resolved leaf its `TypeResolution::Done(KType)` surfaces the interned
 `KType` handle in the value channel's `Type` arm for every type-only nominal — struct / union /
 Result *and* signature; on an earlier still-finalizing binder it parks; on a
 miss it surfaces `Unbound`. The ladder consults **only** the type universe: the token-class
@@ -338,8 +335,8 @@ already finalized every parameter-name identity; type-denoting parameters themse
 elaboration at the bind site. The sole bare-leaf resolution site for dispatch transport
 is the
 [`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
-bridge, which surfaces the resolved `&KType`. Bare leaves resolve through the same
-memo and parking discipline as compound type forms — there is no separate
+bridge, which surfaces the resolved `KType`. Bare leaves resolve through the same
+gate and parking discipline as compound type forms — there is no separate
 synchronous bare-leaf path.
 
 Every `KType` flowing through dispatch is fully elaborated — there is no
@@ -371,33 +368,24 @@ part still admits speculatively in such a slot — it sub-dispatches to a
 type-side carrier downstream. The same shape-only-on-binder-slot rule covers
 `KExpression` slots: the slot owns its body, not a name lookup.
 
-A single cache tier amortizes the elaboration cost. Bind-time builtin lowering
+Elaboration carries no cache tier. Bind-time builtin lowering
 ([`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) →
 [`KType::from_type_expr`](../../src/machine/model/types/ktype_resolution.rs))
-re-runs the ~10-entry builtin match per call rather than memoizing it — the
-match is cheap and a shared table would be added back only if profiling shows
-it hot. The scope-bound resolution memo is therefore the only cache:
+re-runs the ~10-entry builtin match per call — the match is cheap, and a shared
+table would be added back only if profiling shows it hot. Scope-bound resolution
+is the same: interning in the [`TypeRegistry`](../../src/machine/model/types.rs)
+already makes a re-elaborated form yield the *same* handle, so a per-scope memo
+would buy only the elaborator walk while owning an invalidation question.
 
-- A `RefCell<HashMap<TypeName, &'a KType>>` lives on
-  [`Bindings`](../../src/machine/core/bindings.rs) (`type_expr_memo`).
-  Reached through
-  [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs), which
-  returns the three-outcome
-  `TypeResolution<&KType>::{Done(&'a KType), Park(Vec<NodeId>),
-  Unbound(String)}` — the region reference alone, with no stored reach beside it, since a
-  `KType` owns all its content.
-  Cache miss runs the elaborator against `self`, then
-  checks a **finalize gate** before writing: every user-type referenced by the
-  result must be fully finalized (its name absent from the owning scope's
-  `bindings.pending_types`) or the outcome becomes `Park(producers)` and the
-  entry is *not* written. The walk is top-level only — a `RECURSIVE TYPES` block
-  seals every member together, so a finalized `Foo` guarantees every user-type
-  embedded in `Foo`'s payload is also finalized. The memo is monotonic: once
-  `((te, cutoff) → kt)` is written, neither key nor value changes for the scope's
-  lifetime (Koan data is immutable, and the finalize gate prevents caching a
-  member before its group sealed). No invalidation, no staleness window. Cache
-  size is bounded by the scope's source-form `TypeName` corpus paired with the
-  finite set of consumer cutoffs, which is syntactically bounded.
+- [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs) runs the
+  elaborator against `self` on every call and returns the three-outcome
+  `TypeResolution<KType>::{Done(KType), Park(Vec<NodeId>), Unbound(String)}` — the
+  handle alone, with no stored reach beside it, since a `KType` owns all its content.
+  A `Done` passes a **finalize gate** first: every user-type referenced by the
+  result must be fully finalized (no type-side placeholder left in the owning scope)
+  or the outcome becomes `Park(producers)`. The walk is top-level only — a
+  `RECURSIVE TYPES` block seals every member together, so a finalized `Foo`
+  guarantees every user-type embedded in `Foo`'s payload is also finalized.
 
 Consumers that need the scope-resolved identity —
 [`val_decl::body`](../../src/builtins/val_decl.rs)'s structural

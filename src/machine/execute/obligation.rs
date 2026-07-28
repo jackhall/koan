@@ -7,7 +7,9 @@
 //! and is visible to the readers, the Done-boundary check, and the error-label path within the
 //! step's dynamic extent.
 
-use crate::machine::core::ReturnContract;
+use std::rc::Rc;
+
+use crate::machine::core::{FrameStorage, KFunction, ReturnContract};
 use crate::machine::model::{KType, ReturnType};
 
 use super::outcome::NodeContinuation;
@@ -24,19 +26,38 @@ pub(in crate::machine::execute) struct ReturnObligation {
 }
 
 impl ReturnObligation {
-    /// Seal a live [`ReturnContract`] into its dormant, lifetime-free obligation form. Both the label
-    /// and the declared return are resolved once here off the contract variant — the declared type
-    /// is a `Copy` handle read directly (an FN reads its signature return, an arm/per-call its
-    /// borrowed `ret`), so the obligation stores no reference into the contract's region.
-    pub(in crate::machine::execute) fn seal(contract: ReturnContract<'_>) -> Self {
-        let label = match contract {
-            ReturnContract::Function(f) => f.summarize(),
-            ReturnContract::Arm { kind, .. } => kind.to_string(),
-            ReturnContract::PerCall { func, .. } => func.summarize(),
-        };
-        ReturnObligation {
-            declared: pull_declared_return(contract),
-            label,
+    /// Seal a [`ReturnContract`] into its dormant, lifetime-free obligation form. Both the label and
+    /// the declared return are resolved once here, so nothing downstream reopens a contract: an arm
+    /// reads its `Copy` handle directly, and a callable contract re-opens its seal under `pin` — the
+    /// step's own frame, whose `outer` chain pins the callable's home for as long as its body runs
+    /// (design/tail-call-optimization.md Lemma 3). What the obligation keeps is a `Copy` handle and
+    /// an owned string, so the chain carries nothing region-bound.
+    pub(in crate::machine::execute) fn seal(
+        contract: ReturnContract,
+        pin: Option<&Rc<FrameStorage>>,
+    ) -> Self {
+        match contract {
+            ReturnContract::Arm { ret, kind } => ReturnObligation {
+                declared: Some((ret, false)),
+                label: kind.to_string(),
+            },
+            // A `Function`'s declared return is its signature's, and is absent when that return is
+            // still a `Deferred` carrier in the FN-def signature.
+            ReturnContract::Function(func) => {
+                func.open_with(callable_pin(pin), |f: &KFunction<'_>| ReturnObligation {
+                    declared: match &f.signature.return_type {
+                        ReturnType::Resolved(d) => Some((*d, false)),
+                        _ => None,
+                    },
+                    label: f.summarize(),
+                })
+            }
+            ReturnContract::PerCall { func, ret } => {
+                func.open_with(callable_pin(pin), |f: &KFunction<'_>| ReturnObligation {
+                    declared: Some((ret, true)),
+                    label: f.summarize(),
+                })
+            }
         }
     }
 
@@ -63,18 +84,10 @@ impl ReturnObligation {
     }
 }
 
-/// Pull the declared return type off `contract` plus its `per_call` flag, or `None` when nothing is
-/// declared — a `Function` whose signature return is non-`Resolved` (a `Deferred` carrier still in
-/// its FN-def signature). The diagnostic label rides the [`ReturnObligation`] separately.
-fn pull_declared_return(contract: ReturnContract<'_>) -> Option<(KType, bool)> {
-    match contract {
-        ReturnContract::Function(f) => match &f.signature.return_type {
-            ReturnType::Resolved(d) => Some((*d, false)),
-            _ => None,
-        },
-        ReturnContract::Arm { ret, .. } => Some((ret, false)),
-        ReturnContract::PerCall { ret, .. } => Some((ret, true)),
-    }
+/// The step frame a callable contract re-opens under. A `Function` / `PerCall` contract is sealed
+/// inside its callee's installed cart, so the step always has one.
+fn callable_pin(pin: Option<&Rc<FrameStorage>>) -> &Rc<FrameStorage> {
+    pin.expect("a callable return contract is sealed inside its callee's installed cart")
 }
 
 /// Wrap a live continuation so it deposits `obligation` into the ambient slot-step state before

@@ -15,6 +15,7 @@
 
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Held, KObject, KType, ValueEqualityError};
+use crate::machine::WriteGate;
 use crate::machine::{arg_held, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -60,7 +61,7 @@ fn compare(ctx: &BodyCtx<'_, '_>, op: &str) -> Result<bool, KError> {
 
 pub fn body_eq<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let equal = crate::try_action!(compare(ctx, "=="));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(equal))))
@@ -68,7 +69,7 @@ pub fn body_eq<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_ne<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let equal = crate::try_action!(compare(ctx, "!="));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(!equal))))
@@ -76,15 +77,15 @@ pub fn body_ne<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 /// Register `==` / `!=` as binary-only builtins. Deliberately **not** seeded into any operator
 /// group (see [`super::arithmetic::register_builtin_operator_groups`]) — equality does not chain.
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let eq_sig = |op: &str| {
         sig(
             KType::BOOL,
             vec![arg("left", KType::ANY), kw(op), arg("right", KType::ANY)],
         )
     };
-    crate::builtins::register_builtin(scope, "==", eq_sig("=="), body_eq, types);
-    crate::builtins::register_builtin(scope, "!=", eq_sig("!="), body_ne, types);
+    crate::builtins::register_builtin(scope, "==", eq_sig("=="), body_eq, types, gate);
+    crate::builtins::register_builtin(scope, "!=", eq_sig("!="), body_ne, types, gate);
 }
 
 #[cfg(test)]

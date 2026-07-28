@@ -4,9 +4,8 @@
 //! immediately, an unbound name errors, and a still-finalizing head placeholder parks via a
 //! [`park_resume`] closure that re-runs the fast lane on resume.
 
-use crate::machine::model::KObject;
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::{KError, KErrorKind, NameLookup, NodeId};
+use crate::machine::{DeliveredCarried, KError, KErrorKind, NameLookup, NodeId};
 
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
@@ -21,10 +20,12 @@ pub(super) fn initial<'step>(
         _ => unreachable!("FunctionValueCall shape implies Identifier head"),
     };
     let chain = ctx.chain_deref();
-    match ctx.current_scope().resolve_with_chain(&head, chain) {
-        // `obj` resolves against the cart scope at `'step` directly — the cart pins its storage for
-        // `'step`, so it rides straight into the `Outcome<'step>` with no re-anchor.
-        Some(NameLookup::Bound(obj)) => dispatch_callable_value(ctx, expr, obj),
+    match ctx.current_scope().resolve_value_delivered(&head, chain) {
+        // The head is **adopted** into the calling scope's region rather than read bare: the adopt
+        // mints the callable's reach there and retains it, so the captured foreign environment
+        // outlives the application and the re-anchored value is valid at `'step`. Same door the
+        // deferred-head lane takes (`head_deferred::classify_head`).
+        Some(NameLookup::Bound(delivered)) => dispatch_callable_value(ctx, expr, &delivered),
         // Head placeholder. `Errored` means the binder failed before binding the head, so the name
         // never became a value — propagate. `Ready` means the producer finalized without binding the
         // head as a value, so the name is unbound. `Park` re-runs the fast lane on resume.
@@ -48,16 +49,20 @@ pub(super) fn initial<'step>(
 fn dispatch_callable_value<'step>(
     ctx: &SchedulerView<'step, '_>,
     expr: KExpression<'step>,
-    head_obj: &'step KObject<'step>,
+    delivered: &DeliveredCarried,
 ) -> Outcome<'step> {
-    let callable = match head_obj {
-        KObject::KFunction(f) => ResolvedCallable::Function(f),
-        other => {
+    // The head is **adopted** into the calling scope's region as a callable rather than read bare:
+    // the adopt mints its reach there and retains it, so the captured foreign environment outlives
+    // the application and the callable rides the apply tail with that reach still proven.
+    let callable = match ctx.current_scope().adopt_delivered_function(delivered) {
+        Some(function) => ResolvedCallable::Function(function),
+        None => {
+            let got = delivered.open(|live| live.summarize(ctx.types()));
             return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "KFunction or Type".to_string(),
-                got: other.summarize(ctx.types()),
-            })))
+                got,
+            })));
         }
     };
     apply_callable(ctx, callable, &expr)

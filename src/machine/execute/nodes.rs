@@ -119,7 +119,7 @@ impl ChainOp {
     /// FN body) both assemble the FN-body chain; any other contract under a block entry prepends.
     pub(super) fn decide(
         block_entry: Option<ScopeId>,
-        contract: Option<&ReturnContract<'_>>,
+        contract: Option<&ReturnContract>,
         body_index: usize,
     ) -> Self {
         let Some(scope_id) = block_entry else {
@@ -223,11 +223,12 @@ mod tests {
         let scope = test_run.scope;
         let types = test_run.types.clone();
         scope
-            .bind_checked(
+            .bind_checked_direct(
                 "k".to_string(),
                 KObject::Number(7.0),
                 BindingIndex::BUILTIN,
                 &types,
+                &mut crate::machine::WriteGate::for_test(),
             )
             .unwrap();
 

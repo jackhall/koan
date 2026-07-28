@@ -1,5 +1,5 @@
 //! Operator-group registry record. A set of chainable operators is declared
-//! together and registered — one shared [`OperatorGroup`], pointer-shared — under
+//! together and registered — one shared [`OperatorGroup`], held by `Rc` — under
 //! every nonempty subset of the group's operators (the per-group powerset,
 //! singletons included, so a same-operator run like `a + b + c`, whose deduped probe
 //! is just `+`, still resolves). A chain's operator probe (the sorted-joined unique
@@ -10,8 +10,8 @@
 //! recognized run of its operators reduces. The record is **lifetime-free**: a pairwise
 //! group's combiner is an operator *symbol*, not a resolved function, so the chain reducer
 //! synthesizes an infix call the ordinary scope walk resolves at the use site, and the record
-//! borrows no region. That is what lets `RegionBrand::alloc_operator_group` stay a trivial
-//! no-op-gate door.
+//! borrows no region. That is what lets the registry share it by plain `Rc` rather than through
+//! a region allocation door.
 //!
 //! Registry lookup is innermost-wins
 //! ([`Scope::resolve_operator_group_with_chain`](crate::machine::core::Scope::resolve_operator_group_with_chain)):
@@ -55,7 +55,7 @@ pub enum ReductionMode {
         /// synthesizes the infix shape `[left, Keyword(combiner), right]`, so the combiner binds
         /// its two inputs positionally, by signature shape, and imposes no parameter-naming
         /// convention. Holding the symbol rather than a resolved function is what keeps
-        /// [`OperatorGroup`] lifetime-free (no region borrow, no reaching-tier allocation door):
+        /// [`OperatorGroup`] lifetime-free (no region borrow, no allocation door at all):
         /// the ordinary scope walk resolves it at the chain's use site, so a combiner that is
         /// missing, non-callable, or of the wrong arity is an ordinary error there.
         combiner: String,
@@ -64,8 +64,8 @@ pub enum ReductionMode {
 }
 
 /// A declared set of mutually chainable operators plus the mode a recognized run of
-/// them reduces by. Pointer-shared: every powerset key the registering module
-/// installs points at the same region-allocated record, so a subset used in one
+/// them reduces by. Shared by `Rc`: every powerset key the registering module
+/// installs holds a clone of the same record, so a subset used in one
 /// expression resolves to the same group as any other subset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperatorGroup {

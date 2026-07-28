@@ -38,11 +38,11 @@ pub(crate) fn await_body_in_scope<'a>(
         }
         finish(fctx)
     });
-    Action::AwaitDeps {
-        deps: Deps::from_owned([OwnedDispatch {
+    Action::await_deps(
+        Deps::from_owned([OwnedDispatch {
             expr: body,
             placement: DepPlacement::InScope(child),
         }]),
-        finish: continuation,
-    }
+        continuation,
+    )
 }

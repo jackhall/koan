@@ -67,6 +67,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         body_outer_number,
         BindingIndex::value(1),
         &TypeRegistry::new(),
+        &mut crate::machine::WriteGate::for_test(),
     );
 
     let inner = region.brand().alloc_scope(outer.child_for_call());
@@ -86,6 +87,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         inner_sig,
         body_inner_any,
         &TypeRegistry::new(),
+        &mut crate::machine::WriteGate::for_test(),
     );
 
     let expr = KExpression::new(vec![
@@ -125,6 +127,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         one_slot_sig("v", KType::ANY),
         body_marker_any,
         &TypeRegistry::new(),
+        &mut crate::machine::WriteGate::for_test(),
     );
     register_builtin(
         scope,
@@ -132,6 +135,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         one_slot_sig("v", KType::IDENTIFIER),
         body_identifier,
         &TypeRegistry::new(),
+        &mut crate::machine::WriteGate::for_test(),
     );
 
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
@@ -172,7 +176,14 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
             }),
         ],
     };
-    register_builtin(scope, "FOO", sig, body_lowercase, &TypeRegistry::new());
+    register_builtin(
+        scope,
+        "FOO",
+        sig,
+        body_lowercase,
+        &TypeRegistry::new(),
+        &mut crate::machine::WriteGate::for_test(),
+    );
 
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("FOO".into())),

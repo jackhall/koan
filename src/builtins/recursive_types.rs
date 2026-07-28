@@ -21,9 +21,11 @@
 
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::model::KType;
 use crate::machine::model::RecursiveGroupWindow;
 use crate::machine::{KError, KErrorKind, Scope, TraceFrame};
@@ -127,33 +129,34 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             Some(sealed) => sealed,
             None => {
                 let unfilled = window.unfilled_member_names().join("`, `");
-                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "RECURSIVE TYPES `{group_name}`: member `{unfilled}` did not seal — a \
                          declaration referenced a name outside the group",
                 )))
                 .with_frame(frame())));
             }
         };
-        for ((name, _), member) in members.iter().zip(sealed.members.iter()) {
-            if let Err(e) = fctx
-                .scope
-                .register_nominal_upsert(name.clone(), *member, site)
-            {
-                return Action::Done(Err(e.with_frame(frame())));
-            }
-        }
+        // One `types` write per member, then the group's own — applied in this order after the
+        // block's finish returns, so a redeclaration surfaces as this slot's error terminal.
+        let upsert = |name: String, kt| WriteOp::Type {
+            name,
+            kt,
+            site,
+            policy: TypeWritePolicy::UpsertEqual,
+            builtin_shadow_guard: true,
+        };
+        let mut writes: Vec<WriteOp> = members
+            .iter()
+            .zip(sealed.members.iter())
+            .map(|((name, _), member)| upsert(name.clone(), *member))
+            .collect();
         let handle = sealed.group;
-        match fctx
-            .scope
-            .register_nominal_upsert(group_name.clone(), handle, site)
-        {
-            Ok(kt_ref) => Action::Done(Ok(fctx.ctx.type_carried(kt_ref))),
-            Err(e) => Action::Done(Err(e.with_frame(frame()))),
-        }
+        writes.push(upsert(group_name.clone(), handle));
+        Action::done(Ok(fctx.ctx.type_carried(handle))).with_effects(writes)
     })
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let signature = sig(
         KType::of_kind(KKind::AnyType),
         vec![
@@ -164,7 +167,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("body", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin_full(scope, "RECURSIVE TYPES", signature, body, true, types);
+    crate::builtins::register_builtin_full(
+        scope,
+        "RECURSIVE TYPES",
+        signature,
+        body,
+        true,
+        types,
+        gate,
+    );
 }
 
 #[cfg(test)]

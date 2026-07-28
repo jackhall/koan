@@ -38,8 +38,9 @@ pub use sig_schema::{
 #[allow(unused_imports)]
 pub use signature::Specificity;
 pub use signature::{
-    is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, ExpressionSignature,
-    ReturnType, SignatureElement, UntypedElement, UntypedKey,
+    is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, DispatchToken,
+    DispatchTokenElement, ExpressionSignature, ReturnType, SignatureElement, UntypedElement,
+    UntypedKey,
 };
 pub(crate) use type_digest::{empty_schema_digest, TypeDigest};
 pub use typed_field_list::{

@@ -7,6 +7,7 @@
 //! found last, so a declaring scope overrides them.
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::builtins::test_support::{run_root_bare, TestRun};
 use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, Scope};
@@ -28,13 +29,18 @@ fn singleton_group(sym: &str, mode: ReductionMode) -> OperatorGroup {
 fn register_then_resolve_group_by_probe() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = region.brand().alloc_operator_group(arithmetic_group());
+    let group = Rc::new(arithmetic_group());
     // A module registers the powerset; `probe_key` is the sorted-joined probe for a
     // chain mixing both operators — byte order sorts `+` before `-`.
     let key = probe_key(&["+", "-"]);
     assert_eq!(key, "+ -");
     scope
-        .register_operator_group(key.clone(), group, BindingIndex::value(1))
+        .register_operator_group_direct(
+            key.clone(),
+            group,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let resolved = scope
         .resolve_operator_group_with_chain(&key, None)
@@ -48,9 +54,14 @@ fn register_then_resolve_group_by_probe() {
 fn undeclared_probe_misses() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = region.brand().alloc_operator_group(arithmetic_group());
+    let group = Rc::new(arithmetic_group());
     scope
-        .register_operator_group("+".to_string(), group, BindingIndex::value(1))
+        .register_operator_group_direct(
+            "+".to_string(),
+            group,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     // `*` was never registered.
     assert!(scope.resolve_operator_group_with_chain("*", None).is_none());
@@ -60,16 +71,31 @@ fn undeclared_probe_misses() {
 fn cross_group_probe_misses() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = region.brand().alloc_operator_group(arithmetic_group());
+    let group = Rc::new(arithmetic_group());
     // Only the within-group subsets are registered.
     scope
-        .register_operator_group("+".to_string(), group, BindingIndex::value(1))
+        .register_operator_group_direct(
+            "+".to_string(),
+            Rc::clone(&group),
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     scope
-        .register_operator_group("-".to_string(), group, BindingIndex::value(1))
+        .register_operator_group_direct(
+            "-".to_string(),
+            Rc::clone(&group),
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     scope
-        .register_operator_group(probe_key(&["+", "-"]), group, BindingIndex::value(1))
+        .register_operator_group_direct(
+            probe_key(&["+", "-"]),
+            group,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     // A chain mixing `+` with an operator from a different (unregistered) group
     // produces the probe "+ |", which nothing registered — a clean miss.
@@ -84,17 +110,25 @@ fn innermost_scope_shadows_outer() {
     let outer = run_root_bare(&region);
     let inner = region.brand().alloc_scope(outer.child_for_call());
 
-    let outer_group = region.brand().alloc_operator_group(arithmetic_group());
+    let outer_group = Rc::new(arithmetic_group());
     let inner_members: HashSet<String> = ["+"].iter().map(|s| s.to_string()).collect();
-    let inner_group = region
-        .brand()
-        .alloc_operator_group(OperatorGroup::new(inner_members, ReductionMode::FoldRight));
+    let inner_group = Rc::new(OperatorGroup::new(inner_members, ReductionMode::FoldRight));
 
     outer
-        .register_operator_group("+".to_string(), outer_group, BindingIndex::value(1))
+        .register_operator_group_direct(
+            "+".to_string(),
+            outer_group,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     inner
-        .register_operator_group("+".to_string(), inner_group, BindingIndex::value(1))
+        .register_operator_group_direct(
+            "+".to_string(),
+            inner_group,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
 
     // The inner registration wins the chain walk.
@@ -114,9 +148,14 @@ fn innermost_scope_shadows_outer() {
 fn visibility_cutoff_hides_later_sibling_registration() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = region.brand().alloc_operator_group(arithmetic_group());
+    let group = Rc::new(arithmetic_group());
     scope
-        .register_operator_group("+".to_string(), group, BindingIndex::value(5))
+        .register_operator_group_direct(
+            "+".to_string(),
+            group,
+            BindingIndex::value(5),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     // A consumer at cutoff 3 can't see a registration at index 5.
     assert!(scope
@@ -149,11 +188,14 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
     let root = test_run.scope;
     let inner = region.brand().alloc_scope(root.child_for_call());
 
-    let group = region
-        .brand()
-        .alloc_operator_group(singleton_group("+", ReductionMode::FoldRight));
+    let group = Rc::new(singleton_group("+", ReductionMode::FoldRight));
     inner
-        .register_operator_group("+".to_string(), group, BindingIndex::value(1))
+        .register_operator_group_direct(
+            "+".to_string(),
+            group,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("a builtin probe is shadowable, not a rebind");
 
     let inside = inner
@@ -171,7 +213,7 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
     );
 }
 
-/// Upsert: re-registering a probe with an equal record — a distinct allocation carrying the same
+/// Upsert: re-registering a probe with an equal record — a distinct `Rc` carrying the same
 /// mode and member set — is a no-op, so two `OP` statements over one symbol (two bucket overloads,
 /// one registry entry) do not collide.
 #[test]
@@ -179,20 +221,31 @@ fn re_registering_an_equal_record_is_a_no_op() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
 
-    let first = region
-        .brand()
-        .alloc_operator_group(singleton_group("+", ReductionMode::FoldLeft));
-    let second = region
-        .brand()
-        .alloc_operator_group(singleton_group("+", ReductionMode::FoldLeft));
+    let first = Rc::new(singleton_group("+", ReductionMode::FoldLeft));
+    let second = Rc::new(singleton_group("+", ReductionMode::FoldLeft));
     scope
-        .register_operator_group("+".to_string(), first, BindingIndex::value(1))
+        .register_operator_group_direct(
+            "+".to_string(),
+            Rc::clone(&first),
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     scope
-        .register_operator_group("+".to_string(), first, BindingIndex::value(2))
-        .expect("a pointer-equal re-register is idempotent");
+        .register_operator_group_direct(
+            "+".to_string(),
+            first,
+            BindingIndex::value(2),
+            &mut crate::machine::WriteGate::for_test(),
+        )
+        .expect("an `Rc`-identical re-register is idempotent");
     scope
-        .register_operator_group("+".to_string(), second, BindingIndex::value(3))
+        .register_operator_group_direct(
+            "+".to_string(),
+            second,
+            BindingIndex::value(3),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("an equal mode + member set is the same record");
 
     // The first registration's index stands, so the entry stays visible where it was declared.
@@ -209,17 +262,23 @@ fn re_registering_a_conflicting_mode_errors() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
 
-    let fold = region
-        .brand()
-        .alloc_operator_group(singleton_group("+", ReductionMode::FoldLeft));
-    let unary = region
-        .brand()
-        .alloc_operator_group(singleton_group("+", ReductionMode::Unary));
+    let fold = Rc::new(singleton_group("+", ReductionMode::FoldLeft));
+    let unary = Rc::new(singleton_group("+", ReductionMode::Unary));
     scope
-        .register_operator_group("+".to_string(), fold, BindingIndex::value(1))
+        .register_operator_group_direct(
+            "+".to_string(),
+            fold,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
     let error = scope
-        .register_operator_group("+".to_string(), unary, BindingIndex::value(2))
+        .register_operator_group_direct(
+            "+".to_string(),
+            unary,
+            BindingIndex::value(2),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect_err("a different chaining mode under one probe is a conflict");
     let message = error.to_string();
     assert!(
@@ -239,11 +298,14 @@ fn using_window_surfaces_the_modules_operator_group() {
     let module = region
         .brand()
         .alloc_scope(Scope::child_under_module(root, "vec_ops".to_string()));
-    let group = region
-        .brand()
-        .alloc_operator_group(singleton_group("+", ReductionMode::FoldRight));
+    let group = Rc::new(singleton_group("+", ReductionMode::FoldRight));
     module
-        .register_operator_group("+".to_string(), group, BindingIndex::value(1))
+        .register_operator_group_direct(
+            "+".to_string(),
+            group,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
 
     // Outside the module the probe is undeclared.
@@ -265,9 +327,14 @@ fn using_window_surfaces_the_modules_operator_group() {
 fn subset_registration_covers_every_probe_of_the_member_set() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = region.brand().alloc_operator_group(arithmetic_group());
+    let group = Rc::new(arithmetic_group());
     scope
-        .register_group_under_all_subsets(&["+", "-"], group, BindingIndex::value(1))
+        .register_group_under_all_subsets_direct(
+            &["+", "-"],
+            &group,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .unwrap();
 
     for probe in ["+", "-", "+ -"] {
@@ -288,24 +355,25 @@ fn subset_registration_covers_every_probe_of_the_member_set() {
 fn nearest_group_context_stops_at_a_plain_module() {
     let region = run_root_storage();
     let root = run_root_bare(&region);
-    let group = region.brand().alloc_operator_group(arithmetic_group());
+    let group = Rc::new(arithmetic_group());
 
     assert!(root.nearest_group_context().is_none());
 
-    let group_scope =
-        region
-            .brand()
-            .alloc_scope(Scope::child_under_group(root, "vec_ops".to_string(), group));
+    let group_scope = region.brand().alloc_scope(Scope::child_under_group(
+        root,
+        "vec_ops".to_string(),
+        Rc::clone(&group),
+    ));
     let in_group = group_scope
         .nearest_group_context()
         .expect("a GROUP body is its own group context");
-    assert!(std::ptr::eq(in_group, group));
+    assert!(Rc::ptr_eq(&in_group, &group));
 
     // An anonymous frame inside the body (a block, a per-call scope) is transparent.
     let block = region.brand().alloc_scope(group_scope.child_for_call());
     assert!(block
         .nearest_group_context()
-        .is_some_and(|g| std::ptr::eq(g, group)));
+        .is_some_and(|g| Rc::ptr_eq(&g, &group)));
 
     // A plain module declared inside the group body is not a group.
     let nested_module = region

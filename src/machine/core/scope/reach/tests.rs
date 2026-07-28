@@ -1,4 +1,4 @@
-//! Unit coverage for [`Scope::copy_delivered_substrate`]'s pin branch. A bound record whose cost
+//! Unit coverage for [`Scope::adopt_for_binding`]'s pin branch. A bound record whose cost
 //! chooser selects [`RegionEscape::Pin`] — a home-borrowing record crossing out of its producer — rides
 //! the producer region by hold: the projection is pointer-copied (sharing the producer-resident
 //! substrate) and moved in under the binding's `Kept`-minted stored reach, whose named producer
@@ -65,13 +65,14 @@ fn substrate_address(value: &KObject<'_>) -> usize {
 }
 
 /// A home-borrowing record delivered out of a producer frame binds by **pin**:
-/// [`Scope::copy_delivered_substrate`] pointer-copies the projection (sharing the producer's substrate)
-/// and moves it in under the `Kept`-minted stored reach. The bound value reads its field back
-/// correctly after the producer frame shell drops — the stored reach holds the producer region.
+/// [`Scope::adopt_for_binding`] pointer-copies the projection (sharing the producer's substrate)
+/// and moves it in under the `Kept`-minted reach. The bound value reads its field back correctly
+/// after the producer frame shell drops — the consumer region's union bundle, which the mint folded
+/// the producer's pins into, holds the producer region.
 /// (The enclosing module is gated out of the `seam-force-copy` build, which rebuilds instead of
 /// pinning — see the `mod tests` declaration in the parent.)
 #[test]
-fn copy_delivered_substrate_pins_a_home_borrowing_record() {
+fn adopt_for_binding_pins_a_home_borrowing_record() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&root);
     let consumer = test_run.scope;
@@ -100,12 +101,14 @@ fn copy_delivered_substrate_pins_a_home_borrowing_record() {
         Erased::erase(Carried::Object(record)),
         CarrierWitness::default(),
     );
-    let dep: DeliveredCarried = Delivered::seal(sealed, producer.storage_rc(), FramePins::empty());
+    let dep: DeliveredCarried =
+        Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
 
-    let (bound, _stored, _pins) = consumer
-        .copy_delivered_substrate(&dep, |carried| Ok(carried.object()), &types)
-        .expect("a home-borrowing record pins into the binding under Kept-minted evidence")
-        .into_parts();
+    let bound_seal = consumer
+        .adopt_for_binding(&dep, |carried| Ok(carried.object()), &types)
+        .expect("a home-borrowing record pins into the binding under Kept-minted evidence");
+    let opened = bound_seal.open_at(&root);
+    let bound = opened.value().object();
 
     // The pin shares the producer-resident substrate rather than rebuilding it.
     assert_eq!(
@@ -114,8 +117,8 @@ fn copy_delivered_substrate_pins_a_home_borrowing_record() {
         "the pinned record shares the producer's substrate (no rebuild)"
     );
 
-    // Drop the producer frame shell: the owning pin bundle (`_pins`) holds the producer region alive,
-    // so the pinned substrate reads its field values back correctly.
+    // Drop the producer frame shell: the consumer region's union bundle holds the producer region
+    // alive, so the pinned substrate reads its field values back correctly.
     drop(dep);
     drop(producer);
     match bound {

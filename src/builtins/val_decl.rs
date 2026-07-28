@@ -18,10 +18,13 @@ use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KKind, KObject, KType, TypeNode, TypeRegistry};
 use crate::machine::FinishCtx;
 use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
+use crate::machine::model::Carried;
+use crate::machine::CarrierWitness;
 
 fn typeexpr_from_carrier(kt: KType, types: &TypeRegistry) -> CarrierForm {
     // The builtin leaf type names re-resolve against decl_scope through the same name path so a
@@ -64,7 +67,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use crate::builtins::resolve_or_await::dispatch_type_then;
     use crate::machine::{arg_object, arg_type, arg_unresolved_type, Action};
 
-    let done_err = |e: KError| Action::Done(Err(e));
+    let done_err = |e: KError| Action::done(Err(e));
 
     if !ctx.scope.is_in_sig_body() {
         return done_err(KError::new(KErrorKind::ShapeError(
@@ -135,9 +138,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 /// constructor (`VAL boxed :Wrapper` where `Wrapper` has kind `* -> *`) is a kind error here,
 /// while a first-order abstract member (`TYPE Elem` → `VAL zero :Elem`) is proper and admits.
 ///
-/// `declared_kt` arrives from a bind-time `ty` argument or a leaf re-dispatch's dep terminal.
-/// [`Scope::register_sig_slot_delivered`] installs it in the SIG decl scope's slot collector;
-/// [`Scope::resident_type_carrier`] seals the same handle into the terminal.
+/// `declared_kt` arrives from a bind-time `ty` argument or a leaf re-dispatch's dep terminal. The
+/// [`WriteOp::SigSlot`](crate::machine::core::bindings::WriteOp) the outcome carries installs it in
+/// the SIG decl scope's slot collector; [`Scope::resident`] seals the same handle into
+/// the terminal.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: String,
@@ -149,18 +153,19 @@ fn finalize_val<'a>(
         &format!("the type of SIG value slot `{name}`"),
         fctx.types,
     ) {
-        return Action::Done(Err(KError::new(KErrorKind::ShapeError(message))));
+        return Action::done(Err(KError::new(KErrorKind::ShapeError(message))));
     }
-    let kt_ref = match fctx.scope.register_sig_slot_delivered(name, declared_kt) {
-        Ok(kt_ref) => kt_ref,
-        Err(e) => return Action::Done(Err(e)),
-    };
-    Action::Done(Ok(StepCarried::born(
-        fctx.scope.resident_type_carrier(kt_ref),
+    Action::done(Ok(StepCarried::born(
+        fctx.scope
+            .resident(Carried::Type(declared_kt), CarrierWitness::default()),
     )))
+    .with_effect(crate::machine::core::bindings::WriteOp::SigSlot {
+        name,
+        kt: declared_kt,
+    })
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     // Design-B sigil consumes `:`; no explicit colon keyword in the signature.
     let signature = sig(
         KType::ANY,
@@ -174,7 +179,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // any name lookup or forward-reference walk can see. Its `BINDER_SPECS` entry has empty
     // extractors, so `binder` is `false` — the flag drives dispatch's declaration-vs-reference
     // classification, and VAL declares no callable name to replay-park on.
-    crate::builtins::register_builtin_full(scope, "VAL", signature, body, false, types);
+    crate::builtins::register_builtin_full(scope, "VAL", signature, body, false, types, gate);
 }
 
 #[cfg(test)]

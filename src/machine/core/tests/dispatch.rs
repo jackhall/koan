@@ -41,7 +41,14 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    register_builtin(scope, "ONE", one_slot_sig("v", KType::ANY), body_a, &types);
+    register_builtin(
+        scope,
+        "ONE",
+        one_slot_sig("v", KType::ANY),
+        body_a,
+        &types,
+        &mut crate::machine::WriteGate::for_test(),
+    );
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "foo".into(),
     ))]);
@@ -67,6 +74,7 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
         two_slot_sig(KType::NUMBER, KType::ANY),
         body_a,
         &types,
+        &mut crate::machine::WriteGate::for_test(),
     );
     register_builtin(
         scope,
@@ -74,6 +82,7 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
         two_slot_sig(KType::ANY, KType::NUMBER),
         body_b,
         &types,
+        &mut crate::machine::WriteGate::for_test(),
     );
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
@@ -103,6 +112,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         body_a,
         BindingIndex::value(1),
         &TypeRegistry::new(),
+        &mut crate::machine::WriteGate::for_test(),
     );
     let inner = region.brand().alloc_scope(outer.child_for_call());
     register_builtin(
@@ -111,6 +121,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         two_slot_sig(KType::NUMBER, KType::ANY),
         body_a,
         &types,
+        &mut crate::machine::WriteGate::for_test(),
     );
     register_builtin(
         inner,
@@ -118,6 +129,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         two_slot_sig(KType::ANY, KType::NUMBER),
         body_b,
         &types,
+        &mut crate::machine::WriteGate::for_test(),
     );
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
@@ -157,7 +169,15 @@ fn resolve_marks_binder_pick_for_binder_function() {
             }),
         ],
     };
-    register_builtin_full(scope, "LETLIKE", sig, body_a, true, &types);
+    register_builtin_full(
+        scope,
+        "LETLIKE",
+        sig,
+        body_a,
+        true,
+        &types,
+        &mut crate::machine::WriteGate::for_test(),
+    );
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
         Spanned::bare(ExpressionPart::Identifier("foo".into())),
@@ -189,6 +209,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
         one_slot_sig("v", KType::IDENTIFIER),
         body_a,
         &types,
+        &mut crate::machine::WriteGate::for_test(),
     );
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
         KLiteral::Number(5.0),
@@ -216,6 +237,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
         two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_a,
         &types,
+        &mut crate::machine::WriteGate::for_test(),
     );
     let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "deep_call".into(),
@@ -247,7 +269,12 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
         UntypedElement::Slot,
     ];
     scope
-        .install_pending_overload(bucket_single, NodeId(42), BindingIndex::BUILTIN)
+        .install_pending_overload(
+            bucket_single,
+            NodeId(42),
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("install_pending_overload");
 
     let bare = KExpression::new(vec![
@@ -307,6 +334,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         body_a,
         BindingIndex::value(1),
         &TypeRegistry::new(),
+        &mut crate::machine::WriteGate::for_test(),
     );
 
     let inner = region.brand().alloc_scope(outer.child_for_call());
@@ -346,6 +374,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
         two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_a,
         &types,
+        &mut crate::machine::WriteGate::for_test(),
     );
     let inner = region.brand().alloc_scope(outer.child_for_call());
     register_builtin(
@@ -354,6 +383,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
         two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_b,
         &types,
+        &mut crate::machine::WriteGate::for_test(),
     );
     let nested = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "deep_call".into(),
@@ -389,6 +419,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         one_slot_sig("v", KType::IDENTIFIER),
         body_a,
         &types,
+        &mut crate::machine::WriteGate::for_test(),
     );
     let inner = region.brand().alloc_scope(outer.child_for_call());
     // Inner `:Number` overload: the unbound bare name rejects its shape, so the
@@ -399,6 +430,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         one_slot_sig("v", KType::NUMBER),
         body_b,
         &types,
+        &mut crate::machine::WriteGate::for_test(),
     );
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "fwd".into(),
@@ -408,7 +440,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     match inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &types) {
         DispatchOutcome::Resolved(r) => assert!(
             matches!(
-                r.function.signature.elements.first(),
+                r.function.value().signature.elements.first(),
                 Some(SignatureElement::Argument(arg)) if arg.ktype == KType::IDENTIFIER
             ),
             "outer `:Identifier` overload must Pick the bare name shape-only",
@@ -428,7 +460,6 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
 fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let types = TypeRegistry::new();
     use crate::machine::core::kfunction::{Body, KFunction};
-    use crate::machine::model::KObject;
     use crate::machine::NodeId;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -452,16 +483,12 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         false,
         &types,
     ));
-    let pick_num_obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(pick_num_fn), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function(
+        .register_function_direct(
             "pick_num".to_string(),
             pick_num_fn,
-            pick_num_obj,
             BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register pick_num overload");
     let expr = KExpression::new(vec![
@@ -470,7 +497,12 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     ]);
     // In-flight pending sibling on the same bucket key, finalizing at index 3.
     scope
-        .install_pending_overload(expr.untyped_key(), NodeId(77), BindingIndex::value(3))
+        .install_pending_overload(
+            expr.untyped_key(),
+            NodeId(77),
+            BindingIndex::value(3),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("install_pending_overload");
 
     let chain = LexicalFrame::detached();
@@ -506,16 +538,12 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         false,
         &types,
     ));
-    let sibling_obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(sibling), &types)
-        .expect("f was just allocated into region\'s own region");
     scope
-        .register_function(
+        .register_function_direct(
             "pick_str".to_string(),
             sibling,
-            sibling_obj,
             BindingIndex::value(3),
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register sibling overload");
 
@@ -535,7 +563,12 @@ fn scope_install_pending<'a>(
     producer: crate::machine::NodeId,
 ) {
     scope
-        .install_pending_overload(expr.untyped_key(), producer, BindingIndex::BUILTIN)
+        .install_pending_overload(
+            expr.untyped_key(),
+            producer,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("install_pending_overload");
 }
 
@@ -552,10 +585,20 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let scope = run_root_bare(&region);
     let bucket: UntypedKey = vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];
     scope
-        .install_pending_overload(bucket.clone(), NodeId(101), BindingIndex::value(3))
+        .install_pending_overload(
+            bucket.clone(),
+            NodeId(101),
+            BindingIndex::value(3),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("first install");
     scope
-        .install_pending_overload(bucket.clone(), NodeId(102), BindingIndex::value(4))
+        .install_pending_overload(
+            bucket.clone(),
+            NodeId(102),
+            BindingIndex::value(4),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("second install must not collide");
     let entries = scope.bindings().pending_overloads().get(&bucket).cloned();
     let entries = entries.expect("bucket should be populated");

@@ -110,11 +110,13 @@ clears an in-flight type producer's placeholder (nor the reverse).
   type-side symmetry: consults `types` then the `BindKind::Type`
   `placeholders`, surfacing the result as the same
   [`NameLookup`](../../src/machine/core/bindings.rs) shape instantiated for the type
-  channel (`NameLookup<&KType>`) — `Bound(&KType)`, `Parked(NodeId)`, or `None`. Every
-  single-scope lookup — value, type, and the reach-carrying `NameLookup<ValueHit>`
-  read — shares this one bound-or-parked-or-miss shape. There is no type-side
-  reach-carrying twin: a `KType` owns all its content, so a type lookup hands back the
-  bare `&KType`. The
+  channel (`NameLookup<KType>`) — `Bound(KType)`, `Parked(NodeId)`, or `None`. Every
+  single-scope lookup — value and type alike — shares this one
+  bound-or-parked-or-miss shape; the value channel instantiates it at the resting
+  carrier (`NameLookup<SealedValue>`), which fuses the value with its proven reach.
+  There is no type-side
+  carrier twin: a `KType` is a `Copy` handle owning all its content, so a type lookup
+  hands the handle back by copy. The
   finalize gate that must park on an
   in-flight type producer even after a seal pre-installs the name's identity
   into `types` reads the placeholder directly through
@@ -125,7 +127,8 @@ clears an in-flight type producer's placeholder (nor the reverse).
   compares the installing [`NodeHandle`](../../src/machine/core/bindings.rs) against the
   stored entry's. What this gate resolves is in-flight status, not identity: a nominal
   member named by a relative `Sibling` reference is in flight iff the scope carrying the
-  very group window that reference resolves against holds the name in `pending_types`
+  very group window that reference resolves against still holds a type-side placeholder for
+  the name
   ([resolve_type_identifier.rs](../../src/machine/execute/dispatch/resolve_type_identifier.rs)).
   The window match is what stops a same-named in-flight declaration of a
   different type from capturing the reference; a SIG-declared or abstract slot,

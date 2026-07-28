@@ -12,6 +12,7 @@
 //! [design/typing/ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance).
 
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 
 use crate::machine::model::Carried;
 use crate::machine::model::ExpressionPart;
@@ -38,14 +39,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         match &part.value {
             ExpressionPart::Identifier(name) => {
                 if names.iter().any(|n| n == name) {
-                    return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                         "FROM field list has duplicate field `{name}`",
                     )))));
                 }
                 names.push(name.clone());
             }
             other => {
-                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "FROM field list must be bare field names, got `{}`",
                     other.summarize(),
                 )))));
@@ -58,13 +59,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // The `:{}` slot shape-gates to records, so a non-record argument is a
         // dispatch non-match that never reaches the body. Defensive arm only.
         Some(other) => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM record operand must be a record, got `{}`",
                 other.ktype().name(ctx.types),
             )))));
         }
         None => {
-            return Action::Done(Err(KError::new(KErrorKind::MissingArg(
+            return Action::done(Err(KError::new(KErrorKind::MissingArg(
                 "record".to_string(),
             ))));
         }
@@ -82,7 +83,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     };
     for name in &names {
         if record_fields.get(name).is_none() {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM: record has no field `{name}`",
             )))));
         }
@@ -113,10 +114,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             {
                 // A freshly rebuilt object is region-pure (its reach is this scope's own region), so
                 // it seals under an empty foreign bundle.
-                Ok(witnessed) => ctx
-                    .scope
-                    .seal_resident_delivered(witnessed, crate::machine::core::FramePins::empty()),
-                Err(e) => return Action::Done(Err(e)),
+                Ok(witnessed) => ctx.scope.seal_resident_delivered(
+                    witnessed,
+                    crate::machine::core::FrameCoverage::empty(),
+                ),
+                Err(e) => return Action::done(Err(e)),
             };
             &resident
         }
@@ -125,7 +127,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // `record` operand reaches. Built at the fold brand from the operand's own view — the narrowed
     // type map re-read from the view, the backing substrate shared whole — so the result's witness
     // names the read-site home frame plus that reach by construction.
-    Action::Done(Ok(ctx.ctx.alloc_carried_with(&[lhs], move |b, views| {
+    Action::done(Ok(ctx.ctx.alloc_carried_with(&[lhs], move |b, views| {
         let record = match views[0] {
             Carried::Object(o) => o,
             Carried::Type(_) | Carried::UnresolvedType(_) => {
@@ -140,7 +142,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     })))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     // Return type `:{}` is contract-only ("FROM returns a record"): a native
     // `Outcome::Done(Value)` flows straight to Done without being stamped against the
     // declared return, so the empty `:{}` does not coarsen the body's narrowed
@@ -154,7 +156,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("record", types.record(Record::new())),
         ],
     );
-    crate::builtins::register_builtin(scope, "FROM", signature, body, types);
+    crate::builtins::register_builtin(scope, "FROM", signature, body, types, gate);
 }
 
 #[cfg(test)]

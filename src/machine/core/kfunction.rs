@@ -14,6 +14,7 @@ use crate::machine::model::{Held, NamedPairs};
 /// `machine::execute::runtime::run_action`.
 pub mod action;
 pub mod bind_by_name;
+pub mod block_tail;
 pub mod body;
 pub mod exec;
 pub mod pick;
@@ -54,6 +55,27 @@ pub struct KFunction<'a> {
     /// definition, from the normalized signature. `KObject::KFunction(f).ktype()` copies it, so
     /// the value layer never rebuilds a parameter record per dispatch check (ruling 4).
     value_ktype: KType,
+}
+
+/// [`Reattachable`](crate::witnessed::Reattachable) family for [`KFunction`] — the carrier family a
+/// function value travels under when it flows through the three witnessed-carrier states as
+/// `Sealed<KFunctionFamily, _>` / `Opened<'step, KFunctionFamily, _>`, the function-table twin of
+/// [`CarriedFamily`](crate::machine::model::CarriedFamily). Registered here rather than adding a
+/// `Carried::Function` variant because the witnessed library is generic over `Reattachable`
+/// families.
+///
+/// A carried function travels as `&'r KFunction<'r>` — a thin reference whose layout does not depend
+/// on `'r`; `KFunction<'r>` itself is generic only in `'r` (its fields are an
+/// `ExpressionSignature<'r>`, a `Body<'r>`, a `&'r Scope<'r>`, a `bool`, and a lifetime-free
+/// `KType`), so every choice of `'r` is one type up to the lifetime and the shared `reattachable!`
+/// macro discharges the layout-invariance obligation once.
+// Phase 3 consumes it (the `functions` table entries become `Sealed<KFunctionFamily, _>` and
+// dispatch resolves on `Opened<'step, KFunctionFamily>`); Phase 1 only registers the family.
+#[allow(dead_code)]
+pub struct KFunctionFamily;
+
+crate::witnessed::reattachable! {
+    KFunctionFamily => &'r KFunction<'r>,
 }
 
 impl<'a> KFunction<'a> {

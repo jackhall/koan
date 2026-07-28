@@ -15,21 +15,21 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         // The `Any` slot admits both channels, so a type argument reaches the body rather than
         // falling through dispatch; a type's own type is not a question this language asks.
         Some(Held::Type(t)) => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`TYPE OF` takes a value; `{}` is already a type",
                 t.name(ctx.types),
             )))))
         }
         Some(Held::UnresolvedType(ti)) => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`TYPE OF` takes a value; `{}` is already a type",
                 ti.render(),
             )))))
         }
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("value".into())))),
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("value".into())))),
     };
     if value.is_unstamped_empty_container() {
-        return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+        return Action::done(Err(KError::new(KErrorKind::ShapeError(
             "`TYPE OF` an empty, unstamped container: its element type is unknowable — ascribe \
              the container first"
                 .into(),
@@ -37,7 +37,7 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     }
     // The type a value reports for itself is owned data — a module's self-sig included — so it
     // seals with an empty reach and allocates into this step's own region.
-    Action::Done(Ok(ctx.ctx.type_carried(value.ktype())))
+    Action::done(Ok(ctx.ctx.type_carried(value.ktype())))
 }
 
 #[cfg(test)]

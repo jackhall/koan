@@ -14,7 +14,7 @@
 
 use crate::machine::model::BinderKey;
 use crate::machine::model::KExpression;
-use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope};
+use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope, WriteGate};
 
 use super::super::nodes::{NodeScope, SlotFrame};
 use super::super::runtime::KoanRuntime;
@@ -93,14 +93,18 @@ impl<'run> KoanRuntime<'run> {
         // best-effort: lenient when `data[name]` is already a KFunction or the same slot re-installs.
         if !installs.is_empty() {
             let bind_index = BindingIndex::value(chain.index);
+            // The submission-channel stamp is run-loop-owned: dispatch submits the binder with no
+            // koan frame on the stack, the same footing the apply loop writes on.
+            let mut gate = WriteGate::for_run_loop();
             for key in installs {
                 match key {
                     BinderKey::Name(name, kind) => {
-                        let _ = scope.install_placeholder(name, id, bind_index, kind);
+                        let _ = scope.install_placeholder(name, id, bind_index, kind, &mut gate);
                     }
                     BinderKey::Bucket(buckets) => {
                         for bucket in buckets {
-                            let _ = scope.install_pending_overload(bucket, id, bind_index);
+                            let _ =
+                                scope.install_pending_overload(bucket, id, bind_index, &mut gate);
                         }
                     }
                 }

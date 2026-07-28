@@ -1,10 +1,10 @@
 use super::*;
 use crate::builtins::test_support::{mock_declaration_site, TestRun};
-use crate::machine::core::Reached;
-use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::ast::TypeIdentifier;
+use crate::machine::model::values::Carried;
 use crate::machine::model::Record;
+use crate::machine::CarrierWitness;
 use crate::machine::{BindingIndex, DeclarationSite};
 
 fn leaf(n: &str) -> TypeIdentifier {
@@ -21,14 +21,14 @@ fn type_token_cannot_bind_value_side() {
     let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let error = scope
-        .bind_value(
+        .bind_value_direct(
             "Gee".into(),
-            Reached::for_test(
-                region.brand().alloc_object(KObject::Number(7.0)),
-                StoredReach::for_test(None, false),
-                crate::machine::core::FramePins::empty(),
+            scope.seal_resident(
+                Carried::Object(region.brand().alloc_object(KObject::Number(7.0))),
+                CarrierWitness::default(),
             ),
             BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect_err("a Type token names a type; it may not bind a value");
     assert!(
@@ -133,7 +133,6 @@ fn block_member_defers_until_the_window_seals() {
     );
     let fill = |name: &str, repr: KType, site: DeclarationSite| {
         finalize_nominal_member(
-            scope,
             &window,
             name,
             |_| RelativeSchema::NewType(repr),
@@ -148,8 +147,8 @@ fn block_member_defers_until_the_window_seals() {
             outcome_tag(&other)
         ),
     }
-    let sealed = match fill("Leaf", KType::STR, mock_declaration_site(3, 3)) {
-        SealOutcome::Sealed(kt) => kt,
+    let (sealed, write) = match fill("Leaf", KType::STR, mock_declaration_site(3, 3)) {
+        SealOutcome::Sealed { kt, write } => (kt, write),
         other => panic!("the last fill must seal, got {}", outcome_tag(&other)),
     };
     assert_eq!(
@@ -157,35 +156,40 @@ fn block_member_defers_until_the_window_seals() {
         window.sealed().expect("sealed").members[1],
         "the outcome is Leaf's own member handle",
     );
+    // The seal writes nothing itself — the op it hands back is what installs the identity, and
+    // the run loop applies it after the declaring step returns.
+    assert!(scope.bindings().types().get("Leaf").is_none());
+    write
+        .apply(scope, &mut crate::machine::WriteGate::for_test())
+        .expect("the first install lands");
 
-    // A different statement declaring `Leaf` over different content is a redeclaration: the
-    // upsert collides with the identity this window installed.
+    // A different statement declaring `Leaf` over different content is a redeclaration: its op
+    // collides with the identity this window installed, so the apply — not the seal — errors.
     let other_window = RecursiveGroupWindow::new(vec![("Leaf".into(), KKind::NewType)], None);
-    match finalize_nominal_member(
-        scope,
+    let redeclare = match finalize_nominal_member(
         &other_window,
         "Leaf",
         |_| RelativeSchema::NewType(KType::BOOL),
         mock_declaration_site(4, 4),
         &types,
     ) {
-        SealOutcome::Rebind(e) => assert!(
-            matches!(&e.kind, crate::machine::KErrorKind::Rebind { name } if name == "Leaf"),
-            "expected Rebind naming Leaf, got {e}",
-        ),
-        other => panic!(
-            "expected Rebind on redeclaration, got {}",
-            outcome_tag(&other)
-        ),
-    }
+        SealOutcome::Sealed { write, .. } => write,
+        other => panic!("the singleton window seals, got {}", outcome_tag(&other)),
+    };
+    let error = redeclare
+        .apply(scope, &mut crate::machine::WriteGate::for_test())
+        .expect_err("a redeclaration of Leaf must Rebind at apply");
+    assert!(
+        matches!(&error.kind, crate::machine::KErrorKind::Rebind { name } if name == "Leaf"),
+        "expected Rebind naming Leaf, got {error}",
+    );
 }
 
 fn outcome_tag(outcome: &SealOutcome) -> &'static str {
     match outcome {
-        SealOutcome::Sealed(_) => "Sealed",
+        SealOutcome::Sealed { .. } => "Sealed",
         SealOutcome::Deferred => "Deferred",
         SealOutcome::DanglingRef(_) => "DanglingRef",
-        SealOutcome::Rebind(_) => "Rebind",
     }
 }
 

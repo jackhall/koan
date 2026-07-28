@@ -10,28 +10,31 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::machine::model::KExpression;
+use crate::machine::model::KObject;
 #[cfg(test)]
 use crate::machine::model::Module;
 use crate::machine::model::TypeRegistry;
 #[cfg(test)]
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 #[cfg(test)]
-use crate::machine::model::{Carried, ExpressionPart, KObject};
+use crate::machine::model::{Carried, ExpressionPart};
 #[cfg(test)]
 use crate::machine::FrameStorageExt;
+#[cfg(test)]
+use crate::machine::KFunction;
 use crate::machine::KoanRuntime;
 #[cfg(test)]
-use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
+use crate::machine::SealedFunction;
+use crate::machine::{AdoptSeam, FrameStorage, KError, NameLookup, Scope};
 #[cfg(test)]
-use crate::machine::{DeliveredCarried, KFunction};
-use crate::machine::{FrameStorage, KError, Scope};
+use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
 use crate::parse::parse;
 #[cfg(test)]
 use crate::scheduler::NodeId;
 #[cfg(test)]
 use crate::witnessed::{Delivered, Sealed, Witnessed};
 
-use super::{seed_builtins, unseeded_scopes};
+use super::unseeded_scopes;
 
 /// Mint a test [`DeclarationSite`] with a fresh run and an explicit installing node and lexical
 /// index — the fixture stand-in for the run-qualified handle a scheduler-driven binder threads. A
@@ -77,7 +80,7 @@ impl<'a> TestRun<'a> {
         let types = runtime
             .type_registry()
             .expect("run frame was just established");
-        seed_builtins(root, &types);
+        crate::machine::seed_run_root(root, &types);
         Self {
             scope: child,
             runtime,
@@ -130,7 +133,7 @@ pub(crate) fn extract_terminal<'a>(
     // Reuse the production copy-then-audit adoption: a top-level record is totally rebuilt into
     // `scope`'s region through the seam copy verb (never pointer-copied past the checked audit), an
     // object deep-clones under its own minted reach, a type crosses by handle / clone.
-    scope.adopt_sealed_copied(&delivered, types)
+    scope.adopt_carried(&delivered, crate::machine::AdoptSeam::ReHome(types))
 }
 
 /// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read it back.
@@ -150,6 +153,15 @@ impl Write for SharedBuf {
 /// directly. Built inside `run_storage` like every run root, so its `region_owner` resolves —
 /// tests that drive dispatch (establishing a run frame via `ensure_run_frame`) work the same as
 /// pure scope-machinery tests that never reach the escape path.
+/// A **per-call**-tier storage with no ancestor — the fixture stand-in for another call's frame
+/// whenever a white-box reach test needs a foreign region a retention is allowed to pin. The
+/// run-root tier is not interchangeable here: its region outlives the run, so nothing takes an
+/// owning pin on it.
+#[cfg(test)]
+pub(crate) fn per_call_storage() -> Rc<FrameStorage> {
+    crate::witnessed::RegionHost::fresh(None)
+}
+
 #[cfg(test)]
 pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
     run_storage.brand().alloc_scope(Scope::run_root(
@@ -278,6 +290,25 @@ impl<'a> TestRun<'a> {
     }
 }
 
+/// The value `name` binds to, **adopted** into `scope`'s own region so the reference outlives the
+/// read — the assertion form of a binding read. Collapses a parked producer and a miss to `None`.
+///
+/// The bare `&KObject` shape lives here rather than on [`Scope`] because adoption is its price:
+/// every production read that only *inspects* a binding goes through the delivery envelope and
+/// retains nothing. `Scope`'s own bare ladder is `#[cfg(test)]`, which the integration tests in
+/// `tests/` cannot see, so they reach the shape through this scaffolding module instead — and
+/// production code, which never constructs a [`TestRun`], cannot reach it at all.
+pub fn lookup_binding<'a>(scope: &Scope<'a>, name: &str) -> Option<&'a KObject<'a>> {
+    scope
+        .resolve_value_delivered(name, None)
+        .and_then(NameLookup::bound)
+        .map(|delivered| {
+            scope
+                .adopt_carried(&delivered, AdoptSeam::Retaining)
+                .object()
+        })
+}
+
 /// The module `name` binds to. Modules are values, so the binding lives on the value channel
 /// (`bindings.data`) and reads back as the Object-arm module value. Panics when `name` is unbound
 /// or binds a non-module.
@@ -308,21 +339,29 @@ pub(crate) fn binds_module(scope: &Scope<'_>, name: &str) -> bool {
 pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
     let mut found: Option<&'a KFunction<'a>> = None;
     for (_, bucket) in scope.bindings().iter_functions() {
-        for f in bucket {
-            let first_kw = f.signature.elements.iter().find_map(|e| match e {
-                SignatureElement::Keyword(s) => Some(s.as_str()),
-                _ => None,
-            });
-            if first_kw == Some(keyword) {
-                assert!(
-                    found.is_none(),
-                    "ambiguous: multiple overloads under `{keyword}`"
-                );
-                found = Some(f);
+        for sealed in bucket {
+            if first_keyword_of(scope, &sealed).as_deref() != Some(keyword) {
+                continue;
             }
+            assert!(
+                found.is_none(),
+                "ambiguous: multiple overloads under `{keyword}`"
+            );
+            found = Some(scope.open_function(&sealed).value());
         }
     }
     found.unwrap_or_else(|| panic!("no FN overload registered under `{keyword}`"))
+}
+
+/// The first keyword of a dormant overload's signature, read under `scope`'s own pin.
+#[cfg(test)]
+fn first_keyword_of(scope: &Scope<'_>, sealed: &SealedFunction) -> Option<String> {
+    scope.read_function(sealed, |f| {
+        f.signature.elements.iter().find_map(|e| match e {
+            SignatureElement::Keyword(s) => Some(s.clone()),
+            _ => None,
+        })
+    })
 }
 
 /// True iff some `functions` bucket holds an overload whose first keyword is `keyword`.
@@ -334,12 +373,9 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
         .iter_functions()
         .into_iter()
         .any(|(_, bucket)| {
-            bucket.iter().any(|f| {
-                f.signature.elements.iter().find_map(|e| match e {
-                    SignatureElement::Keyword(s) => Some(s.as_str()),
-                    _ => None,
-                }) == Some(keyword)
-            })
+            bucket
+                .iter()
+                .any(|sealed| first_keyword_of(scope, sealed).as_deref() == Some(keyword))
         })
 }
 
@@ -361,22 +397,9 @@ pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
         cell: Delivered::hosted(
             Sealed::seal(Witnessed::resident(c)),
             crate::machine::run_root_storage(),
-            crate::machine::core::FramePins::empty(),
+            crate::machine::core::FrameCoverage::empty(),
         ),
     }
-}
-
-/// Build a delivery envelope around `value` (an empty-reach resident witness) pinned by `host` —
-/// for tests that only need a real `DeliveredCarried` to drive a mint, not any particular reach
-/// content. `Delivered::seal` requires the true owner in hand, so the caller supplies `host`
-/// exactly as a scheduler pull or a resident seal would.
-#[cfg(test)]
-pub(crate) fn delivered_with_host(value: Carried<'_>, host: Rc<FrameStorage>) -> DeliveredCarried {
-    Delivered::seal(
-        Witnessed::resident(value),
-        host,
-        crate::machine::core::FramePins::empty(),
-    )
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.

@@ -5,6 +5,7 @@
 //! either `Ok(v)` or `Error(KError::to_tagged())`.
 
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use std::rc::Rc;
 
 use crate::machine::model::{KObject, KType, Record};
@@ -14,7 +15,7 @@ use crate::machine::{force_substrate_borrows_host, kerror_ktype};
 
 use super::{arg, kw, sig};
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     // CATCH yields `Result {Ok :Any, Error :KError}` — `Any` covers only the unpredictable
     // `Ok` payload, the `Error` arm is the `KError` carrier. `result::register` runs first, so
     // the `Result` member resolves here. This is a documentary contract: the catch finish
@@ -35,7 +36,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         return_type,
         vec![kw("CATCH"), arg("expr", KType::KEXPRESSION)],
     );
-    crate::builtins::register_builtin(scope, "CATCH", signature, body, types);
+    crate::builtins::register_builtin(scope, "CATCH", signature, body, types, gate);
 }
 
 /// Watches the captured `expr` and recovers into a `Result` carrier
@@ -47,7 +48,6 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use crate::machine::FoldingBrand;
     use crate::machine::RegionTypeFamily;
     use crate::machine::{require_kexpression, Action, CatchContinue, DepPlacement, DepRequest};
-    use crate::witnessed::Residence;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.
@@ -69,11 +69,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         }
         // Build the `Result` `Tagged` **inside the witness closure** so it names every region the
         // wrapped value reaches. The `Result` member handle crosses the build brand as a
-        // [`RegionTypeFamily`] operand, `merge`d in under the scope's yoke rather than paired with
-        // an asserted singleton; the handle itself borrows no region.
+        // [`RegionTypeFamily`] operand, yoked into the dest region rather than paired with an
+        // asserted singleton; the handle itself borrows no region.
         let frame = fctx.ctx.frame();
-        let home = build_type_operand(fctx.scope, Rc::clone(&frame), result_member);
-        // Both arms fold a delivery envelope into `home` at `Residence::Copied` — the watched
+        let home = build_type_operand(Rc::clone(&frame), result_member);
+        // Both arms fold a delivery envelope into `home` claiming the envelope's own pins — the watched
         // carrier for `Ok`, `to_tagged`'s freshly-born envelope (its record substrate can only be
         // built through a fold door, so it is sealed as a delivered carrier rather than routed
         // through the checked/audited move-in tier) for `Err` — so the two arms share one shape.
@@ -87,35 +87,37 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         };
         let tag = if result.is_ok() { "Ok" } else { "Error" };
         // The type operand is empty-reach; the transfer composes the result payload's reach and
-        // hands back its owned foreign bundle for the Done-arm seal.
-        let (witnessed, pins) = carrier
-            .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
-                home,
-                &crate::machine::core::FramePins::empty(),
-                Residence::Copied,
-                |value, (_region, identity), placement| {
-                    let region = FoldingBrand::in_fold_closure(placement);
-                    Carried::Object(region.alloc_object_folded(build_result(
-                        region,
-                        tag,
-                        identity,
-                        value.object(),
-                    )))
-                },
-            );
+        // homes the product in the operand's dest frame.
+        let product = carrier.transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
+            home,
+            // The built `Ok`/`Error` record holds the payload's borrow verbatim, so the
+            // predicate releases nothing: every region the payload reaches rides on.
+            |_product, _region| true,
+            |value, (_region, identity), placement| {
+                let region = FoldingBrand::in_fold_closure(placement);
+                Carried::Object(region.alloc_object_folded(build_result(
+                    region,
+                    tag,
+                    identity,
+                    value.object(),
+                )))
+            },
+        );
         // Step-terminal seal: either arm's payload may be (or embed) a fresh record — force the
-        // bit rather than trust the fold's operand-only compose.
-        let witnessed = force_substrate_borrows_host(witnessed, &frame);
-        Action::Done(Ok(StepCarried::born_pinned(witnessed, pins)))
+        // bit rather than trust the fold's operand-only compose. The product's residence *is*
+        // `frame`, which the step's own seal re-pins, so only its foreign coverage rides on.
+        let coverage = product.coverage_releasing_home();
+        let witnessed = force_substrate_borrows_host(product.into_cell().unseal(), &frame);
+        Action::done(Ok(StepCarried::born_pinned(witnessed, coverage)))
     });
-    Action::Catch {
-        watched: DepRequest::Dispatch {
+    Action::catch(
+        DepRequest::Dispatch {
             expr: expr_inner,
             placement: DepPlacement::OwnScope,
             binder_covered: false,
         },
         finish,
-    }
+    )
 }
 
 #[cfg(test)]

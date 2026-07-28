@@ -96,6 +96,9 @@ where
     // storage door (`register_type_delivered`), pinning nothing. Built at the frame brand so nothing
     // fabricates a free `&'a`.
     let bind = ctx.region.with_scope(|child| -> Result<(), KError> {
+        // The frame's own scope: minted for this call and not yet published, so the parameter binds
+        // take the construction door rather than riding a step outcome.
+        let gate = &mut crate::machine::core::bindings::WriteGate::for_unpublished_scope();
         for (name, carried) in args.iter() {
             let carrier = arg_carriers.get(name).copied();
             match *carried {
@@ -104,20 +107,22 @@ where
                     // deep clone into the frame region, so the carrier's residence-only host is not
                     // part of its reach (a tail call's retiring frame must not ride this binding).
                     Some(cell) => {
-                        child.bind_delivered(
+                        child.bind_delivered_direct(
                             name.clone(),
                             cell,
                             BindingIndex::value(0),
                             |c| Ok(c.object()),
                             types,
+                            gate,
                         )?;
                     }
                     None => {
-                        child.bind_checked(
+                        child.bind_checked_direct(
                             name.clone(),
                             object.deep_clone(),
                             BindingIndex::value(0),
                             types,
+                            gate,
                         )?;
                     }
                 },
@@ -136,7 +141,7 @@ where
                         },
                         index: BindingIndex::value(0),
                     };
-                    child.register_type_delivered(name.clone(), kt, site)?;
+                    child.register_type_direct(name.clone(), kt, site, gate)?;
                 }
                 // Dispatch resolves every type-denoting argument before the call, so a name that
                 // is still unlowered here names nothing bindable.

@@ -30,7 +30,7 @@ use typed_arena::Arena;
 
 use super::{
     erase_to_static, with_branded_ref, PinBundle, PinsRegion, ReachDescription, Reattachable,
-    RegionOwner,
+    RegionOwner, StepCoverage,
 };
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
@@ -145,14 +145,23 @@ pub struct Region<W: StorageProfile> {
     /// [`alloc_resident`](Self::alloc_resident) rests on — so a carrier can share a thin reference
     /// into it with no `Drop`-order or dangling hazard.
     reach_table: Arena<ReachDescription<W::FrameOwner>>,
-    /// Owning pin bundles retained for the region's whole life — the liveness home for a value
-    /// **adopted** copy-free into this region ([`Region::retain_reach`], routed by
+    /// The region's **union bundle**: one deduped [`PinBundle`] owning a pin for every region
+    /// anything resident here reaches, retained for the region's whole life. It is the liveness home
+    /// for a value **adopted** copy-free into this region ([`Region::retain_reach`], routed by
     /// [`Delivered::adopt_into`](super::Delivered::adopt_into)), whose re-anchored reference lives as
-    /// long as the region and whose reach a non-owning description cannot pin. A bound value instead
-    /// hands its bundle to the binding entry (dropped at entry death); this list is only for
-    /// genuinely region-resident adoptions, so it pins exactly as long as the old arena-hosted owning
-    /// set did.
-    retained_reach: RefCell<Vec<PinBundle<W::FrameOwner>>>,
+    /// long as the region and whose reach a non-owning description cannot pin.
+    ///
+    /// Every retention folds in through [`PinBundle::absorb`] rather than appending a bundle of its
+    /// own, so the field stays an antichain of the deepest owners: one owning `Rc` per distinct
+    /// region across everything resident here, dropped whole at region death. Region death and the
+    /// scope's death are the same schedule — bindings are bind-once and a resident value never dies
+    /// before its region — so a per-holder bundle would pin no shorter than this one does.
+    ///
+    /// A member declaring [`PinsRegion::needs_no_pin`] never enters (the **eternal rule**,
+    /// [`PinBundle::without_eternal`]): its storage already outlives this region, so a pin on it is
+    /// dead weight — and a live edge into a region that can retain this one back, which is a cycle
+    /// neither side ever frees.
+    retained_reach: RefCell<PinBundle<W::FrameOwner>>,
 }
 
 impl<W: StorageProfile> Region<W> {
@@ -164,7 +173,7 @@ impl<W: StorageProfile> Region<W> {
             storage: StorageOf::<W>::default(),
             membership: RefCell::new(Vec::new()),
             reach_table: Arena::new(),
-            retained_reach: RefCell::new(Vec::new()),
+            retained_reach: RefCell::new(PinBundle::empty()),
         }
     }
 
@@ -184,16 +193,19 @@ impl<W: StorageProfile> Region<W> {
         self.reach_table.alloc(set)
     }
 
-    /// Retain an owning [`PinBundle`] for the region's whole life — the liveness home for a value
-    /// **adopted** copy-free into this region ([`Delivered::adopt_into`](super::Delivered::adopt_into)),
-    /// whose re-anchored reference lives as long as the region. A non-owning description cannot pin
-    /// the adopted value's reach, so the bundle it was minted with is parked here and dropped only at
-    /// region death — pinning exactly as long as the old arena-hosted owning set did. A *bound* value
-    /// never routes here: it hands its bundle to the binding entry (dropped at entry death).
+    /// Fold an owning [`PinBundle`] into the region's union bundle, retained for the region's whole
+    /// life — the liveness home for a value **adopted** copy-free into this region
+    /// ([`Delivered::adopt_into`](super::Delivered::adopt_into)), whose re-anchored reference lives as
+    /// long as the region. A non-owning description cannot pin the adopted value's reach, so the
+    /// bundle it was minted with folds in here and is dropped only at region death.
+    ///
+    /// The fold is [`PinBundle::absorb`], so retaining the same region twice costs one `Rc` in total
+    /// and a retention subsumed by an outer member costs none — the field stays a single antichain
+    /// rather than a bundle per retention.
     pub(crate) fn retain_reach(&self, bundle: PinBundle<W::FrameOwner>) {
-        if !bundle.is_empty() {
-            self.retained_reach.borrow_mut().push(bundle);
-        }
+        self.retained_reach
+            .borrow_mut()
+            .absorb(bundle.without_eternal());
     }
 
     /// Number of values stored in family `K`'s cell. Read-only; exposes no `&Arena`, so it
@@ -362,12 +374,36 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         self.region
     }
 
-    /// Retain an owning [`PinBundle`] in this handle's region for the region's whole life — the
-    /// public door onto [`Region::retain_reach`]. An embedder routes a copy-free adoption or a
-    /// run-teardown rehome here: the value stays resident in this region, so its reach (which a
-    /// non-owning [`ReachDescription`] only names) must be pinned for as long as the region lives.
-    pub fn retain_reach(self, bundle: PinBundle<W::FrameOwner>) {
-        self.region.retain_reach(bundle)
+    /// Fold an owned [`StepCoverage`] into this handle's region's union bundle, retained for the
+    /// region's whole life — the public door onto [`Region::retain_reach`]. An embedder routes a
+    /// copy-free adoption or a run-teardown rehome here: the value stays resident in this region, so
+    /// its reach (which a non-owning [`ReachDescription`] only names) must be pinned for as long as
+    /// the region lives.
+    pub fn retain_reach(self, coverage: StepCoverage<W::FrameOwner>) {
+        self.region.retain_reach(coverage.0)
+    }
+
+    /// **Mint and retain in one verb** — the embedder-facing reach-derivation door. Freezes
+    /// `sources`' composed reach into this region's side table and folds the owning bundle the mint
+    /// hands back straight into this region's union bundle, so the description and the ownership
+    /// that backs it are established together and the embedder never holds the pins in between.
+    ///
+    /// Returns the hosted description (`None` == empty, no allocation) and the
+    /// borrows-into-this-region bit. No policy is threaded in: the mint applies subsumption and the
+    /// self rule alone, so the description is the value's exact reach and the retained bundle is
+    /// that reach minus this region itself (a region owning a pin on itself is a cycle).
+    pub fn mint_retained(
+        self,
+        sources: &[&StepCoverage<W::FrameOwner>],
+    ) -> (Option<&'a ReachDescription<W::FrameOwner>>, bool)
+    where
+        W::FrameOwner: RegionOwner<Region = Region<W>>,
+    {
+        let bundles: Vec<&PinBundle<W::FrameOwner>> = sources.iter().map(|s| &s.0).collect();
+        let (description, bundle, borrows_into_dest) =
+            ReachDescription::mint_with_dest_bit(self, &bundles);
+        self.region.retain_reach(bundle);
+        (description, borrows_into_dest)
     }
 
     /// Brand-confined allocation — see [`Region::alloc`]'s (crate-private) docs. Move-in: `value`
@@ -477,8 +513,8 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
 /// soundness declaration.
 pub unsafe trait AuditedStored<W: StorageProfile>: Stored<W> {
     /// The typed evidence a call site passes — never code. `()` for a family whose audit is a
-    /// self-contained residence check; a richer context (reach evidence, an ambient predicate) for
-    /// a family whose audit widens against the destination's coverage.
+    /// self-contained residence check; a richer context (reach evidence naming what the value is
+    /// allowed to borrow) for a family whose audit widens against the destination's coverage.
     type AuditContext<'ctx>;
     /// Vet `value` for residence in `region` under `context`. Returns `true` only when the store is
     /// sound per the trait's safety contract.

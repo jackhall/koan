@@ -37,14 +37,15 @@
 //! Surface design: [design/operators.md](../../design/operators.md).
 
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::machine::body_statement_refs;
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
-use crate::machine::BindingIndex;
 use crate::machine::{require_identifier_name, require_kexpression, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -76,24 +77,15 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
     let members = crate::try_action!(scan_members(&body_expr, &name));
 
     let member_set: HashSet<String> = members.iter().cloned().collect();
-    let group: &'a OperatorGroup = ctx
-        .scope
-        .brand()
-        .alloc_operator_group(OperatorGroup::new(member_set, mode));
-    let child_scope =
-        ctx.scope
-            .brand()
-            .alloc_scope(Scope::child_under_group(ctx.scope, name.clone(), group));
-
-    // Index-0 visibility, like parameters and `USING` imports: the registry entries carry no
-    // lexical-ordering relationship to the body statement reading them, so a run anywhere in the
-    // body resolves the group — including above the `OP` declarations it names, which park on the
-    // still-finalizing declarations through the ordinary pending-overload machinery.
+    let group = Rc::new(OperatorGroup::new(member_set, mode));
     let member_refs: Vec<&str> = members.iter().map(|s| s.as_str()).collect();
-    crate::try_action!(child_scope.register_group_under_all_subsets(
+    // The child scope is allocated and its member powerset registered in one door, so the registry
+    // is live before the scope is anything a node could reach.
+    let child_scope = crate::try_action!(Scope::alloc_group_child(
+        ctx.scope,
+        name.clone(),
+        Rc::clone(&group),
         &member_refs,
-        group,
-        BindingIndex::value(0),
     ));
 
     super::module_def::await_module_body(child_scope, name, body_expr, ctx.bind_index(), "GROUP")
@@ -175,7 +167,7 @@ fn body_pairwise_right<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     build(ctx, GroupMode::Pairwise(FoldDirection::Right))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     use crate::builtins::register_builtin_full;
 
     // `FOLD <LEFT|RIGHT>` and `PAIRWISE FOLD #(<combiner>) <LEFT|RIGHT>`, each over the two name
@@ -228,6 +220,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             fold_body,
             true,
             types,
+            gate,
         );
         register_builtin_full(
             scope,
@@ -236,6 +229,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             pairwise_body,
             true,
             types,
+            gate,
         );
         register_builtin_full(
             scope,
@@ -244,6 +238,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             super::module_def::body_type_named,
             false,
             types,
+            gate,
         );
         register_builtin_full(
             scope,
@@ -252,6 +247,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             super::module_def::body_type_named,
             false,
             types,
+            gate,
         );
     }
 }

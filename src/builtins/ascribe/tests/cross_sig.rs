@@ -26,12 +26,7 @@ fn strict_cross_sig_subtype_wins_dispatch() {
     test_run.run("LET picked = (PICK arg)");
 
     let m = lookup_module(scope, "picked", &test_run.types);
-    let tag = m
-        .child_scope()
-        .bindings()
-        .data()
-        .get("tag")
-        .map(|(_, r)| r.value());
+    let tag = m.child_scope().lookup("tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 1.0),
         "a module satisfying both Wide and Base must dispatch to the more-specific :Wide overload, got {:?}",
@@ -57,12 +52,7 @@ fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
     test_run.run("LET picked = (PICK arg)");
 
     let m = lookup_module(scope, "picked", &test_run.types);
-    let tag = m
-        .child_scope()
-        .bindings()
-        .data()
-        .get("tag")
-        .map(|(_, r)| r.value());
+    let tag = m.child_scope().lookup("tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 1.0),
         "declaring the less-specific :Base overload first must not flip the winner, got {:?}",
@@ -130,12 +120,7 @@ fn cross_sig_specificity_with_pinned_abstract_member() {
     test_run.run("LET picked = (PICKPIN arg)");
 
     let m = lookup_module(scope, "picked", &test_run.types);
-    let tag = m
-        .child_scope()
-        .bindings()
-        .data()
-        .get("tag")
-        .map(|(_, r)| r.value());
+    let tag = m.child_scope().lookup("tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 1.0),
         "a pinned :Wide must still beat a pinned :Base when it strictly refines it, got {:?}",

@@ -15,6 +15,7 @@ use crate::machine::model::KKind;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use crate::machine::{
     arg_object, require_ktype, Action, AwaitContinue, DepPlacement, OwnedDispatch,
 };
@@ -34,7 +35,7 @@ const MEMBERS_SLOT: &str = "`|` members";
 fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
     let left = crate::try_action!(require_ktype(ctx.args, "left", ctx.types));
     let right = crate::try_action!(require_ktype(ctx.args, "right", ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .ctx
         .type_carried(ctx.types.union_of(vec![left, right]))))
 }
@@ -49,13 +50,13 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
     let members = match arg_object(ctx.args, "members") {
         Some(KObject::KExpression(e)) => e.clone(),
         _ => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "{MEMBERS_SLOT} slot must be a run of type operands",
             )))))
         }
     };
     if members.parts.is_empty() {
-        return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+        return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
             "{MEMBERS_SLOT}: a union needs at least one member",
         )))));
     }
@@ -75,17 +76,17 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
             ));
             members.push(kt);
         }
-        Action::Done(Ok(fctx.ctx.type_carried(fctx.types.union_of(members))))
+        Action::done(Ok(fctx.ctx.type_carried(fctx.types.union_of(members))))
     });
-    Action::AwaitDeps { deps, finish }
+    Action::await_deps(deps, finish)
 }
 
 /// `|` seeds its triple — the reduced `Unary` form `| [members...]`, the two-member keyworded form
 /// `A | B`, and its own single-member `Unary` operator group — through the shared unary-operator
 /// door in [`super::op_def`]. The bodies are native: a `KType` composed from owned members, not a
 /// synthesized koan AST. A single-member group must never share a group with another operator.
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
-    super::op_def::register_unary_operator(
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+    let (_carrier, writes) = super::op_def::register_unary_operator(
         scope,
         "|",
         OperatorForm {
@@ -112,6 +113,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         types,
     )
     .expect("builtin `|` unary-operator seeding must not collide");
+    // Root seeding: a construction-time door, so the writes apply here rather than riding a step.
+    for write in writes {
+        write
+            .apply(scope, gate)
+            .expect("builtin `|` unary-operator seeding must not collide");
+    }
 }
 
 #[cfg(test)]

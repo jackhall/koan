@@ -9,6 +9,7 @@
 //! The keyworded and anonymous FN binders ride the same path, selected by the
 //! [`FnKind`] threaded through `finalize_fn_with_kind` / `defer`.
 
+use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
@@ -24,6 +25,7 @@ use super::return_type::{
     make_capture, resolve_capture_at_finish, ReturnTypeCapture, ReturnTypeState,
 };
 use super::signature::{parse_fn_param_list, ParamListOutcome};
+use crate::machine::OverloadSeal;
 
 /// How a finalized FN-def is wired into the scope:
 ///
@@ -223,7 +225,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     kind: FnKind,
     bind_index: BindingIndex,
     types: &TypeRegistry,
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError> {
     check_value_type_kinds(&elements, &return_type, types)?;
 
     // First Keyword keys the data table. Dispatch is by full signature via
@@ -252,9 +254,9 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just
     // allocated into `scope`'s own region above, so the checked audit always passes; the paired
     // token carries the home-borrow bit the audit walk derives (the captured `&Scope` into home).
-    let (obj, stored) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f), types)
-        .expect("f was just allocated into scope's own region");
+    // A keyworded FN's overload registration rides the step outcome: the seal is built here, where
+    // the callable is open under its home pin, and the bucket write lands at the run loop's apply.
+    let mut writes: Vec<WriteOp> = Vec::new();
     if !matches!(kind, FnKind::Anonymous) {
         let name = match name {
             Some(n) => n,
@@ -265,7 +267,12 @@ pub(crate) fn finalize_fn_with_kind<'a>(
                 )));
             }
         };
-        scope.register_function(name, f, obj, bind_index)?;
+        writes.push(WriteOp::Overload {
+            name,
+            index: bind_index,
+            seal: OverloadSeal::of_resident(scope, f),
+            builtin_shadow_guard: true,
+        });
     }
     // The FN value is co-located in its defining scope's region (owned signature / body, a `&Scope`
     // capture), and the captured scope — region-resident under that frame — transitively keeps every
@@ -273,17 +280,23 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // reaches nothing foreign (its captured scope is home or a home-pinned ancestor): its terminal
     // carrier is built with the empty foreign reach `stored` derived, witnessed by that scope's home
     // frame alone. `LET f = (FN ...)` still captures the callable via this carrier.
-    Ok(scope.resident_value_carrier(obj, stored))
+    Ok((
+        scope.seal_fresh_object(KObject::KFunction(f), types)?,
+        writes,
+    ))
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed
-/// (it names its captured scope's frame), so success seals as [`Action::Done(Ok)`](Action::Done).
+/// (it names its captured scope's frame), so success seals as `Done(Ok)` carrying the overload
+/// registration as the step's effect.
 pub(crate) fn fn_action<'a>(
-    result: Result<Witnessed<CarriedFamily, CarrierWitness>, KError>,
+    result: Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError>,
 ) -> Action<'a> {
     match result {
-        Ok(witnessed) => Action::Done(Ok(StepCarried::born(witnessed))),
-        Err(e) => Action::Done(Err(e)),
+        Ok((witnessed, writes)) => {
+            Action::done(Ok(StepCarried::born(witnessed))).with_effects(writes)
+        }
+        Err(e) => Action::done(Err(e)),
     }
 }
 
@@ -335,7 +348,7 @@ pub(crate) fn defer<'a>(
         for &(slot_idx, owned_pos) in &splice_layout {
             let terminal = results.owned(owned_pos);
             if !matches!(terminal.value, Carried::Type(_)) {
-                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "FN signature slot at part-index {slot_idx} expected a type expression, \
                      got a {} value",
                     terminal.value.ktype(fctx.types).name(fctx.types),
@@ -362,10 +375,10 @@ pub(crate) fn defer<'a>(
                 match parse_fn_param_list(&spliced_signature, &mut elaborator, fctx.types) {
                     ParamListOutcome::Done(es) => es,
                     ParamListOutcome::Err(msg) => {
-                        return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg))))
+                        return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))))
                     }
                     ParamListOutcome::Pending { .. } => {
-                        return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                        return Action::done(Err(KError::new(KErrorKind::ShapeError(
                             "FN signature elaboration still pending after dep-finish wake"
                                 .to_string(),
                         ))))
@@ -383,5 +396,5 @@ pub(crate) fn defer<'a>(
             fctx.types,
         ))
     });
-    crate::machine::Action::AwaitDeps { deps, finish }
+    crate::machine::Action::await_deps(deps, finish)
 }

@@ -234,7 +234,7 @@ fn erased_result_carrier_admits_named_application() {
     test_run.run("LET wrapped = (Result (Ok 3.0))");
     let admitting = test_run.run_one_type(parse_one(":(Result {Ok = Number, Error = Any})"));
     let refusing = test_run.run_one_type(parse_one(":(Result {Ok = Str, Error = Any})"));
-    let value = scope.bindings().expect_value("wrapped");
+    let value = scope.expect_value("wrapped");
     let types = test_run.types.clone();
     assert!(
         admitting.matches_value(value, &types),

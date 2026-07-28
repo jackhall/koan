@@ -265,6 +265,15 @@ impl RecursiveGroupWindow {
             .collect()
     }
 
+    /// Whether the member at `index` has had its finalize run — the by-index half of
+    /// [`Self::unfilled_member_names`], for a consumer holding a relative handle rather than a name.
+    pub fn member_is_filled(&self, index: usize) -> bool {
+        self.members
+            .borrow()
+            .get(index)
+            .is_some_and(|m| m.is_filled())
+    }
+
     /// The relative handle naming member `name`. Announces the member first if the window has not
     /// seen the name — the forward-reference case inside a declarator whose own member list is
     /// discovered as its schema is walked. `kind` is the family to announce it with, ignored when

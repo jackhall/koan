@@ -8,7 +8,7 @@
 //! allocated in the **call-site region** — not a per-call frame — so forwarded
 //! binds and functions defined in the block stay live after the block ends.
 //! A bind colliding with a surfaced member is rejected in
-//! [`Scope::bind_value`](crate::machine::Scope)'s borrowed-window arm.
+//! the value-write op's transparent-window arm.
 //!
 //! Only `data` and `functions` are surfaced; `Module::type_members` is not in
 //! `Bindings`, so abstract ascriptions stay opaque inside the block.
@@ -23,6 +23,7 @@
 
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -31,35 +32,35 @@ use super::{arg, kw, sig};
 /// ordinary `DoneWitnessed` path, not a forwarded dep. Surfaced members resolve through
 /// [`Scope::binding_cutoff`]'s index-0 (no-cutoff) rule for a borrowed window.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
-    use super::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
     use crate::machine::model::{Held, KObject};
     use crate::machine::{arg_held, require_kexpression, Action, FramePlacement};
+    use crate::machine::{block_tail, BlockBody, BlockScope, BlockSeed};
 
     let module = match arg_held(ctx.args, "m") {
         // A module reaches USING on the value channel's Object arm.
         Some(Held::Object(KObject::Module(m))) => *m,
         Some(Held::Type(other)) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
                 expected: "Module".to_string(),
                 got: other.name(ctx.types),
             })))
         }
         Some(Held::UnresolvedType(ti)) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
                 expected: "Module".to_string(),
                 got: ti.render(),
             })))
         }
         Some(Held::Object(other)) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
                 expected: "Module".to_string(),
                 got: other.ktype().name(ctx.types).to_string(),
             })))
         }
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
     };
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
     let module_bindings = module.child_scope().bindings();
@@ -69,14 +70,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         .alloc_scope(Scope::child_transparent(ctx.scope, module_bindings));
     // Fold the eager `m` carrier's reach onto the overlay so the opened module's per-call region stays
     // alive for the window's life (see the module-level soundness note). The minted description is
-    // non-owning, so the overlay **retains** the returned owning bundle for its region's life — that
-    // is what roots the opened module's per-call region one hop removed. A top-level module reaches no
+    // non-owning, so the mint **retains** its owning bundle in the overlay's region union for that
+    // region's life — that is what roots the opened module's per-call region one hop removed. A top-level module reaches no
     // per-call region and a carrier-less module has no reach to root, so both fold nothing.
     let seed: Option<BlockSeed<'a>> = ctx.arg_carrier("m").map(|carrier| {
         let carrier = carrier.duplicate();
-        let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope, _types: &TypeRegistry| {
-            let (_stored, pins) = overlay.host_reach_of(&carrier);
-            overlay.retain_reach(pins);
+        let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope, _types: &TypeRegistry, _gate| {
+            overlay.mint_retained(&[carrier.coverage()]);
         });
         seed
     });
@@ -90,7 +90,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let signature = sig(
         KType::ANY,
         vec![
@@ -100,7 +100,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("body", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "USING", signature, body, types);
+    crate::builtins::register_builtin(scope, "USING", signature, body, types, gate);
 }
 
 #[cfg(test)]

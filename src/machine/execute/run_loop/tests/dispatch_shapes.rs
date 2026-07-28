@@ -10,9 +10,6 @@
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::core::run_root_storage;
-use crate::machine::core::FramePins;
-use crate::machine::core::Reached;
-use crate::machine::core::StoredReach;
 use crate::machine::core::{arg_object, Action, BodyCtx};
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
@@ -65,7 +62,7 @@ fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
                 .alloc_object_checked(obj.deep_clone(), ctx.types)
                 .expect("a deep-cloned Number is always resident-in-self"),
         )),
-        None => Action::Done(Err(crate::machine::KError::new(
+        None => Action::done(Err(crate::machine::KError::new(
             crate::machine::KErrorKind::MissingArg("n".to_string()),
         ))),
     }
@@ -93,10 +90,11 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
         .alloc_object_checked(KObject::KFunction(f), types)
         .expect("f was just allocated into region\'s own region");
     scope
-        .bind_value(
+        .bind_resident_for_test(
             "f".to_string(),
-            Reached::for_test(obj, StoredReach::for_test(None, false), FramePins::empty()),
+            obj,
             BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bind_value should succeed");
 }
@@ -536,14 +534,11 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     // clean. `f` is then a backward-visible placeholder pointing at it.
     let producer_target = scope.brand().alloc_object(KObject::Number(42.0));
     scope
-        .bind_value(
+        .bind_resident_for_test(
             "producer_target".to_string(),
-            Reached::for_test(
-                producer_target,
-                StoredReach::for_test(None, false),
-                FramePins::empty(),
-            ),
+            producer_target,
             BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bind_value should succeed");
     let producer = runtime.dispatch_in_scope(parse_one("producer_target {y = 1}"), scope);
@@ -553,6 +548,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             producer,
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
+            &mut crate::machine::WriteGate::for_test(),
         )
         .expect("install_placeholder should succeed");
 
@@ -821,6 +817,7 @@ fn operator_chain_undeclared_errors_cleanly() {
 fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     use crate::machine::model::{OperatorGroup, ReductionMode};
     use std::collections::HashSet;
+    use std::rc::Rc;
 
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
@@ -829,11 +826,14 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let inner = scope.brand().alloc_scope(scope.child_for_call());
 
     let members: HashSet<String> = ["-"].iter().map(|s| s.to_string()).collect();
-    let group = scope
-        .brand()
-        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::FoldRight));
+    let group = Rc::new(OperatorGroup::new(members, ReductionMode::FoldRight));
     inner
-        .register_operator_group("-".to_string(), group, BindingIndex::value(0))
+        .register_operator_group_direct(
+            "-".to_string(),
+            group,
+            BindingIndex::value(0),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("an inner scope may register a builtin operator's probe");
 
     // Both dispatches ride the bundle's run frame: `inner` is a child of the run root, so the
@@ -881,17 +881,21 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
 fn operator_chain_registered_unary_group_hands_body_the_list() {
     use crate::machine::model::{OperatorGroup, ReductionMode};
     use std::collections::HashSet;
+    use std::rc::Rc;
 
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let members: HashSet<String> = ["~"].iter().map(|s| s.to_string()).collect();
-    let group = scope
-        .brand()
-        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::Unary));
+    let group = Rc::new(OperatorGroup::new(members, ReductionMode::Unary));
     scope
-        .register_operator_group("~".to_string(), group, BindingIndex::BUILTIN)
+        .register_operator_group_direct(
+            "~".to_string(),
+            group,
+            BindingIndex::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("register operator group");
     test_run.run("FN (~ xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
 

@@ -1,4 +1,5 @@
 use crate::machine::model::TypeRegistry;
+use crate::machine::WriteGate;
 
 use crate::machine::model::KKind;
 
@@ -31,7 +32,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let value = match arg_object(ctx.args, "value") {
         Some(v) => v,
         None => {
-            return Action::Done(Err(KError::new(KErrorKind::MissingArg(
+            return Action::done(Err(KError::new(KErrorKind::MissingArg(
                 "value".to_string(),
             ))))
         }
@@ -47,12 +48,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     ) {
         Ok(Some(arm)) => arm,
         Ok(None) => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "inexhaustive match = no branch for value of type `{}`",
                 value.ktype().name(ctx.types)
             )))))
         }
-        Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+        Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
     };
     // The scrutinee reaches its `it` binding through the same carrier door TRY's success arm uses:
     // the envelope's retained host pins the producer until the single bind-time copy, and the
@@ -83,7 +84,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     arm_tail(ctx.scope, it_source, selected.body, contract, ctx.types)
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let signature = sig(
         KType::ANY,
         vec![
@@ -95,7 +96,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("branches", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "MATCH", signature, body, types);
+    crate::builtins::register_builtin(scope, "MATCH", signature, body, types, gate);
 }
 
 #[cfg(test)]

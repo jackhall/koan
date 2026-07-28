@@ -19,19 +19,21 @@ use crate::machine::model::{Carried, Module};
 use crate::machine::model::{Held, KObject, KType, Record, TypeNode};
 use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
-/// seals as a [`StepCarried`] carrier naming its reach ([`Action::Done(Ok)`]), an error as a
-/// [`Action::Done(Err)`]. Both channels are witnessed: an object value re-projected at the fold
+/// seals as a [`StepCarried`] carrier naming its reach ([`Action::done(Ok)`]), an error as a
+/// [`Action::done(Err)`]. Both channels are witnessed: an object value re-projected at the fold
 /// brand from the lhs operand's view (its reach folded by construction), a type identity witnessed
-/// in place from its stored reach via [`Scope::resident_type_carrier`] (or, for a projected type
+/// in place from its stored reach via [`Scope::resident`] (or, for a projected type
 /// field, re-projected and sealed under the folded lhs reach).
 fn route<'a>(result: Result<StepCarried<'a>, KError>) -> crate::machine::Action<'a> {
-    crate::machine::Action::Done(result)
+    crate::machine::Action::done(result)
 }
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
@@ -67,33 +69,27 @@ pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mach
     let s_name = match arg_object(ctx.args, "s") {
         Some(KObject::KString(s)) => s.clone(),
         Some(other) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
                 expected: "Identifier".to_string(),
                 got: other.ktype().name(ctx.types),
             })));
         }
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
     let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
     // `s` is a bound name: cross the binding's own carrier as the field read's lhs operand, so the
-    // projected field folds every region the bound value reaches (its stored reach and home).
-    // `lookup` hit a `data` binding, and `lookup_value_delivered` walks the same chain with the
-    // reach-carrying twin of the same `data` arm, so a data-bound name always resolves to a
-    // delivered carrier.
-    if let Some(target) = ctx.scope.lookup(&s_name) {
-        let lhs = ctx
-            .scope
-            .lookup_value_delivered(&s_name)
-            .expect("a data-bound name always resolves to a delivered value carrier");
-        return route(access_field(&ctx.ctx, target, &field_name, &lhs, ctx.types));
+    // projected field folds every region the bound value reaches. The lift is the only read — the
+    // field probe runs under the envelope's own pins rather than off a bare reference.
+    if let Some(lhs) = ctx.scope.lookup_value_delivered(&s_name) {
+        return route(access_field(&ctx.ctx, &field_name, &lhs, ctx.types));
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name) {
         if let TypeNode::AbstractType { name, .. } = ctx.types.node(kt) {
-            return Action::Done(Err(abstract_type_has_no_members(&name)));
+            return Action::done(Err(abstract_type_has_no_members(&name)));
         }
     }
-    Action::Done(Err(KError::new(KErrorKind::UnboundName(s_name))))
+    Action::done(Err(KError::new(KErrorKind::UnboundName(s_name))))
 }
 
 /// `ATTR <s:ProperType> <field:_>` — entry for a type-channel lhs, e.g. a first-class signature
@@ -111,10 +107,10 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
                 route(access_type_member(ctx.scope, kt, &field_name, ctx.types))
             }
             TypeResolution::Unbound(name) => {
-                Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
+                Action::done(Err(KError::new(KErrorKind::UnboundName(name))))
             }
             TypeResolution::Park(producers) => {
-                Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "ATTR lhs type `{}` resolved to a still-finalizing type \
                      (parked on {} producer(s)); the type argument should already be sealed \
                      at body entry",
@@ -127,7 +123,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
     let s_kt = match arg_type(ctx.args, "s") {
         Some(kt) => kt,
         None => {
-            return Action::Done(Err(match arg_object(ctx.args, "s") {
+            return Action::done(Err(match arg_object(ctx.args, "s") {
                 Some(other) => KError::new(KErrorKind::TypeMismatch {
                     arg: "s".to_string(),
                     expected: "ProperType".to_string(),
@@ -146,7 +142,7 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine
     use crate::machine::{arg_object, Action};
     let target = match arg_object(ctx.args, "s") {
         Some(obj) => obj,
-        None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
     let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
@@ -155,22 +151,17 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine
     // `s` (region-pure) rebuilds into the read-site region and seals resident —
     // coverage-equivalent to an empty-reach seal.
     match ctx.arg_carrier("s") {
-        Some(lhs) => route(access_field(&ctx.ctx, target, &field_name, lhs, ctx.types)),
+        Some(lhs) => route(access_field(&ctx.ctx, &field_name, lhs, ctx.types)),
         None => {
             let resident = match ctx.scope.seal_fresh_object(target.deep_clone(), ctx.types) {
                 // A region-pure rebuild seals under an empty foreign bundle.
-                Ok(witnessed) => ctx
-                    .scope
-                    .seal_resident_delivered(witnessed, crate::machine::core::FramePins::empty()),
-                Err(e) => return Action::Done(Err(e)),
+                Ok(witnessed) => ctx.scope.seal_resident_delivered(
+                    witnessed,
+                    crate::machine::core::FrameCoverage::empty(),
+                ),
+                Err(e) => return Action::done(Err(e)),
             };
-            route(access_field(
-                &ctx.ctx,
-                target,
-                &field_name,
-                &resident,
-                ctx.types,
-            ))
+            route(access_field(&ctx.ctx, &field_name, &resident, ctx.types))
         }
     }
 }
@@ -181,14 +172,14 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     let m = match arg_object(ctx.args, "s") {
         Some(KObject::Module(module)) => *module,
         Some(other) => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
                 expected: "Module".to_string(),
                 got: other.ktype().name(ctx.types),
             })));
         }
         None => {
-            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
                 expected: "Module".to_string(),
                 got: "Type".to_string(),
@@ -222,7 +213,9 @@ fn access_type_member<'a>(
                 .or_else(|| schema.abstract_members.get(field))
                 .or_else(|| schema.value_slots.get(field));
             match member {
-                Some(member) => Ok(StepCarried::born(scope.resident_type_carrier(*member))),
+                Some(member) => Ok(StepCarried::born(
+                    scope.resident(Carried::Type(*member), CarrierWitness::default()),
+                )),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     kt.name(types),
@@ -291,39 +284,54 @@ fn wrapped_field<'v, 'w>(
 /// borrow, so it seals with an empty reach through the no-fold door.
 fn access_field<'a>(
     step: &StepAllocator<'a>,
-    target: &KObject<'a>,
     field: &str,
     lhs: &DeliveredCarried,
     types: &TypeRegistry,
 ) -> Result<StepCarried<'a>, KError> {
-    match wrapped_field(target, field, types)? {
-        Held::Object(value) => {
-            if let Some(sealed) = step.alloc_object_scalar(value) {
-                return Ok(sealed);
+    /// What the probe read off the lhs: a shallow scalar already copied out (no fold needed), a
+    /// non-scalar object member (fold through the lhs), or an owned type member.
+    enum Member<'s> {
+        Scalar(StepCarried<'s>),
+        Object,
+        Type(KType),
+    }
+    // The probe runs under the envelope's own pins, and only brand-free data leaves it — a
+    // classification, a `Copy` `KType`, or a step carrier the scalar path already allocated.
+    let member = lhs.open(|live| -> Result<Member<'a>, KError> {
+        match wrapped_field(live.object(), field, types)? {
+            Held::Object(value) => Ok(match step.alloc_object_scalar(value) {
+                Some(sealed) => Member::Scalar(sealed),
+                None => Member::Object,
+            }),
+            // A type member is owned data: it clones out of the lhs and allocates into the read
+            // site's own region, so the read carries no dependence on the lhs carrier.
+            Held::Type(kt) => Ok(Member::Type(*kt)),
+            // A record field cell is a value or a resolved type; the bind seam's unlowered carrier
+            // never lands in one.
+            Held::UnresolvedType(_) => {
+                unreachable!("a record field is never an unlowered type name")
             }
-            Ok(step.alloc_carried_with(&[lhs], |b, views| {
-                let target = match views[0] {
-                    Carried::Object(o) => o,
-                    Carried::Type(_) | Carried::UnresolvedType(_) => {
-                        unreachable!("probed ambient: lhs is a value")
-                    }
-                };
-                match wrapped_field(target, field, types)
-                    .expect("probed ambient: field exists on this value")
-                {
-                    Held::Object(v) => Carried::Object(b.alloc_object_folded(v.deep_clone())),
-                    Held::Type(_) | Held::UnresolvedType(_) => {
-                        unreachable!("probed ambient: member is an object")
-                    }
-                }
-            }))
         }
-        // A type member is owned data: it clones out of the lhs and allocates into the read
-        // site's own region, so the read carries no dependence on the lhs carrier.
-        Held::Type(kt) => Ok(step.type_carried(*kt)),
-        // A record field cell is a value or a resolved type; the bind seam's unlowered carrier
-        // never lands in one.
-        Held::UnresolvedType(_) => unreachable!("a record field is never an unlowered type name"),
+    })?;
+    match member {
+        Member::Scalar(sealed) => Ok(sealed),
+        Member::Object => Ok(step.alloc_carried_with(&[lhs], |b, views| {
+            let target = match views[0] {
+                Carried::Object(o) => o,
+                Carried::Type(_) | Carried::UnresolvedType(_) => {
+                    unreachable!("probed ambient: lhs is a value")
+                }
+            };
+            match wrapped_field(target, field, types)
+                .expect("probed ambient: field exists on this value")
+            {
+                Held::Object(v) => Carried::Object(b.alloc_object_folded(v.deep_clone())),
+                Held::Type(_) | Held::UnresolvedType(_) => {
+                    unreachable!("probed ambient: member is an object")
+                }
+            }
+        })),
+        Member::Type(kt) => Ok(step.type_carried(kt)),
     }
 }
 
@@ -351,8 +359,10 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
         // `:|`-minted abstract type.
         return Ok(StepCarried::born(
             match module_scope.bindings().lookup_type(field, None) {
-                Some(NameLookup::Bound(kt)) => module_scope.resident_type_carrier(kt),
-                _ => module_scope.resident_type_carrier(minted),
+                Some(NameLookup::Bound(kt)) => {
+                    module_scope.resident(Carried::Type(kt), CarrierWitness::default())
+                }
+                _ => module_scope.resident(Carried::Type(minted), CarrierWitness::default()),
             },
         ));
     }
@@ -363,21 +373,17 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
     // (or its re-tag carrier) names the full reach without an embedded lhs to fold (the module
     // identity is the lhs).
     match module_scope.bindings().lookup_member(field, None) {
-        Some(MemberResolution::Value { obj, stored, pins }) => {
+        Some(MemberResolution::Value(sealed)) => {
             if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
                 // The re-tag allocates in the module region (not the read site's): both the value
-                // member `obj` and the re-tag identity `tag` cross as declared fold operands. `obj`
-                // is a pre-existing reference into the module region, sealed resident with the
-                // member's own `reach`; `tag` is a Copy handle sealed resident via
-                // `resident_type_carrier`. Both carriers union into the wrapped result's witness
-                // via `alloc_carried_with`.
-                let obj_carrier = module_scope.seal_resident_delivered(
-                    module_scope.resident_value_carrier(obj, stored),
-                    pins,
-                );
+                // member and the re-tag identity `tag` cross as declared fold operands. The member
+                // is a binding seal lifted into an envelope pinned by the module scope's own region
+                // owner; `tag` is a Copy handle sealed resident via `Scope::resident`. Both
+                // carriers union into the wrapped result's witness via `alloc_carried_with`.
+                let obj_carrier = module_scope.lift_resident(sealed);
                 let tag_carrier = module_scope.seal_resident_delivered(
-                    module_scope.resident_type_carrier(tag),
-                    crate::machine::core::FramePins::empty(),
+                    module_scope.resident(Carried::Type(tag), CarrierWitness::default()),
+                    crate::machine::core::FrameCoverage::empty(),
                 );
                 let ctx = StepAllocator::for_scope(module_scope);
                 return Ok(ctx.alloc_carried_with(
@@ -390,15 +396,14 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                     },
                 ));
             }
-            // A value member read reaches into the module's region; thread the member's owned pins.
-            Ok(StepCarried::born_pinned(
-                module_scope.resident_value_carrier(obj, stored),
-                pins,
-            ))
+            // A value member read reaches into the module's region; the lift upgrades the member's
+            // exact reach into the owned pins that ride the step.
+            let (carrier, pins) = module_scope.lift_resident_parts(sealed);
+            Ok(StepCarried::born_pinned(carrier, pins))
         }
-        Some(MemberResolution::Type { kt }) => {
-            Ok(StepCarried::born(module_scope.resident_type_carrier(kt)))
-        }
+        Some(MemberResolution::Type { kt }) => Ok(StepCarried::born(
+            module_scope.resident(Carried::Type(kt), CarrierWitness::default()),
+        )),
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field
@@ -406,7 +411,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let identifier_sig = || {
         sig(
             KType::ANY,
@@ -478,18 +483,40 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     };
 
     use crate::builtins::register_builtin;
-    register_builtin(scope, "ATTR", identifier_sig(), body_identifier, types);
-    register_builtin(scope, "ATTR", module_field_sig(), body_module, types);
-    register_builtin(scope, "ATTR", newtype_sig(), body_newtype, types);
+    register_builtin(
+        scope,
+        "ATTR",
+        identifier_sig(),
+        body_identifier,
+        types,
+        gate,
+    );
+    register_builtin(scope, "ATTR", module_field_sig(), body_module, types, gate);
+    register_builtin(scope, "ATTR", newtype_sig(), body_newtype, types, gate);
     register_builtin(
         scope,
         "ATTR",
         type_identifier_field_sig(),
         body_type_lhs,
         types,
+        gate,
     );
-    register_builtin(scope, "ATTR", type_type_field_sig(), body_type_lhs, types);
-    register_builtin(scope, "ATTR", module_type_field_sig(), body_module, types);
+    register_builtin(
+        scope,
+        "ATTR",
+        type_type_field_sig(),
+        body_type_lhs,
+        types,
+        gate,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        module_type_field_sig(),
+        body_module,
+        types,
+        gate,
+    );
 }
 
 #[cfg(test)]

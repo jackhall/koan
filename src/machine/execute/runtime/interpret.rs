@@ -9,9 +9,19 @@ use super::{DestHandleFamily, KoanRuntime};
 use crate::builtins::{seed_builtins, unseeded_scopes};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::KExpression;
-use crate::machine::{CarrierWitness, KError, KErrorKind, Scope};
+use crate::machine::model::TypeRegistry;
+use crate::machine::{CarrierWitness, KError, KErrorKind, Scope, WriteGate};
 use crate::parse::{parse, parse_with_path};
 use crate::witnessed::Witnessed;
+
+/// The run-root seeding door. The run-global root is unreachable by any node until the program
+/// starts, so the builtin registration is a construction-time write: this mints the
+/// [`WriteGate`] for it and threads that one gate through every `register_*` call the seed makes.
+/// `crate::builtins` cannot mint one itself — which is exactly why the seeding entry point takes
+/// the gate as a parameter rather than helping itself to a write verb.
+pub(crate) fn seed_run_root<'a>(root: &'a Scope<'a>, types: &TypeRegistry) {
+    seed_builtins(root, types, &mut WriteGate::for_unpublished_scope());
+}
 
 /// Parse Koan source and run it on a fresh `KoanRegion`; all values allocated by the
 /// program die when this returns.
@@ -51,7 +61,7 @@ pub fn interpret_with_writer_path(
     let types = runtime
         .type_registry()
         .expect("run frame was just established");
-    seed_builtins(root, &types);
+    seed_run_root(root, &types);
     runtime.run_program(top, exprs)
 }
 
@@ -79,14 +89,20 @@ impl<'run> KoanRuntime<'run> {
                 // The dest rides an empty-set `resident`: the run region outlives everything and is
                 // externally pinned, and yoking the run-root frame here would re-form a reference
                 // cycle into the drained value's witness.
-                if let Ok((witnessed, pins)) = self.relocate_terminal(
+                if let Ok((witnessed, coverage)) = self.relocate_terminal(
                     id,
-                    Witnessed::<DestHandleFamily, CarrierWitness>::resident(root.brand().handle()),
+                    root.seal_resident_delivered(
+                        Witnessed::<DestHandleFamily, CarrierWitness>::resident(
+                            root.brand().handle(),
+                        ),
+                        crate::machine::core::FrameCoverage::empty(),
+                    ),
                 ) {
-                    // Mint the rehomed terminal's reach into the run root's arena so those regions stay
-                    // alive past scheduler teardown, from the value's own owned foreign bundle the
-                    // relocation threaded back.
-                    let _ = root.resident_reach_of(&witnessed, &pins);
+                    // Fold the rehomed terminal's own owned bundle — threaded back by the
+                    // relocation — into the run root region's union, so those regions stay alive
+                    // past scheduler teardown. The rehomed value is resident for the region's life,
+                    // which is the schedule that retention runs on.
+                    root.retain_reach(coverage);
                     self.sched.rehome_terminal(id, Ok(witnessed));
                 }
             }

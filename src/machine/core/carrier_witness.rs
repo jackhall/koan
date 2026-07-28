@@ -5,10 +5,14 @@
 
 use std::rc::Rc;
 
-use crate::machine::model::{Carried, CarriedFamily};
+use crate::machine::model::{
+    still_borrows_host, Carried, CarriedFamily, DispatchToken, KObject, UntypedKey,
+};
 use crate::witnessed::{Erased, Witnessed};
 
-use super::arena::FrameStorage;
+use super::arena::{FrameStorage, KoanRegion};
+use super::kfunction::{KFunction, KFunctionFamily};
+use super::scope::Scope;
 
 /// Koan's value-carrier witness: the library [`Carrier`](crate::witnessed::Carrier) over koan's
 /// frame owner — one `borrows_host` bit plus a reference to the value's hosted reach set. It pins
@@ -22,14 +26,27 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// [`CarrierWitness`]-witnessed value carrier paired with its retained [`FrameStorage`] owner. The
 /// in-transit form of a value's liveness — from a scheduler pull (or a resident seal) to its
 /// adoption — and the only surface that materializes a producer frame into a minted reach set
-/// (`mint_reach` / `transfer_into`), so koan never holds a bare frame pin at a consumer site. Every
-/// envelope-bearing mint routes through `Delivered::mint_reach` (koan's `Scope::envelope_reach_of`
-/// funnel); the one envelope-free case — a value already resident in a region the caller's context
-/// covers ambiently — routes through
-/// [`Witnessed::mint_resident_reach`](crate::witnessed::Witnessed::mint_resident_reach) (koan's
-/// `Scope::resident_reach_of`) instead.
+/// (`mint_reach` / `transfer_into`), so koan never holds a bare frame pin at a consumer site. The
+/// envelope's member set names the value's home region as an ordinary member, and the envelope
+/// records the residence owner its container supplied — so a site that needs the home back reads it
+/// ([`Delivered::with_home_region`](crate::witnessed::Delivered::with_home_region)) rather than
+/// searching the member set, and a relocation derives what it still reaches from the product it
+/// built ([`product_still_borrows`]) rather than choosing a bundle up front.
 pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
+
+/// A callable's **dormant** carrier: the `KFunction` fused to the exact reach description minted for
+/// it, over the [`KFunctionFamily`] the library dispatches on. This is what a `functions` dispatch
+/// bucket stores and what a [`ReturnContract`](crate::machine::core::ReturnContract) carries across
+/// a tail chain: the seal fuses the callable with its reach claim, where a bare `&KFunction` would
+/// state no reach at all.
+pub type SealedFunction = crate::witnessed::Sealed<KFunctionFamily, CarrierWitness>;
+
+/// A callable **in use**: re-anchored at a region's own lifetime, paired with the reach witness it
+/// was opened under. Dispatch resolves on one of these and carries it across argument evaluation
+/// (`Resolved<'step>`); the escape into the call chain
+/// [`reseal`](crate::witnessed::Opened::reseal)s it back to a [`SealedFunction`].
+pub type OpenedFunction<'a> = crate::witnessed::Opened<'a, KFunctionFamily, CarrierWitness>;
 
 /// The step-terminal seal's variant bit (design/value-substrates.md § Escape): force
 /// `borrows_host = true` on `witnessed` when its carried value is a substrate carrier (`Record` /
@@ -58,4 +75,75 @@ pub(crate) fn force_substrate_borrows_host(
         Some(erased) => Witnessed::from_erased(erased, CarrierWitness::new(true, None)),
         None => witnessed,
     }
+}
+
+/// Everything a dispatch-bucket registration needs about a callable, computed at seal time — the
+/// one moment the callable is open under its home pin — so no write verb ever opens a carrier.
+/// `sealed` is what the `functions` bucket stores; the rest is plain data with no region lifetime.
+///
+/// A keyworded expression becomes dispatchable **only** through one of these — the `FN` / `OP`
+/// registration doors and the builtin seeds. Binding a function *value* (`LET g = (f)`) publishes
+/// nothing here: a value binding is callable by name alone.
+pub(crate) struct OverloadSeal {
+    /// The dormant callable carrier the dispatch bucket stores.
+    pub sealed: SealedFunction,
+    /// `signature.untyped_key()` — the bucket this callable belongs in.
+    pub key: UntypedKey,
+    /// `signature.dispatch_token()` — the stored form of the duplicate-overload predicate.
+    pub token: DispatchToken,
+    /// `KFunction::summarize()`, rendered here so the `DuplicateOverload` diagnostic can name the
+    /// colliding overload without re-opening it.
+    pub summary: String,
+}
+
+impl OverloadSeal {
+    /// The bundle for a callable **resident in `scope`'s own region** — the `FN` / `OP`
+    /// registration doors. The reach is the exact empty set: `FN` allocates the callable into the
+    /// very scope it captures, so its only region borrow is home, which every read of it already
+    /// pins. The callable is held live here, so everything the bucket write keys on is read
+    /// straight off the reference and travels as plain data.
+    pub(crate) fn of_resident<'a>(scope: &Scope<'a>, f: &'a KFunction<'a>) -> Self {
+        let sealed = scope.seal_resident::<KFunctionFamily>(f, CarrierWitness::default());
+        OverloadSeal {
+            sealed,
+            key: f.signature.untyped_key(),
+            token: f.signature.dispatch_token(),
+            summary: f.summarize(),
+        }
+    }
+}
+
+/// Koan's **retention predicate** for a copying relocation of `envelope`
+/// ([`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into),
+/// design/witness-hosting.md § Escape): whether `product` — the bytes the fold just built at the
+/// destination — still borrows `region`, one of the regions the envelope pins.
+///
+/// Only the value's **home** region is ever released, and `region` is home exactly when it is the
+/// residence the envelope's container supplied ([`Delivered::with_home_region`]) — the library hands
+/// each pinned region over in turn, so residence is answered per region by identity with no probe
+/// over the member set.
+/// Every other member is kept: a foreign member may be reached through structure the product's own
+/// walk cannot see (a `KFunction`'s captured environment, a `Module`'s child scope), so releasing
+/// it on a walk that only follows the product's cells would dangle. Home is exact — the walk is
+/// asking whether the copy left a leaf behind in the region it was copied out of, which is
+/// precisely what [`still_borrows_host`] answers.
+///
+/// A `product` of `None` (the fold built no object — a type-channel cell) keeps every member.
+/// Releasing home is what frees a tail loop's retiring region once its delivered carrier drops,
+/// instead of chaining it into every successor region's arena.
+pub(crate) fn product_still_borrows(
+    envelope: &DeliveredCarried,
+    product: Option<&KObject<'_>>,
+    region: &KoanRegion,
+) -> bool {
+    let is_home = envelope.with_home_region(|home| std::ptr::eq(home, region));
+    !is_home || product.is_none_or(|value| still_borrows_host(value, region))
+}
+
+/// [`product_still_borrows`] for a relocation whose product is a top-node
+/// [`deep_clone`](KObject::deep_clone) of the source value — a scalar, a `KFunction` / `Module` /
+/// `KExpression` leaf riding its borrow verbatim. Such a clone borrows exactly what the source
+/// does, so the source *is* the product and the predicate answers off the envelope alone.
+pub(crate) fn clone_still_borrows(envelope: &DeliveredCarried, region: &KoanRegion) -> bool {
+    envelope.open(|live| product_still_borrows(envelope, live.as_object(), region))
 }

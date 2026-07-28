@@ -17,8 +17,8 @@
 //! head-placeholder resume, no new scheduler primitive.
 
 use crate::machine::core::DepPlacement;
+use crate::machine::model::Carried;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
@@ -26,6 +26,7 @@ use crate::source::Spanned;
 use super::super::TerminalDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::{Await, DepRequest, Outcome};
+use crate::machine::AdoptSeam;
 use crate::scheduler::Deps;
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
@@ -64,10 +65,23 @@ fn park_on_head<'step>(
         let head_terminal = terminals.owned(0);
         // Adopt the head's carrier copy-free: fold its reach so a callable's captured foreign
         // environment outlives the application, and re-anchor the value at the consumer scope brand.
-        let head = ctx.current_scope().adopt_sealed(&head_terminal.delivered);
-        let callable = match classify_head(head, type_only, ctx.types()) {
-            Ok(c) => c,
-            Err(e) => return Outcome::Done(Err(e)),
+        // The callable arm adopts as a callable, so it arrives fused to the reach it was minted
+        // under; every other head takes the whole-value adopt for its classification.
+        let callable = match ctx
+            .current_scope()
+            .adopt_delivered_function(&head_terminal.delivered)
+            .filter(|_| !type_only)
+        {
+            Some(function) => ResolvedCallable::Function(function),
+            None => {
+                let head = ctx
+                    .current_scope()
+                    .adopt_carried(&head_terminal.delivered, AdoptSeam::Retaining);
+                match classify_head(head, type_only, ctx.types()) {
+                    Ok(c) => c,
+                    Err(e) => return Outcome::Done(Err(e)),
+                }
+            }
         };
         apply_callable(ctx, callable, &expr)
     });
@@ -82,9 +96,10 @@ fn park_on_head<'step>(
 
 /// Branch a resumed head value into a [`ResolvedCallable`]. A type identity is always admitted
 /// as a constructor — `apply_callable`'s constructor arm is the single authority on what a type
-/// admits when applied. The `type_only` flag prunes only the value channel: a value callable is a
-/// non-`type_only` `KFunction`, and any other value surfaces a type-shaped `TypeMismatch` (under
-/// `type_only`) or a non-callable `DispatchFailed`.
+/// admits when applied. The admitted value callable is taken by the caller's callable adopt before
+/// this runs, so what reaches here is a type identity or a diagnostic: a `KFunction` gets here only
+/// under `type_only`, where the value channel is pruned and it surfaces a type-shaped
+/// `TypeMismatch`; any other value is a non-callable `DispatchFailed`.
 fn classify_head<'step>(
     head: Carried<'step>,
     type_only: bool,
@@ -94,7 +109,6 @@ fn classify_head<'step>(
         // A function value is the pruned arm under `type_only` — the type-only lane admits no
         // value-channel callable — and falls through to the `TypeMismatch`.
         Carried::Object(obj) => match obj {
-            KObject::KFunction(f) if !type_only => Ok(ResolvedCallable::Function(f)),
             other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "Type".to_string(),

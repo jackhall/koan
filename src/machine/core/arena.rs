@@ -20,7 +20,6 @@ use crate::machine::execute::StepCarried;
 
 use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::model::OperatorGroup;
 use crate::machine::model::{
     Carried, CarriedFamily, ContainerSubstrate, DictSubstrate, Held, KObject, ListSubstrate,
     Module, PayloadSubstrate, Record, RecordSubstrate,
@@ -28,8 +27,8 @@ use crate::machine::model::{
 use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    Erased, FamilyArena, FoldedPlacement, ReachDescription, Reattachable, Region, RegionHandle,
-    StorageOf, StorageProfile, Stored, Witnessed,
+    Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StorageOf,
+    StorageProfile, Stored, Witnessed,
 };
 
 mod frame;
@@ -37,15 +36,14 @@ mod residence;
 mod step_allocator;
 
 pub(crate) use frame::FrameStorageExt;
-pub use frame::{run_root_storage, CallFrame, FramePins, FrameReach, FrameStorage};
+pub use frame::{run_root_storage, CallFrame, FrameCoverage, FrameReach, FrameStorage};
 pub(crate) use residence::Residence;
 use residence::ResidenceEvidence;
 pub use step_allocator::StepAllocator;
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
 /// [`FamilyArena`] cell per family. The `KType` cell backs per-type identity binding storage
-/// (`Bindings::types`); the `OperatorGroup` cell backs the per-scope operator registry
-/// (`Bindings::operators`); the `TypeIdentifier` cell backs the type channel's unlowered-name
+/// (`Bindings::types`); the `TypeIdentifier` cell backs the type channel's unlowered-name
 /// carrier ([`Carried::UnresolvedType`]).
 pub struct KoanStorageProfile;
 
@@ -61,15 +59,12 @@ impl StorageProfile for KoanStorageProfile {
                     (
                         KType,
                         (
-                            OperatorGroup,
+                            TypeIdentifier,
                             (
-                                TypeIdentifier,
+                                RecordSubstrate<'static>,
                                 (
-                                    RecordSubstrate<'static>,
-                                    (
-                                        ListSubstrate<'static>,
-                                        (DictSubstrate<'static>, (PayloadSubstrate<'static>, ())),
-                                    ),
+                                    ListSubstrate<'static>,
+                                    (DictSubstrate<'static>, (PayloadSubstrate<'static>, ())),
                                 ),
                             ),
                         ),
@@ -139,7 +134,8 @@ impl<'a> RegionBrand<'a> {
 
     /// Runtime-checked twin of [`Self::alloc_object`] for an `o` that cannot rebuild owned at
     /// `'static` (`KObject` has no general `'static` rebuild):
-    /// [`KObject::resident_in`] audits every region borrow `o` carries against this brand's own
+    /// [`KObject::resident_in_delivered`] audits every region borrow `o` carries, with no reach
+    /// evidence, against this brand's own
     /// region. A `Wrapped { type_id }` tag needs no walk: the `type_id` is a `Copy` `KType` handle
     /// that reaches nothing the audit could reject.
     pub fn alloc_object_checked(
@@ -192,29 +188,6 @@ impl<'a> RegionBrand<'a> {
         self.0
             .alloc_resident_checked::<Module<'static>>(m, ResidenceEvidence::dest_only())
             .expect("alloc_module: a Module must be allocated into its own child scope's region")
-    }
-
-    /// Allocate an [`OperatorGroup`]. Lifetime-free and anchor-free, so the gate is a no-op, but it
-    /// routes the same engine for a single uniform allocation path.
-    pub fn alloc_operator_group(self, g: OperatorGroup) -> &'a OperatorGroup {
-        self.0.alloc_resident::<OperatorGroup>(g)
-    }
-
-    /// Mint a frozen reach description into this brand's region side table — the Koan veneer over
-    /// [`ReachDescription::mint_with_dest_bit`]. `sources` are the composition's owned pin bundles
-    /// (strong members — the union folds them, never a description's `Weak`). `omit` is the scope's
-    /// home/lexical-ancestor policy predicate; home-omission (self-cycle) is handled by the library.
-    /// Returns the minted description (`None` when the composed reach is empty — a region-pure value
-    /// pins nothing), the owned [`FramePins`] the holder keeps to pin its members, and the
-    /// pre-omission destination-coverage bit (`true` iff a source bundle or materialized host reaches
-    /// this brand's own region before home-omission drops it).
-    pub(crate) fn mint(
-        self,
-        sources: &[&FramePins],
-        materialize_hosts: &[Rc<FrameStorage>],
-        omit: impl Fn(&KoanRegion) -> bool,
-    ) -> (Option<&'a FrameReach>, FramePins, bool) {
-        ReachDescription::mint_with_dest_bit(self.0, sources, materialize_hosts, omit)
     }
 
     /// The witnessed-allocation surface for an owned object built fresh inside the brand: born
@@ -276,16 +249,16 @@ impl<'a> RegionBrand<'a> {
     /// defining frame pins the region for the step, and past the step the scheduler's retention hold
     /// (the delivery envelope's host) carries the pin. Confines [`Witnessed::resident`] to this arena
     /// surface, so no read / define builtin reaches for it. `witness` must name the value's
-    /// home-omitted foreign reach; the caller
-    /// ([`Scope::resident_value_carrier`](crate::machine::core::Scope)) folds it. The brand is the
+    /// exact reach; the caller
+    /// ([`Scope::seal_resident`](crate::machine::core::Scope)) folds it. The brand is the
     /// capability marker: only a handle into the region the value lives in may re-seal it resident.
-    pub(crate) fn seal_resident(
+    pub(crate) fn seal_resident<T: Reattachable>(
         self,
-        carried: Carried<'_>,
+        value: T::At<'_>,
         witness: CarrierWitness,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
+    ) -> Witnessed<T, CarrierWitness> {
         let _ = self.0;
-        Witnessed::from_erased(Erased::erase(carried), witness)
+        Witnessed::from_erased(Erased::erase(value), witness)
     }
 }
 
@@ -354,16 +327,15 @@ impl<'a> FoldingBrand<'a> {
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
 // `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
 // Each family is one type generic only in a single lifetime, so its layout is identical for every
-// choice of that lifetime; `KType`, `OperatorGroup` and `TypeIdentifier` are lifetime-free,
-// trivially invariant. The shared
-// `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its docs).
+// choice of that lifetime; `KType` and `TypeIdentifier` are lifetime-free, trivially invariant. The
+// shared `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its
+// docs).
 reattachable! {
     KObject<'static> => KObject<'r>,
     KType => KType,
     KFunction<'static> => KFunction<'r>,
     Scope<'static> => Scope<'r>,
     Module<'static> => Module<'r>,
-    OperatorGroup => OperatorGroup,
     TypeIdentifier => TypeIdentifier,
     ContainerSubstrate<Record<Held<'static>>> => ContainerSubstrate<Record<Held<'r>>>,
     ContainerSubstrate<Vec<Held<'static>>> => ContainerSubstrate<Vec<Held<'r>>>,
@@ -373,12 +345,12 @@ reattachable! {
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
 /// type-channel identity (a `SetMember` / declared type) that must cross the build brand. A
-/// value-embedding construction `transfer_into`/`merge`s its object carrier with this operand so the
-/// wrapped value lands — allocated through the handle — tagged by the identity, both re-anchored to
-/// the build brand under the same witness; the dest frame's `outer` chain pins the identity's
-/// (ancestor) region. Used by the newtype / tagged-union constructors and the `CATCH` `Result`
-/// build. Layout-invariant: a thin pointer and a `Copy` `KType` handle, representation independent
-/// of `'r`.
+/// value-embedding construction `transfer_into`s its object carrier into this operand so the wrapped
+/// value lands — allocated through the handle — tagged by the identity, both re-anchored to the
+/// build brand under the same witness. The identity is a bare interned handle pointing into no
+/// region, so the whole operand is born co-located in the dest region by a single yoke. Used by the
+/// newtype / tagged-union constructors and the `CATCH` `Result` build. Layout-invariant: a thin
+/// pointer and a `Copy` `KType` handle, representation independent of `'r`.
 pub struct RegionTypeFamily;
 reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, KType));
 
@@ -427,15 +399,9 @@ impl Stored<KoanStorageProfile> for KType {
     }
 }
 
-impl Stored<KoanStorageProfile> for OperatorGroup {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .0
-    }
-}
-
 impl Stored<KoanStorageProfile> for TypeIdentifier {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .1 .0
+        &s.1 .1 .1 .1 .1 .0
     }
 }
 
@@ -458,10 +424,10 @@ macro_rules! koan_substrate_family {
     };
 }
 
-koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
 
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
@@ -602,7 +568,6 @@ impl KoanRegionExt for KoanRegion {
             + weigh::<Scope<'static>>(self)
             + weigh::<Module<'static>>(self)
             + weigh::<KType>(self)
-            + weigh::<OperatorGroup>(self)
             + weigh::<TypeIdentifier>(self)
             + weigh::<RecordSubstrate<'static>>(self)
             + weigh::<ListSubstrate<'static>>(self)
@@ -628,7 +593,6 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<Scope<'static>>()
             + self.family_len::<Module<'static>>()
             + self.family_len::<KType>()
-            + self.family_len::<OperatorGroup>()
             + self.family_len::<RecordSubstrate<'static>>()
             + self.family_len::<ListSubstrate<'static>>()
             + self.family_len::<DictSubstrate<'static>>()

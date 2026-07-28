@@ -3,7 +3,7 @@ use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
 
 #[test]
-fn resolve_type_expr_builtin_leaf_caches() {
+fn resolve_type_expr_builtin_leaf_resolves_stably() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
@@ -18,7 +18,7 @@ fn resolve_type_expr_builtin_leaf_caches() {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on second call"),
     };
-    assert_eq!(first, second, "second call should hit the memo");
+    assert_eq!(first, second, "a re-resolve yields the same handle");
 }
 
 #[test]
@@ -34,10 +34,10 @@ fn resolve_type_expr_unbound_returns_unbound() {
     }
 }
 
-/// Pins the post-finalize memo path: a user type reached after a declaration finalizes lands in
-/// the cache as its sealed member handle.
+/// Pins the post-finalize path: a user type reached after a declaration finalizes resolves to
+/// its sealed member handle, and re-resolves to the same one.
 #[test]
-fn resolve_type_expr_user_struct_caches_after_finalize() {
+fn resolve_type_expr_user_struct_resolves_after_finalize() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
@@ -54,7 +54,7 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
     }
     let kt2 = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
-        _ => panic!("expected Done on memo hit"),
+        _ => panic!("expected Done on re-resolve"),
     };
     assert_eq!(kt, kt2);
 }
@@ -116,7 +116,12 @@ mod bare_leaf_resolution {
     fn builtin_synthesizes_type_carrier() {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
-        scope.register_type("Number".into(), KType::NUMBER, DeclarationSite::BUILTIN);
+        let _ = scope.register_type_direct(
+            "Number".into(),
+            KType::NUMBER,
+            DeclarationSite::BUILTIN,
+            &mut crate::machine::WriteGate::for_test(),
+        );
         let types = TypeRegistry::new();
         let leaf = TypeIdentifier::leaf("Number".to_string());
         match scope.resolve_type_identifier(&leaf, None, &types) {
@@ -143,12 +148,12 @@ mod bare_leaf_resolution {
     }
 
     /// A bare leaf naming a member of an open window resolves to that member's relative sibling
-    /// handle, which the gate refuses to memoize: it parks on the declaration's producer instead,
-    /// then admits once the window seals and the in-flight guard clears. Caching the relative
-    /// handle would leak a window-scoped index into a later, window-free lookup.
+    /// handle, which the gate refuses to admit: it parks on the declaration's producer instead,
+    /// then admits once the window seals and the identity write clears the placeholder. Handing
+    /// the relative handle to a consumer would leak a window-scoped index into a window-free
+    /// context.
     #[test]
     fn mid_window_member_parks_then_resolves() {
-        use crate::machine::core::Bindings;
         use crate::machine::core::NodeId;
         use crate::machine::core::Scope;
         use crate::machine::model::Record;
@@ -159,16 +164,15 @@ mod bare_leaf_resolution {
         let scope = outer
             .brand()
             .alloc_scope(Scope::child_recursive_group(outer, window.clone()));
-        // Mark the binder in-flight (the `pending_types` name the finalize gate reads) and install
-        // a value-side placeholder for the producer node to park on.
-        let bindings: &Bindings<'_> = scope.bindings();
-        let pending_guard = bindings.insert_pending_type("Node".into());
+        // Mark the binder in-flight: the type-side placeholder the finalize gate reads, naming the
+        // producer node a consumer parks on.
         scope
             .install_placeholder(
                 "Node".into(),
                 NodeId(7),
                 BindingIndex::value(0),
                 crate::machine::model::BindKind::Type,
+                &mut crate::machine::WriteGate::for_test(),
             )
             .expect("placeholder install");
 
@@ -181,8 +185,8 @@ mod bare_leaf_resolution {
             other => panic!("expected Park mid-window, got {:?}", outcome_tag(&other)),
         }
 
-        // Seal: fill the member, drop the in-flight guard, and bind the sealed handle where the
-        // declarator's finalize would. The re-resolve now admits.
+        // Seal: fill the member and bind the sealed handle where the declarator's finalize would —
+        // the `types` write clears the placeholder with it. The re-resolve now admits.
         let sealed = window
             .fill_member(
                 0,
@@ -192,14 +196,15 @@ mod bare_leaf_resolution {
                 &types,
             )
             .expect("the only member's fill seals the window");
-        drop(pending_guard);
-        scope
-            .register_nominal_upsert(
-                "Node".into(),
-                sealed.members[0],
-                mock_declaration_site(7, 0),
-            )
-            .expect("install the sealed identity");
+        crate::machine::core::bindings::WriteOp::Type {
+            name: "Node".into(),
+            kt: sealed.members[0],
+            site: mock_declaration_site(7, 0),
+            policy: crate::machine::core::bindings::TypeWritePolicy::UpsertEqual,
+            builtin_shadow_guard: true,
+        }
+        .apply(scope, &mut crate::machine::WriteGate::for_test())
+        .expect("install the sealed identity");
 
         match scope.resolve_type_identifier(&leaf, None, &types) {
             TypeResolution::Done(resolved) => assert_eq!(resolved, sealed.members[0]),
@@ -212,14 +217,11 @@ mod bare_leaf_resolution {
 
     /// Shadowing: an in-flight declaration of the *same name* in an unrelated window must not
     /// capture a sibling reference minted against this one. The gate resolves the index against
-    /// the nearest window and then requires the pending scope to carry that same window, so the
-    /// inner declaration's own window — which is a different allocation — never matches.
-    ///
-    /// This is what the pre-flip gate got from pointer-equality on the set allocation; window
-    /// identity carries exactly the same guarantee.
+    /// the nearest window and then requires the placeholder-holding scope to carry that same
+    /// window, so the inner declaration's own window — which is a different allocation — never
+    /// matches.
     #[test]
     fn a_same_named_declaration_in_another_window_does_not_capture() {
-        use crate::machine::core::Bindings;
         use crate::machine::core::NodeId;
         use crate::machine::core::Scope;
 
@@ -230,14 +232,13 @@ mod bare_leaf_resolution {
         let outer = root
             .brand()
             .alloc_scope(Scope::child_recursive_group(root, other_window));
-        let outer_bindings: &Bindings<'_> = outer.bindings();
-        let _outer_guard = outer_bindings.insert_pending_type("Node".into());
         outer
             .install_placeholder(
                 "Node".into(),
                 NodeId(11),
                 BindingIndex::value(0),
                 crate::machine::model::BindKind::Type,
+                &mut crate::machine::WriteGate::for_test(),
             )
             .expect("placeholder install");
 

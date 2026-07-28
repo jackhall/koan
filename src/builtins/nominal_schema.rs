@@ -1,12 +1,13 @@
 //! Shared `Action`-harness elaboration for a nominal type declarator's field-list schema —
-//! the path UNION and NEWTYPE's record repr both walk: mark the binder in-flight, elaborate the
-//! `(tag/field :Type, …)` list threading the binder name, then either fold the sealed pairs into
-//! the carrier synchronously or defer one dep-finish over the parked producers + sigil sub-Dispatches.
+//! the path UNION and NEWTYPE's record repr both walk: elaborate the `(tag/field :Type, …)` list
+//! threading the binder name, then either fold the sealed pairs into the carrier synchronously or
+//! defer one dep-finish over the parked producers + sigil sub-Dispatches.
 //!
 //! The two callers differ only in the parameters threaded through here (diagnostic context,
 //! field-name policy, error frame) and the `finalize` that folds the sealed `(name, KType)` pairs
 //! into the right carrier (`finalize_union` / `finalize_record_newtype`).
 
+use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KType;
 use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
@@ -16,8 +17,8 @@ use crate::machine::{Action, BodyCtx, FinishCtx};
 use crate::machine::{DeclarationSite, KError, KErrorKind, TraceFrame};
 use crate::machine::{FieldListDeferral, StepCarried};
 
-/// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
-/// and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
+/// Fold the sealed `(name, KType)` pairs into the declarator's carrier and the `types` write that
+/// installs its identity; shared by the synchronous and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
 /// and the deferred finish without `Clone`.
 pub(crate) type SchemaFinalize<'a> = fn(
     &FinishCtx<'a, '_>,
@@ -25,7 +26,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
     std::rc::Rc<crate::machine::model::RecursiveGroupWindow>,
     Vec<(String, KType)>,
     DeclarationSite,
-) -> Result<StepCarried<'a>, KError>;
+) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError>;
 
 /// Elaborate `schema_expr` as the named declarator's field list and fold or defer it.
 /// `context` / `name_kind` / `error_frame` parameterize the diagnostic and seal shape; `finalize`
@@ -47,10 +48,6 @@ pub(crate) fn nominal_schema_action<'a>(
 ) -> Action<'a> {
     let site = ctx.declaration_site();
     let chain = ctx.chain.clone();
-    // Mark this binder in-flight so a consumer referencing it (an earlier sibling still finalizing)
-    // can park on our producer node. The guard's Drop removes the name; the Pending path moves it
-    // into the dep-finish closure.
-    let pending_guard = ctx.scope.bindings().insert_pending_type(name.clone());
     // Seed the threaded set with this binder's name so a self-recursive declaration resolves
     // through the window rather than parking on its own placeholder.
     let mut elaborator = Elaborator::new(ctx.scope)
@@ -66,9 +63,9 @@ pub(crate) fn nominal_schema_action<'a>(
         ctx.types,
     ) {
         FieldListOutcome::Done(fields) => {
-            Action::Done(finalize(&ctx.finish_ctx(), name, window, fields, site))
+            Action::done_writing(finalize(&ctx.finish_ctx(), name, window, fields, site))
         }
-        FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+        FieldListOutcome::Err(msg) => Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
@@ -85,7 +82,6 @@ pub(crate) fn nominal_schema_action<'a>(
             .with_threaded([name])
             .with_window(window)
             .with_chain(chain)
-            .with_pending_guard(pending_guard)
             .with_error_frame(error_frame)
             .action(Box::new(move |fctx, fields| {
                 finalize(fctx, finish_name, finish_window, fields, site)

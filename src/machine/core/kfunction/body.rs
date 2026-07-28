@@ -6,33 +6,38 @@ use crate::machine::model::{ExpressionPart, KExpression};
 
 use crate::machine::model::KType;
 
-use super::KFunction;
+use crate::machine::core::carrier_witness::SealedFunction;
 
 /// Return-type contract a tail-replace carries to its Done arm, for both the
 /// declared-return check and the error-frame label. A function-less return-typed tail (a
 /// MATCH / TRY arm with `-> :T`) rides the same channel as an FN call: `Arm` carries the
 /// declared type directly, `Function` reads it off the callee's signature.
 ///
-/// `Arm`'s / `PerCall`'s `ret` is a `Copy` `KType` handle so the whole contract stays `Copy`,
-/// matching the `&KFunction` it sits beside. Sealed into a `ReturnObligation` — pure `Copy` data
+/// Sealed into a `ReturnObligation` — pure `Copy` data
 /// (the declared type plus a trace label) that rides the tail chain as a continuation capture. A
 /// tail chain keeps the **first** contract (the keep-first rule at the `Outcome::Continue`
 /// construction sites in `execute::runtime`, which wraps each replacement continuation with the
 /// established obligation), so the check fires against the original caller's declared return, not the
 /// tail-most callee's.
-#[derive(Clone, Copy)]
-pub enum ReturnContract<'a> {
+///
+/// The callable arms carry the pick **at rest**, as the same [`SealedFunction`] the dispatch bucket
+/// holds: a tail chain outlives the step that picked, so nothing region-bound may ride it. A reader
+/// re-opens the seal under the step's own coverage — the callable's home is pinned by the frame
+/// `outer` chain for as long as its body runs (design/tail-call-optimization.md Lemma 3) — and the
+/// sealed [`ReturnObligation`](crate::machine::execute) the chain actually keeps is region-free
+/// `Copy` data resolved once, at the first read.
+pub enum ReturnContract {
     /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
-    Function(&'a KFunction<'a>),
+    Function(SealedFunction),
     /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`. `ret`
-    /// is a `Copy` handle, so the contract stays `Copy`.
+    /// is a `Copy` handle, so this arm names no region at all.
     Arm { ret: KType, kind: &'static str },
     /// A deferred-return FN whose per-call return type resolved to `ret`. Rides the FN-body
     /// chain shape (a `Function`/`PerCall` contract) so a tail-replaced deferred body assembles its
     /// lexical chain like any FN — preserving TCO — while `finalize_terminal` checks the
     /// lifted value against the resolved `ret` (labelled "per-call return type", `func` names
-    /// the frame). `ret` is a `Copy` handle like `Arm`'s, so the contract stays `Copy`.
-    PerCall { func: &'a KFunction<'a>, ret: KType },
+    /// the frame). `ret` is a `Copy` handle like `Arm`'s.
+    PerCall { func: SealedFunction, ret: KType },
 }
 
 /// Split an FN / MATCH-arm / TRY-arm body into top-level statements. The single source of

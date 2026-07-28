@@ -18,7 +18,9 @@
 //! [`crate::machine::model::operators`] — so seeding is a separate step from registering
 //! the per-operator bodies above.
 
+use crate::machine::WriteGate;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::model::{Held, KObject, KType, Record, TypeRegistry};
@@ -72,7 +74,7 @@ fn bool_operands(args: &Record<Held<'_>>, types: &TypeRegistry) -> Result<(bool,
 
 pub fn body_add<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Number(left + right))))
@@ -80,7 +82,7 @@ pub fn body_add<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_sub<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Number(left - right))))
@@ -88,7 +90,7 @@ pub fn body_sub<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_mul<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Number(left * right))))
@@ -101,11 +103,11 @@ pub fn body_mul<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 pub fn body_div<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     if right == 0.0 {
-        return Action::Done(Err(KError::new(KErrorKind::User(
+        return Action::done(Err(KError::new(KErrorKind::User(
             "/ : division by zero".to_string(),
         ))));
     }
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Number(left / right))))
@@ -113,7 +115,7 @@ pub fn body_div<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_lt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left < right))))
@@ -121,7 +123,7 @@ pub fn body_lt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_le<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left <= right))))
@@ -129,7 +131,7 @@ pub fn body_le<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_gt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left > right))))
@@ -137,7 +139,7 @@ pub fn body_gt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_ge<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left >= right))))
@@ -145,13 +147,13 @@ pub fn body_ge<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 pub fn body_and<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(bool_operands(ctx.args, ctx.types));
-    Action::Done(Ok(ctx
+    Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left && right))))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let number_sig = |op: &str| {
         sig(
             KType::NUMBER,
@@ -173,15 +175,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         )
     };
 
-    crate::builtins::register_builtin(scope, "+", number_sig("+"), body_add, types);
-    crate::builtins::register_builtin(scope, "-", number_sig("-"), body_sub, types);
-    crate::builtins::register_builtin(scope, "*", number_sig("*"), body_mul, types);
-    crate::builtins::register_builtin(scope, "/", number_sig("/"), body_div, types);
+    crate::builtins::register_builtin(scope, "+", number_sig("+"), body_add, types, gate);
+    crate::builtins::register_builtin(scope, "-", number_sig("-"), body_sub, types, gate);
+    crate::builtins::register_builtin(scope, "*", number_sig("*"), body_mul, types, gate);
+    crate::builtins::register_builtin(scope, "/", number_sig("/"), body_div, types, gate);
 
-    crate::builtins::register_builtin(scope, "<", comparison_sig("<"), body_lt, types);
-    crate::builtins::register_builtin(scope, "<=", comparison_sig("<="), body_le, types);
-    crate::builtins::register_builtin(scope, ">", comparison_sig(">"), body_gt, types);
-    crate::builtins::register_builtin(scope, ">=", comparison_sig(">="), body_ge, types);
+    crate::builtins::register_builtin(scope, "<", comparison_sig("<"), body_lt, types, gate);
+    crate::builtins::register_builtin(scope, "<=", comparison_sig("<="), body_le, types, gate);
+    crate::builtins::register_builtin(scope, ">", comparison_sig(">"), body_gt, types, gate);
+    crate::builtins::register_builtin(scope, ">=", comparison_sig(">="), body_ge, types, gate);
 
     let and_sig = sig(
         KType::BOOL,
@@ -191,12 +193,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("right", KType::BOOL),
         ],
     );
-    crate::builtins::register_builtin(scope, "AND", and_sig, body_and, types);
+    crate::builtins::register_builtin(scope, "AND", and_sig, body_and, types, gate);
 }
 
 /// Seeds the three builtin operator groups: comparison (`< <= > >=`, pairwise, combined by
 /// `AND`), additive (`+ -`, fold-left), and multiplicative (`* /`, fold-left). Each group is
-/// allocated once and registered — through [`Scope::register_group_under_all_subsets`] — under
+/// built once and registered — through [`Scope::register_group_under_all_subsets`] — under
 /// every nonempty subset of its member set, so any chain probe drawn from that set resolves to
 /// the same shared record.
 ///
@@ -206,46 +208,58 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 /// A comparison chain (`1 < 2 < 3`, `1 <= x < 10`) resolves to this group and reduces through the
 /// pairwise reducer (`operator_chain::reduce_pairwise`): each adjacent pair dispatches through its
 /// own operator's body above, and the pair results fold left through the `AND` keyword combiner.
-pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>, _types: &TypeRegistry) {
-    let region = scope.brand();
-
+pub fn register_builtin_operator_groups<'a>(
+    scope: &'a Scope<'a>,
+    _types: &TypeRegistry,
+    gate: &mut WriteGate,
+) {
     let comparison_operators = ["<", "<=", ">", ">="];
     let comparison_members: HashSet<String> =
         comparison_operators.iter().map(|s| s.to_string()).collect();
-    let comparison_group = region.alloc_operator_group(OperatorGroup::new(
+    let comparison_group = Rc::new(OperatorGroup::new(
         comparison_members,
         ReductionMode::Pairwise {
             combiner: "AND".to_string(),
             direction: FoldDirection::Left,
         },
     ));
-    seed(scope, &comparison_operators, comparison_group);
+    seed(scope, &comparison_operators, &comparison_group, gate);
 
     let additive_operators = ["+", "-"];
     let additive_members: HashSet<String> =
         additive_operators.iter().map(|s| s.to_string()).collect();
-    let additive_group = region.alloc_operator_group(OperatorGroup::new(
+    let additive_group = Rc::new(OperatorGroup::new(
         additive_members,
         ReductionMode::FoldLeft,
     ));
-    seed(scope, &additive_operators, additive_group);
+    seed(scope, &additive_operators, &additive_group, gate);
 
     let multiplicative_operators = ["*", "/"];
     let multiplicative_members: HashSet<String> = multiplicative_operators
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let multiplicative_group = region.alloc_operator_group(OperatorGroup::new(
+    let multiplicative_group = Rc::new(OperatorGroup::new(
         multiplicative_members,
         ReductionMode::FoldLeft,
     ));
-    seed(scope, &multiplicative_operators, multiplicative_group);
+    seed(
+        scope,
+        &multiplicative_operators,
+        &multiplicative_group,
+        gate,
+    );
 }
 
 /// One builtin seed: the group's powerset keys, at [`BindingIndex::BUILTIN`].
-fn seed<'a>(scope: &'a Scope<'a>, members: &[&str], group: &'a OperatorGroup) {
+fn seed<'a>(
+    scope: &'a Scope<'a>,
+    members: &[&str],
+    group: &Rc<OperatorGroup>,
+    gate: &mut WriteGate,
+) {
     scope
-        .register_group_under_all_subsets(members, group, BindingIndex::BUILTIN)
+        .register_group_under_all_subsets_direct(members, group, BindingIndex::BUILTIN, gate)
         .expect("builtin operator-group seeding must not collide");
 }
 

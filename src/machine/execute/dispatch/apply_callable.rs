@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::{DepPlacement, KFunction};
+use crate::machine::core::{DepPlacement, OpenedFunction};
 use crate::machine::model::{constructor_param_names, Carried, Record};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, NodeSchema, TypeNode, TypeRegistry};
@@ -47,8 +47,9 @@ pub(in crate::machine::execute) enum ResolvedCallable<'step> {
     /// Build from a sealed nominal member (a `SetMember` node — struct / tagged / newtype /
     /// `TypeConstructor`).
     Constructor { identity: KType },
-    /// Call a `KFunction` by name.
-    Function(&'step KFunction<'step>),
+    /// Call a callable by name, in the **in-use** carrier state its resolving lane adopted it into
+    /// — so the callable rides the apply tail fused to the reach that proves it.
+    Function(OpenedFunction<'step>),
 }
 
 /// Body-shape-branch the resolved callable and launch. `expr.parts[1..]` is the
@@ -393,12 +394,12 @@ fn union_member_names(members: &[KType], types: &TypeRegistry) -> String {
 /// positional expression, then eager-resolve the value slots before binding.
 fn apply_function<'step>(
     ctx: &SchedulerView<'step, '_>,
-    f: &'step KFunction<'step>,
+    f: OpenedFunction<'step>,
     expr: &KExpression<'step>,
     body: CallBody<'step>,
 ) -> Outcome<'step> {
     match body {
-        CallBody::Named(fields) => match f.reconstruct_positional(fields) {
+        CallBody::Named(fields) => match f.value().reconstruct_positional(fields) {
             Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f),
             Err(e) => Outcome::Done(Err(e)),
         },
@@ -412,13 +413,16 @@ fn apply_function<'step>(
 pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
     ctx: &SchedulerView<'step, '_>,
     expr: KExpression<'step>,
-    picked: &'step KFunction<'step>,
+    picked: OpenedFunction<'step>,
 ) -> Outcome<'step> {
     // `picked` is already committed (the head uniquely resolved to it), so bare-name value slots
     // resolve by sub-Dispatch rather than the keyword path's pre-pick `bare_outcomes` lookup —
     // each rides `bare_identifier`'s reach carrier through the eager-subs finish and reaches
     // `accepts_part` at bind. No slot resolves inline here.
-    let wrap_indices = picked.classify_for_pick(&expr, ctx.types()).wrap_indices;
+    let wrap_indices = picked
+        .value()
+        .classify_for_pick(&expr, ctx.types())
+        .wrap_indices;
     let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
     let working_expr = KExpression::new(new_parts);
     ctx.install_eager_subs(working_expr, staged_subs, Some(picked))

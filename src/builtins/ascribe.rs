@@ -14,6 +14,7 @@ use crate::machine::model::{
 };
 use crate::machine::model::{Held, KObject, Module, Record};
 use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 use std::collections::HashMap;
 
@@ -21,7 +22,7 @@ use super::{arg, kw, sig};
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
 /// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
-/// witnessed [`Action::Done(Ok)`](Action::Done) carrier ([`Scope::resident_type_carrier`] seals it under the
+/// witnessed [`Action::done(Ok)`](Action::Done) carrier ([`Scope::resident`] seals it under the
 /// child scope's token, derived via [`Scope::child_module_reach`]).
 pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
@@ -31,15 +32,17 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     let s_name = s.name(ctx.types);
 
     let region = ctx.scope.brand();
-    let new_scope = region.alloc_scope(Scope::child_under_module(
+    // Allocate the view scope and replay the source module's members into it in one door: the
+    // scope is unreachable until the replay has landed, which is what lets the write happen at
+    // construction time rather than riding a step outcome.
+    let new_scope = match Scope::alloc_module_view(
         ctx.scope,
         format!("{} :| {}", m.path, s_name),
-    ));
-
-    let src = m.child_scope();
-    if let Err(e) = new_scope.bindings().try_bulk_install_from(src.bindings()) {
-        return Action::Done(Err(e));
-    }
+        m.child_scope().bindings(),
+    ) {
+        Ok(scope) => scope,
+        Err(e) => return Action::done(Err(e)),
+    };
 
     // The view's members are all bulk-installed into `new_scope` above, and nothing binds into it
     // below (the type-member / slot-tag writes target `new_module`, not the scope) — so seal its
@@ -124,7 +127,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     seal_view_self_sig(new_module, &s_schema, ctx.types);
 
     if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types) {
-        return Action::Done(Err(e));
+        return Action::done(Err(e));
     }
 
     // The view's token is derived from `new_scope` held directly here (co-located, so it names only
@@ -132,22 +135,17 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // nowhere — the view is a returned value, not a named binding — and sealed onto the terminal
     // carrier, witnessing the module in place. The opaque view's `new_scope` is a same-region child
     // of this frame, so the derived bit records the module's home borrow.
-    // The view is a returned value, not a named binding, so its owning pin bundle is not retained
-    // here: the terminal it seals is delivered onward, and the delivery envelope re-derives (and
-    // owns) the foreign reach at finalize, while this step's own liveness covers those members until
-    // then. A bound module instead hands its bundle to the binding entry (`Registry::bind_module`).
     // The view surfaces as the Object-arm module value (`new_module` lives in `region`'s own
     // region, so the audit passes on the dest-only check alone); a LET around it binds that value
     // like any other. The fused door derives the module value's reach from its own `new_scope`, so
-    // value and reach cannot be mispaired; the owning pins are discarded (the delivered terminal's
-    // envelope re-derives the foreign reach at finalize).
-    let reached = crate::try_action!(ctx
+    // value and reach cannot be mispaired, and folds the owning bundle into this region's union.
+    // Lifting that seal upgrades the description's members `Weak → Rc` for the terminal the step
+    // delivers onward.
+    let sealed = crate::try_action!(ctx
         .scope
         .store_module_object(new_module, new_scope, ctx.types));
-    Action::Done(Ok(StepCarried::born(
-        ctx.scope
-            .resident_value_carrier(reached.value(), reached.claim()),
-    )))
+    let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
+    Action::done(Ok(StepCarried::born_pinned(carrier, pins)))
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
@@ -161,7 +159,7 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     let (s_schema, s_digest) = signature_schema(s, ctx.types);
     let s_name = s.name(ctx.types);
     if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types) {
-        return Action::Done(Err(e));
+        return Action::done(Err(e));
     }
     // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
     // to this frame — so its token folds that source's region and reach and derives its home-borrow
@@ -171,24 +169,20 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     // borrows nothing into this home frame (its interior points at the source region), so the derived
     // bit stays unset — a downstream copied-mode mint materializes no home-frame member, and the dying
     // home frame frees once its retention hold releases.
-    // Returned value, not a named binding: the owning bundle is not retained here — the delivered
-    // terminal's envelope re-derives and owns the foreign reach at finalize, under this step's
-    // liveness. (See the opaque arm above.)
     // The re-tagged Module and its Object-arm wrapper both ride one reach derived off the reused
     // (foreign) source child scope — the fused door allocs the Module reaching that region, seals the
     // view's self-sig on it (SIG-declared value slots read the source's concrete types after
-    // substitution), then audits the wrapping value against the same reach and fuses. The owning pins
-    // are discarded (the delivered terminal's envelope re-derives the foreign reach at finalize).
-    let reached = crate::try_action!(ctx.scope.store_transparent_view(
+    // substitution), then audits the wrapping value against the same reach and fuses, folding the
+    // owning bundle into this region's union. Lifting that seal upgrades the description's members
+    // `Weak → Rc` for the terminal the step delivers onward.
+    let sealed = crate::try_action!(ctx.scope.store_transparent_view(
         Module::new(format!("{} :! {}", m.path, s_name), m.child_scope()),
         m.child_scope(),
         |view| seal_view_self_sig(view, &s_schema, ctx.types),
         ctx.types,
     ));
-    Action::Done(Ok(StepCarried::born(
-        ctx.scope
-            .resident_value_carrier(reached.value(), reached.claim()),
-    )))
+    let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
+    Action::done(Ok(StepCarried::born_pinned(carrier, pins)))
 }
 
 /// Seal an ascription view's self-sig. The raw derivation captures the view's members; each
@@ -299,7 +293,7 @@ fn check_satisfies<'a>(
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     // Slots are typed `Module` / `Signature`. A bare module operand (`int_ord :| Ordered`) is an
     // Identifier that resolves value-side and rides the auto-wrap rails into a value-typed future,
     // so no parallel Type-Type overload is required.
@@ -319,8 +313,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             arg("s", KType::of_kind(KKind::Signature)),
         ],
     );
-    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, types);
-    crate::builtins::register_builtin(scope, ":!", transparent_sig, body_transparent, types);
+    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, types, gate);
+    crate::builtins::register_builtin(scope, ":!", transparent_sig, body_transparent, types, gate);
 }
 
 #[cfg(test)]

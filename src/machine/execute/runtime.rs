@@ -21,17 +21,19 @@ use std::rc::Rc;
 
 use crate::machine::core::{split_body_statements, ReturnContract};
 use crate::machine::core::{
-    Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
+    Action, ActionKind, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
 };
 use crate::machine::core::{FoldingBrand, ScopeRefFamily};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
-use crate::machine::{CallFrame, CarrierWitness, FramePins, KError, KErrorKind, NodeId, RunId};
+use crate::machine::{
+    CallFrame, CarrierWitness, FrameCoverage, FrameStorage, KError, KErrorKind, NodeId, RunId,
+};
 use crate::witnessed::SealedExtern;
 
 use super::dispatch::{BodyPlacement, DepRequest, SchedulerView, SubmitContext};
 use super::finalize::check_spliced_return;
-use super::lift::{copy_carried, seam_verb};
+use super::lift::{copy_carried, seam_still_borrows, seam_verb};
 use super::nodes::{ChainOp, NodeStep, NodeWork};
 use super::obligation::{with_obligation, ReturnObligation};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
@@ -42,11 +44,12 @@ use super::{
 };
 use crate::machine::model::CarriedFamily;
 use crate::scheduler::{Deps, ResolvedDeps, Scheduler, Workload};
-use crate::witnessed::Witnessed;
+use crate::witnessed::{Delivered, Witnessed};
 
 mod interpret;
 mod submit;
 
+pub(crate) use interpret::seed_run_root;
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 
 /// The Koan instantiation of the scheduler's [`Workload`] interface — the marker that binds the
@@ -173,24 +176,24 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn relocate_terminal(
         &self,
         producer: NodeId,
-        dest: Witnessed<DestHandleFamily, CarrierWitness>,
-    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FramePins), KError> {
+        dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
+    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FrameCoverage), KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
         let verb = seam_verb(&delivered);
-        // The destination is a bare region handle (empty reach), so its operand bundle is empty.
-        // The transfer returns the relocated carrier paired with its composed owned foreign bundle —
-        // the relocated terminal's reach, threaded to the caller to re-seed the retention hold (a
+        // The destination is a bare region handle (empty reach), so the transfer composes the
+        // producer's reach alone. The product envelope's residence is `dest`'s own frame, which the
+        // caller re-pins as the terminal's host, so it is released here and what crosses back is the
+        // relocated terminal's foreign reach — threaded to re-seed the retention hold (a
         // `Forward`-ready finalize) or retain past teardown (a drained root).
-        Ok(
-            delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
-                dest,
-                &FramePins::empty(),
-                verb.residence(),
-                |value, _region, placement| {
-                    copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
-                },
-            ),
-        )
+        let relocated = delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
+            dest,
+            seam_still_borrows(&delivered, verb),
+            |value, _region, placement| {
+                copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
+            },
+        );
+        let foreign = relocated.coverage_releasing_home();
+        Ok((relocated.into_cell().unseal(), foreign))
     }
 
     pub fn len(&self) -> usize {
@@ -247,16 +250,30 @@ fn block_entry_scope(block_entry: &BlockEntry<'_>) -> Option<crate::machine::cor
     }
 }
 
+/// The coverage a callable [`ReturnContract`] re-opens under: the step's own frame storage. A
+/// `Function` / `PerCall` contract is minted inside its callee's installed cart
+/// ([`super::dispatch::exec::invoke`]), whose `outer` chain pins the callable's home region for the
+/// body's whole life (design/tail-call-optimization.md Lemma 3). `None` on a frameless step, which
+/// carries only an `Arm` contract — a `Copy` handle that reopens nothing.
+fn contract_pin(view: &SchedulerView<'_, '_>) -> Option<Rc<crate::machine::core::FrameStorage>> {
+    view.current_frame().map(|frame| frame.storage_rc())
+}
+
 pub(in crate::machine::execute) fn run_action<'step>(
     view: &SchedulerView<'step, '_>,
     action: Action<'step>,
 ) -> Outcome<'step> {
-    match action {
+    // The step's binding-table writes travel as outcome data: deposit them into the run-loop-owned
+    // sink in the order the bodies decided them, before interpreting what happens next. Every
+    // recursive arm below (a wake-time finish's `Action`) deposits through this same call, so a
+    // chain of finishes contributes its writes in program order.
+    view.deposit_effects(action.effects);
+    match action.next {
         // Already a step-branded carrier (or error): `finalize` seals it as-is, no co-location
         // bundle.
-        Action::Done(result) => Outcome::Done(result),
+        ActionKind::Done(result) => Outcome::Done(result),
 
-        Action::Tail {
+        ActionKind::Tail {
             leading,
             tail,
             contract,
@@ -290,9 +307,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     contract.as_ref(),
                     body_index,
                 );
-                let winner = view
-                    .current_obligation_duplicate()
-                    .or_else(|| contract.map(ReturnObligation::seal));
+                let winner = view.current_obligation_duplicate().or_else(|| {
+                    contract.map(|c| ReturnObligation::seal(c, contract_pin(view).as_ref()))
+                });
                 return Outcome::Continue {
                     work: super::dispatch::decide_tail(tail, winner),
                     frame: frame_placement,
@@ -356,9 +373,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     contract.as_ref(),
                     body_index,
                 );
-                let winner = view
-                    .current_obligation_duplicate()
-                    .or_else(|| contract.map(ReturnObligation::seal));
+                let winner = view.current_obligation_duplicate().or_else(|| {
+                    contract.map(|c| ReturnObligation::seal(c, contract_pin(view).as_ref()))
+                });
                 Outcome::Continue {
                     work: super::dispatch::decide_tail(tail, winner),
                     frame: frame_placement,
@@ -374,7 +391,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
             .finish_terminal(finish)
         }
 
-        Action::AwaitDeps { deps, finish } => {
+        ActionKind::AwaitDeps { deps, finish } => {
             // The builtin assembled the structural `[park..., owned...]` split itself: parks keep
             // first-occurrence order, owned insertion order, and the builder delivers results
             // `[park..., owned...]`. This arm maps each owned sub-dispatch into the library dep
@@ -398,7 +415,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 .finish_terminal(wrapped)
         }
 
-        Action::Catch { watched, finish } => {
+        ActionKind::Catch { watched, finish } => {
             // `watched` is realized (and owned) at apply time — an `InScope` watched enters a
             // fresh single-statement block, distinct from a dep-finish body's fan-out.
             let wrapped: CatchFinish<'step> = Box::new(move |view, result| {

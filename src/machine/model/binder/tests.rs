@@ -44,12 +44,32 @@ fn live_buckets() -> HashMap<UntypedKey, LiveBucket> {
     let run = crate::builtins::test_support::TestRun::silent(&storage);
     let mut table: HashMap<UntypedKey, LiveBucket> = HashMap::new();
     for scope in run.scope.ancestors() {
-        for (key, overloads) in scope.bindings().functions().iter() {
-            let has_hook = overloads.iter().any(|(f, _)| overload_has_hook(f));
+        // Snapshot the bucket's dormant carriers, then read each under the scope's own pin — the
+        // bucket stores seals, so a signature walk opens rather than dereferences.
+        let buckets: Vec<(UntypedKey, Vec<_>)> = scope
+            .bindings()
+            .functions()
+            .iter()
+            .map(|(key, overloads)| {
+                (
+                    key.clone(),
+                    overloads
+                        .iter()
+                        .map(|entry| {
+                            scope.read_function(&entry.sealed, |f| {
+                                (overload_has_hook(f), overload_mask(f))
+                            })
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        for (key, overloads) in buckets {
+            let has_hook = overloads.iter().any(|(hook, _)| *hook);
             let recomputed_mask = overloads
                 .iter()
-                .filter(|(f, _)| overload_has_hook(f))
-                .map(|(f, _)| overload_mask(f))
+                .filter(|(hook, _)| *hook)
+                .map(|(_, mask)| mask.clone())
                 .reduce(|acc, next| {
                     acc.into_iter()
                         .zip(next)

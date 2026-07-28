@@ -13,7 +13,7 @@ use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
-use super::super::lift::{copy_carried, seam_verb};
+use super::super::lift::{copy_carried, seam_still_borrows, seam_verb};
 use super::super::run_loop::{dest_brand, DestHandleFamily};
 use super::super::StepCarried;
 use super::super::WitnessedDepFinish;
@@ -24,6 +24,7 @@ use super::{
     ProducerStanding, TypeChannel,
 };
 use crate::machine::model::CarriedFamily;
+use crate::machine::CarrierWitness;
 use crate::scheduler::Deps;
 
 /// Surfaces `UnboundName` directly when the name has no binding and
@@ -33,12 +34,13 @@ pub(super) fn bare_identifier<'step, 'b>(
     s: &'b Scope<'b>,
     name: String,
 ) -> Outcome<'step> {
-    match s.resolve_value_carrier(&name, ctx.chain_deref()) {
-        // The bound value rides out on a carrier witnessed by its binding scope's home frame, which
-        // transitively pins that scope's reach-set — so the read names the value's reach by
-        // construction rather than reconstructing it from the value.
-        Some(NameLookup::Bound((carrier, pins))) => {
-            Outcome::Done(Ok(StepCarried::born_pinned(carrier, pins)))
+    match s.resolve_value_delivered(&name, ctx.chain_deref()) {
+        // The bound value rides out on a carrier lifted at its binding scope, pinned by that
+        // scope's own region owner — so the read names the value's reach by construction rather
+        // than reconstructing it from the value.
+        Some(NameLookup::Bound(delivered)) => {
+            let (cell, pins) = delivered.into_parts();
+            Outcome::Done(Ok(StepCarried::born_pinned(cell.unseal(), pins)))
         }
         Some(NameLookup::Parked(producer)) => forward_to_producer(producer),
         None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name)))),
@@ -56,7 +58,9 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // A resolved type leaf is carried in place under `s` (the scope it was resolved
         // against): a `KType` is a `Copy` registry handle, so the read is a plain handle copy
         // — no reach to name, no re-home, no `child_scope()` walk.
-        TypeChannel::Done(kt) => Outcome::Done(Ok(StepCarried::born(s.resident_type_carrier(kt)))),
+        TypeChannel::Done(kt) => Outcome::Done(Ok(StepCarried::born(
+            s.resident(Carried::Type(kt), CarrierWitness::default()),
+        ))),
         TypeChannel::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS through the
         // bridge, so a bare leaf parks on exactly one producer. A bare leaf has no consumer id in
@@ -146,12 +150,13 @@ pub(super) fn literal_pass_through<'step>(
         // rather than re-wrapping the read-back value under a freshly-asserted witness. Strictly
         // better witnessing: the value arrives with the exact reach its producer named.
         ExpressionPart::Spliced { cell } => {
-            // The spliced cell is the producer's own delivery envelope; recover its owned foreign
-            // bundle before unsealing so the recovered carrier's reach is threaded, not re-derived.
-            let foreign = cell.foreign().clone();
+            // The spliced cell is the producer's own delivery envelope; recover its whole coverage
+            // — the producer's own region among them — before unsealing, so the recovered carrier's
+            // reach is threaded, not re-derived.
+            let coverage = cell.coverage().clone();
             Outcome::Done(Ok(StepCarried::born_pinned(
                 cell.into_cell().unseal(),
-                foreign,
+                coverage,
             )))
         }
         // A quote is its body as data: seal the `KObject::KExpression` into this scope's region
@@ -185,18 +190,17 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         let delivered = &deps.owned(0).delivered;
         let verb = seam_verb(delivered);
         // The dest brand is a bare region handle (empty reach); the transfer composes the literal
-        // producer's reach into it and hands back the product's owned foreign bundle, threaded
-        // through `born_pinned`.
-        let (carrier, pins) = delivered
-            .transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
+        // producer's reach into it and homes the product in the consumer's own frame, which the
+        // step's seal re-pins — so `born_delivered` releases it and the foreign coverage rides on.
+        Ok(StepCarried::born_delivered(
+            delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
                 dest,
-                &crate::machine::core::FramePins::empty(),
-                verb.residence(),
+                seam_still_borrows(delivered, verb),
                 |value, _region, placement| {
                     copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
                 },
-            );
-        Ok(StepCarried::born_pinned(carrier, pins))
+            ),
+        ))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)
 }

@@ -23,6 +23,7 @@ pub(in crate::machine::execute) use outcome::{
     catch_continuation, ignore_results, seal_witnessed, short_circuit, CatchFinish,
     ContinuationFamily, TerminalDepFinish, WitnessedDepFinish,
 };
+pub(crate) use runtime::seed_run_root;
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
 pub use step_carried::{drive_step_allocator, StepCarried};
 

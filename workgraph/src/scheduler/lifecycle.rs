@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use crate::witnessed::PinBundle;
+use crate::witnessed::StepCoverage;
 
 use super::workload::OwnerOf;
 use super::{Anchor, NodeId, Scheduler, Terminal, Workload};
@@ -28,7 +28,7 @@ impl<W: Workload> Scheduler<W> {
         &mut self,
         idx: usize,
         output: Result<Terminal<W>, W::Error>,
-        foreign: PinBundle<OwnerOf<W>>,
+        foreign: StepCoverage<OwnerOf<W>>,
     ) {
         let id = NodeId(idx);
         self.store.finalize(id, output);
@@ -43,7 +43,7 @@ impl<W: Workload> Scheduler<W> {
             .take_anchor(idx)
             .expect("a finalizing slot still holds its anchor");
         self.deps
-            .seed_retain(idx, Rc::clone(anchor.owner()), foreign, drained.len());
+            .seed_retain(idx, Rc::clone(anchor.owner()), foreign.0, drained.len());
         let mut woken: Vec<usize> = Vec::new();
         for (consumer, hit_zero) in drained {
             if hit_zero {
