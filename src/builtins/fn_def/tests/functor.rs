@@ -19,7 +19,6 @@ mod bare_type_token;
 mod deferred_return;
 mod elaboration;
 mod module_head_in_type_position;
-#[cfg(feature = "ascription")]
 mod per_call_param_bind;
 mod sharing;
 mod value_side_binding;

@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use super::super::Scope;
-use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
+use crate::builtins::test_support::{mock_declaration_site, per_call_storage, run_root_bare};
 use crate::machine::core::{run_root_storage, FrameCoverage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
@@ -112,7 +112,7 @@ fn retaining_adopt_reach_fold_pins_the_producer_region_after_drop() {
 
     // A value in the producer frame's own region, wrapped as a delivery envelope pinned by that
     // frame — the shape a delivered dep arrives in (host = the retention hold's owner).
-    let producer_frame = run_root_storage();
+    let producer_frame = per_call_storage();
     let cell: DeliveredCarried = Delivered::hosted(
         Sealed::seal(KoanRegion::alloc_witnessed(
             Rc::clone(&producer_frame),
@@ -151,11 +151,11 @@ fn child_module_reach_names_the_child_region_which_owns_its_members_reaches() {
     use crate::machine::model::KObject;
 
     // A frame foreign to everything else here — the region a nested member's own reach names.
-    let inner_storage = run_root_storage();
+    let inner_storage = per_call_storage();
     let inner_weak = Rc::downgrade(&inner_storage);
     let inner_region_ptr: *const KoanRegion = inner_storage.region();
 
-    let source_storage = run_root_storage();
+    let source_storage = per_call_storage();
     let source_weak = Rc::downgrade(&source_storage);
     let source_scope = run_root_bare(&source_storage);
 

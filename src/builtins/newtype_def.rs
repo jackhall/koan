@@ -342,7 +342,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 #[cfg(test)]
 mod tests {
 
-    #[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
     use crate::builtins::test_support::{binds_module, parse_one, TestRun};
     use crate::machine::model::{KKind, NodeSchema, TypeNode, TypeRegistry};
     use crate::machine::model::{KObject, KType, Record};
@@ -882,7 +881,6 @@ mod tests {
 
     /// A `NEWTYPE (Type AS Wrap)` declared inside a MODULE body supplies a matching-arity
     /// higher-kinded `TYPE (Type AS Wrap)` SIG slot: `int_list :| Monad` ascribes.
-    #[cfg(feature = "ascription")]
     #[test]
     fn constructor_family_declared_inside_module_satisfies_hk_slot() {
         let region = run_root_storage();

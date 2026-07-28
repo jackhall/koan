@@ -5,7 +5,6 @@ use crate::machine::{BindingIndex, FrameStorageExt, Scope, WriteGate};
 use crate::machine::{Body, KFunction};
 
 pub(crate) mod arithmetic;
-#[cfg(feature = "ascription")]
 mod ascribe;
 mod attr;
 mod await_body;
@@ -181,7 +180,6 @@ pub(crate) fn seed_builtins<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate
     sig_def::register(scope, types, gate);
     val_decl::register(scope, types, gate);
     type_decl::register(scope, types, gate);
-    #[cfg(feature = "ascription")]
     ascribe::register(scope, types, gate);
     record_projection::register(scope, types, gate);
     type_ops::register(scope, types, gate);

@@ -454,8 +454,8 @@ impl<'a> KObject<'a> {
     /// `KExpression` splices, and a substrate carrier's (`Record`/`List`/`Dict`/`Tagged`/`Wrapped`)
     /// substrate address (O(1), never its cells). The `KType` tags (`List`/`Dict`/`Record` memos,
     /// `Tagged { identity }`, `Wrapped { type_id }`) are not walked — a handle is one `u128` naming
-    /// registry-owned content, so it borrows no region at all. The `StoredReach` tokens holding the
-    /// reach are opaque to this layer; core extracts the sets before calling.
+    /// registry-owned content, so it borrows no region at all. The carriers holding the reach are
+    /// opaque to this layer; core extracts the sets before calling.
     pub(crate) fn resident_in_delivered(&self, dest: &KoanRegion, sets: &[&FrameReach]) -> bool {
         self.resident_in_visiting(&Residence::with_reach(dest, sets))
     }

@@ -310,7 +310,6 @@ impl<'a> Scope<'a> {
     /// Born-inside-the-door like [`Self::alloc_group_child`]: the view scope is returned only once
     /// the replay has landed, and nothing else has a reference to it before then, so the door mints
     /// its own [`WriteGate`]. `:|` / `:!` run builtin-side, where no gate can be minted.
-    #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     pub(crate) fn alloc_module_view(
         outer: &'a Scope<'a>,
         path: String,

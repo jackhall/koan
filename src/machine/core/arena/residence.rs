@@ -30,7 +30,7 @@ type MintedReach<'a> = (Option<&'a FrameReach>, bool);
 /// move-in tiers and [`Residence`], rather than in `scope.rs`.)
 impl<'a> Scope<'a> {
     /// The evidence tier for an `o` whose region borrows may reach a *foreign* region this scope
-    /// has already minted reach evidence for (a read-site's materialized `StoredReach`), not just
+    /// has already minted reach evidence for (a read-site's materialized reach), not just
     /// its own region. Widens [`super::RegionBrand::alloc_object_checked`]'s dest-only audit to
     /// "this scope's region, or `evidence`'s reach members" — exact, because the mint applies no
     /// omission policy, so every region the value legitimately reaches is a named member. Placing
@@ -102,7 +102,6 @@ impl<'a> Scope<'a> {
     /// runs `seal` on the resident module (the view's self-sig), then audits the wrapping
     /// `KObject::Module` against the *same* reach and seals. Both audits ride one derived reach, so
     /// value and reach cannot be mispaired.
-    #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     pub(crate) fn store_transparent_view(
         &self,
         module: Module<'a>,
@@ -250,7 +249,7 @@ fn stored_sets<'s, 'r>(minted: &'s MintedReach<'r>) -> &'s [&'r FrameReach] {
 /// ([`KObject::resident_in_delivered`](KObject::resident_in_delivered)); the object delivered tier
 /// widens it. Each `reach` set was minted
 /// into `dest`'s own arena by the same scope the audit runs against
-/// (`Scope::envelope_reach_of`), so membership here is dest-relative by construction — no separate
+/// ([`Scope::mint_retained`]), so membership here is dest-relative by construction — no separate
 /// "is this evidence dest-relative" check is needed. A mint applies no omission policy, so `reach`
 /// names every region the value borrows into and the two disjuncts are exhaustive.
 pub(crate) struct Residence<'d> {

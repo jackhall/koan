@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use crate::builtins::test_support::{parse_one, run_root_bare, TestRun};
+use crate::builtins::test_support::{parse_one, per_call_storage, run_root_bare, TestRun};
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CarrierWitness;
 use crate::machine::KErrorKind;
@@ -183,10 +183,10 @@ fn using_on_non_module_fails_dispatch() {
 /// carrier's reach back; under Miri this is a use-after-free the moment that rooting is missing.
 #[test]
 fn using_window_value_read_reach_survives_under_module_root() {
-    let foreign_storage = run_root_storage();
+    let foreign_storage = per_call_storage();
     let foreign_weak = Rc::downgrade(&foreign_storage);
 
-    let module_storage = run_root_storage();
+    let module_storage = per_call_storage();
     let module_weak = Rc::downgrade(&module_storage);
     let module_scope = run_root_bare(&module_storage);
 

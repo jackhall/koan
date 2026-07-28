@@ -3,7 +3,7 @@
 //! — these tests fail when Miri reports UB, not on values.
 
 use super::*;
-use crate::builtins::test_support::{run_root_bare, TestRun};
+use crate::builtins::test_support::{per_call_storage, run_root_bare, TestRun};
 use crate::machine::core::Bindings;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
@@ -351,7 +351,7 @@ fn alloc_witnessed_yokes_a_reference_only_value() {
 #[test]
 fn envelope_transfer_folds_an_independent_foreign_value() {
     let here_frame = run_root_storage();
-    let foreign_frame = run_root_storage(); // unrelated — a sibling producer's frame.
+    let foreign_frame = per_call_storage(); // unrelated — a sibling producer's frame.
     let foreign: Witnessed<CarriedFamily, CarrierWitness> =
         KoanRegion::alloc_witnessed(Rc::clone(&foreign_frame), |r| {
             Carried::Object(r.alloc_object(KObject::Number(1.0)))
@@ -576,7 +576,7 @@ fn mint_keeps_every_source_member_and_dedups_by_region() {
 /// binding table, and is released only when the destination region dies.
 #[test]
 fn region_union_foreign_pins_release_at_region_death() {
-    let foreign = run_root_storage();
+    let foreign = per_call_storage();
     let weak = Rc::downgrade(&foreign);
     let dest = run_root_storage();
     {
@@ -1465,8 +1465,8 @@ fn mint_leaves_arena_pages_untouched() {
 /// — the shape the Miri leak audit exercises. (AC: teardown releasing members at region death.)
 #[test]
 fn mint_teardown_releases_members() {
-    let a = run_root_storage();
-    let b = run_root_storage();
+    let a = per_call_storage();
+    let b = per_call_storage();
     let c = run_root_storage();
 
     let count_before_a = Rc::strong_count(&a);

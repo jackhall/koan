@@ -12,7 +12,6 @@
 
 use std::rc::Rc;
 
-#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 use crate::builtins::test_support::{binds_module, TestRun};
 use crate::machine::core::{run_root_storage, FrameStorage};
 use crate::machine::model::{KObject, KType};
@@ -83,7 +82,6 @@ fn let_type_alias_install_lets_sibling_resolve() {
 /// abstract member `Carrier` is declared, and a later sibling `VAL zero :Carrier`
 /// parks on its placeholder and resolves. Observable: the SIG builds and a module
 /// providing `Carrier` satisfies it.
-#[cfg(feature = "ascription")]
 #[test]
 fn type_bare_install_in_sig_body_lets_sibling_val_resolve() {
     let region = run_root_storage();
@@ -334,7 +332,6 @@ fn val_inside_sig_installs_no_binder() {
 
 /// The VAL slot is nonetheless a real signature requirement: a module missing it
 /// fails shape-check. Confirms the negative above is "no binder", not "no slot".
-#[cfg(feature = "ascription")]
 #[test]
 fn val_slot_is_a_real_requirement() {
     let region = run_root_storage();

@@ -251,7 +251,6 @@ mod tests {
     /// A dotted `elem.Carrier` pin value sub-dispatches in value context to the abstract
     /// `Carrier` and folds into the schema's manifest members — a dotted pin value the keyworded record-literal
     /// handler could not take (was `#[ignore]`d there).
-    #[cfg(feature = "ascription")]
     #[test]
     fn with_inner_module_attr_path_pins_abstract_type() {
         let region = run_root_storage();

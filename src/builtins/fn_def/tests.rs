@@ -20,6 +20,7 @@ mod container_types;
 mod functor;
 mod param_type;
 mod record_types;
+mod region_liveness;
 mod return_type;
 mod tail_region_turnover;
 

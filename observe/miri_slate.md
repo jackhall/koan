@@ -305,36 +305,26 @@ a lost region dangles under tree borrows.
 - `closure_argument_stays_live_through_user_fn_call`
 - `let_bound_list_reaching_two_call_regions_keeps_both_live`
 
-**`Scope::add` re-entry** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — adding a binding while
-a `data` borrow is live queues onto a pending list and drains on borrow drop,
-so the conditional-defer path doesn't violate the `RefCell` invariant. (Safe
-code by typestate; pinned in the slate because tree borrows catches the
-violation if the queue/drain discipline regresses.)
+**Retaining adoption's reach-fold reattach** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
+— `Scope::adopt_carried` at the retaining seam re-anchors a foreign producer's carrier at the
+consumer scope's own lifetime, copy-free, pinned by the reach the verb folds into the consumer's own
+region **before** the reattach. This test seals a value witnessed by a producer frame, adopts it into
+a consumer scope in a *different* frame, drops every direct producer handle, then reads the adopted
+value — so the folded reach is the sole pin on the region the re-anchored borrow reads, and tree
+borrows catches a use-after-free if the fold-then-reanchor order or the pin regresses.
 
-- `add_during_active_data_borrow_queues_and_drains`
+- `retaining_adopt_reach_fold_pins_the_producer_region_after_drop`
 
-**`Scope::adopt_sealed` reach-fold reattach** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
-— the consumption verb re-anchors a foreign producer's sealed carrier at the consumer scope's own
-lifetime (`Erased::reattach` to `'a`), copy-free, pinned by the reach `Scope::host_reach_of` mints
-into the consumer's own arena **before** the reattach. This test seals a value witnessed by a
-producer frame, adopts it into a consumer scope in a *different* frame, drops every direct producer
-handle, then reads the adopted value — so the minted reach is the sole pin on the region the
-re-anchored borrow reads, and tree borrows catches a use-after-free if the mint-then-reanchor order
-or the pin regresses.
+**Retaining adoption's delivered re-home across retention** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) —
+the same verb consuming a *delivered* envelope: the fold runs first, pinning the producer's residence
+and the value's foreign reach into the consumer's region before the copy-free reattach fabricates the
+consumer-lifetime borrow. This test finalizes an object at the Done boundary (mirroring production),
+rides the retention hold across the producer shell's drop, adopts into an independent consumer scope,
+then drops the hold and every other source handle before reading — the consumer's folded set is the
+sole owner at the read, pinning the hold-to-fold handoff. Tree borrows catches a use-after-free if
+the fold-before-reattach order, the host materialization, or the pin regresses.
 
-- `adopt_sealed_reach_fold_pins_the_producer_region_after_drop`
-
-**`Scope::adopt_sealed` delivered re-home across retention** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) —
-adoption consumes a *delivered* cell: the mint (run first in `adopt_sealed`, at `Residence::Kept` —
-the envelope's host always materializes) pins the producer's residence and the value's foreign reach
-into the consumer's arena before the copy-free `Erased::reattach` fabricates the consumer-lifetime
-borrow. This test finalizes an object at the Done boundary (mirroring production), rides the
-retention hold across the producer shell's drop, adopts into an independent consumer scope, then
-drops the hold and every other source handle before reading — the consumer's minted set is the sole
-owner at the read, pinning the hold-to-mint handoff. Tree borrows catches a use-after-free if the
-mint-before-reattach order, the host materialization, or the pin regresses.
-
-- `adopt_sealed_object_rides_retention_across_producer_shell_drop`
+- `retaining_adopt_object_rides_retention_across_producer_shell_drop`
 
 **Dep envelopes held across a step's own open** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
 — `run_step`'s consumer-step `pin` is a plain `FrameSet` folded from each dep envelope's

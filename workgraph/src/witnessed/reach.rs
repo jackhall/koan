@@ -26,10 +26,18 @@
 //! (design/witness-hosting.md § Composition): the description keeps every composed member,
 //! `dest`'s own region included, so membership is exact — a value's home rides it as an ordinary
 //! member rather than as a separate bit; the owned bundle drops any member whose region *is*
-//! `dest`'s, because a region owning a pin on itself is a reference cycle. Ancestors of `dest`
-//! stay in the bundle: they close no cycle. The asymmetry is what makes the `Sealed → Delivered`
-//! lift correct for a value resting in its own scope's region — [`ReachDescription::to_bundle`]
-//! upgrades home along with everything else when the value travels out.
+//! `dest`'s, because a region owning a pin on itself is a reference cycle. The asymmetry is what
+//! makes the `Sealed → Delivered` lift correct for a value resting in its own scope's region —
+//! [`ReachDescription::to_bundle`] upgrades home along with everything else when the value travels
+//! out.
+//!
+//! The self rule bounds a *mint*. A second rule, the **eternal rule**
+//! ([`PinBundle::without_eternal`]), bounds a *region-lifetime retention*
+//! ([`Region::retain_reach`]): a member declaring [`PinsRegion::needs_no_pin`] — storage that
+//! already outlives every region — is dropped there. Between them they are what keeps the retention
+//! graph acyclic. Neither one alone suffices: an owner outside `dest`'s own region can still hold a
+//! chain back to it, and the two-region ring that closes when a run-root region retains a per-call
+//! owner while that owner's region retains the run root is exactly what the eternal rule cuts.
 
 use std::rc::{Rc, Weak};
 
@@ -51,6 +59,21 @@ use super::{
 pub unsafe trait PinsRegion: RegionOwner {
     /// Whether holding `self` keeps the storage of `region` alive.
     fn pins_region(&self, region: &Self::Region) -> bool;
+
+    /// Whether this owner's storage outlives every region that could retain it, so an owning pin on
+    /// it buys nothing and taking one only risks a cycle. `false` by default — the safe answer, an
+    /// extra pin never dangles. A workload overrides it for its eternal tier (Koan's run-root
+    /// [`RegionHost::is_run_root`](super::RegionHost::is_run_root)).
+    ///
+    /// # Safety
+    ///
+    /// Returning `true` asserts that `Self`'s storage — and every region its owner chain pins —
+    /// stays live and fixed-address for at least as long as any region that could retain it. A
+    /// lying answer drops the one pin holding a region alive, which is the dangle the whole reach
+    /// system exists to rule out.
+    fn needs_no_pin(&self) -> bool {
+        false
+    }
 }
 
 /// The non-owning reach description: the `Weak<F>` members naming the regions a carrier's value
@@ -158,8 +181,10 @@ impl<F: PinsRegion> ReachDescription<F> {
     ///    member kept alive by another member's owner chain is dropped.
     /// 2. **The self rule**, applied to the returned **bundle only**: a member whose region *is*
     ///    `dest`'s is dropped from the owned bundle (a region owning a pin on itself is a cycle)
-    ///    while staying a member of the stored description, so membership remains exact. Ancestors
-    ///    of `dest` survive in both — they close no cycle.
+    ///    while staying a member of the stored description, so membership remains exact. Every other
+    ///    member survives in both; a mint is not where eternal storage is filtered out — that is the
+    ///    retention's own eternal rule ([`PinBundle::without_eternal`]), applied at
+    ///    [`Region::retain_reach`], because only a region-lifetime pin can close a ring.
     ///
     /// A minted description is therefore **exact**: it is the value's whole reach, not a reach
     /// narrowed against what some destination's container happened to pin, so every consumer reads
@@ -331,6 +356,22 @@ impl<F: PinsRegion> PinBundle<F> {
                 .members
                 .iter()
                 .filter(|m| keep(m.region()))
+                .map(Rc::clone)
+                .collect(),
+        }
+    }
+
+    /// This bundle without any member whose storage already outlives every region
+    /// ([`PinsRegion::needs_no_pin`]) — the **eternal rule**, the region-lifetime companion to the
+    /// self rule. Applied where a bundle is about to be owned *for a region's whole life*
+    /// ([`Region::retain_reach`]): pinning storage that outlives the region buys nothing, and if
+    /// that storage's own region ever retains this one back, the pair pins each other forever.
+    pub(crate) fn without_eternal(&self) -> Self {
+        PinBundle {
+            members: self
+                .members
+                .iter()
+                .filter(|m| !m.needs_no_pin())
                 .map(Rc::clone)
                 .collect(),
         }

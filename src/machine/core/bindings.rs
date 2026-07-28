@@ -131,7 +131,6 @@ impl DataEntry {
     /// witness clone, no refcount traffic) beside the `Copy` index. Every read
     /// hands one of these out so no caller holds the `tables` borrow across a carrier build.
     /// The one reader is the bulk-install snapshot, which is ascription-only.
-    #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     fn duplicate(&self) -> Self {
         DataEntry {
             index: self.index,
@@ -157,7 +156,6 @@ pub(crate) struct FunctionBucketEntry {
 
 impl FunctionBucketEntry {
     /// A bit-copy of the entry, for the bulk-install snapshot — like [`DataEntry::duplicate`].
-    #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     fn duplicate(&self) -> Self {
         FunctionBucketEntry {
             index: self.index,
@@ -736,7 +734,6 @@ impl Bindings {
     /// keyworded dispatch surface as-is (keyword → keyword), it does not re-derive it from the
     /// value bindings. Snapshots the source maps and releases the source `Ref` before the replay
     /// so re-entrant ascription cannot deadlock.
-    #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     pub(crate) fn bulk_install_from(
         &self,
         src: &Bindings,

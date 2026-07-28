@@ -153,14 +153,6 @@ recover the answer.
   dispatch on `Opened<'step>` and `ReturnContract` holding a `Sealed`; (4)
   ascription — drop the `ascription` feature flag and migrate the feature onto the
   carrier surface.
-- *Ascription flag — decided, temporary.* Module ascription (`:|` / `:!`) is gated off behind
-  a `ascription` cargo feature so phases 1–3 need not carry the heaviest consumer of
-  the machinery they retire — it drives `store_transparent_view`,
-  `child_module_reach`, `Reached`'s reader impl, and the `sig_subtype` /
-  `SigSubtypeFailure` surface. Phase 4 deletes the feature and every gate, migrates
-  the two ascription store doors off `Reached::mint(value, claim, pins)` onto the
-  sealed entry plus the scope union bundle, and restores `tools/verify.sh`'s tutorial
-  snippet step. The flag is not an end state: this item is not done while it is off.
 - *Step-as-fold — deferred.* Placing the whole step body under one rank-2 brand to
   subsume the per-site open/reseal doors is a later simplification, not this item.
 

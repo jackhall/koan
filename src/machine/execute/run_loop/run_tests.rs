@@ -1,7 +1,6 @@
 //! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
 //! replay-park routing in `classify_dispatch` (see
 //! [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)).
-#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 use crate::builtins::test_support::binds_module;
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
@@ -252,7 +251,6 @@ fn replay_park_propagates_producer_error() {
 /// Bare Type-tokens in `ProperType` slots of non-binders ride the same
 /// replay-park rails as bare Identifiers — see
 /// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
-#[cfg(feature = "ascription")]
 #[test]
 fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     let region = run_root_storage();

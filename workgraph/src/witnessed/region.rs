@@ -156,6 +156,11 @@ pub struct Region<W: StorageProfile> {
     /// region across everything resident here, dropped whole at region death. Region death and the
     /// scope's death are the same schedule — bindings are bind-once and a resident value never dies
     /// before its region — so a per-holder bundle would pin no shorter than this one does.
+    ///
+    /// A member declaring [`PinsRegion::needs_no_pin`] never enters (the **eternal rule**,
+    /// [`PinBundle::without_eternal`]): its storage already outlives this region, so a pin on it is
+    /// dead weight — and a live edge into a region that can retain this one back, which is a cycle
+    /// neither side ever frees.
     retained_reach: RefCell<PinBundle<W::FrameOwner>>,
 }
 
@@ -198,7 +203,9 @@ impl<W: StorageProfile> Region<W> {
     /// and a retention subsumed by an outer member costs none — the field stays a single antichain
     /// rather than a bundle per retention.
     pub(crate) fn retain_reach(&self, bundle: PinBundle<W::FrameOwner>) {
-        self.retained_reach.borrow_mut().absorb(bundle);
+        self.retained_reach
+            .borrow_mut()
+            .absorb(bundle.without_eternal());
     }
 
     /// Number of values stored in family `K`'s cell. Read-only; exposes no `&Arena`, so it

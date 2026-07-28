@@ -130,6 +130,10 @@ unsafe impl<P: StorageProfile> PinsRegion for RegionHost<P> {
     fn pins_region(&self, region: &Region<P>) -> bool {
         RegionHost::pins_region(self, region as *const Region<P>)
     }
+
+    fn needs_no_pin(&self) -> bool {
+        self.run_root
+    }
 }
 
 /// Snapshot of the thread-local region-mint counters. `peak` and `minted_total` are monotonic across

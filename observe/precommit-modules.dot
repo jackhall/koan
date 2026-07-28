@@ -2,6 +2,7 @@ digraph {
     "koan" [label="koan"];
     "koan::builtins" [label="koan::builtins"];
     "koan::builtins::arithmetic" [label="koan::builtins::arithmetic"];
+    "koan::builtins::ascribe" [label="koan::builtins::ascribe"];
     "koan::builtins::attr" [label="koan::builtins::attr"];
     "koan::builtins::await_body" [label="koan::builtins::await_body"];
     "koan::builtins::branch_walk" [label="koan::builtins::branch_walk"];
@@ -139,6 +140,7 @@ digraph {
     "koan" -> "koan::source" [label="owns", style="solid"];
     "koan" -> "koan::step_fixture" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::arithmetic" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::ascribe" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::attr" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::await_body" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::branch_walk" [label="owns", style="solid"];
@@ -264,15 +266,18 @@ digraph {
     "koan::parse" -> "koan::parse::tokens" [label="owns", style="solid"];
     "koan::parse" -> "koan::parse::triple_list" [label="owns", style="solid"];
     "koan::parse" -> "koan::parse::whitespace" [label="owns", style="solid"];
-    "koan::builtins" -> "koan" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins" -> "koan::parse" [label="uses", style="dashed"];
     "koan::builtins::arithmetic" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::arithmetic" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::arithmetic" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::arithmetic" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::ascribe" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::ascribe" -> "koan::builtins::test_support" [label="uses", style="dashed"];
+    "koan::builtins::ascribe" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::ascribe" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::ascribe" -> "koan::parse" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::machine" [label="uses", style="dashed"];

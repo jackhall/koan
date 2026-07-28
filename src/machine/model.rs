@@ -28,7 +28,6 @@ pub(crate) use types::{
     SigSchema, TypeResolution,
 };
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
-#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 pub(crate) use types::{sig_subtype, substitute_sig_members, TypeDigest};
 pub(crate) use values::{
     copy_object_into, copy_or_pin, still_borrows_host, CarriedFamily, DictSubstrate, ListSubstrate,

@@ -152,6 +152,15 @@ impl Write for SharedBuf {
 /// directly. Built inside `run_storage` like every run root, so its `region_owner` resolves —
 /// tests that drive dispatch (establishing a run frame via `ensure_run_frame`) work the same as
 /// pure scope-machinery tests that never reach the escape path.
+/// A **per-call**-tier storage with no ancestor — the fixture stand-in for another call's frame
+/// whenever a white-box reach test needs a foreign region a retention is allowed to pin. The
+/// run-root tier is not interchangeable here: its region outlives the run, so nothing takes an
+/// owning pin on it.
+#[cfg(test)]
+pub(crate) fn per_call_storage() -> Rc<FrameStorage> {
+    crate::witnessed::RegionHost::fresh(None)
+}
+
 #[cfg(test)]
 pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
     run_storage.brand().alloc_scope(Scope::run_root(
@@ -266,7 +275,6 @@ impl<'a> TestRun<'a> {
     /// `prelude`, so a test can measure each counter's movement across `probe` alone rather than
     /// over the whole run.
     #[cfg(test)]
-    #[cfg_attr(not(feature = "ascription"), allow(dead_code))]
     pub(crate) fn run_probe_returning_registry(
         &mut self,
         prelude: &str,

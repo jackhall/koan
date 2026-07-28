@@ -16,7 +16,6 @@
 use std::rc::Rc;
 
 use koan::builtins::test_support::TestRun;
-#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 use koan::machine::model::{KKind, KObject, KType, NodeSchema, TypeNode, TypeRegistry};
 use koan::machine::{run_root_storage, FrameStorage, Scope};
 use koan::parse::parse;
@@ -326,7 +325,6 @@ fn sigil_fn_forward_reference_defers_via_combine() {
 /// A functor — a module-returning FN — binds a `KFunction` carrier under `MAKESET`, and the
 /// keyworded call `(MAKESET int_ord)` produces a Module value. Ordinary dispatch, no type-side
 /// surface: the test pins that a functor application rides the same lane as any other call.
-#[cfg(feature = "ascription")]
 #[test]
 fn user_functor_application_through_dispatch() {
     let region = run_root_storage();

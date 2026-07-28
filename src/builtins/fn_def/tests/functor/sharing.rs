@@ -1,6 +1,5 @@
 //! `WITH` sharing constraints on functor parameters and return types.
 
-#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 use crate::builtins::test_support::{lookup_fn, lookup_module, parse_one, spliced_part, TestRun};
 use crate::machine::model::Carried;
 use crate::machine::{run_root_storage, FrameStorageExt};
@@ -171,7 +170,6 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
 /// pinned return signature: the body binds `Elt = Number` and `insert`, so it bare-satisfies
 /// `Set` and its `Elt` manifest member agrees with the `{Elt = Number}` pin — no ascription
 /// required. Counterpart to `functor_return_with_mismatched_sharing_constraint_errors`.
-#[cfg(feature = "ascription")]
 #[test]
 fn functor_return_with_matching_sharing_constraint_passes() {
     let region = run_root_storage();
@@ -211,7 +209,6 @@ fn functor_return_with_matching_sharing_constraint_passes() {
 /// now rides the self-sig, whose manifest members read the source's concrete types — so a
 /// transparent view of a module binding `Elem = Number` agrees with `{Elem = Number}` and a
 /// view binding `Elem = Str` does not.
-#[cfg(feature = "ascription")]
 #[test]
 fn transparent_view_pin_agreement_reads_source_types() {
     use crate::machine::model::{KType, TypeNode};
@@ -250,7 +247,6 @@ fn transparent_view_pin_agreement_reads_source_types() {
 /// An opaque view agrees with a pin naming its own per-call abstract identity: the view's
 /// self-sig fixes `Carrier` manifest to the abstract type it minted, so a slot pinned to that
 /// same identity accepts it.
-#[cfg(feature = "ascription")]
 #[test]
 fn opaque_view_pin_agreement_names_its_abstract_identity() {
     use crate::machine::model::TypeNode;

@@ -18,7 +18,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::test_support::{SharedBuf, TestRun};
-#[cfg_attr(not(feature = "ascription"), allow(unused_imports))]
 use koan::machine::model::{KObject, SignatureElement, TypeNode};
 use koan::machine::{run_root_storage, FrameStorage, KFunction, Scope};
 use koan::parse::parse;
@@ -44,7 +43,6 @@ fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
 /// integration crate sees neither the helper nor the raw `Bindings::functions` view
 /// (gated `#[cfg(test)]`), so we go through the public `Bindings::iter_functions`
 /// value-yielding iterator.
-#[cfg_attr(not(feature = "ascription"), allow(dead_code))]
 fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
     for (_, bucket) in scope.bindings().iter_functions() {
         for sealed in bucket {
@@ -65,7 +63,6 @@ fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
 /// End-to-end MakeSet smoke. The FN takes an `Ordered`-satisfying module (`int_ord`),
 /// produces a module value carrying a value-side `tag` member, and the LET assigns the
 /// result to `int_set`.
-#[cfg(feature = "ascription")]
 #[test]
 fn functor_e2e_makeset_produces_module() {
     let region = run_root_storage();
@@ -184,7 +181,6 @@ fn run_expect_err(src: &str) -> String {
 /// `compatible_sigs` — the same satisfaction check the keyword-led `(MAKESET int_ord)` form
 /// uses — and admits it. The body's `(LET tag = 0)` then runs, producing the module bound as
 /// `got`.
-#[cfg(feature = "ascription")]
 #[test]
 fn signature_param_satisfied_via_named_args() {
     let region = run_root_storage();

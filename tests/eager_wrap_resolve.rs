@@ -42,7 +42,6 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
 /// `wrap_indices` (Future-bearing slot, not bare-name) and binds the picked function
 /// directly with no subs to schedule. The returned module's `inner` member is `1`,
 /// captured via PRINT.
-#[cfg(feature = "ascription")]
 #[test]
 fn makeset_bare_type_token_resolves_eagerly() {
     let out = run_capturing(
@@ -99,7 +98,6 @@ fn chained_type_access_uses_deferred_path() {
 /// bare-name parts as `wrap_indices`). The lazy-arm still schedules the inner
 /// Expression as a sub-Dispatch. Result is `inner = 2` to distinguish from the
 /// makeset_bare_type_token test above.
-#[cfg(feature = "ascription")]
 #[test]
 fn wrap_slot_parens_expression_still_sub_dispatches() {
     let out = run_capturing(

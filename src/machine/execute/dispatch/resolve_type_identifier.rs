@@ -17,9 +17,12 @@
 //!
 //! Which scope to probe is decided per reference kind. A nominal member in flight is named by a
 //! relative `Sibling` handle, which is meaningful only against the **declaration window** that
-//! minted it — the nearest one on this scope's chain. The gate resolves the index to a member name
-//! there, then walks for the scope that both carries that same window and holds a placeholder for
-//! the name. Window identity is what the ptr-equality does here: it stops an unrelated same-named
+//! minted it — the nearest one on this scope's chain. A member whose slot that window has already
+//! filled is settled and never in flight: the group installs one identity write for every member at
+//! the seal, so a filled member's placeholder outlives its own finalize. For an unfilled one the
+//! gate resolves the index to a member name, then walks for the scope that both carries that same
+//! window and holds a placeholder naming the producer to park on. Window identity is what the
+//! ptr-equality does here: it stops an unrelated same-named
 //! declaration, which opens its own window, from capturing the reference. A sealed member carries
 //! an absolute handle and no window, so it is never in flight. A SIG-declared or abstract slot is
 //! identified by the declaring scope id its node records.
@@ -97,6 +100,14 @@ impl FinalizeGate<'_, '_> {
     /// window of its own, which is not this one.
     fn member_producer(&self, index: usize) -> Option<NodeId> {
         let window = self.scope.nearest_recursive_window()?;
+        // A filled slot ends the member's flight: its own finalize has run, so the relative handle
+        // this reference holds already denotes settled content. The member's placeholder outlives
+        // that — a group's identity write, and with it the clear, waits for the seal — so for a
+        // sibling the slot is the finer signal, and the placeholder below only names the producer
+        // node to park on.
+        if window.member_is_filled(index) {
+            return None;
+        }
         let name = window.member_names().into_iter().nth(index)?;
         self.scope.ancestors().find_map(|s| {
             let carried = s.nearest_recursive_window()?;
