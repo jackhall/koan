@@ -532,7 +532,7 @@ Per the [scheduler-library.md](scheduler-library.md) division:
   — routes the reaching-tier move-ins through the fold-brand construction door
   (§ Residence enforcement) and deletes the runtime reaching audit; the backstops
   there are what remains.
-- [Binding tables as witnessed carriers](../roadmap/untyped_arena/binding-tables-witnessed-carriers.md)
-  — implements the three-carrier model this doc describes: both binding tables
-  store the `Sealed` carrier, home becomes an ordinary `Weak` member, and the
-  scope's single union bundle replaces per-entry pins.
+- [Home lives in the reach description](../roadmap/untyped_arena/home-lives-in-the-reach-description.md)
+  — collapses the two records of home that survive alongside the description: the
+  carrier's borrows-home bit, and the `with_home_region` /
+  `PinBundle::any_member_region` probes the relocation predicates read.

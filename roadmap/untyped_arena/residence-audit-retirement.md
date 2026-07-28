@@ -35,9 +35,8 @@ so its residence audit reads as enforcement rather than the stopgap it is.
   (`alloc_function`, `alloc_scope`, `alloc_module`) — with a note stating that
   [drop-free region death](drop-free-region-death.md) removes the splice-free
   gate. The retained `alloc_object_checked_stored` home-borrow-bit walk is left
-  unmentioned as transient plumbing that
-  [binding tables as witnessed carriers](binding-tables-witnessed-carriers.md)
-  subsumes when home becomes an ordinary reach member.
+  unmentioned: home is an ordinary reach member
+  ([witness-hosting.md](../../design/witness-hosting.md)), which subsumes it.
 - The Miri audit slate is green after the retirements.
 
 ## Dependencies
@@ -47,9 +46,6 @@ so its residence audit reads as enforcement rather than the stopgap it is.
 
 **Unblocks:**
 
-- [Binding tables as witnessed carriers](binding-tables-witnessed-carriers.md)
-  — the fold-brand construction doors whose confined witnessed product these
-  carriers seal into.
 - [Drop-free region death](drop-free-region-death.md) — the reaching tier is
   retired here via the fold-brand doors; that item deletes the residual
   dest-only `resident_in` walk once the expression-part families are

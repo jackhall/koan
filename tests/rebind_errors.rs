@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::test_support::{SharedBuf, TestRun};
+use koan::builtins::test_support::{lookup_binding, SharedBuf, TestRun};
 use koan::machine::model::KObject;
 use koan::machine::{run_root_storage, KError, KErrorKind};
 use koan::parse::parse;
@@ -109,13 +109,13 @@ fn cross_scope_shadowing_succeeds() {
         "shadowing LET inside MODULE should succeed"
     );
     // Outer x stays 1.
-    assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
+    assert!(matches!(lookup_binding(scope, "x"), Some(KObject::Number(n)) if *n == 1.0));
     // Module's x is 99. A module is a value — its `&Module` rides the Object-arm value in `data`.
-    let m = match scope.lookup("some_module") {
+    let m = match lookup_binding(scope, "some_module") {
         Some(KObject::Module(m)) => *m,
         _ => panic!("some_module should bind a module value"),
     };
-    let x = m.child_scope().lookup("x");
+    let x = lookup_binding(m.child_scope(), "x");
     assert!(matches!(x, Some(KObject::Number(n)) if *n == 99.0));
 }
 

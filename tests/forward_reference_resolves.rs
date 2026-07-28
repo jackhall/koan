@@ -9,7 +9,7 @@
 
 use std::rc::Rc;
 
-use koan::builtins::test_support::TestRun;
+use koan::builtins::test_support::{lookup_binding, TestRun};
 use koan::machine::model::KObject;
 use koan::machine::{run_root_storage, FrameStorage};
 use koan::parse::parse;
@@ -68,7 +68,7 @@ fn forward_value_let_at_same_level_is_unbound() {
 fn backward_value_let_at_same_level_resolves() {
     let region = run_root_storage();
     let scope = run(&region, "LET z = 1\nLET y = z").scope;
-    assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0));
+    assert!(matches!(lookup_binding(scope, "y"), Some(KObject::Number(n)) if *n == 1.0));
 }
 
 /// MODULE body: forward LET reference under the body's child scope is `UnboundName` for
@@ -92,11 +92,11 @@ fn module_body_backward_value_reference_resolves() {
     let region = run_root_storage();
     let scope = run(&region, "MODULE some_module = ((LET x = 1) (LET y = x))").scope;
     // A module is a value — the `&Module` rides the Object-arm value in `data`.
-    let m = match scope.lookup("some_module") {
+    let m = match lookup_binding(scope, "some_module") {
         Some(KObject::Module(m)) => *m,
         _ => panic!("some_module should bind a module value"),
     };
-    let y = m.child_scope().lookup("y");
+    let y = lookup_binding(m.child_scope(), "y");
     assert!(matches!(y, Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -136,7 +136,7 @@ fn multi_name_backward_reference_resolves() {
          LET out = (ADD aa BY bb)",
     )
     .scope;
-    assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 2.0));
+    assert!(matches!(lookup_binding(scope, "out"), Some(KObject::Number(n)) if *n == 2.0));
 }
 
 /// Forward function-name reference (call_by_name): a later-sibling `FN DOUBLE` is
@@ -197,7 +197,7 @@ fn backward_attr_lookup_resolves_after_struct_binding() {
          LET v = p.x",
     )
     .scope;
-    assert!(matches!(scope.lookup("v"), Some(KObject::Number(n)) if *n == 7.0));
+    assert!(matches!(lookup_binding(scope, "v"), Some(KObject::Number(n)) if *n == 7.0));
 }
 
 /// LET-as-type-alias is value-style gated: `LET Ty = Un` followed by `LET Un = Number`

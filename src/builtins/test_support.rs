@@ -10,13 +10,14 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::machine::model::KExpression;
+use crate::machine::model::KObject;
 #[cfg(test)]
 use crate::machine::model::Module;
 use crate::machine::model::TypeRegistry;
 #[cfg(test)]
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 #[cfg(test)]
-use crate::machine::model::{Carried, ExpressionPart, KObject};
+use crate::machine::model::{Carried, ExpressionPart};
 #[cfg(test)]
 use crate::machine::FrameStorageExt;
 #[cfg(test)]
@@ -24,9 +25,9 @@ use crate::machine::KFunction;
 use crate::machine::KoanRuntime;
 #[cfg(test)]
 use crate::machine::SealedFunction;
+use crate::machine::{AdoptSeam, FrameStorage, KError, NameLookup, Scope};
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
-use crate::machine::{FrameStorage, KError, Scope};
 use crate::parse::parse;
 #[cfg(test)]
 use crate::scheduler::NodeId;
@@ -287,6 +288,25 @@ impl<'a> TestRun<'a> {
         self.run(probe);
         (registry, hits_before_probe, misses_before_probe)
     }
+}
+
+/// The value `name` binds to, **adopted** into `scope`'s own region so the reference outlives the
+/// read — the assertion form of a binding read. Collapses a parked producer and a miss to `None`.
+///
+/// The bare `&KObject` shape lives here rather than on [`Scope`] because adoption is its price:
+/// every production read that only *inspects* a binding goes through the delivery envelope and
+/// retains nothing. `Scope`'s own bare ladder is `#[cfg(test)]`, which the integration tests in
+/// `tests/` cannot see, so they reach the shape through this scaffolding module instead — and
+/// production code, which never constructs a [`TestRun`], cannot reach it at all.
+pub fn lookup_binding<'a>(scope: &Scope<'a>, name: &str) -> Option<&'a KObject<'a>> {
+    scope
+        .resolve_value_delivered(name, None)
+        .and_then(NameLookup::bound)
+        .map(|delivered| {
+            scope
+                .adopt_carried(&delivered, AdoptSeam::Retaining)
+                .object()
+        })
 }
 
 /// The module `name` binds to. Modules are values, so the binding lives on the value channel

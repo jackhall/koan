@@ -17,7 +17,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::test_support::{SharedBuf, TestRun};
+use koan::builtins::test_support::{lookup_binding, SharedBuf, TestRun};
 use koan::machine::model::{KObject, SignatureElement, TypeNode};
 use koan::machine::{run_root_storage, FrameStorage, KFunction, Scope};
 use koan::parse::parse;
@@ -99,13 +99,13 @@ fn functor_e2e_makeset_produces_module() {
         scope.resolve_type("int_set").is_none(),
         "a module is a value — nothing lands in `types`",
     );
-    let m = match scope.lookup("int_set") {
+    let m = match lookup_binding(scope, "int_set") {
         Some(KObject::Module(module)) => *module,
         _ => panic!("int_set should bind a module value in data"),
     };
     // The body's `(LET tag = 0)` lifted into the result module's child scope — verifies the
     // per-call body actually ran and the produced module carries its declared member.
-    let tag = m.child_scope().lookup("tag");
+    let tag = lookup_binding(m.child_scope(), "tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 0.0),
         "int_set's `tag` member should be 0, got {:?}",
@@ -136,7 +136,10 @@ fn let_bound_fn_applied_by_named_args_yields_module() {
     );
     let scope = test_run.scope;
     assert!(
-        matches!(scope.lookup("apply_it"), Some(KObject::KFunction(_))),
+        matches!(
+            lookup_binding(scope, "apply_it"),
+            Some(KObject::KFunction(_))
+        ),
         "apply_it binds value-side as a KFunction",
     );
     assert!(
@@ -144,11 +147,11 @@ fn let_bound_fn_applied_by_named_args_yields_module() {
         "`bindings.types` holds no callable value",
     );
     // Applying it produced a module that the outer LET bound as `got`.
-    let m = match scope.lookup("got") {
+    let m = match lookup_binding(scope, "got") {
         Some(KObject::Module(module)) => *module,
         _ => panic!("got should be the module value produced by applying apply_it"),
     };
-    let tag = m.child_scope().lookup("tag");
+    let tag = lookup_binding(m.child_scope(), "tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 5.0),
         "the applied body should set `tag = 5` from the named arg, got {:?}",
@@ -194,11 +197,11 @@ fn signature_param_satisfied_via_named_args() {
          LET got = (make_set {base = int_ord})",
     );
     let scope = test_run.scope;
-    let m = match scope.lookup("got") {
+    let m = match lookup_binding(scope, "got") {
         Some(KObject::Module(module)) => *module,
         _ => panic!("got should be the module value produced by applying make_set"),
     };
-    let tag = m.child_scope().lookup("tag");
+    let tag = lookup_binding(m.child_scope(), "tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 0.0),
         "the applied body should set `tag = 0`, got {:?}",

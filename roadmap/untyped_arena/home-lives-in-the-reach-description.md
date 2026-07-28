@@ -41,11 +41,10 @@ region handed over *is* home; [`lift.rs`](../../src/machine/execute/lift.rs) and
 [`scope/reach.rs`](../../src/machine/core/scope/reach.rs) gate their adopt seams
 the same way; [`arena/residence.rs`](../../src/machine/core/arena/residence.rs)
 evidences a foreign borrow through `any_member_region`. Three records of one
-fact, each able to disagree with the other two — and the two probes are the
-surface [binding tables as witnessed carriers](binding-tables-witnessed-carriers.md)
-specified for deletion (its acceptance criteria and its *Embedder boundary —
-decided.* direction both name them) but did not delete, leaving that item's
-"Koan never recovers a producer region from a member set" boundary unenforced.
+fact, each able to disagree with the other two — and while the embedder boundary
+holds everywhere else (`PinBundle` is crate-private, owned pins cross only as the
+opaque `StepCoverage`), these two probes are the hole in it: Koan still recovers
+a producer region from the library rather than being handed it.
 
 **Acceptance criteria.**
 
@@ -87,9 +86,9 @@ decided.* direction both name them) but did not delete, leaving that item's
   (b) the predicate takes only the product and the region, and home membership is
   read off the minted description — viable only once the first criterion holds,
   since a fold-born carrier has no description today. Recommended: (a) — it is
-  what the *Embedder boundary* direction on
-  [binding tables as witnessed carriers](binding-tables-witnessed-carriers.md)
-  already decided, and it does not depend on the birth-site mint landing first.
+  the rule the rest of the embedder boundary already follows (the container
+  supplies the home owner each verb needs), and it does not depend on the
+  birth-site mint landing first.
 - Whether `any_member_region` survives its koan caller — *open.*
   `arena/residence.rs` uses it to evidence a foreign borrow during a move-in
   audit, which is not a home question at all. Either that call site moves to a
@@ -106,10 +105,6 @@ decided.* direction both name them) but did not delete, leaving that item's
 
 ## Dependencies
 
-**Requires:**
-
-- [Binding tables as witnessed carriers](binding-tables-witnessed-carriers.md) —
-  establishes home as an ordinary reach member, which this item extends to birth
-  sites and to the two surviving home probes.
+**Requires:** none — the carrier substrate it builds on has shipped.
 
 **Unblocks:** none — leaf.

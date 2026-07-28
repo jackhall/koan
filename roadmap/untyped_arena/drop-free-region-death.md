@@ -44,8 +44,5 @@ compile time.
   conversion; every value family must be `Drop`-free in stored form before the move.
 - [Residence-audit retirement](residence-audit-retirement.md) — the composite
   residence tiers this item deletes are dispositioned per-site there first.
-- [Binding tables as witnessed carriers](binding-tables-witnessed-carriers.md) —
-  makes the binding entries `Copy` and `Drop`-free, so they can migrate into the
-  untyped bump arena.
 
 **Unblocks:** none tracked yet.

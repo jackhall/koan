@@ -70,10 +70,6 @@ declared them.
 
 ## Dependencies
 
-**Requires:**
-
-- [Binding tables as witnessed carriers](binding-tables-witnessed-carriers.md) —
-  establishes the sealed-carrier entry shape and the lifetime-free `Bindings` this
-  third table would join.
+**Requires:** none — the sealed-carrier entry shape it joins has shipped.
 
 **Unblocks:** none — leaf.

@@ -5,11 +5,16 @@
 
 use std::rc::Rc;
 
+// `AdoptSeam` and `KObject` serve the `#[cfg(test)]` bare-read ladder alone; every other
+// resolution verb hands back a delivery envelope.
+#[cfg(test)]
 use super::AdoptSeam;
 use super::Scope;
 use crate::machine::core::bindings::NameLookup;
 use crate::machine::core::LexicalFrame;
-use crate::machine::model::{KObject, KType, OperatorGroup};
+#[cfg(test)]
+use crate::machine::model::KObject;
+use crate::machine::model::{KType, OperatorGroup};
 use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
@@ -38,14 +43,18 @@ impl<'a> Scope<'a> {
     ///
     /// The adoption is the price of a bare `&KObject`: every production read that only *inspects* a
     /// binding takes [`Self::lookup_value_delivered`] instead and reads under the envelope's own
-    /// pins, retaining nothing. This ladder survives for the assertion suites and for a consumer
-    /// that genuinely needs the value to outlive the read.
+    /// pins, retaining nothing. This ladder is `#[cfg(test)]` — it survives for the assertion
+    /// suites alone, and production has no route to it. The integration tests in `tests/`, which
+    /// compile against the crate without `cfg(test)`, reach the same shape through
+    /// [`test_support::lookup_binding`](crate::builtins::test_support::lookup_binding).
+    #[cfg(test)]
     pub fn lookup(&self, name: &str) -> Option<&'a KObject<'a>> {
         self.lookup_with_chain(name, None)
     }
 
     /// Chain-gated companion to [`Self::lookup`]. Filter consults `chain` per
     /// [`visible`].
+    #[cfg(test)]
     pub fn lookup_with_chain(
         &self,
         name: &str,
@@ -62,6 +71,7 @@ impl<'a> Scope<'a> {
     ///
     /// Type-side bindings are not consulted — see [`Self::resolve_type`].
     /// Visibility unfiltered; the adoption cost is [`Self::lookup`]'s.
+    #[cfg(test)]
     pub fn resolve(&self, name: &str) -> Option<NameLookup<&'a KObject<'a>>> {
         self.resolve_with_chain(name, None)
     }
@@ -92,6 +102,7 @@ impl<'a> Scope<'a> {
     /// Chain-gated companion to [`Self::resolve`]. Per-scope hits are filtered through the
     /// [`binding_cutoff`](Self::binding_cutoff), so hidden entries (later siblings, or value-style
     /// binders before their lexical position) are skipped and the walk continues outward.
+    #[cfg(test)]
     pub fn resolve_with_chain(
         &self,
         name: &str,
