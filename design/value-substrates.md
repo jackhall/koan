@@ -219,16 +219,23 @@ bytes and alignment, with no per-slot type or destructor bookkeeping, which is
 exactly what Drop-freedom licenses. Region death for those bytes is
 deallocation with no per-slot `Drop` glue: free the arena's chunks, done.
 Families whose slots own heap data stay in typed sub-arenas until converted,
-and the families that are *designed* to own things — a `Scope`'s mutable
-binding tables, a `FrameSet`'s region holds — remain typed and droppy
-permanently; "as much storage as possible" means the value substrates.
+and the families that are *designed* to own things — a `FrameSet`'s region
+holds — remain typed and droppy permanently; "as much storage as possible"
+means the value substrates.
+
+A scope's binding tables are **not** in that residue. An entry is a
+`BindingIndex` beside a resting `Sealed` carrier, both `Copy` and `Drop`-free:
+the pins keeping the entry's reach alive live one level down, in the region's own
+union bundle, which drops whole at region death
+([witness-hosting.md § The pin bundle](witness-hosting.md#the-pin-bundle)).
 
 ## Invariants preserved
 
 - **Cycle-freedom needs no gate.** No stored value owns an `Rc` back to any
   region — a substrate borrow is a borrow, a reach's pins are holder-owned
-  and the existing omission policy keeps ownership acyclic — so the
-  allocation engine keeps
+  and the self and eternal rules keep ownership acyclic
+  ([witness-hosting.md § Composition](witness-hosting.md#composition-minting-a-description-and-retaining-its-pins))
+  — so the allocation engine keeps
   needing no cycle gate ([memory-model.md](memory-model.md)).
 - **Directionality.** Inward references stay free; outward references exist
   only on the escape path and are always covered by a minted reach. The

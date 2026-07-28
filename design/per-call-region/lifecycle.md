@@ -98,22 +98,26 @@ its captured scope, and Koan has no reachability mechanic to compute a copy set,
 is *kept alive*, not rebuilt. While the value rides a scheduler slot its producer terminal's `FrameSet`
 witness pins that region; once it is relocated out of the scheduler — bound into a persistent scope,
 spliced into a working expr and re-dispatched, or read out as a top-level result — the producer slot
-is gone, so the *consumer* takes over the pin: the binding entry's owned pin bundle for a bound
+is gone, so the *consumer* takes over the pin: the binding scope's region union bundle for a bound
 value, the new envelope's bundle for a re-dispatched or read-out one.
 
 Both channels carry the regions a relocated value reaches on its delivered
 [`Sealed`](../per-node-memory.md#storage-and-access-seal-open-transfer_into) carrier. A **closure /
-future** seals its captured-scope reach at construction; a **module value** seals its child scope's
-home frame and binding-entry reaches the same way, via
-[`Scope::child_module_reach`](../../src/machine/core/scope.rs). The embedding or binding site mints that
-carrier's reach pair — `merge` at an `attr` / `FROM` projection,
-[`Scope::host_reach_of`](../../src/machine/core/scope.rs) at a `let` / user-fn arg / `USING` bind — and
+future** seals its captured-scope reach at construction; a **module value** names its child scope's
+own region, via
+[`Scope::child_module_reach`](../../src/machine/core/scope.rs), which owns the union covering
+everything its members reach. The embedding or binding site mints that
+carrier's reach — `merge` at an `attr` / `FROM` projection,
+[`Scope::adopt_for_binding`](../../src/machine/core/scope/reach.rs) at a `let` / user-fn arg / `USING`
+bind — and
 the [`run_program`](../../src/machine/execute/runtime/interpret.rs) root drain mints the rehomed
-terminal's full reach against the run-root scope, the root binding owning the pins, so a value reaching
+terminal's full reach against the run-root scope, the root region owning the pins, so a value reaching
 several regions (a
 list of closures, a module over a functor-result region) keeps every one, read straight off its carrier
-rather than reconstructed from the value. The mint is guarded by `pins_region`, so a region the consumer
-or an ancestor already pins is not re-added, and the minted pair dedups by region. No cycle forms: a
+rather than reconstructed from the value. The description is exact — every reached region is a member —
+while the owned bundle drops what it must not hold: the destination's own region (`pins_region`
+subsumption plus the self rule), and, at region-lifetime retention, the run root (the eternal rule).
+No cycle forms: a
 frame's `outer` chain points only toward its lexical ancestor (or `None` at run-root), never back
 toward a descendant, so a minting descendant never strong-refs back into the chain that
 would close a loop.

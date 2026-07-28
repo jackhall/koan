@@ -1,6 +1,6 @@
-//! [`Carrier<F>`] — the reference-only carrier witness: a *reference* to a hosted reach set (plus
-//! the transitional `borrows_host` bit), the same shape whether the value is resident in a region
-//! or walking between nodes. See
+//! [`Carrier<F>`] — the reference-only carrier witness: a *reference* to a hosted reach set plus
+//! the `borrows_host` bit, the same shape whether the value is resident in a region or walking
+//! between nodes. See
 //! [design/witness-hosting.md § The carrier states](../../../design/witness-hosting.md#the-carrier-states).
 //!
 //! The carrier **owns no pin**: cloning is a bit-copy plus a reference-copy, and a carrier's death
@@ -84,13 +84,18 @@ unsafe impl<'b, P: StorageProfile, T> HasRegionHandle<'b, P> for (RegionHandle<'
 }
 
 /// The reference-only carrier witness: a reference to a reach set living in the value's home
-/// region's own arena, plus the transitional `borrows_host` bit. `F` is the workload's frame-owner
+/// region's own arena, plus the `borrows_host` bit. `F` is the workload's frame-owner
 /// type (`Rc<F>` is the home pin the *envelope*, not the carrier, holds). Clone is a bit-copy plus
 /// a reference-copy — no refcount traffic; the carrier keeps nothing alive.
 pub struct Carrier<F: PinsRegion + 'static> {
-    /// Whether the value's borrows reach into its own home region. Duplicates what the referenced
-    /// description now records directly (home is an ordinary member); carried for call sites that
-    /// read the bit rather than querying membership, and retired with them.
+    /// Whether the value's borrows reach into its own home region. **Not** derivable from `reach`:
+    /// a value born borrowing only its birth region carries `borrows_host` with `reach: None`, a
+    /// state no membership query can express because there is no description to hold home as a
+    /// member. That is the shape an embedder's birth-site force mints (koan's
+    /// `force_substrate_borrows_host`), and [`Self::is_empty`] is what reads it — so dropping the
+    /// bit would report such a value as reaching nothing at all. Retiring it means making every
+    /// birth site mint a description naming home instead
+    /// ([roadmap](../../../roadmap/untyped_arena/home-lives-in-the-reach-description.md)).
     borrows_host: bool,
     /// The value's foreign reach, erased and re-anchored only under an externally supplied pin.
     /// `None` == the empty set (encoded without an allocation).
@@ -130,10 +135,10 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         }
     }
 
-    /// Whether the value's borrows reach into its own home region. Never a lifecycle input: home is
-    /// an ordinary member of the referenced description, so a caller with the description in hand
-    /// answers the same question through membership ([`Opened::reach_covers`]). The bit is the
-    /// cheaper, pin-free form of that query, for a call site holding only the carrier.
+    /// Whether the value's borrows reach into its own home region. When the carrier references a
+    /// description, home is an ordinary member of it and this agrees with the membership query
+    /// ([`Opened::reach_covers`]) — pin-free, for a call site holding only the carrier. When it
+    /// references none, the bit is the *only* record of the home borrow: see the field.
     pub fn borrows_host(&self) -> bool {
         self.borrows_host
     }

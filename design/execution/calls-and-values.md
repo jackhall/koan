@@ -276,6 +276,32 @@ chain pins the callable's home for as long as its body runs
 chain actually keeps is the sealed obligation: a `Copy` type handle and a trace
 label, resolved once at the first read.
 
+### Two channels, two ways to be callable
+
+A name becomes callable through exactly one of two channels, and the channel a
+declaration writes decides the *only* way its callable can be reached:
+
+- **The `data` table** holds value bindings. A function bound as a value —
+  `LET label = (FN :{text :Str} -> Str = (text))`, a closure returned from a call,
+  a module member — is callable **by name alone**, through the by-name lane. It
+  publishes no keyworded expression: binding a callable writes a `data` entry and
+  nothing else.
+- **The `functions` dispatch buckets** hold overloads, keyed by
+  [`UntypedKey`](../../src/machine/model/types/signature.rs). A keyworded
+  expression becomes dispatchable through exactly one door,
+  [`WriteOp::Overload`](../../src/machine/core/bindings/ops.rs) — the `FN` and `OP`
+  registration channel. A bare `FN` registration binds no value; it writes a bucket
+  entry only.
+
+So the two channels never write each other's table, and the partition is what
+makes the keyworded and by-name lanes disjoint rather than overlapping. Binding a
+callable under a second name creates an ordinary alias readable by that name; it
+adds no overload, and it can neither join nor collide with any dispatch bucket.
+Overload identity therefore belongs to declarations, not to bindings: two
+overloads collide only when two `FN` / `OP` declarations land in one bucket with
+equal [`DispatchToken`](../../src/machine/model/types/signature.rs)s, which is the
+`DuplicateOverload` diagnostic.
+
 ### Read-side hook
 
 The chain is read by name resolution through

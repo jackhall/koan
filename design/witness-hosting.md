@@ -167,8 +167,9 @@ covered reach names. Where owned pins live:
   library verbs the envelope exposes.
 - **The region union bundle.** A region owns **one** deduped `PinBundle<F>`
   ([`Region::retain_reach`](../workgraph/src/witnessed/region.rs)); each bind and
-  each copy-free adoption unions its pins into it. Binding entries themselves own
-  nothing. This is the liveness of every value resident in the region: one owning
+  each copy-free adoption unions its pins into it, filtered by the eternal rule
+  (§ Composition). Binding entries themselves own nothing. This is the liveness of
+  every value resident in the region: one owning
   pin per distinct foreign region across all of it, dropped whole at region
   death. It is region-owned rather than scope-owned because bindings are
   bind-once and a scope's entries never die before its region does, so the two
@@ -269,11 +270,47 @@ unchanged, so a closure handed up N frames costs zero mints and zero refcount
 traffic beyond the value's travel. A mint runs only where a value's reach is
 genuinely restated against a new region — a bind, an adoption, a merge.
 
-Acyclicity of the region ownership graph rests on two rules: the self rule (no
-owned self-edge) and the per-call frame rule that a frame's `outer` chain
+### The eternal rule
+
+The self rule bounds a *mint*. A second rule bounds a **region-lifetime
+retention**: a member whose owner declares
+[`PinsRegion::needs_no_pin`](../workgraph/src/witnessed/reach.rs) — storage that
+already outlives every region that could retain it — never enters a region's
+union bundle (`PinBundle::without_eternal`, applied at `Region::retain_reach`).
+Koan's eternal tier is the **run root**: `RegionHost::is_run_root` answers `true`
+for the storage `interpret_with_writer_path` holds for the program's whole run.
+
+The rule is applied at retention and nowhere else, because only a
+region-lifetime pin can close a ring. A transient bundle — a binding entry's
+lift, a delivery envelope, a step's coverage — is left alone; an extra refcount
+there closes nothing. The *description* is untouched either way, so reach
+membership stays exact and every residence audit still sees the run-root region
+as a named member.
+
+The self rule alone does not suffice, because an owner outside the destination's
+own region can still hold a chain back to it. The concrete ring: a per-call
+region adopting a run-root-resident module argument takes an owning `Rc` on the
+run-root host, while the run-root region adopting that call's result takes an
+owning `Rc` on the per-call host. Neither edge alone leaks; the pair is a cycle
+that no `outer`-chain walk sees, because the per-call frame's `outer` is `None`
+and the ring is expressed entirely through reach. The eternal rule cuts it at the
+run-root edge.
+
+Its correctness obligation is a **drop-order** one, and it is the reason
+`needs_no_pin` sits under the `unsafe PinsRegion` contract: answering `true`
+asserts that the owner's storage stays live and fixed-address for at least as
+long as any region that could retain it. Koan discharges it by construction — the
+run-root `Rc<FrameStorage>` is created before the runtime and dropped after it,
+so every per-call region dies first.
+
+Acyclicity of the region ownership graph therefore rests on three rules: the self
+rule (no owned self-edge), the eternal rule (no owned edge into eternal storage),
+and the per-call frame rule that a frame's `outer` chain
 strong-owns only a **strictly older** ancestor frame — a DAG, never a back-edge —
 so a dispatched frame chaining its (possibly per-call) captured parent forms no
-cycle ([per-call-region/](per-call-region/README.md)).
+cycle ([per-call-region/](per-call-region/README.md)). Regression coverage is
+[`region_liveness.rs`](../src/builtins/fn_def/tests/region_liveness.rs), which
+runs a program, drops the run, and asserts every `RegionHost` dropped with it.
 
 ## Threading: how pins reach each holder
 
@@ -328,7 +365,8 @@ channel.
   frame; the scheduler's retention hold (§ Retention) keeps that frame alive
   until every consumer pulls.
 - At the bind seam the consumer prices **copy against pin**
-  ([`copy_delivered_substrate`](../src/machine/core/scope/reach.rs), the cost
+  ([`adopt_disposition`](../src/machine/core/scope/reach.rs), the single home of
+  the adoption rules, running the cost
   model of
   [value-substrates.md § Cost-driven copy](value-substrates.md#cost-driven-copy-the-optimization)):
   *copy* rebuilds the value in the destination region and lets the producer frame
@@ -419,10 +457,13 @@ hold any witness state — the pins live one level down, in the library's region
   bundle (§ The pin bundle), applying the self rule before insertion.
   `PinBundle::union` dedupes by region identity with outer-chain subsumption, so
   the region carries one pin per distinct foreign region, not one bundle per
-  entry. The mint and the store are **one fused door** (`Scope::bind_delivered` /
-  `bind_checked`, `bind_module`, `register_type_delivered` and siblings), so a
+  entry. The mint and the value's construction are **one fused door**
+  ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs),
+  `seal_checked`, `seal_module` and siblings), so a
   scope entry cannot state a reach the value's borrows don't back, and the union
-  is written by the library rather than by the door's caller.
+  is written by the library rather than by the door's caller. The door's product
+  is a resting `Sealed`; the table write itself is a separate, run-loop-owned step
+  ([memory-model.md § Binding writes ride the step outcome](memory-model.md#binding-writes-ride-the-step-outcome)).
 - **Reads stay refcount-free.** A binding read opens the entry's `Sealed` under
   the region's own coverage (`open_at`) and hands out an `Opened<'b>` enveloped by
   the region's union bundle (holder rule 3); pins are adopted only when the value
@@ -451,7 +492,7 @@ property no carrier lifetime captures, and each a **backstop** rather than the
 enforcement tier:
 
 - **Splice-free gate.** A `KObject::KExpression` moved in as data is vetted by
-  the dest-only [`resident_in`](../src/machine/model/values/kobject.rs) walk,
+  the dest-only [`resident_in_visiting`](../src/machine/model/values/kobject.rs) walk,
   which rejects a spliced expression carrying a producer reach the empty seal
   cannot name. Splice-freeness is a runtime data property no carrier lifetime
   distinguishes.

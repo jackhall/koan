@@ -54,10 +54,12 @@ recover the answer.
 - The runtime-audited re-box is deleted: the fold door's witnessed product seals
   straight into the table (`rebuild_delivered_substrate`'s `alloc_object_checked`
   plus deep clone no longer runs).
-- Home is an ordinary `Weak` reach member; `StoredReach`'s home omission, the
-  borrows-home bit, and their mint/omit plumbing are deleted. The home/foreign
-  distinction is one region-identity rule at the owned-upgrade boundary: never pin
-  a region into itself.
+- Home is an ordinary `Weak` reach member; `StoredReach`'s home omission and its
+  mint/omit plumbing are deleted. The home/foreign distinction is one
+  region-identity rule at the owned-upgrade boundary: never pin a region into
+  itself. (The borrows-home bit outlives this item: a fold-born substrate carrier
+  has no description to hold home as a member, so retiring the bit is
+  [home lives in the reach description](home-lives-in-the-reach-description.md).)
 - Binding entries own nothing — they are `Copy` and `Drop`-free. The **region** owns
   one deduped `PinBundle<F>` union bundle that each bind door folds its lifted owned
   pins into (applying the self-pin rule), so frame death drops one union, not N
@@ -73,9 +75,12 @@ recover the answer.
   callback's result) and a step's dep slice must own its envelopes while the
   scheduler is mutably borrowed; what Koan cannot do is see inside one or build one
   from loose pins. `Scope::envelope_reach_of` / `copied_reach_of` /
-  `pinned_reach_of`, the `carrier_witness.rs` source-claim helpers,
-  `with_home_region`, and `lift::seam_source_pins` / `copied_seam_source_pins` are
-  all deleted, and no koan source file names an owned pin bundle.
+  `pinned_reach_of`, the `carrier_witness.rs` source-claim helpers, and
+  `lift::seam_source_pins` / `copied_seam_source_pins` are all deleted, and no koan
+  source file names an owned pin bundle. (The `with_home_region` /
+  `PinBundle::any_member_region` probes outlive this item: the relocation
+  predicates still recover home through them, so their deletion is
+  [home lives in the reach description](home-lives-in-the-reach-description.md).)
 - A relocation verb derives its source claim from a workload predicate run on the
   built product — `still_borrows(product, source_region)` — rather than accepting a
   bundle or verdict computed before the fold. A `false` answer drops the source
@@ -124,8 +129,10 @@ recover the answer.
   the transform verbs through container verbs on the pin-owning holder, with owned
   pins crossing the boundary only as the opaque `StepCoverage`. The container
   supplies the home owner each verb needs, so Koan never recovers a producer region
-  from a member set and the `with_home_region` / `PinBundle::any_member_region`
-  probes are deleted rather than kept. `Delivered` stays nameable: Koan's own type
+  from a member set, and the `with_home_region` / `PinBundle::any_member_region`
+  probes are deleted rather than kept — the deletion itself carried by
+  [home lives in the reach description](home-lives-in-the-reach-description.md),
+  since the relocation predicates still read them. `Delivered` stays nameable: Koan's own type
   positions (node slots, dep terminals, finish callbacks) need it, and a step's dep
   slice must own its envelopes across a step that mutably borrows the scheduler, so
   an `Opened<'b>` borrowed from the retention hold does not type. Nameable is not
@@ -136,12 +143,19 @@ recover the answer.
   property of the bytes that exist beats a promise made before they are written, and
   it leaves the workload a memory-versus-CPU lever whose conservative answer costs
   retention rather than soundness.
-- *Omission — decided.* Deleted. Its cycle-avoidance job belongs to the self rule
-  (its targets are ancestors, and ancestors close no cycle), it buys no retention
-  (the chain that made a region ancestral outlives the destination anyway), and
-  narrowing the description makes a `Sealed` carrier describe a pairing rather than a
-  value — which is exactly what would force a policy callback into every library-side
-  lift. Re-adding it as a bundle-only shrink, leaving descriptions exact, is a later
+- *Omission — decided.* Deleted, in favour of exact descriptions: narrowing the
+  description makes a `Sealed` carrier describe a pairing rather than a value, which
+  is exactly what would force a policy callback into every library-side lift. It also
+  buys no retention — the chain that made a region ancestral outlives the destination
+  anyway. Its cycle-avoidance job does **not** fall to the self rule: omission was
+  incidentally masking a two-region ring (a per-call region owning the run-root host
+  while the run-root region owns the per-call host) that the self rule does not see,
+  because neither owner is the other's destination and a per-call frame's `outer` is
+  `None`. That job belongs to the **eternal rule** —
+  `PinsRegion::needs_no_pin`, applied at `Region::retain_reach`, which drops
+  run-root-tier members from any region-lifetime retention
+  ([design/witness-hosting.md § The eternal rule](../../design/witness-hosting.md#the-eternal-rule)).
+  Re-adding omission as a bundle-only shrink, leaving descriptions exact, is a later
   optimization if refcount traffic warrants it.
 - *Phasing — decided.* (1) library — `Opened<'b>` plus the four transform verbs,
   home-as-member, `KFunctionFamily`, `Delivered` reshaped to own its member set
@@ -165,6 +179,10 @@ recover the answer.
 
 **Unblocks:**
 
+- [Substrate birth mints its home](home-lives-in-the-reach-description.md) — establishes
+  home as an ordinary reach member, which that item extends to birth sites.
+- [Region-hosted operator groups](region-hosted-operator-groups.md) — establishes
+  the sealed-carrier entry shape the third binding table would join.
 - [Drop-free region death](drop-free-region-death.md) — removes the `data` table's
   typed-and-droppy residue, so that item can migrate the entries into the untyped
   bump arena.

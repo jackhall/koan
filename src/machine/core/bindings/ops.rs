@@ -84,7 +84,7 @@ pub(crate) enum WriteOp {
 impl WriteOp {
     /// Apply this write against `scope` — the step scope the op was returned from. The single
     /// interpreter: resolve the write target (forwarding through a transparent `USING` window),
-    /// run the guards the door used to run inline, then mutate the table.
+    /// run the door's guards, then mutate the table.
     pub(crate) fn apply(self, scope: &Scope<'_>, gate: &mut WriteGate) -> Result<(), KError> {
         match self {
             WriteOp::Value {

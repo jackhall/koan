@@ -109,18 +109,14 @@ cross-link this section rather than restating its slice.
   preserves the parser-side name verbatim until the park-capable
   `Scope::resolve_type_identifier` consumes it. Runs at `KFunction::bind` time, which has no
   `Scope` in hand, so it is builtin-only and scope-independent.
-- **Layer 2 — scope-bound elaboration memo (the sole cache tier)** in
-  [`bindings.rs`](../../src/machine/core/bindings.rs). A
-  `RefCell<HashMap<(TypeName, Option<usize>), KType>>` on `Bindings`
-  (`type_expr_memo`) caches resolved `(TypeName, cutoff) → KType` per scope,
-  gated by a finalize check on every embedded user-type. Keying by `cutoff` keeps
-  a forward consumer (which sees a name as unresolved) and a backward consumer
-  (which sees it bound) from sharing a verdict. Reached through
+- **Layer 2 — scope-bound resolution**, reached through
   [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs), which takes the
-  chain and returns the three-outcome
-  `TypeResolution<KType>::{Done, Park, Unbound}`. See
-  [Strict admission rules](#strict-admission-rules) for the gate and
-  the monotonicity argument.
+  consumer's chain and returns the three-outcome
+  `TypeResolution<KType>::{Done, Park, Unbound}`. It runs the elaborator on every call
+  and caches nothing: interning in the
+  [`TypeRegistry`](../../src/machine/model/types.rs) already makes a re-elaborated form
+  yield the *same* handle. A `Done` passes a finalize check on every embedded user-type
+  first — see [Strict admission rules](#strict-admission-rules) for the gate.
 - **Layer 3 — the elaborator** in
   [`resolver.rs`](../../src/machine/model/types/resolver.rs). Resolves a
   *bare-leaf* `TypeName` against the scope into a `KType` handle, carrying the
@@ -164,10 +160,11 @@ cross-link this section rather than restating its slice.
 
 Type bindings live in a separate map from value bindings — the type-side
 slice of the [lookup → admit protocol](lookup-protocol.md)'s Layer 2.
-The [`Bindings`](../../src/machine/core/bindings.rs) façade owns four
-maps: `data` for values, `functions` for registered overloads,
-`placeholders` for in-flight dispatch tasks, and `types` for type-name →
-`&KType` region pointers.
+The [`Bindings`](../../src/machine/core/bindings.rs) façade owns six
+maps under one `RefCell`: `data` for values, `functions` for registered overloads,
+`placeholders` for in-flight dispatch tasks, `pending_overloads` for in-flight
+dispatch buckets, `operators` for the operator-group registry, and `types` for
+type-name → `KType` handles.
 
 `types` and `data` are **different universes, and a name's token class decides which one it
 belongs to** — a Type token names something that can type a field, a value token names
@@ -175,7 +172,8 @@ something a field can hold. A write whose name classifies against the map it is 
 hard error, not a convention: `Bindings::partition_guard` refuses a value token entering
 `types` ("`int_ord` is a value token, so it names a value") and a Type token entering `data`
 ("`IntOrd` is a Type token, so it names a type"). It is the **single enforcement point** —
-every binder reaches a map through `try_apply` / `try_apply_type`, so no caller can bind
+every binder reaches a map through [`WriteOp::apply`](../../src/machine/core/bindings/ops.rs), so
+no caller can bind
 across the line and none needs its own check. A keyword-class name (all-uppercase, no
 lowercase — `PRINT`) is not a Type token, so builtin dispatch registration passes the
 value-side gate untouched.

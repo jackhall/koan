@@ -40,8 +40,8 @@ bindings.
 
 ## Dependencies
 
-Bind-side reach over-approximation closes by construction — the witness-derived fused bind doors
-store an opaque, derivation-only `StoredReach` token
+Bind-side reach over-approximation closes by construction — the fused bind doors seal the value to a
+description the library minted for it
 ([design/witness-hosting.md § Scope and bindings](../../design/witness-hosting.md)); this item's
 tightness report covers the fold side and the cycle case.
 

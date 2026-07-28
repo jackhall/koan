@@ -252,17 +252,20 @@ run-global root region the same way.
 A relocated closure / future / module survives its producer's dying frame because the copy keeps its
 bare borrow and the *consumer* keeps that borrow's region alive. Both channels carry the regions they
 reach on their [delivered carrier](per-node-memory.md#storage-and-access-seal-open-transfer_into): a
-**closure / future** seals its captured-scope reach at construction, and a **module value** seals its
-child scope's home frame and binding-entry reaches the same way (via
-[`Scope::child_module_reach`](../src/machine/core/scope.rs)). The embedding or binding site mints that
+**closure / future** seals its captured-scope reach at construction, and a **module value** names its
+child scope's own region (via
+[`Scope::child_module_reach`](../src/machine/core/scope.rs)), which owns the union covering everything
+its members reach. The embedding or binding site mints that
 carrier's reach into its own arena (`transfer_into` at an `attr` / `FROM` projection,
-[`Scope::host_reach_of`](../src/machine/core/scope.rs) at a `let` / user-fn arg / `USING` bind), and the
-root drain mints the rehomed terminal's full reach against the run-root scope, the root binding
+[`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs) at a `let` / user-fn arg / `USING`
+bind), and the
+root drain mints the rehomed terminal's full reach against the run-root scope, the root region
 owning the pins — so a
 multi-region value keeps *every* region it reaches, read straight off its carrier rather than
-reconstructed from the value. No cycle forms: a dispatched frame's `outer` is `None`, so a minting
-descendant never strong-refs back, and the mint omits a region the consumer or an ancestor already
-pins.
+reconstructed from the value. A minted description is **exact**: it names the value's whole reach,
+never a reach narrowed against what some destination already pins. Acyclicity comes from the self
+and eternal rules instead
+([witness-hosting.md § Composition](witness-hosting.md#composition-minting-a-description-and-retaining-its-pins)).
 
 The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params, the deferred-return-type
 elaboration) open the child scope at a `for<'b>` brand through
@@ -340,7 +343,7 @@ permissive audit is not writable in safe code, and each call site passes only ty
 compile-only capability with no runtime audit at all:
 
 - **checked** (`alloc_object_checked`) —
-  [`KObject::resident_in`](../src/machine/model/values/kobject.rs) walks the value's own structure and
+  [`KObject::resident_in_visiting`](../src/machine/model/values/kobject.rs) walks the value's own structure and
   confirms every region pointer it carries points into the destination region, checking an `Rc`-shared
   payload's members by address rather than rebuilding them. A `Wrapped { type_id }` tag needs no walk: the
   `type_id` is a `Copy` `KType` handle naming a registry-owned node, so it holds no region pointer the
@@ -348,32 +351,30 @@ compile-only capability with no runtime audit at all:
   caller reaches here only to store a value whose identity a `'static` rebuild would break (a
   module-family pointer, an `Rc`-shared payload).
 - **reaching / delivered** (`Scope::store_object_adopted` / `store_object_pinned` /
-  `store_module_object` / `store_transparent_view`) — widens the dest-only check with reach evidence the scope already minted
-  (a bind's `host_reach_of` / `adopted_reach_of`), *plus* the regions the mint's own omission policy
-  deliberately never materializes as reach-set members (`Scope::covers_region_ambiently`: the home
-  frame's storage pin chain and the lexical-ancestor chain — re-pinning one would close a
-  `frame → region → scope → frame` cycle), without which the audit would under-cover a value that
-  legitimately reaches a lexically-ancestral region (a module bound at an outer scope, read by a
-  nested per-call functor body). Mint and audit share the one predicate, so they stay exact
-  complements; and unlike the other tiers these live on `Scope`, not `RegionBrand` — a `StoredReach`
-  is meaningful only relative to its minting scope, so taking the destination from `self` binds
-  evidence, ambient coverage, and destination region together by construction. These tiers are fused
-  doors: each derives the `StoredReach` from the one source it takes (a delivered `cell`, a `child`
+  `store_module_object` / `store_transparent_view`) — widens the dest-only check with the reach the
+  mint just derived for *this* value. The minted description is **exact** — the value's whole reach,
+  home riding as an ordinary member, with no destination-relative narrowing — so the audit reads its
+  answer straight off the description instead of re-applying an ambient-coverage predicate to recover
+  it. A value that legitimately reaches a lexically-ancestral region is covered because that region is
+  a named member, not because the audit knows the reader's chain. Unlike the other tiers these live on
+  `Scope`, not `RegionBrand`: taking the destination from `self` binds evidence and destination region
+  together by construction. They are fused
+  doors — each derives the reach from the one source it takes (a delivered `cell`, a `child`
   scope) and audits the re-homed value against it in the same call, so the reach is never a free
-  parameter a caller pairs with the value. The bind door (`Scope::bind_delivered` and siblings)
-  consumes the fused [`Reached`](../src/machine/core/bindings.rs) the store door returns. A deferred FN's per-call return *type* needs no evidence
+  parameter a caller pairs with the value, and the product is a resting
+  [`SealedValue`](../src/machine/core/carrier_witness.rs) fusing value and reach as one unit. A
+  deferred FN's per-call return *type* needs no evidence
   at all — [`home_return_type`](../src/machine/core/kfunction/exec.rs) clones it into the
   captured-scope region through the single type door — but the clone still comes back capped at the
   caller-supplied **contract** lifetime rather than the captured region's own, so a `ret` reference
   cannot outlive the window the lift boundary consumes it in. That cap is return-contract discipline,
   independent of residence.
 
-  "Never a free parameter a caller asserts" is enforced, not merely intended: `StoredReach::empty` —
-  the only way to mint a token from nothing — is visible only within `crate::machine::core`, and
-  `StoredReach` deliberately has **no `Default` impl**, since a public trait method would hand the
-  rest of the crate that same power under another name. Code outside `core` therefore cannot conjure
-  a reach at all; it can only hold one some door derived for a specific value, and the doors that
-  consume a reach take it fused to that value. `Residence`
+  "Never a free parameter a caller asserts" is structural: there is no constructor that pairs a
+  loose reach with a value. `PinBundle` is crate-private to `workgraph` and owned pins cross the
+  boundary only as an opaque `StepCoverage`, so Koan cannot assemble, widen or narrow a claim at all
+  ([witness-hosting.md § The carrier states](witness-hosting.md#the-carrier-states)); what it holds is
+  whatever a door derived for a specific value. `Residence`
   ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage predicate both checked tiers
   compose from.
 - **folded** (`FoldingBrand::alloc_object_folded`) — no runtime audit at all,
@@ -392,7 +393,7 @@ compile-only capability with no runtime audit at all:
   fresh fold brand. The placement's [`alloc_resident_folded`](../workgraph/src/witnessed.rs) store
   discharges the residence obligation at compile time.
 
-`KObject::resident_in` walks every region borrow a value carries. Every structural family (`Scope` / `Module` / `KFunction`) always
+`KObject::resident_in_visiting` walks every region borrow a value carries. Every structural family (`Scope` / `Module` / `KFunction`) always
 captures a borrow (its parent, its declaring scope), so its bare veneer takes the checked-not-`'static`
 form too — `alloc_scope` / `alloc_module` / `alloc_function` run a
 release-enforced `ptr::eq` same-region check via their family's `AuditedStored` audit rather than a

@@ -6,8 +6,8 @@
 //! a zero-sized token with no public constructor and no `Clone`, minted only inside
 //! `crate::machine`, so a builtin body (`crate::builtins` is a sibling of `crate::machine`, not a
 //! descendant) cannot produce one and therefore cannot name a write verb at all. A published
-//! scope's table is mutated by the run loop and nothing else, and that is now a resolution failure
-//! rather than a convention.
+//! scope's table is mutated by the run loop and nothing else — a resolution failure rather than a
+//! convention.
 //!
 //! `&mut` rather than `&`: exclusivity. A gate cannot be reborrowed into two concurrent write
 //! paths, so "one write in flight" is the borrow checker's invariant too.

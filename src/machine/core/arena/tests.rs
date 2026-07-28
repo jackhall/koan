@@ -598,7 +598,7 @@ fn region_union_foreign_pins_release_at_region_death() {
             )
             .expect("a fresh value bind lands");
 
-        // The region's union is now the sole strong owner of `foreign`.
+        // The region's union is the sole strong owner of `foreign`.
         drop(foreign);
         assert!(
             weak.upgrade().is_some(),

@@ -18,7 +18,7 @@ pin even when the finished frame dwarfs it, so the consumer retains the whole
 region — result and temporaries — until its own scope releases the reach.
 
 The same per-value blindness caps a second consumer of the pricing: the bind seam
-([`Scope::copy_delivered_substrate`](../../src/machine/core/scope/reach.rs)) prices only
+([`adopt_disposition`](../../src/machine/core/scope/reach.rs)) prices only
 top-level records; every other substrate carrier (`List` / `Dict` / `Tagged` / `Wrapped`)
 copies unconditionally. A bind-lifetime pin retains its producer region for the whole life
 of the binding, so pricing the loop-carried carriers to pin would chain one retired per-hop
@@ -44,7 +44,7 @@ decided as a whole.
   survivor leaves — no partial evacuation that pays the copy and keeps the pin.
 - The choice is semantically invisible: a program's observable behavior is
   identical whether its regions were evacuated or transferred.
-- The bind seam ([`Scope::copy_delivered_substrate`](../../src/machine/core/scope/reach.rs))
+- The bind seam ([`adopt_disposition`](../../src/machine/core/scope/reach.rs))
   prices every substrate carrier through the cost chooser, not just top-level records: a
   loop-carried pin holds O(1) live regions regardless of depth, because evacuation
   deallocates each retired per-hop region rather than letting a bind-lifetime pin chain them.
