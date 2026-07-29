@@ -1,4 +1,4 @@
-//! Unit coverage for [`Scope::adopt_for_binding`]'s pin branch. A bound record whose cost
+//! Unit coverage for [`Scope::adopt_for_binding`]'s pin branch and for projection's run-exactness. A bound record whose cost
 //! chooser selects [`RegionEscape::Pin`] — a home-borrowing record crossing out of its producer — rides
 //! the producer region by hold: the projection is pointer-copied (sharing the producer-resident
 //! substrate) and moved in under the binding's `Kept`-minted stored reach, whose named producer
@@ -140,4 +140,87 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
         }
         _ => unreachable!(),
     }
+}
+
+/// A record `{v = 1, here = <closure in `home`>, there = <closure in `foreign`>}` built through
+/// `home`'s own door — three cells whose reach differs cell by cell, so the container's union names
+/// both regions while no single run does.
+fn alloc_split_reach_record<'run>(
+    home: &'run Rc<CallFrame>,
+    foreign: &'run Rc<CallFrame>,
+    types: &TypeRegistry,
+) -> &'run KObject<'run> {
+    let here = alloc_home_closure(home);
+    let there = alloc_home_closure(foreign);
+    let door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
+            .resident_door();
+    let fields = Record::from_pairs(vec![
+        ("v".to_string(), Held::Object(KObject::Number(1.0))),
+        ("here".to_string(), Held::Object(KObject::KFunction(here))),
+        ("there".to_string(), Held::Object(KObject::KFunction(there))),
+    ]);
+    door.alloc_object_folded(KObject::record_of_held(door, fields, types))
+}
+
+/// Parting a cell hands it out under **its own run's** stored reach, not the container's union: the
+/// owned scalar's run is empty, and each closure cell's run names only the region that closure
+/// captures. This is what makes a projection release-exact — the container reaches both regions, so
+/// a subset walk over the whole value would over-state every cell.
+#[test]
+fn a_projected_cell_carries_its_own_run_not_the_containers_union() {
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let consumer = test_run.scope;
+    // Two sibling frames: neither one's owner chain keeps the other's region alive, so a run naming
+    // one provably does not cover the other.
+    let home: Rc<CallFrame> = CallFrame::new(consumer);
+    let foreign: Rc<CallFrame> = CallFrame::new(consumer);
+    let types = TypeRegistry::new();
+
+    let record = alloc_split_reach_record(&home, &foreign, &types);
+    let substrate = match record {
+        KObject::Record(substrate, _) => substrate,
+        other => panic!("expected a Record, got {:?}", other.ktype()),
+    };
+
+    // The value-level union — what a whole-value carrier stores — names both regions.
+    assert!(substrate.reach().pins_region(home.region()));
+    assert!(substrate.reach().pins_region(foreign.region()));
+
+    let cell = |name: &str| {
+        substrate
+            .project(
+                substrate
+                    .field_index(name)
+                    .expect("the record declares this field"),
+            )
+            .expect("the index came from the substrate's own layout")
+    };
+
+    let v = cell("v");
+    assert!(
+        !v.has_reach_members(),
+        "an owned scalar cell lands in an empty-reach run"
+    );
+
+    let here = cell("here");
+    assert!(here.reach_covers(home.region()));
+    assert!(
+        !here.reach_covers(foreign.region()),
+        "the home closure's run must not name the region only its sibling cell reaches"
+    );
+
+    let there = cell("there");
+    assert!(there.reach_covers(foreign.region()));
+    assert!(
+        !there.reach_covers(home.region()),
+        "the foreign closure's run must not name the container's own home"
+    );
+
+    // The relocation seam re-owns exactly that run: the lifted envelope keeps reporting the cell's
+    // own reach, never widening to the container's union.
+    let lifted = there.lift_out();
+    assert!(lifted.open_at().reach_covers(foreign.region()));
+    assert!(!lifted.open_at().reach_covers(home.region()));
 }

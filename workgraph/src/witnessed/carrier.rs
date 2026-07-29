@@ -34,8 +34,8 @@
 use std::rc::Rc;
 
 use super::{
-    Erased, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable, Region, RegionHandle,
-    RegionOwner, StorageProfile, Witnessed,
+    Delivered, Erased, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable, Region,
+    RegionHandle, RegionOwner, StorageProfile, Witnessed,
 };
 // `with_branded_ref` re-anchors the erased reach reference: for the `Sealed → Delivered` lift's
 // description-to-bundle upgrade ([`Carrier::upgrade_bundle`]) and for the membership queries the
@@ -262,6 +262,23 @@ impl<'b, T: Reattachable, F: PinsRegion + 'static> Opened<'b, T, Carrier<F>> {
     /// `'b` pin borrow.
     pub fn with_reach<R>(&self, f: impl FnOnce(&ReachDescription<F>) -> R) -> R {
         self.witness().with_reach_impl(f)
+    }
+
+    /// **The relocation seam.** Re-seal this open and lift it into a delivery envelope owning its
+    /// whole reach: the carrier's own description members upgraded `Weak → Rc`, plus the region the
+    /// value lives in — read off the description's own host, so no caller pairs the value with a
+    /// residence it did not derive.
+    ///
+    /// This is what lets a value parted from a container ([`Sectioned::project`](super::Sectioned))
+    /// travel. The projection is `'b`-confined by its type and states *exactly* its own run's reach;
+    /// this is the one place that reach becomes owned, and it stays exact — the container's union
+    /// never enters. The upgrade runs under the `'b` pin the open borrows, which is the holder rule.
+    pub fn lift_out(self) -> Delivered<T, Carrier<F>, F>
+    where
+        F: RegionOwner,
+    {
+        let home = self.witness().home_owner();
+        Delivered::lift(self.reseal(), home)
     }
 }
 

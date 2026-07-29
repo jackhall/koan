@@ -24,7 +24,7 @@ use super::{arg, kw, sig};
 /// Watches `expr`, then a `Catch` finish walks the arms against the `Result`, tail-replacing
 /// into the matched arm under the `-> :T` contract and re-raising on no match.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
-    use super::branch_walk::{arm_tail, resolve_arm_contract, ItProjection, ItSource};
+    use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract, ItSource};
     use crate::machine::{require_kexpression, Action, CatchContinue, DepPlacement, DepRequest};
 
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "TRY", "expr"));
@@ -41,22 +41,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // watched value already uses, rather than the region-pure `ItSource::Pure` tier.
         let (tag, it_source, original_error): (String, ItSource<'a>, Option<KError>) = match result
         {
-            Ok(carrier) => (
-                "Ok".to_string(),
-                ItSource::Carrier(carrier, ItProjection::Scrutinee),
-                None,
-            ),
+            Ok(carrier) => ("Ok".to_string(), ItSource::Carrier(carrier), None),
             Err(e) => {
                 let envelope = e.to_tagged_delivered(fctx.scope, fctx.types);
                 let tag = envelope.open(|carried| match carried {
                     Carried::Object(KObject::Tagged { tag, .. }) => tag.clone(),
                     _ => unreachable!("KError::to_tagged always returns Tagged"),
                 });
-                (
-                    tag,
-                    ItSource::Carrier(envelope, ItProjection::Payload),
-                    Some(e),
-                )
+                (tag, ItSource::Carrier(payload_envelope(&envelope)), Some(e))
             }
         };
         let body_expr = match find_branch_body_by_tag(&branches_expr, &tag, true) {

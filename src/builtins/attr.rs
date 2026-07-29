@@ -16,7 +16,7 @@ use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, Module};
-use crate::machine::model::{Held, KObject, KType, Record, TypeNode};
+use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, Record, TypeNode};
 use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
@@ -239,31 +239,34 @@ fn abstract_type_has_no_members(name: &str) -> KError {
     )))
 }
 
-/// Walk nested `Wrapped` layers to the record member named `field`, returning its held cell.
-/// Lifetime-generic: the ambient classification probe and the at-brand rebuild both run this exact
-/// walk, so they cannot disagree on which member a projection resolves to.
+/// Walk nested `Wrapped` layers to the record member named `field` and **part it from its
+/// container**: the cell arrives bundled with exactly its own run's stored reach, read off the run,
+/// never derived by a subset walk over the container. Lifetime-generic in the container's own region,
+/// so the parted cell is confined there until a relocation seam lifts it out.
 ///
 /// A record-repr newtype (an ex-struct) wraps a `KObject::Record`; the member reads straight off
 /// it, naming the nominal type in the miss diagnostic so `b.z` on a `Point` still reports `Point`.
 /// `Wrapped.inner` is invariantly not a `Wrapped` (the construction-time collapse rule peels any
 /// `Wrapped` before re-wrapping), so a scalar inner (a NEWTYPE-over-`Number`, which has no fields)
 /// falls to the `other` arm.
-fn wrapped_field<'v, 'w>(
-    target: &'v KObject<'w>,
+fn wrapped_field_cell<'w>(
+    target: &'w KObject<'w>,
     field: &str,
     types: &TypeRegistry,
-) -> Result<&'v Held<'w>, KError> {
+) -> Result<PartedCell<'w>, KError> {
     match target {
         KObject::Wrapped { inner, type_id } => match inner.payload() {
-            KObject::Record(substrate, _) => match substrate.field(field) {
-                Some(held) => Ok(held),
+            KObject::Record(substrate, _) => match substrate.field_index(field) {
+                Some(at) => Ok(substrate
+                    .project(at)
+                    .expect("the index came from this substrate's own layout")),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
                     type_id.name(types),
                     field
                 )))),
             },
-            inner => wrapped_field(inner, field, types),
+            payload => wrapped_field_cell(payload, field, types),
         },
         other => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
@@ -273,63 +276,53 @@ fn wrapped_field<'v, 'w>(
     }
 }
 
-/// Project `field` off the `Wrapped` runtime lhs `target`, whose carrier is the declared operand
-/// `lhs`. The ambient `target` classifies the member (scalar? object? type? field present?); the
-/// projected value is then re-built **at the fold brand** from `lhs`'s own view — the same value
-/// `target` names — so the field carrier folds the lhs's reach by construction rather than
-/// laundering an ambient-lifetime clone. A shallow-scalar or region-free-scalar member embeds no
-/// borrow, so it seals with an empty reach through the no-fold door.
+/// Project `field` off the `Wrapped` runtime lhs whose carrier is the declared operand `lhs`.
+///
+/// The member is **parted** from its container ([`wrapped_field_cell`]) under the envelope's own
+/// pins, so it arrives paired with exactly its own run's stored reach rather than the whole
+/// container's. [`Opened::lift_out`](crate::witnessed::Opened::lift_out) is the relocation seam that
+/// turns that run into owned coverage — the run's members plus the region the cell lives in, and
+/// nothing else — and the field carrier is then folded from *that* envelope, so the product names
+/// exactly what the member reaches instead of everything the container did.
+///
+/// A shallow-scalar member embeds no borrow, so it seals with an empty reach through the no-fold
+/// door; a type member is owned data that clones into the read site's own region.
 fn access_field<'a>(
     step: &StepAllocator<'a>,
     field: &str,
     lhs: &DeliveredCarried,
     types: &TypeRegistry,
 ) -> Result<StepCarried<'a>, KError> {
-    /// What the probe read off the lhs: a shallow scalar already copied out (no fold needed), a
-    /// non-scalar object member (fold through the lhs), or an owned type member.
-    enum Member<'s> {
-        Scalar(StepCarried<'s>),
-        Object,
-        Type(KType),
-    }
-    // The probe runs under the envelope's own pins, and only brand-free data leaves it — a
-    // classification, a `Copy` `KType`, or a step carrier the scalar path already allocated.
-    let member = lhs.open(|live| -> Result<Member<'a>, KError> {
-        match wrapped_field(live.object(), field, types)? {
-            Held::Object(value) => Ok(match step.alloc_object_scalar(value) {
-                Some(sealed) => Member::Scalar(sealed),
-                None => Member::Object,
-            }),
-            // A type member is owned data: it clones out of the lhs and allocates into the read
-            // site's own region, so the read carries no dependence on the lhs carrier.
-            Held::Type(kt) => Ok(Member::Type(*kt)),
-            // A record field cell is a value or a resolved type; the bind seam's unlowered carrier
-            // never lands in one.
-            Held::UnresolvedType(_) => {
-                unreachable!("a record field is never an unlowered type name")
+    // The open borrows the envelope's own pins for the whole read, which covers both the walk and
+    // the `lift_out` upgrade below.
+    let opened = lhs.open_at();
+    let parted = wrapped_field_cell(opened.value().object(), field, types)?;
+    match parted.value() {
+        // A type member is owned data: it clones out of the container and allocates into the read
+        // site's own region, so the read carries no dependence on the lhs carrier.
+        Held::Type(kt) => return Ok(step.type_carried(*kt)),
+        // A record field cell is a value or a resolved type; the bind seam's unlowered carrier
+        // never lands in one.
+        Held::UnresolvedType(_) => unreachable!("a record field is never an unlowered type name"),
+        Held::Object(value) => {
+            // A shallow scalar embeds no borrow at all, so it rebuilds owned and seals empty rather
+            // than naming the member's run.
+            if let Some(sealed) = step.alloc_object_scalar(value) {
+                return Ok(sealed);
             }
         }
-    })?;
-    match member {
-        Member::Scalar(sealed) => Ok(sealed),
-        Member::Object => Ok(step.alloc_carried_with(&[lhs], |b, views| {
-            let target = match views[0] {
-                Carried::Object(o) => o,
-                Carried::Type(_) | Carried::UnresolvedType(_) => {
-                    unreachable!("probed ambient: lhs is a value")
-                }
-            };
-            match wrapped_field(target, field, types)
-                .expect("probed ambient: field exists on this value")
-            {
-                Held::Object(v) => Carried::Object(b.alloc_object_folded(v.deep_clone())),
-                Held::Type(_) | Held::UnresolvedType(_) => {
-                    unreachable!("probed ambient: member is an object")
-                }
-            }
-        })),
-        Member::Type(kt) => Ok(step.type_carried(kt)),
     }
+    // Re-family the lifted cell onto the value channel in place: the envelope keeps the coverage the
+    // lift derived, and the projection selects a part of the cell it already covers.
+    let member = parted.lift_out().project::<CarriedFamily>(|cell, _token| {
+        Carried::Object(
+            cell.as_object()
+                .expect("classified above: the member is an object cell"),
+        )
+    });
+    Ok(step.alloc_carried_with(&[&member], |b, views| {
+        Carried::Object(b.alloc_object_folded(views[0].object().deep_clone()))
+    }))
 }
 
 /// Look `field` up inside a [`Module`]'s child scope: opaque-ascription `type_members`,

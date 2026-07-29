@@ -155,6 +155,12 @@ impl<'a> RecordSubstrate<'a> {
         self.index().get(field).and_then(|at| self.cell(*at))
     }
 
+    /// The cell index of `field`, or `None` when the record has no such field — what a projection
+    /// resolves a field name to before parting the cell ([`Self::project`]).
+    pub fn field_index(&self, field: &str) -> Option<usize> {
+        self.index().get(field).copied()
+    }
+
     /// The fields in declaration order, as `(name, cell)` pairs.
     pub fn fields(&self) -> impl Iterator<Item = (&str, &'a Held<'a>)> {
         let cells = self.cells();

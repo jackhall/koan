@@ -13,7 +13,8 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
 use crate::machine::model::{ExpressionSignature, TypeResolution};
 
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Carried, CarriedFamily, KObject, KType};
+use crate::machine::DeliveredCarried;
 use crate::machine::LexicalFrame;
 use crate::machine::ReturnContract;
 use crate::machine::{KError, KErrorKind, Scope};
@@ -55,24 +56,43 @@ pub(crate) fn resolve_arm_contract<'a>(
     Ok(ReturnContract::Arm { ret: ret_kt, kind })
 }
 
-/// Which part of a carrier's carried value the arm's `it` binds.
-pub(crate) enum ItProjection {
-    /// `it` binds the carried value itself — `TRY`'s success arm, and a general-type `MATCH` arm.
-    Scrutinee,
-    /// `it` binds the carried value's wrapped payload — a variant/tag `MATCH` arm (ruling F3).
-    Payload,
-}
-
 /// How the matched scrutinee reaches the arm's `it` binding.
 pub(crate) enum ItSource<'a> {
-    /// A region-pure owned value — `TRY`'s error payload, `MATCH`'s region-pure scrutinee (or its
-    /// payload), and a boolean arm's `Null`. No carrier, no foreign reach: the copy's purity is an
-    /// audit at bind time.
+    /// A region-pure owned value — `MATCH`'s region-pure scrutinee (or its payload), and a boolean
+    /// arm's `Null`. No carrier, no foreign reach: the copy's purity is an audit at bind time.
     Pure(crate::machine::model::KObject<'a>),
-    /// The delivery envelope plus which part of its carried value `it` binds. Cloned once, directly
-    /// into the arm frame at bind time; the envelope's retained host pins the producer until then
-    /// and supplies the binding's stored reach.
-    Carrier(crate::machine::DeliveredCarried, ItProjection),
+    /// The delivery envelope for exactly what `it` binds — the scrutinee itself, or its payload
+    /// already narrowed by [`payload_envelope`]. Cloned once, directly into the arm frame at bind
+    /// time; the envelope's retained host pins the producer until then and supplies the binding's
+    /// stored reach.
+    Carrier(crate::machine::DeliveredCarried),
+}
+
+/// Narrow `carrier` onto the payload of a `Tagged` / `Wrapped` value (ruling F3's variant/tag arm),
+/// by **parting** the payload cell from its container: the cell comes out bundled with exactly its
+/// own run's stored reach — read off the run, never a subset walk over the container — and
+/// [`Opened::lift_out`](crate::witnessed::Opened::lift_out), the relocation seam, turns that run
+/// into owned coverage: its members plus the region the payload lives in, and nothing else. The
+/// arm's `it` binding therefore names what the payload reaches instead of everything the scrutinee
+/// did. A value with no payload keeps its own envelope.
+pub(crate) fn payload_envelope(carrier: &DeliveredCarried) -> DeliveredCarried {
+    // The open borrows the envelope's own pins, which cover both the read and the lift's upgrade.
+    let opened = carrier.open_at();
+    let parted = match opened.value().object() {
+        KObject::Wrapped { inner, .. } => inner.project(0),
+        KObject::Tagged { value, .. } => value.project(0),
+        _ => None,
+    };
+    match parted {
+        Some(cell) => cell.lift_out().project::<CarriedFamily>(|payload, _token| {
+            Carried::Object(
+                payload
+                    .as_object()
+                    .expect("a payload substrate's single cell is always an object"),
+            )
+        }),
+        None => carrier.duplicate(),
+    }
 }
 
 /// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: the
@@ -114,22 +134,12 @@ pub(crate) fn arm_tail<'a>(
                     gate,
                 );
             }
-            ItSource::Carrier(carrier, projection) => {
+            ItSource::Carrier(carrier) => {
                 let _ = child.bind_delivered_direct(
                     "it".to_string(),
                     &carrier,
                     BindingIndex::value(0),
-                    move |carried| {
-                        let object = carried.object();
-                        Ok(match projection {
-                            ItProjection::Scrutinee => object,
-                            ItProjection::Payload => match object {
-                                KObject::Wrapped { inner, .. } => inner.payload(),
-                                KObject::Tagged { value, .. } => value.payload(),
-                                other => other,
-                            },
-                        })
-                    },
+                    |carried| Ok(carried.object()),
                     types,
                     gate,
                 );

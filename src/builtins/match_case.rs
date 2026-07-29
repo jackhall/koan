@@ -24,7 +24,7 @@ use super::{arg, kw, sig};
 /// per-MATCH child scope (so the binding can't leak). No admitting arm → `ShapeError`
 /// naming the scrutinee's runtime type; an F1 ambiguity or malformed shape → `ShapeError`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
-    use super::branch_walk::{arm_tail, resolve_arm_contract, ItProjection, ItSource};
+    use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract, ItSource};
     use crate::machine::{arg_object, require_kexpression, Action};
 
     // Selection needs only a borrow of the scrutinee — it never stores the reference — so no
@@ -65,12 +65,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     {
         ItSource::Pure(crate::machine::model::KObject::Null)
     } else if let Some(carrier) = ctx.arg_carrier("value") {
-        let projection = if selected.binds_payload {
-            ItProjection::Payload
-        } else {
-            ItProjection::Scrutinee
-        };
-        ItSource::Carrier(carrier.duplicate(), projection)
+        // A variant/tag arm binds the payload, so the envelope narrows to the payload's own parted
+        // cell; a general arm binds the scrutinee whole.
+        ItSource::Carrier(match selected.binds_payload {
+            true => payload_envelope(carrier),
+            false => carrier.duplicate(),
+        })
     } else if selected.binds_payload {
         let payload = match value {
             crate::machine::model::KObject::Tagged { value, .. } => value.payload().deep_clone(),
