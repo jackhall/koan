@@ -319,6 +319,33 @@ fn equal_reach_inputs_cost_one_description_and_one_fold() {
     assert_eq!(metrics.reach_retention_folds, 1);
 }
 
+/// A container is `Copy` and `Drop`-free: both its slices are bumped into the region, so it is
+/// region state a holder *names* rather than owns. That is what lets a frame teardown release a
+/// container with the region's chunk instead of walking it.
+#[test]
+fn a_container_is_copy_and_drop_free() {
+    fn assert_copy<T: Copy>(_: &T) {}
+
+    let dest = frame();
+    let values: Vec<&u32> = (0..3).map(|v| store(&dest, v)).collect();
+    let (container, _value_reach) = Sectioned::build(
+        RegionHandle::from_owner(&*dest),
+        values.iter().copied().map(owned).collect(),
+    );
+
+    assert!(!std::mem::needs_drop::<
+        Sectioned<'_, CellFamily, SectionFrame>,
+    >());
+    assert_copy(&container);
+    // A copy names the same region state, so it reads identically.
+    let duplicate = container;
+    assert_eq!(duplicate.len(), container.len());
+    assert!(std::ptr::eq(
+        duplicate.reach_at(0).unwrap(),
+        container.reach_at(0).unwrap()
+    ));
+}
+
 /// The parting seam hands a cell out **bundled** with exactly its own run's reach — never the
 /// container's union — and the pairing is one value, not two the caller must keep aligned.
 #[test]

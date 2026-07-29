@@ -6,11 +6,16 @@
 //! ([design/sectioned-reach.md](../../design/sectioned-reach.md) § Sectioned storage).
 //!
 //! The cell type is the embedder's, named as a [`Reattachable`] family `K`; no embedder type enters
-//! this module. Both halves of a container are anchored to the destination region's lifetime `'a`:
-//! a cell arrives as `&'a K::At<'a>` — content == borrow == `'a`, so it is already resident in
-//! storage that outlives the region handle — and each run's description lives in that region's own
-//! reach side table. So one pin covers a projected cell and its reach together. Cell *layout* stays
-//! the embedder's: workgraph holds the index→cell mapping and the run partition, never the bytes.
+//! this module. Everything a container is made of lives in the destination region and is anchored to
+//! its `'a`: the cells arrive as `&'a K::At<'a>` (content == borrow == `'a`, so a cell is already
+//! resident where the caller allocated it), each run's description is interned in that region's reach
+//! side table, and the two slices holding the index→cell mapping and the run partition are bumped
+//! into that region ([`Region::alloc_side`]). So one pin covers a projected cell and its reach
+//! together, and a cycle among them is harmless — the region dies all at once.
+//!
+//! That is what makes a [`Sectioned`] `Copy` and **`Drop`-free**: a frame teardown never walks a
+//! container. Cell *layout* stays the embedder's — workgraph holds the mapping and the partition,
+//! never the bytes.
 //!
 //! [`Sectioned::project`] therefore parts a cell as a **bundled** carrier —
 //! `Opened<'a, CellRef<K>, Carrier<F>>` — never a payload and a description as loose parts. The
@@ -36,6 +41,25 @@ use super::{
     RegionOwner, StepCoverage, StorageProfile,
 };
 
+/// One physical partition: the index its span starts at, paired with the interned description that
+/// is **exactly** its cells' shared reach. The span's end is the next run's start (or the
+/// container's length for the last run), so a run costs one `usize` and one thin reference.
+///
+/// `Copy`, hence `Drop`-free — the bound [`Region::alloc_side`] requires, and what keeps a container
+/// free at region teardown.
+struct Run<'a, F: PinsRegion + 'static> {
+    start: usize,
+    reach: &'a ReachDescription<F>,
+}
+
+// Manual impls: a derive would bound `F: Copy`, which neither field needs.
+impl<F: PinsRegion + 'static> Clone for Run<'_, F> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<F: PinsRegion + 'static> Copy for Run<'_, F> {}
+
 /// [`Reattachable`] family for a **reference to** a cell of family `K` — the erased form
 /// [`Sectioned::project`] seals. `At<'r>` is `&'r K::At<'r>`: content == borrow == `'r`, the tight
 /// no-free-lifetime shape [`Region::alloc_resident`] hands back, so a re-anchored projection cannot
@@ -49,14 +73,6 @@ pub struct CellRef<K>(PhantomData<K>);
 // SAFETY: `&'r K::At<'r>` is a pointer, whose layout is identical for every choice of `'r`.
 unsafe impl<K: Reattachable + 'static> Reattachable for CellRef<K> {
     type At<'r> = &'r K::At<'r>;
-}
-
-/// One physical partition: the index its span starts at, paired with the interned description that
-/// is **exactly** its cells' shared reach. The span's end is the next run's start (or the
-/// container's length for the last run), so a run costs one `usize` and one thin reference.
-struct Run<'a, F: PinsRegion> {
-    start: usize,
-    reach: &'a ReachDescription<F>,
 }
 
 /// A container whose cells carry reach at sub-value granularity: cells of the embedder's family `K`
@@ -74,12 +90,24 @@ struct Run<'a, F: PinsRegion> {
 /// Alternating owned and borrowing cells degrade to runs of length one — the per-cell-envelope cost
 /// floor, never worse than storing reach on every cell.
 pub struct Sectioned<'a, K: Reattachable + 'static, F: PinsRegion + 'static> {
-    /// The index→cell mapping, in semantic order. Each cell is `&'a K::At<'a>` — the tight
-    /// no-free-lifetime shape, so a projection out of it is `'a`-confined by its own type.
-    cells: Vec<&'a K::At<'a>>,
-    /// Ascending by `start`, contiguous and covering; empty exactly when `cells` is.
-    runs: Vec<Run<'a, F>>,
+    /// The index→cell mapping, in semantic order, bumped into the region. Each cell is
+    /// `&'a K::At<'a>` — the tight no-free-lifetime shape, so a projection out of it is
+    /// `'a`-confined by its own type.
+    cells: &'a [&'a K::At<'a>],
+    /// Ascending by `start`, contiguous and covering; empty exactly when `cells` is. Bumped into the
+    /// region alongside `cells`, so the partition is region state rather than a heap buffer a frame
+    /// drop would have to free.
+    runs: &'a [Run<'a, F>],
 }
+
+// Manual impls: a derive would bound `K: Copy` / `F: Copy`, which two shared slices do not need.
+// `Copy` is the point of the type — a container is region state a holder names, not one it owns.
+impl<K: Reattachable + 'static, F: PinsRegion + 'static> Clone for Sectioned<'_, K, F> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<K: Reattachable + 'static, F: PinsRegion + 'static> Copy for Sectioned<'_, K, F> {}
 
 /// The reach verdict a caller supplies per input cell — the embedder's whole reach obligation at
 /// the door, alongside the payload itself.
@@ -150,10 +178,12 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
 
     /// The runs, as `(span, reach)` pairs in ascending order — the container-level query an
     /// embedder's contains-borrows / borrows-home memos fold over instead of walking cells.
-    pub fn runs(&self) -> impl Iterator<Item = (Range<usize>, &'a ReachDescription<F>)> + '_ {
-        let total = self.cells.len();
-        self.runs.iter().enumerate().map(move |(position, run)| {
-            let end = self.runs.get(position + 1).map_or(total, |next| next.start);
+    pub fn runs(&self) -> impl Iterator<Item = (Range<usize>, &'a ReachDescription<F>)> + 'a {
+        let (cells, runs) = (self.cells, self.runs);
+        runs.iter().enumerate().map(move |(position, run)| {
+            let end = runs
+                .get(position + 1)
+                .map_or(cells.len(), |next| next.start);
             (run.start..end, run.reach)
         })
     }
@@ -310,6 +340,13 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
 
         let (value_level, bundle) = ReachDescription::mint(dest, &[&union]);
         dest.region().retain_for(value_level, bundle);
-        (Sectioned { cells, runs }, value_level)
+
+        // Bump both slices into the region: the container becomes `Copy` region state, so a frame
+        // teardown releases it with the chunk instead of walking it.
+        let sectioned = Sectioned {
+            cells: dest.region().alloc_side(&cells),
+            runs: dest.region().alloc_side(&runs),
+        };
+        (sectioned, value_level)
     }
 }

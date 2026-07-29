@@ -26,8 +26,9 @@
 //!   bundle (a region pinning itself is a cycle) while leaving it in the description. A region's
 //!   side table *interns* descriptions, so within one region a description's address is its member
 //!   set.
-//! - Sub-value reach storage: [`witnessed::Sectioned`], a cell-generic container whose cells are
-//!   physically partitioned into contiguous runs each naming one interned description, built
+//! - Sub-value reach storage: [`witnessed::Sectioned`], a cell-generic `Copy`, `Drop`-free container
+//!   whose cells are physically partitioned into contiguous runs each naming one interned
+//!   description — mapping and partition both bumped into the region, so a teardown never walks one — built
 //!   through the single alloc door [`witnessed::Sectioned::build`] over per-cell
 //!   [`witnessed::CellInput`] / [`witnessed::CellReach`] verdicts.
 //!   [`witnessed::Sectioned::project`] parts a cell as a bundled

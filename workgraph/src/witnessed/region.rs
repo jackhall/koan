@@ -28,6 +28,7 @@ use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::rc::Weak;
 
+use bumpalo::Bump;
 use elsa::FrozenMap;
 use typed_arena::Arena;
 
@@ -165,6 +166,21 @@ pub struct Region<W: StorageProfile> {
     /// a miss *is* the retention and a hit *is* proof the region already pins, and the set deletes
     /// with no replacement.
     retained_descriptions: RefCell<HashSet<usize>>,
+    /// The region's **bump** for `Copy` side data that names the region's own lifetime: a
+    /// [`Sectioned`](super::Sectioned) container's run partition and cell index block. Bumped rather
+    /// than arena'd because the allocator itself is lifetime-free, so `'a` enters only at the
+    /// [`alloc_side`](Self::alloc_side) call — which is what lets side data hold an `&'a` back into
+    /// this same region. A `typed_arena` cell cannot: its type would have to name `'a`, and
+    /// [`Region`] has no lifetime parameter, which is why a [`ReachDescription`] is lifetime-free.
+    ///
+    /// A `Bump` runs **no destructor** for what it holds — it releases its chunks whole. That is the
+    /// point: side data allocated here costs nothing at region teardown, which is what keeps a
+    /// sectioned container `Copy` and `Drop`-free so a frame drop need not walk it. The `T: Copy`
+    /// bound on [`alloc_side`](Self::alloc_side) is what statically holds callers to it — a `Copy`
+    /// type has no `Drop` to skip.
+    ///
+    /// A cycle among bumped entries is harmless: everything here dies with the region, at once.
+    side: Bump,
     /// The region's **union bundle**: one deduped [`PinBundle`] owning a pin for every region
     /// anything resident here reaches, retained for the region's whole life. It is the liveness home
     /// for a value **adopted** copy-free into this region ([`Region::retain_reach`], routed by
@@ -209,6 +225,7 @@ impl<W: StorageProfile> Region<W> {
             membership: RefCell::new(Vec::new()),
             reach_table: FrozenMap::new(),
             retained_descriptions: RefCell::new(HashSet::new()),
+            side: Bump::new(),
             retained_reach: RefCell::new(PinBundle::empty()),
             host,
         }
@@ -266,6 +283,19 @@ impl<W: StorageProfile> Region<W> {
             return;
         }
         self.retain_reach(bundle);
+    }
+
+    /// Copy `items` into the region's bump and hand back the co-located slice — the allocation path
+    /// for `Copy` side data that names this region's own `'a`
+    /// (a [`Sectioned`](super::Sectioned) container's runs and cell index block).
+    ///
+    /// `T: Copy` is load-bearing, not a convenience: the bump never runs a destructor, so admitting
+    /// a `Drop`-bearing `T` would silently skip it. `Copy` rules that out statically. No `unsafe`:
+    /// the `&'a self` borrow is what keeps the chunk alive for the returned slice, exactly as it does
+    /// for [`alloc_resident`](Self::alloc_resident), with no lifetime retype needed at all — the
+    /// bump hands back `T` at whatever lifetime `T` already carried.
+    pub(crate) fn alloc_side<'a, T: Copy>(&'a self, items: &[T]) -> &'a [T] {
+        self.side.alloc_slice_copy(items)
     }
 
     /// Fold an owning [`PinBundle`] into the region's union bundle, retained for the region's whole

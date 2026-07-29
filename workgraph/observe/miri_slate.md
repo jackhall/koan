@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-31 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+33 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -144,11 +144,12 @@ back under the region's bundle alone.
 
 - `region_retention_folds_into_one_deduped_bundle`
 
-**The interned reach side table — writes through `&self` under live readers**
+**Region side tables — writes through `&self` under live readers**
 ([src/witnessed/region.rs](../src/witnessed/region.rs),
 [src/witnessed/sectioned.rs](../src/witnessed/sectioned.rs)) — `Region::intern_reach` inserts into
-an `elsa::FrozenMap` through a shared borrow while every `&ReachDescription` a previous mint handed
-out is still live. No `unsafe` of the crate's own: the append-stable-address guarantee is the map's.
+an `elsa::FrozenMap`, and `Region::alloc_side` bumps into a `bumpalo::Bump`, both through a shared
+borrow while every reference a previous call handed out is still live. No `unsafe` of the crate's
+own: the append-stable-address guarantees are the map's and the bump's.
 But it is exactly the interior-mutation-under-a-live-shared-borrow shape tree borrows adjudicates,
 and a violation is silent under the ordinary suite — a later insert that invalidated an earlier
 entry's tag would poison every carrier referencing it. The tests interleave mints and reads over one
@@ -163,6 +164,8 @@ those shared references are live) rides the same tests.
 - `non_adjacent_runs_share_one_interned_description`
 - `alternating_reach_degrades_to_length_one_runs`
 - `equal_reach_inputs_cost_one_description_and_one_fold`
+- `a_container_is_copy_and_drop_free`
+- `project_bundles_a_cell_with_exactly_its_run_reach`
 
 **The three carrier states and the transform verbs between them**
 ([src/witnessed.rs](../src/witnessed.rs), [src/witnessed/delivered.rs](../src/witnessed/delivered.rs))
