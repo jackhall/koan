@@ -21,6 +21,9 @@ mod shapes;
 /// skipped retention fold on a hit, and the per-region empty singleton.
 mod intern;
 
+/// The sectioned-storage slate: run grouping, index lookup, and the alloc door.
+mod sectioned;
+
 /// Covariant stand-in: a plain shared reference. `At<'r>` is a `&'r u32`, whose lifetime the borrow
 /// checker can't track across the `'static` store.
 struct RefFamily;

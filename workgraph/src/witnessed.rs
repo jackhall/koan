@@ -48,6 +48,9 @@ pub use host::{region_metrics, reset_region_metrics, RegionMetrics};
 mod carrier;
 pub use carrier::{Carrier, HasRegionHandle};
 
+mod sectioned;
+pub use sectioned::{CellInput, CellReach, Sectioned};
+
 mod delivered;
 pub use delivered::Delivered;
 

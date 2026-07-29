@@ -23,7 +23,13 @@
 //!   embedder implements for its own frame-owner type. Both are frozen together at a
 //!   [`witnessed::ReachDescription::mint`], and a value's home region rides them as an ordinary
 //!   member — the sole asymmetry is the self rule, which strips `dest`'s own region from the owned
-//!   bundle (a region pinning itself is a cycle) while leaving it in the description.
+//!   bundle (a region pinning itself is a cycle) while leaving it in the description. A region's
+//!   side table *interns* descriptions, so within one region a description's address is its member
+//!   set.
+//! - Sub-value reach storage: [`witnessed::Sectioned`], a payload-generic container whose cells are
+//!   physically partitioned into contiguous runs each naming one interned description, built
+//!   through the single alloc door [`witnessed::Sectioned::build`] over per-cell
+//!   [`witnessed::CellInput`] / [`witnessed::CellReach`] verdicts.
 //! - The lifetime family contract: [`witnessed::Reattachable`] and the
 //!   [`witnessed::reattachable`] macro that discharges its `unsafe` obligation once per family.
 //! - The generic region engine: [`witnessed::Region`], [`witnessed::StorageProfile`],
