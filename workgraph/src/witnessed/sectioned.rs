@@ -3,25 +3,53 @@
 //! **runs** that each pair a span of cells with one interned `&ReachDescription`. A cell's reach is
 //! therefore a stored, O(log runs)-readable fact, so a seam that parts a cell from its container
 //! reads reach instead of re-deriving it by walking the value
-//! (design/sectioned-reach.md § Sectioned storage).
+//! ([design/sectioned-reach.md](../../design/sectioned-reach.md) § Sectioned storage).
 //!
-//! The payload type `P` is the embedder's; no embedder type enters this module. Confinement is
-//! ordinary borrow checking: `'a` is the destination region's lifetime, carried by every run's
-//! description reference and (in practice) by the payload itself, so a projected cell cannot
-//! outlive its container's region without passing a mint-consuming relocation seam. No `unsafe`.
+//! The cell type is the embedder's, named as a [`Reattachable`] family `K`; no embedder type enters
+//! this module. Both halves of a container are anchored to the destination region's lifetime `'a`:
+//! a cell arrives as `&'a K::At<'a>` — content == borrow == `'a`, so it is already resident in
+//! storage that outlives the region handle — and each run's description lives in that region's own
+//! reach side table. So one pin covers a projected cell and its reach together. Cell *layout* stays
+//! the embedder's: workgraph holds the index→cell mapping and the run partition, never the bytes.
+//!
+//! [`Sectioned::project`] therefore parts a cell as a **bundled** carrier —
+//! `Opened<'a, CellRef<K>, Carrier<F>>` — never a payload and a description as loose parts. The
+//! pairing of a cell with its own reach becomes a type invariant, the cell arrives as a *reference*
+//! (so parting costs no clone however expensive the cell is), and the `'a` the [`Opened`] state
+//! carries keeps the projection inside the region. [`Opened`] rather than
+//! [`Sealed`](super::Sealed) for exactly that last reason: a seal is lifetime-free by construction
+//! — the dormant form that may outlive anything and names its coverage at the open — whereas a
+//! projection must not outlive its container's region at all. A cell that genuinely travels takes
+//! [`Opened::reseal`], which is the mint-consuming relocation seam.
 //!
 //! Containers are built through one door, [`Sectioned::build`], which takes a per-cell
 //! `(payload, reach verdict)` and owns everything downstream of it — grouping into runs, interning,
 //! pin folding, and the value-level union. Interning is what makes grouping cheap: within one
 //! region a description's *address* is its member set ([`Region::intern_reach`]), so a run boundary
-//! is one pointer compare per cell rather than a set comparison.
+//! is one pointer compare per cell rather than a set comparison. No `unsafe`.
 
+use std::marker::PhantomData;
 use std::ops::Range;
 
 use super::{
-    PinBundle, PinsRegion, ReachDescription, Region, RegionHandle, RegionOwner, StepCoverage,
-    StorageProfile,
+    Carrier, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable, Region, RegionHandle,
+    RegionOwner, StepCoverage, StorageProfile,
 };
+
+/// [`Reattachable`] family for a **reference to** a cell of family `K` — the erased form
+/// [`Sectioned::project`] seals. `At<'r>` is `&'r K::At<'r>`: content == borrow == `'r`, the tight
+/// no-free-lifetime shape [`Region::alloc_resident`] hands back, so a re-anchored projection cannot
+/// be widened past its pin.
+///
+/// Being a reference is what makes the projection cheap and universally openable: it is `Copy`
+/// whatever `K` is, so [`Sealed::open_with`]'s `At<'static>: Copy` bound is satisfied for free even
+/// where the cell itself is an expensive owned aggregate.
+pub struct CellRef<K>(PhantomData<K>);
+
+// SAFETY: `&'r K::At<'r>` is a pointer, whose layout is identical for every choice of `'r`.
+unsafe impl<K: Reattachable + 'static> Reattachable for CellRef<K> {
+    type At<'r> = &'r K::At<'r>;
+}
 
 /// One physical partition: the index its span starts at, paired with the interned description that
 /// is **exactly** its cells' shared reach. The span's end is the next run's start (or the
@@ -31,9 +59,9 @@ struct Run<'a, F: PinsRegion> {
     reach: &'a ReachDescription<F>,
 }
 
-/// A payload-generic container whose cells carry reach at sub-value granularity: cells in semantic
-/// order, physically partitioned into contiguous runs that each name one interned
-/// [`ReachDescription`] hosted in the container's own region.
+/// A container whose cells carry reach at sub-value granularity: cells of the embedder's family `K`
+/// in semantic order, region-resident in `'a`, physically partitioned into contiguous runs that each
+/// name one interned [`ReachDescription`] hosted in that same region.
 ///
 /// **Immutable after the door.** There is no push / insert / remove, so a run's description can
 /// never drift out of exactness with the cells it covers. Build one with [`Self::build`].
@@ -45,9 +73,10 @@ struct Run<'a, F: PinsRegion> {
 /// (all-owned, or one shared reach) is the fast path: one description, no per-cell cost.
 /// Alternating owned and borrowing cells degrade to runs of length one — the per-cell-envelope cost
 /// floor, never worse than storing reach on every cell.
-pub struct Sectioned<'a, P, F: PinsRegion> {
-    /// The payloads, in semantic order.
-    cells: Vec<P>,
+pub struct Sectioned<'a, K: Reattachable + 'static, F: PinsRegion + 'static> {
+    /// The index→cell mapping, in semantic order. Each cell is `&'a K::At<'a>` — the tight
+    /// no-free-lifetime shape, so a projection out of it is `'a`-confined by its own type.
+    cells: Vec<&'a K::At<'a>>,
     /// Ascending by `start`, contiguous and covering; empty exactly when `cells` is.
     runs: Vec<Run<'a, F>>,
 }
@@ -55,10 +84,10 @@ pub struct Sectioned<'a, P, F: PinsRegion> {
 /// The reach verdict a caller supplies per input cell — the embedder's whole reach obligation at
 /// the door, alongside the payload itself.
 pub enum CellReach<'r, F: PinsRegion> {
-    /// Fully owned at the destination — a copied input, or owned data. Lands in an empty-reach run
+    /// Fully owned at the destination — a copied cell, or owned data. Lands in an empty-reach run
     /// with no walk.
     Owned,
-    /// The input keeps borrowing its source: its own stored description (which is exact, where the
+    /// The cell keeps borrowing its source: its own stored description (which is exact, where the
     /// envelope coverage a step holds is generally wider) plus its home region, folded in as an
     /// ordinary member. `coverage` is the caller's holder-rule proof — it pins every region the
     /// description names for the whole call, which is what makes reading the description's members
@@ -68,17 +97,20 @@ pub enum CellReach<'r, F: PinsRegion> {
         coverage: StepCoverage<F>,
     },
     /// A born-borrowing seed: reach declared at construction from pins the caller already holds,
-    /// rather than composed from an input's stored description.
+    /// rather than composed from a stored description.
     Seed(StepCoverage<F>),
 }
 
-/// One input to [`Sectioned::build`]: the payload and its reach verdict.
-pub struct CellInput<'r, P, F: PinsRegion> {
-    pub payload: P,
+/// One input to [`Sectioned::build`]: a region-resident cell and its reach verdict. Pairing them in
+/// one value is what makes a verdict-per-cell mismatch unrepresentable — there is no separate
+/// cells-and-verdicts pair of sequences to fall out of step.
+pub struct CellInput<'a, 'r, K: Reattachable, F: PinsRegion> {
+    /// The cell, already resident in storage that outlives the destination region handle.
+    pub payload: &'a K::At<'a>,
     pub reach: CellReach<'r, F>,
 }
 
-impl<'a, P, F: PinsRegion> Sectioned<'a, P, F> {
+impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F> {
     /// Number of cells.
     pub fn len(&self) -> usize {
         self.cells.len()
@@ -100,13 +132,12 @@ impl<'a, P, F: PinsRegion> Sectioned<'a, P, F> {
         self.runs.len() == 1
     }
 
-    /// The payload at `index`.
-    pub fn cell(&self, index: usize) -> Option<&P> {
-        self.cells.get(index)
-    }
-
     /// The reach of the cell at `index`: the description of the run covering it, found by binary
     /// search over the run starts.
+    ///
+    /// A **container-level query**, not a hand-out: it answers a question about reach under the pin
+    /// the caller already holds (it holds the container) and yields no cell. The seam that parts a
+    /// cell *from* the container is [`Self::project`], which bundles.
     pub fn reach_at(&self, index: usize) -> Option<&'a ReachDescription<F>> {
         if index >= self.cells.len() {
             return None;
@@ -117,67 +148,8 @@ impl<'a, P, F: PinsRegion> Sectioned<'a, P, F> {
         Some(self.runs[covering].reach)
     }
 
-    /// The parting seam's read: a cell's payload alongside exactly its own reach. Both are
-    /// `'a`-confined to the container's region — the payload through its own type, the description
-    /// through the run's reference — so neither can outlive the region without passing a seam that
-    /// relocates the reach into a destination. The compiler enforces the seam.
-    ///
-    /// A projection read inside the region's life is ordinary:
-    ///
-    /// ```
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
-    /// use workgraph::witnessed::{CellInput, CellReach, RegionHandle, Sectioned};
-    /// let cart = fresh_cart();
-    /// let handle = RegionHandle::from_owner(&*cart);
-    /// let value: &u32 = handle.alloc_resident::<RefFamily>(&7);
-    /// let (container, _) = Sectioned::build(
-    ///     handle,
-    ///     vec![CellInput { payload: value, reach: CellReach::Owned }],
-    /// );
-    /// let (payload, reach) = container.project(0).unwrap();
-    /// assert_eq!(**payload, 7);
-    /// assert!(reach.is_empty());
-    /// ```
-    ///
-    /// ```compile_fail
-    /// // The projected PAYLOAD is confined: it cannot outlive the container's region.
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
-    /// use workgraph::witnessed::{CellInput, CellReach, RegionHandle, Sectioned};
-    /// let cart = fresh_cart();
-    /// let handle = RegionHandle::from_owner(&*cart);
-    /// let value: &u32 = handle.alloc_resident::<RefFamily>(&7);
-    /// let (container, _) = Sectioned::build(
-    ///     handle,
-    ///     vec![CellInput { payload: value, reach: CellReach::Owned }],
-    /// );
-    /// let (payload, _) = container.project(0).unwrap();
-    /// drop(cart);
-    /// assert_eq!(**payload, 7);
-    /// ```
-    ///
-    /// ```compile_fail
-    /// // The run's DESCRIPTION reference is confined the same way — outliving the container is not
-    /// // enough, the region has to outlive it too.
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
-    /// use workgraph::witnessed::{CellInput, CellReach, RegionHandle, Sectioned};
-    /// let cart = fresh_cart();
-    /// let handle = RegionHandle::from_owner(&*cart);
-    /// let value: &u32 = handle.alloc_resident::<RefFamily>(&7);
-    /// let (container, _) = Sectioned::build(
-    ///     handle,
-    ///     vec![CellInput { payload: value, reach: CellReach::Owned }],
-    /// );
-    /// let reach = container.project(0).unwrap().1;
-    /// drop(container);
-    /// drop(cart);
-    /// assert!(reach.is_empty());
-    /// ```
-    pub fn project(&self, index: usize) -> Option<(&P, &'a ReachDescription<F>)> {
-        Some((self.cell(index)?, self.reach_at(index)?))
-    }
-
-    /// The runs, as `(span, reach)` pairs in ascending order — what an embedder's
-    /// contains-borrows / borrows-home memos fold over instead of walking cells.
+    /// The runs, as `(span, reach)` pairs in ascending order — the container-level query an
+    /// embedder's contains-borrows / borrows-home memos fold over instead of walking cells.
     pub fn runs(&self) -> impl Iterator<Item = (Range<usize>, &'a ReachDescription<F>)> + '_ {
         let total = self.cells.len();
         self.runs.iter().enumerate().map(move |(position, run)| {
@@ -185,13 +157,98 @@ impl<'a, P, F: PinsRegion> Sectioned<'a, P, F> {
             (run.start..end, run.reach)
         })
     }
-}
 
-impl<'a, P, F: PinsRegion> Sectioned<'a, P, F> {
+    /// **The parting seam.** Hand the cell at `index` out as a bundled carrier: a reference to the
+    /// cell, sealed under a [`Carrier`] naming exactly that cell's run reach.
+    ///
+    /// Bundled rather than a `(payload, description)` pair, for the reason the whole module is: the
+    /// value↔reach pairing becomes a type invariant instead of caller discipline, and the cell
+    /// travels as a reference, so parting is free however expensive the cell is.
+    ///
+    /// [`Opened`] rather than [`Sealed`](super::Sealed) because confinement has to be a compile
+    /// error: a seal is lifetime-free by construction (that is what makes it the dormant storage
+    /// form) and would outlive the region freely, naming its coverage only at the open. An
+    /// `Opened<'a, …>` carries `'a`, so both halves are confined by ordinary borrow checking — the
+    /// cell reference is `&'a K::At<'a>` and the carrier's description is hosted in that same
+    /// region. A cell that genuinely travels passes [`Opened::reseal`], the mint-consuming
+    /// relocation seam. The `'a` here is the destination region's own lifetime rather than a borrow
+    /// of a pin, which is sound for [`Opened::adopted`]'s stated reason: [`Self::build`] retained
+    /// every cell's pins into the region before this projection could exist.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
+    /// use workgraph::witnessed::{CellInput, CellReach, RegionHandle, Sectioned};
+    ///
+    /// let cart = fresh_cart();
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// // `alloc_resident` hands back `&'a RefFamily::At<'a>` — a cell reference, resident.
+    /// let cell: &&u32 = handle.alloc_resident::<RefFamily>(&7);
+    /// let (container, _) = Sectioned::<RefFamily, _>::build(
+    ///     handle,
+    ///     vec![CellInput { payload: cell, reach: CellReach::Owned }],
+    /// );
+    /// // The projection is one value: the cell reference and its reach, paired.
+    /// let parted = container.project(0).expect("index is covered");
+    /// assert_eq!(**parted.value(), 7);
+    /// // Its reach rides along, so a consumer never has to be handed it separately.
+    /// assert!(!parted.borrows_home());
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // A parted cell cannot outlive its container's region: the `Opened` state carries `'a`.
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
+    /// use workgraph::witnessed::{CellInput, CellReach, RegionHandle, Sectioned};
+    ///
+    /// let cart = fresh_cart();
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// // `alloc_resident` hands back `&'a RefFamily::At<'a>` — a cell reference, resident.
+    /// let cell: &&u32 = handle.alloc_resident::<RefFamily>(&7);
+    /// let (container, _) = Sectioned::<RefFamily, _>::build(
+    ///     handle,
+    ///     vec![CellInput { payload: cell, reach: CellReach::Owned }],
+    /// );
+    /// let parted = container.project(0).unwrap();
+    /// drop(cart);
+    /// let _ = parted;
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // The run's description reference is confined the same way — outliving the container is not
+    /// // enough, the region has to outlive it too.
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
+    /// use workgraph::witnessed::{CellInput, CellReach, RegionHandle, Sectioned};
+    ///
+    /// let cart = fresh_cart();
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// // `alloc_resident` hands back `&'a RefFamily::At<'a>` — a cell reference, resident.
+    /// let cell: &&u32 = handle.alloc_resident::<RefFamily>(&7);
+    /// let (container, _) = Sectioned::<RefFamily, _>::build(
+    ///     handle,
+    ///     vec![CellInput { payload: cell, reach: CellReach::Owned }],
+    /// );
+    /// let reach = container.reach_at(0).unwrap();
+    /// drop(container);
+    /// drop(cart);
+    /// assert!(reach.is_empty());
+    /// ```
+    pub fn project(&self, index: usize) -> Option<Opened<'a, CellRef<K>, Carrier<F>>> {
+        // The stored cell reference is already `&'a`, so copying it out carries the region lifetime
+        // rather than this `&self` borrow.
+        let cell: &'a K::At<'a> = *self.cells.get(index)?;
+        let reach = self.reach_at(index)?;
+        Some(Opened::adopted(cell, Carrier::new(reach)))
+    }
+
     /// The alloc door: build a sectioned container resident in `dest` from per-cell
     /// `(payload, reach verdict)` inputs, returning it alongside its **value-level** description —
     /// what a whole-value carrier stores, so carriers keep their single-`&ReachDescription` shape
     /// unchanged.
+    ///
+    /// Each input cell arrives already resident as `&'a K::At<'a>`, tying it to the same `'a` the
+    /// destination handle carries — so whatever pin keeps `dest`'s region alive covers both a
+    /// projected cell and its run description. Cell *storage* is the embedder's: it allocates its
+    /// cell block through its own [`Stored`](super::Stored) family and hands the resident borrows
+    /// in, rather than workgraph re-declaring a cell family it has no other use for.
     ///
     /// Per input, the mint source is the verdict read literally: nothing for
     /// [`CellReach::Owned`] (so owned data costs no walk), the stored description's members plus
@@ -210,13 +267,13 @@ impl<'a, P, F: PinsRegion> Sectioned<'a, P, F> {
     /// description exactly when a cell genuinely borrows into `dest`.
     pub fn build<W>(
         dest: RegionHandle<'a, W>,
-        inputs: Vec<CellInput<'_, P, F>>,
+        inputs: Vec<CellInput<'a, '_, K, F>>,
     ) -> (Self, &'a ReachDescription<F>)
     where
         W: StorageProfile<FrameOwner = F>,
         F: RegionOwner<Region = Region<W>>,
     {
-        let mut cells: Vec<P> = Vec::with_capacity(inputs.len());
+        let mut cells: Vec<&'a K::At<'a>> = Vec::with_capacity(inputs.len());
         let mut runs: Vec<Run<'a, F>> = Vec::new();
         let mut union = PinBundle::empty();
 

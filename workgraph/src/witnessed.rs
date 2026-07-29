@@ -49,7 +49,7 @@ mod carrier;
 pub use carrier::{Carrier, HasRegionHandle};
 
 mod sectioned;
-pub use sectioned::{CellInput, CellReach, Sectioned};
+pub use sectioned::{CellInput, CellReach, CellRef, Sectioned};
 
 mod delivered;
 pub use delivered::Delivered;

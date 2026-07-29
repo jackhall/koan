@@ -7,25 +7,26 @@ use std::rc::Rc;
 
 use super::super::*;
 
-/// The library-only profile the sectioned slate runs over: owned `u32` content, which the payload
-/// borrows out of a region.
+/// The library-only profile the sectioned slate runs over: `u32` cells, resident in a region and
+/// handed to the door as the `&'a CellFamily::At<'a>` references it takes.
 struct SectionProfile;
 
 impl StorageProfile for SectionProfile {
-    type Families = (ValFamily, ());
+    type Families = (CellFamily, ());
     type FrameOwner = RegionHost<SectionProfile>;
 }
 
 type SectionFrame = RegionHost<SectionProfile>;
 
-/// Owned scalar content — what a region stores and a cell payload borrows.
-struct ValFamily;
+/// The stand-in cell family: owned scalar content, so `At<'r>` is lifetime-free and a cell
+/// reference is the plain `&'a u32` a region hands back.
+struct CellFamily;
 
 reattachable! {
-    ValFamily => u32,
+    CellFamily => u32,
 }
 
-impl Stored<SectionProfile> for ValFamily {
+impl Stored<SectionProfile> for CellFamily {
     fn cell(storage: &StorageOf<SectionProfile>) -> &FamilyArena<Self> {
         &storage.0
     }
@@ -35,9 +36,9 @@ fn frame() -> Rc<SectionFrame> {
     RegionHost::fresh(None)
 }
 
-/// Store `v` in `frame`'s region and hand back the co-located borrow — a cell payload.
+/// Store `v` in `frame`'s region and hand back the co-located cell reference the door takes.
 fn store(frame: &Rc<SectionFrame>, v: u32) -> &u32 {
-    RegionHandle::from_owner(&**frame).alloc_resident::<ValFamily>(v)
+    RegionHandle::from_owner(&**frame).alloc_resident::<CellFamily>(v)
 }
 
 /// The reach counters' movement across `body`. A delta rather than a [`reset_region_metrics`]
@@ -73,11 +74,19 @@ fn pinned_input<'r>(
 }
 
 /// A cell that is fully owned at the destination.
-fn owned(payload: &u32) -> CellInput<'_, &u32, SectionFrame> {
+fn owned<'a>(payload: &'a u32) -> CellInput<'a, 'a, CellFamily, SectionFrame> {
     CellInput {
         payload,
         reach: CellReach::Owned,
     }
+}
+
+/// A cell with an explicit reach verdict.
+fn cell<'a, 'r>(
+    payload: &'a u32,
+    reach: CellReach<'r, SectionFrame>,
+) -> CellInput<'a, 'r, CellFamily, SectionFrame> {
+    CellInput { payload, reach }
 }
 
 /// Whether `description`'s members are exactly `expected`, compared by owner identity.
@@ -106,14 +115,8 @@ fn adjacent_cells_of_equal_reach_share_a_run() {
         vec![
             owned(values[0]),
             owned(values[1]),
-            CellInput {
-                payload: values[2],
-                reach: pinned_input(&source, &member),
-            },
-            CellInput {
-                payload: values[3],
-                reach: pinned_input(&source, &member),
-            },
+            cell(values[2], pinned_input(&source, &member)),
+            cell(values[3], pinned_input(&source, &member)),
             owned(values[4]),
         ],
     );
@@ -135,15 +138,9 @@ fn non_adjacent_runs_share_one_interned_description() {
     let (container, _value_reach) = Sectioned::build(
         RegionHandle::from_owner(&*dest),
         vec![
-            CellInput {
-                payload: values[0],
-                reach: pinned_input(&source, &member),
-            },
+            cell(values[0], pinned_input(&source, &member)),
             owned(values[1]),
-            CellInput {
-                payload: values[2],
-                reach: pinned_input(&source, &member),
-            },
+            cell(values[2], pinned_input(&source, &member)),
         ],
     );
 
@@ -167,10 +164,7 @@ fn alternating_reach_degrades_to_length_one_runs() {
         inputs.push(if index % 2 == 0 {
             owned(payload)
         } else {
-            CellInput {
-                payload,
-                reach: pinned_input(&source, &member),
-            }
+            cell(payload, pinned_input(&source, &member))
         });
     }
     let (container, _value_reach) = Sectioned::build(RegionHandle::from_owner(&*dest), inputs);
@@ -181,7 +175,7 @@ fn alternating_reach_degrades_to_length_one_runs() {
         assert_eq!(reach.is_empty(), index % 2 == 0);
     }
     assert!(container.reach_at(container.len()).is_none());
-    assert!(container.cell(container.len()).is_none());
+    assert!(container.project(container.len()).is_none());
 }
 
 /// The single-run fast path: an all-owned container is one empty-reach run, and its value-level
@@ -194,7 +188,7 @@ fn all_owned_is_one_empty_run() {
     let ((container, value_reach), metrics) = reach_delta(|| {
         Sectioned::build(
             RegionHandle::from_owner(&*dest),
-            values.iter().map(|v| owned(v)).collect(),
+            values.iter().copied().map(owned).collect(),
         )
     });
 
@@ -218,10 +212,7 @@ fn a_pinned_run_names_its_members_and_its_home() {
 
     let (container, value_reach) = Sectioned::build(
         RegionHandle::from_owner(&*dest),
-        vec![CellInput {
-            payload: value,
-            reach: pinned_input(&source, &member),
-        }],
+        vec![cell(value, pinned_input(&source, &member))],
     );
 
     let run_reach = container.reach_at(0).expect("index is covered");
@@ -239,10 +230,10 @@ fn a_seed_run_is_its_declared_coverage() {
 
     let (container, _value_reach) = Sectioned::build(
         RegionHandle::from_owner(&*dest),
-        vec![CellInput {
-            payload: value,
-            reach: CellReach::Seed(StepCoverage::of(Rc::clone(&seeded))),
-        }],
+        vec![cell(
+            value,
+            CellReach::Seed(StepCoverage::of(Rc::clone(&seeded))),
+        )],
     );
 
     assert!(members_are(
@@ -262,14 +253,11 @@ fn the_value_level_description_is_the_union_over_runs() {
     let (container, value_reach) = Sectioned::build(
         RegionHandle::from_owner(&*dest),
         vec![
-            CellInput {
-                payload: values[0],
-                reach: pinned_input(&left_home, &left_member),
-            },
-            CellInput {
-                payload: values[1],
-                reach: CellReach::Seed(StepCoverage::of(Rc::clone(&right))),
-            },
+            cell(values[0], pinned_input(&left_home, &left_member)),
+            cell(
+                values[1],
+                CellReach::Seed(StepCoverage::of(Rc::clone(&right))),
+            ),
         ],
     );
 
@@ -291,10 +279,10 @@ fn a_cell_borrowing_home_keeps_home_in_the_value_level_description() {
 
     let (container, value_reach) = Sectioned::build(
         RegionHandle::from_owner(&*dest),
-        vec![CellInput {
-            payload: value,
-            reach: CellReach::Seed(StepCoverage::of(Rc::clone(&dest))),
-        }],
+        vec![cell(
+            value,
+            CellReach::Seed(StepCoverage::of(Rc::clone(&dest))),
+        )],
     );
 
     assert!(container
@@ -320,16 +308,7 @@ fn equal_reach_inputs_cost_one_description_and_one_fold() {
     let ((container, value_reach), metrics) = reach_delta(|| {
         Sectioned::build(
             RegionHandle::from_owner(&*dest),
-            vec![
-                CellInput {
-                    payload: values[0],
-                    reach: first,
-                },
-                CellInput {
-                    payload: values[1],
-                    reach: second,
-                },
-            ],
+            vec![cell(values[0], first), cell(values[1], second)],
         )
     });
 
@@ -340,12 +319,44 @@ fn equal_reach_inputs_cost_one_description_and_one_fold() {
     assert_eq!(metrics.reach_retention_folds, 1);
 }
 
+/// The parting seam hands a cell out **bundled** with exactly its own run's reach — never the
+/// container's union — and the pairing is one value, not two the caller must keep aligned.
+#[test]
+fn project_bundles_a_cell_with_exactly_its_run_reach() {
+    let dest = frame();
+    let source = frame();
+    let member = frame();
+    let values: Vec<&u32> = (0..2).map(|v| store(&dest, v + 1)).collect();
+
+    let (container, value_reach) = Sectioned::build(
+        RegionHandle::from_owner(&*dest),
+        vec![
+            owned(values[0]),
+            cell(values[1], pinned_input(&source, &member)),
+        ],
+    );
+
+    // The container's own reach names both source regions; the owned cell's does not.
+    assert!(members_are(value_reach, &[&source, &member]));
+
+    let plain = container.project(0).expect("index is covered");
+    assert_eq!(*plain.value(), 1);
+    assert!(!plain.reach_covers(source.region()));
+
+    let borrowing = container.project(1).expect("index is covered");
+    assert_eq!(*borrowing.value(), 2);
+    assert!(borrowing.reach_covers(source.region()));
+    assert!(borrowing.reach_covers(member.region()));
+    // Release-exact: the parted cell resides in `dest` but does not borrow into it.
+    assert!(!borrowing.borrows_home());
+}
+
 /// An empty container is well-formed: no cells, no runs, and an empty value-level description.
 #[test]
 fn an_empty_container_has_no_runs() {
     let dest = frame();
 
-    let (container, value_reach): (Sectioned<'_, &u32, SectionFrame>, _) =
+    let (container, value_reach): (Sectioned<'_, CellFamily, SectionFrame>, _) =
         Sectioned::build(RegionHandle::from_owner(&*dest), Vec::new());
 
     assert!(container.is_empty());

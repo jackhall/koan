@@ -26,10 +26,13 @@
 //!   bundle (a region pinning itself is a cycle) while leaving it in the description. A region's
 //!   side table *interns* descriptions, so within one region a description's address is its member
 //!   set.
-//! - Sub-value reach storage: [`witnessed::Sectioned`], a payload-generic container whose cells are
+//! - Sub-value reach storage: [`witnessed::Sectioned`], a cell-generic container whose cells are
 //!   physically partitioned into contiguous runs each naming one interned description, built
 //!   through the single alloc door [`witnessed::Sectioned::build`] over per-cell
 //!   [`witnessed::CellInput`] / [`witnessed::CellReach`] verdicts.
+//!   [`witnessed::Sectioned::project`] parts a cell as a bundled
+//!   `Opened<'a, CellRef<K>, Carrier<F>>` — the cell reference and exactly its run's reach in one
+//!   `'a`-confined value ([`witnessed::CellRef`]), never as loose parts.
 //! - The lifetime family contract: [`witnessed::Reattachable`] and the
 //!   [`witnessed::reattachable`] macro that discharges its `unsafe` obligation once per family.
 //! - The generic region engine: [`witnessed::Region`], [`witnessed::StorageProfile`],
