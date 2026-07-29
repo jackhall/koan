@@ -25,6 +25,7 @@
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::rc::Weak;
 
 use typed_arena::Arena;
 
@@ -162,19 +163,41 @@ pub struct Region<W: StorageProfile> {
     /// dead weight — and a live edge into a region that can retain this one back, which is a cycle
     /// neither side ever frees.
     retained_reach: RefCell<PinBundle<W::FrameOwner>>,
+    /// The region's **owner** — the frame-owner value this region is a part of, named weakly. It is
+    /// what [`ReachDescription::mint`] stamps as a description's host, so a value's residence is
+    /// read off the description that already lives in its home region's side table rather than
+    /// carried a second time on the envelope.
+    ///
+    /// `Weak` because the owner owns this region: a strong link would be a self-cycle. The upgrade
+    /// is infallible wherever it is reached — a live region *is* live storage inside its owner, so
+    /// anything holding a pin that keeps this region alive holds the owner alive too.
+    ///
+    /// Supplied at construction (there is no un-owned region), so the back-link is established by
+    /// the same act that creates the region: an owner builds itself through `Rc::new_cyclic` and
+    /// hands its own `Weak` down.
+    host: Weak<W::FrameOwner>,
 }
 
 impl<W: StorageProfile> Region<W> {
     /// The library's sole raw-region constructor — `pub(crate)` so an embedder can never mint a
     /// bare `Region` directly. The only mint point reachable from outside `workgraph` is
     /// [`RegionHost::region`](super::RegionHost::region), which calls this lazily on first access.
-    pub(crate) fn new() -> Self {
+    /// `host` is the owner this region belongs to, named weakly; an owner sources it from
+    /// `Rc::new_cyclic`, so a region cannot exist without naming the owner that holds it.
+    pub(crate) fn new(host: Weak<W::FrameOwner>) -> Self {
         Self {
             storage: StorageOf::<W>::default(),
             membership: RefCell::new(Vec::new()),
             reach_table: Arena::new(),
             retained_reach: RefCell::new(PinBundle::empty()),
+            host,
         }
+    }
+
+    /// This region's owner, named weakly — the host [`ReachDescription::mint`] stamps onto every
+    /// description it freezes into this region's side table.
+    pub(crate) fn host(&self) -> Weak<W::FrameOwner> {
+        self.host.clone()
     }
 
     /// Append a minted reach description to the region's side table and hand back a co-located
@@ -305,25 +328,25 @@ unsafe impl<W: StorageProfile> super::Witness for Region<W> {}
 ///
 /// ```compile_fail
 /// // A bare `&Region` has no allocation surface: `alloc_resident` is crate-private.
-/// use workgraph::witnessed::doctest_fixture::{fresh_region, RefFamily};
-/// let region = fresh_region();
-/// let _ = region.alloc_resident::<RefFamily>(&7);
+/// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
+/// let cart = fresh_cart();
+/// let _ = cart.0.alloc_resident::<RefFamily>(&7);
 /// ```
 ///
 /// ```compile_fail
 /// // Safe embedder code cannot wrap a bare `&Region` into the capability: the field and the raw
 /// // constructor are crate-private.
-/// use workgraph::witnessed::doctest_fixture::{fresh_region, FixtureProfile};
+/// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
 /// use workgraph::witnessed::RegionHandle;
-/// let region = fresh_region();
-/// let _: RegionHandle<'_, FixtureProfile> = RegionHandle::new(&region);
+/// let cart = fresh_cart();
+/// let _: RegionHandle<'_, FixtureProfile> = RegionHandle::new(&cart.0);
 /// ```
 ///
 /// ```
 /// use std::rc::Rc;
-/// use workgraph::witnessed::doctest_fixture::{fresh_region, RefFamily, RegionCart};
+/// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
 /// use workgraph::witnessed::RegionHandle;
-/// let cart = Rc::new(RegionCart(fresh_region()));
+/// let cart = fresh_cart();
 /// let handle = RegionHandle::from_owner(&*cart);
 /// let stored: &u32 = handle.alloc_resident::<RefFamily>(&7);
 /// assert_eq!(*stored, 7);
@@ -333,9 +356,9 @@ unsafe impl<W: StorageProfile> super::Witness for Region<W> {}
 /// // The closure-gated move-in is gone: storage of a region-borrowing value is gated by the
 /// // family's own declared audit, never by caller code.
 /// use std::rc::Rc;
-/// use workgraph::witnessed::doctest_fixture::{fresh_region, RegionCart, RefFamily};
+/// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
 /// use workgraph::witnessed::RegionHandle;
-/// let cart = Rc::new(RegionCart(fresh_region()));
+/// let cart = fresh_cart();
 /// let handle = RegionHandle::from_owner(&*cart);
 /// let local = 7u32;
 /// let _ = handle.alloc_resident_audited::<RefFamily>(&local, |_, _| true);
@@ -388,22 +411,22 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// hands back straight into this region's union bundle, so the description and the ownership
     /// that backs it are established together and the embedder never holds the pins in between.
     ///
-    /// Returns the hosted description (`None` == empty, no allocation) and the
-    /// borrows-into-this-region bit. No policy is threaded in: the mint applies subsumption and the
-    /// self rule alone, so the description is the value's exact reach and the retained bundle is
-    /// that reach minus this region itself (a region owning a pin on itself is a cycle).
+    /// Returns the hosted description — stamped with this region's owner as its host, so the value
+    /// it describes carries its own residence. No policy is threaded in: the mint applies
+    /// subsumption and the self rule alone, so the description is the value's exact reach and the
+    /// retained bundle is that reach minus this region itself (a region owning a pin on itself is a
+    /// cycle).
     pub fn mint_retained(
         self,
         sources: &[&StepCoverage<W::FrameOwner>],
-    ) -> (Option<&'a ReachDescription<W::FrameOwner>>, bool)
+    ) -> &'a ReachDescription<W::FrameOwner>
     where
         W::FrameOwner: RegionOwner<Region = Region<W>>,
     {
         let bundles: Vec<&PinBundle<W::FrameOwner>> = sources.iter().map(|s| &s.0).collect();
-        let (description, bundle, borrows_into_dest) =
-            ReachDescription::mint_with_dest_bit(self, &bundles);
+        let (description, bundle) = ReachDescription::mint(self, &bundles);
         self.region.retain_reach(bundle);
-        (description, borrows_into_dest)
+        description
     }
 
     /// Brand-confined allocation — see [`Region::alloc`]'s (crate-private) docs. Move-in: `value`
@@ -425,9 +448,9 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     ///
     /// ```
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_region, RegionCart, RefFamily};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
     /// use workgraph::witnessed::RegionHandle;
-    /// let cart = Rc::new(RegionCart(fresh_region()));
+    /// let cart = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
     /// // A `'static` value — here a promoted literal reference — is accepted.
     /// let stored: &u32 = handle.alloc_resident::<RefFamily>(&7);
@@ -438,9 +461,9 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// // A region-borrowing value is rejected: `local`'s borrow is not `'static`, so it cannot
     /// // satisfy `alloc_resident`'s `K::At<'static>` bound.
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_region, RegionCart, RefFamily};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
     /// use workgraph::witnessed::RegionHandle;
-    /// let cart = Rc::new(RegionCart(fresh_region()));
+    /// let cart = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
     /// let local = 7u32;
     /// let _: &u32 = handle.alloc_resident::<RefFamily>(&local);
@@ -458,10 +481,10 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     ///
     /// ```
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_region, RecordedRefFamily, RegionCart};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RecordedRefFamily};
     /// use workgraph::witnessed::RegionHandle;
     /// static SEED: u32 = 7;
-    /// let cart = Rc::new(RegionCart(fresh_region()));
+    /// let cart = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
     /// // Seed the region so it records `SEED`'s address as resident.
     /// let _ = handle.alloc_resident::<RecordedRefFamily>(&SEED);
@@ -474,10 +497,10 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     ///
     /// ```
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_region, RecordedRefFamily, RegionCart};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RecordedRefFamily};
     /// use workgraph::witnessed::RegionHandle;
     /// static OTHER: u32 = 9;
-    /// let cart = Rc::new(RegionCart(fresh_region()));
+    /// let cart = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
     /// // `OTHER` was never stored, so the region does not own its address: the audit rejects it.
     /// assert!(handle

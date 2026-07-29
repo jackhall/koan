@@ -10,9 +10,9 @@ use crate::builtins::{seed_builtins, unseeded_scopes};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::KExpression;
 use crate::machine::model::TypeRegistry;
-use crate::machine::{CarrierWitness, KError, KErrorKind, Scope, WriteGate};
+use crate::machine::{KError, KErrorKind, Scope, WriteGate};
 use crate::parse::{parse, parse_with_path};
-use crate::witnessed::Witnessed;
+use crate::witnessed::ReachDescription;
 
 /// The run-root seeding door. The run-global root is unreachable by any node until the program
 /// starts, so the builtin registration is a construction-time write: this mints the
@@ -79,12 +79,14 @@ impl<'run> KoanRuntime<'run> {
         // Each top-level statement is a consumer-less root: its terminal stays pinned in the
         // producer's per-call frame, since no consumer ever pull-lifts it. Relocate every root that
         // reaches a per-call region into the run region so it lives run-long and its per-call frame
-        // releases; a fully-surviving root (empty witness) and an errored terminal need no re-home.
+        // releases; a root whose whole reach is eternal storage — the run region itself — and an
+        // errored terminal need no re-home, because nothing they name dies with a per-call frame.
         for &id in &top_level {
-            let reaches_per_call = self
-                .sched
-                .dep_carrier(id)
-                .is_ok_and(|sealed| !sealed.witness().is_empty());
+            let reaches_per_call = self.sched.dep_delivered(id).is_ok_and(|delivered| {
+                delivered
+                    .open_at()
+                    .with_reach(ReachDescription::pins_beyond_eternal)
+            });
             if reaches_per_call {
                 // The dest rides an empty-set `resident`: the run region outlives everything and is
                 // externally pinned, and yoking the run-root frame here would re-form a reference
@@ -92,9 +94,7 @@ impl<'run> KoanRuntime<'run> {
                 if let Ok((witnessed, coverage)) = self.relocate_terminal(
                     id,
                     root.seal_resident_delivered(
-                        Witnessed::<DestHandleFamily, CarrierWitness>::resident(
-                            root.brand().handle(),
-                        ),
+                        root.resident::<DestHandleFamily>(root.brand().handle()),
                         crate::machine::core::FrameCoverage::empty(),
                     ),
                 ) {

@@ -118,13 +118,21 @@ The transform verbs:
   without splitting the value from its pins; a projection taken through a bare
   read would arrive somewhere else with no proven reach at all.
 
-Home rides as an **ordinary member**, never a distinguished field. A carrier's
-reach is one flat set, and "the value borrows into the region it lives in" is
-just that region appearing as a member. The single place home is treated
-specially is the owned-upgrade boundary, one region-identity rule: **never pin a
-region into itself** (§ Composition). A `Weak` member naming a carrier's own
-home closes no strong cycle, so home sits in the description like any other
-member; only an *owned* pin naming the holder's own region would make the region
+A description records **two** facts about one value, and they are not the same
+fact: its `host` is the region the value **lives in** (its residence), its
+`members` are the regions the value's borrows **reach**. Home appears in
+`members` only when the value genuinely borrows into its own region — living in a
+region is not borrowing into it, so a region-pure scalar has a real host and an
+empty member set. "Does this value borrow into its own home?" is therefore the
+ordinary membership query `members ∋ host`, answered on an `Opened` like any
+other membership question, and residence is read off that same record rather than
+off a side channel on whatever is holding the value.
+
+The single place home is treated specially is the owned-upgrade boundary, one
+region-identity rule: **never pin a region into itself** (§ Composition). It
+applies to the owned bundle alone. A `Weak` naming a carrier's own home — as the
+`host`, or as a member when the borrows do reach it — closes no strong cycle;
+only an *owned* pin naming the holder's own region would make the region
 transitively own itself, and that is the pin the self rule drops.
 
 ## The reach description
@@ -136,9 +144,10 @@ transitively own itself, and that is the pin the self rule drops.
   needs the pages clean). The table is append-only in address: a description's
   `&` stays valid for the region's whole life, which is what lets a `Sealed`
   carrier hold a thin reference to it.
-- A description is **per-object and precise**: the exact reach of one stored
-  value, home included. There is no whole-region merged description — two values
-  in one region with different reaches reference two different entries.
+- A description is **per-object and precise**: the residence of one stored value
+  and the exact reach of that same value. There is no whole-region merged
+  description — two values in one region with different reaches reference two
+  different entries.
 - A description is **frozen at mint**. No site mutates one; composition mints a
   new entry. This is load-bearing: `Sealed` carriers share references to one
   description, so growing a shared one would silently widen every sharing
@@ -147,10 +156,12 @@ transitively own itself, and that is the pin the self rule drops.
 - The description is **not a storage family**: it is not allocated through the
   value store path and carries no `Stored`/`Reattachable` bounds. Only values
   live in arenas; reach metadata lives beside them, in the table.
-- **Empty reach is `None`, not a hosted empty entry.** A region-pure value's
-  description is `None` and it owns no pins — a region-pure bind allocates
-  nothing and refcounts nothing. `None` **is** the empty set; every reader
-  treats it as "reaches nothing," never "not yet computed."
+- **Every value has a description**, because that is where its residence is
+  recorded. A region-pure value references one whose members are empty — one
+  `Weak` host and an empty `Vec`, no heap — and owns no pins, so a region-pure
+  bind still refcounts nothing. Empty members **are** the empty reach set; every
+  reader treats them as "reaches nothing," never "not yet computed," and asks
+  "reaches anything?" of the members rather than of the description's existence.
 
 ## The pin bundle
 
@@ -532,7 +543,3 @@ Per the [scheduler-library.md](scheduler-library.md) division:
   — routes the reaching-tier move-ins through the fold-brand construction door
   (§ Residence enforcement) and deletes the runtime reaching audit; the backstops
   there are what remains.
-- [Home lives in the reach description](../roadmap/untyped_arena/home-lives-in-the-reach-description.md)
-  — collapses the two records of home that survive alongside the description: the
-  carrier's borrows-home bit, and the `with_home_region` /
-  `PinBundle::any_member_region` probes the relocation predicates read.

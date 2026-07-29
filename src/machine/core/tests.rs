@@ -20,6 +20,7 @@ pub(super) fn body_no_op<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     crate::machine::core::kfunction::action::Action::done_resident(
+        ctx.scope,
         crate::machine::model::Carried::Object(ctx.scope.brand().alloc_object(KObject::Null)),
     )
 }

@@ -210,7 +210,8 @@ The value channel is borrow-checked end to end. The scheduler stores a finalized
 `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` / `merge_pinned`) and re-anchors
 only through a rank-2 destination verb. `finalize` bundles the erased value under a
 [`CarrierWitness`](../src/machine/core/carrier_witness.rs) — the **reference-only** carrier, a
-`borrows_host` bit plus a reference to the value's foreign reach description, pinning nothing itself —
+reference to the value's reach description and nothing else, pinning nothing itself; the description
+is where both of the value's region facts live, its host region and the regions its borrows reach —
 and seals it **as-is** (a declared return is checked and re-stamped in place first): there is no
 Done-boundary relocation or sever gate. What keeps the
 producer frame alive is the scheduler's **frame-retention hold**, seeded at finalize and released

@@ -386,17 +386,28 @@ pub(crate) fn marker<'a>(scope: &Scope<'a>, label: &'static str) -> &'a KObject<
     scope.brand().alloc_object(KObject::KString(label.into()))
 }
 
+/// The region-pure carrier a synthetic terminal needs: a description hosted in `scope`'s own region
+/// naming no members — exactly what a value allocated straight into that region carries.
+/// `Scheduler::set_result` writes a terminal onto a slot without running finalize, so the carrier
+/// the real finalize would have minted has to be handed in here.
+#[cfg(test)]
+pub(crate) fn resident_carrier(scope: &Scope<'_>) -> crate::machine::CarrierWitness {
+    crate::machine::CarrierWitness::new(scope.mint_retained(&[]))
+}
+
 /// Seal a resolved value into a region-pure `ExpressionPart::Spliced` cell — the test-side peer of
 /// the scheduler's splice, so a classification test can build the exact carrier a real splice rests
-/// on the working expression. `Witnessed::resident` asserts the empty reach: the value borrows only
-/// caller-held test data, not a foreign region — a fresh throwaway storage stands in as the
-/// envelope's host pin.
+/// on the working expression. `Witnessed::resident_in` asserts the empty reach: the value borrows
+/// only caller-held test data, not a foreign region. A fresh throwaway storage is both the region
+/// the description is hosted in and the envelope's host pin, so the pin covers the arena the mint
+/// landed in.
 #[cfg(test)]
 pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
+    let host = crate::machine::run_root_storage();
     ExpressionPart::Spliced {
         cell: Delivered::hosted(
-            Sealed::seal(Witnessed::resident(c)),
-            crate::machine::run_root_storage(),
+            Sealed::seal(Witnessed::resident_in(c, &host)),
+            host,
             crate::machine::core::FrameCoverage::empty(),
         ),
     }

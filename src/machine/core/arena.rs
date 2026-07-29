@@ -190,16 +190,16 @@ impl<'a> RegionBrand<'a> {
             .expect("alloc_module: a Module must be allocated into its own child scope's region")
     }
 
-    /// The witnessed-allocation surface for an owned object built fresh inside the brand: born
-    /// witnessed by the **empty** (foreign-reach-only) set. The brand-confined
+    /// The witnessed-allocation surface for an owned object built fresh inside the brand: born under
+    /// a description hosted in this region with **no members**. The brand-confined
     /// [`alloc`](Region::alloc) stores `value` and hands the freshly-stored `&'b KObject<'b>` to the
-    /// closure at the brand, which bundles it through [`Witnessed::resident`] — the empty-witness
-    /// constructor that names the region-pure obligation, so the active frame is deliberately excluded.
+    /// closure at the brand, which bundles it through [`Self::seal_resident`] — the door that names
+    /// the region-pure obligation, so the active frame is deliberately excluded from the pins.
     /// The producing frame is folded in only at finalize/close (the scope-reach seal), so a
     /// region-resident value never strong-owns its own frame (the `region → object → frame` cycle that
     /// would keep the frame's `Rc` alive forever and defeat the refcount-driven region free).
     ///
-    /// The within-step transient invariant is typed: the empty-witness carrier pins nothing, so it
+    /// The within-step transient invariant is typed: the member-less carrier pins nothing, so it
     /// returns as a [`StepCarried`] branded at this brand's own `'a` — in production a step's
     /// rank-2 open lifetime — and the borrow checker rejects any use past the step. The active
     /// frame pins the region across the step, and the sole exit to node storage is the seal door in
@@ -209,18 +209,16 @@ impl<'a> RegionBrand<'a> {
     /// [`Self::alloc_object_witnessed_checked`] for a value whose region borrow is only
     /// runtime-auditable (e.g. raw AST that is splice-free).
     pub(crate) fn alloc_object_witnessed(self, value: KObject<'static>) -> StepCarried<'a> {
-        StepCarried::born(
-            self.0.alloc::<KObject<'static>, _>(value, |live| {
-                Witnessed::resident(Carried::Object(live))
-            }),
-        )
+        StepCarried::born(self.0.alloc::<KObject<'static>, _>(value, |live| {
+            self.seal_resident::<CarriedFamily>(Carried::Object(live))
+        }))
     }
 
     /// Runtime-checked twin of [`Self::alloc_object_witnessed`] for a `value` that cannot rebuild at
     /// `'static` (e.g. a `KObject::KExpression` — `KExpression<'a>` is invariant and raw AST has no
     /// `'static` rebuild): the `KObject` family audit vets `value` against this brand's own region
-    /// before anything is stored, and the value is stored — sealed under the same empty
-    /// (own-region-only) witness [`Self::alloc_object_witnessed`] uses — only if it passes. The
+    /// before anything is stored, and the value is stored — sealed under the same member-less
+    /// own-region description [`Self::alloc_object_witnessed`] uses — only if it passes. The
     /// standard `KObject` residence walk gates a `KObject::KExpression` by its
     /// [`is_splice_free`](crate::machine::model::KExpression::is_splice_free) flag, so a spliced
     /// expression (a resolved value carrying a producer reach the empty seal cannot name) is
@@ -234,7 +232,9 @@ impl<'a> RegionBrand<'a> {
         let name = value.ktype().name(types);
         self.0
             .alloc_resident_checked::<KObject<'static>>(value, ResidenceEvidence::dest_only())
-            .map(|live| StepCarried::born(Witnessed::resident(Carried::Object(live))))
+            .map(|live| {
+                StepCarried::born(self.seal_resident::<CarriedFamily>(Carried::Object(live)))
+            })
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
                     "{name}: borrows a region other than its seal's destination"
@@ -242,23 +242,38 @@ impl<'a> RegionBrand<'a> {
             })
     }
 
-    /// Bundle a value **already resident in this brand's region** under `witness` — the terminal
-    /// carrier a name / ATTR read hands back and an FN-def / LET define site seals its object with.
-    /// Unlike [`alloc_object_witnessed`](Self::alloc_object_witnessed) the value is not stored here;
-    /// it pre-exists in the region, so it is bundled through [`Witnessed::resident`] — the reading /
-    /// defining frame pins the region for the step, and past the step the scheduler's retention hold
-    /// (the delivery envelope's host) carries the pin. Confines [`Witnessed::resident`] to this arena
-    /// surface, so no read / define builtin reaches for it. `witness` must name the value's
-    /// exact reach; the caller
-    /// ([`Scope::seal_resident`](crate::machine::core::Scope)) folds it. The brand is the
-    /// capability marker: only a handle into the region the value lives in may re-seal it resident.
+    /// Bundle a value **already resident in this brand's region** whose borrows reach nothing — the
+    /// terminal carrier a name / ATTR read hands back and an FN-def / LET define site seals its
+    /// object with. Unlike [`alloc_object_witnessed`](Self::alloc_object_witnessed) the value is not
+    /// stored here; it pre-exists in the region. The description is minted **here**, so no caller
+    /// pairs a value with a residence it did not derive: its host is this brand's own region owner
+    /// and its members are empty, which is the exact claim for a value that reaches nothing beyond
+    /// the region it lives in. The reading / defining frame pins that region for the step, and past
+    /// the step the scheduler's retention hold (the delivery envelope's host) carries the pin.
+    ///
+    /// A value that *does* reach somewhere takes [`Self::seal_reaching`] with the description
+    /// [`Scope::mint_retained`](crate::machine::core::Scope) derived for it. The brand is the
+    /// capability marker: only a handle into the region the value lives in may seal it resident.
     pub(crate) fn seal_resident<T: Reattachable>(
         self,
         value: T::At<'_>,
-        witness: CarrierWitness,
     ) -> Witnessed<T, CarrierWitness> {
-        let _ = self.0;
-        Witnessed::from_erased(Erased::erase(value), witness)
+        // A mint with no sources composes nothing, so the retained bundle is empty and the frozen
+        // description names this region's owner as host and no member at all.
+        self.seal_reaching(value, self.0.mint_retained(&[]))
+    }
+
+    /// [`Self::seal_resident`] for a value whose reach is already minted: bundle it under `reach`,
+    /// the description a caller derived for this same value into this same region
+    /// ([`Scope::mint_retained`](crate::machine::core::Scope)). The description carries the value's
+    /// residence as its host, so the pairing this takes is one record, not two — there is no
+    /// separate residence for a caller to get wrong.
+    pub(crate) fn seal_reaching<T: Reattachable>(
+        self,
+        value: T::At<'_>,
+        reach: &'a FrameReach,
+    ) -> Witnessed<T, CarrierWitness> {
+        Witnessed::from_erased(Erased::erase(value), CarrierWitness::new(reach))
     }
 }
 
@@ -520,14 +535,14 @@ impl KoanRegionExt for KoanRegion {
         // `yoke_handle` into `owner`'s own region under the single-owner `Rc<FrameStorage>` witness
         // ([`WitnessRegion`](crate::witnessed::WitnessRegion)) — the brand proves the built value
         // is region-derived — then
-        // [`into_reference_only`](Witnessed::into_reference_only) re-bundles under the empty
-        // reference-only carrier: the value's reach is exactly its own region, and its liveness is
-        // external (the active frame during the step, the scheduler's retention hold once
-        // finalized). Turbofish `T` at the yoke: inference does not drive `yoke`'s `T` from the
-        // return type early enough to check `build`'s `-> T::At<'b>` bound, so it sees
-        // `<_ as Reattachable>::At` and fails to match the projection.
+        // [`into_reference_only`](Witnessed::into_reference_only) re-bundles under a reference-only
+        // carrier hosted in that same region with no members: the value's reach is exactly its own
+        // region, and its liveness is external (the active frame during the step, the scheduler's
+        // retention hold once finalized). Turbofish `T` at the yoke: inference does not drive
+        // `yoke`'s `T` from the return type early enough to check `build`'s `-> T::At<'b>` bound, so
+        // it sees `<_ as Reattachable>::At` and fails to match the projection.
         Witnessed::<T, Rc<FrameStorage>>::yoke_handle(owner, |handle| build(RegionBrand(handle)))
-            .into_reference_only()
+            .into_reference_only::<KoanStorageProfile>()
     }
 
     fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool {

@@ -6,14 +6,15 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
 use crate::machine::{
-    force_substrate_borrows_host, CarrierWitness, DeliveredCarried, FrameStorage, KError,
-    KErrorKind, KoanRegion, NodeId, TraceFrame,
+    CarrierWitness, DeliveredCarried, FrameStorage, KError, KErrorKind, KoanRegion, NodeId,
+    TraceFrame,
 };
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Delivered, RegionHandle};
 
 use super::super::lift::{cell_still_borrows, copy_held_from_carried};
 use super::super::outcome::DepTerminal;
+use super::super::run_loop::{dest_brand, DestHandleFamily};
 use super::super::runtime::KoanRuntime;
 use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::{current_dest_frame, with_current_node_scope, SchedulerView};
@@ -174,18 +175,17 @@ impl<'step> KoanRuntime<'step> {
             }
             let acc = fold_cells(view, cells.into_iter(), n);
             // The accumulated envelope's coverage carries every region the folded `Held` views point
-            // into; `map_pinned_placing` re-projects the value under the same witness, so it carries
-            // over unchanged onto the built carrier. The pin for that read: the destination frame,
-            // whose arena holds the set the folds minted.
+            // into, and its home is the destination frame the folds minted into. Merging it into a
+            // bare handle on that same region assembles the aggregate at a fold door and mints its
+            // description there in one step: `dest_frame`'s region is the product's host, and it
+            // rides the members too — a record literal's fresh substrate borrows into the very
+            // region it was built in, which the accumulator's own pins name.
             let dest_frame = view.dest_frame();
             let types = view.types();
-            let coverage = acc.coverage_releasing_home();
-            let witnessed = acc
-                .into_cell()
-                .unseal()
-                .map_pinned_placing::<CarriedFamily, KoanStorageProfile, _>(
-                    &dest_frame,
-                    move |(_region, value_helds), placement| {
+            let built = acc
+                .merge_into_placing::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
+                    dest_brand(dest_frame),
+                    move |(_region, value_helds), _dest_handle, placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         Carried::Object(region.alloc_object_folded(assemble(
                             region,
@@ -195,12 +195,7 @@ impl<'step> KoanRuntime<'step> {
                         )))
                     },
                 );
-            // Step-terminal seal: a record literal's fresh substrate always borrows into this
-            // same `dest_frame` it was just built into — the fold above composes the witness
-            // from the accumulator alone, blind to that fact, so force it here rather than
-            // under-report the value's own self-borrow.
-            let witnessed = force_substrate_borrows_host(witnessed, &dest_frame);
-            Ok(StepCarried::born_pinned(witnessed, coverage))
+            Ok(StepCarried::born_delivered(built))
         });
         self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
     }

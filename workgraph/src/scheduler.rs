@@ -265,8 +265,13 @@ impl<W: Workload> Scheduler<W> {
     pub fn clear_node(&mut self, id: NodeId) {
         self.store.clear_node(id);
     }
-    pub fn set_result(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
-        self.store.set_result(id, output);
+    pub fn set_result(
+        &mut self,
+        id: NodeId,
+        output: Result<Live<'_, W>, W::Error>,
+        carrier: crate::witnessed::Carrier<OwnerOf<W>>,
+    ) {
+        self.store.set_result(id, output, carrier);
     }
     /// Seed a retention hold on a synthetically-finalized slot ([`Self::set_result`] writes the
     /// terminal but runs no finalize, so no hold exists) — [`Self::dep_delivered`] requires one for

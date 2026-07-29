@@ -14,7 +14,7 @@ use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
 use crate::machine::KFunction;
 use crate::witnessed::{
-    Delivered, Erased, FoldToken, FoldedPlacement, RegionHandleFamily, RegionHost, WitnessRegion,
+    Delivered, FoldToken, FoldedPlacement, RegionHandleFamily, RegionHost, Sealed, WitnessRegion,
     Witnessed,
 };
 
@@ -333,9 +333,14 @@ fn alloc_witnessed_yokes_a_reference_only_value() {
         KoanRegion::alloc_witnessed(Rc::clone(&frame), |region| {
             Carried::Object(region.alloc_object(KObject::Number(7.0)))
         });
-    assert!(w.witness().is_empty(), "born reference-only: empty reach");
-    // The held `frame` (the retention stand-in) is the pin the read names.
-    let got = w.with_pinned(&frame, |c| match *c {
+    // The held `frame` (the retention stand-in) is the pin every read below names — the reach
+    // query included, since re-anchoring the description reference needs the same coverage.
+    let sealed = Sealed::seal(w);
+    assert!(
+        !sealed.open_at(&frame).has_reach_members(),
+        "born reference-only: empty reach",
+    );
+    let got = sealed.open_with(&frame, |c| match c {
         Carried::Object(KObject::Number(n)) => *n,
         _ => panic!("expected a Number object"),
     });
@@ -406,9 +411,7 @@ fn pass_through_duplicate_keeps_reach_pointer_and_mints_nothing() {
 
     // The reach query lives on the **in-use** carrier state, opened under the envelope's own
     // coverage — the pins the reach re-anchor needs.
-    let reach_ptr = envelope
-        .open_at()
-        .with_reach(|r| r.map(|set| set as *const _));
+    let reach_ptr = envelope.open_at().with_reach(|r| r as *const _);
     // Baselines taken with the envelope already built, so they include its own host clone.
     let here_count_before = Rc::strong_count(&here_frame);
     let foreign_count_before = Rc::strong_count(&foreign_frame);
@@ -418,7 +421,7 @@ fn pass_through_duplicate_keeps_reach_pointer_and_mints_nothing() {
     let copy_b = envelope.duplicate();
 
     for copy in [&copy_a, &copy_b] {
-        let copy_ptr = copy.open_at().with_reach(|r| r.map(|set| set as *const _));
+        let copy_ptr = copy.open_at().with_reach(|r| r as *const _);
         assert_eq!(
             copy_ptr, reach_ptr,
             "duplicating rides the same reach set by reference -- no re-mint"
@@ -547,22 +550,22 @@ fn mint_keeps_every_source_member_and_dedups_by_region() {
     // A source frame lands as a member — the region a bound closure / module borrows into. The
     // mint retains its own bundle in `dest`'s region, which pins the member across the `members()`
     // read.
-    let (kept, _) = dest
+    let kept = dest
         .brand()
         .handle()
         .mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
     assert!(
-        matches!(kept.unwrap().members().as_slice(), [only] if Rc::ptr_eq(only, &foreign)),
+        matches!(kept.members().as_slice(), [only] if Rc::ptr_eq(only, &foreign)),
         "a source frame must land in the minted set",
     );
 
     // Two sources naming the same foreign region collapse to one member.
-    let (deduped, _) = dest.brand().handle().mint_retained(&[
+    let deduped = dest.brand().handle().mint_retained(&[
         &FrameCoverage::of(Rc::clone(&foreign)),
         &FrameCoverage::of(Rc::clone(&foreign)),
     ]);
     assert_eq!(
-        deduped.unwrap().members().len(),
+        deduped.members().len(),
         1,
         "a duplicate member stays a singleton, not a double entry",
     );
@@ -584,16 +587,13 @@ fn region_union_foreign_pins_release_at_region_death() {
         let obj = scope.brand().alloc_object(KObject::Number(1.0));
         // The bind-door mint: derive the exact reach into `dest`'s arena and fold the owning bundle
         // into `dest`'s region union. `foreign` is not the dest, so the self rule keeps it.
-        let (reach, borrows_home) = scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
+        let reach = scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
         let bindings: Bindings = Bindings::new();
         bindings
             .write_value(
                 "x",
                 BindingIndex::BUILTIN,
-                scope.seal_resident(
-                    Carried::Object(obj),
-                    CarrierWitness::new(borrows_home, reach),
-                ),
+                scope.seal_reaching(Carried::Object(obj), reach),
                 &mut crate::machine::WriteGate::for_test(),
             )
             .expect("a fresh value bind lands");
@@ -661,14 +661,14 @@ fn reference_only_carrier_survives_producer_shell_drop_under_retention_hold() {
 
     // Born reference-only: the active frame is excluded at the alloc site.
     let carrier: StepCarried = frame.brand().alloc_object_witnessed(KObject::Number(7.0));
-    assert!(
-        carrier.reach_is_empty(),
-        "a region-pure carrier is born under the empty reach",
-    );
 
     // The finalize shape: seal as-is; the retention hold (the producer's storage Rc) rides the
     // delivery envelope, never the carrier.
     let envelope: DeliveredCarried = carrier.seal_for_test(frame.storage_rc());
+    assert!(
+        !envelope.open_at().has_reach_members(),
+        "a region-pure carrier is born under the empty reach",
+    );
 
     // Drop the producer shell outright — the envelope holds the *storage* Rc, not the shell,
     // so the region stays alive under the drop.
@@ -713,9 +713,10 @@ fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
             elements: vec![SignatureElement::Keyword("__INNER__".into())],
         },
         Body::Builtin(|ctx| {
-            Action::done_resident(Carried::Object(
-                ctx.scope.brand().alloc_object(KObject::Null),
-            ))
+            Action::done_resident(
+                ctx.scope,
+                Carried::Object(ctx.scope.brand().alloc_object(KObject::Null)),
+            )
         }),
         captured,
         false,
@@ -724,16 +725,14 @@ fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
 }
 
 /// A closure carrier in its delivery envelope — the value reference-only (region-pure in its home
-/// frame, so its carrier is empty) and the envelope's host the home frame's storage, the retention
-/// hold's stand-in. A closure can't be `yoke`d — yoke's `for<'b>` build closure can't capture the
-/// frame's existing scope, and minting a fresh one needs the frame's storage `Rc` a `for<'b>`
-/// forbids — so the erased pairing here mirrors production's resident seal.
+/// frame, so its description names that frame as host and no member at all) and the envelope's host
+/// the home frame's storage, the retention hold's stand-in. A closure can't be `yoke`d — yoke's
+/// `for<'b>` build closure can't capture the frame's existing scope, and minting a fresh one needs
+/// the frame's storage `Rc` a `for<'b>` forbids — so this takes production's resident-seal door.
 fn delivered_closure(home: &Rc<CallFrame>) -> DeliveredCarried {
     Delivered::seal(
-        Witnessed::from_erased(
-            Erased::erase(Carried::Object(alloc_home_closure(home))),
-            CarrierWitness::default(),
-        ),
+        home.brand()
+            .seal_resident(Carried::Object(alloc_home_closure(home))),
         home.storage_rc(),
         FrameCoverage::empty(),
     )
@@ -760,11 +759,8 @@ fn delivered_reread_closure<'run>(
     // The bind-time mint: `home` materializes into the reader's arena as the entry's reach, with
     // the owning bundle folded into the reader region's union. The read then lifts that entry —
     // upgrading the description's members `Weak → Rc` — into an envelope hosted by the reader.
-    let (reach, borrows_home) = reader_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(home))]);
-    let sealed = reader_scope.seal_resident(
-        Carried::Object(obj),
-        CarrierWitness::new(borrows_home, reach),
-    );
+    let reach = reader_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(home))]);
+    let sealed = reader_scope.seal_reaching(Carried::Object(obj), reach);
     reader_scope.lift_resident(sealed)
 }
 
@@ -1083,10 +1079,7 @@ fn object_field_reach_fold_survives_producer_frame_free() {
         other => panic!("expected a KFunction, got {}", other.ktype().name(&types)),
     };
     let dep: DeliveredCarried = Delivered::seal(
-        Witnessed::from_erased(
-            Erased::erase(Carried::Object(obj)),
-            CarrierWitness::default(),
-        ),
+        producer_frame.brand().seal_resident(Carried::Object(obj)),
         producer_frame.storage_rc(),
         FrameCoverage::empty(),
     );
@@ -1166,10 +1159,7 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
     };
     let dep: DeliveredCarried = Delivered::seal(
-        Witnessed::from_erased(
-            Erased::erase(Carried::Object(obj)),
-            CarrierWitness::default(),
-        ),
+        producer_frame.brand().seal_resident(Carried::Object(obj)),
         producer_frame.storage_rc(),
         FrameCoverage::empty(),
     );
@@ -1240,10 +1230,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
     };
     let envelope: DeliveredCarried = Delivered::seal(
-        Witnessed::from_erased(
-            Erased::erase(Carried::Object(obj)),
-            CarrierWitness::default(),
-        ),
+        producer_frame.brand().seal_resident(Carried::Object(obj)),
         producer_frame.storage_rc(),
         FrameCoverage::empty(),
     );
@@ -1254,7 +1241,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     // Re-stamp in place: re-tag the top node to `declared`, re-anchored into the producer's own
     // region through the folded placement — the substrate rides shared (`deep_clone` pointer-copies
     // it, `stamp_type` swaps only the handle).
-    let restamped: Witnessed<CarriedFamily, CarrierWitness> = envelope
+    let restamped: DeliveredCarried = envelope
         .restamp_in_place::<CarriedFamily, KoanStorageProfile>(
             &producer_frame.storage_rc(),
             |value, _handle, placement| {
@@ -1271,16 +1258,18 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     // retained owned bundle empty, so the region holds no strong pin on its own owner. The drop
     // below (and Miri's leak check) is what proves it.
     assert!(
-        restamped.witness().has_reach_members(),
+        restamped.open_at().has_reach_members(),
         "membership is exact: the restamped value's own home is an ordinary member"
     );
 
-    // The producer storage is the sole pin: the re-stamped value lives in its own region.
+    // The producer storage is the sole pin: the re-stamped value lives in its own region, so the
+    // product envelope's own pins are dropped here and the seal read below names that storage.
+    let restamped: Sealed<CarriedFamily, CarrierWitness> = restamped.into_cell();
     let producer_storage = producer_frame.storage_rc();
     drop(envelope);
     drop(producer_frame);
 
-    let read_addr = restamped.with_pinned(&producer_storage, |c| match c.object() {
+    let read_addr = restamped.open_with(&producer_storage, |c| match c.object() {
         KObject::Record(substrate, record_type) => {
             assert_eq!(*record_type, declared, "re-stamped to the declared type");
             *substrate as *const RecordSubstrate<'_> as usize
@@ -1309,11 +1298,10 @@ fn mint_composes_exact_members() {
     let b = run_root_storage();
     let c = run_root_storage();
 
-    let (minted, _) = c.brand().handle().mint_retained(&[
+    let minted = c.brand().handle().mint_retained(&[
         &FrameCoverage::of(Rc::clone(&a)),
         &FrameCoverage::of(Rc::clone(&b)),
     ]);
-    let minted = minted.unwrap();
 
     assert_eq!(minted.members().len(), 2, "exact members — no coarsening");
     assert!(minted
@@ -1334,18 +1322,15 @@ fn mint_self_rule_strips_dest_from_the_bundle_only() {
     let c = run_root_storage();
     let count_before = Rc::strong_count(&c);
 
-    let (minted, _) = c
+    let minted = c
         .brand()
         .handle()
         .mint_retained(&[&FrameCoverage::of(Rc::clone(&c))]);
 
     assert_eq!(
-        minted
-            .expect("dest's own region is an exact member of the stored description")
-            .members()
-            .len(),
+        minted.members().len(),
         1,
-        "membership stays exact — home is an ordinary member"
+        "dest's own region stays an exact member — home is an ordinary member"
     );
     // The owned bundle is retained into `c`'s own region, so a surviving self member would show up
     // as a strong ref `c` holds on itself — the cycle the self rule forbids.
@@ -1364,11 +1349,10 @@ fn mint_materializes_foreign_host() {
     let a = run_root_storage();
     let c = run_root_storage();
 
-    let (minted_into_c, _) = c
+    let minted_into_c = c
         .brand()
         .handle()
         .mint_retained(&[&FrameCoverage::of(Rc::clone(&a))]);
-    let minted_into_c = minted_into_c.unwrap();
     assert_eq!(minted_into_c.members().len(), 1, "A is foreign to C");
     assert!(std::ptr::eq(
         minted_into_c.members()[0].region(),
@@ -1376,16 +1360,14 @@ fn mint_materializes_foreign_host() {
     ));
 
     let a_count_before = Rc::strong_count(&a);
-    let (minted_into_a, _) = a
+    let minted_into_a = a
         .brand()
         .handle()
         .mint_retained(&[&FrameCoverage::of(Rc::clone(&a))]);
     assert_eq!(
-        minted_into_a
-            .expect("A stays an exact member of the description minted into A")
-            .members()
-            .len(),
-        1
+        minted_into_a.members().len(),
+        1,
+        "A stays an exact member of the description minted into A"
     );
     assert_eq!(
         Rc::strong_count(&a),
@@ -1403,11 +1385,10 @@ fn mint_subsumes_ancestor() {
     let b = child_storage(&a);
     let c = run_root_storage();
 
-    let (minted, _) = c.brand().handle().mint_retained(&[
+    let minted = c.brand().handle().mint_retained(&[
         &FrameCoverage::of(Rc::clone(&a)),
         &FrameCoverage::of(Rc::clone(&b)),
     ]);
-    let minted = minted.unwrap();
 
     let members = minted.members();
     let [sole] = members.as_slice() else {
@@ -1423,11 +1404,10 @@ fn mint_reads_back_under_pin() {
     let a = run_root_storage();
     let c = run_root_storage();
 
-    let (minted, _) = c
+    let minted = c
         .brand()
         .handle()
         .mint_retained(&[&FrameCoverage::of(Rc::clone(&a))]);
-    let minted = minted.unwrap();
 
     let regions: Vec<*const KoanRegion> = minted
         .members()
@@ -1446,7 +1426,7 @@ fn mint_leaves_arena_pages_untouched() {
     let c = run_root_storage();
 
     let before = c.region().alloc_count();
-    let (_minted, _) = c
+    let _minted = c
         .brand()
         .handle()
         .mint_retained(&[&FrameCoverage::of(Rc::clone(&a))]);
@@ -1476,11 +1456,11 @@ fn mint_teardown_releases_members() {
         // The mint retains its own bundle in `c`'s region for that region's whole life — the
         // liveness home a resident value's reach rides while the side-table description only names
         // the members.
-        let (minted, _) = c.brand().handle().mint_retained(&[
+        let minted = c.brand().handle().mint_retained(&[
             &FrameCoverage::of(Rc::clone(&a)),
             &FrameCoverage::of(Rc::clone(&b)),
         ]);
-        assert_eq!(minted.unwrap().members().len(), 2);
+        assert_eq!(minted.members().len(), 2);
     }
     assert_eq!(
         Rc::strong_count(&a),
@@ -1608,14 +1588,12 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
     // Covered: evidence names `producer`'s region — the nested record's home. Minting `producer`
     // (foreign to the consumer) into the consumer region yields a hosted description naming it;
     // `_covering_pins` keeps the member pinned across the `store_value_reaching_for_test` read below.
-    let (covering, _) = consumer_storage
+    let covering = consumer_storage
         .brand()
         .handle()
         .mint_retained(&[&FrameCoverage::of(Rc::clone(&producer))]);
-    let covering = covering.expect("producer is foreign to the consumer region");
-    let covering_evidence = (Some(covering), false);
     let moved = consumer_scope
-        .store_value_reaching_for_test(list_obj.deep_clone(), covering_evidence, &types)
+        .store_value_reaching_for_test(list_obj.deep_clone(), covering, &types)
         .expect("evidence naming the record's home region covers it via owns_substrate membership");
     match moved {
         KObject::List(items, _) => match items.elements()[0].object() {
@@ -1636,9 +1614,9 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
     }
 
     // Uncovered: no evidence names the record's home region, and it is foreign to `consumer`'s
-    // own region too — the audit must reject rather than silently accept. An empty reach is the
-    // `None` foreign case (a region-pure evidence naming nothing).
-    let no_evidence = (None, false);
+    // own region too — the audit must reject rather than silently accept. A description minted with
+    // no sources is the region-pure evidence: hosted in the consumer's region, naming nothing.
+    let no_evidence = consumer_storage.brand().handle().mint_retained(&[]);
     let rejected =
         consumer_scope.store_value_reaching_for_test(list_obj.deep_clone(), no_evidence, &types);
     assert!(

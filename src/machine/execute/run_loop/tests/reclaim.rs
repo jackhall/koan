@@ -1,6 +1,6 @@
 //! `free` / node-reclamation invariants.
 
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{resident_carrier, TestRun};
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::KExpression;
 use crate::machine::model::{Carried, KObject};
@@ -24,9 +24,9 @@ fn free_reclaims_owned_subtree() {
     for id in [s0, s1, s2, s3] {
         store.clear_node(id);
     }
-    store.set_result(s1, Ok(Carried::Object(value)));
-    store.set_result(s2, Ok(Carried::Object(value)));
-    store.set_result(s3, Ok(Carried::Object(value)));
+    store.set_result(s1, Ok(Carried::Object(value)), resident_carrier(root));
+    store.set_result(s2, Ok(Carried::Object(value)), resident_carrier(root));
+    store.set_result(s3, Ok(Carried::Object(value)), resident_carrier(root));
     store.set_dep_edges(s0.index(), vec![DepEdge::Owned(s1)]);
     store.set_dep_edges(s1.index(), vec![DepEdge::Owned(s2)]);
     store.set_dep_edges(s2.index(), vec![DepEdge::Owned(s3)]);
@@ -83,7 +83,7 @@ fn free_skips_live_slot_and_is_idempotent() {
     let value: &KObject = region.brand().alloc_object(KObject::Number(1.0));
     runtime
         .scheduler_mut()
-        .set_result(s, Ok(Carried::Object(value)));
+        .set_result(s, Ok(Carried::Object(value)), resident_carrier(root));
     runtime.free(s.index());
     assert_eq!(runtime.scheduler().free_list_snapshot(), vec![s]);
     runtime.free(s.index());
@@ -112,9 +112,13 @@ fn free_does_not_recurse_through_notify_edges() {
     for id in [s_owner, s_owned, s_sibling] {
         store.clear_node(id);
     }
-    store.set_result(s_owner, Ok(Carried::Object(value)));
-    store.set_result(s_owned, Ok(Carried::Object(value)));
-    store.set_result(s_sibling, Ok(Carried::Object(value)));
+    store.set_result(s_owner, Ok(Carried::Object(value)), resident_carrier(root));
+    store.set_result(s_owned, Ok(Carried::Object(value)), resident_carrier(root));
+    store.set_result(
+        s_sibling,
+        Ok(Carried::Object(value)),
+        resident_carrier(root),
+    );
     // Sibling self-loop is synthetic: a real scheduler never installs one, but it
     // gives the bug-shape something to walk into so we can assert the walk stopped.
     store.set_dep_edges(

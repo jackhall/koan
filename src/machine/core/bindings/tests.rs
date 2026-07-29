@@ -4,7 +4,7 @@
 use super::*;
 use crate::machine::core::arena::RegionBrand;
 use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
-use crate::machine::core::{CarrierWitness, FrameCoverage, FrameReach, FrameStorage};
+use crate::machine::core::{FrameCoverage, FrameReach, FrameStorage};
 use crate::machine::model::values::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
@@ -22,12 +22,8 @@ fn sealed_reaching<'a>(
     // `region`; these tests assert on the description the seal carries, and `foreign` outlives them
     // on the stack.
     let foreign_bundle = FrameCoverage::of(Rc::clone(foreign));
-    let (minted, _) = region.handle().mint_retained(&[&foreign_bundle]);
-    let reach_set = minted.expect("a foreign member mints a single-member reach");
-    let sealed = Sealed::seal(region.seal_resident(
-        Carried::Object(obj),
-        CarrierWitness::new(false, Some(reach_set)),
-    ));
+    let reach_set = region.handle().mint_retained(&[&foreign_bundle]);
+    let sealed = Sealed::seal(region.seal_reaching(Carried::Object(obj), reach_set));
     (sealed, reach_set)
 }
 
@@ -35,7 +31,7 @@ fn sealed_reaching<'a>(
 /// under a pin, so the caller's own hold on the hosting frame opens the seal.
 fn sole_reach_member(sealed: &SealedValue, pin: &Rc<FrameStorage>) -> Rc<FrameStorage> {
     sealed.open_at(pin).with_reach(|reach| {
-        let members = reach.expect("non-empty reach").members();
+        let members = reach.members();
         match members.as_slice() {
             [only] => Rc::clone(only),
             _ => panic!("expected a single-member reach"),
@@ -93,9 +89,7 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
         .expect("value bind should succeed");
 
     let read = |label: &str| match bindings.lookup_value("x", None) {
-        Some(NameLookup::Bound(hit)) => hit
-            .open_at(&storage)
-            .with_reach(|reach| reach.expect("non-empty reach") as *const _),
+        Some(NameLookup::Bound(hit)) => hit.open_at(&storage).with_reach(|reach| reach as *const _),
         _ => panic!("expected a bound value hit for {label}"),
     };
     let (first, second) = (read("first"), read("second"));
@@ -324,7 +318,7 @@ fn type_token_may_not_bind_value_side() {
     let error = match bindings.write_value(
         "IntOrd",
         BindingIndex::BUILTIN,
-        Sealed::seal(region.seal_resident(Carried::Object(val), CarrierWitness::new(false, None))),
+        Sealed::seal(region.seal_resident(Carried::Object(val))),
         &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,

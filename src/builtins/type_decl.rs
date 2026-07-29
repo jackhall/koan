@@ -28,7 +28,6 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
-use crate::machine::CarrierWitness;
 
 fn not_in_sig_body() -> KError {
     KError::new(KErrorKind::ShapeError(
@@ -47,9 +46,7 @@ fn bind_abstract_member<'a>(
     kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    let carrier = ctx
-        .scope
-        .resident(Carried::Type(kt), CarrierWitness::default());
+    let carrier = ctx.scope.resident(Carried::Type(kt));
     Action::done(Ok(StepCarried::born(carrier))).with_effect(
         crate::machine::core::bindings::WriteOp::Type {
             name,

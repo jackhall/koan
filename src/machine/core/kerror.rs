@@ -1,5 +1,4 @@
 use std::fmt;
-use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::KExpression;
@@ -10,10 +9,8 @@ use crate::machine::model::{
 use crate::source::{self, FileId, SourceLoc, Span};
 use crate::witnessed::RegionHandleFamily;
 
-use super::{
-    force_substrate_borrows_host, DeliveredCarried, FoldingBrand, KoanRegion, KoanRegionExt,
-};
 use super::{scope_frame, KoanStorageProfile, Scope};
+use super::{DeliveredCarried, FoldingBrand};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -220,33 +217,32 @@ impl KError {
 
     /// [`Self::to_tagged`] built directly resident in `scope`'s own region and sealed as a
     /// delivered carrier — the shape a caller with no fold already in hand needs: the payload's
-    /// `Record` substrate can only be born through a fold door, so this mints a zero-dep one over
-    /// `scope`'s frame (a `yoke_branded` accumulator handed to `map_pinned_placing`, mirroring
-    /// `dispatch::literal`'s aggregate builders) rather than routing the record through the
-    /// checked/audited move-in tier `alloc_object_checked` would need. Forces the step-terminal
-    /// seal's variant bit (the payload is always a `Wrapped` over a fresh `Record`), so a consumer
-    /// adopting this envelope under `Residence::Copied` correctly retains `scope`'s frame.
+    /// `Record` substrate can only be born through a fold door, so this drives a zero-dep one over
+    /// `scope`'s frame rather than routing the record through the checked/audited move-in tier
+    /// `alloc_object_checked` would need. The seed operand is a bare handle into that same region,
+    /// so [`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place) builds the
+    /// value where it already belongs and mints its description there: the region is the value's
+    /// host *and* one of its members, since the freshly born substrate borrows into it. A consumer
+    /// adopting this envelope under a copying seam therefore correctly retains `scope`'s frame.
     pub fn to_tagged_delivered<'a>(
         &self,
         scope: &'a Scope<'a>,
         types: &TypeRegistry,
     ) -> DeliveredCarried {
         let frame = scope_frame(scope);
-        let acc = KoanRegion::yoke_branded::<RegionHandleFamily<KoanStorageProfile>, _>(
-            Rc::clone(&frame),
-            |region| region.handle(),
+        // The seed is a bare region handle living in this scope's own region — it borrows nothing,
+        // so it seals resident under an empty foreign bundle.
+        let seed = scope.seal_resident_delivered(
+            scope.resident::<RegionHandleFamily<KoanStorageProfile>>(scope.brand().handle()),
+            crate::machine::core::FrameCoverage::empty(),
         );
-        let witnessed = acc.map_pinned_placing::<CarriedFamily, KoanStorageProfile, _>(
+        seed.restamp_in_place::<CarriedFamily, KoanStorageProfile>(
             &frame,
-            |_handle, placement| {
+            |_handle, _dest, placement| {
                 let door = FoldingBrand::in_fold_closure(placement);
                 Carried::Object(door.alloc_object_folded(self.to_tagged(door, types)))
             },
-        );
-        let witnessed = force_substrate_borrows_host(witnessed, &frame);
-        // The tagged error object is built fresh in this scope's region (region-pure foreign reach),
-        // so it seals under an empty foreign bundle.
-        scope.seal_resident_delivered(witnessed, crate::machine::core::FrameCoverage::empty())
+        )
     }
 }
 

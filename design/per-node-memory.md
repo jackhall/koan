@@ -126,8 +126,9 @@ co-located with the region-resident type the slot write
 self-sig (`KType::Signature { sig: SelfOf(m), .. }`) too — its `SelfOf` names the module
 structurally, not by region pointer. Every multi-dep constructed *object* is born
 co-located by the `yoke` brand. The region-pure
-carrier is built by the purpose-built [`Witnessed::resident`](../workgraph/src/witnessed.rs), which fixes the
-witness to `W::default()` — the empty, pins-nothing set — so it cannot pair a value with a *wrong*
+carrier is built by the purpose-built [`Witnessed::resident_in`](../workgraph/src/witnessed/carrier.rs), which
+mints a description hosted in the named home region with **no members** — the value records where it
+lives even though its borrows reach nothing — so it cannot pair a value with a *wrong*
 witness, only with the empty reach a region-pure value genuinely has; that emptiness is sound as a
 within-step transient, the producing frame folded in at close ([`reseal_under`](../workgraph/src/witnessed.rs))
 before the carrier is stored. That transient is **typed**, not merely disciplined: the step doors return

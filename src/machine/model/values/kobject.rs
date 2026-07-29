@@ -558,11 +558,9 @@ impl<'a> KObject<'a> {
     /// Whether `self` is a substrate carrier — a `Record`, `List`, `Dict`, `Tagged`, or `Wrapped`,
     /// each of which directly borrows a region-resident substrate. Purely structural — unlike
     /// [`Self::resident_in_visiting`], no residence is checked here. A substrate is always a genuine
-    /// region borrow into its own home (Ruling 5, design/value-substrates.md), which the fold engines
-    /// that build a fresh carrier around one cannot see (composing a witness only ever consults the
-    /// fold's *other* operands, never the value its own closure just built) — so a step-terminal seal
-    /// uses this predicate to force the carrier's `borrows_host` bit conservatively true rather than
-    /// under-reporting it.
+    /// region borrow into its own home (Ruling 5, design/value-substrates.md), which is what makes
+    /// this the shape question the adoption rules turn on: a substrate carrier cannot cross a
+    /// checked move-in by a pointer copy, so a copying seam rebuilds it through the fold door.
     pub(crate) fn embeds_substrate(&self) -> bool {
         matches!(
             self,

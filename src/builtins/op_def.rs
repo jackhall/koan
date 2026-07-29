@@ -491,8 +491,8 @@ pub(super) fn register_unary_operator<'a>(
 /// types reach the module's body. Ordinary user `FN`s keep the guard.
 ///
 /// The `KFunction` is allocated into `scope`'s own region, so the checked seal always passes and the
-/// paired token carries the home-borrow bit the audit walk derives (the captured `&Scope` into
-/// home). Bare-`FN` style: the overload lands in `functions` only, never in `data`.
+/// paired description names that region as a member, the audit walk having seen the callable's
+/// captured `&Scope` borrow into it. Bare-`FN` style: the overload lands in `functions` only, never in `data`.
 fn register_body<'a>(
     scope: &'a Scope<'a>,
     sym: &str,

@@ -8,17 +8,17 @@
 use super::*;
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{
-    force_substrate_borrows_host, run_root_storage, FoldingBrand, FrameCoverage, KoanRegion,
-    KoanRegionExt, KoanStorageProfile,
+    run_root_storage, FoldingBrand, FrameCoverage, KoanRegion, KoanRegionExt, KoanStorageProfile,
 };
+use crate::machine::execute::run_loop::{dest_brand, DestHandleFamily};
+use crate::machine::model::CarriedFamily;
 use crate::machine::model::Held;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
-use crate::machine::CarrierWitness;
-use crate::witnessed::{reattachable, Delivered, Erased, FoldedPlacement, RegionHandle, Witnessed};
+use crate::witnessed::{reattachable, Delivered, FoldedPlacement, RegionHandle};
 use std::rc::Rc;
 
 /// A `KFunction` allocated into `home`'s region (its captured scope lives there), for the
@@ -38,9 +38,10 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
                 elements: vec![SignatureElement::Keyword("__INNER__".into())],
             },
             Body::Builtin(|ctx| {
-                crate::machine::core::Action::done_resident(Carried::Object(
-                    ctx.scope.brand().alloc_object(KObject::Null),
-                ))
+                crate::machine::core::Action::done_resident(
+                    ctx.scope,
+                    Carried::Object(ctx.scope.brand().alloc_object(KObject::Null)),
+                )
             }),
             child,
             false,
@@ -420,6 +421,56 @@ fn type_recursive_member_relocates_and_navigates() {
 struct RecordAggFamily;
 reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
 
+/// The birth mint at a fold door: a record literal assembled by `merge_into_placing` into the
+/// destination brand — `schedule_record_literal`'s terminal step verbatim — references a
+/// description whose members name the very region it was built in. The substrate is region-resident,
+/// so the fresh value genuinely borrows into its birth region, and the mint at the door records that
+/// as ordinary membership. The question is asked of the opened carrier and answered off the
+/// description; there is no bit to consult, and nothing rebuilds the witness after the fold.
+#[test]
+fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+    let dest_storage = dest_frame.storage_rc();
+
+    // `fold_cells`'s seed: a bare handle on the destination region plus an empty cell vector, homed
+    // in the destination frame. A handle and an empty `Vec` reach nothing, so the seed's own
+    // coverage is empty — every member the product ends up with comes from the birth mint.
+    let acc = Delivered::seal(
+        KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+            (region.handle(), Vec::new())
+        }),
+        Rc::clone(&dest_storage),
+        FrameCoverage::empty(),
+    );
+
+    let born: DeliveredCarried = acc
+        .merge_into_placing::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
+            dest_brand(Rc::clone(&dest_storage)),
+            move |(_region, _cells), _dest_handle, placement| {
+                let door = FoldingBrand::in_fold_closure(placement);
+                let fields =
+                    Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
+                Carried::Object(
+                    door.alloc_object_folded(KObject::record_of_held(door, fields, &types)),
+                )
+            },
+        );
+
+    let opened = born.open_at();
+    assert!(
+        opened.reach_covers(dest_frame.region()),
+        "the substrate was built in this region, so the birth mint names it as an ordinary member"
+    );
+    assert!(
+        opened.borrows_home(),
+        "and that region is the value's own residence — membership and host agree, from one record"
+    );
+}
+
 /// Accumulator twin for the value-level-seam pin mirror below: the destination region plus the
 /// relocated `Carried` cells [`copy_carried`] produces (the value-level relocate that honors the
 /// [`RegionEscape`], unlike the container-cell [`copy_held_from_carried`] which always rebuilds). Used
@@ -482,16 +533,14 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
         let obj: &KObject<'_> =
             door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
         // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
-        // conservatively forces `borrows_host = true` at construction, regardless of its own
+        // conservatively claims its own home as a member at construction, regardless of its own
         // contents — the retention predicate's walk over the rebuilt cell is what actually
-        // decides release vs. retain below; the seal bit only matters if the source is retained.
-        let sealed = force_substrate_borrows_host(
-            Witnessed::from_erased(
-                Erased::erase(Carried::Object(obj)),
-                CarrierWitness::default(),
-            ),
-            &producer.storage_rc(),
-        );
+        // decides release vs. retain below; the claim only matters if the source is retained.
+        let sealed = producer.with_scope(|child| {
+            child
+                .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
+                .unseal()
+        });
         let dep: DeliveredCarried =
             Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
         producers.push(producer);
@@ -582,17 +631,14 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
             }
             other => panic!("expected a Record, got {}", other.ktype().name(&types)),
         });
-        // The seal chokepoint (Ruling 5): every record's carrier conservatively forces
-        // `borrows_host = true` at construction; the retention predicate below independently
-        // walks the rebuilt cell and finds the closure leaf, so the producer is retained either
-        // way.
-        let sealed = force_substrate_borrows_host(
-            Witnessed::from_erased(
-                Erased::erase(Carried::Object(obj)),
-                CarrierWitness::default(),
-            ),
-            &producer.storage_rc(),
-        );
+        // The seal chokepoint (Ruling 5): every record's carrier conservatively claims its own home
+        // as a member at construction; the retention predicate below independently walks the
+        // rebuilt cell and finds the closure leaf, so the producer is retained either way.
+        let sealed = producer.with_scope(|child| {
+            child
+                .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
+                .unseal()
+        });
         let dep: DeliveredCarried =
             Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
         producers.push(producer);
@@ -687,10 +733,13 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
             }
             other => panic!("expected a Record, got {}", other.ktype().name(&types)),
         });
-        let sealed = Witnessed::from_erased(
-            Erased::erase(Carried::Object(obj)),
-            CarrierWitness::default(),
-        );
+        // Born in the producer's own region with a home-borrowing closure leaf, so home is an
+        // ordinary member of the description the birth mint stamps.
+        let sealed = producer.with_scope(|child| {
+            child
+                .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
+                .unseal()
+        });
         let dep: DeliveredCarried =
             Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
         let verb = seam_verb(&dep);

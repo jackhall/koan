@@ -20,7 +20,6 @@ use crate::machine::{
 use super::super::runtime::KoanWorkload;
 use super::{producer_standing, ProducerStanding};
 use crate::machine::model::Carried;
-use crate::machine::CarrierWitness;
 use crate::scheduler::Scheduler;
 
 /// Type-channel resolution with the first-producer fold applied once. Folds
@@ -88,7 +87,7 @@ pub(in crate::machine::execute) fn resolve_bare_carrier(
             // A `KType` is a `Copy` registry handle — no foreign reach — so the resident type
             // carrier seals under an empty foreign bundle.
             TypeChannel::Done(kt) => Ok(BareCarrier::Sealed(scope.seal_resident_delivered(
-                scope.resident(Carried::Type(kt), CarrierWitness::default()),
+                scope.resident(Carried::Type(kt)),
                 crate::machine::core::FrameCoverage::empty(),
             ))),
             TypeChannel::Parked(producer) => screen(scheduler, producer, t.render()),
@@ -147,7 +146,7 @@ pub(in crate::machine::execute) fn resolve_name_part(
             // A `KType` is a `Copy` registry handle with no reach, so the admission cache carries
             // it in the same envelope currency under an empty foreign bundle.
             TypeChannel::Done(kt) => Ok(NameOutcome::Resolved(scope.seal_resident_delivered(
-                scope.resident(Carried::Type(kt), CarrierWitness::default()),
+                scope.resident(Carried::Type(kt)),
                 crate::machine::core::FrameCoverage::empty(),
             ))),
             TypeChannel::Unbound(n) => Ok(NameOutcome::Unbound(n)),

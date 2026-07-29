@@ -226,9 +226,9 @@ impl<'b> FoldToken<'b> {
 /// ```compile_fail
 /// use std::rc::Rc;
 /// use workgraph::witnessed::FoldedPlacement;
-/// use workgraph::witnessed::doctest_fixture::{fresh_region, FixtureProfile, RegionCart};
+/// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
 /// use workgraph::witnessed::RegionHandle;
-/// let cart = Rc::new(RegionCart(fresh_region()));
+/// let cart = fresh_cart();
 /// let handle = RegionHandle::from_owner(&*cart);
 /// // The field is private outside the crate — a placement cannot be forged by construction.
 /// let _p: FoldedPlacement<'_, FixtureProfile> = FoldedPlacement { handle };
@@ -237,9 +237,9 @@ impl<'b> FoldToken<'b> {
 /// ```compile_fail
 /// use std::rc::Rc;
 /// use workgraph::witnessed::FoldedPlacement;
-/// use workgraph::witnessed::doctest_fixture::{fresh_region, FixtureProfile, RegionCart};
+/// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
 /// use workgraph::witnessed::RegionHandle;
-/// let cart = Rc::new(RegionCart(fresh_region()));
+/// let cart = fresh_cart();
 /// let handle = RegionHandle::from_owner(&*cart);
 /// // `mint` is crate-internal — only the fold engines mint a placement.
 /// let _p = FoldedPlacement::mint(handle);
@@ -447,7 +447,7 @@ unsafe impl<F: RegionOwner> WitnessRegion for Rc<F> {
 ///
 /// Deliberately **not** `: Witness` — a reference-only witness composes too. [`PinBundle`] (a
 /// pinning witness) composes by plain union, ignoring `dest`; [`Carrier`] (reference-only) composes
-/// by minting both operands' reach into `dest`'s own arena and deriving the borrows-into-dest bit.
+/// by minting both operands' reach into `dest`'s own arena, which is also the product's residence.
 /// The carrier owns no pin, so the *owned* bundles the mint folds are threaded in by the holder
 /// that does — the envelope-bearing
 /// [`Delivered::transfer_into`](delivered::Delivered::transfer_into), or a resident merge's entry
@@ -492,8 +492,9 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// value and witness arrive independently, so this is the crate-private substrate primitive, never
     /// a production construction path. Every production carrier is born co-located instead — via
     /// [`yoke`](Self::yoke) (sourced from the witness's region), [`resident`](Self::resident) (a
-    /// region-pure value under the empty witness), or [`merge_pinned`](Self::merge_pinned) (folding
-    /// two co-located carriers) — so no site pairs an arbitrary value with an arbitrary witness.
+    /// region-pure value under the empty witness) or its reference-only twin
+    /// [`resident_in`](Witnessed::resident_in), or [`merge_pinned`](Self::merge_pinned) (folding two
+    /// co-located carriers) — so no site pairs an arbitrary value with an arbitrary witness.
     pub fn from_erased(value: Erased<T>, witness: W) -> Self {
         Witnessed { value, witness }
     }
@@ -504,6 +505,11 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// **cannot** pair a value with a *wrong* non-empty witness; the only obligation it carries is that
     /// `value`'s foreign reach is genuinely empty. It is what lets the brand-confined region allocator
     /// return a witnessed carrier without an open-ended co-location assertion.
+    ///
+    /// A reference-only [`Carrier`] has no default — a carrier names the region its value lives in,
+    /// and no default can name one — so it takes the sibling
+    /// [`resident_in`](Witnessed::resident_in), which mints the empty-member description under the
+    /// home owner it is handed.
     ///
     /// Because the default witness pins nothing, the carrier depends on an **external pin** for every
     /// read: the active frame pins its region during the producing step, and once stored on a node the
@@ -974,16 +980,27 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
 }
 
 impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Rc<F>> {
-    /// Forget the bundled frame pin, re-bundling under the empty reference-only [`Carrier`] — the
-    /// lift a freshly-[`yoke`](Self::yoke)d region-pure construction takes into the carrier world.
-    /// The yoke brand already proved the value is derived from the frame's own region, so the
-    /// carrier's empty reach is exact; what this drops is the *pin*, whose job moves to the
-    /// caller's ambient liveness — the active frame during the step, the scheduler's retention
-    /// hold once the value finalizes onto a node. Safe: the value stays erased throughout (no
-    /// reattach); every later read names its coverage explicitly ([`Sealed::open_with`], the
+    /// Forget the bundled frame pin, re-bundling under a reference-only [`Carrier`] hosted in that
+    /// frame's own region — the lift a freshly-[`yoke`](Self::yoke)d region-pure construction takes
+    /// into the carrier world. The yoke brand already proved the value is derived from the frame's
+    /// own region, so the minted description's empty members are exact and its host is where the
+    /// value genuinely lives; the mint composes no source, so the bundle it yields is empty and
+    /// nothing needs retaining. What this drops is the *pin*, whose job moves to the caller's
+    /// ambient liveness — the active frame during the step, the scheduler's retention hold once the
+    /// value finalizes onto a node. Safe: the value stays erased throughout (no reattach); every
+    /// later read names its coverage explicitly ([`Sealed::open_with`], the
     /// [`Delivered`](delivered::Delivered) envelope).
-    pub fn into_reference_only(self) -> Witnessed<T, Carrier<F>> {
-        self.rewitness(Carrier::default())
+    pub fn into_reference_only<P>(self) -> Witnessed<T, Carrier<F>>
+    where
+        P: StorageProfile<FrameOwner = F> + 'static,
+        F: RegionOwner<Region = Region<P>>,
+    {
+        let carrier = {
+            let (reach, _empty) =
+                ReachDescription::mint(RegionHandle::from_owner(&*self.witness), &[]);
+            Carrier::new(reach)
+        };
+        self.rewitness(carrier)
     }
 }
 

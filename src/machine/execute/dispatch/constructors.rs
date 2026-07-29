@@ -18,8 +18,8 @@ use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{
-    force_substrate_borrows_host, CarrierWitness, DeliveredCarried, FrameCoverage, KError,
-    KErrorKind, KoanRegion, RegionTypeFamily,
+    CarrierWitness, DeliveredCarried, FrameCoverage, KError, KErrorKind, KoanRegion,
+    RegionTypeFamily,
 };
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Delivered, RegionHandle};
@@ -333,12 +333,12 @@ pub(crate) fn build_type_operand(
 }
 
 /// Seal a declaration's nominal identity as a `Carried::Type` terminal. A `KType` is a `Copy`
-/// handle, so the identity reaches no region and the carrier seals under the empty witness — the
-/// read travels under the home-frame pin alone. The type channel mints no reach;
+/// handle, so the identity reaches no region and the carrier seals under a member-less description
+/// hosted in `scope`'s own region — the read travels under the home-frame pin alone. The type channel mints no reach;
 /// [`finish_witnessed`]'s construction fold is the value-side counterpart, where the wrapped object
 /// genuinely reaches its deps' regions.
 pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: KType) -> StepCarried<'a> {
-    StepCarried::born(scope.resident(Carried::Type(identity), CarrierWitness::default()))
+    StepCarried::born(scope.resident(Carried::Type(identity)))
 }
 
 /// All value subs have resolved. Build the wrapped value **inside the witness closure**, folding the
@@ -445,16 +445,10 @@ fn finish_witnessed<'step>(
                         )))
                     },
                 );
-            // Step-terminal seal: the fresh record's substrate always borrows into this same
-            // `dest_frame` — force the bit rather than trust the merge's operand-only compose. The
-            // re-seal is at the product's own residence under its own foreign coverage, so nothing
-            // about what it reaches changes.
-            let foreign = product.coverage_releasing_home();
-            Ok(Delivered::seal(
-                force_substrate_borrows_host(product.into_cell().unseal(), &dest_frame),
-                dest_frame,
-                foreign,
-            ))
+            // The merge minted the product's description into `dest_frame`'s own region, so that
+            // region is the product's host and rides its members: the fresh record's substrate
+            // borrows into the very region it was built in, and the accumulator's pins named it.
+            Ok(product)
         }
         CtorKind::Tagged {
             schema,

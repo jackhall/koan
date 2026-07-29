@@ -23,7 +23,6 @@ use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
 use super::{arg, kw, sig};
-use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
@@ -213,9 +212,7 @@ fn access_type_member<'a>(
                 .or_else(|| schema.abstract_members.get(field))
                 .or_else(|| schema.value_slots.get(field));
             match member {
-                Some(member) => Ok(StepCarried::born(
-                    scope.resident(Carried::Type(*member), CarrierWitness::default()),
-                )),
+                Some(member) => Ok(StepCarried::born(scope.resident(Carried::Type(*member)))),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     kt.name(types),
@@ -359,10 +356,8 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
         // `:|`-minted abstract type.
         return Ok(StepCarried::born(
             match module_scope.bindings().lookup_type(field, None) {
-                Some(NameLookup::Bound(kt)) => {
-                    module_scope.resident(Carried::Type(kt), CarrierWitness::default())
-                }
-                _ => module_scope.resident(Carried::Type(minted), CarrierWitness::default()),
+                Some(NameLookup::Bound(kt)) => module_scope.resident(Carried::Type(kt)),
+                _ => module_scope.resident(Carried::Type(minted)),
             },
         ));
     }
@@ -382,7 +377,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 // carriers union into the wrapped result's witness via `alloc_carried_with`.
                 let obj_carrier = module_scope.lift_resident(sealed);
                 let tag_carrier = module_scope.seal_resident_delivered(
-                    module_scope.resident(Carried::Type(tag), CarrierWitness::default()),
+                    module_scope.resident(Carried::Type(tag)),
                     crate::machine::core::FrameCoverage::empty(),
                 );
                 let ctx = StepAllocator::for_scope(module_scope);
@@ -401,9 +396,9 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
             let (carrier, pins) = module_scope.lift_resident_parts(sealed);
             Ok(StepCarried::born_pinned(carrier, pins))
         }
-        Some(MemberResolution::Type { kt }) => Ok(StepCarried::born(
-            module_scope.resident(Carried::Type(kt), CarrierWitness::default()),
-        )),
+        Some(MemberResolution::Type { kt }) => {
+            Ok(StepCarried::born(module_scope.resident(Carried::Type(kt))))
+        }
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field

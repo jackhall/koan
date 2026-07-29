@@ -22,8 +22,6 @@ use crate::machine::{
 };
 use crate::scheduler::DepResults;
 use crate::scheduler::Deps;
-#[cfg(test)]
-use crate::witnessed::Witnessed;
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -479,12 +477,12 @@ pub enum ActionKind<'a> {
 #[cfg(test)]
 impl<'a> Action<'a> {
     /// Seal a **region-pure** bare value as a `Done` terminal — the test-only constructor for a
-    /// marker object that references no foreign region ([`Witnessed::resident`] fixes the empty
-    /// witness). Production never mints a bare terminal: a real value is always built witnessed at its
-    /// alloc site (`alloc_carried`/`alloc_carried_with` / `yoke` / `merge` / `resident_*_carrier`), so
-    /// this stays behind `cfg(test)`.
-    pub(crate) fn done_resident(value: Carried<'a>) -> Self {
-        Action::done(Ok(StepCarried::born(Witnessed::resident(value))))
+    /// marker object that references no foreign region ([`Scope::resident`] mints the description
+    /// hosting it in `scope`'s own region with no members). Production never mints a bare terminal:
+    /// a real value is always built witnessed at its alloc site (`alloc_carried`/`alloc_carried_with`
+    /// / `yoke` / `merge` / `resident_*_carrier`), so this stays behind `cfg(test)`.
+    pub(crate) fn done_resident(scope: &Scope<'a>, value: Carried<'a>) -> Self {
+        Action::done(Ok(StepCarried::born(scope.resident(value))))
     }
 }
 

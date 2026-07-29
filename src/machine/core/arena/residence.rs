@@ -16,11 +16,12 @@ use crate::machine::model::{
 use crate::machine::{CarrierWitness, DeliveredCarried};
 use crate::witnessed::{AuditedStored, Witnessed};
 
-/// A move-in's minted reach evidence: the arena-hosted description (`None` == the empty set) and
-/// the borrows-into-this-region bit, both derived by [`Scope::mint_retained`] from the same source
-/// claim the value is copied under. It is meaningful only relative to the scope that minted it, so
-/// it never leaves the door that derived it.
-type MintedReach<'a> = (Option<&'a FrameReach>, bool);
+/// A move-in's minted reach evidence: the arena-hosted description [`Scope::mint_retained`] derived
+/// from the same source claim the value is copied under. It records the value's residence (the
+/// minting scope's own region, stamped as the description's host) and its exact reach in one record,
+/// so a door that holds one holds everything the seal needs. It is meaningful only relative to the
+/// scope that minted it, so it never leaves the door that derived it.
+type MintedReach<'a> = &'a FrameReach;
 
 /// The evidence-tier move-ins live on [`Scope`], not [`super::RegionBrand`]: a minted reach is
 /// meaningful only relative to the scope that minted it — its description is hosted in that
@@ -42,7 +43,7 @@ impl<'a> Scope<'a> {
         cell: &DeliveredCarried,
         project: P,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, Option<&'a FrameReach>, bool), KError>
+    ) -> Result<(&'a KObject<'a>, MintedReach<'a>), KError>
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
@@ -55,7 +56,7 @@ impl<'a> Scope<'a> {
         let claim = cell.coverage_retaining(|region| clone_still_borrows(cell, region));
         let minted = self.mint_retained(&[&claim]);
         let obj = self.store_projection_reaching(cell, &project, minted, types)?;
-        Ok((obj, minted.0, minted.1))
+        Ok((obj, minted))
     }
 
     /// The pin twin of [`Self::store_object_adopted`]: mint the whole-envelope reach (naming every
@@ -67,13 +68,13 @@ impl<'a> Scope<'a> {
         cell: &DeliveredCarried,
         project: P,
         types: &TypeRegistry,
-    ) -> Result<(&'a KObject<'a>, Option<&'a FrameReach>, bool), KError>
+    ) -> Result<(&'a KObject<'a>, MintedReach<'a>), KError>
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
         let minted = self.mint_retained(&[cell.coverage()]);
         let obj = self.store_projection_reaching(cell, &project, minted, types)?;
-        Ok((obj, minted.0, minted.1))
+        Ok((obj, minted))
     }
 
     /// Seal a resident `Module` value under the reach its own `child` scope mints — the object-arm
@@ -90,10 +91,7 @@ impl<'a> Scope<'a> {
     ) -> Result<SealedValue, KError> {
         let minted = self.child_module_reach(child);
         let obj = self.store_value_reaching(KObject::Module(module), minted, types)?;
-        Ok(self.seal_resident(
-            Carried::Object(obj),
-            CarrierWitness::new(minted.1, minted.0),
-        ))
+        Ok(self.seal_reaching(Carried::Object(obj), minted))
     }
 
     /// The transparent-ascription store: a fresh re-tagged `Module` reusing a *foreign* source
@@ -110,7 +108,7 @@ impl<'a> Scope<'a> {
         types: &TypeRegistry,
     ) -> Result<SealedValue, KError> {
         let minted = self.child_module_reach(source_child);
-        let sets: &[&FrameReach] = stored_sets(&minted);
+        let sets: &[&FrameReach] = std::slice::from_ref(&minted);
         let new_module: &'a Module<'a> = self
             .brand()
             .0
@@ -121,10 +119,7 @@ impl<'a> Scope<'a> {
             );
         seal(new_module);
         let obj = self.store_value_reaching(KObject::Module(new_module), minted, types)?;
-        Ok(self.seal_resident(
-            Carried::Object(obj),
-            CarrierWitness::new(minted.1, minted.0),
-        ))
+        Ok(self.seal_reaching(Carried::Object(obj), minted))
     }
 
     /// Audit a projection of the delivered `cell` (deep-cloned into this scope's region) against
@@ -163,7 +158,7 @@ impl<'a> Scope<'a> {
         types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError> {
         let kt = o.ktype();
-        let sets: &[&FrameReach] = stored_sets(&minted);
+        let sets: &[&FrameReach] = std::slice::from_ref(&minted);
         self.brand()
             .0
             .alloc_resident_checked::<KObject<'static>>(o, ResidenceEvidence::reaching(sets))
@@ -175,11 +170,13 @@ impl<'a> Scope<'a> {
             })
     }
 
-    /// Checked move-in of a fresh object into this scope's own region ([`super::RegionBrand::alloc_object_checked`]'s
-    /// dest-only audit), paired with its derived reach: the description is `None` — a value that
-    /// passes the dest-only audit borrows no foreign region — and the bit is the audit
-    /// walk's saw-a-region-pointer flag ([`Residence::dest_only_seen`]), so the home-borrow bit is
-    /// derived from the value's own borrows, never asserted.
+    /// Checked move-in of a fresh object into this scope's own region
+    /// ([`super::RegionBrand::alloc_object_checked`]'s dest-only audit), paired with the description
+    /// minted for it ([`Scope::mint_born_here`]). A value that passes the dest-only audit borrows no
+    /// foreign region, so the only member the description can carry is this scope's own — and it
+    /// carries it exactly when the audit walk's saw-a-region-pointer flag
+    /// ([`Residence::dest_only_seen`]) says the value genuinely holds one. Residence is recorded
+    /// either way, as the description's host: a region-pure scalar still records where it lives.
     pub(crate) fn alloc_object_checked_stored(
         &self,
         value: KObject<'_>,
@@ -200,22 +197,20 @@ impl<'a> Scope<'a> {
                     kt.name(types)
                 )))
             })?;
-        Ok((obj, (None, seen.get())))
+        Ok((obj, self.mint_born_here(seen.get())))
     }
 
-    /// Checked alloc of a fresh object into this scope's region, derive its `(None, bit)` witness,
-    /// and seal it as the resident carrier — one call for a value born carrier-less. The home-borrow
-    /// bit is the checked audit's own saw-a-region-pointer flag, never a caller assertion.
+    /// Checked alloc of a fresh object into this scope's region under the description minted for it,
+    /// bundled as the resident carrier — one call for a value born carrier-less. Whether the
+    /// description names this region as a member is the checked audit's own saw-a-region-pointer
+    /// flag, never a caller assertion.
     pub(crate) fn seal_fresh_object(
         &self,
         value: KObject<'_>,
         types: &TypeRegistry,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
-        let (obj, (_, borrows_home)) = self.alloc_object_checked_stored(value, types)?;
-        Ok(self.brand().seal_resident(
-            Carried::Object(obj),
-            CarrierWitness::new(borrows_home, None),
-        ))
+        let (obj, reach) = self.alloc_object_checked_stored(value, types)?;
+        Ok(self.brand().seal_reaching(Carried::Object(obj), reach))
     }
 
     /// Test affordance: drive the reaching/delivered residence audit directly from a value in hand
@@ -234,16 +229,6 @@ impl<'a> Scope<'a> {
     }
 }
 
-/// A minted reach's description as an audit slice: a one-element slice naming it, or empty when the
-/// value reaches nothing. The reaching audits take a slice so one audit shape covers both the
-/// reach-bearing and region-pure cases.
-fn stored_sets<'s, 'r>(minted: &'s MintedReach<'r>) -> &'s [&'r FrameReach] {
-    match &minted.0 {
-        Some(fs) => std::slice::from_ref(fs),
-        None => &[],
-    }
-}
-
 /// Ownership predicate for the checked/reaching-tier residence audits: "`dest`, or the hosting
 /// arena of some member of `reach`" — the `reach: &[]` case is the plain dest-only check
 /// ([`KObject::resident_in_delivered`](KObject::resident_in_delivered)); the object delivered tier
@@ -259,8 +244,8 @@ pub(crate) struct Residence<'d> {
     /// pointer — the residence side-table's recorded region pointers) sets it. A
     /// walk that passes the audit and set this reports a value whose borrows reach *some* region; a
     /// value freshly stored in the scope's own region (where every pointer is home by construction)
-    /// reads it as its honest home-borrow bit ([`Scope::seal_fresh_object`]). `None` when a caller
-    /// wants the plain audit with no recording.
+    /// reads it as the verdict on whether its own region belongs in its minted description's members
+    /// ([`Scope::mint_born_here`]). `None` when a caller wants the plain audit with no recording.
     seen: Option<&'d Cell<bool>>,
 }
 
@@ -362,7 +347,8 @@ impl<'ctx> ResidenceEvidence<'ctx> {
     }
 
     /// [`Self::dest_only`] with a saw-a-region-pointer recorder — the [`Residence::seen`] flag the
-    /// checked-stored sites read after the store to derive a value's home-borrow bit.
+    /// checked-stored sites read after the store to decide whether the destination region enters the
+    /// value's minted description as a member.
     pub(crate) fn dest_only_seen(seen: &'ctx Cell<bool>) -> Self {
         ResidenceEvidence {
             reach: &[],

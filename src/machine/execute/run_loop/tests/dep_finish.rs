@@ -1,7 +1,7 @@
 //! combine, defer_to, and tail-call slot reuse.
 
 use super::super::super::outcome::Outcome;
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{resident_carrier, TestRun};
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::KExpression;
 use crate::machine::model::ReturnType;
@@ -41,7 +41,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
             .current_scope()
             .brand()
             .alloc_object(KObject::KString(format!("{a}+{b}")));
-        Outcome::done_resident(Carried::Object(allocated))
+        Outcome::done_resident(_sched.current_scope(), Carried::Object(allocated))
     });
     let mut deps = crate::scheduler::ResolvedDeps::new();
     deps.own(dep_a);
@@ -81,7 +81,7 @@ fn dep_finish_short_circuits_on_dep_error() {
     let _ = store.pop_next();
     let _ = store.pop_next();
     let value = region.brand().alloc_object(KObject::Number(99.0));
-    store.set_result(dep_ok, Ok(Carried::Object(value)));
+    store.set_result(dep_ok, Ok(Carried::Object(value)), resident_carrier(scope));
     // A synthetic terminal carries no finalize-seeded retention hold; the dep pull requires one.
     // This slot reaches nothing foreign, so its hold's owned bundle is empty.
     store.seed_retention(
@@ -95,13 +95,14 @@ fn dep_finish_short_circuits_on_dep_error() {
         Err(KError::new(KErrorKind::ShapeError(
             "dep_err synthetic".into(),
         ))),
+        resident_carrier(scope),
     );
 
     let invoked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let invoked_clone = Rc::clone(&invoked);
     let finish: TerminalDepFinish = Box::new(move |_sched, _terminals| {
         invoked_clone.set(true);
-        Outcome::done_resident(Carried::Object(value))
+        Outcome::done_resident(_sched.current_scope(), Carried::Object(value))
     });
     let mut deps = crate::scheduler::ResolvedDeps::new();
     deps.own(dep_ok);
@@ -150,7 +151,7 @@ fn retention_hold_foreign_bundle_releases_at_pull_zero() {
     store.clear_node(dep_ok);
     let _ = store.pop_next();
     let value = region.brand().alloc_object(KObject::Number(42.0));
-    store.set_result(dep_ok, Ok(Carried::Object(value)));
+    store.set_result(dep_ok, Ok(Carried::Object(value)), resident_carrier(scope));
     // Seed the hold with a foreign bundle pinning `foreign`, and one outstanding pull.
     store.seed_retention(
         dep_ok,
@@ -172,7 +173,7 @@ fn retention_hold_foreign_bundle_releases_at_pull_zero() {
             Carried::Object(object) => object,
             _ => unreachable!("dep_ok delivered a Number object"),
         };
-        Outcome::done_resident(Carried::Object(v))
+        Outcome::done_resident(_sched.current_scope(), Carried::Object(v))
     });
     let mut deps = crate::scheduler::ResolvedDeps::new();
     deps.own(dep_ok);
@@ -209,7 +210,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
                 .scope
                 .brand()
                 .alloc_object(KObject::KString("from-combine".into()));
-            Action::done_resident(Carried::Object(v))
+            Action::done_resident(fctx.scope, Carried::Object(v))
         });
         Action::await_deps(crate::scheduler::Deps::new(), finish)
     }

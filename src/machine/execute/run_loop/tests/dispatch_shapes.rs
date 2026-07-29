@@ -56,12 +56,15 @@ fn sched_read_carried<'run>(
 /// using it only inspect routing, never the call outcome.
 fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
     match arg_object(ctx.args, "n") {
-        Some(obj) => Action::done_resident(Carried::Object(
-            ctx.scope
-                .brand()
-                .alloc_object_checked(obj.deep_clone(), ctx.types)
-                .expect("a deep-cloned Number is always resident-in-self"),
-        )),
+        Some(obj) => Action::done_resident(
+            ctx.scope,
+            Carried::Object(
+                ctx.scope
+                    .brand()
+                    .alloc_object_checked(obj.deep_clone(), ctx.types)
+                    .expect("a deep-cloned Number is always resident-in-self"),
+            ),
+        ),
         None => Action::done(Err(crate::machine::KError::new(
             crate::machine::KErrorKind::MissingArg("n".to_string()),
         ))),

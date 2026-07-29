@@ -19,11 +19,11 @@ use crate::machine::core::{BlockEntry, FramePlacement};
 use crate::machine::model::Carried;
 use crate::machine::DeliveredCarried;
 
+#[cfg(test)]
+use crate::machine::Scope;
 use crate::machine::{KError, NodeId, TraceFrame};
 use crate::scheduler::{DepResults, Deps};
 use crate::witnessed::reattachable;
-#[cfg(test)]
-use crate::witnessed::Witnessed;
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::{ChainOp, NodeWork};
@@ -75,11 +75,14 @@ pub(in crate::machine::execute) enum Outcome<'step> {
 
 #[cfg(test)]
 impl<'step> Outcome<'step> {
-    /// Seal a region-pure bare value as a `Done` terminal ([`Witnessed::resident`] fixes the empty
-    /// witness, [`StepCarried::born`] brands it at the step). Test-only: production always builds a
-    /// value witnessed at its alloc site, never bare.
-    pub(in crate::machine::execute) fn done_resident(value: Carried<'step>) -> Self {
-        Outcome::Done(Ok(StepCarried::born(Witnessed::resident(value))))
+    /// Seal a region-pure bare value as a `Done` terminal ([`Scope::resident`] mints the description
+    /// hosting it in `scope`'s own region with no members, [`StepCarried::born`] brands it at the
+    /// step). Test-only: production always builds a value witnessed at its alloc site, never bare.
+    pub(in crate::machine::execute) fn done_resident(
+        scope: &Scope<'step>,
+        value: Carried<'step>,
+    ) -> Self {
+        Outcome::Done(Ok(StepCarried::born(scope.resident(value))))
     }
 }
 

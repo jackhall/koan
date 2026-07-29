@@ -5,7 +5,6 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::Carried;
 use crate::machine::model::Record;
-use crate::machine::CarrierWitness;
 
 /// Mint the zero-dep fold door a `Tagged`/`Wrapped` test value needs, over a fresh root region, as
 /// two `let` bindings in the caller's own scope (mirrors the `kobject` test macro). `forge_for_test`
@@ -234,7 +233,7 @@ fn spliced_cell_classifies_by_opening() {
     let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
     let cell_part = ExpressionPart::Spliced {
         cell: Delivered::hosted(
-            scope.seal_resident(Carried::Object(obj), CarrierWitness::new(false, None)),
+            scope.seal_resident(Carried::Object(obj)),
             std::rc::Rc::clone(&storage),
             crate::machine::core::FrameCoverage::empty(),
         ),

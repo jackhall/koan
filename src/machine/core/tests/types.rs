@@ -9,7 +9,6 @@ use crate::machine::core::{run_root_storage, FrameCoverage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
 use crate::machine::AdoptSeam;
-use crate::machine::CarrierWitness;
 use crate::machine::{BindingIndex, DeclarationSite};
 
 #[test]
@@ -84,7 +83,7 @@ fn retaining_adopt_reanchors_the_same_value_copy_free() {
     // by the frame that owns that region.
     let obj: &KObject = producer.brand().alloc_object(KObject::Number(42.0));
     let cell = Delivered::hosted(
-        producer.seal_resident(Carried::Object(obj), CarrierWitness::new(false, None)),
+        producer.seal_resident(Carried::Object(obj)),
         std::rc::Rc::clone(&storage),
         crate::machine::core::FrameCoverage::empty(),
     );
@@ -163,12 +162,8 @@ fn child_module_reach_names_the_child_region_which_owns_its_members_reaches() {
     // member reaching into another module's own region. The mint folds the owning bundle into
     // `source_scope`'s region union, so nothing but that region keeps `inner_storage` alive.
     let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
-    let (reach, borrows_home) =
-        source_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&inner_storage))]);
-    let sealed = source_scope.seal_resident(
-        Carried::Object(obj),
-        CarrierWitness::new(borrows_home, reach),
-    );
+    let reach = source_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&inner_storage))]);
+    let sealed = source_scope.seal_reaching(Carried::Object(obj), reach);
     source_scope
         .bind_value_direct(
             "m".to_string(),
@@ -181,12 +176,9 @@ fn child_module_reach_names_the_child_region_which_owns_its_members_reaches() {
 
     let parent_storage = run_root_storage();
     let parent = run_root_bare(&parent_storage);
-    let (child_reach, _borrows_into_parent) = parent.child_module_reach(source_scope);
+    let child_reach = parent.child_module_reach(source_scope);
 
     let members: Vec<*const KoanRegion> = child_reach
-        .expect(
-            "the child's own region is a foreign member of the parent, so the mint is non-empty",
-        )
         .members()
         .iter()
         .map(|m| m.region() as *const KoanRegion)

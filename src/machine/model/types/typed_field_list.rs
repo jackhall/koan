@@ -10,7 +10,6 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
 use crate::machine::model::Record;
 use crate::machine::AdoptSeam;
-use crate::machine::CarrierWitness;
 use crate::machine::{NodeId, Scope};
 use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
@@ -290,7 +289,7 @@ fn rewrite_threaded_self_refs<'e, 'a>(
                     // producer frame.
                     let sibling =
                         window.sibling(&t.render(), crate::machine::model::KKind::NewType, types);
-                    let carrier = scope.resident(Carried::Type(sibling), CarrierWitness::default());
+                    let carrier = scope.resident(Carried::Type(sibling));
                     ExpressionPart::Spliced {
                         // A `KType` carrier has no foreign reach, so it seals under an empty bundle.
                         cell: scope.seal_resident_delivered(

@@ -13,7 +13,7 @@ use crate::machine::model::{
 };
 use crate::machine::run_root_storage;
 use crate::machine::{Body, CallFrame, KFunction};
-use crate::witnessed::{Erased, FoldedPlacement};
+use crate::witnessed::FoldedPlacement;
 
 /// A `KFunction` whose captured scope lives in `home`'s region, allocated into `home`'s region — a
 /// borrow leaf pointing at `home`, the shape a closure capturing its own defining frame takes.
@@ -26,9 +26,10 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KFunction<'run> 
                 elements: vec![SignatureElement::Keyword("__INNER__".into())],
             },
             Body::Builtin(|ctx| {
-                crate::machine::core::Action::done_resident(Carried::Object(
-                    ctx.scope.brand().alloc_object(KObject::Null),
-                ))
+                crate::machine::core::Action::done_resident(
+                    ctx.scope,
+                    Carried::Object(ctx.scope.brand().alloc_object(KObject::Null)),
+                )
             }),
             child,
             false,
@@ -97,10 +98,13 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
         "a home-crossing, borrows-home record must select Pin"
     );
 
-    let sealed = Witnessed::from_erased(
-        Erased::erase(Carried::Object(record)),
-        CarrierWitness::default(),
-    );
+    // The record lives in the producer's region and borrows into it, so its description is hosted
+    // there with home as an ordinary member — what the producer's own birth mint would have stamped.
+    let sealed = producer.with_scope(|child| {
+        child
+            .seal_reaching(Carried::Object(record), child.mint_born_here(true))
+            .unseal()
+    });
     let dep: DeliveredCarried =
         Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
 

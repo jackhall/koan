@@ -48,39 +48,47 @@ impl<F: RegionOwner> StepContext<F> {
 
 impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// Build a value reachable only through the held frame's own region: reach = own region only,
-    /// so the carrier is the empty reference-only [`Carrier`] — its liveness is the frame the step
-    /// loop holds (guarantee 4), then the retention hold once finalized. The `for<'b>` brand on
-    /// `build` admits only region-derived or owned references, so purity is structural rather than
-    /// asserted: the value is yoked from the frame's own region and only then re-bundled under the
-    /// pin-free carrier.
+    /// so the carrier references a description with empty members hosted in that same region — its
+    /// liveness is the frame the step loop holds (guarantee 4), then the retention hold once
+    /// finalized. The `for<'b>` brand on `build` admits only region-derived or owned references, so
+    /// purity is structural rather than asserted: the value is yoked from the frame's own region and
+    /// only then re-bundled under the pin-free carrier.
     ///
     /// ```
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
     /// use workgraph::witnessed::{Carrier, StepContext, Witnessed};
     ///
-    /// let cart = Rc::new(Cart(vec![1, 2, 3]));
-    /// let ctx: StepContext<Cart> = StepContext::new(Rc::clone(&cart));
-    /// let w: Witnessed<RefFamily, Carrier<Cart>> = ctx.alloc(|region| &region[0]);
-    /// assert_eq!(w.with_pinned(&cart, |r| **r), 1);
+    /// static SEVEN: u32 = 7;
+    /// let cart = fresh_cart();
+    /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
+    /// let w: Witnessed<RefFamily, Carrier<RegionCart>> =
+    ///     ctx.alloc::<RefFamily, FixtureProfile>(|_region| &SEVEN);
+    /// assert_eq!(w.with_pinned(&cart, |r| **r), 7);
     /// ```
     ///
     /// ```compile_fail
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
     /// use workgraph::witnessed::{Carrier, StepContext, Witnessed};
     ///
     /// let outside: u32 = 7;
-    /// let cart = Rc::new(Cart(vec![1, 2, 3]));
-    /// let ctx: StepContext<Cart> = StepContext::new(cart);
+    /// let cart = fresh_cart();
+    /// let ctx: StepContext<RegionCart> = StepContext::new(cart);
     /// // Try to capture a non-region borrow into the closure — rejected by the `for<'b>` brand.
-    /// let _: Witnessed<RefFamily, Carrier<Cart>> = ctx.alloc(|_region| &outside);
+    /// let _: Witnessed<RefFamily, Carrier<RegionCart>> =
+    ///     ctx.alloc::<RefFamily, FixtureProfile>(|_region| &outside);
     /// ```
-    pub fn alloc<T: Reattachable>(
+    pub fn alloc<T, P>(
         &self,
         build: impl for<'b> FnOnce(&'b F::Region) -> T::At<'b>,
-    ) -> Witnessed<T, Carrier<F>> {
-        Witnessed::<T, Rc<F>>::yoke(Rc::clone(&self.frame), build).rewitness(Carrier::default())
+    ) -> Witnessed<T, Carrier<F>>
+    where
+        T: Reattachable,
+        P: StorageProfile<FrameOwner = F> + 'static,
+        F: RegionOwner<Region = Region<P>>,
+    {
+        Witnessed::<T, Rc<F>>::yoke(Rc::clone(&self.frame), build).into_reference_only::<P>()
     }
 
     /// Build a value whose carrier names the held frame's own region implicitly plus every named
@@ -94,42 +102,42 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     ///
     /// ```
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_region, RefFamily, RegionCart};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
     /// use workgraph::witnessed::{Carrier, Delivered, StepContext, StepCoverage, Witnessed};
     ///
     /// static TEN: u32 = 10;
-    /// let dep_cart = Rc::new(RegionCart(fresh_region()));
+    /// let dep_cart = fresh_cart();
     /// let dep: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = Delivered::seal(
-    ///     Witnessed::<RefFamily, Carrier<RegionCart>>::resident(&TEN),
+    ///     Witnessed::<RefFamily, Carrier<RegionCart>>::resident_in::<FixtureProfile>(&TEN, &dep_cart),
     ///     Rc::clone(&dep_cart),
     ///     StepCoverage::empty(),
     /// );
     ///
-    /// let cart = Rc::new(RegionCart(fresh_region()));
+    /// let cart = fresh_cart();
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
     /// let built: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> =
-    ///     ctx.alloc_with(&[&dep], |_region, views, _token| views[0]);
+    ///     ctx.alloc_with::<RefFamily, RefFamily, FixtureProfile>(&[&dep], |_region, views, _token| views[0]);
     /// assert_eq!(built.open(|r| *r), 10);
     /// ```
     ///
     /// ```compile_fail
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_region, RefFamily, RegionCart};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
     /// use workgraph::witnessed::{Carrier, Delivered, StepContext, StepCoverage, Witnessed};
     ///
     /// static TEN: u32 = 10;
-    /// let dep_cart = Rc::new(RegionCart(fresh_region()));
+    /// let dep_cart = fresh_cart();
     /// let dep: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = Delivered::seal(
-    ///     Witnessed::<RefFamily, Carrier<RegionCart>>::resident(&TEN),
+    ///     Witnessed::<RefFamily, Carrier<RegionCart>>::resident_in::<FixtureProfile>(&TEN, &dep_cart),
     ///     Rc::clone(&dep_cart),
     ///     StepCoverage::empty(),
     /// );
     ///
-    /// let cart = Rc::new(RegionCart(fresh_region()));
+    /// let cart = fresh_cart();
     /// let ctx: StepContext<RegionCart> = StepContext::new(cart);
     /// let mut escaped: Option<&u32> = None;
     /// // Try to smuggle a dep view OUT of `alloc_with`'s closure — rejected by the `for<'b>` brand.
-    /// let _built: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = ctx.alloc_with(&[&dep], |_region, views, _token| {
+    /// let _built: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = ctx.alloc_with::<RefFamily, RefFamily, FixtureProfile>(&[&dep], |_region, views, _token| {
     ///     escaped = Some(views[0]);
     ///     views[0]
     /// });
@@ -150,7 +158,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         // The accumulator is enveloped over this context's own frame — the region it is yoked into —
         // so each fold step composes into an envelope rather than a carrier plus a loose bundle.
         let acc0 = Delivered::seal(
-            self.alloc::<AllocViews<V, F::Region>>(|region| {
+            self.alloc::<AllocViews<V, F::Region>, P>(|region| {
                 (region, Vec::with_capacity(deps.len()))
             }),
             Rc::clone(&self.frame),
@@ -181,11 +189,11 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         build: impl for<'b> FnOnce(RegionHandle<'b, P>) -> T::At<'b>,
     ) -> Witnessed<T, Carrier<F>>
     where
-        P: StorageProfile + 'static,
+        P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
         T: Reattachable,
     {
-        self.alloc::<T>(|region| build(RegionHandle::new(region)))
+        self.alloc::<T, P>(|region| build(RegionHandle::new(region)))
     }
 
     /// [`Self::alloc_with`] for a frame owning a library [`Region`]: same dep folding, build closure

@@ -14,7 +14,7 @@ use crate::machine::model::types::TypeRegistry;
 use crate::machine::CarrierWitness;
 use crate::witnessed::{
     Delivered, ReachDescription, RegionHandle, RegionHandleFamily, RegionHost, Sealed,
-    SealedExtern, StepCoverage, Witnessed,
+    SealedExtern, StepCoverage,
 };
 
 /// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
@@ -97,9 +97,9 @@ pub(crate) fn build_frame_child_witnessed<'p>(
     handle.zip(parent).open(storage, |(handle_b, outer_b)| {
         // `handle_b: RegionHandle<'b, KoanStorageProfile>`, `outer_b: &'b Scope<'b>` — the region
         // handle and parent unified at the one brand. The child stores both by plain coercion (no
-        // retype of its own). The child scope lives in `storage`'s own region, so it seals under the
-        // empty (`resident`) carrier witness — its liveness is the frame storage, paired with it as the
-        // envelope host by the `CallFrame` constructor.
+        // retype of its own). The child scope lives in `storage`'s own region, so it seals under a
+        // description hosted there with no members — its liveness is the frame storage, paired with
+        // it as the envelope host by the `CallFrame` constructor.
         //
         // `child.outer` is a genuine cross-region borrow into the lexical parent's (possibly foreign)
         // region — unlike every other resident move-in in this file, `child` cannot rebuild at
@@ -120,7 +120,7 @@ pub(crate) fn build_frame_child_witnessed<'p>(
         let live = handle_b
             .alloc_resident_checked::<Scope<'static>>(child, ())
             .expect("frame child is built over this frame's own region");
-        Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(live))
+        Sealed::seal(RegionBrand(handle_b).seal_resident::<ScopeRefFamily>(live))
     })
 }
 
@@ -136,7 +136,7 @@ pub(crate) fn build_frame_child_witnessed<'p>(
 pub struct CallFrame {
     /// The per-call child scope paired with the frame storage that owns its region, as one delivery
     /// [`Delivered`] envelope: the storage is the envelope's retained host, the scope its
-    /// empty-witness ([`resident`](Witnessed::resident)) carrier, read back through
+    /// member-less resident carrier (hosted in that storage's own region), read back through
     /// [`Self::with_scope`] / [`Self::scope_sealed`] under that host pin. Co-ownership by one value
     /// replaces the former hand-maintained `(storage, scope_carrier)` field pair: the
     /// storage-pins-the-scope co-location the pair kept by field-order convention is now a
@@ -196,9 +196,9 @@ impl CallFrame {
         // address behind the Rc, keeping the erased reference valid.
         let scope_carrier = build_frame_child_witnessed(outer, &storage);
         Rc::new(CallFrame {
-            // The child scope seals under the empty (`resident`) carrier witness — its cross-region
-            // borrow into the parent rides `FrameStorage`'s own `outer` `Rc` chain, not the reach
-            // system — so the envelope's foreign bundle is empty.
+            // The child scope seals under a description hosted in this storage's own region with no
+            // members — its cross-region borrow into the parent rides `FrameStorage`'s own `outer`
+            // `Rc` chain, not the reach system — so the envelope's foreign bundle is empty.
             envelope: Delivered::hosted(scope_carrier, Rc::clone(&storage), FrameCoverage::empty()),
             storage,
             non_dying: false,
@@ -224,8 +224,7 @@ impl CallFrame {
             std::ptr::eq(run_storage.region(), scope.region() as *const KoanRegion),
             "adopting run_storage must own the run-root scope's region"
         );
-        let scope_carrier =
-            Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(scope));
+        let scope_carrier = Sealed::seal(scope.brand().seal_resident::<ScopeRefFamily>(scope));
         Rc::new(CallFrame {
             // The run scope lives in the run region (empty reach), so the envelope's foreign bundle
             // is empty.

@@ -253,7 +253,8 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just
     // allocated into `scope`'s own region above, so the checked audit always passes; the paired
-    // token carries the home-borrow bit the audit walk derives (the captured `&Scope` into home).
+    // description names that region as a member, the audit walk having seen the callable's captured
+    // `&Scope` borrow into it.
     // A keyworded FN's overload registration rides the step outcome: the seal is built here, where
     // the callable is open under its home pin, and the bucket write lands at the run loop's apply.
     let mut writes: Vec<WriteOp> = Vec::new();

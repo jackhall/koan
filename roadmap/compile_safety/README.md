@@ -55,9 +55,8 @@ by local discipline rather than by construction.
 | Reach over-approximation ([fold side](../scheduler_library/region-debug-audits.md)) | over-pin | every fold audit is one-sided (catches under-pinning only) | every fold sink (`alloc_object_folded`, `arena.rs`); the scalar counter-gates live in `arena.rs` |
 | Side-table growth | retention | `membership` vec + linear-scan `owns_addr` (`region.rs`) | every recorded-family allocation feeds it; every `owns_addr` audit scans it |
 | Raw-handle reach | under-pin | `pub(crate)` `RegionBrand::handle()` hands koan code the raw `RegionHandle`, bypassing the veneer ([arena.rs](../../src/machine/core/arena.rs)) | 11 raw-handle reaches across `src/machine` |
-| Region-purity by fiat | under-pin | the empty `CarrierWitness` sealed by the bare-`FN` registration door on a structural claim never audited ([reach.rs](../../src/machine/core/scope/reach.rs)) | 1 production seal (`OverloadSeal` for a bare `FN`) plus test fixtures |
+| Region-purity by fiat | under-pin | the empty-member description the bare-`FN` registration door mints, on a structural claim never audited ([reach.rs](../../src/machine/core/scope/reach.rs)) | 1 production seal (`OverloadSeal` for a bare `FN`) plus test fixtures |
 | Carrier reach co-location | under-pin | [`Carrier`](../../workgraph/src/witnessed/carrier.rs) erases its reach reference, so co-location with the value is backed by the re-anchor pin, not the type | every `Sealed::open_at` / lift reader |
-| [Bit-only home borrow](../untyped_arena/home-lives-in-the-reach-description.md) | surface | a fold-born substrate carrier records its home borrow in `Carrier::borrows_host` with no description to hold home as a member ([carrier.rs](../../workgraph/src/witnessed/carrier.rs)) | every `force_substrate_borrows_host` site |
 | [Untyped re-anchor pins](typed-fold-pins.md) | under-pin | the pinned fold verbs take any `Pin: Witness`, unlinked to the operand backing the re-anchor needs ([witnessed.rs](../../workgraph/src/witnessed.rs)) | every koan `map_pinned*` / `merge_pinned*` call site (`catch.rs`, `constructors.rs`, `literal.rs`), incl. the possibly-empty pin in `build_type_operand` |
 | Evidence dead states | under-pin | `ResidenceEvidence` is a struct of `Option`s, so the meaningless ambient+seen state is representable and the family audits silently drop `seen` when `ambient` is present ([arena.rs](../../src/machine/core/arena.rs)) | every `alloc_resident_checked` evidence mint in `arena.rs` (none passes both today) |
 
@@ -90,9 +89,10 @@ by local discipline rather than by construction.
   reused address cannot false-pass.
 
 - **Region-purity by fiat.** The bare-`FN` registration door
-  ([reach.rs](../../src/machine/core/scope/reach.rs)) seals its callable under the
-  empty `CarrierWitness`, on the structural claim that a function allocated into
-  the very scope it captures borrows only its home. The claim is never audited; a
+  ([reach.rs](../../src/machine/core/scope/reach.rs)) seals its callable under a
+  description hosted in its own scope's region with **no members**, on the
+  structural claim that a function allocated into the very scope it captures
+  borrows only its home. The claim is never audited; a
   registration that ever embedded a foreign borrow would under-pin. Candidate:
   derive the empty reach from a residence walk rather than assert it. The type
   channel no longer participates — a `KType` is a `Copy` handle owning all its
@@ -128,15 +128,6 @@ by local discipline rather than by construction.
   tables sized to the sparse families that need them.
 
 ### Surface debt (not fault-capable)
-
-- **Bit-only home borrow.** `Carrier::borrows_host`
-  ([carrier.rs](../../workgraph/src/witnessed/carrier.rs)) records whether a value's
-  borrows reach its own home region. Where the carrier references a description that
-  is a duplicate — home is an ordinary member — but a fold-born substrate carrier
-  references no description at all, so for it the bit is the sole record and the
-  duplication cannot be resolved by deleting it. Two description sites that can
-  disagree, kept alive by a birth path that cannot name its own home. Owned by
-  [substrate birth mints its home](../untyped_arena/home-lives-in-the-reach-description.md).
 
 - **Vestigial fold-token surface.** With `FoldedPlacement` the sole folded-store
   key, the token-form fold verbs (`map_pinned` / `merge_pinned` /

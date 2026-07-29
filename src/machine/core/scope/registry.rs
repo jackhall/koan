@@ -27,7 +27,6 @@ use crate::machine::core::bindings::{
 use crate::machine::core::carrier_witness::OverloadSeal;
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
 use crate::machine::model::{Carried, KObject, OperatorGroup, TypeRegistry};
-use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
@@ -64,27 +63,26 @@ impl<'a> Scope<'a> {
     }
 
     /// Fused region-pure / fresh-value **construction**: checked move-in of `value` into this
-    /// scope's own region with a `(None, bit)` reach derived from the checked audit's own
-    /// saw-a-region-pointer walk ([`Self::alloc_object_checked_stored`]), sealed. The pure-value
-    /// twin of [`Self::adopt_for_binding`], the delivered-value construction door.
+    /// scope's own region under the description [`Self::alloc_object_checked_stored`] mints for it,
+    /// sealed. The pure-value twin of [`Self::adopt_for_binding`], the delivered-value construction
+    /// door.
     pub(crate) fn seal_checked(
         &self,
         value: KObject<'_>,
         types: &TypeRegistry,
     ) -> Result<SealedValue, KError> {
-        // A checked bind is region-pure — its borrows reach no foreign region — so there is no
-        // description to host and nothing to fold into the region's union bundle.
-        let (obj, (_, borrows_home)) = self.alloc_object_checked_stored(value, types)?;
-        Ok(self.seal_resident(
-            Carried::Object(obj),
-            CarrierWitness::new(borrows_home, None),
-        ))
+        // A checked bind reaches no foreign region — the dest-only audit is what proves it — so the
+        // only member the mint can name is this scope's own, and it names it exactly when the audit
+        // walk saw the value hold a borrow into it. The mint's own bundle is empty either way (the
+        // self rule strips the destination), so nothing folds into the region's union bundle.
+        let (obj, reach) = self.alloc_object_checked_stored(value, types)?;
+        Ok(self.seal_reaching(Carried::Object(obj), reach))
     }
 
     /// Fused MODULE-finish value **construction**: derive the module's stored reach off its `child`
     /// scope ([`Self::child_module_reach`]) — never by walking the built value — and allocate the
-    /// Object-arm module value under that evidence, sealed. The home-borrow bit is derived by the
-    /// mint, never hand-asserted.
+    /// Object-arm module value under that evidence, sealed. Membership is derived by the mint, never
+    /// hand-asserted.
     pub(crate) fn seal_module(
         &self,
         module: &'a crate::machine::model::Module<'a>,
@@ -160,7 +158,7 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let sealed = self.seal_resident(Carried::Object(obj), CarrierWitness::new(false, None));
+        let sealed = self.seal_resident(Carried::Object(obj));
         self.bind_value_direct(name, sealed, index, gate)
     }
 

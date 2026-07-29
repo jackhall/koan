@@ -16,11 +16,11 @@ pub use core::kfunction::{KFunction, NodeId};
 pub(crate) use core::KoanRegionTestExt;
 pub(crate) use core::{
     arg_held, arg_object, arg_type, arg_unresolved_type, block_tail, body_statement_refs,
-    force_substrate_borrows_host, kerror_ktype, require_bare_type_name, require_identifier_name,
-    require_kexpression, require_ktype, split_body_statements, Action, ActionFn, AwaitContinue,
-    BlockBody, BlockEntry, BlockScope, BlockSeed, BodyCtx, CatchContinue, DepPlacement, DepRequest,
-    DepTerminal, FinishCtx, FoldingBrand, FramePlacement, FrameStorageExt, OverloadSeal,
-    OwnedDispatch, ReturnContract, StepAllocator, TailContract,
+    kerror_ktype, require_bare_type_name, require_identifier_name, require_kexpression,
+    require_ktype, split_body_statements, Action, ActionFn, AwaitContinue, BlockBody, BlockEntry,
+    BlockScope, BlockSeed, BodyCtx, CatchContinue, DepPlacement, DepRequest, DepTerminal,
+    FinishCtx, FoldingBrand, FramePlacement, FrameStorageExt, OverloadSeal, OwnedDispatch,
+    ReturnContract, StepAllocator, TailContract,
 };
 pub use core::{
     run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, OpenedFunction,

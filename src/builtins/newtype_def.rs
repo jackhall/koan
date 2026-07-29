@@ -36,7 +36,6 @@ use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
-use crate::machine::CarrierWitness;
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. Fills the declaration
 /// window's member with `RelativeSchema::NewType(repr)`; the window is a fresh singleton for a
@@ -258,9 +257,7 @@ pub fn body_constructor_family<'a>(
     let kt = mint_type_constructor(member_name.clone(), param_names, ctx.types);
     // The handle names the same interned type in every region, so the terminal seals from it
     // directly and the `types` write rides the outcome, mirroring `type_decl::bind_abstract_member`.
-    let carrier = ctx
-        .scope
-        .resident(Carried::Type(kt), CarrierWitness::default());
+    let carrier = ctx.scope.resident(Carried::Type(kt));
     Action::done(Ok(StepCarried::born(carrier))).with_effect(WriteOp::Type {
         name: member_name,
         kt,

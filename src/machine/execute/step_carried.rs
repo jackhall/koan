@@ -1,7 +1,7 @@
 //! The step-scoped brand for the Done-arm value carrier.
 //!
-//! An empty-witness carrier ([`Witnessed::resident`](crate::witnessed::Witnessed::resident) over a
-//! region-pure value) pins nothing: it is sound only as a within-step transient — the run loop's
+//! A member-less resident carrier (a region-pure value under a description hosted in its own
+//! region) pins nothing: it is sound only as a within-step transient — the run loop's
 //! held frame set pins the producing region across the step, and [`finalize_terminal`] folds that
 //! frame into the carrier's reach before it is stored on a node. [`StepCarried`] makes that transient
 //! a type: the carrier crossing the Done arm ([`Outcome::Done`](super::outcome::Outcome) →
@@ -54,18 +54,23 @@ pub struct StepCarried<'step, T: Reattachable = CarriedFamily> {
 impl<'step, T: Reattachable> StepCarried<'step, T> {
     /// Wrap a **no-foreign-reach** carrier into the step brand — the majority of Done sites (literals,
     /// type carriers, region-pure `alloc_object_witnessed` products, and a value that borrows only its
-    /// own home, e.g. a fresh closure capturing its defining scope). Debug-asserts the carrier names
-    /// no foreign reach, so its owned pin bundle is empty. Unrestricted in-crate: wrapping only
+    /// own home, e.g. a fresh closure capturing its defining scope), whose owned pin bundle is
+    /// therefore empty. Unrestricted in-crate: wrapping only
     /// ever *adds* confinement, so any construction site may brand a carrier it holds. `'step` is
     /// inferred from the context the wrapper flows into — the Done-arm enums
     /// ([`Outcome`](super::outcome::Outcome), [`NodeStep`](super::nodes::NodeStep)) carry it at the
     /// step open's rank-2 brand.
+    ///
+    /// The premise is established at the doors that build such a carrier, not checked here: a
+    /// carrier eligible for this wrapper comes from
+    /// [`Scope::resident`](crate::machine::core::Scope) / [`RegionBrand::seal_resident`](crate::machine::core::RegionBrand),
+    /// whose mint composes no source and so yields a description with no members at all, or from the
+    /// checked-alloc door, whose only possible member is the birth region itself. Neither can name a
+    /// foreign region, so neither has owned pins to thread. A producer whose value *does* reach
+    /// elsewhere takes [`Self::born_pinned`] or [`Self::born_delivered`], which carry the bundle.
+    /// (Re-checking it here is not available anyway: the membership queries live on the opened
+    /// carrier, and this door holds no pin to open one under.)
     pub(crate) fn born(inner: Witnessed<T, CarrierWitness>) -> Self {
-        debug_assert!(
-            !inner.witness().has_reach_members(),
-            "StepCarried::born is for carriers that name no reach members (empty owned pins); a \
-             reach-carrying producer must thread its owned pins through born_pinned"
-        );
         StepCarried {
             inner,
             pins: FrameCoverage::empty(),
@@ -74,12 +79,11 @@ impl<'step, T: Reattachable> StepCarried<'step, T> {
     }
 
     /// Wrap a **reach-carrying** carrier into the step brand, threading its owned
-    /// [`FrameCoverage`] — a resident binding read (the entry's coverage), a splice (the source
-    /// envelope's whole coverage, its producer's own region among them), or a fold product whose
-    /// carrier the site re-derives before sealing (`force_substrate_borrows_host`), which
-    /// [`Self::born_delivered`] cannot take because it consumes the envelope whole. The coverage
-    /// rides the step and [`Self::seal_at_step`] consumes it into the delivery envelope, so the
-    /// terminal's reach is owned end-to-end rather than re-derived.
+    /// [`FrameCoverage`] — a resident binding read (the entry's coverage) or a splice (the source
+    /// envelope's whole coverage, its producer's own region among them), where the carrier and its
+    /// pins arrive separately rather than inside an envelope [`Self::born_delivered`] could consume
+    /// whole. The coverage rides the step and [`Self::seal_at_step`] consumes it into the delivery
+    /// envelope, so the terminal's reach is owned end-to-end rather than re-derived.
     pub(crate) fn born_pinned(inner: Witnessed<T, CarrierWitness>, pins: FrameCoverage) -> Self {
         StepCarried {
             inner,
@@ -136,14 +140,6 @@ impl<'step, T: Reattachable> StepCarried<'step, T> {
         Pin: crate::witnessed::Witness,
     {
         self.inner.with_pinned(pin, read)
-    }
-
-    /// Whether the carrier's bundled witness names no reach — the reference-only born shape pins
-    /// nothing. `#[cfg(test)]`-gated borrowed inspection: reads the witness, returns a `bool`, and
-    /// hands back neither the carrier nor its witness.
-    #[cfg(test)]
-    pub(crate) fn reach_is_empty(&self) -> bool {
-        self.inner.witness().is_empty()
     }
 
     /// Consume the wrapper through the [`Self::seal_at_step`] exit under a `#[cfg(test)]` gate, so a

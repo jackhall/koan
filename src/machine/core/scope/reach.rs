@@ -1,7 +1,7 @@
-//! The reach / carrier derivation cluster on [`Scope`]: minting a delivered value's reach into this
-//! scope's arena, the one generic resident carrier and its witness, sealing residents into delivery
-//! envelopes, and the two adoption doors over one policy chooser ([`adopt_disposition`]). Split out
-//! of the parent `scope` module.
+//! The reach / carrier derivation cluster on [`Scope`]: minting a value's residence and reach into
+//! this scope's arena as one description, the two resident-carrier verbs over it (region-pure and
+//! reach-carrying), sealing residents into delivery envelopes, and the two adoption doors over one
+//! policy chooser ([`adopt_disposition`]). Split out of the parent `scope` module.
 
 use std::rc::Rc;
 
@@ -65,71 +65,103 @@ impl<'a> Scope<'a> {
     /// it), which already names the value's home region as an ordinary member: there is no residence
     /// mode to choose.
     ///
-    /// Returns the hosted description (`None` == empty, no allocation) and the borrows-into-this-
-    /// region bit — the move-in's audit evidence and the resident seal's witness, both derived here
-    /// so no caller pairs a value with a reach some other value derived. No omission policy: the
-    /// mint applies subsumption and the self rule alone, so the description is the value's exact
-    /// reach.
+    /// Returns the hosted description — the move-in's audit evidence and the resident seal's
+    /// witness, derived here so no caller pairs a value with a reach some other value derived. It
+    /// records **two** facts: its host is this scope's own region owner (the value's residence,
+    /// stamped by the mint from the destination it freezes into) and its members are the regions the
+    /// value's borrows reach, this scope's own among them exactly when a source claim names it. No
+    /// omission policy: the mint applies subsumption and the self rule alone, so the description is
+    /// the value's exact reach.
     ///
-    /// The description is arena-hosted for the region's life and non-owning (`Weak` members); the
-    /// owning bundle never crosses back out — the library folds it straight into the region's union
-    /// bundle, which dedupes by region identity with outer-chain subsumption, so one owning `Rc` per
-    /// distinct region covers everything resident here and drops whole at region death. Binding
-    /// entries own nothing, and since a binding never dies before its scope, that pins no longer
-    /// than a per-entry bundle would.
-    pub(crate) fn mint_retained(
-        &self,
-        sources: &[&FrameCoverage],
-    ) -> (Option<&'a FrameReach>, bool) {
+    /// Every value gets one, `sources` empty or not — a region-pure value's description has no
+    /// members and still records where the value lives.
+    ///
+    /// The description is arena-hosted for the region's life and non-owning (`Weak` host and
+    /// members); the owning bundle never crosses back out — the library folds it straight into the
+    /// region's union bundle, which dedupes by region identity with outer-chain subsumption, so one
+    /// owning `Rc` per distinct region covers everything resident here and drops whole at region
+    /// death. Binding entries own nothing, and since a binding never dies before its scope, that
+    /// pins no longer than a per-entry bundle would.
+    pub(crate) fn mint_retained(&self, sources: &[&FrameCoverage]) -> &'a FrameReach {
         self.brand().handle().mint_retained(sources)
     }
 
-    /// Fuse a value living **in this scope's region** to its reference-only `{ bit, ref }` carrier
-    /// — the one resident-carrier verb, generic over the carried family, for every terminal that
-    /// hands a resident value out of a step un-sealed (a type terminal's `Carried::Type`, a
-    /// relocation's bare destination handle). The bundle runs on the confined arena surface
-    /// ([`RegionBrand::seal_resident`]), so `Witnessed::resident` is never reached from a builtin.
+    /// The description for a value **born in this scope's own region** that passed the dest-only
+    /// residence audit: its host is this scope's region owner, and that same region enters the
+    /// members exactly when `borrows_home` — the audit walk's own saw-a-region-pointer verdict
+    /// ([`Residence::seen`](crate::machine::core::Residence)) — says the value genuinely holds a
+    /// borrow into it. The audit passed, so every region the value borrows *is* this one; there is
+    /// nothing else a member could name. A region-pure scalar mints an empty member set and records
+    /// its residence all the same.
+    pub(crate) fn mint_born_here(&self, borrows_home: bool) -> &'a FrameReach {
+        match borrows_home {
+            true => {
+                let home = FrameCoverage::of(self.home());
+                self.mint_retained(&[&home])
+            }
+            false => self.mint_retained(&[]),
+        }
+    }
+
+    /// Fuse a value living **in this scope's region and reaching nothing** to its reference-only
+    /// carrier — the one region-pure resident verb, generic over the carried family, for every
+    /// terminal that hands a resident value out of a step un-sealed (a type terminal's
+    /// `Carried::Type`, a relocation's bare destination handle). The description is minted on the
+    /// confined arena surface ([`RegionBrand::seal_resident`]), so the residence is derived where
+    /// the region handle is, never assembled at a call site.
     ///
-    /// The witness's shape is the caller's, read by family:
+    /// What "reaching nothing" covers, by family:
     ///
-    /// - **Value carrier** (`CarriedFamily`, an object): the exact reach freshly minted for it
-    ///   ([`Self::mint_retained`]) with the derived home-borrow bit. The carrier pins nothing — the
-    ///   reached regions are owned by this region's union bundle — so an entry read is a bit-copy,
-    ///   and a read that leaves the container re-owns the reach by lifting into a
-    ///   [`DeliveredCarried`] envelope ([`Self::lift_resident`]).
-    /// - **Type carrier** (`CarriedFamily`, a `KType`): the empty witness
-    ///   ([`CarrierWitness::default`]). A `KType` is owned data, so the read pins no foreign region
-    ///   and travels under the home-frame pin alone (the envelope host
-    ///   [`Self::seal_resident_delivered`] pairs); the `Copy` handle rides in place, never
-    ///   re-cloned into the region.
-    /// - **Callable** (`KFunctionFamily`): also the empty witness, for the `FN` / `OP`
-    ///   registration doors. `FN` allocates
-    ///   the callable into the very scope it captures, so its only region borrow is home, which
-    ///   every read of it already pins.
+    /// - **Type carrier** (`CarriedFamily`, a `KType`): a `KType` is owned data, so the read pins no
+    ///   foreign region and travels under the home-frame pin alone (the envelope host
+    ///   [`Self::seal_resident_delivered`] pairs); the `Copy` handle rides in place, never re-cloned
+    ///   into the region.
+    /// - **Callable** (`KFunctionFamily`): the `FN` / `OP` registration doors. `FN` allocates the
+    ///   callable into the very scope it captures, so it reaches nothing beyond the region it lives
+    ///   in, which every read of it already pins.
+    /// - **Destination handle** (`RegionHandleFamily` / `DestHandleFamily`): a bare region handle
+    ///   borrows nothing at all.
+    ///
+    /// A **value carrier** whose borrows do reach somewhere takes [`Self::seal_reaching`] under the
+    /// description [`Self::mint_retained`] derived for it. Its carrier pins nothing either — the
+    /// reached regions are owned by this region's union bundle — so an entry read is a pointer copy,
+    /// and a read that leaves the container re-owns the reach by lifting into a [`DeliveredCarried`]
+    /// envelope ([`Self::lift_resident`]).
     pub(crate) fn resident<T: Reattachable>(
         &self,
         value: T::At<'_>,
-        witness: CarrierWitness,
     ) -> Witnessed<T, CarrierWitness> {
-        self.brand().seal_resident(value, witness)
+        self.brand().seal_resident(value)
     }
 
-    /// [`Self::resident`], sealed into its dormant binding form — the door a binding entry and a
-    /// dispatch-bucket registration write through.
-    ///
-    /// When `self` is a transparent window over borrowed bindings ([`Self::child_transparent`]),
-    /// the home frame is the call-site frame but the description points into the *owning* (module)
-    /// scope's own arena, not the call site's — the binding was minted there at the module's own
-    /// bind time. Sound because the window's overlay reach-fold (`USING`'s body,
-    /// `builtins/using_scope.rs`) mints the opened module's own carrier into the call-site arena at
-    /// overlay construction, before any such carrier exists — so holding the call-site frame roots
-    /// the module's arena one hop removed, and through it the description's pointee.
+    /// [`Self::resident`], sealed into its dormant binding form — the door a dispatch-bucket
+    /// registration writes through.
     pub(crate) fn seal_resident<T: Reattachable>(
         &self,
         value: T::At<'_>,
-        witness: CarrierWitness,
     ) -> Sealed<T, CarrierWitness> {
-        Sealed::seal(self.resident(value, witness))
+        Sealed::seal(self.resident(value))
+    }
+
+    /// Seal a value living in this scope's region under the description already minted for it — the
+    /// reach-carrying door a binding entry writes through, where [`Self::seal_resident`] is the
+    /// region-pure one. `reach` must be this scope's own mint for this same value
+    /// ([`Self::mint_retained`]), which is what makes the residence it stamps the value's own.
+    ///
+    /// When `self` is a transparent window over borrowed bindings ([`Self::child_transparent`]), a
+    /// binding read out of the window carries a description minted into the *owning* (module)
+    /// scope's own arena, not the call site's — the binding was minted there at the module's own
+    /// bind time, and that arena is where its host names the module's frame. Sound because the
+    /// window's overlay reach-fold (`USING`'s body, `builtins/using_scope.rs`) mints the opened
+    /// module's own carrier into the call-site arena at overlay construction, before any such
+    /// carrier exists — so holding the call-site frame roots the module's arena one hop removed, and
+    /// through it the description's pointee.
+    pub(crate) fn seal_reaching<T: Reattachable>(
+        &self,
+        value: T::At<'_>,
+        reach: &'a FrameReach,
+    ) -> Sealed<T, CarrierWitness> {
+        Sealed::seal(self.brand().seal_reaching(value, reach))
     }
 
     /// **Open** a dormant function carrier at this scope's own region lifetime: lift it into a
@@ -282,7 +314,7 @@ impl<'a> Scope<'a> {
                 // it in one step, so the copy's residence is audited against a reach derived for that same
                 // value, and folds the owning bundle into this region's union — the deep copy's surviving
                 // interior foreign borrows would otherwise be pinned by nothing.
-                let (object, _reach, _borrows_home) = self
+                let (object, _reach) = self
                     .store_object_adopted(cell, |carried| Ok(carried.object()), types)
                     .expect(
                         "a deep copy's own residence must be covered by its own reach evidence",
@@ -336,20 +368,12 @@ impl<'a> Scope<'a> {
                 Ok(self.rebuild_delivered_substrate(cell, project)?.into_cell())
             }
             AdoptDisposition::Pin => {
-                let (object, reach, borrows_home) =
-                    self.store_object_pinned(cell, project, types)?;
-                Ok(self.seal_resident(
-                    Carried::Object(object),
-                    CarrierWitness::new(borrows_home, reach),
-                ))
+                let (object, reach) = self.store_object_pinned(cell, project, types)?;
+                Ok(self.seal_reaching(Carried::Object(object), reach))
             }
             AdoptDisposition::CopyNode(types) => {
-                let (object, reach, borrows_home) =
-                    self.store_object_adopted(cell, project, types)?;
-                Ok(self.seal_resident(
-                    Carried::Object(object),
-                    CarrierWitness::new(borrows_home, reach),
-                ))
+                let (object, reach) = self.store_object_adopted(cell, project, types)?;
+                Ok(self.seal_reaching(Carried::Object(object), reach))
             }
         }
     }
@@ -380,9 +404,7 @@ impl<'a> Scope<'a> {
         // The destination operand is this scope's own region handle, sealed into an envelope under
         // this scope's own region owner — its residence, which the composition gives the product.
         let dest = self.seal_resident_delivered(
-            Witnessed::<RegionHandleFamily<KoanStorageProfile>, CarrierWitness>::resident(
-                self.brand().handle(),
-            ),
+            self.resident::<RegionHandleFamily<KoanStorageProfile>>(self.brand().handle()),
             FrameCoverage::empty(),
         );
         let mut projection_error: Option<KError> = None;
@@ -419,8 +441,8 @@ impl<'a> Scope<'a> {
     }
 
     /// The reach a module value minted in **this** scope claims from its `child` scope — the
-    /// derivation door for the module store paths, alongside the home-borrow bit the mint derives
-    /// (`true` iff the child's own region reaches this scope's region).
+    /// derivation door for the module store paths. The minted description is hosted here (the module
+    /// value's own residence) and names the child's region as a member.
     ///
     /// The claim is the child's **own region owner**, and that is exact: a `KObject::Module`'s only
     /// region borrow is its child scope, and every member value the module surfaces lives inside
@@ -430,7 +452,7 @@ impl<'a> Scope<'a> {
     /// opaque `:|`) claims a region this scope's own chain already holds; a transparent `:!` view of
     /// a source module claims that source's (foreign) region. Never recovered by walking the built
     /// module value.
-    pub(crate) fn child_module_reach(&self, child: &Scope<'a>) -> (Option<&'a FrameReach>, bool) {
+    pub(crate) fn child_module_reach(&self, child: &Scope<'a>) -> &'a FrameReach {
         let child_home: FrameCoverage = match child.region_owner().upgrade() {
             Some(owner) => FrameCoverage::of(owner),
             None => FrameCoverage::empty(),
@@ -516,8 +538,8 @@ enum AdoptDisposition<'t> {
 ///   producer region, which a tail loop's O(1) region turnover cannot afford (`it` in a
 ///   `MATCH`-mediated tail hop binds a `Tagged` payload every iteration). Records reach the pin arm
 ///   only outside tail position.
-/// - A record's crossing is priced against the region the delivered value *lives in* — the residence
-///   the envelope's container supplied ([`Delivered::with_home_region`]) — not against the
+/// - A record's crossing is priced against the region the delivered value *lives in* — the host its
+///   own reach description names, read off the carrier under the envelope's pins — not against the
 ///   projection, which may be an interior payload.
 fn adopt_disposition<'t>(
     cell: &DeliveredCarried,
@@ -530,12 +552,16 @@ fn adopt_disposition<'t>(
         AdoptSeam::ReHome(types) if !embeds_substrate => AdoptDisposition::CopyNode(types),
         AdoptSeam::ReHome(_) => AdoptDisposition::Rebuild,
         AdoptSeam::Binding(types, _) if !embeds_substrate => AdoptDisposition::CopyNode(types),
-        AdoptSeam::Binding(..) => cell.with_home_region(|host_region| match projected {
-            KObject::Record(substrate, _) => match copy_or_pin(substrate, projected, host_region) {
-                RegionEscape::Copy { .. } => AdoptDisposition::Rebuild,
-                RegionEscape::Pin => AdoptDisposition::Pin,
-            },
-            _ => AdoptDisposition::Rebuild,
-        }),
+        AdoptSeam::Binding(..) => cell
+            .open_at()
+            .with_home_region(|host_region| match projected {
+                KObject::Record(substrate, _) => {
+                    match copy_or_pin(substrate, projected, host_region) {
+                        RegionEscape::Copy { .. } => AdoptDisposition::Rebuild,
+                        RegionEscape::Pin => AdoptDisposition::Pin,
+                    }
+                }
+                _ => AdoptDisposition::Rebuild,
+            }),
     }
 }

@@ -6,7 +6,7 @@
 //! implemented against everywhere in the workgraph model.
 
 use std::cell::OnceCell;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 #[cfg(any(test, feature = "test-hooks"))]
 use std::cell::Cell;
@@ -31,28 +31,41 @@ pub struct RegionHost<P: StorageProfile> {
     /// carries the bit, and a workload asking "is this the run root?" reads it here rather than
     /// stamping a shadow copy on every structure the region backs.
     run_root: bool,
+    /// This host's own `Weak`, captured at construction through `Rc::new_cyclic` — the back-link
+    /// [`Self::region`] hands the region it mints, so every reach description frozen into that
+    /// region's side table can stamp the owner it is hosted by ([`Region::host`]). A `Weak`, so it
+    /// closes no cycle on the `Rc` that owns this host.
+    me: Weak<P::FrameOwner>,
 }
 
-impl<P: StorageProfile> RegionHost<P> {
+/// The constructors — available for a profile whose frame owner **is** this host type. A
+/// `RegionHost<P>` mints `Region<P>`, whose descriptions are typed at `P::FrameOwner`, so the
+/// back-link a fresh host captures for itself is only well-typed when the two coincide. Every
+/// workload that owns its regions through `RegionHost` satisfies it by definition.
+impl<P: StorageProfile<FrameOwner = RegionHost<P>>> RegionHost<P> {
     /// Build a fresh **per-call** host with no region minted yet, chained to `outer`.
     pub fn fresh(outer: Option<Rc<RegionHost<P>>>) -> Rc<Self> {
-        Rc::new(RegionHost {
+        Rc::new_cyclic(|me| RegionHost {
             region: OnceCell::new(),
             outer,
             run_root: false,
+            me: me.clone(),
         })
     }
 
     /// Build the **run-root** host: no region minted yet, no ancestor, and marked as the run tier
     /// ([`Self::is_run_root`]). A run has exactly one; every other host is a [`Self::fresh`] per-call.
     pub fn fresh_root() -> Rc<Self> {
-        Rc::new(RegionHost {
+        Rc::new_cyclic(|me| RegionHost {
             region: OnceCell::new(),
             outer: None,
             run_root: true,
+            me: me.clone(),
         })
     }
+}
 
+impl<P: StorageProfile> RegionHost<P> {
     /// Whether this host is the run-root ([`Self::fresh_root`]) rather than a per-call frame. The
     /// tier a caller consults to decide whether chaining a strong pin to this storage is meaningful:
     /// the run-root region outlives the run, so pinning it buys nothing and closes an `Rc` cycle.
@@ -62,6 +75,8 @@ impl<P: StorageProfile> RegionHost<P> {
 
     /// The backing region, minting it on first call. This is the **sole** mint point: nothing else
     /// in the library or a workload ever constructs a `Region<P>` directly against a `RegionHost`.
+    /// The fresh region is handed this host's own `Weak`, so every description it later hosts names
+    /// the owner it lives in.
     ///
     /// The `get_or_init` result is deliberately discarded and the reference re-derived through a
     /// plain `get`: the reference `get_or_init` returns on the minting call descends from the init
@@ -72,7 +87,7 @@ impl<P: StorageProfile> RegionHost<P> {
         let _ = self.region.get_or_init(|| {
             #[cfg(any(test, feature = "test-hooks"))]
             note_mint();
-            Region::new()
+            Region::new(self.me.clone())
         });
         self.region.get().expect("initialized just above")
     }

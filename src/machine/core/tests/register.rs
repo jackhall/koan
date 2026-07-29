@@ -10,7 +10,6 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 
 use super::{body_no_op, unit_signature};
-use crate::machine::CarrierWitness;
 
 // `BindingIndex::BUILTIN` is used throughout because these tests exercise the
 // `Bindings` write rules (rebind, dedupe, placeholder lifecycle) rather than the
@@ -703,7 +702,7 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
         .brand()
         .alloc_object_checked(KObject::KFunction(f), &types)
         .expect("f was just allocated into this region");
-    let sealed = scope.seal_resident(Carried::Object(obj), CarrierWitness::new(false, None));
+    let sealed = scope.seal_resident(Carried::Object(obj));
     scope
         .bind_value_direct(
             "f".to_string(),

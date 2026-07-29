@@ -304,12 +304,20 @@ impl<W: Workload> NodeStore<W> {
         self.slots[id] = SlotState::Running;
     }
 
+    /// Write a synthetic terminal onto a slot. `carrier` is the value's reach description reference,
+    /// minted upstream by the caller — a description names the region its value lives in, which only
+    /// the embedder's own frame owner can supply, so the store never fabricates one.
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn set_result(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
+    pub(super) fn set_result(
+        &mut self,
+        id: NodeId,
+        output: Result<Live<'_, W>, W::Error>,
+        carrier: Carrier<OwnerOf<W>>,
+    ) {
         self.slots[id] = SlotState::Done(
             output
                 .map(Erased::erase)
-                .map(|e| Sealed::seal(Witnessed::from_erased(e, Carrier::default()))),
+                .map(|e| Sealed::seal(Witnessed::from_erased(e, carrier))),
         );
     }
 

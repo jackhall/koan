@@ -8,7 +8,6 @@ use std::rc::Rc;
 
 use crate::builtins::test_support::{parse_one, per_call_storage, run_root_bare, TestRun};
 use crate::machine::model::{Carried, KObject};
-use crate::machine::CarrierWitness;
 use crate::machine::KErrorKind;
 use crate::machine::{run_root_storage, BindingIndex, FrameCoverage, Scope};
 
@@ -194,12 +193,8 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // the module's own arena via `mint_retained`, the same primitive every bind door uses, which
     // folds the owning bundle into the module region's union.
     let value_obj = module_scope.brand().alloc_object(KObject::Number(1.0));
-    let (reach, borrows_home) =
-        module_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign_storage))]);
-    let sealed = module_scope.seal_resident(
-        Carried::Object(value_obj),
-        CarrierWitness::new(borrows_home, reach),
-    );
+    let reach = module_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign_storage))]);
+    let sealed = module_scope.seal_reaching(Carried::Object(value_obj), reach);
     module_scope
         .bind_value_direct(
             "val".to_string(),
@@ -222,8 +217,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // carrier into the window's (call-site) arena at overlay construction, before any read through
     // the window -- the step that roots the module's region transitively.
     // The window region's own union is what roots the module's region transitively.
-    let (_window_reach, _borrows) =
-        window.mint_retained(&[&FrameCoverage::of(Rc::clone(&module_storage))]);
+    let _window_reach = window.mint_retained(&[&FrameCoverage::of(Rc::clone(&module_storage))]);
 
     let delivered = window
         .resolve_value_delivered("val", None)
@@ -251,5 +245,84 @@ fn using_window_value_read_reach_survives_under_module_root() {
             .open_at()
             .reach_covers(foreign_region_owner.region()),
         "the read carrier's reach still covers the foreign region after every other handle drops"
+    );
+}
+
+/// A `USING` window's overlay is the one scope whose `region_owner` is the *call site* while the
+/// bindings it surfaces live in the **module's** region — the single place residence and the reading
+/// scope diverge. Residence rides the value's own description, not the reading scope, so a record
+/// read through the window reports the module's region as its home. That is what makes the crossing
+/// out of the window a *priceable* home crossing: `copy_or_pin`'s `owns_substrate` disjunct holds
+/// and the chooser runs. A host taken from the reading scope would own no substrate here, and the
+/// same crossing would short-circuit to Pin without ever being priced.
+///
+/// (Gated out of the forced-seam builds, which override the chooser wholesale.)
+#[cfg(not(any(feature = "seam-force-copy", feature = "seam-force-pin")))]
+#[test]
+fn using_window_value_prices_against_the_module_region_it_lives_in() {
+    use crate::machine::core::{FoldingBrand, FrameStorageExt};
+    use crate::machine::model::{copy_or_pin, Held, Record, RegionEscape, TypeRegistry};
+    use crate::witnessed::FoldedPlacement;
+
+    let module_storage = per_call_storage();
+    let module_scope = run_root_bare(&module_storage);
+    let types = TypeRegistry::new();
+
+    // A plain-data record built in the module's own region: no leaf borrows home, so the chooser
+    // has a real decision to make once the crossing is recognized as a home crossing at all.
+    let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+        module_storage.brand().handle(),
+    ));
+    let fields = Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
+    let record = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
+    let sealed =
+        module_scope.seal_reaching(Carried::Object(record), module_scope.mint_born_here(false));
+    module_scope
+        .bind_value_direct(
+            "rec".to_string(),
+            sealed,
+            BindingIndex::value(0),
+            &mut crate::machine::WriteGate::for_test(),
+        )
+        .expect("fresh binding name in an unborrowed scope");
+
+    // The window: a transparent overlay whose `region_owner` is the call-site frame, not the
+    // module's — the one place residence and the reading scope genuinely diverge.
+    let call_site_storage = run_root_storage();
+    let call_site_scope = run_root_bare(&call_site_storage);
+    let window = call_site_scope
+        .brand()
+        .alloc_scope(Scope::child_transparent(
+            call_site_scope,
+            module_scope.bindings(),
+        ));
+    // `USING`'s own overlay fold, which roots the module's arena under the call-site region.
+    let _window_reach = window.mint_retained(&[&FrameCoverage::of(Rc::clone(&module_storage))]);
+
+    let delivered = window
+        .resolve_value_delivered("rec", None)
+        .expect("rec is bound in the module scope, surfaced through the transparent window")
+        .bound()
+        .expect("rec is fully bound, not a placeholder");
+
+    assert!(
+        delivered
+            .open_at()
+            .with_home_region(|host| std::ptr::eq(host, module_storage.region())),
+        "residence is the value's own record: it lives in the module's region, not the call \
+         site's, even though the window reads at the call site"
+    );
+    // `seam_verb`'s own body, spelled out: price the crossing against the host the carrier names.
+    let opened = delivered.open_at();
+    let verb = opened.with_home_region(|host| match opened.value() {
+        Carried::Object(value @ KObject::Record(substrate, _)) => {
+            copy_or_pin(substrate, value, host)
+        }
+        _ => panic!("expected a Record carrier"),
+    });
+    assert!(
+        !matches!(verb, RegionEscape::Pin),
+        "the module region owns the substrate, so the crossing is priceable and the chooser \
+         decides — a call-site host would own nothing and force Pin unconditionally"
     );
 }

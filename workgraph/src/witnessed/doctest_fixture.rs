@@ -5,6 +5,7 @@
 //! must import it; it is not part of the module's real surface.
 
 use std::cell::Cell;
+use std::rc::Rc;
 
 use super::{
     AuditedStored, FamilyArena, PinBundle, PinsRegion, Reattachable, Region, RegionOwner,
@@ -114,11 +115,13 @@ unsafe impl AuditedStored<FixtureProfile> for RecordedRefFamily {
     }
 }
 
-/// A fresh [`Region`] for the fixture profile. `Region::new` is `pub(crate)` to `workgraph`, so a
-/// doctest — which compiles as an external crate — has no direct route to one; this wraps the
-/// crate-internal constructor for that one purpose.
-pub fn fresh_region() -> Region<FixtureProfile> {
-    Region::new()
+/// A fresh region owner for the fixture profile, built through `Rc::new_cyclic` so its region is
+/// handed the owner's own `Weak` at construction — the back-link every reach description minted into
+/// that region stamps as its host. `Region::new` is `pub(crate)` to `workgraph`, so a doctest —
+/// which compiles as an external crate — has no direct route to one; this wraps the crate-internal
+/// constructor for that one purpose.
+pub fn fresh_cart() -> Rc<RegionCart> {
+    Rc::new_cyclic(|me| RegionCart(Region::new(me.clone())))
 }
 
 /// A region owner for the fixture profile.

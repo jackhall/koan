@@ -120,19 +120,22 @@ impl NodeFinalize for KoanRuntime<'_> {
             )),
             Disposition::PassThrough => Ok((envelope.into_cell().unseal(), foreign)),
             // Re-stamp in place: re-tag the top node to the declared type and re-anchor it into the
-            // producer's own region, sharing the substrate borrow verbatim. Residence is unchanged,
-            // so the re-sealed carrier's witness — and its foreign bundle, captured above — is
-            // identical to the delivered one.
+            // producer's own region, sharing the substrate borrow verbatim. Residence is unchanged —
+            // the re-mint's host is the same region — so the product envelope's foreign bundle
+            // matches the one captured above, and only its carrier is kept.
             Disposition::Restamp => Ok((
-                envelope.restamp_in_place::<CarriedFamily, KoanStorageProfile>(
-                    home,
-                    |value, _handle, placement| {
-                        let region = FoldingBrand::in_fold_closure(placement);
-                        Carried::Object(region.alloc_object_folded(
-                            value.object().deep_clone().stamp_type(declared, types),
-                        ))
-                    },
-                ),
+                envelope
+                    .restamp_in_place::<CarriedFamily, KoanStorageProfile>(
+                        home,
+                        |value, _handle, placement| {
+                            let region = FoldingBrand::in_fold_closure(placement);
+                            Carried::Object(region.alloc_object_folded(
+                                value.object().deep_clone().stamp_type(declared, types),
+                            ))
+                        },
+                    )
+                    .into_cell()
+                    .unseal(),
                 foreign,
             )),
         }

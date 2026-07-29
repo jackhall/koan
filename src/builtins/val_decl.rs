@@ -24,7 +24,6 @@ use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
-use crate::machine::CarrierWitness;
 
 fn typeexpr_from_carrier(kt: KType, types: &TypeRegistry) -> CarrierForm {
     // The builtin leaf type names re-resolve against decl_scope through the same name path so a
@@ -156,8 +155,7 @@ fn finalize_val<'a>(
         return Action::done(Err(KError::new(KErrorKind::ShapeError(message))));
     }
     Action::done(Ok(StepCarried::born(
-        fctx.scope
-            .resident(Carried::Type(declared_kt), CarrierWitness::default()),
+        fctx.scope.resident(Carried::Type(declared_kt)),
     )))
     .with_effect(crate::machine::core::bindings::WriteOp::SigSlot {
         name,

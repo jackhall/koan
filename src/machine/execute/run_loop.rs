@@ -17,7 +17,7 @@ use crate::machine::{
     CarrierWitness, FrameCoverage, KError, KErrorKind, KoanRegion, NodeHandle, NodeId,
 };
 use crate::witnessed::{
-    erase_to_static, reattachable, Delivered, RegionHandleFamily, SealedExtern, Witnessed,
+    erase_to_static, reattachable, Delivered, RegionHandleFamily, SealedExtern,
 };
 
 use super::dispatch::SchedulerView;
@@ -299,9 +299,7 @@ impl<'run> KoanRuntime<'run> {
                         let dest = match frame {
                             Some(_) => dest_brand(Rc::clone(anchor.owner())),
                             None => scope.seal_resident_delivered(
-                                Witnessed::<DestHandleFamily, CarrierWitness>::resident(
-                                    scope.brand().handle(),
-                                ),
+                                scope.resident::<DestHandleFamily>(scope.brand().handle()),
                                 FrameCoverage::empty(),
                             ),
                         };

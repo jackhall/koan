@@ -88,9 +88,9 @@ pub(super) fn await_module_body<'a>(
             // module carries no SIG, so the raw derivation is the whole signature.
             module.seal_self_sig(SigSchema::raw_self_sig(module), fctx.types);
             // Fused MODULE-finish seal: the module's stored reach is derived off the child scope
-            // held **directly** here (never by walking the built value) — the home-borrow bit
-            // included, `true` because the same-region child's own region owner covers this scope's
-            // region — and the Object-arm module value is allocated under it. The returned terminal
+            // held **directly** here (never by walking the built value) — which names this scope's
+            // own region as a member, because the same-region child's own region owner covers it —
+            // and the Object-arm module value is allocated under it. The returned terminal
             // witnesses that same value from the same stored reach; the value-side
             // (`bindings.data`) write rides the outcome.
             match fctx.scope.seal_module(module, child_scope, fctx.types) {

@@ -17,10 +17,11 @@ use crate::machine::AdoptSeam;
 use crate::machine::CallFrame;
 use crate::witnessed::Delivered;
 
-/// Build a scalar carrier residing in `producer`'s region with the given exact reach
-/// and `borrows_into_home` bit — the exact carrier a resident-value read hands to finalize. Returns
-/// the carrier (lifetime-erased, so it escapes the frame's rank-2 scope open) and a [`Weak`] to the
-/// producer's `FrameStorage` for the liveness census.
+/// Build a scalar carrier residing in `producer`'s region whose borrows reach that region exactly
+/// when `borrows_into_home` — the exact carrier a resident-value read hands to finalize. The
+/// description is minted by [`Scope::mint_born_here`], so home is an ordinary member of it or absent
+/// from it, never a bit beside it. Returns the carrier (lifetime-erased, so it escapes the frame's
+/// rank-2 scope open) and a [`Weak`] to the producer's `FrameStorage` for the liveness census.
 fn resident_scalar(
     producer: &Rc<CallFrame>,
     borrows_into_home: bool,
@@ -31,9 +32,9 @@ fn resident_scalar(
     let carrier = producer.with_scope(|child| {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
         child
-            .seal_resident(
+            .seal_reaching(
                 Carried::Object(obj),
-                CarrierWitness::new(borrows_into_home, None),
+                child.mint_born_here(borrows_into_home),
             )
             .unseal()
     });
@@ -53,22 +54,16 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, false);
+    let delivered = Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty());
     assert!(
-        !carrier.witness().has_reach_members(),
-        "a region-pure scalar's reach names nothing"
-    );
-    assert!(
-        carrier.witness().is_empty(),
-        "the carrier pins nothing — liveness is retention's"
+        !delivered.open_at().has_reach_members(),
+        "a region-pure scalar's reach names nothing — the carrier itself pins nothing, so \
+         liveness is retention's"
     );
 
     let (sealed, sealed_pins) = test_run
         .runtime
-        .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
-            &producer.storage_rc(),
-            None,
-        )
+        .finalize_terminal(delivered, &producer.storage_rc(), None)
         .expect("no declared return, no error");
     // The retention seed: the producer's storage rides the envelope, exactly as the run loop hands
     // it to the scheduler at finalize.
@@ -127,35 +122,32 @@ fn delivery_envelope_foreign_bundle_releases_at_envelope_drop() {
     );
 }
 
-/// A value that genuinely borrows into its producer frame carries the `borrows_host` bit through
-/// the Done boundary unchanged — finalize seals as-is; the bit is read only at a later copied
-/// re-home mint, never as a lifecycle input. The frame's lifetime is retention's either way.
+/// A value that genuinely borrows into its producer frame carries that home membership through the
+/// Done boundary unchanged — finalize seals as-is; membership is read only at a later copied re-home
+/// mint, never as a lifecycle input. The frame's lifetime is retention's either way.
 #[test]
-fn home_borrowing_value_keeps_its_bit_and_rides_retention() {
+fn home_borrowing_value_keeps_its_home_membership_and_rides_retention() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, true);
+    let delivered = Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty());
     assert!(
-        carrier.witness().borrows_host(),
-        "the home-borrow bit rides the carrier"
+        delivered.open_at().borrows_home(),
+        "home is an ordinary member of the value's own description"
     );
 
     let (sealed, sealed_pins) = test_run
         .runtime
-        .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
-            &producer.storage_rc(),
-            None,
-        )
+        .finalize_terminal(delivered, &producer.storage_rc(), None)
         .expect("no declared return, no error");
-    assert!(
-        sealed.witness().borrows_host(),
-        "the bit survives the Done boundary verbatim"
-    );
     let envelope = Delivered::seal(sealed, producer.storage_rc(), sealed_pins);
+    assert!(
+        envelope.open_at().borrows_home(),
+        "the membership survives the Done boundary verbatim"
+    );
 
     drop(producer);
     assert!(
@@ -182,9 +174,10 @@ thread_local! {
 /// become observable end-to-end.
 fn probe_body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     FRAME_CENSUS.with(|census| census.borrow_mut().push(ctx.scope.region_owner()));
-    Action::done_resident(Carried::Object(
-        ctx.scope.brand().alloc_object(KObject::Number(1.0)),
-    ))
+    Action::done_resident(
+        ctx.scope,
+        Carried::Object(ctx.scope.brand().alloc_object(KObject::Number(1.0))),
+    )
 }
 
 /// Register `(PROBE)` — a nullary keyword builtin returning `Number` — into `scope`, against the
@@ -397,12 +390,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let (carrier, birth_addr) = producer.with_scope(|child| {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
         let addr = obj as *const KObject as usize;
-        (
-            child
-                .seal_resident(Carried::Object(obj), CarrierWitness::new(false, None))
-                .unseal(),
-            addr,
-        )
+        (child.seal_resident(Carried::Object(obj)).unseal(), addr)
     });
     let storage = producer.storage_rc();
     let count_before = Rc::strong_count(&storage);

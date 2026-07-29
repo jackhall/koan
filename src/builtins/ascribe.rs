@@ -131,10 +131,10 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     }
 
     // The view's token is derived from `new_scope` held directly here (co-located, so it names only
-    // what the bulk-installed members reach and derives its home-borrow bit from the mint), stored
-    // nowhere — the view is a returned value, not a named binding — and sealed onto the terminal
-    // carrier, witnessing the module in place. The opaque view's `new_scope` is a same-region child
-    // of this frame, so the derived bit records the module's home borrow.
+    // what the bulk-installed members reach), stored nowhere — the view is a returned value, not a
+    // named binding — and sealed onto the terminal carrier, witnessing the module in place. The
+    // opaque view's `new_scope` is a same-region child of this frame, so the mint names this scope's
+    // own region as a member: the module genuinely borrows into its home.
     // The view surfaces as the Object-arm module value (`new_module` lives in `region`'s own
     // region, so the audit passes on the dest-only check alone); a LET around it binds that value
     // like any other. The fused door derives the module value's reach from its own `new_scope`, so
@@ -162,12 +162,12 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
         return Action::done(Err(e));
     }
     // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
-    // to this frame — so its token folds that source's region and reach and derives its home-borrow
-    // bit from the mint, sealed onto the terminal. Minted *before* the module alloc below: both the
+    // to this frame — so its token folds that source's region and reach, sealed onto the terminal.
+    // Minted *before* the module alloc below: both the
     // module's own placement (its child scope is this foreign region, not `region`'s own) and the
     // Object-arm carrier that surfaces it need this one token. Reusing the foreign source's child scope, the view
-    // borrows nothing into this home frame (its interior points at the source region), so the derived
-    // bit stays unset — a downstream copied-mode mint materializes no home-frame member, and the dying
+    // borrows nothing into this home frame (its interior points at the source region), so the mint
+    // names no home member — a downstream copied-mode mint materializes no home-frame member, and the dying
     // home frame frees once its retention hold releases.
     // The re-tagged Module and its Object-arm wrapper both ride one reach derived off the reused
     // (foreign) source child scope — the fused door allocs the Module reaching that region, seals the

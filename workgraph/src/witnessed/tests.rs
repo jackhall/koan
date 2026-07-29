@@ -404,22 +404,9 @@ fn seal_option_none_opens_to_none() {
     assert_eq!(got, 9);
 }
 
-/// [`StepContext::alloc`]: the built value's carrier is the empty reference-only [`Carrier`] —
-/// reach = own region only, encoded as no reach at all; liveness is the frame the step loop holds.
-#[test]
-fn step_context_alloc_carrier_is_empty() {
-    let cart: Rc<TestCart> = Rc::new(TestCart {
-        backing: vec![1, 2, 3],
-        outer: None,
-    });
-    let ctx: StepContext<TestCart> = StepContext::new(Rc::clone(&cart));
-    let w: Witnessed<RefFamily, Carrier<TestCart>> = ctx.alloc(|region| &region[0]);
-    assert_eq!(w.with_pinned(&cart, |r| **r), 1);
-    assert!(w.witness().is_empty());
-}
-
-/// Library-`Region` frame profile for the [`StepContext::alloc_with`] fold test — the envelope-fed
-/// fold mints into a real library arena, so the plain `[u32]`-region `TestCart` cannot host it.
+/// Library-`Region` frame profile for the [`StepContext`] fold tests — every construction door
+/// mints a description into a real library arena, so the plain `[u32]`-region `TestCart` cannot
+/// host one.
 struct StepProfile;
 
 impl StorageProfile for StepProfile {
@@ -449,9 +436,27 @@ unsafe impl PinsRegion for StepFrame {
 }
 
 fn step_frame() -> Rc<StepFrame> {
-    Rc::new(StepFrame {
-        region: Region::new(),
+    Rc::new_cyclic(|me| StepFrame {
+        region: Region::new(me.clone()),
     })
+}
+
+/// [`StepContext::alloc`]: the built value's carrier references a description with **no members** —
+/// reach = own region only, which is residence, not reach — hosted in the frame's own region;
+/// liveness is the frame the step loop holds.
+#[test]
+fn step_context_alloc_carrier_names_its_home_and_no_members() {
+    static SEVEN: u32 = 7;
+    let frame = step_frame();
+    let ctx: StepContext<StepFrame> = StepContext::new(Rc::clone(&frame));
+    let w: Witnessed<RefFamily, Carrier<StepFrame>> =
+        ctx.alloc::<RefFamily, StepProfile>(|_region| &SEVEN);
+    assert_eq!(w.with_pinned(&frame, |r| **r), 7);
+    let sealed = Sealed::seal(w);
+    let opened = sealed.open_at(&frame);
+    assert!(!opened.has_reach_members(), "reach = own region only");
+    assert!(!opened.borrows_home());
+    assert!(opened.with_home_region(|region| std::ptr::eq(region, frame.region())));
 }
 
 /// [`StepContext::alloc_with`]: each dep folds through its delivery envelope claiming that
@@ -465,12 +470,12 @@ fn step_context_alloc_with_mints_dep_homes_and_preserves_dep_order() {
     let dep_a = step_frame();
     let dep_b = step_frame();
     let delivered_a: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
-        Witnessed::<RefFamily, Carrier<StepFrame>>::resident(&ONE),
+        Witnessed::<RefFamily, Carrier<StepFrame>>::resident_in::<StepProfile>(&ONE, &dep_a),
         Rc::clone(&dep_a),
         StepCoverage::empty(),
     );
     let delivered_b: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
-        Witnessed::<RefFamily, Carrier<StepFrame>>::resident(&TWO),
+        Witnessed::<RefFamily, Carrier<StepFrame>>::resident_in::<StepProfile>(&TWO, &dep_b),
         Rc::clone(&dep_b),
         StepCoverage::empty(),
     );
@@ -489,10 +494,10 @@ fn step_context_alloc_with_mints_dep_homes_and_preserves_dep_order() {
     let sealed: Sealed<RefFamily, Carrier<StepFrame>> = built.into_cell();
     let opened = sealed.open_at(&own);
     opened.with_reach(|reach| {
-        let reach = reach.expect("dep homes compose as reach members");
         assert!(reach.pins_region(dep_a.region()));
         assert!(reach.pins_region(dep_b.region()));
         assert!(!reach.pins_region(own.region()));
     });
-    assert!(!opened.witness().borrows_host());
+    assert!(!opened.borrows_home());
+    assert!(opened.with_home_region(|region| std::ptr::eq(region, own.region())));
 }

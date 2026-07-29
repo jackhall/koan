@@ -97,10 +97,11 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
 /// ([`copy_or_pin`](crate::machine::model::copy_or_pin)); every other value copies unconditionally
 /// (`Copy { released: false }` → `Residence::Copied`, the behavior for non-substrate carriers).
 pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> RegionEscape {
-    delivered.open(|carried| match carried {
-        // The crossing is priced against the region the value *lives in* — the residence the
-        // envelope's container supplied ([`Delivered::with_home_region`]).
-        Carried::Object(value) => delivered.with_home_region(|host| match value {
+    let opened = delivered.open_at();
+    match opened.value() {
+        // The crossing is priced against the region the value *lives in* — the host its own reach
+        // description names, read off the carrier under the envelope's pins.
+        Carried::Object(value) => opened.with_home_region(|host| match value {
             KObject::Record(substrate, _) => copy_or_pin(substrate, value, host),
             KObject::List(substrate, _) => copy_or_pin(substrate, value, host),
             KObject::Dict(substrate, _) => copy_or_pin(substrate, value, host),
@@ -113,7 +114,7 @@ pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> Re
             _ => RegionEscape::Copy { released: false },
         }),
         _ => RegionEscape::Copy { released: false },
-    })
+    }
 }
 
 /// The **retention predicate** a value-level relocation of `delivered` hands its fold, given the
@@ -143,9 +144,9 @@ pub(in crate::machine::execute) fn seam_still_borrows<'e>(
 /// releases it, letting the retiring producer free at retention discharge instead of riding the
 /// destination's reach.
 ///
-/// This is what reconciles with `force_substrate_borrows_host`'s conservative seal bit: at a copy
-/// seam a still-borrowing carrier keeps its pins, and a plain-data carrier releases, its bit
-/// overridden by the copy pass's exact answer.
+/// It is also what keeps a birth-site mint from over-retaining: a fold door's mint names every
+/// region the source bundle pins, and this pass is where a plain-data copy drops the ones it no
+/// longer borrows, while a still-borrowing carrier keeps its pins.
 pub(in crate::machine::execute) fn cell_still_borrows(
     delivered: &DeliveredCarried,
 ) -> impl for<'b> FnMut(&(RegionHandle<'b, KoanStorageProfile>, Vec<Held<'b>>), &KoanRegion) -> bool + '_

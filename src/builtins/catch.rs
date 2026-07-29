@@ -8,10 +8,10 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::WriteGate;
 use std::rc::Rc;
 
+use crate::machine::kerror_ktype;
 use crate::machine::model::{KObject, KType, Record};
 use crate::machine::Scope;
 use crate::machine::StepCarried;
-use crate::machine::{force_substrate_borrows_host, kerror_ktype};
 
 use super::{arg, kw, sig};
 
@@ -103,12 +103,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 )))
             },
         );
-        // Step-terminal seal: either arm's payload may be (or embed) a fresh record — force the
-        // bit rather than trust the fold's operand-only compose. The product's residence *is*
-        // `frame`, which the step's own seal re-pins, so only its foreign coverage rides on.
-        let coverage = product.coverage_releasing_home();
-        let witnessed = force_substrate_borrows_host(product.into_cell().unseal(), &frame);
-        Action::done(Ok(StepCarried::born_pinned(witnessed, coverage)))
+        // Step-terminal seal: the transfer minted the product's description into the dest frame's
+        // own region, so that region is the product's host and enters its members whenever the
+        // payload borrows there — a fresh record does. The product's residence *is* `frame`, which
+        // the step's own seal re-pins, so only its foreign coverage rides on.
+        Action::done(Ok(StepCarried::born_delivered(product)))
     });
     Action::catch(
         DepRequest::Dispatch {
