@@ -38,6 +38,8 @@ just enough to read the policy.
   consumer region's reach table) and owned pin bundle (stored by the
   consuming holder), so the consumer keeps the regions alive with no help
   from the producer ([memory-model.md § Region lifetime erasure](memory-model.md#region-lifetime-erasure)).
+  Minting is get-or-mint against the region's interned description table
+  ([workgraph/design/sectioned-reach.md](../workgraph/design/sectioned-reach.md)).
 - **Pin** — keeping a producer's whole region alive by holding its
   `Rc<FrameStorage>` in the consuming holder's bundle, released when that
   holder drops; the escape default below.
@@ -120,6 +122,45 @@ pass that computes the type join):
   reads (see [§ Cost-driven copy](#cost-driven-copy-the-optimization)), distinct
   from the conservative contains-borrows bit above.
 
+The two borrow bits are folds over the substrate's run descriptions
+([§ Sectioned reach](#sectioned-reach)), not a separate walk.
+
+## Sectioned reach
+
+Reach is a stored fact at every granularity, not just per value. A
+substrate's cells are physically partitioned into contiguous **runs** in
+semantic order (field order, list index order, dict iteration order), each
+run pairing a span of cells with one reach description interned in the home
+region's side table. The run machinery — the interned table, the
+payload-generic sectioned storage, the alloc door that groups enveloped
+inputs into runs and folds their pins — is workgraph's
+([workgraph/design/sectioned-reach.md](../workgraph/design/sectioned-reach.md));
+koan supplies the per-input copy-or-pin verdicts and the born-borrowing
+seeds (the `FN` door naming a closure's captured scope, the module door
+naming its child scope).
+
+- **Exact per run.** A run's description is precisely the shared reach of
+  its cells, so a projection or index read hands a cell out with exactly
+  its own reach: the bind or lift seam mints from the stored description —
+  upgrade to a bundle under the container's covering pin, then one mint
+  source — never a subset walk over the container. A cell is `'a`-confined
+  to its container's region until such a seam relocates it; the compiler
+  forces the seam.
+- **Owned-only channels.** Scalars, strings, and type values are owned data
+  (a koan type value never embeds a value), so they always land in
+  empty-reach runs. **Dict keys are restricted to owned data** by language
+  rule — a function or module key is meaningless — and the construction
+  door rejects a borrow-carrying key by its stored envelope, an O(1) check.
+- **Memos are folds over runs.** Contains-borrows ⇔ any run's description
+  is non-empty; borrows-home ⇔ any run names the home region; `copy_cost`
+  is unchanged.
+- **Transfer reads stored reach.** A crossing claims the empty source
+  bundle exactly when no surviving run names the source region — a stored
+  fact, not a probe over the value's shape.
+- **The value-level description stays.** Whole-value carriers (delivery
+  envelopes, binding tables) keep their single stored description — the
+  get-or-mint of the union over the value's runs, cheap under interning.
+
 ## Escape: pin by default
 
 An escaping value — a return, an argument bind, a root-drain terminal —
@@ -185,10 +226,10 @@ than the conservative contains-borrows bit: contains-borrows asks only whether
 *any* borrow leaf exists into *any* region, and remains the seal/reach
 conservatism input; the copy decision needs the home-relative question, and gets
 an exact answer for a priceable value. On the **unpriceable** path, where no
-home-relative memo is available, release falls back to the copy pass's per-host
-address-table probe: each surviving borrow leaf is checked against the retiring
-host's tables, so a value whose leaves all point into foreign regions still
-releases its home.
+home-relative memo is available, release is still a stored fact: the copy claims
+the retiring host's release exactly when no surviving run description names it
+([§ Sectioned reach](#sectioned-reach)), so a value whose leaves all point into
+foreign regions still releases its home.
 
 A **pinned record** shares its producer-resident substrate by a pointer-copy
 (never a partial rebuild). Because a record's substrate borrow carries no borrow

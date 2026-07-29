@@ -43,6 +43,8 @@ semantics, and the retention protocol.
 
 **Requires:**
 
+- [Sectioned reach](sectioned-reach.md) — landing first keeps the carved
+  memory-substrate surface final.
 
 **Unblocks:**
 
