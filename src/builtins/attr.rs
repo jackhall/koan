@@ -255,7 +255,7 @@ fn wrapped_field<'v, 'w>(
 ) -> Result<&'v Held<'w>, KError> {
     match target {
         KObject::Wrapped { inner, type_id } => match inner.payload() {
-            KObject::Record(substrate, _) => match substrate.fields().get(field) {
+            KObject::Record(substrate, _) => match substrate.field(field) {
                 Some(held) => Ok(held),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
@@ -381,11 +381,19 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                     crate::machine::core::FrameCoverage::empty(),
                 );
                 let ctx = StepAllocator::for_scope(module_scope);
+                // The peel keeps the member's payload verbatim, so a payload substrate that stays
+                // in the module's region rides as the payload cell's own stored run; the member
+                // carrier's coverage is the holder-rule proof for reading it at the door.
+                let holder = obj_carrier.coverage().clone();
                 return Ok(ctx.alloc_carried_with(
                     &[&obj_carrier, &tag_carrier],
                     |b, views| match (views[0], views[1]) {
                         (Carried::Object(o), Carried::Type(tag)) => {
-                            Carried::Object(b.alloc_object_folded(KObject::wrapped_peel(b, o, tag)))
+                            Carried::Object(b.alloc_object_folded(KObject::wrapped_peel(
+                                b.with_holder(&holder),
+                                o,
+                                tag,
+                            )))
                         }
                         _ => unreachable!("operand order: [value member, re-tag identity]"),
                     },

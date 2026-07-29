@@ -1,13 +1,18 @@
 use std::collections::HashMap;
+use std::rc::Weak;
 
 use crate::machine::core::KFunction;
-use crate::machine::core::{FoldingBrand, FrameReach, KoanRegion, KoanRegionExt, Residence};
+use crate::machine::core::{
+    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, Residence, SubstrateDoor,
+};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
+use crate::witnessed::{CellInput, CellReach, Sectioned};
 
+use super::container_substrate::{held_copy_cost, HeldCells, ListLayout, PayloadLayout};
 use super::{
     ContainerSubstrate, DictSubstrate, Held, KKey, ListSubstrate, Module, PayloadSubstrate,
-    RecordSubstrate, SubstrateMemos,
+    RecordSubstrate,
 };
 
 mod equality;
@@ -60,9 +65,9 @@ pub enum KObject<'a> {
     Number(f64),
     KString(String),
     Bool(bool),
-    /// List value. The first field is a region borrow of the list's [`ListSubstrate`] — the element
-    /// slice plus its three construction memos, contains-borrows / copy-cost / borrows-home
-    /// (positional, index-ordered). The second is the value's **own type handle** — the interned
+    /// List value. The first field is a region borrow of the list's [`ListSubstrate`] — the elements
+    /// in sectioned storage (positional, index-ordered, partitioned into reach runs) plus the value's
+    /// stored reach union and copy cost. The second is the value's **own type handle** — the interned
     /// `List<element>` — memoized at construction from the join (LUB) of the contents, or re-stamped
     /// at an annotated boundary to the declared list type (coarsening included). Construct via
     /// [`KObject::list`] / [`KObject::list_with_type`] — never the tuple directly outside this
@@ -70,9 +75,9 @@ pub enum KObject<'a> {
     /// [`FoldingBrand::alloc_substrate_folded`]. Each element is a [`Held`] (an object or a
     /// first-class type).
     List(&'a ListSubstrate<'a>, KType),
-    /// Dict value. The first field is a region borrow of the dict's [`DictSubstrate`] — the frozen
-    /// entry table plus its three construction memos, contains-borrows / copy-cost / borrows-home.
-    /// Each value cell is a [`Held`] (an object or a first-class type); keys are the concrete scalar
+    /// Dict value. The first field is a region borrow of the dict's [`DictSubstrate`] — the value
+    /// cells in sectioned storage plus the frozen key→index table, the stored reach union and the copy
+    /// cost. Each value cell is a [`Held`] (an object or a first-class type); keys are the concrete scalar
     /// [`KKey`]. The second field is the value's **own type handle** — the interned `Dict<key, value>`
     /// over the join of the keys / values, or the declared dict type after a stamp. Construct via
     /// [`KObject::dict`] / [`KObject::dict_with_type`] — never the tuple directly outside this module,
@@ -82,8 +87,8 @@ pub enum KObject<'a> {
     KExpression(KExpression<'a>),
     KFunction(&'a KFunction<'a>),
     /// Tagged-union value. The `value` field is a region borrow of the payload's
-    /// [`PayloadSubstrate`] — the single payload cell plus its three construction memos,
-    /// contains-borrows / copy-cost / borrows-home. `identity` is the value's own type handle: the
+    /// [`PayloadSubstrate`] — the single payload cell in sectioned storage plus its stored reach and
+    /// copy cost. `identity` is the value's own type handle: the
     /// union member's `SetMember` handle when the carrier's type arguments are erased, or the
     /// `ConstructorApply` over that member when an ascription stamped a parameterized union's
     /// arguments in. One handle carries what the member reference and the runtime type
@@ -97,9 +102,9 @@ pub enum KObject<'a> {
         identity: KType,
     },
     /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is a region
-    /// borrow of the record's [`RecordSubstrate`] — the field record plus its three construction
-    /// memos, contains-borrows / copy-cost / borrows-home (identifier-keyed, declaration-ordered,
-    /// order-blind equality); the
+    /// borrow of the record's [`RecordSubstrate`] — the field cells in sectioned storage plus the
+    /// name→index table, the stored reach union and the copy cost (identifier-keyed,
+    /// declaration-ordered, order-blind equality); the
     /// second is the value's own type handle — the interned `Record` over each field's
     /// `ktype()` at fresh construction, re-stamped to a declared record type at an annotated
     /// boundary (mirrors `List` / `Dict`). Construct via [`KObject::record`] /
@@ -111,7 +116,7 @@ pub enum KObject<'a> {
     /// NEWTYPE identity-wrapper carrier (and the ATTR abstract-type re-tag carrier): tags a
     /// representation value with a type identity. (A user-`UNION` variant value is a
     /// [`Self::Tagged`], not a `Wrapped` — ruling 13.) The `inner` field is a region borrow of the
-    /// payload's [`PayloadSubstrate`] — the single payload cell plus its three construction memos.
+    /// payload's [`PayloadSubstrate`] — the single payload cell plus its stored reach and copy cost.
     /// A re-tag collapses one wrapper layer ([`KObject::wrapped_peel`]); a genuine construction
     /// preserves the payload verbatim ([`KObject::wrapped_hold`]), so a newtype nesting another
     /// keeps every layer. `type_id` is the declaration-stable identity handle — for a standalone
@@ -140,10 +145,10 @@ pub enum KObject<'a> {
 impl<'a> KObject<'a> {
     /// Fresh `List` carrier: memoizes the element type as the join (LUB) of contents.
     /// Empty list memoizes `Any` (the join's identity); the empty-container *error*
-    /// rule lives at the untyped-resolution boundary, not here. `door` is the fold brand the
-    /// substrate is born through — see [`Self::list_of_held`].
+    /// rule lives at the untyped-resolution boundary, not here. `door` is the substrate door the
+    /// cells are sectioned through — see [`Self::list_of_held`].
     pub fn list(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         items: Vec<KObject<'a>>,
         types: &TypeRegistry,
     ) -> KObject<'a> {
@@ -152,22 +157,16 @@ impl<'a> KObject<'a> {
 
     /// Fresh `List` carrier over [`Held`] cells — the type-aware path (a list element may be
     /// a first-class type). One pass over `items` computes the memoized element-type join (this
-    /// carrier's own `ktype()`) and the substrate's three memos — contains-borrows, copy-cost,
-    /// borrows-home (see [`ListSubstrate`]'s doc for the per-cell rules; the leaf checks read
-    /// `door`'s own region as home) — then allocates the substrate through `door` — the list door's
+    /// carrier's own `ktype()`); the substrate door then sections the cells, folding their stored
+    /// reach verdicts into the runs and the value-level union ([`section_cells`]) — the list door's
     /// sole construction site.
     pub fn list_of_held(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         items: Vec<Held<'a>>,
         types: &TypeRegistry,
     ) -> KObject<'a> {
         let element = types.join_iter(items.iter().map(|i| i.ktype(types)));
-        let home = door.region();
-        let memos = SubstrateMemos::compute(items.iter(), home);
-        let substrate = door.alloc_substrate_folded::<ListSubstrate<'static>>(
-            ContainerSubstrate::new(items, memos),
-        );
-        KObject::List(substrate, types.list(element))
+        KObject::List(alloc_list(door, items), types.list(element))
     }
 
     /// `List` carrier with an explicitly supplied **list type** — for ascription stamping (re-tag to
@@ -182,26 +181,20 @@ impl<'a> KObject<'a> {
     /// Re-home an already-relocated element slice into `door`'s region under the value's existing
     /// memoized list type — the seam copy verb's list arm ([`copy_object_into`]). Relocation
     /// preserves every element's `ktype()`, so the element-type join is unchanged and `list_type`
-    /// rides verbatim; the three memos recompute relative to the new home (`door`'s own region). The
-    /// substrate is born through `door` — the list door's sole construction site. See
-    /// [`Self::record_rehomed`].
+    /// rides verbatim; the cells are re-sectioned at `door`, so each rebuilt cell's run reads its own
+    /// fresh stored facts. See [`Self::record_rehomed`].
     pub fn list_rehomed(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         items: Vec<Held<'a>>,
         list_type: KType,
     ) -> KObject<'a> {
-        let home = door.region();
-        let memos = SubstrateMemos::compute(items.iter(), home);
-        let substrate = door.alloc_substrate_folded::<ListSubstrate<'static>>(
-            ContainerSubstrate::new(items, memos),
-        );
-        KObject::List(substrate, list_type)
+        KObject::List(alloc_list(door, items), list_type)
     }
 
     /// Fresh `Dict` carrier: memoizes key + value types as the join of the keys / values. `door` is
-    /// the fold brand the substrate is born through — see [`Self::dict_of_held`].
+    /// the substrate door the cells are sectioned through — see [`Self::dict_of_held`].
     pub fn dict(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         map: HashMap<KKey, KObject<'a>>,
         types: &TypeRegistry,
     ) -> KObject<'a> {
@@ -214,25 +207,22 @@ impl<'a> KObject<'a> {
 
     /// Fresh `Dict` carrier over [`Held`] value cells — the type-aware path (a dict value may be a
     /// first-class type; keys stay scalar). One pass over `map` computes the memoized key/value type
-    /// join (this carrier's own `ktype()`) and the substrate's three memos — contains-borrows,
-    /// copy-cost, borrows-home (the leaf checks read `door`'s own region as home; only the value
-    /// cells carry region borrows, so the memos fold over `map.values()`). The frozen table is
-    /// materialized into `hashbrown` (last-wins dedup already happened in the transient input map)
-    /// and allocated through `door` — the dict door's sole construction site.
+    /// join (this carrier's own `ktype()`); the value cells are then sectioned through `door` and the
+    /// key→index table frozen into `hashbrown` (last-wins dedup already happened in the transient
+    /// input map) — the dict door's sole construction site.
+    ///
+    /// **Keys are owned data by language rule** ([`KKey`] admits only `String` / `Number` / `Bool`,
+    /// so a borrow-carrying key is unrepresentable here); the O(1) stored-envelope rejection of a key
+    /// whose carrier names any reach member runs at the one site that produces a key from a carrier
+    /// (`dispatch::literal`'s `scalar_key`).
     pub fn dict_of_held(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         map: HashMap<KKey, Held<'a>>,
         types: &TypeRegistry,
     ) -> KObject<'a> {
         let key = types.join_iter(map.keys().map(|k| k.ktype()));
         let value = types.join_iter(map.values().map(|v| v.ktype(types)));
-        let home = door.region();
-        let memos = SubstrateMemos::compute(map.values(), home);
-        let frozen: hashbrown::HashMap<KKey, Held<'a>> = map.into_iter().collect();
-        let substrate = door.alloc_substrate_folded::<DictSubstrate<'static>>(
-            ContainerSubstrate::new(frozen, memos),
-        );
-        KObject::Dict(substrate, types.dict(key, value))
+        KObject::Dict(alloc_dict(door, map), types.dict(key, value))
     }
 
     /// `Dict` carrier with an explicitly supplied **dict type** — for ascription stamping (re-tag to
@@ -246,27 +236,21 @@ impl<'a> KObject<'a> {
     /// Re-home an already-relocated entry table into `door`'s region under the value's existing
     /// memoized dict type — the seam copy verb's dict arm ([`copy_object_into`]). Relocation
     /// preserves every value cell's `ktype()`, so the key/value-type join is unchanged and
-    /// `dict_type` rides verbatim; the three memos recompute relative to the new home (`door`'s own
-    /// region). The substrate is born through `door` — the dict door's sole construction site. See
-    /// [`Self::list_rehomed`].
+    /// `dict_type` rides verbatim; the cells are re-sectioned at `door`. See [`Self::list_rehomed`].
     pub fn dict_rehomed(
-        door: FoldingBrand<'a>,
-        map: hashbrown::HashMap<KKey, Held<'a>>,
+        door: SubstrateDoor<'a, '_>,
+        map: HashMap<KKey, Held<'a>>,
         dict_type: KType,
     ) -> KObject<'a> {
-        let home = door.region();
-        let memos = SubstrateMemos::compute(map.values(), home);
-        let substrate = door
-            .alloc_substrate_folded::<DictSubstrate<'static>>(ContainerSubstrate::new(map, memos));
-        KObject::Dict(substrate, dict_type)
+        KObject::Dict(alloc_dict(door, map), dict_type)
     }
 
     /// Fresh `Record` carrier: memoizes the per-field type record as each field's
     /// `ktype()`. Field order follows declaration; equality is order-blind per the
-    /// `Record` substrate. `door` is the fold brand the substrate is born through — see
+    /// `Record` substrate. `door` is the substrate door the cells are sectioned through — see
     /// [`Self::record_of_held`].
     pub fn record(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         fields: Record<KObject<'a>>,
         types: &TypeRegistry,
     ) -> KObject<'a> {
@@ -279,22 +263,16 @@ impl<'a> KObject<'a> {
 
     /// Fresh `Record` carrier over [`Held`] field cells — the type-aware path (a field
     /// value may be a first-class type). One pass over `fields` computes the memoized
-    /// field-type join (this carrier's own `ktype()`) and the substrate's three memos —
-    /// contains-borrows, copy-cost, borrows-home (see [`RecordSubstrate`]'s doc for the per-cell
-    /// rules; the leaf checks read `door`'s own region as home) — then allocates the substrate
-    /// through `door` — the record door's sole construction site.
+    /// field-type join (this carrier's own `ktype()`); the cells are then sectioned through `door` in
+    /// declaration order, with the name→index table as the substrate's layout — the record door's
+    /// sole construction site.
     pub fn record_of_held(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         fields: Record<Held<'a>>,
         types: &TypeRegistry,
     ) -> KObject<'a> {
         let field_types = fields.map(|v| v.ktype(types));
-        let home = door.region();
-        let memos = SubstrateMemos::compute(fields.values(), home);
-        let substrate = door.alloc_substrate_folded::<RecordSubstrate<'static>>(
-            ContainerSubstrate::new(fields, memos),
-        );
-        KObject::Record(substrate, types.record(field_types))
+        KObject::Record(alloc_record(door, fields), types.record(field_types))
     }
 
     /// `Record` carrier with an explicitly supplied **record type** — the whole interned
@@ -308,30 +286,23 @@ impl<'a> KObject<'a> {
     /// Re-home an already-relocated field record into `door`'s region under the value's existing
     /// memoized record type — the seam copy verb's record arm (`copy_object_into`, in
     /// `machine::execute::lift`). Relocation preserves every field's `ktype()`, so the field-type
-    /// join is unchanged and `record_type` rides verbatim; the three memos — contains-borrows,
-    /// copy-cost, borrows-home — recompute relative to the new home (`door`'s own region): a bit may
-    /// set, stay, or clear there. The substrate is born through `door` — the record door's sole
-    /// construction site.
+    /// join is unchanged and `record_type` rides verbatim; the cells are re-sectioned at `door`, so
+    /// each rebuilt cell's run reads its own fresh stored facts — a run that named the source region
+    /// names it no longer once the cell rebuilt owned.
     pub fn record_rehomed(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         fields: Record<Held<'a>>,
         record_type: KType,
     ) -> KObject<'a> {
-        let home = door.region();
-        let memos = SubstrateMemos::compute(fields.values(), home);
-        let substrate = door.alloc_substrate_folded::<RecordSubstrate<'static>>(
-            ContainerSubstrate::new(fields, memos),
-        );
-        KObject::Record(substrate, record_type)
+        KObject::Record(alloc_record(door, fields), record_type)
     }
 
-    /// Fresh `Tagged` carrier over one payload value. Allocates the payload substrate — the single
-    /// cell plus its three construction memos (computed relative to `door`'s own region as home) —
-    /// through `door`, the tagged door's sole construction site, then names the carrier `tag` /
-    /// `identity`. `value` is deep-cloned into the substrate (a pointer copy for a substrate-carrier
-    /// payload); the caller keeps its borrow.
+    /// Fresh `Tagged` carrier over one payload value. Sections the payload cell through `door` — the
+    /// tagged door's sole construction site — then names the carrier `tag` / `identity`. `value` is
+    /// deep-cloned into the substrate (a pointer copy for a substrate-carrier payload, whose own
+    /// stored reach then becomes the payload run's); the caller keeps its borrow.
     pub fn tagged(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         tag: String,
         value: &KObject<'a>,
         identity: KType,
@@ -345,11 +316,10 @@ impl<'a> KObject<'a> {
     }
 
     /// Fresh `Wrapped` carrier for a **construction**, preserving the payload verbatim — including a
-    /// nested `Wrapped`, so a newtype over another keeps every layer. Allocates the payload substrate
-    /// (the single cell plus its memos, home = `door`'s region) through `door`. See
-    /// [`Self::wrapped_peel`] for the re-tag verb.
+    /// nested `Wrapped`, so a newtype over another keeps every layer. Sections the payload cell
+    /// through `door`. See [`Self::wrapped_peel`] for the re-tag verb.
     pub fn wrapped_hold(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         value: &KObject<'a>,
         type_id: KType,
     ) -> KObject<'a> {
@@ -363,10 +333,10 @@ impl<'a> KObject<'a> {
     /// Fresh `Wrapped` carrier for a **re-tag**, collapsing one `Wrapped` layer so `Wrapped.inner`'s
     /// payload is never itself `Wrapped` (the single-layer invariant): the new identity replaces the
     /// old. When `value` is already a `Wrapped`, its inner substrate borrow rides verbatim (O(1), no
-    /// copy — the payload keeps its home, pinned by the carrier's reach); anything else allocates a
-    /// fresh payload substrate over an independent `deep_clone` through `door`.
+    /// copy — the payload keeps its home, pinned by the carrier's reach); anything else sections a
+    /// fresh payload cell over an independent `deep_clone` through `door`.
     pub fn wrapped_peel(
-        door: FoldingBrand<'a>,
+        door: SubstrateDoor<'a, '_>,
         value: &KObject<'a>,
         type_id: KType,
     ) -> KObject<'a> {
@@ -425,10 +395,10 @@ impl<'a> KObject<'a> {
     pub fn is_unstamped_empty_container(&self) -> bool {
         match self {
             KObject::List(substrate, list_type) => {
-                substrate.elements().is_empty() && *list_type == KType::LIST_OF_ANY
+                substrate.is_empty() && *list_type == KType::LIST_OF_ANY
             }
             KObject::Dict(substrate, dict_type) => {
-                substrate.entries().is_empty() && *dict_type == KType::DICT_ANY_ANY
+                substrate.is_empty() && *dict_type == KType::DICT_ANY_ANY
             }
             _ => false,
         }
@@ -573,26 +543,180 @@ impl<'a> KObject<'a> {
     }
 }
 
-/// Allocate a [`PayloadSubstrate`] over one owned payload `value` through `door` — the single
+/// The sectioned alloc door's reach verdict for one cell — read off **stored facts**, one O(1) read
+/// per cell, never a walk over the cell's contents:
+///
+/// - **Owned data** — a scalar, a `KString`, a type-channel cell, a splice-free quoted expression —
+///   lands in an empty-reach run.
+/// - A **substrate carrier** hands in its own nested substrate's stored union, which is exact by
+///   construction. The run-level self rule at the door
+///   ([`Sectioned::build`](crate::witnessed::Sectioned::build)) drops that substrate's home when it
+///   *is* the destination, so a co-resident sub-container contributes nothing of its own residence
+///   while a foreign one contributes the region it lives in — which is what keeps the borrows-home
+///   memo answering the question it exists for: does a borrow *leaf* point home.
+/// - A `KFunction` / `Module` is a **born-borrowing seed** naming the scope it captures: the `FN`
+///   door naming a closure's captured scope, the module door naming its child scope.
+/// - A **splice-carrying `KExpression`** is the one conservative arm: an expression carries no stored
+///   description of its own, so its run is declared from the door's whole holder coverage — sound but
+///   wider than exact. Tightened to a composition over the embedded values' own stored reach by
+///   [region-store-expressions](../../../../roadmap/untyped_arena/region-store-expressions.md).
+fn cell_reach<'a>(cell: &Held<'a>, door: SubstrateDoor<'a, '_>) -> CellReach<'a, FrameStorage> {
+    match cell {
+        Held::Type(_) | Held::UnresolvedType(_) => CellReach::Owned,
+        Held::Object(o) => object_cell_reach(o, door),
+    }
+}
+
+/// The [`Held::Object`] arm of [`cell_reach`] — see its doc for the per-shape rules.
+fn object_cell_reach<'a>(
+    o: &KObject<'a>,
+    door: SubstrateDoor<'a, '_>,
+) -> CellReach<'a, FrameStorage> {
+    match o {
+        KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => {
+            CellReach::Owned
+        }
+        KObject::KFunction(f) => CellReach::Seed(scope_coverage(f.captured_scope().region_owner())),
+        KObject::Module(m) => CellReach::Seed(scope_coverage(m.child_scope().region_owner())),
+        KObject::KExpression(e) => {
+            if e.is_splice_free() {
+                CellReach::Owned
+            } else {
+                CellReach::Seed(door.holder())
+            }
+        }
+        KObject::Record(substrate, _) => pinned_cell(substrate.reach(), door),
+        KObject::List(substrate, _) => pinned_cell(substrate.reach(), door),
+        KObject::Dict(substrate, _) => pinned_cell(substrate.reach(), door),
+        KObject::Tagged { value, .. } => pinned_cell(value.reach(), door),
+        KObject::Wrapped { inner, .. } => pinned_cell(inner.reach(), door),
+    }
+}
+
+/// The [`CellReach::Pinned`] verdict for a substrate-carrier cell: its nested substrate's stored
+/// union, under the door's holder-rule proof. The door folds in the nested substrate's own home
+/// region unless that is the destination itself.
+fn pinned_cell<'a>(
+    reach: &'a FrameReach,
+    door: SubstrateDoor<'a, '_>,
+) -> CellReach<'a, FrameStorage> {
+    CellReach::Pinned {
+        reach,
+        coverage: door.holder(),
+    }
+}
+
+/// The born-borrowing seed's declared pins: coverage of the scope's own region, from the owner the
+/// scope names. An owner that fails to upgrade covers nothing — the storage is already gone, so
+/// there is no region left to pin (the same holder-rule read
+/// [`Scope::child_module_reach`](crate::machine::core::Scope) takes).
+fn scope_coverage(owner: Weak<FrameStorage>) -> FrameCoverage {
+    match owner.upgrade() {
+        Some(owner) => FrameCoverage::of(owner),
+        None => FrameCoverage::empty(),
+    }
+}
+
+/// Section `cells` through `door`: store each cell resident (so the door receives a `&'a Held<'a>`
+/// anchored to the container's own region, and one pin covers a projected cell and its reach
+/// together), pair it with the verdict [`cell_reach`] reads off its stored facts, and hand the whole
+/// batch to the alloc door. Returns the sectioned storage, the value-level union the door mints, and
+/// the copy-cost fold — the shared body of every container door.
+fn section_cells<'a>(
+    door: SubstrateDoor<'a, '_>,
+    cells: Vec<Held<'a>>,
+) -> (HeldCells<'a>, &'a FrameReach, u64) {
+    let copy_cost = cells.iter().fold(0u64, |total, cell| {
+        total.saturating_add(held_copy_cost(cell))
+    });
+    let inputs: Vec<CellInput<'a, 'a, Held<'static>, FrameStorage>> = cells
+        .into_iter()
+        .map(|cell| {
+            // The verdict is read before the cell moves into storage: it names the cell's *stored*
+            // reach, whose `&'a` lifetime is the region's, not this borrow's.
+            let reach = cell_reach(&cell, door);
+            CellInput {
+                payload: door.alloc_cell_folded(cell),
+                reach,
+            }
+        })
+        .collect();
+    let (cells, union) = Sectioned::build(door.handle(), inputs);
+    (cells, union, copy_cost)
+}
+
+/// Section a list's elements and store the [`ListSubstrate`] — positional, so the layout is implicit
+/// and a cell's index is its position.
+fn alloc_list<'a>(door: SubstrateDoor<'a, '_>, items: Vec<Held<'a>>) -> &'a ListSubstrate<'a> {
+    let (cells, reach, copy_cost) = section_cells(door, items);
+    door.alloc_substrate_folded::<ListSubstrate<'static>>(ContainerSubstrate::new(
+        ListLayout, cells, reach, copy_cost,
+    ))
+}
+
+/// Section a record's field cells in declaration order and store the [`RecordSubstrate`] under the
+/// name→index table that layout implies.
+fn alloc_record<'a>(
+    door: SubstrateDoor<'a, '_>,
+    fields: Record<Held<'a>>,
+) -> &'a RecordSubstrate<'a> {
+    let mut index: Record<usize> = Record::new();
+    let mut cells: Vec<Held<'a>> = Vec::with_capacity(fields.len());
+    for (name, cell) in fields.into_pairs() {
+        index.insert(name, cells.len());
+        cells.push(cell);
+    }
+    let (cells, reach, copy_cost) = section_cells(door, cells);
+    door.alloc_substrate_folded::<RecordSubstrate<'static>>(ContainerSubstrate::new(
+        index, cells, reach, copy_cost,
+    ))
+}
+
+/// Section a dict's value cells and store the [`DictSubstrate`] under the frozen key→index table.
+/// Cell order follows the input map's iteration order, which is what makes dict entry order
+/// unspecified.
+fn alloc_dict<'a>(
+    door: SubstrateDoor<'a, '_>,
+    map: HashMap<KKey, Held<'a>>,
+) -> &'a DictSubstrate<'a> {
+    let mut index: hashbrown::HashMap<KKey, usize> = hashbrown::HashMap::with_capacity(map.len());
+    let mut cells: Vec<Held<'a>> = Vec::with_capacity(map.len());
+    for (key, cell) in map {
+        index.insert(key, cells.len());
+        cells.push(cell);
+    }
+    let (cells, reach, copy_cost) = section_cells(door, cells);
+    door.alloc_substrate_folded::<DictSubstrate<'static>>(ContainerSubstrate::new(
+        index, cells, reach, copy_cost,
+    ))
+}
+
+/// Section one owned payload `value` as a [`PayloadSubstrate`]'s single cell through `door` — the
 /// construction site every `Tagged` / `Wrapped` door verb ([`KObject::tagged`],
 /// [`KObject::wrapped_hold`], the non-`Wrapped` arm of [`KObject::wrapped_peel`], and the seam copy
-/// verb's tagged/wrapped arms) funnels through. Computes the payload's three memos relative to
-/// `door`'s own region as home, then stores the substrate and hands back a co-located borrow.
-fn alloc_payload<'a>(door: FoldingBrand<'a>, value: KObject<'a>) -> &'a PayloadSubstrate<'a> {
-    let home = door.region();
-    let memos = SubstrateMemos::compute_object(&value, home);
-    door.alloc_substrate_folded::<PayloadSubstrate<'static>>(ContainerSubstrate::new(value, memos))
+/// verb's tagged/wrapped arms) funnels through.
+fn alloc_payload<'a>(door: SubstrateDoor<'a, '_>, value: KObject<'a>) -> &'a PayloadSubstrate<'a> {
+    let (cells, reach, copy_cost) = section_cells(door, vec![Held::Object(value)]);
+    door.alloc_substrate_folded::<PayloadSubstrate<'static>>(ContainerSubstrate::new(
+        PayloadLayout,
+        cells,
+        reach,
+        copy_cost,
+    ))
 }
 
 /// The seam copy verb's total rebuild: reconstruct `value`'s entire reachable structure at `dest`'s
 /// brand. A substrate carrier (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) rebuilds each
-/// cell recursively and allocates a fresh substrate at `dest` through its door (the contains-borrows
-/// memo recomputes — leaves ride the rebuild, so the bit can only stay or clear); a scalar rebuilds
-/// owned; a `KFunction` / `Module` borrow rides verbatim (its own reach rides the transfer witness);
-/// a `KExpression` clones.
+/// cell recursively and sections a fresh substrate at `dest` through its door (so every run reads the
+/// rebuilt cell's own stored facts — a run that named the source region names it no longer once the
+/// cell rebuilt owned); a scalar rebuilds owned; a `KFunction` / `Module` borrow rides verbatim as a
+/// born-borrowing seed naming its own scope; a `KExpression` clones.
 /// Total or not at all — a partial spine copy would pay the copy *and* keep the pin. See
 /// [design/value-substrates.md § Escape](../../../../design/value-substrates.md#escape-pin-by-default).
-pub(crate) fn copy_object_into<'b>(value: &KObject<'b>, dest: FoldingBrand<'b>) -> KObject<'b> {
+pub(crate) fn copy_object_into<'b>(
+    value: &KObject<'b>,
+    dest: SubstrateDoor<'b, '_>,
+) -> KObject<'b> {
     match value {
         KObject::Number(n) => KObject::Number(*n),
         KObject::KString(s) => KObject::KString(s.clone()),
@@ -602,8 +726,12 @@ pub(crate) fn copy_object_into<'b>(value: &KObject<'b>, dest: FoldingBrand<'b>) 
         KObject::KFunction(f) => KObject::KFunction(f),
         KObject::Module(m) => KObject::Module(m),
         KObject::Record(substrate, record_type) => {
-            let fields: Record<Held<'b>> =
-                substrate.fields().map(|cell| copy_held_into(cell, dest));
+            let fields: Record<Held<'b>> = Record::from_pairs(
+                substrate
+                    .fields()
+                    .map(|(name, cell)| (name.to_string(), copy_held_into(cell, dest)))
+                    .collect::<Vec<_>>(),
+            );
             KObject::record_rehomed(dest, fields, *record_type)
         }
         KObject::List(substrate, list_type) => {
@@ -615,9 +743,8 @@ pub(crate) fn copy_object_into<'b>(value: &KObject<'b>, dest: FoldingBrand<'b>) 
             KObject::list_rehomed(dest, rebuilt, *list_type)
         }
         KObject::Dict(substrate, dict_type) => {
-            let rebuilt: hashbrown::HashMap<KKey, Held<'b>> = substrate
+            let rebuilt: HashMap<KKey, Held<'b>> = substrate
                 .entries()
-                .iter()
                 .map(|(key, cell)| (key.clone(), copy_held_into(cell, dest)))
                 .collect();
             KObject::dict_rehomed(dest, rebuilt, *dict_type)
@@ -640,7 +767,7 @@ pub(crate) fn copy_object_into<'b>(value: &KObject<'b>, dest: FoldingBrand<'b>) 
 
 /// [`copy_object_into`]'s per-cell dispatch for a [`Held`] field / element: an object rebuilds
 /// recursively, a type-channel cell is owned data copied verbatim.
-fn copy_held_into<'b>(cell: &Held<'b>, dest: FoldingBrand<'b>) -> Held<'b> {
+fn copy_held_into<'b>(cell: &Held<'b>, dest: SubstrateDoor<'b, '_>) -> Held<'b> {
     match cell {
         Held::Object(o) => Held::Object(copy_object_into(o, dest)),
         Held::Type(t) => Held::Type(*t),
@@ -663,22 +790,22 @@ pub(crate) fn still_borrows_host(value: &KObject<'_>, host: &KoanRegion) -> bool
         KObject::Record(substrate, _) => {
             substrate.contains_borrows()
                 && substrate
-                    .fields()
-                    .values()
+                    .cells()
+                    .iter()
                     .any(|cell| held_borrows_host(cell, host))
         }
         KObject::List(substrate, _) => {
             substrate.contains_borrows()
                 && substrate
-                    .elements()
+                    .cells()
                     .iter()
                     .any(|cell| held_borrows_host(cell, host))
         }
         KObject::Dict(substrate, _) => {
             substrate.contains_borrows()
                 && substrate
-                    .entries()
-                    .values()
+                    .cells()
+                    .iter()
                     .any(|cell| held_borrows_host(cell, host))
         }
         KObject::Tagged { value, .. } => {
@@ -723,7 +850,7 @@ const ALPHA_DIVISOR: u64 = 4;
 /// the substrate's cell payload `C`; only records instantiate it today. See
 /// design/value-substrates.md § Cost-driven copy.
 pub(crate) fn copy_or_pin<C>(
-    substrate: &ContainerSubstrate<C>,
+    substrate: &ContainerSubstrate<'_, C>,
     value: &KObject<'_>,
     host: &KoanRegion,
 ) -> RegionEscape {
@@ -791,7 +918,6 @@ impl<'a> KObject<'a> {
             KObject::Dict(substrate, _) => {
                 let parts: Vec<String> = substrate
                     .entries()
-                    .iter()
                     .map(|(k, v)| format!("{}: {}", k.summarize(), v.summarize(types)))
                     .collect();
                 format!("{{{}}}", parts.join(", "))
@@ -804,7 +930,6 @@ impl<'a> KObject<'a> {
             KObject::Record(substrate, _) => {
                 let parts: Vec<String> = substrate
                     .fields()
-                    .iter()
                     .map(|(field, value)| format!("{} = {}", field, value.summarize(types)))
                     .collect();
                 format!("{{{}}}", parts.join(", "))

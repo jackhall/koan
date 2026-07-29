@@ -291,6 +291,7 @@ digraph {
     "koan::builtins::catch" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::catch" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::equality" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::equality" -> "koan::builtins::test_support" [label="uses", style="dashed"];
@@ -909,6 +910,7 @@ digraph {
     "koan::machine::model::values::carried" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::model::values::container_substrate" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::model::values" [label="uses", style="dashed"];
@@ -923,6 +925,7 @@ digraph {
     "koan::machine::model::values::kobject" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject" -> "koan::machine::model::values::container_substrate" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject::equality" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject::equality" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject::equality" -> "koan::machine" [label="uses", style="dashed"];

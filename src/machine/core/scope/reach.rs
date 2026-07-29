@@ -408,6 +408,10 @@ impl<'a> Scope<'a> {
             FrameCoverage::empty(),
         );
         let mut projection_error: Option<KError> = None;
+        // The rebuild's cells read their own stored reach at the door; `cell`'s coverage is the
+        // holder-rule proof for a cell whose substrate stays foreign, captured here because a
+        // `for<'b>` fold closure has no route back to its operand's pins.
+        let holder = cell.coverage().clone();
         // The destination is a bare region handle (empty reach), so its operand bundle is empty and
         // the composition mints exactly the copy's release-exact reach: the retention predicate runs
         // over the rebuilt value, so a plain-data record drops the producer region and a tail loop's
@@ -419,7 +423,7 @@ impl<'a> Scope<'a> {
                 dest,
                 |product, region| product_still_borrows(cell, product.as_object(), region),
                 |value, _handle, placement| {
-                    let door = FoldingBrand::in_fold_closure(placement);
+                    let door = FoldingBrand::in_fold_closure(placement).with_holder(&holder);
                     match project(&value) {
                         Ok(record) => {
                             Carried::Object(door.alloc_object_folded(copy_object_into(record, door)))

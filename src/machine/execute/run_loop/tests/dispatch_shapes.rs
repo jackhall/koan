@@ -386,12 +386,11 @@ fn fast_lane_on_newtype_record_type_constructs() {
             assert_eq!(type_id.name(&test_run.types), "Pt");
             match inner.payload() {
                 KObject::Record(substrate, _) => {
-                    let values = substrate.fields();
                     assert!(
-                        matches!(values.get("x"), Some(Held::Object(KObject::Number(n))) if *n == 3.0)
+                        matches!(substrate.field("x"), Some(Held::Object(KObject::Number(n))) if *n == 3.0)
                     );
                     assert!(
-                        matches!(values.get("y"), Some(Held::Object(KObject::Number(n))) if *n == 4.0)
+                        matches!(substrate.field("y"), Some(Held::Object(KObject::Number(n))) if *n == 4.0)
                     );
                 }
                 other => panic!("expected record inner, got {:?}", other.ktype()),

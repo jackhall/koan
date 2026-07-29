@@ -272,7 +272,8 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
     // has a real decision to make once the crossing is recognized as a home crossing at all.
     let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
         module_storage.brand().handle(),
-    ));
+    ))
+    .resident_door();
     let fields = Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
     let record = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
     let sealed =

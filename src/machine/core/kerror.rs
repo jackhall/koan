@@ -10,7 +10,7 @@ use crate::source::{self, FileId, SourceLoc, Span};
 use crate::witnessed::RegionHandleFamily;
 
 use super::{scope_frame, KoanStorageProfile, Scope};
-use super::{DeliveredCarried, FoldingBrand};
+use super::{DeliveredCarried, FoldingBrand, SubstrateDoor};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -178,9 +178,10 @@ impl KError {
     /// through dispatch — these carriers never need real nominal identity. They intern like any
     /// other member, so two errors of one variant carry one handle.
     ///
-    /// `door` is the fold brand the payload's `Record` substrate is born through — a caller with
-    /// no fold in hand mints a zero-dep one (see [`Self::to_tagged_delivered`]).
-    pub fn to_tagged<'a>(&self, door: FoldingBrand<'a>, types: &TypeRegistry) -> KObject<'a> {
+    /// `door` is the substrate door the payload's `Record` substrate is born through — a caller with
+    /// no fold in hand mints a zero-dep one (see [`Self::to_tagged_delivered`]). Every cell here is
+    /// freshly built owned data, so the door needs no holder.
+    pub fn to_tagged<'a>(&self, door: SubstrateDoor<'a, '_>, types: &TypeRegistry) -> KObject<'a> {
         let (name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
             door,
@@ -239,8 +240,10 @@ impl KError {
         seed.restamp_in_place::<CarriedFamily, KoanStorageProfile>(
             &frame,
             |_handle, _dest, placement| {
-                let door = FoldingBrand::in_fold_closure(placement);
-                Carried::Object(door.alloc_object_folded(self.to_tagged(door, types)))
+                let brand = FoldingBrand::in_fold_closure(placement);
+                Carried::Object(
+                    brand.alloc_object_folded(self.to_tagged(brand.resident_door(), types)),
+                )
             },
         )
     }

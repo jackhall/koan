@@ -94,8 +94,8 @@ fn let_binds_a_list_literal_of_numbers() {
     match scope.lookup("xs") {
         Some(KObject::List(items, _)) => {
             assert_eq!(items.elements().len(), 3);
-            assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0));
-            assert!(matches!(items.elements()[2], Held::Object(KObject::Number(n)) if n == 3.0));
+            assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if *n == 1.0));
+            assert!(matches!(items.elements()[2], Held::Object(KObject::Number(n)) if *n == 3.0));
         }
         _ => panic!("expected `xs` bound to a List"),
     }
@@ -151,9 +151,9 @@ fn list_literal_with_subexpression_element_evaluates_eagerly() {
     match scope.lookup("xs") {
         Some(KObject::List(items, _)) => {
             assert_eq!(items.elements().len(), 3);
-            assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0));
-            assert!(matches!(items.elements()[1], Held::Object(KObject::Number(n)) if n == 7.0));
-            assert!(matches!(items.elements()[2], Held::Object(KObject::Number(n)) if n == 3.0));
+            assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if *n == 1.0));
+            assert!(matches!(items.elements()[1], Held::Object(KObject::Number(n)) if *n == 7.0));
+            assert!(matches!(items.elements()[2], Held::Object(KObject::Number(n)) if *n == 3.0));
         }
         _ => panic!("expected `xs` bound to a List"),
     }
@@ -183,8 +183,8 @@ fn multiline_list_literal_binds_correctly() {
     match scope.lookup("xs") {
         Some(KObject::List(items, _)) => {
             assert_eq!(items.elements().len(), 3);
-            assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0));
-            assert!(matches!(items.elements()[2], Held::Object(KObject::Number(n)) if n == 3.0));
+            assert!(matches!(items.elements()[0], Held::Object(KObject::Number(n)) if *n == 1.0));
+            assert!(matches!(items.elements()[2], Held::Object(KObject::Number(n)) if *n == 3.0));
         }
         _ => panic!("expected `xs` bound to a List"),
     }
@@ -203,7 +203,7 @@ fn nested_list_literal_produces_list_of_lists() {
                 Held::Object(KObject::List(inner, _)) => {
                     assert_eq!(inner.elements().len(), 2);
                     assert!(
-                        matches!(inner.elements()[0], Held::Object(KObject::Number(n)) if n == 1.0)
+                        matches!(inner.elements()[0], Held::Object(KObject::Number(n)) if *n == 1.0)
                     );
                 }
                 _ => panic!("inner[0] should be a List"),

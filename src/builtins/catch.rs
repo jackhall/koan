@@ -43,6 +43,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 /// (`Ok(v)` / `Error(KError::to_tagged())`) via a `Catch` finish.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::build_type_operand;
+    use crate::machine::core::SubstrateDoor;
     use crate::machine::model::Carried;
     use crate::machine::model::CarriedFamily;
     use crate::machine::FoldingBrand;
@@ -60,7 +61,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // substrate through the fold `door`. A free fn (no captured lifetime) so both branches'
         // `transfer_into_placing` brand closures can call it.
         fn build_result<'x>(
-            door: FoldingBrand<'x>,
+            door: SubstrateDoor<'x, '_>,
             tag: &str,
             identity: KType,
             payload: &KObject<'x>,
@@ -86,6 +87,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             }
         };
         let tag = if result.is_ok() { "Ok" } else { "Error" };
+        // The payload rides into the `Tagged` verbatim, so a payload substrate that stays foreign
+        // keeps its own stored reach as the payload cell's run; the carrier's coverage is the
+        // holder-rule proof for reading it, captured before the fold closure.
+        let holder = carrier.coverage().clone();
         // The type operand is empty-reach; the transfer composes the result payload's reach and
         // homes the product in the operand's dest frame.
         let product = carrier.transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
@@ -95,8 +100,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             |_product, _region| true,
             |value, (_region, identity), placement| {
                 let region = FoldingBrand::in_fold_closure(placement);
+                let door = region.with_holder(&holder);
                 Carried::Object(region.alloc_object_folded(build_result(
-                    region,
+                    door,
                     tag,
                     identity,
                     value.object(),

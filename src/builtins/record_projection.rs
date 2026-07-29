@@ -172,9 +172,8 @@ mod tests {
         let result = test_run.run_one(parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
             KObject::Record(substrate, record_type) => {
-                let fields = substrate.fields();
-                assert_eq!(fields.len(), 3);
-                assert!(fields.get("z").is_some());
+                assert_eq!(substrate.len(), 3);
+                assert!(substrate.field("z").is_some());
                 let field_types = match test_run.types().node(*record_type) {
                     TypeNode::Record { fields } => fields,
                     _ => panic!("record value's type must be a Record node, got {record_type:?}"),
@@ -198,8 +197,7 @@ mod tests {
         let result = test_run.run_one(parse_one("(x) FROM {x = 1, y = 2}"));
         match result {
             KObject::Record(substrate, record_type) => {
-                let fields = substrate.fields();
-                assert_eq!(fields.len(), 2);
+                assert_eq!(substrate.len(), 2);
                 let field_types = match test_run.types().node(*record_type) {
                     TypeNode::Record { fields } => fields,
                     _ => panic!("record value's type must be a Record node, got {record_type:?}"),
@@ -219,8 +217,7 @@ mod tests {
         let result = test_run.run_one(parse_one("() FROM {x = 1}"));
         match result {
             KObject::Record(substrate, record_type) => {
-                let fields = substrate.fields();
-                assert_eq!(fields.len(), 1);
+                assert_eq!(substrate.len(), 1);
                 let field_types = match test_run.types().node(*record_type) {
                     TypeNode::Record { fields } => fields,
                     _ => panic!("record value's type must be a Record node, got {record_type:?}"),

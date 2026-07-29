@@ -22,7 +22,7 @@ use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::{
     Carried, CarriedFamily, ContainerSubstrate, DictSubstrate, Held, KObject, ListSubstrate,
-    Module, PayloadSubstrate, Record, RecordSubstrate,
+    Module, PayloadSubstrate, RecordSubstrate,
 };
 use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
@@ -64,7 +64,10 @@ impl StorageProfile for KoanStorageProfile {
                                 RecordSubstrate<'static>,
                                 (
                                     ListSubstrate<'static>,
-                                    (DictSubstrate<'static>, (PayloadSubstrate<'static>, ())),
+                                    (
+                                        DictSubstrate<'static>,
+                                        (PayloadSubstrate<'static>, (Held<'static>, ())),
+                                    ),
                                 ),
                             ),
                         ),
@@ -337,6 +340,77 @@ impl<'a> FoldingBrand<'a> {
     ) -> &'a K::At<'a> {
         self.placement.alloc_resident_folded::<K>(substrate)
     }
+
+    /// Store one container cell at this fold's own brand, handing back the resident `&'a Held<'a>`
+    /// borrow the sectioned alloc door takes as its payload
+    /// ([`Sectioned::build`](crate::witnessed::Sectioned::build)). Sound by the same rank-2
+    /// fold-brand argument as [`Self::alloc_object_folded`]: the cell is typed at the brand lifetime,
+    /// so an ambient-lifetime capture is a compile error at this signature. Residing the cell before
+    /// the door runs is what ties it to the same `'a` the container's run descriptions are interned
+    /// at, so one pin covers a projected cell and its reach together.
+    pub(crate) fn alloc_cell_folded(self, cell: Held<'a>) -> &'a Held<'a> {
+        self.placement.alloc_resident_folded::<Held<'static>>(cell)
+    }
+
+    /// This brand as a [`SubstrateDoor`] over `holder` — the coverage the enclosing fold's operand
+    /// envelopes hold, which is the proof the door reads its cells' stored reach under.
+    pub(crate) fn with_holder<'h>(self, holder: &'h FrameCoverage) -> SubstrateDoor<'a, 'h> {
+        SubstrateDoor {
+            brand: self,
+            holder: Some(holder),
+        }
+    }
+
+    /// This brand as a [`SubstrateDoor`] for cells that are all **owned or destination-resident** —
+    /// a container built from fresh data, or one whose cells were just rebuilt at this very brand. No
+    /// holder is needed: such a cell's stored description is hosted in this region, whose own
+    /// retention keeps every member alive, and the brand itself is the pin on that region.
+    pub(crate) fn resident_door<'h>(self) -> SubstrateDoor<'a, 'h> {
+        SubstrateDoor {
+            brand: self,
+            holder: None,
+        }
+    }
+}
+
+/// The door every composite substrate is born through: a [`FoldingBrand`] plus the **holder-rule
+/// proof** its per-cell reach verdicts are read under.
+///
+/// A cell that keeps borrowing a foreign source hands the sectioned alloc door that source's stored
+/// description ([`CellReach::Pinned`](crate::witnessed::CellReach::Pinned)), and reading a
+/// description's members back out is sound only while something pins every region it names. Inside a
+/// fold closure the operands' pins are held by the enclosing combinator — but a `for<'b>` closure has
+/// no route back to them, so the coverage is captured at the call site and moved in. Pairing it with
+/// the brand makes that obligation part of the door's type: a container cannot be built through a
+/// brand alone.
+///
+/// A door minted through [`resident_door`](FoldingBrand::resident_door) carries no holder at all,
+/// which is right where every cell is owned or destination-resident: such a cell's description is
+/// hosted in the destination region, whose own retention holds every member, and the brand is the pin
+/// on that region.
+///
+/// Everything else derefs to the brand, so a closure that also allocates objects or type identifiers
+/// through the door is unaffected.
+#[derive(Clone, Copy)]
+pub struct SubstrateDoor<'a, 'h> {
+    brand: FoldingBrand<'a>,
+    holder: Option<&'h FrameCoverage>,
+}
+
+impl<'a> std::ops::Deref for SubstrateDoor<'a, '_> {
+    type Target = FoldingBrand<'a>;
+    fn deref(&self) -> &FoldingBrand<'a> {
+        &self.brand
+    }
+}
+
+impl SubstrateDoor<'_, '_> {
+    /// The holder-rule proof this door reads stored cell reach under, as a coverage the door hands
+    /// on to the alloc door per pinned cell — see the type's own doc. Empty for a
+    /// [`resident_door`](FoldingBrand::resident_door).
+    pub(crate) fn holder(&self) -> FrameCoverage {
+        self.holder.cloned().unwrap_or_default()
+    }
 }
 
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
@@ -352,10 +426,11 @@ reattachable! {
     Scope<'static> => Scope<'r>,
     Module<'static> => Module<'r>,
     TypeIdentifier => TypeIdentifier,
-    ContainerSubstrate<Record<Held<'static>>> => ContainerSubstrate<Record<Held<'r>>>,
-    ContainerSubstrate<Vec<Held<'static>>> => ContainerSubstrate<Vec<Held<'r>>>,
+    Held<'static> => Held<'r>,
+    RecordSubstrate<'static> => RecordSubstrate<'r>,
+    ListSubstrate<'static> => ListSubstrate<'r>,
     DictSubstrate<'static> => DictSubstrate<'r>,
-    ContainerSubstrate<KObject<'static>> => ContainerSubstrate<KObject<'r>>,
+    PayloadSubstrate<'static> => PayloadSubstrate<'r>,
 }
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
@@ -444,6 +519,16 @@ koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .0);
 koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
 koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
 
+/// The cell family every sectioned substrate hands into the alloc door: one [`Held`] per cell, stored
+/// resident so the door receives `&'a Held<'a>` borrows anchored to the container's own region. No
+/// address hook — a cell is reached only through its container's own sectioned storage, never
+/// probed by address.
+impl Stored<KoanStorageProfile> for Held<'static> {
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .0
+    }
+}
+
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
 /// Every co-located `alloc_*` lives on [`RegionBrand`] (minted via [`FrameStorage::brand`]); a bare
@@ -505,9 +590,9 @@ pub(crate) trait KoanRegionExt {
     /// check, the same shape as [`Self::owns_function`] but with no scope-region shortcut: a
     /// `ContainerSubstrate<C>` carries no borrow naming its own home region, so the residence walk
     /// widens this with a per-reach-member check rather than a single `covers_region` call.
-    fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<C>) -> bool;
+    fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<'_, C>) -> bool;
 
-    /// Total bytes allocated across this region's twelve Koan families — each family's live count
+    /// Total bytes allocated across every one of this region's Koan families — each family's live count
     /// weighted by the flat size of its stored `'static` form. Prices the host region only, not the
     /// `outer` chain its `Rc<FrameStorage>` also retains (a documented approximation): the cost-copy
     /// seam reads this as the denominator of the payoff ratio, where the host's own footprint is the
@@ -569,7 +654,7 @@ impl KoanRegionExt for KoanRegion {
         self.owns_addr(target)
     }
 
-    fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<C>) -> bool {
+    fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<'_, C>) -> bool {
         let target = ptr as usize;
         self.owns_addr(target)
     }
@@ -588,6 +673,7 @@ impl KoanRegionExt for KoanRegion {
             + weigh::<ListSubstrate<'static>>(self)
             + weigh::<DictSubstrate<'static>>(self)
             + weigh::<PayloadSubstrate<'static>>(self)
+            + weigh::<Held<'static>>(self)
     }
 }
 
@@ -612,6 +698,7 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<ListSubstrate<'static>>()
             + self.family_len::<DictSubstrate<'static>>()
             + self.family_len::<PayloadSubstrate<'static>>()
+            + self.family_len::<Held<'static>>()
     }
 }
 

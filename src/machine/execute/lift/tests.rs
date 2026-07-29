@@ -65,7 +65,8 @@ fn object_top_node_relocates_into_dest() {
     let relocated = copy_carried(
         Carried::Object(obj),
         RegionEscape::Copy { released: false },
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
+            .resident_door(),
     );
     match relocated {
         Carried::Object(r) => {
@@ -96,7 +97,8 @@ fn list_relocation_rebuilds_substrate_into_dest() {
     let types = test_run.types.clone();
 
     let source_door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()))
+            .resident_door();
     let list: &KObject = source_door.alloc_object_folded(KObject::list_of_held(
         source_door,
         vec![
@@ -109,7 +111,8 @@ fn list_relocation_rebuilds_substrate_into_dest() {
     let relocated = copy_carried(
         Carried::Object(list),
         RegionEscape::Copy { released: false },
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
+            .resident_door(),
     );
     match relocated {
         Carried::Object(r @ KObject::List(out, _)) => {
@@ -146,7 +149,8 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
     let types = test_run.types.clone();
 
     let source_door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()))
+            .resident_door();
     let mut map: HashMap<KKey, Held> = HashMap::new();
     map.insert(KKey::String("a".into()), Held::Object(KObject::Number(1.0)));
     let dict: &KObject =
@@ -155,7 +159,8 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
     let relocated = copy_carried(
         Carried::Object(dict),
         RegionEscape::Copy { released: false },
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
+            .resident_door(),
     );
     match relocated {
         Carried::Object(r @ KObject::Dict(out, _)) => {
@@ -203,7 +208,8 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
     let identity =
         types.constructor_apply(ctor, Record::from_pairs([("T".to_string(), KType::NUMBER)]));
     let source_door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()))
+            .resident_door();
     let tagged: &KObject = source_door.alloc_object_folded(KObject::tagged(
         source_door,
         "Just".into(),
@@ -214,7 +220,8 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
     let relocated = copy_carried(
         Carried::Object(tagged),
         RegionEscape::Copy { released: false },
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
+            .resident_door(),
     );
     match relocated {
         Carried::Object(
@@ -268,7 +275,8 @@ fn wrapped_relocation_rebuilds_payload_into_dest() {
         nonce: None,
     });
     let source_door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()))
+            .resident_door();
     let wrapped: &KObject = source_door.alloc_object_folded(KObject::wrapped_hold(
         source_door,
         &KObject::Number(7.0),
@@ -278,7 +286,8 @@ fn wrapped_relocation_rebuilds_payload_into_dest() {
     let relocated = copy_carried(
         Carried::Object(wrapped),
         RegionEscape::Copy { released: false },
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
+            .resident_door(),
     );
     match relocated {
         Carried::Object(
@@ -331,7 +340,8 @@ fn kfunction_borrow_preserved_verbatim() {
     let relocated = copy_carried(
         Carried::Object(obj),
         RegionEscape::Copy { released: false },
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
+            .resident_door(),
     );
     match relocated {
         Carried::Object(r @ KObject::KFunction(f)) => {
@@ -379,7 +389,8 @@ fn type_recursive_member_relocates_and_navigates() {
     let relocated = copy_carried(
         Carried::Type(type_value),
         RegionEscape::Copy { released: false },
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
+            .resident_door(),
     );
     match relocated {
         Carried::Type(out) => {
@@ -451,7 +462,7 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
         .merge_into_placing::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
             dest_brand(Rc::clone(&dest_storage)),
             move |(_region, _cells), _dest_handle, placement| {
-                let door = FoldingBrand::in_fold_closure(placement);
+                let door = FoldingBrand::in_fold_closure(placement).resident_door();
                 let fields =
                     Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
                 Carried::Object(
@@ -489,7 +500,8 @@ fn alloc_home_closure_record<'run>(
 ) -> &'run KObject<'run> {
     let kf = alloc_local_kf(home);
     let door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
+            .resident_door();
     let fields = Record::from_pairs(vec![(
         "f".to_string(),
         Held::Object(KObject::KFunction(kf)),
@@ -525,7 +537,8 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
         let producer: Rc<CallFrame> = CallFrame::new(scope);
         let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             producer.brand().handle(),
-        ));
+        ))
+        .resident_door();
         let fields = Record::from_pairs(vec![(
             "acc".to_string(),
             Held::Object(KObject::Number(i as f64)),
@@ -550,7 +563,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
             |value, (region, mut cells), placement| {
                 cells.push(copy_held_from_carried(
                     value,
-                    FoldingBrand::in_fold_closure(placement),
+                    FoldingBrand::in_fold_closure(placement).resident_door(),
                 ));
                 (region, cells)
             },
@@ -577,7 +590,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
                 .iter()
                 .map(|h| match h.object() {
                     KObject::Record(substrate, _) => {
-                        match substrate.fields().get("acc").map(|h| h.object()) {
+                        match substrate.field("acc").map(|h| h.object()) {
                             Some(KObject::Number(n)) => *n,
                             _ => panic!("expected field acc: Number"),
                         }
@@ -623,12 +636,10 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         let producer: Rc<CallFrame> = CallFrame::new(scope);
         let obj = alloc_home_closure_record(&producer, &types);
         expected_ids.push(match obj {
-            KObject::Record(substrate, _) => {
-                match substrate.fields().get("f").map(|h| h.object()) {
-                    Some(KObject::KFunction(f)) => f.captured_scope().id,
-                    _ => panic!("expected field f: KFunction"),
-                }
-            }
+            KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+                Some(KObject::KFunction(f)) => f.captured_scope().id,
+                _ => panic!("expected field f: KFunction"),
+            },
             other => panic!("expected a Record, got {}", other.ktype().name(&types)),
         });
         // The seal chokepoint (Ruling 5): every record's carrier conservatively claims its own home
@@ -648,7 +659,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
             |value, (region, mut cells), placement| {
                 cells.push(copy_held_from_carried(
                     value,
-                    FoldingBrand::in_fold_closure(placement),
+                    FoldingBrand::in_fold_closure(placement).resident_door(),
                 ));
                 (region, cells)
             },
@@ -675,7 +686,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
                 .iter()
                 .map(|h| match h.object() {
                     KObject::Record(substrate, _) => {
-                        match substrate.fields().get("f").map(|h| h.object()) {
+                        match substrate.field("f").map(|h| h.object()) {
                             Some(KObject::KFunction(f)) => f.captured_scope().id,
                             _ => panic!("expected field f: KFunction"),
                         }
@@ -725,12 +736,10 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
         let producer: Rc<CallFrame> = CallFrame::new(scope);
         let obj = alloc_home_closure_record(&producer, &types);
         expected_ids.push(match obj {
-            KObject::Record(substrate, _) => {
-                match substrate.fields().get("f").map(|h| h.object()) {
-                    Some(KObject::KFunction(f)) => f.captured_scope().id,
-                    _ => panic!("expected field f: KFunction"),
-                }
-            }
+            KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+                Some(KObject::KFunction(f)) => f.captured_scope().id,
+                _ => panic!("expected field f: KFunction"),
+            },
             other => panic!("expected a Record, got {}", other.ktype().name(&types)),
         });
         // Born in the producer's own region with a home-borrowing closure leaf, so home is an
@@ -767,7 +776,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
                 cells.push(copy_carried(
                     value,
                     verb,
-                    FoldingBrand::in_fold_closure(placement),
+                    FoldingBrand::in_fold_closure(placement).resident_door(),
                 ));
                 (region, cells)
             },
@@ -788,7 +797,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
                 .iter()
                 .map(|carried| match carried.object() {
                     KObject::Record(substrate, _) => {
-                        match substrate.fields().get("f").map(|h| h.object()) {
+                        match substrate.field("f").map(|h| h.object()) {
                             Some(KObject::KFunction(f)) => f.captured_scope().id,
                             _ => panic!("expected field f: KFunction"),
                         }
@@ -821,7 +830,8 @@ fn record_memos<'run>(
     types: &TypeRegistry,
 ) -> (u64, bool) {
     let door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
+            .resident_door();
     match door.alloc_object_folded(KObject::record_of_held(door, fields, types)) {
         KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
         other => panic!("expected a Record, got {}", other.ktype().name(types)),
@@ -932,7 +942,8 @@ fn substrate_memo_nested_record_composes_by_memo() {
         ("f".to_string(), Held::Object(KObject::KFunction(inner_kf))),
     ]);
     let door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
+            .resident_door();
     let inner = door.alloc_object_folded(KObject::record_of_held(door, inner_fields, &types));
     let (inner_cost, inner_home) = match inner {
         KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
@@ -973,7 +984,8 @@ fn substrate_memo_list_cell_is_priceable_and_home_free() {
     // The list cell is itself born through a door homed in `home`; its one scalar element costs one
     // flat `Held`, which the enclosing record's memo pass reads back through the list's own memo.
     let list_door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
+            .resident_door();
     let list = KObject::list_of_held(list_door, vec![Held::Object(KObject::Number(1.0))], &types);
     let fields = Record::from_pairs(vec![("l".to_string(), Held::Object(list))]);
     let (cost, borrows_home) = record_memos(&home, fields, &types);
@@ -1002,7 +1014,8 @@ mod seam_verb_table {
         types: &TypeRegistry,
     ) -> &'run KObject<'run> {
         let door =
-            FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+            FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
+                .resident_door();
         door.alloc_object_folded(KObject::record_of_held(door, fields, types))
     }
 

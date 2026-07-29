@@ -180,6 +180,10 @@ impl<'run> KoanRuntime<'run> {
     ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FrameCoverage), KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
         let verb = seam_verb(&delivered);
+        // The relocation's cells read their own stored reach at the door; the source envelope's
+        // coverage is the holder-rule proof for a cell whose substrate stays foreign, captured here
+        // because a `for<'b>` fold closure has no route back to its operand's pins.
+        let holder = delivered.coverage().clone();
         // The destination is a bare region handle (empty reach), so the transfer composes the
         // producer's reach alone. The product envelope's residence is `dest`'s own frame, which the
         // caller re-pins as the terminal's host, so it is released here and what crosses back is the
@@ -189,7 +193,11 @@ impl<'run> KoanRuntime<'run> {
             dest,
             seam_still_borrows(&delivered, verb),
             |value, _region, placement| {
-                copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
+                copy_carried(
+                    value,
+                    verb,
+                    FoldingBrand::in_fold_closure(placement).with_holder(&holder),
+                )
             },
         );
         let foreign = relocated.coverage_releasing_home();

@@ -89,6 +89,10 @@ fn fold_cells(
         FrameCoverage::empty(),
     );
     cells.fold(acc0, |acc, cell| {
+        // The cell rebuilds through the container door, so its own cells' stored reach is read at
+        // that door; this envelope's coverage is the holder-rule proof for any part of it that stays
+        // foreign, captured before the fold closure.
+        let holder = cell.coverage().clone();
         cell.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
             acc,
             // The cell always rebuilds through the container door, so the retention predicate walks
@@ -98,7 +102,7 @@ fn fold_cells(
             |value, (region, mut cells), placement| {
                 cells.push(copy_held_from_carried(
                     value,
-                    FoldingBrand::in_fold_closure(placement),
+                    FoldingBrand::in_fold_closure(placement).with_holder(&holder),
                 ));
                 (region, cells)
             },
@@ -108,16 +112,26 @@ fn fold_cells(
 
 /// Read a dict key cell as a scalar [`KKey`]: a key is never folded (it is a scalar, reaching no
 /// region), so it is read out and converted in place. A `Type` arm or a non-scalar value errors.
+///
+/// **Dict keys are owned data by language rule** — a function or module key is meaningless — and
+/// this is the one site that turns a carrier into a key, so it is where the rule is enforced. The
+/// check is O(1) on the key's own **stored envelope**: a carrier naming any reach member is
+/// rejected outright, no walk over the value. [`KKey`] then admits only `String` / `Number` /
+/// `Bool`, so the two together leave a borrow-carrying key unrepresentable downstream of here.
 fn scalar_key(
     slot: &Slot,
     terminals: DepResults<'_, &DepTerminal<'_>>,
     types: &TypeRegistry,
 ) -> Result<KKey, String> {
-    match slot {
-        Slot::Static(delivered) => delivered.open(|c| key_from_carried(c, types)),
-        Slot::Park(i) => key_from_carried(terminals.park(*i).value, types),
-        Slot::Owned(j) => key_from_carried(terminals.owned(*j).value, types),
+    let envelope = match slot {
+        Slot::Static(delivered) => delivered,
+        Slot::Park(i) => &terminals.park(*i).delivered,
+        Slot::Owned(j) => &terminals.owned(*j).delivered,
+    };
+    if envelope.open_at().has_reach_members() {
+        return Err("dict key must be owned data, but its value borrows a region".to_string());
     }
+    envelope.open(|c| key_from_carried(c, types))
 }
 
 fn key_from_carried(c: Carried<'_>, types: &TypeRegistry) -> Result<KKey, String> {
@@ -138,9 +152,11 @@ struct AggRow {
 
 /// Finish-side assemble hook: the resolved keys (empty unless the rows carry key slots) and the folded
 /// value cells become the aggregate object. Boxed higher-ranked so the record variant captures its
-/// field names and each shape builds its own `KObject` at the fold brand. Every shape threads the
-/// fold's own `FoldingBrand` into its `*_of_held` constructor — the door each substrate (record,
-/// list, dict) is born through.
+/// field names and each shape builds its own `KObject` at the fold brand. Every shape opens the
+/// fold's own `FoldingBrand` as a
+/// [`resident_door`](crate::machine::core::FoldingBrand::resident_door) — the cells [`fold_cells`]
+/// pushed were each rebuilt at this very brand, so every one of them is destination-resident and the
+/// door needs no holder of its own.
 type AggAssemble = Box<
     dyn for<'r> FnOnce(FoldingBrand<'r>, Vec<KKey>, Vec<Held<'r>>, &TypeRegistry) -> KObject<'r>,
 >;
@@ -216,7 +232,9 @@ impl<'step> KoanRuntime<'step> {
         self.schedule_aggregate(
             deps,
             rows,
-            Box::new(|door, _keys, cells, types| KObject::list_of_held(door, cells, types)),
+            Box::new(|door, _keys, cells, types| {
+                KObject::list_of_held(door.resident_door(), cells, types)
+            }),
         )
     }
 
@@ -242,7 +260,7 @@ impl<'step> KoanRuntime<'step> {
             rows,
             Box::new(|door, keys, value_helds, types| {
                 let map: HashMap<KKey, Held<'_>> = keys.into_iter().zip(value_helds).collect();
-                KObject::dict_of_held(door, map, types)
+                KObject::dict_of_held(door.resident_door(), map, types)
             }),
         )
     }
@@ -267,7 +285,7 @@ impl<'step> KoanRuntime<'step> {
             rows,
             Box::new(move |door, _keys, value_helds, types| {
                 let record: Record<Held<'_>> = names.into_iter().zip(value_helds).collect();
-                KObject::record_of_held(door, record, types)
+                KObject::record_of_held(door.resident_door(), record, types)
             }),
         )
     }

@@ -116,10 +116,10 @@ pub enum CellReach<'r, F: PinsRegion> {
     /// with no walk.
     Owned,
     /// The cell keeps borrowing its source: its own stored description (which is exact, where the
-    /// envelope coverage a step holds is generally wider) plus its home region, folded in as an
-    /// ordinary member. `coverage` is the caller's holder-rule proof — it pins every region the
-    /// description names for the whole call, which is what makes reading the description's members
-    /// back out of it sound.
+    /// envelope coverage a step holds is generally wider), plus — under the run-level self rule
+    /// ([`Sectioned::build`]) — its home region whenever that is not the destination itself.
+    /// `coverage` is the caller's holder-rule proof — it pins every region the description names for
+    /// the whole call, which is what makes reading the description's members back out of it sound.
     Pinned {
         reach: &'r ReachDescription<F>,
         coverage: StepCoverage<F>,
@@ -174,6 +174,24 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
         // or before `index` — and index 0 is always covered, so the partition point is never 0.
         let covering = self.runs.partition_point(|run| run.start <= index) - 1;
         Some(self.runs[covering].reach)
+    }
+
+    /// The cells in semantic order — the **in-place read** twin of [`Self::reach_at`]: where that
+    /// answers a reach question yielding no cell, this hands out cells yielding no reach. Neither is
+    /// a parting seam, and neither needs to be: both run under the pin the caller already holds (it
+    /// holds the container), and a cell reference is `&'a K::At<'a>`, so it is confined to the
+    /// container's own region by its type. This is what an embedder's in-place traversals —
+    /// equality, rendering, a copying rebuild — read, none of which relocates a cell.
+    ///
+    /// The seam that *parts* a cell from the container is [`Self::project`], which bundles it with
+    /// its reach; the pairing is a type invariant exactly where a cell can travel.
+    pub fn cells(&self) -> &'a [&'a K::At<'a>] {
+        self.cells
+    }
+
+    /// The cell at `index`, or `None` past the end — [`Self::cells`] at one index.
+    pub fn cell(&self, index: usize) -> Option<&'a K::At<'a>> {
+        self.cells.get(index).copied()
     }
 
     /// The runs, as `(span, reach)` pairs in ascending order — the container-level query an
@@ -281,8 +299,9 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     /// in, rather than workgraph re-declaring a cell family it has no other use for.
     ///
     /// Per input, the mint source is the verdict read literally: nothing for
-    /// [`CellReach::Owned`] (so owned data costs no walk), the stored description's members plus
-    /// its home region for [`CellReach::Pinned`], the declared pins for [`CellReach::Seed`]. Each
+    /// [`CellReach::Owned`] (so owned data costs no walk), the stored description's members — plus
+    /// its home region under the run-level self rule below — for [`CellReach::Pinned`], the declared
+    /// pins for [`CellReach::Seed`]. Each
     /// source is minted into `dest` and **retained** there ([`Region::retain_for`]): a sectioned
     /// container is region-resident, so its liveness home is the region's union bundle, and the
     /// fold is skipped whenever the mint is an intern hit.
@@ -315,7 +334,17 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
                     // makes the upgrade below succeed under the holder rule; it drops at the end.
                     let _held = coverage;
                     let mut source = reach.to_bundle();
-                    source.insert(reach.host_owner());
+                    // The cell's own residence joins its members only when it is somewhere *else* —
+                    // the run-level self rule. A cell already resident in `dest` is covered by
+                    // `dest`'s own liveness, so naming it would make every container holding a
+                    // co-resident sub-container read as borrowing its own home, and the
+                    // borrows-home memo folded from these runs would stop answering the question it
+                    // exists to answer: does a *borrow leaf* point home. A cell resident elsewhere
+                    // is a genuine cross-region borrow and its host is folded in as an ordinary
+                    // member — nothing else would pin it.
+                    if !reach.with_home_region(|home| std::ptr::eq(home, dest.region())) {
+                        source.insert(reach.host_owner());
+                    }
                     source
                 }
                 CellReach::Seed(coverage) => coverage.0,

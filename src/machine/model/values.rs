@@ -13,7 +13,7 @@ mod module;
 mod named_pairs;
 
 pub use carried::{Carried, CarriedFamily, Held};
-pub use container_substrate::{ContainerSubstrate, SubstrateMemos};
+pub use container_substrate::ContainerSubstrate;
 pub(crate) use container_substrate::{
     DictSubstrate, ListSubstrate, PayloadSubstrate, RecordSubstrate,
 };

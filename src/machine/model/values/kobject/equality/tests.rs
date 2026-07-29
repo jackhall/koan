@@ -31,7 +31,8 @@ macro_rules! container_door {
         let $storage = run_root_storage();
         let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             $storage.brand().handle(),
-        ));
+        ))
+        .resident_door();
     };
 }
 
@@ -139,7 +140,7 @@ fn list_of_types_compares_by_digest() {
 // --- dicts ------------------------------------------------------------------------
 
 fn dict<'a>(
-    door: crate::machine::core::FoldingBrand<'a>,
+    door: crate::machine::core::SubstrateDoor<'a, '_>,
     pairs: Vec<(KKey, KObject<'a>)>,
     types: &TypeRegistry,
 ) -> KObject<'a> {
@@ -212,7 +213,7 @@ fn dict_length_mismatch_is_false() {
 // --- records ----------------------------------------------------------------------
 
 fn record<'a>(
-    door: crate::machine::core::FoldingBrand<'a>,
+    door: crate::machine::core::SubstrateDoor<'a, '_>,
     pairs: Vec<(&str, KObject<'a>)>,
     types: &TypeRegistry,
 ) -> KObject<'a> {
@@ -453,6 +454,7 @@ fn function_operand_is_error_at_any_position() {
         use crate::machine::core::{FoldingBrand, FrameStorageExt};
         use crate::witnessed::FoldedPlacement;
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage2.brand().handle()))
+            .resident_door()
     };
     let list_f = KObject::list_of_held(
         door,
@@ -487,6 +489,7 @@ fn length_mismatch_short_circuits_before_banned_cell() {
         use crate::machine::core::{FoldingBrand, FrameStorageExt};
         use crate::witnessed::FoldedPlacement;
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage.brand().handle()))
+            .resident_door()
     };
     let list_f = KObject::list_of_held(
         door,

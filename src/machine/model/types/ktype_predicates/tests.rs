@@ -1,6 +1,6 @@
 use super::*;
 use crate::builtins::test_support::spliced_part;
-use crate::machine::core::FoldingBrand;
+use crate::machine::core::SubstrateDoor;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::Carried;
@@ -17,7 +17,8 @@ macro_rules! container_door {
         let $storage = run_root_storage();
         let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             $storage.brand().handle(),
-        ));
+        ))
+        .resident_door();
     };
 }
 
@@ -272,7 +273,8 @@ fn record_value_admission_and_matches() {
     use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
     let region = storage.brand();
-    let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region.handle()));
+    let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region.handle()))
+        .resident_door();
     let value: &KObject<'_> = door.alloc_object_folded(KObject::record(
         door,
         Record::from_pairs(vec![
@@ -384,7 +386,8 @@ fn of_kind_nominal_is_type_channel_only() {
     use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
     let region = storage.brand();
-    let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region.handle()));
+    let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region.handle()))
+        .resident_door();
     let newtype_ty = KType::of_kind(KKind::NewType);
 
     // The NewType *type value* — admitted in the type channel.
@@ -536,7 +539,7 @@ fn result_args(ok: KType, error: KType) -> Record<KType> {
 /// erased `Result` member handle (no stamped type arguments). The inner `payload` is itself a
 /// `Tagged` carrier identified by the error type's nominal member handle.
 fn result_value<'a>(
-    door: FoldingBrand<'a>,
+    door: SubstrateDoor<'a, '_>,
     member: KType,
     tag: &str,
     payload: &KObject<'a>,
@@ -545,7 +548,7 @@ fn result_value<'a>(
 }
 
 /// A bare error carrier (`Tagged` identified by `member`) standing in for a caught error value.
-fn error_carrier<'a>(door: FoldingBrand<'a>, member: KType) -> KObject<'a> {
+fn error_carrier<'a>(door: SubstrateDoor<'a, '_>, member: KType) -> KObject<'a> {
     KObject::tagged(door, "_".into(), &KObject::Number(0.0), member)
 }
 
@@ -780,7 +783,8 @@ fn union_honors_memoized_list_element_type() {
     use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
     let door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage.brand().handle()))
+            .resident_door();
     let list_value: &KObject<'_> = door.alloc_object_folded(KObject::list_of_held(
         door,
         vec![Held::Object(KObject::Number(1.0))],

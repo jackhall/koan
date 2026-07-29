@@ -20,7 +20,7 @@ mod tests;
 pub(crate) use arena::KoanRegionTestExt;
 pub use arena::{
     run_root_storage, CallFrame, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
-    RegionTypeFamily, StepAllocator,
+    RegionTypeFamily, StepAllocator, SubstrateDoor,
 };
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
 pub use bindings::{

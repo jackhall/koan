@@ -84,12 +84,12 @@ impl<'a> KObject<'a> {
             }
 
             (KObject::Dict(substrate_a, type_a), KObject::Dict(substrate_b, type_b)) => {
-                let (map_a, map_b) = (substrate_a.entries(), substrate_b.entries());
-                if !types_related(*type_a, *type_b, types) || map_a.len() != map_b.len() {
+                if !types_related(*type_a, *type_b, types) || substrate_a.len() != substrate_b.len()
+                {
                     return Ok(false);
                 }
-                for (key, held_a) in map_a.iter() {
-                    match map_b.get(key) {
+                for (key, held_a) in substrate_a.entries() {
+                    match substrate_b.entry(key) {
                         Some(held_b) if held_equal(held_a, held_b, types)? => {}
                         _ => return Ok(false),
                     }
@@ -98,13 +98,13 @@ impl<'a> KObject<'a> {
             }
 
             (KObject::Record(substrate_a, type_a), KObject::Record(substrate_b, type_b)) => {
-                let (fields_a, fields_b) = (substrate_a.fields(), substrate_b.fields());
-                if !types_related(*type_a, *type_b, types) || fields_a.len() != fields_b.len() {
+                if !types_related(*type_a, *type_b, types) || substrate_a.len() != substrate_b.len()
+                {
                     return Ok(false);
                 }
                 // Order-blind: same name set, per-name held equality.
-                for (name, held_a) in fields_a.iter() {
-                    match fields_b.get(name) {
+                for (name, held_a) in substrate_a.fields() {
+                    match substrate_b.field(name) {
                         Some(held_b) if held_equal(held_a, held_b, types)? => {}
                         _ => return Ok(false),
                     }

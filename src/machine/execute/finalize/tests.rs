@@ -298,7 +298,7 @@ fn aggregate_of_plain_record_results_releases_every_producer_frame() {
             for item in items.elements().iter() {
                 match item.object() {
                     KObject::Record(substrate, _) => {
-                        match substrate.fields().get("acc").map(|h| h.object()) {
+                        match substrate.field("acc").map(|h| h.object()) {
                             Some(KObject::Number(n)) => {
                                 assert_eq!(*n, 1.0, "the acc field survives the total copy")
                             }

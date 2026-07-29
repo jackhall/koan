@@ -20,7 +20,8 @@ macro_rules! container_door {
         let $storage = run_root_storage();
         let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             $storage.brand().handle(),
-        ));
+        ))
+        .resident_door();
     };
 }
 
@@ -351,7 +352,8 @@ fn resident_in_true_for_owned_list() {
     let types = TypeRegistry::new();
     let dest = run_root_storage();
     let door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
+            .resident_door();
     let o = KObject::list(
         door,
         vec![KObject::Number(1.0), KObject::Number(2.0)],

@@ -361,6 +361,10 @@ fn finish_witnessed<'step>(
             let collapse =
                 check_newtype_repr(*identity, terminals[0].value.object(), view.types())?;
             let home = build_type_operand(view.dest_frame(), *identity);
+            // The wrap keeps the value verbatim, so a payload substrate that stays foreign rides as
+            // the payload cell's own stored run; the term's coverage is the holder-rule proof for
+            // reading it, captured before the fold closure.
+            let holder = terminals[0].delivered.coverage().clone();
             // The type operand is empty-reach, so the transfer composes the value's reach alone and
             // hands back the wrapped product as an envelope homed in the dest frame.
             Ok(terminals[0]
@@ -371,10 +375,11 @@ fn finish_witnessed<'step>(
                     |_product, _region| true,
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
+                        let door = region.with_holder(&holder);
                         let wrapped = if collapse {
-                            KObject::wrapped_peel(region, value.object(), identity_ty)
+                            KObject::wrapped_peel(door, value.object(), identity_ty)
                         } else {
-                            KObject::wrapped_hold(region, value.object(), identity_ty)
+                            KObject::wrapped_hold(door, value.object(), identity_ty)
                         };
                         Carried::Object(region.alloc_object_folded(wrapped))
                     },
@@ -430,6 +435,10 @@ fn finish_witnessed<'step>(
                 });
             let home = build_type_operand(Rc::clone(&dest_frame), *identity);
             let types = view.types();
+            // Each accumulated field cell is a pointer copy of its term's value, so a field
+            // substrate that stays foreign rides as that field's own stored run; the accumulator's
+            // coverage names every region those cells reach, which is the door's holder-rule proof.
+            let holder = fields.coverage().clone();
             // The type operand is empty-reach; merge the accumulated fields into it, yielding the
             // wrapped record homed in the dest frame.
             let product = fields
@@ -437,9 +446,10 @@ fn finish_witnessed<'step>(
                     home,
                     |(_region, fields), (_identity_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
-                        let record = KObject::record(region, Record::from_pairs(fields), types);
+                        let door = region.with_holder(&holder);
+                        let record = KObject::record(door, Record::from_pairs(fields), types);
                         Carried::Object(region.alloc_object_folded(KObject::wrapped_hold(
-                            region,
+                            door,
                             &record,
                             identity_ty,
                         )))
@@ -480,6 +490,8 @@ fn finish_witnessed<'step>(
             // naming registry-owned content — so the operand's reach stays empty.
             let home = build_type_operand(view.dest_frame(), *member);
             let tag = tag.clone();
+            // The tag keeps the value verbatim — see the `NewType` arm's holder.
+            let holder = terminals[0].delivered.coverage().clone();
             Ok(terminals[0]
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
@@ -489,7 +501,7 @@ fn finish_witnessed<'step>(
                     move |value, (_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         Carried::Object(region.alloc_object_folded(KObject::tagged(
-                            region,
+                            region.with_holder(&holder),
                             tag,
                             value.object(),
                             identity_ty,
@@ -517,6 +529,8 @@ fn finish_witnessed<'step>(
             };
             let home = build_type_operand(view.dest_frame(), identity);
             let types = view.types();
+            // The wrap keeps the value verbatim — see the `NewType` arm's holder.
+            let holder = terminals[0].delivered.coverage().clone();
             Ok(terminals[0]
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
@@ -538,7 +552,7 @@ fn finish_witnessed<'step>(
                         // is never itself `Wrapped` (the single-layer invariant); the peeled identity
                         // is not lost — it lives in `arg`.
                         Carried::Object(region.alloc_object_folded(KObject::wrapped_peel(
-                            region,
+                            region.with_holder(&holder),
                             value.object(),
                             type_id,
                         )))

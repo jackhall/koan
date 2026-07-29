@@ -49,7 +49,8 @@ fn alloc_home_borrowing_record<'run>(
 ) -> &'run KObject<'run> {
     let closure = alloc_home_closure(home);
     let door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()));
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
+            .resident_door();
     let fields = Record::from_pairs(vec![
         ("v".to_string(), Held::Object(KObject::Number(value))),
         ("f".to_string(), Held::Object(KObject::KFunction(closure))),
@@ -127,7 +128,7 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
     drop(producer);
     match bound {
         KObject::Record(bound_substrate, _) => {
-            match bound_substrate.fields().get("v").map(|h| h.object()) {
+            match bound_substrate.field("v").map(|h| h.object()) {
                 Some(KObject::Number(n)) => {
                     assert_eq!(*n, 7.0, "field v reads back after producer drop")
                 }

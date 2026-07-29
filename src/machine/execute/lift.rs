@@ -8,7 +8,7 @@
 //! live in the value model, shared with the core binding seams. See
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
-use crate::machine::core::FoldingBrand;
+use crate::machine::core::SubstrateDoor;
 use crate::machine::core::{product_still_borrows, KoanRegion, KoanStorageProfile};
 use crate::machine::model::{copy_object_into, copy_or_pin, Carried, Held, KObject, RegionEscape};
 use crate::machine::DeliveredCarried;
@@ -23,14 +23,15 @@ use crate::witnessed::RegionHandle;
 /// `KFunction` / first-class `Module` riding a bare borrow preserved verbatim — kept alive by the
 /// reach set the transfer mints into the destination, so this hook owns only the copy, never a region
 /// anchor. It is not a delivery channel: dep terminals cross to finishes as sealed carriers. `dest`
-/// is a [`FoldingBrand`], not a plain brand: every caller is a `transfer_into` fold closure, whose
+/// is a [`SubstrateDoor`], not a plain brand: every caller is a `transfer_into` fold closure, whose
 /// enclosing combinator has already minted the value's reach into `dest`'s arena, so a bare-borrow
 /// payload like `KFunction` is covered by the fold rather than an address-only audit that can't see
-/// it.
+/// it — and the door carries the source envelope's coverage, the holder-rule proof a rebuilt cell's
+/// stored reach is read under.
 pub(in crate::machine::execute) fn copy_carried<'b>(
     value: Carried<'b>,
     verb: RegionEscape,
-    dest: FoldingBrand<'b>,
+    dest: SubstrateDoor<'b, '_>,
 ) -> Carried<'b> {
     match value {
         Carried::Object(v) => {
@@ -54,7 +55,7 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
 pub(in crate::machine::execute) fn relocate_object_into<'b>(
     value: &KObject<'b>,
     verb: RegionEscape,
-    dest: FoldingBrand<'b>,
+    dest: SubstrateDoor<'b, '_>,
 ) -> KObject<'b> {
     match value {
         KObject::Record(..)
@@ -79,7 +80,7 @@ pub(in crate::machine::execute) fn relocate_object_into<'b>(
 /// stay self-contained), never pins.
 pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
     carried: Carried<'b>,
-    dest: FoldingBrand<'b>,
+    dest: SubstrateDoor<'b, '_>,
 ) -> Held<'b> {
     match carried {
         Carried::Object(o) => Held::Object(relocate_object_into(

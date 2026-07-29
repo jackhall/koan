@@ -188,6 +188,9 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         let dest = dest_brand(view.dest_frame());
         let delivered = &deps.owned(0).delivered;
         let verb = seam_verb(delivered);
+        // The source envelope's coverage is the holder-rule proof the relocation's cells read their
+        // stored reach under — captured before the fold, which cannot reach its operand's pins.
+        let holder = delivered.coverage().clone();
         // The dest brand is a bare region handle (empty reach); the transfer composes the literal
         // producer's reach into it and homes the product in the consumer's own frame, which the
         // step's seal re-pins — so `born_delivered` releases it and the foreign coverage rides on.
@@ -196,7 +199,11 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
                 dest,
                 seam_still_borrows(delivered, verb),
                 |value, _region, placement| {
-                    copy_carried(value, verb, FoldingBrand::in_fold_closure(placement))
+                    copy_carried(
+                        value,
+                        verb,
+                        FoldingBrand::in_fold_closure(placement).with_holder(&holder),
+                    )
                 },
             ),
         ))

@@ -46,8 +46,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         TypeNode::Signature { schema, .. } => schema,
         _ => return done_err(mismatch(sig_handle.name(ctx.types))),
     };
-    let fields = match arg_object(ctx.args, "bindings") {
-        Some(KObject::Record(substrate, _types)) => substrate.fields(),
+    let bindings = match arg_object(ctx.args, "bindings") {
+        Some(KObject::Record(substrate, _types)) => substrate,
         _ => {
             return done_err(KError::new(KErrorKind::ShapeError(
                 "WITH bindings must be a record literal `{Slot = Type, …}`".to_string(),
@@ -69,7 +69,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // `S WITH {Tag = Number}` and `(S WITH {A = Number}) WITH {A = Number}` keep their source's
     // signature identity; an unequal re-pin is a type error.
     let mut dropped: HashSet<String> = HashSet::new();
-    for (name, value) in fields.iter() {
+    for (name, value) in bindings.fields() {
         let is_abstract = abstract_slots.contains(name);
         let manifest = manifest_members.get(name);
         if !is_abstract && manifest.is_none() {
@@ -92,7 +92,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         };
         if let Some(fixed) = manifest {
             if pin_type == fixed {
-                dropped.insert(name.clone());
+                dropped.insert(name.to_string());
             } else {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}.{name}` is a manifest type member fixed to `{}`; \
@@ -105,11 +105,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         }
     }
 
-    let pins: Vec<(String, KType)> = fields
-        .iter()
-        .filter(|(name, _)| !dropped.contains(name.as_str()))
+    let pins: Vec<(String, KType)> = bindings
+        .fields()
+        .filter(|(name, _)| !dropped.contains(*name))
         .map(|(name, value)| match value {
-            Held::Type(kt) => (name.clone(), *kt),
+            Held::Type(kt) => (name.to_string(), *kt),
             Held::Object(_) | Held::UnresolvedType(_) => {
                 unreachable!("validated above: every pin value is a type")
             }

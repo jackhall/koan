@@ -5,33 +5,24 @@ use std::rc::Rc;
 
 use super::*;
 use crate::machine::model::KObject;
-use crate::machine::model::{Held, KKey};
+use crate::machine::model::{DictSubstrate, Held, KKey};
 use crate::machine::KErrorKind;
 
 use super::run;
 
-/// Dict value cells are [`Held`]; these helpers narrow to the `Object` arm so the
+/// Dict value cells are `Held`; these helpers narrow to the `Object` arm so the
 /// scalar-value assertions read unchanged.
-fn lookup_string_key<'run, 'b>(
-    d: &'b hashbrown::HashMap<KKey, Held<'run>>,
-    key: &str,
-) -> Option<&'b KObject<'run>> {
-    d.get(&KKey::String(key.to_string()))
+fn lookup_string_key<'run>(d: &DictSubstrate<'run>, key: &str) -> Option<&'run KObject<'run>> {
+    d.entry(&KKey::String(key.to_string()))
         .and_then(|h| h.as_object())
 }
 
-fn lookup_number_key<'run, 'b>(
-    d: &'b hashbrown::HashMap<KKey, Held<'run>>,
-    key: f64,
-) -> Option<&'b KObject<'run>> {
-    d.get(&KKey::Number(key)).and_then(|h| h.as_object())
+fn lookup_number_key<'run>(d: &DictSubstrate<'run>, key: f64) -> Option<&'run KObject<'run>> {
+    d.entry(&KKey::Number(key)).and_then(|h| h.as_object())
 }
 
-fn lookup_bool_key<'run, 'b>(
-    d: &'b hashbrown::HashMap<KKey, Held<'run>>,
-    key: bool,
-) -> Option<&'b KObject<'run>> {
-    d.get(&KKey::Bool(key)).and_then(|h| h.as_object())
+fn lookup_bool_key<'run>(d: &DictSubstrate<'run>, key: bool) -> Option<&'run KObject<'run>> {
+    d.entry(&KKey::Bool(key)).and_then(|h| h.as_object())
 }
 
 /// Unlike the empty-list / empty-dict rule, bare `{}` is the empty record (the top of
@@ -45,7 +36,7 @@ fn let_binds_an_empty_record_literal() {
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Record(substrate, _)) => {
-            assert!(substrate.fields().is_empty(), "expected empty record")
+            assert!(substrate.is_empty(), "expected empty record")
         }
         other => panic!(
             "expected `d` bound to an empty Record, got {:?}",
@@ -62,7 +53,7 @@ fn let_binds_a_dict_with_string_keys() {
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
-            let entries = substrate.entries();
+            let entries = substrate;
             assert_eq!(entries.len(), 2);
             assert!(
                 matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0)
@@ -83,7 +74,7 @@ fn let_binds_a_dict_with_number_keys() {
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
-            let entries = substrate.entries();
+            let entries = substrate;
             assert_eq!(entries.len(), 2);
             assert!(
                 matches!(lookup_number_key(entries, 1.0), Some(KObject::KString(s)) if s == "a")
@@ -104,7 +95,7 @@ fn let_binds_a_dict_with_bool_keys() {
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
-            let entries = substrate.entries();
+            let entries = substrate;
             assert_eq!(entries.len(), 2);
             assert!(
                 matches!(lookup_bool_key(entries, true), Some(KObject::Number(n)) if *n == 1.0)
@@ -129,7 +120,7 @@ fn bare_identifier_key_is_looked_up() {
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
-            let entries = substrate.entries();
+            let entries = substrate;
             assert_eq!(entries.len(), 1);
             assert!(
                 matches!(lookup_string_key(entries, "alice"), Some(KObject::Number(n)) if *n == 1.0)
@@ -148,7 +139,7 @@ fn sub_expression_as_value_evaluates_eagerly() {
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
-            let entries = substrate.entries();
+            let entries = substrate;
             assert!(
                 matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 7.0)
             );
@@ -180,7 +171,7 @@ fn sub_expression_as_key_evaluates() {
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
-            let entries = substrate.entries();
+            let entries = substrate;
             assert!(
                 matches!(lookup_string_key(entries, "x"), Some(KObject::Number(n)) if *n == 1.0)
             );
@@ -197,7 +188,7 @@ fn multiline_dict_binds_correctly() {
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
-            let entries = substrate.entries();
+            let entries = substrate;
             assert_eq!(entries.len(), 2);
             assert!(
                 matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0)
@@ -221,7 +212,7 @@ fn nested_dict_in_list_binds_correctly() {
             assert_eq!(outer.elements().len(), 2);
             match &outer.elements()[0] {
                 Held::Object(KObject::Dict(d, _)) => assert!(matches!(
-                    lookup_string_key(d.entries(), "a"),
+                    lookup_string_key(d, "a"),
                     Some(KObject::Number(n)) if *n == 1.0,
                 )),
                 _ => panic!("outer[0] should be a Dict"),
