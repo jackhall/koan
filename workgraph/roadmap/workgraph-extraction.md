@@ -43,7 +43,7 @@ the surface being documented and frozen is the final one.
 
 **Requires:**
 
-- [Carving the workcell crate](workcell-extraction.md) — the published
+- [Carving the cellgraph crate](cellgraph-extraction.md) — the published
   boundary is the layered pair.
 
 **Unblocks:** none tracked — the project's terminal item.

@@ -3,11 +3,11 @@
 Implement [workgraph/design/sectioned-reach.md](../../workgraph/design/sectioned-reach.md):
 the interned description side table, the run-partitioned container storage,
 and the alloc door — workgraph-side only, with tests; koan adoption is
-[Sectioned substrates](../untyped_arena/sectioned-substrates.md).
+[Sectioned substrates](../../roadmap/untyped_arena/sectioned-substrates.md).
 
 **Problem.** Reach evidence is stored only per whole value. The region's
 description side table
-([`Region::alloc_reach`](../../workgraph/src/witnessed/region.rs)) appends
+([`Region::alloc_reach`](../src/witnessed/region.rs)) appends
 unconditionally — minting an already-seen member set allocates a duplicate
 description and re-folds its owning pins into the region's union via
 `Region::retain_reach` — and workgraph offers no container storage that
@@ -18,7 +18,7 @@ walking the value.
 **Acceptance criteria.**
 
 - The region's description side table is an intern table:
-  [`ReachDescription::mint`](../../workgraph/src/witnessed/reach.rs)
+  [`ReachDescription::mint`](../src/witnessed/reach.rs)
   get-or-mints keyed on the canonical member set (member owner addresses,
   sorted), returning the existing co-located entry on a hit and allocating
   only on a miss; the `(&'a description, PinBundle)` caller contract is
@@ -56,14 +56,27 @@ walking the value.
 
 **Directions.**
 
-- *Phasing — open.* (a) Interning ships first as its own PR — the mint
-  contract is unchanged, and the dedupe is independently valuable — then
-  sectioned storage and the alloc door; (b) the whole workgraph side in
-  one PR. Recommended: (a).
-- *Intern lookup structure — open.* The append arena has no lookup, so the
-  intern needs its own index: (a) a map from canonical key to table entry
-  alongside the arena; (b) a linear scan over the table, betting per-region
-  tables stay small.
+- *Phasing — decided.* Two PRs: interning first (the mint contract is
+  unchanged, and the dedupe is independently valuable), then sectioned
+  storage and the alloc door. Interning first is also what makes run
+  grouping a pointer compare per cell rather than a set comparison per
+  boundary.
+- *Intern lookup structure — decided.* An `elsa::FrozenMap` keyed on the
+  canonical member slice replaces the append arena for the reach table.
+  A `typed_arena::Arena` cannot be read through `&self` at all, so both a
+  map and a linear scan needed the same frozen container first; the map
+  comes with it.
+- *Retention bookkeeping — decided, and temporary.* The "this region's
+  union already pins these members" bit lives on the region, keyed on the
+  interned entry's address, so a
+  [`ReachDescription`](../src/witnessed/reach.rs) still owns
+  and mutates nothing. It is needed only because retention is a separate
+  call a caller makes after a mint: a non-retaining mint (the envelope
+  holds its own pins) interns the entry first, so a later retaining mint
+  hits an entry the region does not yet pin. Once a mint names its
+  destination role and performs its own retention, an intern miss *is* the
+  retention and a hit *is* proof the region already pins — the bit deletes
+  with no replacement. Do not build on it.
 
 ## Dependencies
 
@@ -71,7 +84,9 @@ walking the value.
 
 **Unblocks:**
 
-- [Sectioned substrates](../untyped_arena/sectioned-substrates.md) — the
+- [Sectioned substrates](../../roadmap/untyped_arena/sectioned-substrates.md) — the
   koan adoption routes substrates through this machinery.
-- [Carving the workcell crate](workcell-extraction.md) — landing first
+- [Mint owns its retention](mint-owns-retention.md) — interning is what
+  makes a miss the retention and a hit proof of one.
+- [Carving the cellgraph crate](cellgraph-extraction.md) — landing first
   keeps the carved memory-substrate surface final.

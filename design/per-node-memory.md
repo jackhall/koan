@@ -1,420 +1,279 @@
-# Per-node memory: the witnessed substrate
+# Per-node memory: Koan on the witnessed substrate
 
-A scheduler node is a long-lived object that nevertheless eventually dies, and
-between birth and death it must hold values that *borrow* from memory it does not
-own. The `witnessed` substrate is the generic, workload-independent machinery that
-makes those borrow-carrying values safe to store, move, and read across a node's
-life — a bump allocator, a liveness witness, and a small carrier surface, naming
-no Koan type. `machine` and `scheduler` both depend on it; it depends on neither.
+Every `KObject`, `Scope`, `KFunction`, … is born in a `KoanRegion` whose
+sub-arenas store `T<'static>` and hand back a borrow re-anchored under a witness.
+This doc owns **Koan's instantiation** of that machinery: which witness backs a
+node, which construction verb each Koan site takes, where a bound value's reach is
+minted, and how the run loop's reads nest under the substrate's access brand.
 
-The design goal is a single safe interface over per-node memory: every access is a
-borrow the compiler checks, and the substrate's own `unsafe` is confined to a
-handful of audited lifetime retypes no caller can reach.
+The generic machinery itself is the library's:
+[workgraph/design/witnessed-memory.md](../workgraph/design/witnessed-memory.md)
+owns the erase-store contract, the `Region<P>` allocator, the
+`yoke` / `merge_pinned` / `map` construction surface, and the
+`seal` / `open` / `transfer_into` access surface;
+[workgraph/design/reach.md](../workgraph/design/reach.md) owns the reach
+description / pin bundle representation and the holder rule.
+[memory-model.md](memory-model.md) owns Koan's region/frame/lift mechanics and
+[witness-hosting.md](witness-hosting.md) owns Koan's escape and residence policy
+above the substrate.
 
-## The core: erase-store, witness, reattach
+## The Koan profile
 
-**Generic.** A value of type `T<'a>` cannot be stored in a structure that outlives
-`'a`. The substrate stores its `'static`-erased form `T<'static>` instead — sound
-because a lifetime is zero-sized, so `T<'a>` and `T<'static>` share layout — and
-re-anchors a borrow on the way out. Three pieces carry the contract:
+`KoanRegion` is `Region<KoanStorageProfile>` over seven sub-arenas. The witness is
+the per-call `Rc<FrameStorage>`, whose held `Rc` heap-pins the region for its life.
+[arena.rs](../src/machine/core/arena.rs) holds only that profile
+(`KoanStorageProfile`, `KoanRegion`, `FrameSet`, `CallFrame`) plus a thin
+`RegionBrand` veneer over the library's
+[`RegionHandle`](../workgraph/src/witnessed/region.rs) adding Koan-family-typed
+`alloc_*` wrappers. The veneer carries no capability rule of its own; it allocates
+through the generic engine via the `RegionOwner` seam — the `Rc<F>` blanket impl
+that lets a foreign region-owner type pick up the library's region behaviour.
 
-- `Reattachable` — an `unsafe` trait marking a family `{ type At<'r>; }` whose
-  representation is identical across every choice of its one lifetime. `Erased<T>`
-  stores `T::At<'static>`.
-- `Witness` — an `unsafe` marker asserting its holder pins the value's backing at a
-  fixed address while held (`StableDeref`-backed). A re-anchor is sound only while
-  a witness is held.
-- A single private `retype<A, B>` lifetime-cast, guarded by a size assert, is the
-  only place a `T::At<'a> → T::At<'b>` retype is written. Every accessor routes it.
+Allocation is reachable only through the branded `RegionBrand` handle: a bare
+`&KoanRegion` exposes no `alloc_*`, so "always witnessed" is compile-enforced for
+allocation.
 
-**In Koan.** Every `KObject`, `Scope`, `KFunction`, … is born in a `KoanRegion`
-whose sub-arenas store `T<'static>`. The witness is the per-call `Rc<FrameStorage>`,
-whose held `Rc` heap-pins the region for its life. The region/frame/lift mechanics
-are owned by [memory-model.md](memory-model.md); this doc owns the substrate the
-mechanics instantiate.
+## Which verb each construction site takes
 
-## The bump allocator
+**`yoke` — region-pure leaves.** An `alloc` site inverts so its construction runs
+*inside* the closure: a region-pure leaf (`region.alloc_object(…)` over owned or
+region-derived parts) is a `yoke` whose closure is the single allocation.
 
-**Generic.** `Region<P>` is the erase-store engine: a set of typed sub-arenas
-parameterized by a storage profile `P`, holding `At<'static>` and handing back an
-`&'a` tied to the caller's input borrow. It keeps the typed-arena Drop discipline —
-each stored value's `Drop` runs, and touches only owned contents, never a
-lifetime-parameterized reference (sub-arenas drop together, so any cross-arena `&`
-is dead before it could be observed). This is what makes a byte-bump allocator that
-forgoes Drop (`bumpalo`) the wrong fit: the Drop discipline *is* the soundness
-argument, and dropping it would mean re-proving every stored type leak-free by hand.
+A value embedding an AST — a quoted expression, an FN body — also `yoke`s, because
+the embedded AST is *owned data*, not a borrow. An FN body and a quoted expression
+are owned [`KExpression`](../src/machine/model/ast.rs) clones (the
+`KObject::KExpression` and `Body::UserDefined` payloads). A `KExpression`'s
+lifetime parameter names no live borrow: its one non-owned variant —
+`ExpressionPart::Spliced`, the per-call resolved sub-result the scheduler folds
+into a parent's parts — holds a lifetime-free `Sealed` carrier cell, so `'a` is a
+phantom across every `KExpression`, re-anchored invariantly by a zero-size
+`PhantomData` marker. Raw, unevaluated AST is additionally *splice-free*: it holds
+no `Spliced` cell at all. `KExpression` is therefore a layout-invariant carrier
+family, and a splice-free embed contributes no foreign region: the AST-embedding
+object is **region-pure** and allocs through the witnessed object surface
+(`alloc_object_witnessed`), born under the empty (foreign-reach-only) set exactly
+as any region-pure leaf. The sole residual obligation — that the embed is
+splice-free — is a runtime-checked gate at the quote-capture site
+([`RegionBrand::alloc_object_witnessed_checked`](../src/machine/core/arena.rs), the
+audited twin of `alloc_object_witnessed`): a spliced part rejects with a structured
+`KError` rather than landing unvetted.
 
-**In Koan.** `KoanRegion` is `Region<KoanStorageProfile>` over seven sub-arenas. The
-witnessed allocation surface is the substrate's `alloc`, which — see *Construction* —
-hands the freshly-stored value to a `for<'b>` brand and returns it already wrapped in
-its carrier, witnessed by the value's *foreign* reach (the active frame folded in only
-at close), so a region-resident value is born inside the Witnessed/Sealed abstraction
-rather than handed out as a bare `&'a` and re-wrapped downstream.
+**`merge_pinned` / `transfer_into` — everything that references a pre-existing
+value.** An aggregate folds its *element carriers* (deps arriving witnessed from
+the lift) via `transfer_into`; a closure folds the captured-scope operand minted
+from its frame `Rc` via `merge_pinned` directly. The object family's leaves and
+aggregates are built this way — a single-part literal and a static aggregate cell
+`yoke` their owned data, and a list / dict / record folds its dep carriers via
+`transfer_into` ([dispatch/literal.rs](../src/machine/execute/dispatch/literal.rs) /
+[single_poll.rs](../src/machine/execute/dispatch/single_poll.rs)). The
+carrier-self-building constructions follow: the newtype / tagged-union
+[`constructors`](../src/machine/execute/dispatch/constructors.rs) and
+[`catch`](../src/builtins/catch.rs) fold their dep carriers, and FN def
+[`finalize`](../src/builtins/fn_def/finalize.rs) `yoke`s its co-located
+`KObject::KFunction` onto a carrier witnessed by the defining scope's frame.
 
-## Construction: `yoke`, `merge_pinned`, `map`, and one wrapper per node
+The value-embedding sites that take a *bare arg* —
+[`attr`](../src/builtins/attr.rs)'s `Wrapped`,
+[`FROM`](../src/builtins/record_projection.rs)'s `Record`, and the
+[literal.rs](../src/machine/execute/dispatch/literal.rs) Resolved arm's bound value
+— climb off it the same way: each receives the value it embeds as a delivered
+`Sealed` carrier and folds it into the result's own construction. `attr` / `FROM`
+go through the step context's
+[`alloc_carried_with`](../src/machine/core/arena.rs), which re-projects the value
+at the fold brand from the lhs operand's own view (crossed via
+[`BodyCtx::arg_carrier`](../src/machine/core/kfunction/action.rs)), so its reach
+folds in by construction; the Resolved arm goes through the binding scope's own
+[`Scope::seal_resident`](../src/machine/core/scope/reach.rs).
 
-The carrier `Witnessed<T, W>` bundles `Erased<T>` with the witness `W` that pins it,
-so "the witness keeps the value alive" is a type invariant, not a co-stored pair
-plus a comment. Three constructors build it; their division of labour is the heart
-of the design.
+In Koan the cross-region case is rare. `merge_pinned` is the **same-region** case
+almost always — a list assembled in one call's arena, or a closure capturing its
+defining scope (a `KFunction` is allocated *into that scope's region*, so the
+capture is co-located) — where subsumption trivially collapses the union to a
+single `Rc`. The genuinely cross-region merges are *ancestry-related*: a scope or
+function in a per-call frame referencing the run-global root or a lexical-ancestor
+scope, where the descendant frame `Rc`'s `outer` chain already pins the ancestor
+and subsumption drops it. The case that cannot collapse — a dep whose backing is an
+independent, dying descendant region — is `transfer_into`, where the union is held
+whole.
 
-**`yoke` — mint a value into a region.** Generic: `yoke` hands the witness's own
-region to a rank-2 `for<'b> FnOnce(&'b Region) -> T::At<'b>` closure and bundles
-whatever it builds. Because the closure is universally quantified in `'b`, it cannot
-return a reference captured from its environment (a foreign `&'x` would need
-`'x: 'b` for every `'b`) — so the produced value's references are *region-derived or
-owned*, and co-location (the witness pins *this* value's references) holds by
-construction rather than by assertion. The witness enters here, as a parameter,
-because there is no prior carrier to inherit it from: `yoke` is the door through
-which a value first becomes witnessed. In Koan: an `alloc` site inverts so its
-construction runs *inside* the closure — a region-pure leaf
-(`region.alloc_object(…)` over owned or region-derived parts) is a `yoke` whose
-closure is the single allocation. A value embedding an AST — a quoted expression, an FN body — also
-`yoke`s, because the embedded AST is *owned data*, not a borrow. An FN body and a quoted expression are owned
-[`KExpression`](../src/machine/model/ast.rs) clones (the `KObject::KExpression` and
-`Body::UserDefined` payloads). A `KExpression`'s lifetime parameter names no live borrow: its one
-non-owned variant — `ExpressionPart::Spliced`, the per-call resolved sub-result the scheduler folds
-into a parent's parts — holds a lifetime-free `Sealed` carrier cell, so `'a` is a phantom across
-every `KExpression`, re-anchored invariantly by a zero-size `PhantomData` marker. Raw, unevaluated
-AST is additionally *splice-free*: it holds no `Spliced` cell at all. `KExpression` is therefore a
-[layout-invariant carrier family](#the-core-erase-store-witness-reattach) — the splice cell is
-lifetime-free and the marker zero-size, so the layout is identical across `'a` — and
-a splice-free embed contributes no foreign region: the AST-embedding object is **region-pure** and
-allocs through the witnessed object surface (`alloc_object_witnessed`), born under the empty
-(foreign-reach-only) set exactly as any region-pure leaf. Co-location is enforced by the `for<'b>`
-brand; the embedded AST contributes no region of its own, and the sole residual obligation — that the
-embed is splice-free — is a runtime-checked gate at the quote-capture site
-([`RegionBrand::alloc_object_witnessed_checked`](../src/machine/core/arena.rs), the audited twin of
-`alloc_object_witnessed`): a spliced part rejects with a structured `KError` rather than landing
-unvetted, not a witness the type encodes.
+**The type family needs no reach.** A `KType` owns all its content, so a type
+terminal instantiates the generic resident verb
+([`Scope::resident`](../src/machine/core/scope/reach.rs)) with an empty,
+pins-nothing witness, co-located with the region-resident type the slot write
+([`WriteOp::SigSlot`](../src/machine/core/bindings/ops.rs)) installs. That holds
+for a module self-sig (`KType::Signature { sig: SelfOf(m), .. }`) too — its
+`SelfOf` names the module structurally, not by region pointer.
 
-The witness `yoke` takes is a *single-region* type — a lone region owner — so a mint pins exactly one
-region by construction, not by narrowing a set that might be empty or hold several; a minted leaf then
-lifts to the **reference-only** carrier the aggregate stores through a distinct
-[`into_reference_only`](../workgraph/src/witnessed.rs) lift — its own region kept alive externally,
-by containment or the retention hold, so the carrier holds no pin — kept separate from `yoke` so
-minting stays a one-region act and combining regions (minting the reach pair against the
-destination) stays `merge_pinned`'s job. What `yoke` cannot mint composes through `merge_pinned` (or the
-`transfer_into` it shares its `ComposeWitness::compose` engine with, for a dep-delivered operand): an
-aggregate folds its *element carriers* (deps arriving witnessed from the lift) via `transfer_into`; a
-closure folds the captured-scope operand minted from its frame `Rc` via `merge_pinned` directly. The
-object family's region-pure leaves and aggregates are built this way — a single-part
-literal and a static aggregate cell `yoke` their owned data, and a list / dict / record folds its
-dep carriers via `transfer_into` ([dispatch/literal.rs](../src/machine/execute/dispatch/literal.rs)
-/ [single_poll.rs](../src/machine/execute/dispatch/single_poll.rs)) — co-location the `for<'b>`
-brand enforces, never asserted. The carrier-self-building object constructions are built the same way:
-the newtype / tagged-union [`constructors`](../src/machine/execute/dispatch/constructors.rs)
-and [`catch`](../src/builtins/catch.rs) fold their dep carriers via `transfer_into` / `merge_pinned`, and FN
-def [`finalize`](../src/builtins/fn_def/finalize.rs) `yoke`s its co-located `KObject::KFunction` onto a
-carrier witnessed by the defining scope's frame. The value-embedding sites that take a *bare arg* —
-[`attr`](../src/builtins/attr.rs)'s `Wrapped`, [`FROM`](../src/builtins/record_projection.rs)'s
-`Record`, and the [literal.rs](../src/machine/execute/dispatch/literal.rs) Resolved arm's bound value —
-climb off it the same way: each receives the value it embeds as a delivered
-[`Sealed`](#storage-and-access-seal-open-transfer_into) carrier and folds it into the result's own
-construction — `attr` / `FROM` through the step context's
-[`alloc_carried_with`](../src/machine/core/arena.rs), which re-projects the value at the fold brand from
-the lhs operand's own view (crossed via [`BodyCtx::arg_carrier`](../src/machine/core/kfunction/action.rs)),
-so its reach folds in by construction),
-the Resolved arm through the binding scope's own
-[`Scope::seal_resident`](../src/machine/core/scope/reach.rs) — so the projected object
-names every region it reaches by construction. No construction terminal pairs an *already-built* value
-with a separately-asserted witness. The **type** family needs no reach at all: a `KType` owns
-all its content, so a type terminal instantiates the same generic resident verb
-([`Scope::resident`](../src/machine/core/scope/reach.rs)) with an empty, pins-nothing witness,
-co-located with the region-resident type the slot write
-([`WriteOp::SigSlot`](../src/machine/core/bindings/ops.rs)) installs. That holds for a module
-self-sig (`KType::Signature { sig: SelfOf(m), .. }`) too — its `SelfOf` names the module
-structurally, not by region pointer. Every multi-dep constructed *object* is born
-co-located by the `yoke` brand. The region-pure
-carrier is built by the purpose-built [`Witnessed::resident_in`](../workgraph/src/witnessed/carrier.rs), which
-mints a description hosted in the named home region with **no members** — the value records where it
-lives even though its borrows reach nothing — so it cannot pair a value with a *wrong*
-witness, only with the empty reach a region-pure value genuinely has; that emptiness is sound as a
-within-step transient, the producing frame folded in at close ([`reseal_under`](../workgraph/src/witnessed.rs))
-before the carrier is stored. That transient is **typed**, not merely disciplined: the step doors return
-the carrier wrapped as a [`StepCarried`](../src/machine/execute/step_carried.rs) branded at the step's
-`'step` lifetime, so the borrow checker rejects any attempt to stash it past its construction step, and
-its sole exit to node storage is [`StepCarried::seal_at_step`](../src/machine/execute/step_carried.rs)
-into finalize's fold. A node's own value terminal is witnessed the same way — a region-pure
-result (a spliced value, a builtin's synchronous result) through `resident`, a dep-reaching result by
-folding its delivered dep carriers — so [`NodeStep::DoneWitnessed`](../src/machine/execute/nodes.rs) is
-the sole value terminal and [`finalize_terminal`](../src/machine/execute/finalize.rs) folds the
-producing frame into that carrier's own reach at close rather than asserting a separately-computed
-witness; an error carries no value and finalizes bare. The type / region construction operands are
-computed carriers too — the newtype / tagged-union / `CATCH` build `merge_pinned`s a delivered type-identity
-carrier under the binding's stored reach ([`build_type_operand`](../src/machine/execute/dispatch/constructors.rs)) —
-so no site pairs an already-built value with a separately-asserted witness. A declared return is
-checked and re-stamped in place in the producer's own region; no relocation operand exists at Done. A read of an
-*already-built* region-resident value — a bound name, an `ATTR` value member, a defined FN object —
-does **not** rebuild a witness: it pre-exists its carrier, so the read bundles it through the confined
-[`RegionBrand::seal_resident`](../src/machine/core/arena.rs) surface — reached by the one generic
-[`Scope::seal_resident`](../src/machine/core/scope/reach.rs), instantiated per family rather than
-duplicated per channel — under the
-reach stored on its binding (see [Storage and access](#storage-and-access-seal-open-transfer_into)), so
-`Witnessed::resident` is never reached from a builtin and no read walks a value to recover its reach.
+**No site pairs an already-built value with a separately-asserted witness.** The
+region-pure carrier is built by
+[`Witnessed::resident_in`](../workgraph/src/witnessed/carrier.rs), which mints a
+description hosted in the named home region with **no members** — the value records
+where it lives even though its borrows reach nothing — so it cannot pair a value
+with a *wrong* witness, only with the empty reach a region-pure value genuinely
+has. That emptiness is sound as a within-step transient, the producing frame folded
+in at close ([`reseal_under`](../workgraph/src/witnessed.rs)) before the carrier is
+stored. The transient is **typed**, not merely disciplined: the step doors return
+the carrier wrapped as a
+[`StepCarried`](../src/machine/execute/step_carried.rs) branded at the step's
+`'step` lifetime, so the borrow checker rejects any attempt to stash it past its
+construction step, and its sole exit to node storage is
+[`StepCarried::seal_at_step`](../src/machine/execute/step_carried.rs) into
+finalize's fold.
 
-**`merge_pinned` — fold many region-resident values into one.** Generic: a value built
-from references into *two* regions cannot be bundled with one witness by `yoke`
-alone. `merge_pinned` re-anchors two carriers at one shared brand under an **externally
-supplied pin** covering the source (`self`) operand's backing, runs a projection that
-binds one into the other, and re-seals under the **composed** witness — the union of
-the two operands' regions, with `outer`-chain subsumption dropping a region another
-already pins. The composition is `ComposeWitness::compose`, run inside the shared
-brand with the destination in scope: an owned region *set* composes by plain union
-(total, since a set can always represent the combined pin), while a hosted carrier
-mints the union into the destination's own arena. This is what keeps
-witnessed-ness at the *boundary*: without it, an aggregate of independently-witnessed
-elements would nest `Witnessed<…Witnessed<…>>` wrappers with the data and be
-unstorable as a single node carrier. With it, the invariant holds:
+A node's own value terminal is witnessed the same way — a region-pure result (a
+spliced value, a builtin's synchronous result) through `resident`, a dep-reaching
+result by folding its delivered dep carriers — so
+[`NodeStep::DoneWitnessed`](../src/machine/execute/nodes.rs) is the sole value
+terminal and [`finalize_terminal`](../src/machine/execute/finalize.rs) folds the
+producing frame into that carrier's own reach at close. An error carries no value
+and finalizes bare. The type / region construction operands are computed carriers
+too — the newtype / tagged-union / `CATCH` build `merge_pinned`s a delivered
+type-identity carrier under the binding's stored reach
+([`build_type_operand`](../src/machine/execute/dispatch/constructors.rs)). A
+declared return is checked and re-stamped in place in the producer's own region; no
+relocation operand exists at Done.
 
-> **One wrapper per node.** A node stores exactly one carrier, regardless of value
-> complexity. `yoke` mints leaves into a region; `merge_pinned` folds region-resident
-> values — same-region or cross-region — into one aggregate under the single witness
-> that pins them all; the result seals as one unit. Wrapper count is O(1) per node,
-> not O(data size).
+A read of an *already-built* region-resident value — a bound name, an `ATTR` value
+member, a defined FN object — does **not** rebuild a witness: it pre-exists its
+carrier, so the read bundles it through the confined
+[`RegionBrand::seal_resident`](../src/machine/core/arena.rs) surface, reached by the
+one generic [`Scope::seal_resident`](../src/machine/core/scope/reach.rs) instantiated
+per family, under the reach stored on its binding. `Witnessed::resident` is never
+reached from a builtin, and no read walks a value to recover its reach.
 
-In Koan, `merge_pinned`'s trigger is *referencing a pre-existing region-resident value* — the
-foreign borrow a `yoke` closure would reject — and it is the **same-region** case almost
-always: a list assembled in one call's arena, or a closure capturing its defining scope (a
-`KFunction` is allocated *into that scope's region*, so the capture is co-located), where
-subsumption trivially collapses the union to a single `Rc`. The genuinely
-cross-region merges are *ancestry-related* — a scope or function in a per-call frame
-referencing the run-global root (or a lexical-ancestor scope) — where the descendant frame
-`Rc`'s `outer` chain already pins the ancestor region, so subsumption keeps the frame witness
-and drops the ancestor's. The case `merge_pinned` *cannot* collapse — a value whose backing reaches an
-**independent, dying** region — is `transfer_into` (below) instead: there the source is a dying
-*descendant*, so subsumption would collapse onto the backing about to drop; the union must be held
-*whole* as the set of both.
+## Which witness form each node takes
 
-**`map` — advance a value already witnessed.** Generic: `map` consumes a carrier,
-re-anchors it at a brand, transforms `T::At<'b> → P::At<'b>`, and re-seals under the
-*same* witness. It differs from `yoke` in source (an existing carrier, not a region)
-and from `with` (below) in that the brand-flavoured result is *kept* — re-sealed —
-rather than forbidden from escaping. In Koan: stepping a witnessed continuation to
-its next witnessed state without changing which cart pins it.
+Koan uses both of the substrate's two sealed forms, and the split is not
+incidental:
 
-## Storage and access: `seal`, `open`, `transfer_into`
+- A **node result** is self-witnessed under its producer frame `Rc`. The carrier is
+  held *outside* the region it witnesses, so the strong `Rc` closes no cycle.
+- The **per-call child scope** is externally-witnessed. It lives in the frame's own
+  region, the `CallFrame` already holds the pinning `Rc`, and bundling a clone
+  would peg `FrameStorage`'s refcount and defeat the `Rc::get_mut` uniqueness check
+  TCO frame reuse depends on. The scope-pointer handle — an erased scope recovered
+  against the frame `Rc` — *is* the externally-witnessed sealed carrier, rather than
+  a scope-specialized erasure beside the substrate.
 
-A node holds its carrier *between* run-loop steps, when nothing is being read. The
-access surface models exactly that rhythm.
+A value that *captures* the per-call scope therefore has no bundled scope witness
+to `merge_pinned` against: it mints its merge operand from the frame `Rc` the
+builder already holds — co-located, since the scope lives in that frame's region —
+so the capturing carrier's minted reach gains that `Rc` and the escaping closure
+pins the frame exactly as a node result does.
 
-**Sealing.** Generic: `seal` turns the live `Witnessed<T, W>` into a `Sealed<T, W>`
-— the node-storage form, opaque between accesses, exposing no construction or
-transform. Sealing is the same operation that lifts a finalized result into a slot:
-bundle the erased value with the witness that pins it. In Koan: `finalize` sealing a
-node's terminal under its producer frame `Rc`.
+## Reach at the bind seam
 
-**Two witness forms.** Generic: a sealed carrier comes in two shapes, distinguished
-by where the witness lives. The **self-witnessed** form bundles `W` (the
-`Sealed<T, W>` above): for a value *minted* into a fresh region whose pin nothing
-else holds. The **externally-witnessed** form carries *no* bundled witness; the
-holder already pins the backing and supplies it at the access, read through a
-**consuming, externally-witnessed `open`** — the witness handed in at the call and the
-carrier moved into the same rank-2 `for<'b>` brand, so a non-`Copy` carrier (a continuation)
-passes and nothing branded escapes. Bundling a witness the carrier does
-not need would be a redundant second owner — and, when the witness is
-reference-counted, an extra count the holder's own uniqueness checks must subtract.
-`yoke`, which moves `W` into the bundle, builds the self-witnessed form; the
-externally-witnessed form is built with the witness-less `erase` and read against an
-external pin. In Koan: a node result is self-witnessed under its producer frame `Rc`;
-the per-call child scope is externally-witnessed — it lives in the frame's own
-region, the `CallFrame` already holds the pinning `Rc`, and bundling a clone would
-peg `FrameStorage`'s refcount and defeat the `Rc::get_mut` uniqueness check TCO frame
-reuse depends on. So the scope-pointer handle — an erased scope recovered against the
-frame `Rc` — *is* the externally-witnessed sealed carrier, and collapses into this
-one substrate rather than a scope-specialized erasure.
+A value *bound into a scope* has its reach **minted directly against the scope's
+region** ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs)) — the
+description into that region's reach table, the owned pins folded into that
+region's one deduped union bundle. The binding entry itself owns **nothing**: it is
+a `BindingIndex` beside a resting
+[`SealedValue`](../src/machine/core/carrier_witness.rs), both `Copy` and
+`Drop`-free. Because bindings are bind-once and a scope's entries never outlive its
+region, entry death and region death are one schedule, so a region-owned union is
+exactly as tight as a per-entry bundle and costs one `Rc` per distinct foreign
+region instead of one per entry. A liveness-only retention (the FN return-type
+slot, the `USING` overlay, the run-root drain) folds into the same union. There is
+no scope-level reach-set and no deposit list to keep in sync; the adopt is the one
+call that mints the description, retains the pins, and hands back what the binding
+entry stores.
 
-This split is what keeps self-witnessing cycle-free. A self-witnessed carrier's strong frame
-`Rc` rides the *carrier*, which a node holds *outside* the region it witnesses; `merge_pinned` folds
-every intermediate into that one carrier (the *one wrapper per node* invariant above), so no
-region-resident value strong-owns its own frame — the value in-region holds only non-owning
-pointers (a plain `&Scope`, a `Weak` `region_owner`). The per-call scope is the one value held
-*inside* the frame, which is exactly why it stays externally-witnessed. A value that *captures*
-the scope therefore has no bundled scope witness to `merge_pinned` against: it mints its merge operand
-from the frame `Rc` the builder already holds — co-located, since the scope lives in that frame's
-region — so the capturing carrier's minted reach gains that `Rc` and the escaping closure pins the
-frame exactly as a node result does.
+The bind sites adopt the bound value's full delivered carrier across both channels:
+a [`let`](../src/builtins/let_binding.rs) adopts its bound value's carrier (an
+object RHS or a resolved-type RHS alike), a user-fn arg bind adopts each argument
+carrier — object and type — into the *per-call* scope
+([`exec::invoke`](../src/machine/execute/dispatch/exec.rs), the scope the parameters
+bind on), and [`USING`](../src/builtins/using_scope.rs)'s transparent window adopts
+the opened module's carrier into the call-site scope it borrows into. A multi-region
+value (a list of closures, a closure over several closures, a module reaching a
+functor-result region) thus keeps *every* region it reaches alive for the life of
+its scope's region.
 
-**Opening.** Generic: `open` is the access verb — a rank-2
-`open<R>(&self, for<'b> FnOnce(Live<'b, T>) -> R) -> R` for the self-witnessed form, with a
-consuming, witness-supplied twin for the externally-witnessed form (same brand, witness handed in
-at the call rather than bundled). Between calls the carrier is
-`Erased`: no live reference exists. Each `open` is a borrow-scoped window in which
-references go live, branded `'b`; `R` cannot name `'b`, so nothing branded escapes
-the window. This is the design's safety core, and the RAII analogy is exact: *behave
-like RAII while accessed — borrow-checked, references confined — but instead of
-dropping, go opaque until the next access.* No `'b`, no access; a value that must
-outlive the window leaves it only as an owned copy or by transfer.
+The mint applies **no destination-relative narrowing**; only the library's self and
+eternal rules shrink it, and Koan's eternal tier is the run root
+([witness-hosting.md § The eternal tier](witness-hosting.md#the-eternal-tier)).
 
-**Transfer.** Generic: `transfer_into` is the safe relocation — it moves the sealed
-value into a *consumer's* storage at the destination's lifetime, keeping every region
-the value still reaches alive by holding that region's frame `Rc`. Copying is not an
-option: a captured closure may reference anything reachable from its scope, and a
-region carries no per-value reachability map, so the source regions are *kept*, not
-rebuilt. The carrier is therefore witnessed by the **set** of regions the value
-reaches — the destination it was relocated into, plus each source region a retained
-closure still borrows. These regions form a tree, not a chain — a closure capturing
-closures branches into independent lineages — flattened into the set; a value with no
-cross-region reference is the degenerate singleton (the destination alone). This is **not** a `merge_pinned`: the source is a dying
-*descendant* of the destination (its ancestry pins the destination, not the reverse),
-so no single dominating witness exists — the set is held whole and composed by union,
-since splicing the source into the destination's `outer` chain to collapse it risks
-re-forming the `src`↔`dst` cycle. This closes the one case `open` cannot: a value
-whose source backing is dying but whose consumer outlives it. In Koan: the
-consumer-pull lift across a dependency edge — `copy_carried` copies the dep into the consumer
-`dest` region at the step brand (the spine sharing its `Rc` payloads, a closure / future / module
-riding its bare borrow), and `transfer_into` re-seals it under the set union of its reached sources
-and `dest`. The lift delivers each dep **both** as a live bare `Carried` and as its producer slot's
-own `Sealed` carrier (a `duplicate`): a finish that embeds or binds a value folds that carrier so the
-reach is named on the carrier and never reconstructed. Every object construction does this — the
-aggregate and region-pure inversions, the newtype / tagged-union constructors, and `catch` fold their
-dep carriers via `transfer_into`; the bare-arg value-embedding sites (`attr`, `FROM`, the literal
-Resolved arm) `transfer_into` the [delivered carrier](#storage-and-access-seal-open-transfer_into) of the value
-they project; and a `let` or user-fn arg bind mints the bound value's carrier against the scope
-(below). The **type** channel rides the same construction: a delivered type terminal — a `VAL` slot
-([`val_decl`](../src/builtins/val_decl.rs)), an abstract or manifest type member
-([`type_decl`](../src/builtins/type_decl.rs)), or a `LET` type alias
-([`let_binding`](../src/builtins/let_binding.rs)) — seals via the generic
-[`Scope::resident`](../src/machine/core/scope/reach.rs), born co-located with the region-resident
-type the write channel installs. It
-carries no reach: a `KType` owns all its content, including a signature's schema, so a sealed type
-borrows nothing beyond the region it was stored into. The reach discipline below is therefore the
-*value* channel's alone — a module value's seal ([`Scope::seal_module`](../src/machine/core/scope/registry.rs))
-derives its reach from the child scope held directly at construction
-([`Scope::child_module_reach`](../src/machine/core/scope.rs)), never recovered by
-walking the built value. A relocated module therefore names every region it reaches on its own witness, read
-back at the consumer rather than reconstructed from the value. No finish reads a live
-value out to rebuild its reach: the relocate-into-consumer seam is a plain
-[`copy_carried`](../src/machine/execute/lift.rs) structural copy, transient reach rides each dep's
-carrier, and only a *bound* value mints against the scope (below).
+The minted reach rests **fused to its value** in one `Sealed` carrier, so a later
+read hands the carrier back structurally and a value is never separated from the
+reach that proves it. [`Bindings`](../src/machine/core/bindings.rs)' `data` entries
+store that carrier — minted at bind time from the delivered carrier for a value or
+alias, and from the child scope's own region for a module
+([`Scope::child_module_reach`](../src/machine/core/scope.rs)), whose union already
+covers everything its members reach. A value lookup or an `ATTR` member read hands
+out a bit-copy of the seal — the thin description reference beside the value, no
+bundle cloned — and the reader re-anchors it under a pin it already holds
+([`Scope::lift_resident`](../src/machine/core/scope/reach.rs) for travel,
+`Sealed::open_at` for an in-step read), witnessing the existing `&'a KObject` **in
+place**.
 
-A value *bound into a scope* has its reach **minted directly against the scope's region**
-([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs)) — the description into that
-region's reach table, the owned pins folded into that region's one deduped union bundle. The binding
-entry itself owns **nothing**: it is a `BindingIndex` beside a resting
-[`SealedValue`](../src/machine/core/carrier_witness.rs), both `Copy` and `Drop`-free. Because
-bindings are bind-once and a scope's entries never outlive its region, entry death and region death
-are one schedule, so a region-owned union is exactly as tight as a per-entry bundle and costs one
-`Rc` per distinct foreign region instead of one per entry. A liveness-only retention (the FN
-return-type slot, the `USING` overlay, the run-root drain) folds into the same union. There is no
-scope-level reach-set and no deposit list to keep in sync; the adopt is the one call that mints the
-description, retains the pins, and hands back what the binding entry stores. The bind sites adopt the
-bound value's full delivered carrier across both channels: a
-[`let`](../src/builtins/let_binding.rs) adopts its bound value's carrier (an object RHS or a
-resolved-type RHS alike), a user-fn arg bind adopts each argument carrier — object and type — into the
-*per-call* scope ([`exec::invoke`](../src/machine/execute/dispatch/exec.rs), the scope the parameters
-bind on), and [`USING`](../src/builtins/using_scope.rs)'s transparent window adopts the opened
-module's carrier into the call-site scope it borrows into. A multi-region value (a list of closures, a
-closure over several closures, a module reaching a functor-result region) thus keeps *every* region it
-reaches alive for the life of its scope's region.
+The `types` channel stores no reach at all: a `KType` is a `Copy` handle interned
+in the run frame's registry, so a bound type borrows nothing and names the same type
+in every region. A type binding is a handle beside its
+[`DeclarationSite`](../src/machine/core/bindings.rs), read out by copy; a bare type
+leaf rides the resolve chain (`resolve_type_identifier`) with nothing to replay. A
+freshly-built FN-def / LET-object seals one carrier through the confined resident
+surface and the table write carries a duplicate of that same seal, so the bound
+entry and the returned terminal share one allocation and one reach.
 
-The mint applies **no destination-relative narrowing**. A stored description is the value's whole
-reach, home riding as an ordinary `Weak` member rather than as a separate bit, so a `Sealed` carrier
-describes a *value* rather than the pairing of a value with some reader's ambient coverage — which is
-what lets a lift upgrade it to owned pins with no policy threaded in. Only two shrinks apply, and both
-are about ownership rather than membership: the **self rule** (a region never owns a pin on itself)
-at the mint, and the **eternal rule** (nothing owns a pin on the run root) at region-lifetime
-retention. Together they are what keeps the retention graph acyclic under TCO, where a per-call frame
-carries no storage `outer` link and the ring a naive mint would close is invisible to the `outer` walk
-([witness-hosting.md § Composition](witness-hosting.md#composition-minting-a-description-and-retaining-its-pins)).
+With both channels' construction carried and every bind's reach minted into its
+scope's region, reach lives entirely on carriers: a value's reach is read off its
+own carrier witness, never recovered by walking the value, and no scope-level
+accumulator or deposit list exists to keep consistent alongside it.
 
-The minted reach rests **fused to its value** in one `Sealed` carrier, so a later read hands the
-carrier back structurally and a value is never separated from the reach that proves it.
-[`Bindings`](../src/machine/core/bindings.rs)' `data` entries store that carrier — minted at bind time
-from the delivered carrier for a value or alias, and from the child scope's own region for a module
-([`Scope::child_module_reach`](../src/machine/core/scope.rs)), whose union already covers everything
-its members reach. A value lookup or an `ATTR` member read hands out a bit-copy of the seal — the thin
-description reference beside the value, no bundle cloned — and the reader re-anchors it under a pin
-it already holds ([`Scope::lift_resident`](../src/machine/core/scope/reach.rs) for travel,
-`Sealed::open_at` for an in-step read), witnessing the existing `&'a KObject` **in place**.
+## The run loop nests inside the access brand
 
-The `types` channel stores no reach at all: a `KType` is a `Copy` handle interned in the run frame's
-registry, so a bound type borrows nothing and names the same type in every region. A type binding is a
-handle beside its [`DeclarationSite`](../src/machine/core/bindings.rs), read out by copy; a bare type
-leaf rides the resolve chain (`resolve_type_identifier`) with nothing to replay. On the value side,
-home is an ordinary description member while the *owned* pin on it is what the self rule drops — a
-`Weak` member closes no cycle, so the description stays exact and no
-`frame → region → scope → bindings → frame` strong cycle forms. A freshly-built FN-def / LET-object
-seals one carrier through the confined resident surface and the table write carries a duplicate of
-that same seal, so the bound entry and the returned terminal share one allocation and one reach.
+The substrate's rank-2 brand forces the entire per-step consumption to nest inside
+the closure. Koan pays that in full: the run-loop step nests its whole tail in one
+brand — the continuation run, the outcome apply, and the finalize — through the
+consuming externally-witnessed `open`, so nothing branded crosses the step
+boundary.
 
-With both channels' construction carried and every bind's reach minted into its scope's region, reach
-lives entirely on carriers: a value's reach is read off its own carrier witness, never recovered by
-walking the value, and no scope-level accumulator or deposit list exists to keep consistent alongside
-it.
+- **The dep slice** opens *in-band* at that same brand: each producer terminal is
+  read out borrow-bounded, erased into one slice carrier, and zipped alongside the
+  continuation, so every dep value is born at `'b` through the one step `open` with
+  no separate slice reattach.
+- **The active scope** opens at that same brand: its carrier — the frame's own
+  `SealedExtern<ScopeRefFamily>` for a `Yoked` slot, the node's own for a
+  `YokedChild` — is zipped into the step `open` alongside the continuation, so the
+  dispatch decide reads `&Scope<'b>` from the one brand (and the consumer `dest`
+  region is the opened scope's own `region`, derived inside it) rather than
+  re-anchoring a free `&Scope<'step>` up the dispatcher stack.
+- **Frame-side reads** fold onto `open` the same way: a frame's own child scope
+  opens at a `for<'b>` brand through
+  [`CallFrame::with_scope`](../src/machine/core/arena.rs) — the `&mut self` submit /
+  classify paths reach it through `with_node_scope` / `with_current_node_scope`,
+  copying out a scalar (an id, a region) where they need no live scope — so no
+  `&Scope` rides up a `&mut self` path.
+- **Seed-side binds** fold onto `open` too: the MATCH / TRY arm `it`-bind, the
+  user-fn param-bind, and the deferred-return-type elaboration each open the child
+  scope at the brand through `CallFrame::with_scope` and **relocate** their
+  caller-`'a` value into the opened scope's own region through the substrate
+  ([`Scope::store_object_adopted`](../src/machine/core/arena/residence.rs), which
+  re-homes the value at the frame region under a residence audit against the bind's
+  own reach evidence rather than assuming purity — see
+  [memory-model.md § Move-in residence audits](memory-model.md#move-in-residence-audits)
+  — for the `it` / param binds; the deferred return re-homing its elaborated `KType`
+  into the captured-scope region) before binding it, so the value lands at the brand
+  and the seed fabricates no free `&'a`.
 
-## Why reads are safe
+Two driver accessors copy out inside the brand — a value read
+([`read_result_with`](../workgraph/src/scheduler.rs)) and a borrow-free error probe
+(`result_error`) — and the ride-up-stack dispatch sites resolve at the cart `'step`
+directly. With every frame-side and seed-side read on `open`, the access surface is
+`open` alone.
 
-The danger in any reattach is a *free, unbounded* content lifetime the caller can
-widen past the witness pin — the Miri-proven use-after-free the naive content-free
-reattach exhibits. `open`'s rank-2 brand forecloses it: the fabricated lifetime is
-universally quantified and un-nameable, so it cannot be widened or captured. Reads
-therefore lose no safety — a reference may escape the *call* (the value drives the
-step's work), but only as an owned copy or pin-bounded transfer, never as a branded
-borrow outliving its window.
+The construction-time scope re-anchor closes the same way: a same-region child
+stores its already-`'a` parent by plain coercion, and the per-call frame child
+builds through the externally-witnessed construction door
+[`build_frame_child_witnessed`](../src/machine/core/arena.rs), which brands the
+fresh region and the foreign parent at one `for<'b>` and erases the child
+witness-less. No scope re-anchor survives outside the witnessed substrate.
 
-The rank-2 brand forces the entire per-step consumption to nest inside the closure; where a
-re-anchored reference would otherwise ride up the dispatcher call stack, that becomes either
-copy-out or a CPS rewrite of the step. The run-loop step nests its whole tail this way — the
-continuation run, the outcome apply, and the finalize all run inside one brand (the consuming
-externally-witnessed `open` above), so nothing branded crosses the step boundary. The step's dep
-slice is opened *in-band* at that same brand — each producer terminal read out borrow-bounded, erased
-into one slice carrier, and zipped alongside the continuation — so every dep value is born at `'b`
-through the one step `open`, with no separate slice reattach. The **active scope** opens at that same
-brand: its carrier — the frame's own `SealedExtern<ScopeRefFamily>` for a `Yoked` slot, the node's
-own `SealedExtern<ScopeRefFamily>` for a `YokedChild` — is zipped into the step `open` alongside the continuation, so the
-dispatch decide reads `&Scope<'b>` from the one brand (and the consumer `dest` region is the opened
-scope's own `region`, derived inside it) rather than re-anchoring a free `&Scope<'step>` up the
-dispatcher stack. The frame-side reads fold onto `open` the same way: a frame's own child scope opens at
-a `for<'b>` brand through [`CallFrame::with_scope`](../src/machine/core/arena.rs) — the `&mut self`
-submit / classify paths reach it through `with_node_scope` / `with_current_node_scope`, copying out a
-scalar (an id, a region) where they need no live scope — so no `&Scope` rides up a `&mut self` path. The
-seed-side binds fold onto `open` the same way: the MATCH / TRY arm `it`-bind, the user-fn param-bind, and
-the deferred-return-type elaboration each open the child scope at the brand through
-[`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller-`'a` value into the
-opened scope's own region through the substrate ([`Scope::store_object_adopted`](../src/machine/core/arena/residence.rs),
-which re-homes the value at the frame region under a residence audit against the bind's own reach
-evidence rather than assuming purity — see [memory-model.md § Move-in residence audits](memory-model.md#move-in-residence-audits)
-— for the `it` / param binds; the deferred return re-homing its elaborated `KType` into the
-captured-scope region) before binding it — so the value lands at the brand and the seed fabricates no
-free `&'a`. With every frame-side and
-seed-side read on `open`, the access surface is `open` alone — the borrow-bounded `attach` accessor is
-deleted.
+## Storage choice, per node
 
-## Storage choice belongs to the workload
-
-**Generic.** The substrate is parametric over the witness `W`, and assumes nothing
-about which storage backs a given carrier. A carrier may witness a freshly-allocated
-region or borrow storage its creator already holds; the substrate routes both
-through the same surface.
-
-**In Koan.** The interpreter decides per node: a user-fn call installs a fresh
-per-call region and witnesses its values with that frame's `Rc`; a sub-expression
-node allocates into the *active* frame and witnesses with the caller's pin. A
-tail-call chain reuses one node across a sequence of fresh frames. The substrate
-imposes none of this — it is the workload's call, which is why "per-node memory" is
-the carrier a node holds, not an arena the node owns.
-
-The construction surface (`yoke` / `merge_pinned` / `with` / `map`, the witness-borrow
-reattaches) is shipped, as is the relocation of the generic `Region<P>` allocator
-beside its carrier in the `witnessed` module and the opaque [`Sealed`](../workgraph/src/witnessed.rs)
-storage form (`seal` / `open`), with the node result slot rerouted onto it. Its **value reads** now
-nest under the rank-2 `open`: two driver accessors copy out inside the brand — a value read
-([`read_result_with`](../workgraph/src/scheduler.rs)) and a borrow-free error probe (`result_error`) — and the
-three ride-up-stack dispatch sites resolve at the cart `'step` directly, so the transitional
-self-witnessed `Sealed::read` is gone, and the scope channel — the frame-side reads and the seed-side
-binds alike — fold onto `open` too, and the borrow-bounded `attach` is deleted. The witnessed
-alloc surface has landed — region allocation hands back a foreign-reach-only
-[`Witnessed`](../workgraph/src/witnessed.rs) with the active frame folded in at close, and the frame builder's
-child scope is born externally-witnessed — and every object- and type-channel construction *terminal*
-builds through it, a seal folding the already-witnessed carrier's reach rather than re-anchoring a
-separately-built value. Allocation is reachable only through the branded
-[`RegionBrand`](../src/machine/core/arena.rs) handle — a bare `&KoanRegion` exposes no `alloc_*`, so
-"always witnessed" is compile-enforced for allocation. The construction-time scope re-anchor — a
-per-call child's longer-lived lexical parent and root, content-shortened into the child's fresh region
-under `Scope`'s invariance — is closed the same way: a same-region child stores its already-`'a` parent
-by plain coercion, and the per-call frame child builds through the externally-witnessed construction
-door [`build_frame_child_witnessed`](../src/machine/core/arena.rs), which brands the fresh region and
-the foreign parent at one `for<'b>` and erases the child witness-less. No scope re-anchor survives
-outside the witnessed substrate and the access surface is `open` alone, so "always witnessed" is a
-closed type rule.
+The substrate is parametric over the witness and imposes no policy; Koan decides
+per node. A user-fn call installs a fresh per-call region and witnesses its values
+with that frame's `Rc`; a sub-expression node allocates into the *active* frame and
+witnesses with the caller's pin; a tail-call chain reuses one node across a sequence
+of fresh frames. This is why "per-node memory" names the carrier a node holds, not
+an arena the node owns.

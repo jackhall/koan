@@ -102,7 +102,7 @@ is gone, so the *consumer* takes over the pin: the binding scope's region union 
 value, the new envelope's bundle for a re-dispatched or read-out one.
 
 Both channels carry the regions a relocated value reaches on its delivered
-[`Sealed`](../per-node-memory.md#storage-and-access-seal-open-transfer_into) carrier. A **closure /
+[`Sealed`](../../workgraph/design/witnessed-memory.md#storage-and-access-seal-open-transfer_into) carrier. A **closure /
 future** seals its captured-scope reach at construction; a **module value** names its child scope's
 own region, via
 [`Scope::child_module_reach`](../../src/machine/core/scope.rs), which owns the union covering

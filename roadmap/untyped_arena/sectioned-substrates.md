@@ -40,7 +40,7 @@ doors, not here.
 
 **Requires:**
 
-- [Sectioned reach](../scheduler_library/sectioned-reach.md) — the
+- [Sectioned reach](../../workgraph/roadmap/sectioned-reach.md) — the
   interned table, sectioned container, and alloc door this adoption
   routes through.
 

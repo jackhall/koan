@@ -1,7 +1,7 @@
 //! [`Delivered<T, W, F>`] — the **delivery envelope**: a sealed carrier paired with the frame-owner
 //! `Rc` that retains its value's backing *in transit*, from a scheduler pull to the point a consumer
 //! adopts or re-homes it. See
-//! [design/witness-hosting.md § Retention model](../../../design/witness-hosting.md#retention-model).
+//! [design/reach.md § Retention model](../../design/reach.md#retention-model).
 //!
 //! Liveness *at rest* is the scheduler's retention table (a producer frame stays held while any
 //! consumer edge is undischarged). Liveness *in transit* — from a pull to its adoption — is this
@@ -22,7 +22,7 @@
 //! that bundle: [`Delivered::transfer_into`] *derives* the source claim by running the site's retention
 //! predicate over the folded product against each pinned region in turn, so what the product still
 //! reaches is a checked property of the bytes rather than a promise made before they existed. See
-//! [design/witness-hosting.md § Composition](../../../design/witness-hosting.md#composition-minting-a-description-and-retaining-its-pins).
+//! [design/reach.md § Composition](../../design/reach.md#composition-minting-a-description-and-retaining-its-pins).
 //!
 //! [`Delivered::mint_reach`] is the envelope-bearing mint entry a consumer routes, a thin caller
 //! over the crate-internal [`Carrier::mint_into`](super::Carrier::mint_into) core.

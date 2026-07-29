@@ -252,7 +252,7 @@ run-global root region the same way.
 
 A relocated closure / future / module survives its producer's dying frame because the copy keeps its
 bare borrow and the *consumer* keeps that borrow's region alive. Both channels carry the regions they
-reach on their [delivered carrier](per-node-memory.md#storage-and-access-seal-open-transfer_into): a
+reach on their [delivered carrier](../workgraph/design/witnessed-memory.md#storage-and-access-seal-open-transfer_into): a
 **closure / future** seals its captured-scope reach at construction, and a **module value** names its
 child scope's own region (via
 [`Scope::child_module_reach`](../src/machine/core/scope.rs)), which owns the union covering everything
@@ -266,7 +266,7 @@ multi-region value keeps *every* region it reaches, read straight off its carrie
 reconstructed from the value. A minted description is **exact**: it names the value's whole reach,
 never a reach narrowed against what some destination already pins. Acyclicity comes from the self
 and eternal rules instead
-([witness-hosting.md § Composition](witness-hosting.md#composition-minting-a-description-and-retaining-its-pins)).
+([reach.md § Composition](../workgraph/design/reach.md#composition-minting-a-description-and-retaining-its-pins)).
 
 The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params, the deferred-return-type
 elaboration) open the child scope at a `for<'b>` brand through
@@ -374,7 +374,7 @@ compile-only capability with no runtime audit at all:
   "Never a free parameter a caller asserts" is structural: there is no constructor that pairs a
   loose reach with a value. `PinBundle` is crate-private to `workgraph` and owned pins cross the
   boundary only as an opaque `StepCoverage`, so Koan cannot assemble, widen or narrow a claim at all
-  ([witness-hosting.md § The carrier states](witness-hosting.md#the-carrier-states)); what it holds is
+  ([reach.md § The carrier states](../workgraph/design/reach.md#the-carrier-states)); what it holds is
   whatever a door derived for a specific value. `Residence`
   ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage predicate both checked tiers
   compose from.
@@ -475,7 +475,7 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 ## Performance notes
 
 The push/notify scheduler ([execution/README.md § Push/notify dependency
-edges](execution/scheduler.md#pushnotify-dependency-edges)) keeps its slot-table
+edges](../workgraph/design/dag-scheduler.md#pushnotify-dependency-edges)) keeps its slot-table
 state in a
 [`NodeStore`](../workgraph/src/scheduler/node_store.rs)
 sub-struct that owns `slots: SlotVec<SlotState<'run>>` (each slot a `PreRun(Node)`

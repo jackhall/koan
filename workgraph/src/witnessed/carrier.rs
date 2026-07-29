@@ -1,7 +1,7 @@
 //! [`Carrier<F>`] — the reference-only carrier witness: a *reference* to a hosted reach description
 //! and nothing else, the same shape whether the value is resident in a region or walking between
 //! nodes. See
-//! [design/witness-hosting.md § The carrier states](../../../design/witness-hosting.md#the-carrier-states).
+//! [design/reach.md § The carrier states](../../design/reach.md#the-carrier-states).
 //!
 //! The carrier **owns no pin**: cloning is a reference-copy, and a carrier's death releases nothing.
 //! What keeps its description (and the value it describes) alive is external —

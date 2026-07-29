@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Maintain links between docs and source for the koan repo.
 
+Two doc trees are covered: koan's own `design/` + `roadmap/`, and the embedded
+library's `workgraph/design/` + `workgraph/roadmap/`. Roadmap items across both
+form one dependency graph — cross-tree edges are gated for symmetry like any
+other — but each tree derives its own "Next items" index.
+
 Subcommands:
   check                run every gating audit in one pass: broken links, roadmap
                        Requires/Unblocks symmetry, orphaned design/ + roadmap/
@@ -9,8 +14,9 @@ Subcommands:
                        ref. Exits non-zero if any gate fails; the source-tree
                        section never affects the exit code.
   sync-next            regenerate the global "Next items" list in roadmap/README.md
-                       plus each project README's slice, from the roadmap
-                       dependency graph (items with no open prerequisite)
+                       plus each project README's slice (including
+                       workgraph/roadmap/README.md), from the roadmap dependency
+                       graph (items with no open prerequisite)
   refs <path>          list every file that links to <path>
   fix-refs OLD=NEW ... rewrite every link that resolves to OLD so it points at
                        NEW instead — used to fix inbound references after a
@@ -39,8 +45,36 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-MD_GLOBS = ("*.md", "design/**/*.md", "roadmap/**/*.md")
+MD_GLOBS = (
+    "*.md", "design/**/*.md", "roadmap/**/*.md",
+    "workgraph/*.md", "workgraph/design/**/*.md", "workgraph/roadmap/**/*.md",
+)
 SRC_GLOBS = ("src/**/*.rs", "workgraph/src/**/*.rs")
+
+# Roadmap items live in two trees: koan's own `roadmap/`, and the library's
+# `workgraph/roadmap/`. They form one dependency graph — an edge crosses trees
+# whenever a library item unblocks a koan one, and `check` gates that edge's
+# symmetry like any other — but each tree owns its own derived `## Next items`
+# index, so neither reaches across the split to list the other's work.
+ROADMAP_ROOTS = (REPO / "roadmap", REPO / "workgraph" / "roadmap")
+
+# Doc trees whose files are subject to the orphan gate, paired with the roadmap
+# roots above.
+DESIGN_ROOTS = (REPO / "design", REPO / "workgraph" / "design")
+
+
+def roadmap_items() -> list[Path]:
+    """Every markdown file across both roadmap trees, README indexes included."""
+    out: list[Path] = []
+    for root in ROADMAP_ROOTS:
+        out.extend(root.glob("**/*.md"))
+    return sorted(out)
+
+
+def under_roadmap(path: Path) -> bool:
+    """Whether `path` names a file in either roadmap tree."""
+    resolved = path.resolve()
+    return any(resolved.is_relative_to(root.resolve()) for root in ROADMAP_ROOTS)
 
 # [text](target) — target stops at the first ')' that isn't escaped, no nesting,
 # no whitespace, no '#' fragment included in the resolved path.
@@ -217,15 +251,14 @@ NONE_RE = re.compile(r"\bnone\b", re.IGNORECASE)
 # ---------- deps ----------
 
 def parse_dep_section(path: Path) -> tuple[set[Path], set[Path]]:
-    """Return (requires, unblocks) — sets of resolved paths into `roadmap/`.
+    """Return (requires, unblocks) — sets of resolved paths into a roadmap tree.
 
     Reads only the **Dependencies** section. A section ends at the next h2 header
-    (`## ...`) or EOF. Targets outside `roadmap/` (e.g. `design/foo.md`) are
-    ignored — only intra-roadmap edges have a symmetric partner. Targets are
-    resolved against the link's source file's directory so `../sibling.md` and
-    `../topic/item.md` work for items in `roadmap/<subdir>/`.
+    (`## ...`) or EOF. Targets outside the roadmap trees (e.g. `design/foo.md`)
+    are ignored — only intra-roadmap edges have a symmetric partner. Targets are
+    resolved against the link's source file's directory so `../sibling.md`,
+    `../topic/item.md`, and cross-tree `../../workgraph/roadmap/item.md` all work.
     """
-    roadmap_dir = (REPO / "roadmap").resolve()
     requires: set[Path] = set()
     unblocks: set[Path] = set()
     text = path.read_text(encoding="utf-8")
@@ -254,17 +287,14 @@ def parse_dep_section(path: Path) -> tuple[set[Path], set[Path]]:
             if not raw.endswith(".md"):
                 continue
             resolved = (path.parent / raw).resolve()
-            try:
-                resolved.relative_to(roadmap_dir)
-            except ValueError:
+            if not under_roadmap(resolved):
                 continue
             current.add(resolved)
     return requires, unblocks
 
 
 def _check_deps() -> int:
-    roadmap_dir = REPO / "roadmap"
-    items = sorted(roadmap_dir.glob("**/*.md"))
+    items = roadmap_items()
     deps: dict[Path, tuple[set[Path], set[Path]]] = {}
     for f in items:
         deps[f.resolve()] = parse_dep_section(f)
@@ -311,8 +341,8 @@ def _check_deps() -> int:
 
 def _check_orphans() -> int:
     targets: list[Path] = []
-    for sub in ("design", "roadmap"):
-        targets.extend((REPO / sub).glob("**/*.md"))
+    for root in DESIGN_ROOTS + ROADMAP_ROOTS:
+        targets.extend(root.glob("**/*.md"))
     targets.sort()
 
     referenced: set[Path] = set()
@@ -326,7 +356,7 @@ def _check_orphans() -> int:
     if orphans:
         print(f"\n{len(orphans)} orphaned doc(s).", file=sys.stderr)
         return 1
-    print("No orphaned design/ or roadmap/ docs.")
+    print("No orphaned design/ or roadmap/ docs (koan or workgraph).")
     return 0
 
 
@@ -446,8 +476,9 @@ NEXT_ITEMS_INTRO = [
     "not edit by hand. Each project subdirectory's README carries its own slice.\n",
 ]
 
-# Per-project variant, written into each `roadmap/<project>/README.md`. Same
-# derived-and-gated contract as the global list, scoped to one project's items.
+# Per-project variant, written into each `roadmap/<project>/README.md` and into
+# `workgraph/roadmap/README.md`. Same derived-and-gated contract as the global
+# list, scoped to one project's items.
 PROJECT_NEXT_INTRO = [
     "This project's items with no unshipped prerequisite — ready to start.\n",
     "Regenerated by `python3 tools/doclinks.py sync-next`; do not edit by hand.\n",
@@ -460,11 +491,12 @@ def compute_next_items() -> list[Path]:
     An item is 'next' when its **Requires:** set — already restricted to
     intra-roadmap edges by `parse_dep_section` — names no file that still exists:
     a require pointing at an already-deleted (shipped) item no longer blocks,
-    while one pointing at a live roadmap item does. Sorted by repo-relative path
-    so the generated list is deterministic. `roadmap/README.md` is excluded."""
-    roadmap_dir = (REPO / "roadmap").resolve()
+    while one pointing at a live roadmap item does. Both roadmap trees are walked
+    as one graph, so a koan item blocked by a library item stays off the list.
+    Sorted by repo-relative path so the generated list is deterministic; README
+    indexes are excluded."""
     out: list[Path] = []
-    for f in sorted(roadmap_dir.glob("**/*.md")):
+    for f in roadmap_items():
         if f.name == "README.md":
             continue
         requires, _ = parse_dep_section(f)
@@ -473,12 +505,22 @@ def compute_next_items() -> list[Path]:
     return out
 
 
+def next_items_under(root: Path, next_paths: list[Path]) -> list[Path]:
+    """The subset of `next_paths` living anywhere beneath `root`."""
+    r = root.resolve()
+    return [p for p in next_paths if p.is_relative_to(r)]
+
+
 def project_readmes() -> list[Path]:
-    """Each roadmap subdirectory's `README.md` — one per project — sorted by path.
-    These carry the moved per-project descriptions plus a derived per-project
+    """Each project's `README.md` — koan's `roadmap/<project>/README.md` files plus
+    `workgraph/roadmap/README.md`, whose one crate *is* its project so it carries
+    the slice directly. These hold the per-project description plus a derived
     `## Next items` slice; `sync-next` regenerates the slice and `check` gates it."""
-    roadmap_dir = (REPO / "roadmap").resolve()
-    return sorted(roadmap_dir.glob("*/README.md"))
+    out = sorted((REPO / "roadmap").resolve().glob("*/README.md"))
+    library = (REPO / "workgraph" / "roadmap" / "README.md").resolve()
+    if library.exists():
+        out.append(library)
+    return out
 
 
 def next_items_in(project_dir: Path, next_paths: list[Path]) -> list[Path]:
@@ -507,10 +549,9 @@ def render_next_block(
 
 
 def _links_under_roadmap(block: list[str], base_dir: Path) -> set[Path]:
-    """Resolved roadmap/*.md targets of every link in `block` (a slice of README
+    """Resolved roadmap-tree targets of every link in `block` (a slice of README
     lines), used to diff the listed Next-items membership against the computed
     set."""
-    roadmap_dir = (REPO / "roadmap").resolve()
     out: set[Path] = set()
     for line in block:
         for m in LINK_RE.finditer(line):
@@ -518,9 +559,7 @@ def _links_under_roadmap(block: list[str], base_dir: Path) -> set[Path]:
             if not raw or raw.startswith(("http://", "https://", "mailto:")):
                 continue
             resolved = (base_dir / raw).resolve()
-            try:
-                resolved.relative_to(roadmap_dir)
-            except ValueError:
+            if not under_roadmap(resolved):
                 continue
             out.add(resolved)
     return out
@@ -564,14 +603,19 @@ def _apply_next_section(
 
 
 def cmd_sync_next(args: argparse.Namespace) -> int:
-    """Regenerate the global `## Next items` list plus each project README's slice."""
+    """Regenerate the global `## Next items` list plus each project README's slice.
+
+    The global list covers koan's own `roadmap/` tree only — the library tree's
+    items are indexed by `workgraph/roadmap/README.md`, which `project_readmes`
+    returns."""
     readme = REPO / "roadmap" / "README.md"
     if not readme.exists():
         print("error: roadmap/README.md not found", file=sys.stderr)
         return 1
     next_paths = compute_next_items()
+    koan_next = next_items_under(REPO / "roadmap", next_paths)
 
-    any_changed = _apply_next_section(readme, next_paths, NEXT_ITEMS_INTRO, args.dry_run)
+    any_changed = _apply_next_section(readme, koan_next, NEXT_ITEMS_INTRO, args.dry_run)
     for proj in project_readmes():
         items = next_items_in(proj.parent, next_paths)
         any_changed |= _apply_next_section(proj, items, PROJECT_NEXT_INTRO, args.dry_run)
@@ -613,7 +657,8 @@ def _check_next_items() -> int:
     """Gate: the global `## Next items` list and every project README's slice must
     each equal what `sync-next` would emit."""
     next_paths = compute_next_items()
-    rc = _check_one_next(REPO / "roadmap" / "README.md", next_paths, NEXT_ITEMS_INTRO)
+    koan_next = next_items_under(REPO / "roadmap", next_paths)
+    rc = _check_one_next(REPO / "roadmap" / "README.md", koan_next, NEXT_ITEMS_INTRO)
     for proj in project_readmes():
         items = next_items_in(proj.parent, next_paths)
         rc = max(rc, _check_one_next(proj, items, PROJECT_NEXT_INTRO))
@@ -731,11 +776,9 @@ def cmd_rm_roadmap(args: argparse.Namespace) -> int:
     else:
         target = target.resolve()
 
-    roadmap_dir = (REPO / "roadmap").resolve()
-    try:
-        target.relative_to(roadmap_dir)
-    except ValueError:
-        print(f"error: {args.path} is not under roadmap/", file=sys.stderr)
+    if not under_roadmap(target):
+        print(f"error: {args.path} is not under roadmap/ or workgraph/roadmap/",
+              file=sys.stderr)
         return 1
     if not target.exists():
         print(f"error: {args.path} does not exist", file=sys.stderr)
@@ -751,7 +794,7 @@ def cmd_rm_roadmap(args: argparse.Namespace) -> int:
     # derived from the dependency graph, so they are regenerated wholesale after
     # the delete (below) rather than pruned here — deleting an item can also
     # *add* newly-unblocked dependents to them.
-    for f in sorted(roadmap_dir.glob("**/*.md")):
+    for f in roadmap_items():
         if f.resolve() == target:
             continue
         lines = f.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -804,8 +847,7 @@ def cmd_dag(args: argparse.Namespace) -> int:
     disagree, and surfacing both edges is more useful than silently dropping
     one.
     """
-    roadmap_dir = REPO / "roadmap"
-    items = sorted(roadmap_dir.glob("**/*.md"))
+    items = roadmap_items()
 
     # Key by resolved path so subdirectory items with colliding basenames stay
     # distinct. The on-graph URL is the repo-relative path (also unique).

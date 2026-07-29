@@ -20,6 +20,11 @@
 # Runtime: ~3–6 minutes per commit (dominated by the instrumented build /
 # test pass plus the non-instrumented `cargo test` in verify.sh). Bypass
 # for a hotfix with `git commit --no-verify`.
+#
+# A commit touching only `workgraph/` takes verify.sh's library slate
+# instead, which is far quicker and does not gate on koan compiling — so a
+# library change lands ahead of its koan adoption. That slate regenerates
+# no observability artifacts, leaving the `git add` below a no-op.
 
 set -euo pipefail
 

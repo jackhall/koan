@@ -1,7 +1,7 @@
 //! Koan's instantiation of the library's reference-only carrier witness
 //! ([`crate::witnessed::Carrier`]) over `F = FrameStorage` (the per-call frame owner), and the
 //! delivery envelope that carries a value's retained frame pin in transit. See
-//! [design/witness-hosting.md § The carrier states](../../../design/witness-hosting.md#the-carrier-states).
+//! [workgraph/design/reach.md § The carrier states](../../../workgraph/design/reach.md#the-carrier-states).
 
 use crate::machine::model::{
     still_borrows_host, CarriedFamily, DispatchToken, KObject, UntypedKey,

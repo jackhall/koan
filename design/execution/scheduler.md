@@ -173,72 +173,38 @@ rather than park as a forwarding node, it is spliced out as an alias of that
 producer (see [Bare-name forward splice](#bare-name-forward-splice)), keeping the
 single-producer-per-result invariant without a duplicate slot.
 
-## Push/notify dependency edges
+## Which edges Koan installs
 
-The scheduler's edges point producer → consumer. Each slot's `DepRow` carries a
-`notify: Vec<NodeId>` list of dependents waiting on it; each consumer carries a
-`pending: usize` counter of unresolved deps. When a slot writes a terminal
-`Value` or `Err`, the notify-walk drains its `notify` list, decrements each
-consumer's `pending`, and pushes any zero-counter consumer onto the run-set.
-The terminal write and notify-walk fire in a single
-[`Scheduler::finalize`](../../src/machine/execute/run_loop.rs)
-method body that pairs `NodeStore::finalize` with `DepGraph::drain_notify`,
-so the "every terminal write fires the notify" rule is type-enforced
-rather than restated at each call site. Consumers arrive on the run-set
-only when actually ready; there is no poll-and-requeue.
+The edge mechanism — producer → consumer notify lists, per-consumer pending
+counters, the two-band run set, and the three row invariants that keep them
+coherent — is the library's
+([workgraph/design/dag-scheduler.md](../../workgraph/design/dag-scheduler.md)).
+What is Koan's is *which* edges each dispatch shape installs:
 
-Every consumer wakes the same way: at pop time its `pending_deps` is zero, so
-every dep is terminal, and [`run_step`](../../src/machine/execute/run_loop.rs)
-reads each resolved dep off the view by index and hands the `Result` slice to the
-slot's `cont`. There is no per-edge wake-attribution side-channel — a decide that
+- **Owned** edges are the sub-Dispatches a slot spawns for its own nested
+  sub-expressions — the deps of the working-copy splice, a body block's leading
+  statements. They are the slot's to cascade-reclaim.
+- **Notify** (park) edges are Koan's wait-on-someone-else's-producer cases: a
+  dispatch decide's park-on-producer when a name resolves to a still-running
+  binding producer, and a dep-finish's `Existing` sibling parks. These leave the
+  producer alive and unowned, which is why the reclaim walk skips them.
+
+The classification behind the choice — ready / already-errored / would-cycle /
+must-park — is Koan policy over the library's dependence primitives, and lives in
+[`producer_disposition`](../../src/machine/execute/dispatch.rs) (with its
+consumer-less `producer_standing` twin for leaf-park sites with no consumer id in
+scope).
+
+Every consumer wakes the same way: at pop time its pending count is zero, so every
+dep is terminal, and [`run_step`](../../src/machine/execute/run_loop.rs) reads each
+resolved dep off the view by index and hands the `Result` slice to the slot's
+`cont`. There is no per-edge wake-attribution side channel — a decide that
 re-resolves reads its producers from the rebuilt scope, not a wakes list.
-`DepGraph::drain_notify` returns the per-consumer `hit_zero` flag so the
-enqueue-on-zero runs off a single drain.
 
-The run-set has two priority bands managed by
-[`WorkQueues`](../../workgraph/src/scheduler/work_queues.rs). Internal
-work — notify-walk wake-ups, Replace-arm re-enqueues, and ready-on-arrival
-nodes registered in `add()` — routes through `WorkQueues::push_internal` /
-`push_internal_front` / `push_woken`. Top-level `dispatch_in_scope` calls route
-through `WorkQueues::push_top_level` so independent top-level expressions
-execute in submission order. The execute loop drains via `WorkQueues::pop_next`,
-which yields internal slots ahead of top-level slots; the routing rule (which
-band a push lands in) and the priority rule (which band a pop drains first)
-are both enforced by the wrapper's method surface rather than restated at each
-call site.
-
-## Dependency graph invariants
-
-[`DepGraph`](../../workgraph/src/scheduler/dep_graph.rs) stores one
-`rows: Vec<DepRow>` parallel to the slot table; each `DepRow` bundles the
-three coordinated per-slot fields — `notify` (forward wake edges to this
-slot's dependents), `pending` (this slot's unresolved-dep counter), and
-`edges` (backward edges to producers it depends on, tagged `Owned` or
-`Notify`) — and the rows uphold three invariants:
-
-- **Inv-A (wake-pending coherence).** For every consumer slot `c`,
-  `rows[c].pending == |{ p : c appears in rows[p].notify }|`. Mutations go
-  through the row, so a slot's `notify` / `pending` / `edges` cannot
-  desync — Inv-A holds by construction.
-- **Inv-B (free-cascade source).** `rows[c].edges` lists every `Owned`
-  sub-slot `c` must cascade-reclaim. Park edges are tagged `Notify` and
-  filtered out of `free`'s walk via `owned_children`. Independent of
-  Inv-A.
-- **Inv-C (lazy notify-scrub on free).** A slot `c` is only freed once
-  every producer's `drain_notify` has run and removed `c` from every
-  `rows[*].notify`. The
-  `freed_slot_does_not_appear_in_other_notify_lists` test pins this;
-  `free` relies on Inv-A and Inv-C still holding rather than scrubbing
-  itself.
-
-Inv-B is what makes the eager `clear_dep_edges(idx)` in
-`Scheduler::reclaim_deps` sound at the owned-suffix reclaim: the owned deps a
-node holds carry only `Owned` edges (the sub-Dispatches the slot spawned).
-`Notify` edges land only on a node's park producers — a dispatch decide's
-park-on-producer and a dep-finish's `Existing` sibling parks — which `run_step`
-excludes from the reclaim by reading only the resolved dep list's owned entries
-(`deps.owned()`), so clearing the owned tree cannot drop a wake intent on a
-sibling producer.
+Koan's own use of the two priority bands is thin: top-level `dispatch_in_scope`
+calls route through the top-level band so independent top-level expressions execute
+in submission order, and everything else — wakeups, Replace-arm re-enqueues,
+ready-on-arrival nodes — is internal work that drains first.
 
 ## Bare-name forward splice
 
@@ -246,31 +212,18 @@ The push/notify model assumes a single producer slot per result. A bare-name slo
 (`(some_var)`, or the RHS of `LET y = z`) that resolves its name to a still-running
 binding-producer would otherwise become a *second* producer of that result. Instead
 the slot is **spliced out** as an alias of the producer, which stays the sole
-producer. All the graph logic lives in
-[`scheduler/splice.rs`](../../workgraph/src/scheduler/splice.rs):
+producer.
 
-- The bare-name decide returns [`Outcome::Forward(producer)`](../../src/machine/execute/outcome.rs).
-  If `producer` is already ready, the harness finalizes the slot with the
-  producer's terminal directly ([`NodeStep::Done`](../../src/machine/execute/nodes.rs)).
-- Otherwise the slot's step yields [`NodeStep::Alias(producer)`](../../src/machine/execute/nodes.rs),
-  and the execute loop calls [`Scheduler::splice_forward`](../../workgraph/src/scheduler/splice.rs):
-  the consumers already parked on the slot are moved onto the producer's notify
-  list ([`DepGraph::splice_notify`](../../workgraph/src/scheduler/dep_graph.rs)),
-  and the slot's [`SlotState`](../../workgraph/src/scheduler/node_store.rs)
-  becomes `Aliased(producer)`. The aliased slot never fires; the producer's fire
-  wakes the moved consumers directly.
-
-Reads follow the alias to the real producer:
-[`Scheduler::resolve_alias`](../../workgraph/src/scheduler/splice.rs) walks the
-alias chain (iterative, always pointing downstream to a real producer, so it
-terminates and never cycles), and `read_result` / `is_result_ready` resolve
-through it. Edge installs resolve it too:
-[`add_owned_edge`](../../workgraph/src/scheduler/splice.rs) /
-[`add_park_edge`](../../workgraph/src/scheduler/splice.rs) wire a late consumer
-to the *resolved* producer, and a producer that has already finalized adds no edge
-at all — the consumer reads its value directly when it runs, contributing nothing
-to its pending count. So neither the store nor the dep graph has to be
-alias-aware on its own; the alias contract lives in one module.
+Koan's half is the trigger: the bare-name decide returns
+[`Outcome::Forward(producer)`](../../src/machine/execute/outcome.rs). If `producer`
+is already ready, the harness finalizes the slot with the producer's terminal
+directly ([`NodeStep::Done`](../../src/machine/execute/nodes.rs)); otherwise the
+slot's step yields [`NodeStep::Alias(producer)`](../../src/machine/execute/nodes.rs)
+and the library takes over — moving the parked consumers onto the producer's notify
+list, marking the slot aliased, and resolving reads and late edge installs through
+the alias chain
+([workgraph/design/dag-scheduler.md § Alias splice](../../workgraph/design/dag-scheduler.md#alias-splice)).
+Nothing in Koan has to be alias-aware.
 
 ## Working-copy splice
 
@@ -347,67 +300,27 @@ a sub-Dispatch that the parent slot parks on as an owned dep. Without
 reclamation those slots accumulate per body iteration, so realistic recursive
 code is O(n) scheduler memory even when its data footprint is O(1).
 
-Reclamation runs in [`run_step`](../../src/machine/execute/run_loop.rs) after
-the `cont` closure returns its `Outcome`, before the harness applies it — so a
-dispatch splice finish's freed indices are on the free-list before the harness
-dispatches the spliced body. Once the consumer has read its dep results and either
-spliced them into `working_expr.parts` as `Future(value)` (the eager-subs splice
-finish) or handed them to its dep-finish / catch finish, the owned dep
-slots are unreachable: a sub-Dispatch is
-owned by exactly one consumer, recorded in the consumer's `dep_edges`
-entry as a `DepEdge::Owned(NodeId)`. Free walks recursively, recycling
-each dep's own dep tree, and stops at any still-live slot via
-`NodeStore::is_live` — so a free that dives into another in-flight
-user-fn call leaves that subtree for that call's own reclamation.
+Reclamation is the library's cascade over owned edges
+([workgraph/design/dag-scheduler.md § Cascade reclamation](../../workgraph/design/dag-scheduler.md#cascade-reclamation)),
+and Koan's part is the *timing*: it runs in
+[`run_step`](../../src/machine/execute/run_loop.rs) after the `cont` closure returns
+its `Outcome` and before the harness applies it — so a dispatch splice finish's
+freed indices are on the free list before the harness dispatches the spliced body.
+By that point the consumer has read its dep results and either spliced them into
+`working_expr.parts` as `Future(value)` (the eager-subs splice finish) or handed
+them to its dep-finish / catch finish, so its owned dep slots are unreachable.
 
-The net effect: recursive bodies whose only persistent state is the call
-result run in O(1) scheduler memory across iterations, with the per-iteration
-fanout (the body's transient sub-Dispatches) recycled through a
-free-list of slot indices that `add()` pulls from before extending the vecs.
-Slot-table state lives in a
-[`NodeStore`](../../workgraph/src/scheduler/node_store.rs)
-sub-struct on `Scheduler` that owns a single `slots` vector of `SlotState`
-enums plus a `free_list: Vec<NodeId>` of recyclable indices. One enum encodes
-the per-slot lifecycle — `PreRun(NodeWork)` (an un-run node's work), `Running`
-(work moved out for its step), `Done(Result)` (terminal result),
-`Aliased(NodeId)` (a bare-name forward spliced out to its producer), and `Free`
-(reclaimed) — and each index moves through `alloc_slot → take_for_run →
-reinstall* → finalize → free_one`. Each transition is a single atomic mutator
-body, so the recycle-vs-extend choice, the take/reinstall pairing, the terminal
-write, and reclamation are each encapsulated; because work and result are the
-same enum slot, no call site outside `NodeStore` can land a `Done` without the
-node having been taken, nor read a result before it is `Done`.
-Dependency bookkeeping lives alongside it in a single
-[`DepGraph`](../../workgraph/src/scheduler/dep_graph.rs) sub-struct
-that owns one `rows: Vec<DepRow>`, each `DepRow` bundling the three
-coordinated per-slot fields — `notify: Vec<NodeId>` (this slot's dependent
-list), `pending: usize` (its unresolved-dep counter), and `edges:
-Vec<DepEdge>` (its backward edges to producers, tagged `Owned` or `Notify`;
-the `Owned` arm carries the ownership tree the free walk follows, and the
-`Notify` arm carries park-only edges that the walk skips). The rows are kept
-private and mutated only through a small surface (`install_for_slot`,
-`add_owned_edge`, `add_park_edge`, `drain_notify`, `owned_children`,
-`clear_dep_edges`, `splice_notify`) so every change preserves the per-row
-invariant atomically — every forward edge in `rows[p].notify` has a matching
-backward entry in `rows[c].edges` and contributes 1 to `rows[c].pending`.
-`add_owned_edge` / `add_park_edge` (in
-[`splice.rs`](../../workgraph/src/scheduler/splice.rs)) resolve the
-producer through any alias and short-circuit a producer that is already
-terminal; `splice_notify` moves a spliced-out slot's dependents onto its
-producer's row.
-`Scheduler::add` orchestrates across the two sub-structs: `NodeStore::alloc_slot`
-picks the index (popping `free_list` or extending) and `DepGraph::install_for_slot`
-branches privately on whether the slot is recycled or freshly extended to
-write the dep entries in lockstep. See also
+The net effect: recursive bodies whose only persistent state is the call result run
+in O(1) scheduler memory across iterations, with the per-iteration fanout (the
+body's transient sub-Dispatches) recycled through the library's free list. A free
+that dives into another in-flight user-fn call stops at that call's still-live
+slots, leaving that subtree for its own reclamation. See also
 [memory-model.md § Performance notes](../memory-model.md).
 
-A known limitation: each top-level dispatch retains a small constant of
-persistent slots — the entry slot returned to the user, and, for a bare-name
-binding (`LET y = z`), the spliced-out alias slot plus its producer. An aliased
-slot is never freed (it has no parent to reclaim it), and a top-level producer
-has no parent either. So each `dispatch_in_scope` costs a small constant rather than
-one slot — linear in call count, not multiplicative in body size; closing it
-would need a post-execute compaction pass.
+The known residual — a small constant of persistent slots per top-level dispatch
+(the entry slot returned to the user, and for a bare-name binding the spliced-out
+alias slot plus its producer) — is a property of the library's reclaim, linear in
+call count rather than multiplicative in body size.
 
 ## Pegged and free execution
 

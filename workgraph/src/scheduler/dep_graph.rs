@@ -2,9 +2,9 @@
 //! (`notify`, `pending`, `edges`) that share the slot index — keeping them in one row makes Inv-A
 //! (wake-pending coherence) structural rather than enforced — plus the slot's
 //! **delivery-driven frame-retention** bookkeeping (`retain`, `owed`). See
-//! [design/execution/scheduler.md § Dependency graph invariants](../../../design/execution/scheduler.md#dependency-graph-invariants)
+//! [design/dag-scheduler.md § The dep row and its invariants](../../design/dag-scheduler.md#the-dep-row-and-its-invariants)
 //! for the Inv-A / Inv-B / Inv-C contract and
-//! [design/witness-hosting.md § Retention model](../../../design/witness-hosting.md#retention-model)
+//! [design/reach.md § Retention model](../../design/reach.md#retention-model)
 //! for the pull-count release rule.
 
 use std::rc::Rc;
@@ -49,7 +49,7 @@ pub(super) fn work_owned_edges<W: Workload>(work: &NodeWork<W>) -> Vec<DepEdge> 
 /// are dropped (releasing the frame and the reached regions) when a discharge brings `pulls` to
 /// zero. A seed of zero pulls does **not** release — it means "no current destination; wait for a
 /// late parker or an explicit free" — so only a decrement-to-zero triggers release. See
-/// [design/witness-hosting.md § Retention model](../../../design/witness-hosting.md#retention-model).
+/// [design/reach.md § Retention model](../../design/reach.md#retention-model).
 struct RetentionHold<F: crate::witnessed::PinsRegion> {
     /// The retained producer frame's owner. Its Drop releases the frame; the pinned read of a
     /// retained terminal re-anchors the value under a clone of it ([`DepGraph::retained_owner`]).

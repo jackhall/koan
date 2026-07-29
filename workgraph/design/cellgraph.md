@@ -1,6 +1,6 @@
-# The workcell substrate
+# The cellgraph substrate
 
-*(working name — `workcell` fixes a concept, not a final crate identifier)*
+*(working name — `cellgraph` fixes a concept, not a final crate identifier)*
 
 Beneath the DAG scheduler sits a smaller, more general library: a graph of
 computation **cells**. A cell is one unit of suspended computation with three
@@ -13,13 +13,13 @@ or never finished at all. Everything that makes `workgraph` a *DAG scheduler*
 delivery-driven retention, splicing — is layered on top of this substrate,
 not part of it.
 
-The dependency direction is `koan` → `workgraph` → `workcell`; each arrow is
+The dependency direction is `koan` → `workgraph` → `cellgraph`; each arrow is
 compile-enforced (the lower crate names no type from the higher one).
-[scheduler-library.md](scheduler-library.md) owns the overall division of
+[scheduler-library.md](../../design/scheduler-library.md) owns the overall division of
 responsibility and the `workgraph` consumer API; this doc owns the cell
-substrate's contract. [per-node-memory.md](per-node-memory.md) owns the
+substrate's contract. [witnessed-memory.md](witnessed-memory.md) owns the
 witnessed-memory mechanics the substrate is built from;
-[witness-hosting.md](witness-hosting.md) owns reach representation — the
+[reach.md](reach.md) owns reach representation — the
 description / pin-bundle split — and the holder rule.
 
 ## The two halves
@@ -46,7 +46,7 @@ with it.
 
 - **Continuation** — the work. A one-lifetime reattachable family
   (the erase-to-`'static` / re-anchor contract of
-  [per-node-memory.md](per-node-memory.md)), stored erased and handed back
+  [witnessed-memory.md](witnessed-memory.md)), stored erased and handed back
   once; the substrate re-anchors it witnessed by the cell's memory anchor
   and never calls it. Everything an embedder knows
   about a cell that the substrate does not — its name-resolution state, its
@@ -97,9 +97,9 @@ of the substrate it owns dependency edges (park and owned), notify lists and
 work queues, cycle classification, terminal storage and delivery, retention
 holds, and tail splicing. Koan instantiates the combined trait once
 (`KoanWorkload`) and speaks only the consumer API described in
-[scheduler-library.md](scheduler-library.md).
+[scheduler-library.md](../../design/scheduler-library.md).
 
 ## Open work
 
-- [Carving the workcell crate](../roadmap/scheduler_library/workcell-extraction.md)
+- [Carving the cellgraph crate](../roadmap/cellgraph-extraction.md)
   — the crate split itself.

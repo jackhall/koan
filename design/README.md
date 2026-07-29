@@ -14,6 +14,14 @@ subdirectory carries the type-and-module system as one topic because
 both share the scheduler-driven elaborator and the nominal-identity
 carrier — see [typing/](typing/README.md) for its own index.
 
+Docs describing the embedded scheduler library *as a library* — rather
+than the boundary Koan meets it at — live in the crate's own tree,
+[workgraph/design/](../workgraph/README.md): the witnessed memory
+substrate, the reach representation, the DAG scheduler's own graph
+shape, the `cellgraph` cell substrate beneath it, and sectioned reach
+evidence. The Koan-side docs below own Koan's *instantiation* of that
+machinery, not the machinery itself.
+
 ## Doc index
 
 Root concerns:
@@ -29,12 +37,13 @@ Root concerns:
   for composite values: region-allocated substrates carried as borrows,
   witnessed-only construction doors, pin-by-default escape with a
   cost-driven copy, and the Drop-free untyped-arena end state.
-- [per-node-memory.md](per-node-memory.md) — the generic `witnessed`
-  substrate beneath the memory model: the erase-store bump allocator,
-  the liveness witness, the `yoke` / `merge` / `map` construction
-  surface with its one-wrapper-per-node invariant, and the
-  `seal` / `open` / `transfer_into` access surface for storing
-  borrow-carrying values in scheduler nodes.
+- [per-node-memory.md](per-node-memory.md) — Koan on the witnessed
+  substrate: the `KoanRegion` storage profile, which construction verb
+  (`yoke` / `merge_pinned` / `transfer_into`) each Koan site takes,
+  which witness form each node holds, where a bind mints its reach, and
+  how the run loop nests inside the substrate's access brand. The
+  substrate itself is
+  [workgraph/design/witnessed-memory.md](../workgraph/design/witnessed-memory.md).
 - [scheduler-library.md](scheduler-library.md) — the north star for the
   runtime substrate: the scheduler + region memory + witnessed machinery
   as one extractable, Koan-agnostic library whose public surface is
@@ -42,16 +51,12 @@ Root concerns:
   soundness guarantees, the two-currency step contract, and the consumer
   API (the dependence primitives, `Deps`, `Await`, the step construction
   context).
-- [workcell.md](workcell.md) — the computation-cell substrate beneath the
-  DAG scheduler (working name `workcell`): cells with a continuation, a
-  memory anchor, and inter-cell values — no acyclicity, no terminality,
-  long-lived cells — and the three-type cell contract `workgraph` extends
-  with its terminal error type.
-- [witness-hosting.md](witness-hosting.md) — the witness-set
-  representation: the split into non-owning reach descriptions (frozen in a
-  region-owned table) and holder-owned pin bundles, the reference-only
-  carrier and its delivery envelope, the paired mint rules for composition,
-  the holder rule, and the single bind-seam escape mechanism.
+- [witness-hosting.md](witness-hosting.md) — Koan's reach *policy*: the
+  single bind-seam escape and its copy-versus-pin pricing, the run-root
+  eternal tier and the ring it cuts, scope and binding entries above the
+  substrate, and the fold-brand residence enforcement with its remaining
+  runtime backstops. The representation it sits on is
+  [workgraph/design/reach.md](../workgraph/design/reach.md).
 - [per-call-region/](per-call-region/README.md) — the
   single owner of the `Rc<CallFrame>` contract: anchor carriers,
   lift-time anchor decision, the `alloc_object` cycle gate, active-frame

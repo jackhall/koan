@@ -98,7 +98,7 @@ Soundness, Lemma 2).
 
 A value returned up the stack unmodified is a pure pass-through: its carrier rides
 by reference, host unchanged, costing no set allocation and no refcount traffic
-([witness-hosting.md § Composition](witness-hosting.md#composition-minting-a-description-and-retaining-its-pins)).
+([reach.md § Composition](../workgraph/design/reach.md#composition-minting-a-description-and-retaining-its-pins)).
 A mint runs only where a value is genuinely re-homed into a longer-lived region —
 the loop-carried argument adoption, and the loop's final escaping result. An
 allocation-light loop is strictly cheaper than a naive call: `O(1)` everything and
@@ -120,7 +120,7 @@ incarnation seals its carried arguments as carriers hosted in its own region; th
 reinstalled incarnation adopts them into its fresh region on its first step.
 Frame-retention holds the retiring region's owner until every destination has
 pulled — here, until the one successor incarnation adopts (release at pull-count
-zero, [witness-hosting.md § Retention model](witness-hosting.md#retention-model)).
+zero, [reach.md § Retention model](../workgraph/design/reach.md#retention-model)).
 So the free is ordered *after* the adoption copy, never before, and the single
 consumer of tail position makes the release prompt.
 
@@ -130,7 +130,7 @@ cross-region reference arise, each with its own pin:
 - **A value borrowing a foreign region** (a returned closure's reach, a spliced
   argument) holds that reach as a **witness-set member** pinning the region, not a
   raw pointer — the reference-only carrier model
-  ([witness-hosting.md § The carrier states](witness-hosting.md#the-carrier-states)). *Enforced by*
+  ([reach.md § The carrier states](../workgraph/design/reach.md#the-carrier-states)). *Enforced by*
   the carrier being the only way to hold a cross-region value borrow.
 - **An incarnation's own scope chain reaching into an enclosing frame's region** (a
   MATCH/TRY arm, or a called closure whose captured definition scope lives in a

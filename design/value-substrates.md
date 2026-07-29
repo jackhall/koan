@@ -10,7 +10,8 @@ One ownership regime, no per-value refcounts.
 
 Terms this doc and the [untyped_arena](../roadmap/untyped_arena/README.md)
 roadmap items use with fixed meanings. The machinery behind them is owned by
-[per-node-memory.md](per-node-memory.md) (the witnessed substrate) and
+[workgraph/design/witnessed-memory.md](../workgraph/design/witnessed-memory.md)
+(the witnessed substrate) and
 [memory-model.md](memory-model.md) (the region/frame protocol); this list is
 just enough to read the policy.
 
@@ -25,14 +26,14 @@ just enough to read the policy.
 - **Brand** — a rank-2 (`for<'b>`) lifetime naming one specific region inside
   a closure's scope, so "this allocation went into that region" is a
   compile-time fact rather than a runtime check
-  ([per-node-memory.md](per-node-memory.md)).
+  ([witnessed-memory.md](../workgraph/design/witnessed-memory.md)).
 - **Door** — a construction entry point holding a region's brand; the only way
   a composite substrate gets built. Allocating through a door is what makes
   the residence question compile-enforced.
 - **Witness** — held liveness evidence (`Rc<FrameStorage>` holds) proving
   every region a value borrows from is still alive; the combinator enclosing a
   door composes it from the operands' own witnesses
-  ([per-node-memory.md](per-node-memory.md)).
+  ([witnessed-memory.md](../workgraph/design/witnessed-memory.md)).
 - **Reach** — the set of foreign regions a value's borrows can point into.
   **Minting** a reach produces a paired non-owning description (into the
   consumer region's reach table) and owned pin bundle (stored by the
@@ -106,7 +107,7 @@ operand the value was built from. Residence is
 compile-enforced by the door's brand: there is **no runtime residence audit
 and no structural residence walk** for composite values. The rank-2 brand
 discipline that makes this sound is the substrate contract in
-[per-node-memory.md](per-node-memory.md).
+[witnessed-memory.md](../workgraph/design/witnessed-memory.md).
 
 Region-free value construction exists only for shapes that own their data
 outright (scalars, quoted expressions); no container is ever built without a
@@ -268,14 +269,14 @@ A scope's binding tables are **not** in that residue. An entry is a
 `BindingIndex` beside a resting `Sealed` carrier, both `Copy` and `Drop`-free:
 the pins keeping the entry's reach alive live one level down, in the region's own
 union bundle, which drops whole at region death
-([witness-hosting.md § The pin bundle](witness-hosting.md#the-pin-bundle)).
+([reach.md § The pin bundle](../workgraph/design/reach.md#the-pin-bundle)).
 
 ## Invariants preserved
 
 - **Cycle-freedom needs no gate.** No stored value owns an `Rc` back to any
   region — a substrate borrow is a borrow, a reach's pins are holder-owned
   and the self and eternal rules keep ownership acyclic
-  ([witness-hosting.md § Composition](witness-hosting.md#composition-minting-a-description-and-retaining-its-pins))
+  ([reach.md § Composition](../workgraph/design/reach.md#composition-minting-a-description-and-retaining-its-pins))
   — so the allocation engine keeps
   needing no cycle gate ([memory-model.md](memory-model.md)).
 - **Directionality.** Inward references stay free; outward references exist

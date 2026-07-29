@@ -285,3 +285,11 @@ Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requ
 subdirectories — each with its own README naming the project and listing its ready-to-start
 items — and derives a "Next items" list, everything with no still-open prerequisite, from
 those cross-links (`tools/doclinks.py sync-next`).
+
+The [workgraph/](workgraph/README.md) crate — the scheduler and region-memory
+library Koan embeds — carries its own design and roadmap trees, so it reads as a
+standalone library rather than as one of Koan's internals. Work items cross-link
+across the two trees and `doclinks` gates the pair as one dependency graph, but
+each tree derives its own "Next items" list. The boundary between them —
+what is library, what is Koan — is
+[design/scheduler-library.md](design/scheduler-library.md).

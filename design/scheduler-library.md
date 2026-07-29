@@ -3,12 +3,12 @@
 Koan's runtime substrate — the deferred-work scheduler, the region memory
 system, and the witnessed carrier machinery — is a self-contained library
 stack with no dependency on Koan's language semantics. It ships as two
-workspace crates: `workcell` *(working name — [workcell.md](workcell.md))*,
+workspace crates: `cellgraph` *(working name — [cellgraph.md](../workgraph/design/cellgraph.md))*,
 the computation-cell substrate (witnessed memory plus a cell table:
 continuations, memory anchors, inter-cell values — no acyclicity, no
 terminality), and `workgraph`, the DAG scheduler layered on it (dep edges,
 park/notify, cycle detection, terminal results, retention, splicing). The
-dependency direction (`koan` → `workgraph` → `workcell`, never the reverse)
+dependency direction (`koan` → `workgraph` → `cellgraph`, never the reverse)
 is what makes "no Koan type in scope" compile-enforced rather than a
 convention. Koan is its first embedder, re-exporting `workgraph::witnessed`
 and `workgraph::scheduler` from its own crate root so internal
@@ -22,8 +22,12 @@ opaque set, a sealed carrier) or discharged inside the library.
 
 This doc owns the *division of responsibility*: what is library, what is
 Koan, and the API surface between them.
-[per-node-memory.md](per-node-memory.md) owns the witnessed substrate
-mechanics; [execution/](execution/README.md) owns the pipeline;
+[witnessed-memory.md](../workgraph/design/witnessed-memory.md) owns the
+witnessed substrate mechanics and
+[reach.md](../workgraph/design/reach.md) the reach representation;
+[per-node-memory.md](per-node-memory.md) and
+[witness-hosting.md](witness-hosting.md) own Koan's instantiation and policy
+over them; [execution/](execution/README.md) owns the pipeline;
 [memory-model.md](memory-model.md) owns Koan's value-ownership semantics;
 [per-call-region/](per-call-region/README.md) owns the `Rc<CallFrame>`
 contract. Where those docs describe machinery this doc assigns to the
@@ -37,7 +41,7 @@ a concept, not a final identifier.
 
 - **Region** — a bump-allocated arena owning stored values, with typed
   sub-arenas and the Drop discipline described in
-  [per-node-memory.md](per-node-memory.md).
+  [witnessed-memory.md](../workgraph/design/witnessed-memory.md).
 - **Region owner** — the handle whose drop tears a region down. Holding it,
   or a handle derived from it, is proof of liveness.
 - **Witness** — a value whose possession pins a region alive at a fixed
@@ -55,7 +59,7 @@ a concept, not a final identifier.
   an owned **pin bundle** carrying the strong region holds. Only the library
   mints one — from region handles and carriers, always as the pair — so a
   reach set always represents the true union; no caller can assert or
-  assemble one by hand. [witness-hosting.md](witness-hosting.md) owns the
+  assemble one by hand. [reach.md](../workgraph/design/reach.md) owns the
   representation, the resident/walking carrier forms, and the holder rule.
 - **Slot / node** — one unit of scheduled work with an identity (`NodeId`),
   dep edges, and eventually a terminal.
@@ -74,7 +78,7 @@ a concept, not a final identifier.
   scheduler.
 - **Finish** — the continuation a consumer runs once its deps resolve.
 - **Workload** — the embedder-facing trait: the cell contract
-  ([workcell.md](workcell.md) — the continuation family, the memory anchor
+  ([cellgraph.md](../workgraph/design/cellgraph.md) — the continuation family, the memory anchor
   `Frame` (which projects its region owner through `Anchor::owner`), and the
   brand-indexed value family Koan instantiates with `Carried`) plus the
   terminal error type the DAG layer's `Result`-shaped terminal protocol adds.
@@ -285,7 +289,7 @@ layers, not a naming inconsistency to resolve.
 maximally-checked path. Outside a step, an embedder allocates through a held
 [`RegionHandle`](../workgraph/src/witnessed/region.rs) — the `yoke` /
 `yoke_handle` / `merge` construction surface of
-[per-node-memory.md](per-node-memory.md) — with the same carrier and
+[witnessed-memory.md](../workgraph/design/witnessed-memory.md) — with the same carrier and
 reach-set types. In Koan: `CallFrame` holds the handle (wrapped in the
 `RegionBrand` veneer); `Scope` allocates through it.
 
@@ -313,7 +317,7 @@ picture:
 
 ## Open work
 
-- [Carving the workcell crate](../roadmap/scheduler_library/workcell-extraction.md)
+- [Carving the cellgraph crate](../workgraph/roadmap/cellgraph-extraction.md)
   — the crate split beneath the DAG layer.
-- [Publishing the workgraph crate](../roadmap/scheduler_library/workgraph-extraction.md)
+- [Publishing the workgraph crate](../workgraph/roadmap/workgraph-extraction.md)
   — names, docs, and publish metadata once the boundary stops moving.
