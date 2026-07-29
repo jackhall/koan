@@ -11,9 +11,10 @@ by walking the value.
 
 ## Interned side table
 
-The region's description side table ([`Region::alloc_reach`]) is an
-intern table: minting looks up the composed member set and allocates
-only on a miss.
+The region's description side table
+([`Region::intern_reach`](../src/witnessed/region.rs)) is an intern
+table: minting looks up the composed member set and allocates only on a
+miss.
 
 - **Key.** The canonical member set: member owner addresses, sorted.
   Well-defined on two grounds. The antichain is unique *as a set* —
@@ -30,21 +31,51 @@ only on a miss.
   description object, not any holder's coverage — a caller that keeps
   its own bundle (a delivery envelope, an embedder's own holder) still
   composes it.
-- **Region-lifetime retention dedupes fully.** On a hit, the region's
-  union bundle already pins the entry's members from its first mint,
-  and every holder of the interned reference lives inside that region,
-  so the [`Region::retain_reach`] fold is skipped. One description and
-  one region-lifetime pin fold per distinct reach per region, ever.
+- **Region-lifetime retention dedupes fully.** One description and one
+  region-lifetime pin fold per distinct reach per region, ever: a
+  retaining mint whose members the region's union already pins skips the
+  [`Region::retain_reach`](../src/witnessed/region.rs) fold. An intern
+  hit is not by itself the proof that it does — a *non*-retaining mint
+  (the holder keeps its own bundle) interns the entry first, so the
+  region carries the "already pinned" bit beside the table and reads it
+  in `Region::retain_for`. That bit is scaffolding under the current
+  mint contract, not part of the design (§ Open work).
 - **The empty description** (reaches nothing; residence only) is a
   per-region interned singleton shared by every region-pure value and
   every owned-data run.
 
 ## Sectioned storage
 
-A payload-generic container type: cells in semantic order, physically
-partitioned into contiguous **runs**, each run pairing a span of cells
-with one interned `&ReachDescription`. The payload type is the
-embedder's; embedder values never enter workgraph.
+A cell-generic container type
+([`Sectioned`](../src/witnessed/sectioned.rs)): cells in semantic order,
+physically partitioned into contiguous **runs**, each run pairing a span
+of cells with one interned `&ReachDescription`. The cell type is the
+embedder's, named as a `Reattachable` family; embedder values never enter
+workgraph. A container is immutable after the door — there is no push,
+insert or remove — so a run's description can never drift out of
+exactness with the cells it covers.
+
+Cell *layout* stays the embedder's. A cell reaches the container already
+resident, as the tight `&'a K::At<'a>` shape (content == borrow == `'a`)
+a region allocation hands back, so what workgraph holds is the
+index→cell mapping and the run partition, never the bytes. That is also
+what anchors confinement: both halves of the container carry the
+destination region's own `'a`, so one pin covers a cell and its reach
+together.
+
+A container is **`Copy` and `Drop`-free**: the mapping and the partition
+are two slices bumped into the destination region, not heap buffers the
+container owns. So a container is region state a holder *names*, and a
+frame teardown releases it with the region rather than walking it — the
+per-value drop work a `Drop`-bearing container would put back on the
+teardown path. A bump rather than the family arena for two reasons: the
+allocator is lifetime-free, so `'a` enters only at the allocation and a
+run may hold an `&'a` back into the same region (a `typed_arena` cell's
+own type would have to name `'a`, which is why a `ReachDescription` is
+lifetime-free instead); and a bump releases its chunks whole, running no
+destructor — which is the point, and why only `Copy` data may go in.
+Reference cycles among region-resident side data are harmless: it all
+dies at once.
 
 - **Exact per run.** A run's description is precisely the shared reach
   of its cells; adjacency decides sharing. Exactness is what makes
@@ -58,35 +89,58 @@ embedder's; embedder values never enter workgraph.
 - **Degenerate interleaving** (alternating owned/borrowing cells)
   degrades to runs of length one — the per-cell-envelope cost floor,
   never worse than storing reach on every cell.
-- **Confinement.** A projected cell is `'a`-confined to its
-  container's region through both the payload and the run's
-  description reference; it cannot outlive the container without
-  passing a mint-consuming seam that relocates its reach into a
-  destination. The compiler enforces the seam.
+- **Projection is bundled.** Parting a cell hands back one value — an
+  `Opened<'a, CellRef<K>, Carrier<F>>`: a reference to the cell paired
+  with a carrier naming exactly that cell's run reach. Never a payload
+  and a description as loose parts, for the reason the whole carrier
+  model is: the value↔reach pairing is a type invariant rather than
+  caller discipline. The cell rides as a *reference*, so parting costs no
+  clone however expensive the cell is.
+- **Confinement.** The `Opened` state carries the container's region
+  lifetime `'a` through both halves — the cell reference is
+  `&'a K::At<'a>`, and the carrier's description is hosted in that same
+  region — so a projection outliving the region is a compile error. It is
+  deliberately *not* a `Sealed`: a seal is lifetime-free by construction
+  (that is what makes it the dormant storage form) and would outlive the
+  region freely, naming its coverage only at the open. A cell that
+  genuinely travels passes the re-seal, which is the mint-consuming
+  relocation seam. The compiler enforces the seam.
 
 ## The alloc door
 
-Sectioned containers are built through one door: constructor plus
-per-input `(payload, envelope, copy-or-pin verdict)`, producing
-sectioned storage in the destination region.
+Sectioned containers are built through one door
+([`Sectioned::build`](../src/witnessed/sectioned.rs)): the destination
+region plus one `(resident cell, reach verdict)` per cell. Pairing the
+two in one input value is what makes a verdict-per-cell mismatch
+unrepresentable — there is no cells sequence and verdicts sequence to
+fall out of step. The unit is the **cell**, so a copied input whose own
+runs differ arrives already expanded into per-cell verdicts, each
+carrying that sub-run's surviving reach. Three verdicts, and no fourth:
 
-- **Copied input**: rebuilt at the destination carrying each
-  surviving sub-run's reach. A fully-owned input lands in an
-  empty-reach run with no walk — its own runs already say so.
-- **Pinned input**: the run's description is get-or-minted from the
-  input's members plus the input's home region as an ordinary member;
-  the owning pins fold into the destination's union bundle (skipped on
-  an intern hit).
-- **The container's value-level description** is the get-or-mint of
-  the union over its run descriptions — cheap under interning, so
-  whole-value carriers keep their single stored `&ReachDescription`
-  shape unchanged.
+- **Owned**: fully owned at the destination — a copied cell, or owned
+  data. Lands in an empty-reach run with no walk.
+- **Pinned**: the cell keeps borrowing its source. The run's description
+  is get-or-minted from the input's *stored* description's members —
+  which are exact, where the envelope coverage a step holds is generally
+  wider — plus the input's home region as an ordinary member; the owning
+  pins fold into the destination's union bundle. The verdict carries the
+  coverage pinning those members across the weak→strong upgrade: the
+  holder rule, discharged at the door.
+- **Seed**: a born-borrowing cell, its reach declared at construction
+  from pins the caller already holds rather than composed from a stored
+  description.
+
+**The container's value-level description** is the get-or-mint over the
+union of the per-cell reach sources — the same member set as the union
+over its run descriptions, taken *before* the mint so that a cell
+borrowing into the destination keeps home in it (the self rule strips
+the destination from a returned bundle while leaving it in the
+description). Cheap under interning, so whole-value carriers keep their
+single stored `&ReachDescription` shape unchanged.
 
 The embedder supplies the copy-or-pin cost predicate, the deep-copy
-hooks, and the born-borrowing seeds (values whose description is
-declared at construction rather than composed from the door's inputs).
-Everything else — grouping into runs, interning, pin folding, the
-value-level union — is workgraph's.
+hooks, and the born-borrowing seeds. Everything else — grouping into
+runs, interning, pin folding, the value-level union — is workgraph's.
 
 ## What this replaces
 
@@ -97,3 +151,11 @@ at projection, and residence audit walks. A transfer claims the empty
 source bundle exactly when no surviving run names the source region —
 a stored fact, not a probe. The embedder's reach obligation shrinks to
 the per-input verdicts and the born-borrowing seeds.
+
+## Open work
+
+- [Sectioned substrates](../../roadmap/untyped_arena/sectioned-substrates.md)
+  — the embedder-side adoption that retires the walks above.
+- [Mint owns its retention](../roadmap/mint-owns-retention.md) — deletes
+  the region's "already pinned" bit, so an intern miss *is* the retention
+  and a hit *is* proof the region already pins.

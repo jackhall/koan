@@ -113,6 +113,16 @@ because:
   drop together at `KoanRegion` drop, so any cross-sub-arena `&` is dead
   by the time anyone could observe it.
 
+A region also holds a bump allocator for `Copy` side data that names the region's
+own lifetime — the reach-run partitions and cell index blocks a sectioned container
+names ([`Region::alloc_side`](../workgraph/src/witnessed/region.rs)). It is the one
+region storage needing **no** erasure: a bump's own type carries no lifetime, so
+`'a` enters only at the allocation and an entry may hold an `&'a` back into the
+same region. Its `T: Copy` bound is what keeps it honest — a bump releases its
+chunks whole and runs no destructor, so admitting a `Drop`-bearing entry would
+silently skip one. Cross-references among bumped entries need no drop-order
+argument at all: everything there dies with the region, at once.
+
 The scope-pointer case — `CallFrame`, `Module`, `Signature`, `KFunction`, and a `Scope`'s
 own lexical parent each holding a pointer to a captured, defining, or parent `Scope` — holds that
 scope **outright** as a plain `&'a Scope<'a>` (a thin pointer, layout-invariant in `'a`), centralized

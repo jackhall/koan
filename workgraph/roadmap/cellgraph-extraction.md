@@ -43,8 +43,6 @@ semantics, and the retention protocol.
 
 **Requires:**
 
-- [Sectioned reach](sectioned-reach.md) — landing first keeps the carved
-  memory-substrate surface final.
 - [Mint owns its retention](mint-owns-retention.md) — dropping
   `retain_reach` from the embedder surface before the carve keeps it final.
 

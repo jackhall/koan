@@ -13,18 +13,19 @@ per-host address-table probe on the unpriceable release path.
 
 **Acceptance criteria.**
 
-- Koan's composite substrates store their cells in workgraph's sectioned
-  storage, supplying only the per-input copy-or-pin verdicts and the
-  born-borrowing seeds (the `FN` door naming a closure's captured scope,
-  the module door naming its child scope).
+- Koan's composite substrates section their cells through workgraph's alloc
+  door, handing in each cell as a region-resident borrow paired with its
+  copy-or-pin verdict, and supplying nothing else beyond the born-borrowing
+  seeds (the `FN` door naming a closure's captured scope, the module door
+  naming its child scope).
 - The contains-borrows and borrows-home memos are folds over the
   substrate's run descriptions, not a separate walk.
 - Dict keys are restricted to owned data, and the construction door
   rejects a borrow-carrying key by its stored envelope — an O(1) check,
   not a walk.
-- A projection or index read hands a cell out with exactly its own reach,
-  minted from the stored run description — never a subset walk over the
-  container.
+- A projection or index read hands a cell out bundled with exactly its own
+  run's stored reach — read, not derived, and never a subset walk over the
+  container. A mint happens only where the cell relocates, at the re-seal.
 - The seam-time shape walks are deleted: the `product_still_borrows`
   escape probe, release-exact subset derivation at projection, and the
   per-host address-table release probe — a transfer claims the empty
@@ -40,8 +41,5 @@ doors, not here.
 
 **Requires:**
 
-- [Sectioned reach](../../workgraph/roadmap/sectioned-reach.md) — the
-  interned table, sectioned container, and alloc door this adoption
-  routes through.
 
 **Unblocks:** none tracked.

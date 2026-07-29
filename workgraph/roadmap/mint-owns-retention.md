@@ -6,12 +6,13 @@ mint and an embedder's only reach input is the copy-or-pin verdict.
 **Problem.** Retention is a separate call a caller makes *after* a mint.
 [`ReachDescription::mint`](../src/witnessed/reach.rs) returns
 the owned bundle and leaves its home to the caller:
-`RegionHandle::mint_retained`, `Carrier::compose_into` and
-`Delivered::open_adopted` fold it into the destination region by hand,
-while `Carrier::mint_into` and `Carrier::resident_in` hand it out to a
-holder that owns the pins itself. The mint cannot tell the two apart, so
-it cannot record which regions it made the destination pin — and the
-region carries a `retained` address side table
+`RegionHandle::mint_retained`, `Carrier::compose_into`,
+`Delivered::open_adopted` and `Sectioned::build` fold it into the
+destination region by hand, while `Carrier::mint_into` and
+`Carrier::resident_in` hand it out to a holder that owns the pins itself.
+The mint cannot tell the two apart, so it cannot record which regions it
+made the destination pin — and the region carries a
+`retained_descriptions` address set
 ([`Region`](../src/witnessed/region.rs)) purely to recover
 that fact when a later mint interns a hit. `RegionHandle::retain_reach` is
 public besides, so an embedder folds reach into a region directly
@@ -47,10 +48,8 @@ public besides, so an embedder folds reach into a region directly
 
 ## Dependencies
 
-**Requires:**
-
-- [Sectioned reach](sectioned-reach.md) — interning is what makes a miss
-  the retention and a hit proof of one.
+**Requires:** none — the interned side table it builds on is shipped
+([workgraph/design/sectioned-reach.md](../design/sectioned-reach.md)).
 
 **Unblocks:**
 

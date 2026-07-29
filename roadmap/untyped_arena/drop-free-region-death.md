@@ -34,7 +34,12 @@ compile time.
 **Directions.**
 
 - *Arena granularity — open.* One untyped bump arena per region versus per-family
-  segments inside it; alignment handling and debuggability decide.
+  segments inside it; alignment handling and debuggability decide. A per-region
+  untyped bump already exists for `Copy` side data — the reach-run partitions and
+  cell index blocks a sectioned container names
+  ([`Region::alloc_side`](../../workgraph/src/witnessed/region.rs)) — so the
+  question is whether the value substrates share that one or take segments of
+  their own.
 
 ## Dependencies
 

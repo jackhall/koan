@@ -134,14 +134,19 @@ own itself, and that is the pin the self rule drops.
   arena-page data, so arena pages carry no `Drop`-bearing reach state. The table
   is append-only in address: a description's `&` stays valid for the region's whole
   life, which is what lets a `Sealed` carrier hold a thin reference to it.
-- A description is **per-value and precise**: the residence of one stored value and
-  the exact reach of that same value. There is no whole-region merged description —
-  two values in one region with different reaches reference two different entries.
-- A description is **frozen at mint**. No site mutates one; composition mints a new
-  entry. This is load-bearing: `Sealed` carriers share references to one
-  description, so growing a shared one would silently widen every sharing carrier's
-  claimed reach, and shrinking one would falsify a claim some carrier still relies
-  on.
+- A description is **precise**, and the table **interns** it
+  ([sectioned-reach.md § Interned side table](sectioned-reach.md)): an entry is
+  the exact reach of the values referencing it, keyed on that member set, so one
+  entry exists per distinct reach per region. There is no whole-region merged
+  description — two values in one region with different reaches reference two
+  different entries — and, conversely, two values with the same reach reference
+  one. Within a region a description's *address* is therefore its member set,
+  which is what makes an equality test over reach a pointer compare.
+- A description is **frozen at mint**. No site mutates one; composition get-or-mints
+  an entry and never edits the one it finds. This is load-bearing: `Sealed` carriers
+  share references to one description, so growing a shared one would silently widen
+  every sharing carrier's claimed reach, and shrinking one would falsify a claim
+  some carrier still relies on.
 - The description is **not a storage family**: it is not allocated through the
   value store path and carries no `Stored`/`Reattachable` bounds. Only values live
   in arenas; reach metadata lives beside them, in the table.
@@ -165,7 +170,10 @@ region the covered reach names. Where owned pins live:
 - **The region union bundle.** A region owns **one** deduped `PinBundle<F>`
   ([`Region::retain_reach`](../src/witnessed/region.rs)); each bind and each
   copy-free adoption unions its pins into it, filtered by the eternal rule
-  (§ Composition). Embedder binding entries themselves own nothing. This is the
+  (§ Composition) and folded **once per distinct reach** — a second retention
+  naming a member set this region already pins is a no-op
+  ([sectioned-reach.md § Interned side table](sectioned-reach.md)).
+  Embedder binding entries themselves own nothing. This is the
   liveness of every value resident in the region: one owning pin per distinct
   foreign region across all of it, dropped whole at region death. It is
   region-owned rather than embedder-owned because a region-lifetime union is
@@ -217,9 +225,11 @@ holder that could violate it.
 
 ## Composition: minting a description and retaining its pins
 
-Every union — a merge of two carriers, a bind fold, a finalize reseal — mints a
-**new frozen description into the destination region's side table** and retains
-the composed owned pins into the destination's liveness. The mint verbs take the
+Every union — a merge of two carriers, a bind fold, a finalize reseal — gets-or-mints
+a **frozen description in the destination region's side table** and retains the
+composed owned pins into the destination's liveness. Both halves dedupe: an already
+described member set yields the existing entry, and a member set the destination
+already pins folds nothing. The mint verbs take the
 destination's allocation capability, so a composing site must hold one: inside a
 step, the consumer's region held by the scheduler
 ([guarantee 4](../../design/scheduler-library.md#the-guarantees)); outside one, the
@@ -325,8 +335,8 @@ last-holder drop, never at some later death.
   Housing the pins in the hold makes the parked terminal's coverage owned rather
   than transitive; it does not lengthen it.
 - **Fan-out.** Duplicating a `Delivered` clones its inline pins (§ The pin bundle),
-  so each fan-out consumer owns its hold; a consumer that re-homes the value adopts
-  a fresh description against its own destination.
+  so each fan-out consumer owns its hold; a consumer that re-homes the value
+  get-or-mints a description against its own destination.
 
 ## Retention model
 
