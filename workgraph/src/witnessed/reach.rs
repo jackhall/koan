@@ -3,7 +3,7 @@
 //! ([`PinsRegion`], the outer-chain subsumption hook a workload's frame-owner type supplies):
 //!
 //! - [`ReachDescription<F>`] — the **non-owning** description: a `Weak<F>` host plus `Weak<F>`
-//!   members, hosted in a region's append-stable side table ([`Region::alloc_reach`]) and
+//!   members, interned in a region's append-stable side table ([`Region::intern_reach`]) and
 //!   *referenced* (never owned) by a [`Carrier`](super::Carrier). It keeps nothing alive; it answers
 //!   membership queries ([`Self::pins_region`]) and residence queries
 //!   ([`Self::with_home_region`]) by upgrading under a pinned
@@ -233,8 +233,8 @@ impl<F: PinsRegion> ReachDescription<F> {
     /// always lands in its value's home region's side table.
     ///
     /// Every value gets a description: a region-pure value mints one with empty members, because
-    /// there is nowhere else to put the host. `Vec::new()` allocates no heap, so the empty case
-    /// costs one side-table slot and nothing more.
+    /// there is nowhere else to put the host. The empty member set is a key like any other, so
+    /// every region-pure value in a region shares that region's one empty description.
     ///
     /// Composes every source bundle in `sources` — its **exact** strong members, never "everything a
     /// region reaches" — applying exactly two rules, and no caller-supplied policy:
@@ -254,16 +254,22 @@ impl<F: PinsRegion> ReachDescription<F> {
     ///
     /// The fold runs over the sources' **strong** `Rc` members (no `Weak` upgrade — ownership flows
     /// forward from the mint, never recovered from a description), then the composed antichain is
-    /// downgraded into the stored description, so the description's members mirror it. The returned
-    /// `&'a` description is co-located in `dest`'s side table; the returned bundle is what keeps its
-    /// members alive.
+    /// downgraded into the stored description, so the description's members mirror it.
+    ///
+    /// The composed antichain is **interned** ([`Region::intern_reach`]): a member set already
+    /// described in `dest` yields that existing entry, so one description exists per distinct reach
+    /// per region and pointer identity over descriptions *is* member-set equality within a region.
+    /// The caller's contract is untouched either way — the returned `&'a` description is co-located
+    /// in `dest`'s side table, and the returned bundle is what keeps its members alive. Interning
+    /// dedupes the description object, never a holder's coverage: a caller that keeps its own bundle
+    /// (a delivery envelope, an embedder's holder) still composes one.
     pub fn mint<'a, W>(
         dest: RegionHandle<'a, W>,
         sources: &[&PinBundle<F>],
     ) -> (&'a ReachDescription<F>, PinBundle<F>)
     where
         // `W::FrameOwner = F` ties the destination's reach side table to this member type, so the
-        // minted description lands in `dest`'s own [`Region::alloc_reach`] table. Binding `Region`
+        // minted description lands in `dest`'s own [`Region::intern_reach`] table. Binding `Region`
         // on `RegionOwner` (the trait that DECLARES it, not `PinsRegion`) avoids E0220 — a
         // supertrait's associated type is not bindable through the subtrait.
         W: StorageProfile<FrameOwner = F>,
@@ -275,13 +281,12 @@ impl<F: PinsRegion> ReachDescription<F> {
                 composed.insert(Rc::clone(owner)); // exact members + subsumption
             }
         }
-        // Freeze the full antichain's mirror into the region's side table under that region's own
+        // Get-or-mint the full antichain's mirror in the region's side table under that region's own
         // owner as host — membership is exact, `dest`'s own region included — then strip the self
         // member from the owned copy that rides out to the caller (the binding entry, the delivery
-        // envelope, the region's own retention).
-        let stored = dest
-            .region()
-            .alloc_reach(composed.describe(dest.region().host()));
+        // envelope, the region's own retention). The intern key comes off `composed`, *before* the
+        // self-rule strip, so it matches the description's membership rather than the bundle's.
+        let stored = dest.region().intern_reach(&composed);
         let bundle = composed.without_region(dest.region());
         (stored, bundle)
     }
@@ -415,11 +420,32 @@ impl<F: PinsRegion> PinBundle<F> {
     }
 
     /// The description mirror of this bundle's antichain — `Weak` members for side-table hosting,
-    /// under `host` (the owner of the region the description is frozen into). Called at a mint,
-    /// where the bundle is the freshly-composed antichain and the description it yields is stored
-    /// frozen alongside it.
-    fn describe(&self, host: Weak<F>) -> ReachDescription<F> {
+    /// under `host` (the owner of the region the description is frozen into). Called on an intern
+    /// miss, where the bundle is the freshly-composed antichain and the description it yields is
+    /// stored frozen alongside it.
+    pub(in crate::witnessed) fn describe(&self, host: Weak<F>) -> ReachDescription<F> {
         ReachDescription::from_members(host, &self.members)
+    }
+
+    /// This bundle's canonical intern key: its member owners' addresses, **sorted**. The key
+    /// [`Region::intern_reach`] keys its side table on, well-defined on two grounds.
+    ///
+    /// The antichain is unique *as a set*: [`Self::insert`]'s outer-chain subsumption normalizes to
+    /// the deepest owners regardless of fold order, so only the `Vec` order varies and sorting
+    /// removes it. And the addresses are stable for as long as an entry keyed on them lives: the
+    /// entry's `Weak` members keep each `Rc<F>` allocation itself alive through the weak count, so
+    /// no member address is reused while a description naming it exists.
+    ///
+    /// The host never enters the key — every description in one table shares that table's region
+    /// owner as host.
+    pub(in crate::witnessed) fn intern_key(&self) -> Box<[usize]> {
+        let mut key: Vec<usize> = self
+            .members
+            .iter()
+            .map(|m| Rc::as_ptr(m) as usize)
+            .collect();
+        key.sort_unstable();
+        key.into_boxed_slice()
     }
 
     /// The bundle's members — white-box reach introspection, gated behind `test-hooks` for an

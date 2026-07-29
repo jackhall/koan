@@ -17,6 +17,10 @@ use super::*;
 /// verbs, and the finish-surface fold — over a library-only profile.
 mod shapes;
 
+/// The reach side table's interning slate: get-or-mint keyed on the canonical member set, the
+/// skipped retention fold on a hit, and the per-region empty singleton.
+mod intern;
+
 /// Covariant stand-in: a plain shared reference. `At<'r>` is a `&'r u32`, whose lifetime the borrow
 /// checker can't track across the `'static` store.
 struct RefFamily;

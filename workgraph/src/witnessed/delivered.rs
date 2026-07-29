@@ -283,8 +283,9 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         let (minted, bundle) = self.mint_reach(dest);
         // The description is non-owning; the adopted value lives for the region's life, so the
         // region retains the owning bundle (dropped only at region death) — the liveness the
-        // non-owning description cannot provide, carried by the region's retention list.
-        dest.region().retain_reach(bundle);
+        // non-owning description cannot provide, carried by the region's retention list. Skipped
+        // when this region's union already pins the interned description's members.
+        dest.region().retain_for(minted, bundle);
         let erased: Erased<T> = self.open(Erased::<T>::erase);
         Opened::adopted(
             // SAFETY: the mint above stored this carrier's reach into `dest`'s side table and the

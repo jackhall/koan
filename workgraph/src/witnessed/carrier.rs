@@ -199,7 +199,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         F: RegionOwner<Region = Region<P>>,
     {
         let (minted, bundle) = ReachDescription::mint(dest, &[left_bundle, right_bundle]);
-        dest.region().retain_reach(bundle.clone());
+        dest.region().retain_for(minted, bundle.clone());
         (Carrier::new(minted), bundle)
     }
 }

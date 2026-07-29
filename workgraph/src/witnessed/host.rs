@@ -151,9 +151,14 @@ unsafe impl<P: StorageProfile> PinsRegion for RegionHost<P> {
     }
 }
 
-/// Snapshot of the thread-local region-mint counters. `peak` and `minted_total` are monotonic across
+/// Snapshot of the thread-local region counters — region mints, plus the reach side table's intern
+/// and retention traffic. `peak` and every `_total`-shaped counter are monotonic across
 /// [`reset_region_metrics`] calls only in the sense that a reset zeroes them; within one measurement
-/// window both only grow, while `live` also falls as hosts drop.
+/// window they only grow, while `live` also falls as hosts drop.
+///
+/// The reach counters live here rather than on [`Region`] so a region grows no `cfg`-gated field:
+/// they are per-thread totals across every region, which is what a test measuring one region's
+/// traffic in isolation reads after a reset.
 #[cfg(any(test, feature = "test-hooks"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RegionMetrics {
@@ -163,6 +168,12 @@ pub struct RegionMetrics {
     pub peak: usize,
     /// Total number of mints since the last reset (never decremented).
     pub minted_total: usize,
+    /// Reach descriptions allocated — intern **misses** ([`Region::intern_reach`]).
+    pub reach_interned: usize,
+    /// Intern **hits**: a mint that found its member set already described in the region.
+    pub reach_intern_hits: usize,
+    /// Folds into a region's union bundle ([`Region::retain_reach`]).
+    pub reach_retention_folds: usize,
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -170,6 +181,27 @@ thread_local! {
     static LIVE: Cell<usize> = const { Cell::new(0) };
     static PEAK: Cell<usize> = const { Cell::new(0) };
     static MINTED_TOTAL: Cell<usize> = const { Cell::new(0) };
+    static REACH_INTERNED: Cell<usize> = const { Cell::new(0) };
+    static REACH_INTERN_HITS: Cell<usize> = const { Cell::new(0) };
+    static REACH_RETENTION_FOLDS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Records an intern miss — one fresh description allocated in some region's side table.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(super) fn note_reach_interned() {
+    REACH_INTERNED.with(|c| c.set(c.get() + 1));
+}
+
+/// Records an intern hit — a mint that reused an existing description.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(super) fn note_reach_intern_hit() {
+    REACH_INTERN_HITS.with(|c| c.set(c.get() + 1));
+}
+
+/// Records a fold into some region's union bundle.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(super) fn note_reach_retention_fold() {
+    REACH_RETENTION_FOLDS.with(|c| c.set(c.get() + 1));
 }
 
 /// Records a mint: increments `live` and `minted_total`, folding `peak` to the new `live` if it
@@ -191,6 +223,9 @@ pub fn region_metrics() -> RegionMetrics {
         live: LIVE.with(Cell::get),
         peak: PEAK.with(Cell::get),
         minted_total: MINTED_TOTAL.with(Cell::get),
+        reach_interned: REACH_INTERNED.with(Cell::get),
+        reach_intern_hits: REACH_INTERN_HITS.with(Cell::get),
+        reach_retention_folds: REACH_RETENTION_FOLDS.with(Cell::get),
     }
 }
 
@@ -201,6 +236,9 @@ pub fn reset_region_metrics() {
     LIVE.with(|c| c.set(0));
     PEAK.with(|c| c.set(0));
     MINTED_TOTAL.with(|c| c.set(0));
+    REACH_INTERNED.with(|c| c.set(0));
+    REACH_INTERN_HITS.with(|c| c.set(0));
+    REACH_RETENTION_FOLDS.with(|c| c.set(0));
 }
 
 // SAFETY: nothing about drop needs an unsafe obligation here; the impl is gated alongside the

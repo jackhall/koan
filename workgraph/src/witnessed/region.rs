@@ -24,9 +24,11 @@
 //! for how an escaped value's region stays alive.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::rc::Weak;
 
+use elsa::FrozenMap;
 use typed_arena::Arena;
 
 use super::{
@@ -94,8 +96,8 @@ pub type StorageOf<W> = <<W as StorageProfile>::Families as FamilyList>::Arenas;
 pub trait StorageProfile: Sized {
     type Families: FamilyList;
     /// The workload's frame-owner type — the `PinsRegion` member a region's reach descriptions
-    /// name. A [`Region`] hosts its reach descriptions in a side table typed at this owner
-    /// ([`Region::alloc_reach`]), separate from the [`Families`](Self::Families) arena bundle, so
+    /// name. A [`Region`] interns its reach descriptions in a side table typed at this owner
+    /// ([`Region::intern_reach`]), separate from the [`Families`](Self::Families) arena bundle, so
     /// the value pages carry no `Drop`-bearing reach state.
     type FrameOwner: PinsRegion + 'static;
 }
@@ -134,18 +136,35 @@ pub struct Region<W: StorageProfile> {
     /// [`owns_addr`](Self::owns_addr). `usize` rather than `*const _` keeps the field
     /// lifetime-erased and `Send`/`Sync`-neutral.
     membership: RefCell<Vec<usize>>,
-    /// The region's **reach side table**: an append-stable arena of the non-owning reach
-    /// descriptions minted for values living in this region ([`Region::alloc_reach`]). Separate from
-    /// the family [`storage`](Self::storage) bundle so a description is never arena-page data (see
+    /// The region's **reach intern table**: the non-owning reach descriptions minted for values
+    /// living in this region ([`Region::intern_reach`]), keyed on the canonical member set so one
+    /// description exists per distinct reach per region. Separate from the family
+    /// [`storage`](Self::storage) bundle so a description is never arena-page data (see
     /// [design/reach.md § The reach description](../../design/reach.md#the-reach-description)).
     /// A [`ReachDescription`] owns nothing — its members are `Weak`, so hosting it here pins no
     /// region; the owning [`PinBundle`] that keeps its members alive is held by the value's holder
     /// (a binding entry, the delivery envelope) or, for a region-resident adoption, by
-    /// [`retained_reach`](Self::retained_reach) below. `typed_arena::Arena` hands back a `&` valid
-    /// for the region's whole life, the append-stable-address guarantee
-    /// [`alloc_resident`](Self::alloc_resident) rests on — so a carrier can share a thin reference
-    /// into it with no `Drop`-order or dangling hazard.
-    reach_table: Arena<ReachDescription<W::FrameOwner>>,
+    /// [`retained_reach`](Self::retained_reach) below.
+    ///
+    /// `elsa::FrozenMap` is what makes get-or-mint expressible through `&self`: it inserts through a
+    /// shared borrow and hands back a `&` to the boxed entry valid for the region's whole life — the
+    /// same append-stable-address guarantee [`alloc_resident`](Self::alloc_resident) rests on, plus a
+    /// read path an append-only arena has none of. The map owns the guarantee, so a carrier can share
+    /// a thin reference into it with no `Drop`-order, dangling, or hand-audited-pointer hazard.
+    reach_table: FrozenMap<Box<[usize]>, Box<ReachDescription<W::FrameOwner>>>,
+    /// Addresses of the interned descriptions whose members
+    /// [`retained_reach`](Self::retained_reach) already pins — what makes
+    /// [`retain_for`](Self::retain_for) fold once per distinct reach instead of once per mint.
+    ///
+    /// **Temporary; build nothing on it.** It is needed only because retention is a separate call a
+    /// caller makes *after* a mint: a non-retaining mint (the envelope holds its own pins) interns
+    /// its entry first, so a later retaining mint over the same members hits an entry this region
+    /// does not yet pin. An intern hit answers "does this description exist here"; this set answers
+    /// "does this region's union pin its members". Once a mint names its destination role and
+    /// performs its own retention ([Mint owns its retention](../../roadmap/mint-owns-retention.md)),
+    /// a miss *is* the retention and a hit *is* proof the region already pins, and the set deletes
+    /// with no replacement.
+    retained_descriptions: RefCell<HashSet<usize>>,
     /// The region's **union bundle**: one deduped [`PinBundle`] owning a pin for every region
     /// anything resident here reaches, retained for the region's whole life. It is the liveness home
     /// for a value **adopted** copy-free into this region ([`Region::retain_reach`], routed by
@@ -188,7 +207,8 @@ impl<W: StorageProfile> Region<W> {
         Self {
             storage: StorageOf::<W>::default(),
             membership: RefCell::new(Vec::new()),
-            reach_table: Arena::new(),
+            reach_table: FrozenMap::new(),
+            retained_descriptions: RefCell::new(HashSet::new()),
             retained_reach: RefCell::new(PinBundle::empty()),
             host,
         }
@@ -200,20 +220,52 @@ impl<W: StorageProfile> Region<W> {
         self.host.clone()
     }
 
-    /// Append a minted reach description to the region's side table and hand back a co-located
-    /// `&'a` — the sole reach-allocation path, reached through [`ReachDescription::mint`]. Unlike
-    /// [`alloc_resident`](Self::alloc_resident) this touches no family cell and needs no
-    /// lifetime-retype: a [`ReachDescription`] is lifetime-free, and `typed_arena::Arena` already
-    /// returns a reference valid for the `&'a self` borrow (the region's life), so the description a
-    /// carrier references outlives every read pinned by this region's owner. The description is
-    /// non-owning (`Weak` members), so hosting it pins nothing — the members' liveness is the
-    /// holder's [`PinBundle`], not this table. No `unsafe`: the append-stable guarantee is the
-    /// arena's, not a hand-audited pointer extension.
-    pub(crate) fn alloc_reach(
+    /// Get-or-mint the description of `composed`'s member set in this region's side table and hand
+    /// back a co-located `&'a` — the sole reach-allocation path, reached through
+    /// [`ReachDescription::mint`]. Keyed on the canonical member set
+    /// ([`PinBundle::intern_key`]): a hit returns the existing entry, a miss builds the description
+    /// and stores it, so one description exists per distinct reach per region.
+    ///
+    /// Unlike [`alloc_resident`](Self::alloc_resident) this touches no family cell and needs no
+    /// lifetime-retype: a [`ReachDescription`] is lifetime-free, and the map already returns a
+    /// reference valid for the `&'a self` borrow (the region's life), so the description a carrier
+    /// references outlives every read pinned by this region's owner. The description is non-owning
+    /// (`Weak` members), so hosting it pins nothing — the members' liveness is the holder's
+    /// [`PinBundle`], not this table. No `unsafe`: the append-stable guarantee is the map's, not a
+    /// hand-audited pointer extension.
+    pub(crate) fn intern_reach(
         &self,
-        set: ReachDescription<W::FrameOwner>,
+        composed: &PinBundle<W::FrameOwner>,
     ) -> &ReachDescription<W::FrameOwner> {
-        self.reach_table.alloc(set)
+        let key = composed.intern_key();
+        if let Some(hit) = self.reach_table.get(&key[..]) {
+            #[cfg(any(test, feature = "test-hooks"))]
+            super::host::note_reach_intern_hit();
+            return hit;
+        }
+        #[cfg(any(test, feature = "test-hooks"))]
+        super::host::note_reach_interned();
+        self.reach_table
+            .insert(key, Box::new(composed.describe(self.host())))
+    }
+
+    /// Fold `bundle` into the region's union bundle **once per distinct reach**: a no-op when
+    /// [`retained_descriptions`](Self::retained_descriptions) already records `description`'s
+    /// address, since this region's union then already pins every member the description names.
+    /// The retaining counterpart of [`intern_reach`](Self::intern_reach), called by every mint door
+    /// whose product rests in `dest` for the region's life.
+    ///
+    /// **Temporary**, with the bookkeeping set it reads — see that field's doc.
+    pub(crate) fn retain_for(
+        &self,
+        description: &ReachDescription<W::FrameOwner>,
+        bundle: PinBundle<W::FrameOwner>,
+    ) {
+        let addr = description as *const ReachDescription<W::FrameOwner> as usize;
+        if !self.retained_descriptions.borrow_mut().insert(addr) {
+            return;
+        }
+        self.retain_reach(bundle);
     }
 
     /// Fold an owning [`PinBundle`] into the region's union bundle, retained for the region's whole
@@ -226,9 +278,19 @@ impl<W: StorageProfile> Region<W> {
     /// and a retention subsumed by an outer member costs none — the field stays a single antichain
     /// rather than a bundle per retention.
     pub(crate) fn retain_reach(&self, bundle: PinBundle<W::FrameOwner>) {
+        #[cfg(any(test, feature = "test-hooks"))]
+        super::host::note_reach_retention_fold();
         self.retained_reach
             .borrow_mut()
             .absorb(bundle.without_eternal());
+    }
+
+    /// Number of distinct owners in the region's union bundle — white-box retention introspection,
+    /// gated behind `test-hooks` like the other reach white-box readers. Exposes a count, not the
+    /// bundle, so it cannot be used to narrow a claim.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn retained_reach_len(&self) -> usize {
+        self.retained_reach.borrow().members().len()
     }
 
     /// Number of values stored in family `K`'s cell. Read-only; exposes no `&Arena`, so it
@@ -425,7 +487,7 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     {
         let bundles: Vec<&PinBundle<W::FrameOwner>> = sources.iter().map(|s| &s.0).collect();
         let (description, bundle) = ReachDescription::mint(self, &bundles);
-        self.region.retain_reach(bundle);
+        self.region.retain_for(description, bundle);
         description
     }
 
