@@ -181,9 +181,11 @@ pub struct Region<W: StorageProfile> {
     /// own lifetime. Two kinds of writer reach it — the library's own container metadata (a
     /// [`Sectioned`](super::Sectioned) container's run partition and cell index block, through the
     /// crate-private [`bump_slice`](Self::bump_slice) family) and an embedder converting a
-    /// `Drop`-free value family, which reaches it through the public bump door
-    /// ([`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)) and never
-    /// directly. Bumped rather than arena'd because the allocator itself is lifetime-free, so `'a`
+    /// `Drop`-free value family, which reaches it through one of the two public bump doors and never
+    /// directly: [`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump) when the
+    /// bytes belong to a value whose operands' reach the door must compose,
+    /// [`RegionHandle::bump_text`] when they are bare bytes wanted at the handle's own frame
+    /// lifetime. Bumped rather than arena'd because the allocator itself is lifetime-free, so `'a`
     /// enters only at the allocating call — which is what lets a bumped value hold an `&'a` back
     /// into this same region with no erasure and no residence audit. A `typed_arena` cell cannot:
     /// its type would have to name `'a`, and [`Region`] has no lifetime parameter, which is why a
@@ -558,6 +560,34 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// The bare region this handle authorizes — identity queries only.
     pub fn region(self) -> &'a Region<W> {
         self.region
+    }
+
+    /// **Bump `text` into this handle's region** and hand back the co-located `&'a str` — the
+    /// frame-lifetime bytes door, for a `Drop`-free byte run an embedder needs at the handle's own
+    /// lifetime rather than confined to a fold closure.
+    ///
+    /// The sibling of [`BumpPlacement::text`](super::BumpPlacement::text), and deliberately not the
+    /// same door. [`fold_and_bump`](super::FoldedPlacement::fold_and_bump) exists to compose its
+    /// **operands'** reach into the product's carrier, which is why its placement is minted only
+    /// inside that call; bare bytes have no operands and no reach to compose, so there is nothing for
+    /// that machinery to do and nothing a call site could claim wrongly. What is left is an ordinary
+    /// borrow: the returned `&'a str` cannot outlive the `&'a Region` this handle holds, which the
+    /// borrow checker enforces with no audit and no `unsafe`. A value built *around* those bytes is
+    /// gated where it always was — [`alloc_resident`](Self::alloc_resident)'s `'static` bound, the
+    /// family audit on [`alloc_resident_checked`](Self::alloc_resident_checked), or the rank-2 brand
+    /// on [`FoldedPlacement::alloc_resident_folded`](super::FoldedPlacement::alloc_resident_folded)
+    /// — none of which this door touches.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// let stored: &str = handle.bump_text("hello");
+    /// assert_eq!(stored, "hello");
+    /// ```
+    pub fn bump_text(self, text: &str) -> &'a str {
+        self.region.bump_text(text)
     }
 
     /// Fold an owned [`StepCoverage`] into this handle's region's union bundle, retained for the

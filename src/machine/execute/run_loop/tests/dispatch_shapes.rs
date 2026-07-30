@@ -347,7 +347,7 @@ fn fast_lane_on_tagged_union_constructs() {
             value,
             identity,
         } => {
-            assert_eq!(tag, "Some");
+            assert_eq!(*tag, "Some");
             assert!(matches!(value.payload(), KObject::Number(n) if *n == 42.0));
             match test_run.types.node(*identity) {
                 TypeNode::SetMember { name, .. } => {
@@ -466,7 +466,7 @@ fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
     );
     let result = test_run.run_one(parse_one("f {}"));
     assert!(
-        matches!(result, KObject::KString(s) if s == "hi"),
+        matches!(result, KObject::KString(s) if *s == "hi"),
         "expected KString(\"hi\"), got {}",
         result.summarize(&test_run.types),
     );
@@ -729,7 +729,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
         .execute()
         .expect("DESCRIBE with eager-sub list resolves cleanly on the stateful driver");
     match scope.lookup("out") {
-        Some(KObject::KString(s)) => assert_eq!(s.as_str(), "numbers"),
+        Some(KObject::KString(s)) => assert_eq!(*s, "numbers"),
         Some(other) => panic!(
             "expected KString(\"numbers\"), got {}",
             other.summarize(&test_run.types)
@@ -1083,7 +1083,7 @@ fn type_head_deferred_constructs_union_variant() {
     let result = test_run.run_one(parse_one(":(Maybe) (Some 42)"));
     match result {
         KObject::Tagged { tag, value, .. } => {
-            assert_eq!(tag, "Some");
+            assert_eq!(*tag, "Some");
             assert!(matches!(value.payload(), KObject::Number(n) if *n == 42.0));
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),

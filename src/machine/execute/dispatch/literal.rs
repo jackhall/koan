@@ -124,7 +124,7 @@ fn scalar_key(
     slot: &Slot,
     terminals: DepResults<'_, &DepTerminal<'_>>,
     types: &TypeRegistry,
-) -> Result<KKey, String> {
+) -> Result<PendingKey, String> {
     let envelope = match slot {
         Slot::Static(delivered) => delivered,
         Slot::Park(i) => &terminals.park(*i).delivered,
@@ -136,11 +136,43 @@ fn scalar_key(
     envelope.open(|c| key_from_carried(c, types))
 }
 
-fn key_from_carried(c: Carried<'_>, types: &TypeRegistry) -> Result<KKey, String> {
+fn key_from_carried(c: Carried<'_>, types: &TypeRegistry) -> Result<PendingKey, String> {
     match c {
-        Carried::Object(o) => KKey::try_from_kobject(o, types),
+        Carried::Object(o) => KKey::try_from_kobject(o, types).map(PendingKey::staged),
         Carried::Type(_) | Carried::UnresolvedType(_) => {
             Err("dict key must be a value, not a type".to_string())
+        }
+    }
+}
+
+/// A resolved dict key held **owned** across the gap between reading it and assembling the dict.
+/// The key is read inside its producer envelope's own open, whose lifetime ends there, and the dict
+/// is built later at a fold brand no earlier borrow can reach — so a string key's bytes have to be
+/// staged rather than carried. Transient by construction: [`Self::as_key`] hands the dict door a
+/// borrow and the door bumps the bytes into the dict's own region, after which this is dropped. It
+/// is not a value-family slot and never reaches a region, so owning a `String` here costs no
+/// teardown.
+enum PendingKey {
+    String(String),
+    Number(f64),
+    Bool(bool),
+}
+
+impl PendingKey {
+    fn staged(key: KKey<'_>) -> PendingKey {
+        match key {
+            KKey::String(s) => PendingKey::String(s.to_string()),
+            KKey::Number(n) => PendingKey::Number(n),
+            KKey::Bool(b) => PendingKey::Bool(b),
+        }
+    }
+
+    /// This key as a [`KKey`] borrowing the staged bytes — what the dict door re-homes.
+    fn as_key(&self) -> KKey<'_> {
+        match self {
+            PendingKey::String(s) => KKey::String(s),
+            PendingKey::Number(n) => KKey::Number(*n),
+            PendingKey::Bool(b) => KKey::Bool(*b),
         }
     }
 }
@@ -161,7 +193,7 @@ struct AggRow {
 type AggAssemble = Box<
     dyn for<'r, 'h> FnOnce(
         SubstrateDoor<'r, 'h>,
-        Vec<KKey>,
+        Vec<PendingKey>,
         Vec<Held<'r>>,
         &TypeRegistry,
     ) -> KObject<'r>,
@@ -183,7 +215,7 @@ impl<'step> KoanRuntime<'step> {
             let n = rows.len();
             // Keys stay scalar (reaching no region): read them out eagerly, erroring before the fold.
             // The value cells fold into the witnessed accumulator, paired back with the keys at `map`.
-            let mut keys: Vec<KKey> = Vec::new();
+            let mut keys: Vec<PendingKey> = Vec::new();
             let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(n);
             for row in rows {
                 if let Some(key_slot) = row.key {
@@ -267,7 +299,11 @@ impl<'step> KoanRuntime<'step> {
             deps,
             rows,
             Box::new(|door, keys, value_helds, types| {
-                let map: HashMap<KKey, Held<'_>> = keys.into_iter().zip(value_helds).collect();
+                let map: HashMap<KKey, Held<'_>> = keys
+                    .iter()
+                    .map(PendingKey::as_key)
+                    .zip(value_helds)
+                    .collect();
                 KObject::dict_of_held(door, map, types)
             }),
         )
@@ -330,14 +366,14 @@ impl<'step> KoanRuntime<'step> {
             ref p @ ExpressionPart::Identifier(_) => self.resolve_aggregate_bare_name(p, deps),
             ref p @ ExpressionPart::Type(_) => self.resolve_aggregate_bare_name(p, deps),
             other => {
-                // A static literal (keyword / literal): region-pure owned
-                // data, so the cell is built **inside** the witness closure — `yoke`d into the classify
-                // scope's frame, born co-located with that frame as its reach rather than resolved at
-                // the ambient lifetime and bundled under an asserted witness. The cell is then lifetime-free
-                // and folds uniformly with the dep cells.
+                // A static literal (keyword / literal): region-pure — every borrow it carries
+                // points into the classify scope's own frame, a string literal's bumped bytes
+                // included — so the cell is built **inside** a zero-dep fold, born co-located with
+                // that frame as its reach rather than resolved at the ambient lifetime and bundled
+                // under an asserted witness. The cell then folds uniformly with the dep cells.
                 let frame = current_dest_frame(&self.ambient);
-                let carrier = KoanRegion::alloc_witnessed(Rc::clone(&frame), move |region| {
-                    Carried::Object(region.alloc_object(other.resolve_region_pure()))
+                let carrier = KoanRegion::fold_witnessed(Rc::clone(&frame), move |brand| {
+                    Carried::Object(brand.alloc_object_folded(other.resolve_region_pure(*brand)))
                 });
                 // A region-pure static literal reaches nothing foreign, so it seals empty.
                 Slot::Static(Delivered::seal(carrier, frame, FrameCoverage::empty()))

@@ -73,7 +73,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                     suggestion = capitalize_identifier(s),
                 ))));
             }
-            s.clone()
+            (*s).to_string()
         }
         (_, Some(resolved_name)) => {
             type_classified_name = true;

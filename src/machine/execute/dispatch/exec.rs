@@ -293,16 +293,26 @@ fn extract_carried_args<'step>(
                     .adopt_carried(cell, AdoptSeam::ReHome(view.types())),
             ),
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
-            // the args as a `'step` `Carried`. A `#(...)` quote is a literal for this purpose: its
-            // `KObject::KExpression` body is data, and the checked door's family audit passes it —
-            // a quote body comes from the parser, which plants no `Spliced` cell, and the scheduler
-            // splices only into the parts of an expression it dispatches, never into quoted data.
-            ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => {
+            // the args as a `'step` `Carried`. A string literal bumps its bytes here, so the value
+            // is region-pure but not `'static` and takes the zero-dep fold door rather than the
+            // audited one.
+            ExpressionPart::Literal(lit) => {
                 let object = view
                     .current_scope()
+                    .fold_resident_object(|brand| lit.to_kobject(*brand));
+                args.push(Carried::Object(object));
+            }
+            // A `#(...)` quote's `KObject::KExpression` body is data, but it is invariant in its
+            // region lifetime with no `'static` rebuild and no fold-brand construction, so it keeps
+            // the checked door — whose family audit passes it: a quote body comes from the parser,
+            // which plants no `Spliced` cell, and the scheduler splices only into the parts of an
+            // expression it dispatches, never into quoted data.
+            ExpressionPart::QuotedExpression(_) => {
+                let scope = view.current_scope();
+                let object = scope
                     .brand()
-                    .alloc_object_checked(part.value.resolve(), view.types())
-                    .expect("a resolved literal or quoted expression is owned and splice-free");
+                    .alloc_object_checked(part.value.resolve(scope.brand()), view.types())
+                    .expect("a resolved quoted expression is splice-free");
                 args.push(Carried::Object(object));
             }
             _ => return None,

@@ -174,7 +174,7 @@ fn user_fn_with_any_return_type_accepts_anything() {
     let mut test_run = TestRun::silent(&region);
     test_run.run("FN (PURE) -> Any = (\"a string\")");
     let result = test_run.run_one(parse_one("PURE"));
-    assert!(matches!(result, KObject::KString(s) if s == "a string"));
+    assert!(matches!(result, KObject::KString(s) if *s == "a string"));
 }
 
 /// Keep-first across a cross-function tail chain: `OUTER`'s declared `-> Number` governs the whole

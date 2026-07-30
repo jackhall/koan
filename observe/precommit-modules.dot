@@ -793,6 +793,7 @@ digraph {
     "koan::machine::execute::step_carried" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::model::ast" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::values" [label="uses", style="dashed"];
@@ -914,6 +915,7 @@ digraph {
     "koan::machine::model::values::container_substrate" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::model::values::kkey" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::values::kobject" [label="uses", style="dashed"];

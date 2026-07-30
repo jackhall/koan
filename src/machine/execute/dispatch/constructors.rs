@@ -502,7 +502,7 @@ fn finish_witnessed<'step>(
                         let region = FoldingBrand::in_fold_closure(placement);
                         Carried::Object(region.alloc_object_folded(KObject::tagged(
                             region.with_holder(&holder),
-                            tag,
+                            &tag,
                             value.object(),
                             identity_ty,
                         )))

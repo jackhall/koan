@@ -123,7 +123,7 @@ pub fn require_identifier_name<'a>(
     types: &TypeRegistry,
 ) -> Result<String, KError> {
     match arg_object(args, slot) {
-        Some(KObject::KString(s)) => Ok(s.clone()),
+        Some(KObject::KString(s)) => Ok((*s).to_string()),
         Some(other) => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {slot} must be a bare identifier, got `{}`",
             other.ktype().name(types),

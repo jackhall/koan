@@ -173,7 +173,7 @@ fn overload_pre_filter_hides_later_sibling_overload() {
     );
     let scope = test_run.scope;
     assert!(
-        matches!(scope.lookup("result"), Some(KObject::KString(s)) if s == "numbers"),
+        matches!(scope.lookup("result"), Some(KObject::KString(s)) if *s == "numbers"),
         "expected result = 'numbers' (only earlier overload visible); got {:?}",
         scope.lookup("result").map(|o| o.summarize(&test_run.types)),
     );

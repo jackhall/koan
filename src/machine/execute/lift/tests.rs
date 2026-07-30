@@ -156,7 +156,7 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()))
             .with_holder(&owned_cells);
     let mut map: HashMap<KKey, Held> = HashMap::new();
-    map.insert(KKey::String("a".into()), Held::Object(KObject::Number(1.0)));
+    map.insert(KKey::String("a"), Held::Object(KObject::Number(1.0)));
     let dict: &KObject =
         source_door.alloc_object_folded(KObject::dict_of_held(source_door, map, &types));
 
@@ -218,7 +218,7 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
             .with_holder(&owned_cells);
     let tagged: &KObject = source_door.alloc_object_folded(KObject::tagged(
         source_door,
-        "Just".into(),
+        "Just",
         &KObject::Number(42.0),
         identity,
     ));
@@ -242,7 +242,7 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
                 dest.region().owns_object(r),
                 "relocated tagged node lives in dest"
             );
-            assert_eq!(tag, "Just");
+            assert_eq!(*tag, "Just");
             assert!(
                 dest.region().owns_substrate(*out),
                 "the rebuilt payload substrate lives in dest"
@@ -885,7 +885,7 @@ fn substrate_memo_string_cell_adds_its_length() {
 
     let fields = Record::from_pairs(vec![(
         "s".to_string(),
-        Held::Object(KObject::KString("hello".into())),
+        Held::Object(KObject::KString("hello")),
     )]);
     let (cost, borrows_home) = record_memos(&home, fields, &types);
     assert_eq!(
@@ -956,7 +956,7 @@ fn substrate_memo_nested_record_composes_by_memo() {
 
     let inner_kf = alloc_local_kf(&home);
     let inner_fields = Record::from_pairs(vec![
-        ("x".to_string(), Held::Object(KObject::KString("ab".into()))),
+        ("x".to_string(), Held::Object(KObject::KString("ab"))),
         ("f".to_string(), Held::Object(KObject::KFunction(inner_kf))),
     ]);
     let owned_cells = crate::machine::core::FrameCoverage::empty();
@@ -1128,17 +1128,20 @@ mod seam_verb_table {
     /// the ratio (a long string against a tiny host) pins — the rebuild is not worth paying.
     #[test]
     fn seam_verb_priceable_cost_over_ratio_pins() {
+        let big = "x".repeat(8192);
         let root = run_root_storage();
         let test_run = TestRun::silent(&root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
         let types = TypeRegistry::new();
 
-        // A long string dominates the record's rebuild cost while the host stays tiny (String bytes are
-        // heap, not arena, so the host's allocated total does not grow with the string).
-        let big = "x".repeat(8192);
-        let fields =
-            Record::from_pairs(vec![("s".to_string(), Held::Object(KObject::KString(big)))]);
+        // A long string dominates the record's rebuild cost. The record door re-bumps the bytes into
+        // the host region, so they price on both sides of the ratio — the rebuild cost is still the
+        // dominant term, so the verb pins.
+        let fields = Record::from_pairs(vec![(
+            "s".to_string(),
+            Held::Object(KObject::KString(&big)),
+        )]);
         let value = build_record(&home, fields, &types);
         assert!(
             !substrate_of(value).borrows_home(),

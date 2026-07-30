@@ -36,7 +36,7 @@ fn body_lowercase<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
 
 fn summarize_marker(obj: &KObject<'_>) -> String {
     match obj {
-        KObject::KString(s) => s.clone(),
+        KObject::KString(s) => (*s).to_string(),
         KObject::Null => "null".into(),
         _ => "<other>".into(),
     }
@@ -104,7 +104,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         .read_result_with(id, |v| {
             let obj = v.object();
             (
-                matches!(obj, KObject::KString(s) if s == "inner_any"),
+                matches!(obj, KObject::KString(s) if *s == "inner_any"),
                 summarize_marker(obj),
             )
         })
@@ -198,7 +198,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     assert!(runtime
         .read_result_with(
             id,
-            |v| matches!(v.object(), KObject::KString(s) if s == "lowercase")
+            |v| matches!(v.object(), KObject::KString(s) if *s == "lowercase")
         )
         .expect("value"));
 }

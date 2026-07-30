@@ -160,7 +160,7 @@ fn union_with_signature_member_admits_module_and_number() {
     );
     for call in ["EITHER widget", "EITHER 5"] {
         match test_run.run_one(parse_one(call)) {
-            KObject::KString(s) => assert_eq!(s, "admitted", "for `{call}`"),
+            KObject::KString(s) => assert_eq!(*s, "admitted", "for `{call}`"),
             other => panic!(
                 "`{call}` should dispatch, got {}",
                 other.ktype().name(&test_run.types)

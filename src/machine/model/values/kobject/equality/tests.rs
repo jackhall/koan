@@ -53,13 +53,13 @@ fn number_ieee_semantics() {
 #[test]
 fn string_bool_null_scalars() {
     let types = TypeRegistry::new();
-    let s = KObject::KString("a".into());
+    let s = KObject::KString("a");
     assert_eq!(
-        s.value_equal(&KObject::KString("a".into()), &types),
+        s.value_equal(&KObject::KString("a"), &types),
         Ok(true)
     );
     assert_eq!(
-        s.value_equal(&KObject::KString("b".into()), &types),
+        s.value_equal(&KObject::KString("b"), &types),
         Ok(false)
     );
     assert_eq!(
@@ -77,12 +77,12 @@ fn string_bool_null_scalars() {
 fn cross_variant_scalars_are_unequal() {
     let types = TypeRegistry::new();
     assert_eq!(
-        num(1.0).value_equal(&KObject::KString("a".into()), &types),
+        num(1.0).value_equal(&KObject::KString("a"), &types),
         Ok(false)
     );
     assert_eq!(KObject::Null.value_equal(&num(0.0), &types), Ok(false));
     assert_eq!(
-        KObject::Bool(true).value_equal(&KObject::KString("true".into()), &types),
+        KObject::Bool(true).value_equal(&KObject::KString("true"), &types),
         Ok(false)
     );
 }
@@ -159,16 +159,16 @@ fn dict_key_and_value_equality() {
     let a = dict(
         door,
         vec![
-            (KKey::String("x".into()), num(1.0)),
-            (KKey::String("y".into()), num(2.0)),
+            (KKey::String("x"), num(1.0)),
+            (KKey::String("y"), num(2.0)),
         ],
         &types,
     );
     let b = dict(
         door,
         vec![
-            (KKey::String("y".into()), num(2.0)),
-            (KKey::String("x".into()), num(1.0)),
+            (KKey::String("y"), num(2.0)),
+            (KKey::String("x"), num(1.0)),
         ],
         &types,
     );
@@ -177,8 +177,8 @@ fn dict_key_and_value_equality() {
     let missing_key = dict(
         door,
         vec![
-            (KKey::String("x".into()), num(1.0)),
-            (KKey::String("z".into()), num(2.0)),
+            (KKey::String("x"), num(1.0)),
+            (KKey::String("z"), num(2.0)),
         ],
         &types,
     );
@@ -187,8 +187,8 @@ fn dict_key_and_value_equality() {
     let diff_value = dict(
         door,
         vec![
-            (KKey::String("x".into()), num(1.0)),
-            (KKey::String("y".into()), num(9.0)),
+            (KKey::String("x"), num(1.0)),
+            (KKey::String("y"), num(9.0)),
         ],
         &types,
     );
@@ -199,12 +199,12 @@ fn dict_key_and_value_equality() {
 fn dict_length_mismatch_is_false() {
     let types = TypeRegistry::new();
     container_door!(_storage, door);
-    let a = dict(door, vec![(KKey::String("x".into()), num(1.0))], &types);
+    let a = dict(door, vec![(KKey::String("x"), num(1.0))], &types);
     let b = dict(
         door,
         vec![
-            (KKey::String("x".into()), num(1.0)),
-            (KKey::String("y".into()), num(2.0)),
+            (KKey::String("x"), num(1.0)),
+            (KKey::String("y"), num(2.0)),
         ],
         &types,
     );
@@ -278,9 +278,9 @@ fn tagged_same_nominal_compares_payload() {
     let types = TypeRegistry::new();
     container_door!(_storage, door);
     let identity = newtype_singleton("Distance", KType::NUMBER, &types);
-    let a = KObject::tagged(door, "Distance".into(), &num(3.0), identity);
-    let b = KObject::tagged(door, "Distance".into(), &num(3.0), identity);
-    let c = KObject::tagged(door, "Distance".into(), &num(4.0), identity);
+    let a = KObject::tagged(door, "Distance", &num(3.0), identity);
+    let b = KObject::tagged(door, "Distance", &num(3.0), identity);
+    let c = KObject::tagged(door, "Distance", &num(4.0), identity);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&c, &types), Ok(false));
 }
@@ -301,10 +301,10 @@ fn tagged_erased_and_stamped_are_distinct_identities() {
         None,
         &types,
     );
-    let erased = KObject::tagged(door, "Box".into(), &num(1.0), ctor);
+    let erased = KObject::tagged(door, "Box", &num(1.0), ctor);
     let stamped = KObject::tagged(
         door,
-        "Box".into(),
+        "Box",
         &num(1.0),
         types.constructor_apply(
             ctor,
@@ -319,8 +319,8 @@ fn tagged_distinct_index_is_unequal() {
     let types = TypeRegistry::new();
     container_door!(_storage, door);
     let members = two_member(&types);
-    let none = KObject::tagged(door, "None".into(), &KObject::Null, members[0]);
-    let some = KObject::tagged(door, "Some".into(), &num(1.0), members[1]);
+    let none = KObject::tagged(door, "None", &KObject::Null, members[0]);
+    let some = KObject::tagged(door, "Some", &num(1.0), members[1]);
     assert_eq!(none.value_equal(&some, &types), Ok(false));
 }
 

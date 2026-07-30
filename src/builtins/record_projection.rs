@@ -317,7 +317,7 @@ mod tests {
         // `(x y) FROM r` re-tags the carrier to `{x, y}`; only `:{x,y}` admits.
         let picked = test_run.run_one(parse_one("PICK ((x y) FROM r)"));
         match picked {
-            KObject::KString(s) => assert_eq!(s, "xy"),
+            KObject::KString(s) => assert_eq!(*s, "xy"),
             other => panic!("expected \"xy\", got {:?}", other.ktype()),
         }
     }

@@ -109,14 +109,15 @@ impl<'step> StepAllocator<'step> {
         self.alloc_carried(|_| Carried::Type(kt))
     }
 
-    /// The no-fold arm for a shallow scalar (Number / KString / Bool / Null): such a value embeds
-    /// no borrow, so it rebuilds owned and seals with an empty reach instead of over-retaining a
-    /// producer arena. `None` when the value is not a shallow scalar (the caller takes a fold door
-    /// instead).
+    /// The no-fold arm for a shallow scalar (Number / Bool / Null): such a value embeds no borrow,
+    /// so it rebuilds owned and seals with an empty reach instead of over-retaining a producer
+    /// arena. `None` when the value is not a shallow scalar (the caller takes a fold door instead) —
+    /// a `KString` is the notable one: its bytes live in a region's bump, so there is no `'static`
+    /// rebuild to make here and a string producer folds.
     pub fn alloc_object_scalar(&self, value: &KObject<'_>) -> Option<StepCarried<'step>> {
         // A shallow scalar embeds no borrow, so the dep-witness union would be pure over-retention:
         // route it to the no-fold path so an escaped scalar seals with an empty reach and stops
-        // pinning its producer arena. `is_shallow_scalar`'s four variants hold only owned payloads,
+        // pinning its producer arena. `is_shallow_scalar`'s three variants hold only owned payloads,
         // so rebuilding fresh (rather than coercing the `'_`-tagged `value`) is always valid at
         // `'static` — `KObject` has no general owned rebuild, so this is a by-hand rebuild scoped to
         // exactly the owned variants `is_shallow_scalar` names. `None` when the value is not a
@@ -124,12 +125,11 @@ impl<'step> StepAllocator<'step> {
         if !value.is_shallow_scalar() {
             return None;
         }
-        let owned = match value {
+        let owned: KObject<'static> = match value {
             KObject::Number(n) => KObject::Number(*n),
-            KObject::KString(s) => KObject::KString(s.clone()),
             KObject::Bool(b) => KObject::Bool(*b),
             KObject::Null => KObject::Null,
-            _ => unreachable!("is_shallow_scalar guarantees one of the four owned variants"),
+            _ => unreachable!("is_shallow_scalar guarantees one of the three owned variants"),
         };
         Some(self.alloc_carried(|b| Carried::Object(b.alloc_object(owned))))
     }

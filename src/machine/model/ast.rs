@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 
 use crate::source::{FileId, Span, Spanned};
 
+use crate::machine::core::RegionBrand;
 use crate::machine::model::{
     BinderKey, Carried, Held, KObject, Parseable, UntypedElement, UntypedKey,
 };
@@ -23,14 +24,18 @@ pub enum KLiteral {
 }
 
 impl KLiteral {
-    /// The owned [`KObject`] this literal denotes — region-pure (no borrow), so a construction site can
-    /// build it **inside** a [`yoke`](crate::witnessed::Witnessed::yoke) closure. Generic in `'a`
-    /// (rather than `'static`) despite [`KObject`] being invariant in its lifetime: every arm owns its
-    /// data, so the value is constructible at *any* lifetime — in particular the caller's `yoke` brand.
-    pub fn to_kobject<'a>(&self) -> KObject<'a> {
+    /// The [`KObject`] this literal denotes, built into `brand`'s region: the scalar arms own their
+    /// data outright, and a string literal's bytes are bumped into that region
+    /// ([`RegionBrand::alloc_text`]). Generic in `'a` (rather than `'static`) despite [`KObject`]
+    /// being invariant in its lifetime — the value is constructible at whatever lifetime the brand
+    /// carries, in particular a construction site's fold brand.
+    ///
+    /// Region-pure in the sense the construction sites need: every borrow the product carries points
+    /// into `brand`'s own region, so a fold door stores it with no audit at all.
+    pub fn to_kobject<'a>(&self, brand: RegionBrand<'a>) -> KObject<'a> {
         match self {
             KLiteral::Number(n) => KObject::Number(*n),
-            KLiteral::String(s) => KObject::KString(s.clone()),
+            KLiteral::String(s) => KObject::KString(brand.alloc_text(s)),
             KLiteral::Boolean(b) => KObject::Bool(*b),
             KLiteral::Null => KObject::Null,
         }
@@ -284,16 +289,18 @@ impl<'a> ExpressionPart<'a> {
             let parts = items.iter().cloned().map(Spanned::bare).collect();
             return Held::Object(KObject::KExpression(KExpression::new(parts)));
         }
-        Held::Object(self.resolve())
+        Held::Object(self.resolve(scope.brand()))
     }
 
-    pub fn resolve(&self) -> KObject<'a> {
+    /// The [`KObject`] this part denotes, built into `brand`'s region — the string arms bump their
+    /// bytes there, so the product is dest-resident and holds no allocation of its own.
+    pub fn resolve(&self, brand: RegionBrand<'a>) -> KObject<'a> {
         match self {
-            ExpressionPart::Keyword(s) => KObject::KString(s.clone()),
-            ExpressionPart::Identifier(s) => KObject::KString(s.clone()),
-            ExpressionPart::Type(t) => KObject::KString(t.render()),
+            ExpressionPart::Keyword(s) => KObject::KString(brand.alloc_text(s)),
+            ExpressionPart::Identifier(s) => KObject::KString(brand.alloc_text(s)),
+            ExpressionPart::Type(t) => KObject::KString(brand.alloc_text(&t.render())),
             ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
-            ExpressionPart::Literal(KLiteral::String(s)) => KObject::KString(s.clone()),
+            ExpressionPart::Literal(KLiteral::String(s)) => KObject::KString(brand.alloc_text(s)),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
             ExpressionPart::Expression(e) => KObject::KExpression((**e).clone()),
@@ -362,18 +369,19 @@ impl<'a> ExpressionPart<'a> {
         }
     }
 
-    /// The owned [`KObject`] a **region-pure** part denotes, at *any* lifetime — the lifetime-generic
-    /// peer of [`resolve`](Self::resolve) for static-cell sites that `yoke`. The borrow-free variants
-    /// (keyword, bare identifier, type name, literal) own their data, so the value is constructible at
-    /// the caller's `yoke` brand, where [`resolve`]'s invariant `KObject<'a>` cannot go. Borrow-bearing
-    /// variants are classified to owned sub-dispatches before any static cell, so they never reach here.
-    pub fn resolve_region_pure<'b>(&self) -> KObject<'b> {
+    /// The [`KObject`] a **region-pure** part denotes, at *any* lifetime — the lifetime-generic peer
+    /// of [`resolve`](Self::resolve) for static-cell sites that fold. The region-pure variants
+    /// (keyword, bare identifier, type name, literal) reach nothing outside `brand`'s own region, so
+    /// the value is constructible at the caller's fold brand, where [`resolve`]'s invariant
+    /// `KObject<'a>` cannot go. Borrow-bearing variants are classified to owned sub-dispatches before
+    /// any static cell, so they never reach here.
+    pub fn resolve_region_pure<'b>(&self, brand: RegionBrand<'b>) -> KObject<'b> {
         match self {
             ExpressionPart::Keyword(s) | ExpressionPart::Identifier(s) => {
-                KObject::KString(s.clone())
+                KObject::KString(brand.alloc_text(s))
             }
-            ExpressionPart::Type(t) => KObject::KString(t.render()),
-            ExpressionPart::Literal(lit) => lit.to_kobject(),
+            ExpressionPart::Type(t) => KObject::KString(brand.alloc_text(&t.render())),
+            ExpressionPart::Literal(lit) => lit.to_kobject(brand),
             // A quote's `KObject::KExpression` is invariant in `'a` with no `'static` rebuild, so it
             // cannot be constructed at the caller's `yoke` brand — the classifier routes a quote to
             // its own sub-dispatch (which seals it through the checked door) before any static cell.

@@ -198,23 +198,26 @@ impl<'a> ListSubstrate<'a> {
 /// construction map) and never written again; cell order follows the construction map's iteration
 /// order, so entry order is unspecified. The index block is a default-`Global` heap allocation the
 /// substrate owns and drops at region death — a `hashbrown` table so a future region-`Allocator` swap
-/// is a zero-payload-churn change.
-pub(crate) type DictSubstrate<'a> = ContainerSubstrate<'a, HashMap<KKey, usize>>;
+/// is a zero-payload-churn change. Every key is `Copy` and its string bytes are region-hosted, so
+/// the table holds no per-key allocation of its own.
+pub(crate) type DictSubstrate<'a> = ContainerSubstrate<'a, HashMap<KKey<'a>, usize>>;
 
 impl<'a> DictSubstrate<'a> {
-    /// The cell stored under `key`, or `None` when the dict has no such entry.
-    pub fn entry(&self, key: &KKey) -> Option<&'a Held<'a>> {
+    /// The cell stored under `key`, or `None` when the dict has no such entry. `key` may borrow
+    /// anywhere — lookup is by content, so a probe built at the call site matches a stored key
+    /// whose bytes live in this dict's region.
+    pub fn entry(&self, key: &KKey<'_>) -> Option<&'a Held<'a>> {
         self.index().get(key).and_then(|at| self.cell(*at))
     }
 
     /// The entries as `(key, cell)` pairs — arbitrary order; look one up with [`Self::entry`].
-    pub fn entries(&self) -> impl Iterator<Item = (&KKey, &'a Held<'a>)> {
+    pub fn entries(&self) -> impl Iterator<Item = (&KKey<'a>, &'a Held<'a>)> {
         let cells = self.cells();
         self.index().iter().map(move |(key, at)| (key, cells[*at]))
     }
 
     /// The keys, in the same arbitrary order [`Self::entries`] yields.
-    pub fn keys(&self) -> impl Iterator<Item = &KKey> {
+    pub fn keys(&self) -> impl Iterator<Item = &KKey<'a>> {
         self.index().keys()
     }
 }
@@ -254,7 +257,7 @@ pub(crate) fn held_copy_cost(h: &Held<'_>) -> u64 {
 /// totally rebuilding this object at a destination brand. A scalar costs one flat [`Held`]; a
 /// `KString` adds its byte length; a `KFunction` / `Module` is a borrow leaf that rides the transfer
 /// and rebuilds nothing (**0**); a nested `Record`, `List`, `Dict`, `Tagged`, or `Wrapped`
-/// contributes its own memoized cost (a `Tagged`'s tag `String` bytes stay out — short, the same
+/// contributes its own memoized cost (a `Tagged`'s tag bytes stay out — short, the same
 /// negligible approximation a `KString` cell already takes for its own discriminant); a
 /// `KExpression` is unpriceable (`u64::MAX`), carrying no cost memo of its own.
 fn object_copy_cost(o: &KObject<'_>) -> u64 {

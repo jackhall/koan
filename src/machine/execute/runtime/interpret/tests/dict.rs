@@ -13,8 +13,7 @@ use super::run;
 /// Dict value cells are `Held`; these helpers narrow to the `Object` arm so the
 /// scalar-value assertions read unchanged.
 fn lookup_string_key<'run>(d: &DictSubstrate<'run>, key: &str) -> Option<&'run KObject<'run>> {
-    d.entry(&KKey::String(key.to_string()))
-        .and_then(|h| h.as_object())
+    d.entry(&KKey::String(key)).and_then(|h| h.as_object())
 }
 
 fn lookup_number_key<'run>(d: &DictSubstrate<'run>, key: f64) -> Option<&'run KObject<'run>> {
@@ -77,10 +76,10 @@ fn let_binds_a_dict_with_number_keys() {
             let entries = substrate;
             assert_eq!(entries.len(), 2);
             assert!(
-                matches!(lookup_number_key(entries, 1.0), Some(KObject::KString(s)) if s == "a")
+                matches!(lookup_number_key(entries, 1.0), Some(KObject::KString(s)) if *s == "a")
             );
             assert!(
-                matches!(lookup_number_key(entries, 2.0), Some(KObject::KString(s)) if s == "b")
+                matches!(lookup_number_key(entries, 2.0), Some(KObject::KString(s)) if *s == "b")
             );
         }
         _ => panic!("expected `d` bound to a Dict"),

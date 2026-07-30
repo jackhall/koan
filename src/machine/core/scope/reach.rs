@@ -11,7 +11,7 @@ use crate::machine::core::carrier_witness::{OpenedFunction, SealedFunction};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::{
     product_reaches_region, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
-    KoanStorageProfile,
+    KoanRegionExt, KoanStorageProfile,
 };
 use crate::machine::model::{
     copy_object_into, copy_or_pin, Carried, CarriedFamily, KObject, KType, RegionEscape,
@@ -259,6 +259,29 @@ impl<'a> Scope<'a> {
         Delivered::seal(witnessed, self.home(), coverage)
     }
 
+    /// Build an object into this scope's own region through a **zero-dep fold** and hand back the
+    /// resident borrow. The door for a value that is region-pure in the sense that matters — every
+    /// borrow it carries points into this region — but not `'static`, because a string literal's
+    /// bytes are bumped here ([`RegionBrand::alloc_text`](crate::machine::core::RegionBrand::alloc_text)).
+    ///
+    /// [`alloc_object_checked`](crate::machine::core::RegionBrand::alloc_object_checked) cannot take
+    /// such a value: the bump keeps no address table, so the residence audit answers `false` for a
+    /// string and the store is refused. The fold brand discharges the same obligation at compile time
+    /// instead — an ambient borrow cannot inhabit `KObject<'b>` — and the product is re-anchored at
+    /// `'a` through the library's own fused adopt door. With no deps the fold composes no reach, so
+    /// the adoption retains nothing and the value's residence stays exactly this region.
+    pub(crate) fn fold_resident_object(
+        &self,
+        build: impl for<'b> FnOnce(FoldingBrand<'b>) -> KObject<'b>,
+    ) -> &'a KObject<'a> {
+        let built = KoanRegion::fold_witnessed(self.home(), |brand| {
+            Carried::Object(brand.alloc_object_folded(build(brand)))
+        });
+        self.seal_resident_delivered(built, FrameCoverage::empty())
+            .adopt_into(self.brand().handle())
+            .object()
+    }
+
     /// Adopt a delivered carrier into this scope for **consumption** — the door whose product is a
     /// live [`Carried`] the caller goes on to use (a bare-name read, a head-callable, a spliced
     /// argument, a call's argument delivery). `seam` selects the policy
@@ -344,9 +367,9 @@ impl<'a> Scope<'a> {
     ///   substrate on the audit's `any_member_region` reach-member path — a record substrate carries
     ///   no home-naming borrow, so the dest-resident `owns_substrate` check cannot evidence it. The
     ///   reach is the pin's liveness, and the region's union bundle owns it.
-    /// - **CopyNode** — every projection that embeds no substrate deep-clones its top node under the
-    ///   cell's copied-mode reach; the mint runs *before* the copy so the copy's own residence audit
-    ///   sees the evidence.
+    /// - **CopyNode** — every projection that needs no destination door deep-clones its top node
+    ///   under the cell's copied-mode reach; the mint runs *before* the copy so the copy's own
+    ///   residence audit sees the evidence.
     pub(crate) fn adopt_for_binding<P>(
         &self,
         cell: &DeliveredCarried,
@@ -526,17 +549,20 @@ enum AdoptDisposition<'t> {
 /// - [`AdoptSeam::Retaining`] pins every object, substrate or not. The adopting scope's region union
 ///   holds the minted reach, so the value can stay put; that is what lets a spliced argument or a
 ///   head-deferred callable survive its producing step as its carrier rather than as a copy.
-/// - [`AdoptSeam::ReHome`] copies every object: the top node through the fused mint when it embeds
-///   no substrate, the whole structure through the fold door when it does.
-/// - [`AdoptSeam::Binding`] copies a non-substrate projection's top node, and routes a top-level
-///   record through the cost chooser; every other substrate carrier rebuilds.
+/// - [`AdoptSeam::ReHome`] copies every object: the top node through the fused mint when it needs no
+///   destination door, the whole structure through the fold door when it does.
+/// - [`AdoptSeam::Binding`] copies such a projection's top node, and routes a top-level record
+///   through the cost chooser; every other value needing a door rebuilds.
 ///
 /// The shape rules behind that table:
 ///
 /// - A **substrate carrier** (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) is region-resident
 ///   and cannot cross the checked audit by a `deep_clone`, which would leave the substrate in the
 ///   retiring producer, uncovered once the copy's reach releases it. So a copying seam rebuilds it
-///   through the fold door rather than taking the pointer-copy arm.
+///   through the fold door rather than taking the pointer-copy arm. A bare **`KString`** joins it
+///   ([`KObject::needs_destination_door`]): a pointer copy would share bump bytes the producer owns,
+///   and no audit can catch that — the bump keeps no address table — so the copy has to re-bump at
+///   the destination.
 /// - Only a top-level **record**, and only at the bind seam, is cost-driven ([`copy_or_pin`]). Every
 ///   other substrate carrier copies unconditionally there: pinning a bound value retains its
 ///   producer region, which a tail loop's O(1) region turnover cannot afford (`it` in a
@@ -550,12 +576,12 @@ fn adopt_disposition<'t>(
     projected: &KObject<'_>,
     seam: &AdoptSeam<'t>,
 ) -> AdoptDisposition<'t> {
-    let embeds_substrate = projected.embeds_substrate();
+    let needs_door = projected.needs_destination_door();
     match seam {
         AdoptSeam::Retaining => AdoptDisposition::Pin,
-        AdoptSeam::ReHome(types) if !embeds_substrate => AdoptDisposition::CopyNode(types),
+        AdoptSeam::ReHome(types) if !needs_door => AdoptDisposition::CopyNode(types),
         AdoptSeam::ReHome(_) => AdoptDisposition::Rebuild,
-        AdoptSeam::Binding(types, _) if !embeds_substrate => AdoptDisposition::CopyNode(types),
+        AdoptSeam::Binding(types, _) if !needs_door => AdoptDisposition::CopyNode(types),
         AdoptSeam::Binding(..) => cell
             .open_at()
             .with_home_region(|host_region| match projected {

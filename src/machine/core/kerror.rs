@@ -10,7 +10,7 @@ use crate::source::{self, FileId, SourceLoc, Span};
 use crate::witnessed::RegionHandleFamily;
 
 use super::{scope_frame, KoanStorageProfile, Scope};
-use super::{DeliveredCarried, FoldingBrand, SubstrateDoor};
+use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -182,7 +182,8 @@ impl KError {
     /// no fold in hand mints a zero-dep one (see [`Self::to_tagged_delivered`]). Every cell here is
     /// freshly built owned data, so the door needs no holder.
     pub fn to_tagged<'a>(&self, door: SubstrateDoor<'a, '_>, types: &TypeRegistry) -> KObject<'a> {
-        let (name, fields) = self.kind.to_struct_fields();
+        let brand = **door;
+        let (name, fields) = self.kind.to_struct_fields(brand);
         let frames_list = KObject::list(
             door,
             self.frames
@@ -195,7 +196,7 @@ impl KError {
                         }
                         None => base,
                     };
-                    KObject::KString(rendered)
+                    KObject::KString(brand.alloc_text(&rendered))
                 })
                 .collect(),
             types,
@@ -210,7 +211,7 @@ impl KError {
         );
         KObject::tagged(
             door,
-            name,
+            &name,
             &payload,
             synthetic_singleton("KError".to_string(), KKind::TypeConstructor, types),
         )
@@ -282,23 +283,26 @@ impl KErrorKind {
     /// identity. Field order mirrors the variant's declaration order; `frames` is appended
     /// by the caller. Dispatcher-internal kinds flatten to `{ kind, message }` since
     /// they're only catchable via `_`.
-    fn to_struct_fields<'a>(&self) -> (String, Vec<(String, KObject<'a>)>) {
+    fn to_struct_fields<'a>(&self, brand: RegionBrand<'a>) -> (String, Vec<(String, KObject<'a>)>) {
         match self {
             KErrorKind::TypeMismatch { arg, expected, got } => (
                 "TypeMismatch".to_string(),
                 vec![
-                    ("arg".to_string(), KObject::KString(arg.clone())),
-                    ("expected".to_string(), KObject::KString(expected.clone())),
-                    ("got".to_string(), KObject::KString(got.clone())),
+                    ("arg".to_string(), KObject::KString(brand.alloc_text(arg))),
+                    (
+                        "expected".to_string(),
+                        KObject::KString(brand.alloc_text(expected)),
+                    ),
+                    ("got".to_string(), KObject::KString(brand.alloc_text(got))),
                 ],
             ),
             KErrorKind::MissingArg(name) => (
                 "MissingArg".to_string(),
-                vec![("name".to_string(), KObject::KString(name.clone()))],
+                vec![("name".to_string(), KObject::KString(brand.alloc_text(name)))],
             ),
             KErrorKind::UnboundName(name) => (
                 "UnboundName".to_string(),
-                vec![("name".to_string(), KObject::KString(name.clone()))],
+                vec![("name".to_string(), KObject::KString(brand.alloc_text(name)))],
             ),
             KErrorKind::ArityMismatch { expected, got } => (
                 "ArityMismatch".to_string(),
@@ -310,7 +314,7 @@ impl KErrorKind {
             KErrorKind::AmbiguousDispatch { expr, candidates } => (
                 "AmbiguousDispatch".to_string(),
                 vec![
-                    ("expr".to_string(), KObject::KString(expr.clone())),
+                    ("expr".to_string(), KObject::KString(brand.alloc_text(expr))),
                     (
                         "candidates".to_string(),
                         KObject::Number(*candidates as f64),
@@ -320,17 +324,23 @@ impl KErrorKind {
             KErrorKind::DispatchFailed { expr, reason } => (
                 "DispatchFailed".to_string(),
                 vec![
-                    ("expr".to_string(), KObject::KString(expr.clone())),
-                    ("reason".to_string(), KObject::KString(reason.clone())),
+                    ("expr".to_string(), KObject::KString(brand.alloc_text(expr))),
+                    (
+                        "reason".to_string(),
+                        KObject::KString(brand.alloc_text(reason)),
+                    ),
                 ],
             ),
             KErrorKind::NestedBinder { expr } => (
                 "NestedBinder".to_string(),
-                vec![("expr".to_string(), KObject::KString(expr.clone()))],
+                vec![("expr".to_string(), KObject::KString(brand.alloc_text(expr)))],
             ),
             KErrorKind::ShapeError(msg) => (
                 "ShapeError".to_string(),
-                vec![("message".to_string(), KObject::KString(msg.clone()))],
+                vec![(
+                    "message".to_string(),
+                    KObject::KString(brand.alloc_text(msg)),
+                )],
             ),
             KErrorKind::ParseError {
                 message,
@@ -338,7 +348,10 @@ impl KErrorKind {
                 file,
             } => {
                 let mut fields: Vec<(String, KObject<'a>)> = Vec::with_capacity(6);
-                fields.push(("message".to_string(), KObject::KString(message.clone())));
+                fields.push((
+                    "message".to_string(),
+                    KObject::KString(brand.alloc_text(message)),
+                ));
                 let (path, line, col_utf16) = match (span, file) {
                     (Some(sp), Some(fid)) => source::with(*fid, |f| {
                         let (line, col_utf16) = f.resolve(sp.start);
@@ -363,7 +376,7 @@ impl KErrorKind {
                 ));
                 fields.push((
                     "path".to_string(),
-                    KObject::KString(path.unwrap_or_default()),
+                    KObject::KString(brand.alloc_text(&path.unwrap_or_default())),
                 ));
                 fields.push((
                     "line".to_string(),
@@ -377,7 +390,10 @@ impl KErrorKind {
             }
             KErrorKind::User(msg) => (
                 "User".to_string(),
-                vec![("message".to_string(), KObject::KString(msg.clone()))],
+                vec![(
+                    "message".to_string(),
+                    KObject::KString(brand.alloc_text(msg)),
+                )],
             ),
             KErrorKind::Rebind { .. }
             | KErrorKind::DuplicateOverload { .. }
@@ -393,8 +409,11 @@ impl KErrorKind {
                 (
                     name.to_string(),
                     vec![
-                        ("kind".to_string(), KObject::KString(name.to_string())),
-                        ("message".to_string(), KObject::KString(format!("{self}"))),
+                        ("kind".to_string(), KObject::KString(brand.alloc_text(name))),
+                        (
+                            "message".to_string(),
+                            KObject::KString(brand.alloc_text(&format!("{self}"))),
+                        ),
                     ],
                 )
             }

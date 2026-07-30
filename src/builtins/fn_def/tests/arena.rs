@@ -264,7 +264,7 @@ fn deep_tail_chain_satisfies_arm_return_contract() {
              )",
     ));
     assert!(
-        matches!(result, KObject::KString(s) if s == "ok"),
+        matches!(result, KObject::KString(s) if *s == "ok"),
         "expected the MATCH arm's :Str contract to pass the 3-hop tail chain's Str result, got {}",
         result.ktype().name(&types),
     );

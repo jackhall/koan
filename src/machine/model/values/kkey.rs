@@ -1,6 +1,7 @@
 use std::hash::{Hash, Hasher};
 
 use super::kobject::KObject;
+use crate::machine::core::SubstrateDoor;
 use crate::machine::model::types::{KType, Parseable, TypeRegistry};
 
 /// Concrete dict-key value for the `KObject::Dict` map. Restricted to the hashable scalars;
@@ -9,21 +10,34 @@ use crate::machine::model::types::{KType, Parseable, TypeRegistry};
 /// The key domain is kept NaN-free and zero-normalized (see `try_from_kobject`), so `Number`
 /// bit equality coincides with IEEE equality here and the [`PartialEq`] / [`Hash`] impls agree
 /// by construction — the map contract holds.
-#[derive(Clone, Debug)]
-pub enum KKey {
-    String(String),
+///
+/// A `String` key carries a region-hosted `&'a str`, the same representation
+/// [`KObject::KString`] takes, so the whole enum is `Copy` and `Drop`-free — a dict's frozen
+/// key→index table costs region teardown nothing per key. Equality and hashing stay `str`
+/// compares (no interning table, ruling 1), so a key produced in one region matches a key
+/// produced in another by content.
+#[derive(Clone, Copy, Debug)]
+pub enum KKey<'a> {
+    String(&'a str),
     Number(f64),
     Bool(bool),
 }
 
-impl KKey {
+impl<'a> KKey<'a> {
     /// Returns the rejection reason as a plain `String` so this value-type conversion stays
     /// free of the runtime `KError` type; the caller wraps it into a structured error. NaN is
     /// rejected (it would be equal-to-nothing, breaking key lookup) and `-0.0` is normalized to
     /// `0.0` so the two zeros are one key.
-    pub fn try_from_kobject(obj: &KObject<'_>, types: &TypeRegistry) -> Result<KKey, String> {
+    ///
+    /// A string key rides `obj`'s own bytes verbatim — the key is minted where the object already
+    /// lives, and the dict door re-bumps every string key into the dict's own region as it freezes
+    /// the table, so residence is settled there rather than here.
+    pub fn try_from_kobject(
+        obj: &'a KObject<'a>,
+        types: &TypeRegistry,
+    ) -> Result<KKey<'a>, String> {
         match obj {
-            KObject::KString(s) => Ok(KKey::String(s.clone())),
+            KObject::KString(s) => Ok(KKey::String(s)),
             KObject::Number(n) if n.is_nan() => Err("dict key must not be NaN".to_string()),
             KObject::Number(n) => Ok(KKey::Number(if *n == 0.0 { 0.0 } else { *n })),
             KObject::Bool(b) => Ok(KKey::Bool(*b)),
@@ -33,9 +47,20 @@ impl KKey {
             )),
         }
     }
+
+    /// Re-home this key's bytes into `door`'s region, so a key frozen into a dict's table is
+    /// resident in the dict's own region rather than borrowing wherever it was produced. The
+    /// scalar arms are owned data and ride verbatim. Called once per key by the dict door.
+    pub(crate) fn rehomed<'d>(self, door: SubstrateDoor<'d, '_>) -> KKey<'d> {
+        match self {
+            KKey::String(s) => KKey::String(door.alloc_text(s)),
+            KKey::Number(n) => KKey::Number(n),
+            KKey::Bool(b) => KKey::Bool(b),
+        }
+    }
 }
 
-impl PartialEq for KKey {
+impl PartialEq for KKey<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (KKey::String(a), KKey::String(b)) => a == b,
@@ -48,9 +73,9 @@ impl PartialEq for KKey {
     }
 }
 
-impl Eq for KKey {}
+impl Eq for KKey<'_> {}
 
-impl Hash for KKey {
+impl Hash for KKey<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
             KKey::String(s) => {
@@ -69,7 +94,7 @@ impl Hash for KKey {
     }
 }
 
-impl Parseable for KKey {
+impl Parseable for KKey<'_> {
     fn ktype(&self) -> KType {
         match self {
             KKey::String(_) => KType::STR,
@@ -79,7 +104,7 @@ impl Parseable for KKey {
     }
 }
 
-impl KKey {
+impl KKey<'_> {
     /// String keys are quoted so `{"1": x}` and `{1: x}` render distinctly. A key is a scalar,
     /// so its rendering carries no type and needs no registry.
     pub fn summarize(&self) -> String {

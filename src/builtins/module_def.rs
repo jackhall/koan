@@ -257,7 +257,7 @@ mod tests {
         // PRINT returns the rendered string — a bare module renders as its path.
         let printed = test_run.run_one(parse_one("PRINT foo"));
         match printed {
-            KObject::KString(s) => assert_eq!(s, "foo"),
+            KObject::KString(s) => assert_eq!(*s, "foo"),
             other => panic!(
                 "PRINT foo returns the path string, got {}",
                 other.ktype().name(&test_run.types)

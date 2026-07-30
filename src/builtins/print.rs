@@ -1,5 +1,5 @@
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -17,13 +17,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     };
     let line = format!("{rendered}\n");
     ctx.scope.write_out(line.as_bytes());
-    // The rendered string is owned (region-pure), so it allocs through the witnessed surface born
-    // under the empty (foreign-reach-only) set — the active frame is folded in at finalize/close, not
-    // bundled here.
-    let carrier = ctx
-        .scope
-        .brand()
-        .alloc_object_witnessed(KObject::KString(rendered));
+    // The rendered bytes are bumped into this step's own destination region through a zero-dep fold,
+    // so the carrier reaches nothing but the region it lives in — the active frame is folded in at
+    // finalize/close, not bundled here.
+    let carrier = ctx.ctx.alloc_carried_with(&[], |brand, _| {
+        Carried::Object(brand.alloc_object_folded(KObject::KString(brand.alloc_text(&rendered))))
+    });
     Action::done(Ok(carrier))
 }
 

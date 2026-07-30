@@ -135,13 +135,14 @@ pub(super) fn literal_pass_through<'step>(
         .next()
         .expect("LiteralPassThrough shape implies one part");
     match only.value {
-        // A literal is region-pure owned data, so the `KObject` is built inside the witness closure
-        // — `yoke`d into this scope's frame, born co-located with it as its sole reach. It comes from
-        // `expr`, not a scope resolve, so it stays on the cart region.
+        // A literal is region-pure — every borrow it carries points into this scope's own frame, a
+        // string literal's bumped bytes included — so the `KObject` is built inside a zero-dep fold,
+        // born co-located with that frame as its sole reach. It comes from `expr`, not a scope
+        // resolve, so it stays on the cart region.
         ExpressionPart::Literal(lit) => {
             let frame = ctx.dest_frame();
-            let carrier = KoanRegion::alloc_witnessed(frame, move |region| {
-                Carried::Object(region.alloc_object(lit.to_kobject()))
+            let carrier = KoanRegion::fold_witnessed(frame, move |brand| {
+                Carried::Object(brand.alloc_object_folded(lit.to_kobject(*brand)))
             });
             Outcome::Done(Ok(StepCarried::born(carrier)))
         }

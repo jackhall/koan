@@ -39,8 +39,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
         };
         let allocated = _sched
             .current_scope()
-            .brand()
-            .alloc_object(KObject::KString(format!("{a}+{b}")));
+            .fold_resident_object(|brand| KObject::KString(brand.alloc_text(&format!("{a}+{b}"))));
         Outcome::done_resident(_sched.current_scope(), Carried::Object(allocated))
     });
     let mut deps = crate::scheduler::ResolvedDeps::new();
@@ -51,7 +50,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     assert!(runtime
         .read_result_with(
             dep_finish_id,
-            |v| matches!(v.object(), KObject::KString(s) if s == "7+11")
+            |v| matches!(v.object(), KObject::KString(s) if *s == "7+11")
         )
         .expect("value"));
 }
@@ -209,7 +208,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
             let v = fctx
                 .scope
                 .brand()
-                .alloc_object(KObject::KString("from-combine".into()));
+                .alloc_object(KObject::KString("from-combine"));
             Action::done_resident(fctx.scope, Carried::Object(v))
         });
         Action::await_deps(crate::scheduler::Deps::new(), finish)
@@ -242,7 +241,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         runtime
             .read_result_with(
                 id,
-                |v| matches!(v.object(), KObject::KString(s) if s == "from-combine")
+                |v| matches!(v.object(), KObject::KString(s) if *s == "from-combine")
             )
             .expect("value"),
         "DEFERTEST slot's terminal should match the dep-finish's terminal",
@@ -267,7 +266,7 @@ fn tail_call_reuses_node_slot_in_place() {
     assert!(runtime
         .read_result_with(
             id,
-            |v| matches!(v.object(), KObject::KString(s) if s == "hi")
+            |v| matches!(v.object(), KObject::KString(s) if *s == "hi")
         )
         .expect("value"));
     assert_eq!(

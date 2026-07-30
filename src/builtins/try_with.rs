@@ -45,7 +45,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             Err(e) => {
                 let envelope = e.to_tagged_delivered(fctx.scope, fctx.types);
                 let tag = envelope.open(|carried| match carried {
-                    Carried::Object(KObject::Tagged { tag, .. }) => tag.clone(),
+                    Carried::Object(KObject::Tagged { tag, .. }) => tag.to_string(),
                     _ => unreachable!("KError::to_tagged always returns Tagged"),
                 });
                 (tag, ItSource::Carrier(payload_envelope(&envelope)), Some(e))

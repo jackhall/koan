@@ -183,6 +183,17 @@ impl<'a> Scope<'a> {
         value: KObject<'_>,
         types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, MintedReach<'a>), KError> {
+        // A string never crosses the audit: its bytes live in some region's bump and the bump keeps
+        // no address table, so [`KObject::resident_in_visiting`] answers `false` for one and the
+        // store would be refused. It takes the fold door's text arm instead — which is the same copy
+        // this tier makes for every other fresh value, made where bytes can actually be placed. The
+        // product borrows only the region it now lives in, so its description is this scope's own
+        // region as host with no member: exactly what the audit walk mints for a value that saw no
+        // region pointer at all.
+        if let KObject::KString(text) = value {
+            let obj = self.fold_resident_object(|brand| KObject::KString(brand.alloc_text(text)));
+            return Ok((obj, self.mint_born_here(false)));
+        }
         let kt = value.ktype();
         let seen = Cell::new(false);
         let obj = self

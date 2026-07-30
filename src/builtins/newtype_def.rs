@@ -710,12 +710,12 @@ mod tests {
         );
         let r1 = test_run.run_one(parse_one("TAKES_DIST (Distance (3.0))"));
         match r1 {
-            KObject::KString(s) => assert_eq!(s, "dist"),
+            KObject::KString(s) => assert_eq!(*s, "dist"),
             other => panic!("expected \"dist\", got {:?}", other.ktype()),
         }
         let r2 = test_run.run_one(parse_one("TAKES_NUM (3.0)"));
         match r2 {
-            KObject::KString(s) => assert_eq!(s, "num"),
+            KObject::KString(s) => assert_eq!(*s, "num"),
             other => panic!("expected \"num\", got {:?}", other.ktype()),
         }
         let root = test_run
@@ -1038,7 +1038,7 @@ mod tests {
         // A matching applied-type value dispatches.
         let hit = test_run.run_one(parse_one("UNPACK (Wrapper (3.0))"));
         assert!(
-            matches!(hit, KObject::KString(s) if s == "hit"),
+            matches!(hit, KObject::KString(s) if *s == "hit"),
             "Wrapper (3.0) must dispatch, got {:?}",
             hit.ktype(),
         );
@@ -1109,7 +1109,7 @@ mod tests {
         for probe in ["ANYUNPACK (Wrapper (3.0))", "ANYUNPACK (Wrapper (\"s\"))"] {
             let hit = test_run.run_one(parse_one(probe));
             assert!(
-                matches!(hit, KObject::KString(s) if s == "hit"),
+                matches!(hit, KObject::KString(s) if *s == "hit"),
                 "`{probe}` must dispatch, got {:?}",
                 hit.ktype(),
             );

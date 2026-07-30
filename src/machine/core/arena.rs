@@ -27,8 +27,8 @@ use crate::machine::model::{
 use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StorageOf,
-    StorageProfile, Stored, Witnessed,
+    Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StepContext,
+    StorageOf, StorageProfile, Stored, Witnessed,
 };
 
 mod frame;
@@ -127,6 +127,26 @@ impl<'a> RegionBrand<'a> {
     /// that borrows another region takes [`Self::alloc_object_witnessed_checked`] instead.
     pub fn alloc_object(self, o: KObject<'static>) -> &'a KObject<'a> {
         self.0.alloc_resident::<KObject<'static>>(o)
+    }
+
+    /// **Copy `text` into this brand's region** and hand back the co-located `&'a str` — the door
+    /// every string a value family slot holds is born through ([`KObject::KString`], a
+    /// `Tagged` discriminant, a [`KKey::String`](crate::machine::model::KKey) dict key).
+    ///
+    /// The bytes land in the region's bump, so they cost region teardown nothing: the bump releases
+    /// its chunks whole and runs no destructor, which is what keeps a string slot `Copy` and the
+    /// value family free of `Drop` glue. The borrow the caller gets back is checked against this
+    /// brand's own `'a`, so no audit and no reach vocabulary enter here — bare bytes reach nothing.
+    ///
+    /// Storing the *value* built around those bytes is gated exactly where it always was.
+    /// [`Self::alloc_object`] admits only `'static`, so a region-hosted string cannot reach it;
+    /// [`KObject::resident_in_visiting`] answers `false` for a string, so the runtime-audited doors
+    /// ([`Self::alloc_object_checked`], [`Self::alloc_object_witnessed_checked`]) reject one — the
+    /// bump keeps no address table, so no audit could tell which region a `&str` points into. The
+    /// route in is [`FoldingBrand::alloc_object_folded`], where the rank-2 brand proves the string
+    /// was bumped at the destination.
+    pub fn alloc_text(self, text: &str) -> &'a str {
+        self.0.bump_text(text)
     }
 
     /// The storage door for a [`TypeIdentifier`] the bind seam left unlowered. Owned surface data —
@@ -522,26 +542,34 @@ impl Stored<KoanStorageProfile> for Held<'static> {
 /// `&KoanRegion` keeps only the identity surface here.
 pub(crate) trait KoanRegionExt {
     /// The alloc-witnessed construction inversion's region-pure primitive: build a value into
-    /// `owner`'s region *inside* the `yoke` closure, returning it bundled with the [`FrameReach`]
+    /// `owner`'s region *inside* a **zero-dep fold**, returning it bundled with the [`FrameReach`]
     /// singleton pinning `owner` so it is co-located by construction rather than paired with an
-    /// asserted witness. The closure receives a per-construction [`RegionBrand`] confined to the
-    /// `for<'b>` brand (it cannot escape the closure), so it allocates through the same handle as every
-    /// other site. One primitive for both value families — the closure returns a `Carried::Object` (an
-    /// [`alloc_object`](RegionBrand::alloc_object)) or a `Carried::Type` (a `Copy` `KType` handle,
-    /// needing no storage door). A value that *references* another region's resident
-    /// value folds that in with [`Witnessed::merge_pinned`] instead, unioning its reach; this primitive covers
-    /// the case whose references are all region-derived or owned, so the `for<'b>` brand admits them.
+    /// asserted witness. The closure receives a per-construction [`FoldingBrand`] confined to the
+    /// `for<'b>` brand (it cannot escape the closure), so it allocates through the same capability as
+    /// every other construction site. One primitive for both value families — the closure returns a
+    /// `Carried::Object` (an [`alloc_object_folded`](FoldingBrand::alloc_object_folded)) or a
+    /// `Carried::Type` (a `Copy` `KType` handle, needing no storage door). A value that *references*
+    /// another region's resident value folds that in with [`Witnessed::merge_pinned`] instead,
+    /// unioning its reach; this primitive covers the case whose references are all region-derived or
+    /// owned, so the `for<'b>` brand admits them.
+    ///
+    /// The fold brand rather than a bare [`RegionBrand`] because a region-pure leaf is no longer
+    /// necessarily `'static`: a string literal's bytes are bumped into this same region
+    /// ([`RegionBrand::alloc_text`]), so the value is region-self-referential and only
+    /// [`alloc_object_folded`](FoldingBrand::alloc_object_folded)'s rank-2 argument admits it. With no
+    /// deps the fold composes nothing, so the product's reach is exactly what it was: this region and
+    /// no member.
     ///
     /// `build`'s return is spelled `<CarriedFamily as Reattachable>::At<'b>`, not the concrete
     /// `Carried<'b>`: the two are equal by the family's definition, but under the `for<'b>` binder the
     /// compiler does not normalize the projection lazily, so a `build` typed `-> Carried<'b>` fails to
-    /// satisfy `yoke`'s `-> T::At<'b>` bound. Naming the projection makes the bounds syntactically
+    /// satisfy the `-> T::At<'b>` bound. Naming the projection makes the bounds syntactically
     /// identical. An inline closure returning a `Carried` still unifies fine at the call site.
     // Drives the object-family construction inversion
     // (design/per-node-memory.md): a region-pure leaf builds its `KObject` inside this closure.
-    fn alloc_witnessed(
+    fn fold_witnessed(
         owner: Rc<FrameStorage>,
-        build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
+        build: impl for<'b> FnOnce(FoldingBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
     ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
     /// `yoke` a value of **any** carrier family into `owner`'s region, handing the build closure a
@@ -579,8 +607,11 @@ pub(crate) trait KoanRegionExt {
     /// widens this with a per-reach-member check rather than a single `covers_region` call.
     fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<'_, C>) -> bool;
 
-    /// Total bytes allocated across every one of this region's Koan families — each family's live count
-    /// weighted by the flat size of its stored `'static` form. Prices the host region only, not the
+    /// Total bytes allocated in this region: each Koan family's live count weighted by the flat size
+    /// of its stored `'static` form, plus the region's **bump occupancy**
+    /// ([`Region::bump_bytes`]) — the string bytes a value family slot holds and the library's own
+    /// sectioned-container metadata, which a pin would retain just as surely as an arena cell.
+    /// Prices the host region only, not the
     /// `outer` chain its `Rc<FrameStorage>` also retains (a documented approximation): the cost-copy
     /// seam reads this as the denominator of the payoff ratio, where the host's own footprint is the
     /// relevant scale. `#[allow(dead_code)]` for the same reason as [`Self::owns_object`]: the plain
@@ -590,11 +621,21 @@ pub(crate) trait KoanRegionExt {
 }
 
 impl KoanRegionExt for KoanRegion {
-    fn alloc_witnessed(
+    fn fold_witnessed(
         owner: Rc<FrameStorage>,
-        build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
+        build: impl for<'b> FnOnce(FoldingBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        Self::yoke_branded::<CarriedFamily, _>(owner, build)
+        // A zero-dep fold: the engine composes no operand reach, so the envelope it hands back is
+        // homed in `owner`'s own region with empty coverage — the same claim `yoke_branded`'s
+        // reference-only re-bundle makes, reached through the fold door instead. Unsealing it drops
+        // an empty coverage, so nothing a pin was holding is discarded.
+        StepContext::new(owner)
+            .alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
+                &[],
+                |placement, _views| build(FoldingBrand::in_fold_closure(placement)),
+            )
+            .into_cell()
+            .unseal()
     }
 
     fn yoke_branded<T: Reattachable, F>(
@@ -661,6 +702,7 @@ impl KoanRegionExt for KoanRegion {
             + weigh::<DictSubstrate<'static>>(self)
             + weigh::<PayloadSubstrate<'static>>(self)
             + weigh::<Held<'static>>(self)
+            + self.bump_bytes() as u64
     }
 }
 

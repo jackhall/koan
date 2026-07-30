@@ -190,7 +190,7 @@ fn accepts_carried_matches_spliced_delegation() {
     let storage = run_root_storage();
     let region = storage.brand();
     let n: &KObject<'_> = region.alloc_object(KObject::Number(7.0));
-    let s: &KObject<'_> = region.alloc_object(KObject::KString("hi".into()));
+    let s: &KObject<'_> = region.alloc_object(KObject::KString("hi"));
 
     for (ty, carried) in [
         (KType::NUMBER, Carried::Object(n)),
@@ -281,7 +281,7 @@ fn record_value_admission_and_matches() {
         door,
         Record::from_pairs(vec![
             ("x".to_string(), KObject::Number(1.0)),
-            ("y".to_string(), KObject::KString("a".into())),
+            ("y".to_string(), KObject::KString("a")),
         ]),
         &types,
     ));
@@ -361,7 +361,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     assert!(!KType::of_kind(KKind::ProperType)
         .accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
     let n: &KObject<'_> = region.brand().alloc_object(KObject::Number(7.0));
-    let s: &KObject<'_> = region.brand().alloc_object(KObject::KString("hi".into()));
+    let s: &KObject<'_> = region.brand().alloc_object(KObject::KString("hi"));
     assert!(!t.accepts_part(&spliced_part(Carried::Object(n)), &types));
     assert!(!t.accepts_part(&spliced_part(Carried::Object(s)), &types));
 }
@@ -547,12 +547,12 @@ fn result_value<'a>(
     tag: &str,
     payload: &KObject<'a>,
 ) -> KObject<'a> {
-    KObject::tagged(door, tag.into(), payload, member)
+    KObject::tagged(door, tag, payload, member)
 }
 
 /// A bare error carrier (`Tagged` identified by `member`) standing in for a caught error value.
 fn error_carrier<'a>(door: SubstrateDoor<'a, '_>, member: KType) -> KObject<'a> {
-    KObject::tagged(door, "_".into(), &KObject::Number(0.0), member)
+    KObject::tagged(door, "_", &KObject::Number(0.0), member)
 }
 
 /// A singleton `TypeConstructor`-kind member named `name`, for an error-type identity.
@@ -621,7 +621,7 @@ fn constructor_apply_covariant_admission_and_specificity() {
     let my_error = error_type_member("MyError", &types);
     let stamped = KObject::tagged(
         door,
-        "Ok".into(),
+        "Ok",
         &KObject::Number(1.0),
         types.constructor_apply(r_member, result_args(KType::NUMBER, my_error)),
     );
@@ -642,7 +642,7 @@ fn constructor_apply_stamped_type_args_checked_structurally() {
     let r_member = result_member(&types);
     let stamped = KObject::tagged(
         door,
-        "Ok".into(),
+        "Ok",
         &KObject::Number(1.0),
         types.constructor_apply(r_member, result_args(KType::NUMBER, KType::STR)),
     );

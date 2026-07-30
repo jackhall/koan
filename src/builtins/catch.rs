@@ -66,7 +66,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             identity: KType,
             payload: &KObject<'x>,
         ) -> KObject<'x> {
-            KObject::tagged(door, tag.to_string(), payload, identity)
+            KObject::tagged(door, tag, payload, identity)
         }
         // Build the `Result` `Tagged` **inside the witness closure** so it names every region the
         // wrapped value reaches. The `Result` member handle crosses the build brand as a

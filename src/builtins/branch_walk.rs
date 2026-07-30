@@ -298,7 +298,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
     // identity wrapper or a standalone newtype — resolves heads against the scope.
     let mode = match scrutinee {
         KObject::Tagged { tag, .. } => HeadMode::TaggedByTag {
-            value_tag: tag.clone(),
+            value_tag: tag.to_string(),
         },
         _ => HeadMode::Scope,
     };

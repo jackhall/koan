@@ -41,7 +41,7 @@ fn read_field_name<'a>(args: &Record<Held<'a>>, types: &TypeRegistry) -> Result<
     use crate::machine::{arg_object, arg_type};
     if let Some(obj) = arg_object(args, "field") {
         return match obj {
-            KObject::KString(s) => Ok(s.clone()),
+            KObject::KString(s) => Ok((*s).to_string()),
             other => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "field".to_string(),
                 expected: "Identifier".to_string(),
@@ -66,7 +66,7 @@ fn read_field_name<'a>(args: &Record<Held<'a>>, types: &TypeRegistry) -> Result<
 pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{arg_object, Action};
     let s_name = match arg_object(ctx.args, "s") {
-        Some(KObject::KString(s)) => s.clone(),
+        Some(KObject::KString(s)) => (*s).to_string(),
         Some(other) => {
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
@@ -88,7 +88,9 @@ pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mach
             return Action::done(Err(abstract_type_has_no_members(&name)));
         }
     }
-    Action::done(Err(KError::new(KErrorKind::UnboundName(s_name))))
+    Action::done(Err(KError::new(KErrorKind::UnboundName(
+        s_name.to_string(),
+    ))))
 }
 
 /// `ATTR <s:ProperType> <field:_>` — entry for a type-channel lhs, e.g. a first-class signature

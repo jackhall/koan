@@ -12,27 +12,27 @@ fn hash_of(k: &KKey) -> u64 {
 #[test]
 fn distinct_strings_hash_differently() {
     assert_ne!(
-        hash_of(&KKey::String("a".into())),
-        hash_of(&KKey::String("b".into()))
+        hash_of(&KKey::String("a")),
+        hash_of(&KKey::String("b"))
     );
 }
 
 #[test]
 fn equal_strings_hash_equal() {
     assert_eq!(
-        hash_of(&KKey::String("a".into())),
-        hash_of(&KKey::String("a".into()))
+        hash_of(&KKey::String("a")),
+        hash_of(&KKey::String("a"))
     );
-    assert_eq!(KKey::String("a".into()), KKey::String("a".into()));
+    assert_eq!(KKey::String("a"), KKey::String("a"));
 }
 
 #[test]
 fn number_and_string_with_same_text_differ() {
     assert_ne!(
         hash_of(&KKey::Number(1.0)),
-        hash_of(&KKey::String("1".into()))
+        hash_of(&KKey::String("1"))
     );
-    assert_ne!(KKey::Number(1.0), KKey::String("1".into()));
+    assert_ne!(KKey::Number(1.0), KKey::String("1"));
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn bool_and_number_zero_differ() {
 fn try_from_kobject_accepts_scalars() {
     let types = TypeRegistry::new();
     assert!(matches!(
-        KKey::try_from_kobject(&KObject::KString("a".into()), &types),
+        KKey::try_from_kobject(&KObject::KString("a"), &types),
         Ok(KKey::String(s)) if s == "a"
     ));
     assert!(matches!(
@@ -84,14 +84,14 @@ fn negative_zero_normalizes_and_matches_positive_zero() {
 
 #[test]
 fn summarize_quotes_strings_only() {
-    assert_eq!(KKey::String("hi".into()).summarize(), "\"hi\"");
+    assert_eq!(KKey::String("hi").summarize(), "\"hi\"");
     assert_eq!(KKey::Number(3.0).summarize(), "3");
     assert_eq!(KKey::Bool(true).summarize(), "true");
 }
 
 #[test]
 fn ktype_reports_variant() {
-    assert_eq!(KKey::String("a".into()).ktype(), KType::STR);
+    assert_eq!(KKey::String("a").ktype(), KType::STR);
     assert_eq!(KKey::Number(1.0).ktype(), KType::NUMBER);
     assert_eq!(KKey::Bool(false).ktype(), KType::BOOL);
 }

@@ -44,7 +44,7 @@ fn ktype_of_mixed_list_is_list_any() {
     container_door!(_storage, door);
     let l: KObject<'_> = KObject::list(
         door,
-        vec![KObject::Number(1.0), KObject::KString("x".into())],
+        vec![KObject::Number(1.0), KObject::KString("x")],
         &types,
     );
     assert_eq!(l.ktype(), types.list(KType::ANY));
@@ -72,8 +72,8 @@ fn ktype_of_dict_string_number() {
     let types = TypeRegistry::new();
     container_door!(_storage, door);
     let mut map: HashMap<KKey, KObject<'_>> = HashMap::new();
-    map.insert(KKey::String("a".into()), KObject::Number(1.0));
-    map.insert(KKey::String("b".into()), KObject::Number(2.0));
+    map.insert(KKey::String("a"), KObject::Number(1.0));
+    map.insert(KKey::String("b"), KObject::Number(2.0));
     let d: KObject<'_> = KObject::dict(door, map, &types);
     assert_eq!(d.ktype(), types.dict(KType::STR, KType::NUMBER));
 }
@@ -94,7 +94,7 @@ fn matches_value_list_number_rejects_string_element() {
     let t = types.list(KType::NUMBER);
     let bad: KObject<'_> = KObject::list(
         door,
-        vec![KObject::Number(1.0), KObject::KString("x".into())],
+        vec![KObject::Number(1.0), KObject::KString("x")],
         &types,
     );
     assert!(!t.matches_value(&bad, &types));
@@ -120,7 +120,7 @@ fn matches_value_list_any_accepts_any_list() {
     let t = types.list(KType::ANY);
     let mixed: KObject<'_> = KObject::list(
         door,
-        vec![KObject::Number(1.0), KObject::KString("x".into())],
+        vec![KObject::Number(1.0), KObject::KString("x")],
         &types,
     );
     assert!(t.matches_value(&mixed, &types));
@@ -158,7 +158,7 @@ fn type_constructor_ktype_erased_vs_applied() {
         None,
         &types,
     );
-    let erased = KObject::tagged(door, "Ok".into(), &KObject::Number(1.0), ctor);
+    let erased = KObject::tagged(door, "Ok", &KObject::Number(1.0), ctor);
     let erased_handle = erased.ktype();
     match types.node(erased_handle) {
         TypeNode::SetMember { name, .. } => assert_eq!(name, "Result"),
@@ -170,7 +170,7 @@ fn type_constructor_ktype_erased_vs_applied() {
     ]);
     let applied = KObject::tagged(
         door,
-        "Ok".into(),
+        "Ok",
         &KObject::Number(1.0),
         types.constructor_apply(ctor, arguments.clone()),
     );
@@ -207,7 +207,7 @@ fn unstamped_empty_container_detection() {
     assert!(!stamped.is_unstamped_empty_container());
     let hetero = KObject::list(
         door,
-        vec![KObject::Number(1.0), KObject::KString("x".into())],
+        vec![KObject::Number(1.0), KObject::KString("x")],
         &types,
     );
     assert!(!hetero.is_unstamped_empty_container());

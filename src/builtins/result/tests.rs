@@ -62,7 +62,7 @@ fn result_constructs_ok_variant() {
             value,
             identity,
         } => {
-            assert_eq!(tag, "Ok");
+            assert_eq!(*tag, "Ok");
             assert_member_named(test_run.types(), *identity, "Result");
             assert!(matches!(value.payload(), KObject::Number(n) if *n == 1.0));
         }
@@ -81,9 +81,9 @@ fn result_constructs_error_variant() {
             value,
             identity,
         } => {
-            assert_eq!(tag, "Error");
+            assert_eq!(*tag, "Error");
             assert_member_named(test_run.types(), *identity, "Result");
-            assert!(matches!(value.payload(), KObject::KString(s) if s == "x"));
+            assert!(matches!(value.payload(), KObject::KString(s) if *s == "x"));
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),
     }

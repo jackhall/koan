@@ -113,9 +113,9 @@ fn retaining_adopt_reach_fold_pins_the_producer_region_after_drop() {
     // frame — the shape a delivered dep arrives in (host = the retention hold's owner).
     let producer_frame = per_call_storage();
     let cell: DeliveredCarried = Delivered::hosted(
-        Sealed::seal(KoanRegion::alloc_witnessed(
+        Sealed::seal(KoanRegion::fold_witnessed(
             Rc::clone(&producer_frame),
-            |r| Carried::Object(r.alloc_object(KObject::Number(9.0))),
+            |r| Carried::Object(r.alloc_object_folded(KObject::Number(9.0))),
         )),
         Rc::clone(&producer_frame),
         crate::machine::core::FrameCoverage::empty(),

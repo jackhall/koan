@@ -57,7 +57,7 @@ fn same_symbol_in_two_modules_resolves_by_scope() {
         matches!(test_run.run_one(parse_one("takes_left.result")), KObject::Number(n) if *n == 1.0),
     );
     assert!(
-        matches!(test_run.run_one(parse_one("takes_right.result")), KObject::KString(s) if s == "z"),
+        matches!(test_run.run_one(parse_one("takes_right.result")), KObject::KString(s) if *s == "z"),
     );
 }
 
@@ -269,7 +269,9 @@ fn two_operand_types_under_one_symbol_upsert_to_one_group() {
            (LET strings = (\"a\" ⊚ \"b\" ⊚ \"c\")))",
     );
     assert!(matches!(test_run.run_one(parse_one("both.numbers")), KObject::Number(n) if *n == 1.0),);
-    assert!(matches!(test_run.run_one(parse_one("both.strings")), KObject::KString(s) if s == "c"),);
+    assert!(
+        matches!(test_run.run_one(parse_one("both.strings")), KObject::KString(s) if *s == "c"),
+    );
 }
 
 /// Parking: the declaration's operand type sub-dispatches, so the `OP` slot is still in flight

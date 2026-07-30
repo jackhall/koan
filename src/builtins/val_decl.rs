@@ -77,7 +77,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     }
 
     let name = match arg_object(ctx.args, "name") {
-        Some(KObject::KString(s)) => s.clone(),
+        Some(KObject::KString(s)) => (*s).to_string(),
         Some(other) => {
             return done_err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),

@@ -327,11 +327,11 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
 /// scheduler's retention hold in production), which the pinned read names. The region-pure /
 /// single-frame shape the object and type families' common case takes.
 #[test]
-fn alloc_witnessed_yokes_a_reference_only_value() {
+fn fold_witnessed_yokes_a_reference_only_value() {
     let frame = run_root_storage();
     let w: Witnessed<CarriedFamily, CarrierWitness> =
-        KoanRegion::alloc_witnessed(Rc::clone(&frame), |region| {
-            Carried::Object(region.alloc_object(KObject::Number(7.0)))
+        KoanRegion::fold_witnessed(Rc::clone(&frame), |region| {
+            Carried::Object(region.alloc_object_folded(KObject::Number(7.0)))
         });
     // The held `frame` (the retention stand-in) is the pin every read below names — the reach
     // query included, since re-anchoring the description reference needs the same coverage.
@@ -358,8 +358,8 @@ fn envelope_transfer_folds_an_independent_foreign_value() {
     let here_frame = run_root_storage();
     let foreign_frame = per_call_storage(); // unrelated — a sibling producer's frame.
     let foreign: Witnessed<CarriedFamily, CarrierWitness> =
-        KoanRegion::alloc_witnessed(Rc::clone(&foreign_frame), |r| {
-            Carried::Object(r.alloc_object(KObject::Number(1.0)))
+        KoanRegion::fold_witnessed(Rc::clone(&foreign_frame), |r| {
+            Carried::Object(r.alloc_object_folded(KObject::Number(1.0)))
         });
     // `here_frame`'s own brand is the destination operand: the `HasRegionHandle` mint target the
     // transfer composes against. `foreign`'s value is untouched (still living in `foreign_frame`'s
@@ -396,8 +396,8 @@ fn pass_through_duplicate_keeps_reach_pointer_and_mints_nothing() {
     let foreign_frame = run_root_storage();
     let here_frame = run_root_storage();
     let foreign: Witnessed<CarriedFamily, CarrierWitness> =
-        KoanRegion::alloc_witnessed(Rc::clone(&foreign_frame), |r| {
-            Carried::Object(r.alloc_object(KObject::Number(1.0)))
+        KoanRegion::fold_witnessed(Rc::clone(&foreign_frame), |r| {
+            Carried::Object(r.alloc_object_folded(KObject::Number(1.0)))
         });
     let source: DeliveredCarried =
         Delivered::seal(foreign, Rc::clone(&foreign_frame), FrameCoverage::empty());
@@ -460,21 +460,21 @@ crate::witnessed::reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageP
 /// on the one carrier rather than reconstructing it from the value. Mirrors the production fold; fails
 /// on UB / leaks, not values.
 #[test]
-fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
+fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
     // Two unrelated producer frames, each holding one element — sibling producers whose terminals
     // this consumer aggregates.
     let frame_a = run_root_storage();
     let frame_b = run_root_storage();
     let dep_a: DeliveredCarried = Delivered::seal(
-        KoanRegion::alloc_witnessed(Rc::clone(&frame_a), |r| {
-            Carried::Object(r.alloc_object(KObject::Number(1.0)))
+        KoanRegion::fold_witnessed(Rc::clone(&frame_a), |r| {
+            Carried::Object(r.alloc_object_folded(KObject::Number(1.0)))
         }),
         Rc::clone(&frame_a),
         FrameCoverage::empty(),
     );
     let dep_b: DeliveredCarried = Delivered::seal(
-        KoanRegion::alloc_witnessed(Rc::clone(&frame_b), |r| {
-            Carried::Object(r.alloc_object(KObject::Number(2.0)))
+        KoanRegion::fold_witnessed(Rc::clone(&frame_b), |r| {
+            Carried::Object(r.alloc_object_folded(KObject::Number(2.0)))
         }),
         Rc::clone(&frame_b),
         FrameCoverage::empty(),
