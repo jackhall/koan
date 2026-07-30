@@ -130,10 +130,11 @@ pub(crate) fn parse_fn_param_list<'a>(
                         i += 2;
                     }
                     Some(ExpressionPart::Spliced { cell }) => {
-                        // The resolved type slot arrives as a carrier cell. A type is owned data, so
-                        // it is read straight out of the envelope and cloned into the signature's
-                        // own `Argument` — no adoption, no allocation.
-                        let cloned = cell.open(|live| match live {
+                        // The resolved type slot arrives as a resting carrier cell, rested into this
+                        // elaborating scope's own region by the dep-finish that spliced it. A type is
+                        // owned data, so it is read in place under that scope's owner and cloned into
+                        // the signature's own `Argument` — no adoption, no allocation.
+                        let cloned = elaborator.scope.read_spliced(cell, |live| match live {
                             Carried::Type(kt) => Ok(kt),
                             other => Err(other.summarize(types)),
                         });

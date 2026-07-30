@@ -18,6 +18,7 @@
 //! `==` intentionally intransitive across ascriptions and is documented in the value-equality
 //! design note.
 
+use crate::machine::core::read_resting;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{KType, TypeRegistry};
 use crate::machine::model::values::{Carried, Held};
@@ -240,10 +241,13 @@ fn part_equal<'a, 'b>(
             }
             Ok(true)
         }
-        // A spliced result compares by the value walk: open both envelopes at their own brand (hence
-        // the cross-lifetime comparison) and compare the carried values.
-        (Spliced { cell: cell_a }, Spliced { cell: cell_b }) => cell_a
-            .open(|carried_a| cell_b.open(|carried_b| carried_equal(carried_a, carried_b, types))),
+        // A spliced result compares by the value walk: read both resting cells at their own brand
+        // (hence the cross-lifetime comparison) and compare the carried values.
+        (Spliced { cell: cell_a }, Spliced { cell: cell_b }) => read_resting(cell_a, |carried_a| {
+            read_resting(cell_b, |carried_b| {
+                carried_equal(carried_a, carried_b, types)
+            })
+        }),
         _ => Ok(false),
     }
 }

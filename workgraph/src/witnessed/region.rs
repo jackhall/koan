@@ -601,8 +601,20 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// copy-free adoption or a run-teardown rehome here: the value stays resident in this region, so
     /// its reach (which a non-owning [`ReachDescription`] only names) must be pinned for as long as
     /// the region lives.
-    pub fn retain_reach(self, coverage: StepCoverage<W::FrameOwner>) {
-        self.region.retain_reach(coverage.0)
+    ///
+    /// The **self rule** applies as it does at [`Self::mint_retained`]: this region is stripped from
+    /// the retained bundle, because a region owning a pin on itself is a cycle nothing ever breaks.
+    /// It is what lets a caller hand over a whole coverage — a resting cell's claim, home included —
+    /// without first asking whether that home happens to be this very region.
+    pub fn retain_reach(self, coverage: StepCoverage<W::FrameOwner>)
+    where
+        W::FrameOwner: RegionOwner<Region = Region<W>>,
+    {
+        // The coverage arrives owned, so the strip is in place — no second buffer and no refcount
+        // traffic, where `without_region` would clone the whole bundle to drop one member.
+        let mut bundle = coverage.0;
+        bundle.remove_region(self.region);
+        self.region.retain_reach(bundle)
     }
 
     /// **Mint and retain in one verb** — the embedder-facing reach-derivation door. Freezes

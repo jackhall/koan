@@ -230,7 +230,11 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
             // A spliced cell is adopted into the elaborating scope (folding its reach),
             // then routed through type/non-type handling.
             ExpressionPart::Spliced { cell, .. } => {
-                match elaborator.scope.adopt_carried(cell, AdoptSeam::Retaining) {
+                let delivered = elaborator.scope.lift_spliced(cell);
+                match elaborator
+                    .scope
+                    .adopt_carried(&delivered, AdoptSeam::Retaining)
+                {
                     Carried::Type(kt) => checked(kt),
                     other @ (Carried::Object(_) | Carried::UnresolvedType(_)) => Err(format!(
                         "{context_list} type for `{}` resolved to non-type value `{}`",
@@ -282,19 +286,14 @@ fn rewrite_threaded_self_refs<'e, 'a>(
             let value = match (&p.value, window) {
                 (ExpressionPart::Type(t), Some(window)) if threaded.contains(t.as_str()) => {
                     // The sibling handle is minted against the window here, where the window is in
-                    // hand — the sub-dispatch it crosses into cannot reach one. The carrier is
-                    // minted fresh in this scope's region and spliced as a cell: a region-resident
-                    // type carrier reaching nothing foreign, whose delivery envelope pins this
-                    // scope's own region owner (the seal-resident veneer) rather than a separate
-                    // producer frame.
+                    // hand — the sub-dispatch it crosses into cannot reach one. The cell is a
+                    // resident seal in this scope's own region: a type carrier reaching nothing
+                    // foreign, so it rests with no coverage to lodge anywhere.
                     let sibling =
                         window.sibling(&t.render(), crate::machine::model::KKind::NewType, types);
-                    let carrier = scope.resident(Carried::Type(sibling));
                     ExpressionPart::Spliced {
-                        // A `KType` carrier has no foreign reach, so it seals under an empty bundle.
-                        cell: scope.seal_resident_delivered(
-                            carrier,
-                            crate::machine::core::FrameCoverage::empty(),
+                        cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
+                            Carried::Type(sibling),
                         ),
                     }
                 }

@@ -17,7 +17,7 @@ use crate::machine::model::{
     copy_object_into, copy_or_pin, Carried, CarriedFamily, KObject, KType, RegionEscape,
     TypeIdentifier, TypeRegistry,
 };
-use crate::machine::{CarrierWitness, DeliveredCarried, KError};
+use crate::machine::{CarrierWitness, DeliveredCarried, KError, SplicedCell};
 use crate::witnessed::{Delivered, Reattachable, RegionHandleFamily, Sealed, Witnessed};
 
 // The sole test here pins the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy`
@@ -210,6 +210,45 @@ impl<'a> Scope<'a> {
             }
         });
         Some(function.open_adopted(self.brand().handle()))
+    }
+
+    /// Drop a delivered value **to rest** in this scope's own region, keeping the sealed cell alone
+    /// ([`Delivered::rest_in`]) — the splice-install door. The envelope's whole coverage (the
+    /// producer's region among its members) is lodged in this region's union bundle, so the returned
+    /// [`SplicedCell`] is pure data: `Copy`, `Drop`-free, and readable for as long as this region
+    /// lives. A value already resident here rests for free — the library's self rule strips this
+    /// region from what is retained.
+    ///
+    /// The counterpart reads are [`Self::lift_spliced`] (an adoption, which needs the reach owned
+    /// again) and [`Self::read_spliced`] (a probe). Both name this scope's own region owner as their
+    /// pin, which is what the retention above makes sufficient.
+    pub(crate) fn rest_delivered(&self, cell: &DeliveredCarried) -> SplicedCell {
+        cell.rest_in(self.brand().handle())
+    }
+
+    /// **Lift** a resting splice cell back into a delivery envelope owning its whole reach
+    /// ([`Opened::lift_out`]) — the read door for a consumer that goes on to *adopt* the value, which
+    /// needs the reach owned rather than merely named. The cell's own description supplies both its
+    /// residence and its members, so nothing is paired with a reach some other value derived.
+    ///
+    /// `self` must be a scope whose region keeps the cell's producer alive: the region the cell was
+    /// rested into ([`Self::rest_delivered`]), whose union bundle holds an `Rc` on every region the
+    /// cell reaches, or one of its descendants. Holding this scope holds that region's owner, which
+    /// is what makes the `Weak → Rc` upgrade behind the lift succeed.
+    pub(crate) fn lift_spliced(&self, cell: &SplicedCell) -> DeliveredCarried {
+        cell.open_at(&self.home()).lift_out()
+    }
+
+    /// Read a resting splice cell's value under this scope's own region owner — the probe form of
+    /// [`Self::lift_spliced`], for a caller that only inspects (a type slot's handle, a shape
+    /// classification). Nothing is minted and nothing escapes: the `for<'b>` brand confines the
+    /// re-anchored value to the call. Same coverage obligation on `self` as the lift.
+    pub(crate) fn read_spliced<R>(
+        &self,
+        cell: &SplicedCell,
+        read: impl for<'b> FnOnce(Carried<'b>) -> R,
+    ) -> R {
+        cell.open_with(&self.home(), read)
     }
 
     /// **Lift** a binding's dormant carrier into a delivery envelope pinned by this scope's own

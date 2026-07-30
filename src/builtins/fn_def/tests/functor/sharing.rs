@@ -42,9 +42,12 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     // on the Object channel — its satisfaction of a `Signature` slot goes through
     // `accepts_carried`'s `Carried::Object(KObject::Module)` arm.
     let module_part = |name: &str| {
-        spliced_part(Carried::Object(scope.lookup(name).unwrap_or_else(|| {
-            panic!("{name} must bind a module value-side");
-        })))
+        spliced_part(
+            &region,
+            Carried::Object(scope.lookup(name).unwrap_or_else(|| {
+                panic!("{name} must bind a module value-side");
+            })),
+        )
     };
     assert!(slot.accepts_part(&module_part("num_pinned"), &types));
     assert!(!slot.accepts_part(&module_part("str_pinned"), &types));
@@ -235,11 +238,11 @@ fn transparent_view_pin_agreement_reads_source_types() {
     let num_view = scope.lookup("num_view").expect("num_view bound");
     let str_view = scope.lookup("str_view").expect("str_view bound");
     assert!(
-        slot.accepts_part(&spliced_part(Carried::Object(num_view)), &types),
+        slot.accepts_part(&spliced_part(&region, Carried::Object(num_view)), &types),
         "transparent view over `Elem = Number` must agree with the `{{Elem = Number}}` pin",
     );
     assert!(
-        !slot.accepts_part(&spliced_part(Carried::Object(str_view)), &types),
+        !slot.accepts_part(&spliced_part(&region, Carried::Object(str_view)), &types),
         "transparent view over `Elem = Str` must not agree with the `{{Elem = Number}}` pin",
     );
 }
@@ -278,7 +281,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let view_obj = scope.lookup("view").expect("view bound");
     assert!(
-        slot.accepts_part(&spliced_part(Carried::Object(view_obj)), &types),
+        slot.accepts_part(&spliced_part(&region, Carried::Object(view_obj)), &types),
         "opaque view must agree with a pin naming its own per-call abstract `Carrier`",
     );
 }

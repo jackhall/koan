@@ -150,14 +150,11 @@ pub(super) fn literal_pass_through<'step>(
         // rather than re-wrapping the read-back value under a freshly-asserted witness. Strictly
         // better witnessing: the value arrives with the exact reach its producer named.
         ExpressionPart::Spliced { cell } => {
-            // The spliced cell is the producer's own delivery envelope; recover its whole coverage
-            // — the producer's own region among them — before unsealing, so the recovered carrier's
-            // reach is threaded, not re-derived.
-            let coverage = cell.coverage().clone();
-            Outcome::Done(Ok(StepCarried::born_pinned(
-                cell.into_cell().unseal(),
-                coverage,
-            )))
+            // Lift the resting cell back into its producer's own delivery envelope under the step's
+            // coverage: the whole claim — the producer's own region among its members — is re-owned
+            // there, so the recovered carrier's reach is threaded, not re-derived.
+            let (recovered, coverage) = ctx.lift_spliced(&cell).into_parts();
+            Outcome::Done(Ok(StepCarried::born_pinned(recovered.unseal(), coverage)))
         }
         // A quote is its body as data: seal the `KObject::KExpression` into this scope's region
         // through the **checked** door. `KExpression<'a>` is invariant with no `'static` rebuild,

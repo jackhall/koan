@@ -94,8 +94,9 @@ chokepoint (`KExpression::build`)
 and refreshed at the two parse-finalization points where parts are pushed
 incrementally (frame finalization in [frame.rs](../src/parse/frame.rs) and the
 redundant-wrapper peel in [expression_tree.rs](../src/parse/expression_tree.rs)).
-It is invariant under the dispatch-time splice that swaps an eager slot part for a
-`Future` (also a slot), so the parse-time fill stays valid through execution.
+It is invariant under the dispatch-time splice that swaps a `StagedSlot` for the
+resolved sub-result's `Spliced` cell — one part for one part, no structural
+change — so the parse-time fill stays valid through execution.
 
 `DispatchShape` partitions expressions into the bare-name and single-part
 fast lanes, the head-position call shapes, `Keyworded`, `OperatorChain`, and the

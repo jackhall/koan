@@ -113,3 +113,57 @@ fn every_call_shape_leaves_no_live_region() {
         assert_eq!(live_after(source), 0, "shape `{name}` left a region live");
     }
 }
+
+/// Run `source` to completion in a fresh run and report the **peak** number of regions live at any
+/// moment during it, alongside the count still live after the whole run drops.
+fn peak_and_live_after(source: &str) -> (usize, usize) {
+    reset_region_metrics();
+    let peak = {
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&region);
+        test_run.run(source);
+        region_metrics().peak
+    };
+    (peak, region_metrics().live)
+}
+
+/// A tail loop whose every iteration splices an eagerly-dispatched sub-result into its own working
+/// expression: `(COUNTDOWN (PASS it))` evaluates `(PASS it)` as an eager dep and rests the resolved
+/// cell in the dispatching step's own region.
+fn splicing_countdown(depth: usize) -> String {
+    let mut source = String::from(
+        "UNION Nat = (Zero :Null Succ :Nat)\n\
+         FN (PASS x :Nat) -> Nat = (x)\n\
+         FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) -> :Str WITH (\
+             Zero -> (\"done\")\
+             Succ -> (COUNTDOWN (PASS it))\
+         ))\n\
+         LET n0 = (Nat (Zero null))\n",
+    );
+    for i in 1..=depth {
+        source.push_str(&format!("LET n{i} = (Nat (Succ n{}))\n", i - 1));
+    }
+    source.push_str(&format!("LET out = (COUNTDOWN n{depth})\n"));
+    source
+}
+
+/// **Splice retention is per-iteration, not cumulative.** A spliced cell's pins live in the region
+/// the splice site rested them into, released when that region dies — so a tail loop's producer
+/// regions turn over with their consuming iteration instead of chaining forward. The observable is
+/// the *peak* live-region count: it is flat in the loop's depth, where a retention that accumulated
+/// would grow one region per hop.
+///
+/// The depths bracket the per-hop cost either way: the `LET n<i>` prelude is straight-line
+/// construction, so any growth between them is the loop's own.
+#[test]
+fn a_splicing_tail_loop_holds_no_region_per_iteration() {
+    let (shallow_peak, shallow_live) = peak_and_live_after(&splicing_countdown(3));
+    let (deep_peak, deep_live) = peak_and_live_after(&splicing_countdown(11));
+    assert_eq!(shallow_live, 0, "the shallow run leaves no region live");
+    assert_eq!(deep_live, 0, "the deep run leaves no region live");
+    assert_eq!(
+        shallow_peak, deep_peak,
+        "eight more tail hops must cost no extra live region — a spliced producer is released \
+         with the iteration that consumed it"
+    );
+}

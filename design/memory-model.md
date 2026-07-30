@@ -518,7 +518,7 @@ Transient-node reclamation runs through `Scheduler::reclaim_deps` from the
 unified node handler `KoanRuntime::run_step`, *after* the finish closure returns
 its `Outcome` but *before* the harness applies it. So
 when a dispatch splice finish has rewritten `working_expr.parts` to
-`ExpressionPart::Future`, the freed indices are back on the free-list before
+`ExpressionPart::Spliced`, the freed indices are back on the free-list before
 the harness dispatches the bound expression — its `add()` can recycle them
 immediately. `reclaim_deps` clears `dep_edges[idx]` and
 invokes `Scheduler::free` per dep index; the walk follows `DepGraph::owned_children`,

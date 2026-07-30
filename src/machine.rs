@@ -24,7 +24,7 @@ pub(crate) use core::{
 };
 pub use core::{
     run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, OpenedFunction,
-    Scope, ScopeId, SealedFunction, WriteGate,
+    Scope, ScopeId, SealedFunction, SplicedCell, WriteGate,
 };
 pub(crate) use core::{
     AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, KoanRegion,

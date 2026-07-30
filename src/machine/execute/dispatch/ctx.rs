@@ -16,11 +16,14 @@ use std::rc::Rc;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::{scope_frame, DepPlacement};
-use crate::machine::core::{FrameStorage, StepAllocator};
+use crate::machine::core::{FrameCoverage, FrameStorage, StepAllocator};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::FoldDirection;
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeHandle, NodeId, Scope};
+use crate::machine::{
+    CallFrame, DeliveredCarried, KError, LexicalFrame, NameOutcome, NodeHandle, NodeId, Scope,
+    SplicedCell,
+};
 use crate::source::{Span, Spanned};
 
 use super::super::ambient::AmbientContext;
@@ -102,9 +105,22 @@ pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
     /// as outcome *data* on their `Action`; this is a harness-internal hop from `run_action` to the
     /// run loop's apply point, not a channel bodies write through.
     effects: &'view RefCell<Vec<WriteOp>>,
+    /// **The step's coverage**: every region this step's own machinery keeps alive for its whole
+    /// duration — the slot's memory anchor, each dep envelope's members, and a framed tail hop's TCO
+    /// handoff hold (the retiring incarnation's frame). Assembled by
+    /// [`run_step`](super::super::run_loop) before the step open and held across it, so it outlives
+    /// every read taken under it.
+    ///
+    /// It is what [`Self::lift_spliced`] opens a resting splice cell under. A cell rests in the
+    /// region the splice site named — the dispatching step's own cart — and the reading step may be a
+    /// *later* incarnation of the same slot, running against a freshly minted cart whose ancestor
+    /// chain does not reach the retiring one. The handoff hold is precisely the pin that spans that
+    /// hop, so it is named here rather than re-derived from the reader's scope.
+    coverage: &'view FrameCoverage,
 }
 
 impl<'step, 'view> SchedulerView<'step, 'view> {
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::machine::execute) fn new(
         sched: &'view Scheduler<KoanWorkload>,
         ambient: &'view AmbientContext,
@@ -112,6 +128,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         dest_frame: Rc<FrameStorage>,
         node: NodeHandle,
         effects: &'view RefCell<Vec<WriteOp>>,
+        coverage: &'view FrameCoverage,
     ) -> Self {
         Self {
             sched,
@@ -120,7 +137,17 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             dest_frame,
             node,
             effects,
+            coverage,
         }
+    }
+
+    /// **Lift** a resting splice cell back into a delivery envelope owning its whole reach, under
+    /// [the step's coverage](Self::coverage) — the read door for a consumer that goes on to adopt the
+    /// value. The scope-level twin ([`Scope::lift_spliced`]) covers a read inside the region that did
+    /// the resting; this one also covers a read *after* a framed tail hop, where the resting region
+    /// survives only as the run loop's handoff hold.
+    pub(in crate::machine::execute) fn lift_spliced(&self, cell: &SplicedCell) -> DeliveredCarried {
+        cell.open_at(self.coverage).lift_out()
     }
 
     /// Append this step's next batch of binding writes to the run-loop-owned sink, preserving the
@@ -302,12 +329,13 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             // brand; `invoke` reads each cell back for the body-facing reach. Owned deps land in the
             // owned suffix in staging order — 1:1 with `part_indices`.
             for (slot, terminal) in part_indices.iter().zip(terminals.owned_slice()) {
-                // Duplicate the dep's delivery envelope — its carrier bundled with the retained
-                // producer-frame owner — so the value's backing stays retained across the `Replace`
-                // to the re-dispatch step where `extract_carried_args` adopts it. A frameless / run
-                // producer carries a `None` host inside the envelope, its backing outliving the cell.
+                // Rest the dep's delivery envelope into this step's own region: the cell keeps the
+                // producer's carrier, the envelope's whole coverage moves into the region's union
+                // bundle. That is what keeps the value's backing retained across the `Replace` to the
+                // re-dispatch step where `extract_carried_args` adopts it — a framed tail hop's TCO
+                // handoff holds this retiring region across exactly that step.
                 working_expr.parts[*slot].value = ExpressionPart::Spliced {
-                    cell: terminal.delivered.duplicate(),
+                    cell: ctx.current_scope().rest_delivered(&terminal.delivered),
                 };
             }
             finish_eager_subs(ctx, working_expr, picked)
@@ -356,21 +384,23 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             })
             .collect();
         let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
-            // Every operand resolved. Build one pair per operator, duplicating each shared
-            // middle operand's resolved cell into both of the adjacent pairs it feeds — the
-            // splice that makes evaluation once-only.
+            // Every operand resolved. Build one pair per operator, resting each shared middle
+            // operand's resolved cell into both of the adjacent pairs it feeds — the splice that
+            // makes evaluation once-only. The region's union bundle dedupes the repeated coverage,
+            // so a middle operand costs one retention however many pairs read it.
             let cells = terminals.owned_slice();
             let mut pairs = Vec::with_capacity(operators.len());
+            let scope = ctx.current_scope();
             for (i, operator) in operators.into_iter().enumerate() {
                 let left = Spanned {
                     value: ExpressionPart::Spliced {
-                        cell: cells[i].delivered.duplicate(),
+                        cell: scope.rest_delivered(&cells[i].delivered),
                     },
                     span: operand_spans[i],
                 };
                 let right = Spanned {
                     value: ExpressionPart::Spliced {
-                        cell: cells[i + 1].delivered.duplicate(),
+                        cell: scope.rest_delivered(&cells[i + 1].delivered),
                     },
                     span: operand_spans[i + 1],
                 };

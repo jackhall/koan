@@ -419,6 +419,18 @@ rather than chaining one region per hop the way a conservative pin would.
 - `loop_carried_aggregate_survives_tail_hop_adoption`
 - `tail_recursive_record_thread_stays_o1_in_regions`
 
+**Resting splice cell read across a tail hop** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs)) —
+a spliced sub-result rests as a pin-less `Sealed` cell in the *dispatching* step's own region
+(`Scope::rest_delivered`), and the step that adopts it is a **later incarnation of the same slot**,
+running against a freshly minted cart whose ancestor chain does not reach the retiring one. What spans
+the hop is the run loop's TCO handoff hold, absorbed into the step's coverage and named as the pin for
+`SchedulerView::lift_spliced`'s `Sealed::open_at` + `Opened::lift_out`. Tree borrows catches a
+use-after-free if that ordering ever breaks; the test also asserts the retention is *per-iteration* —
+the peak live-region count is flat in the loop's depth, where pins chained forward would grow it one
+region per hop.
+
+- `a_splicing_tail_loop_holds_no_region_per_iteration`
+
 **TRY-WITH inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — same
 `CallFrame::with_scope` seed relocation + bind as MATCH for the per-branch frame; the
 `FrameStorage.outer` chain keeps the call-site region alive when the branch body
@@ -630,9 +642,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-30: 2131s — 48 tests, 0 leaks, 0 UB
 - 2026-07-30: 1827s — 45 tests, 0 leaks, 0 UB
 - 2026-07-30: 1794s — 45 tests, 0 leaks, 0 UB
 - 2026-07-29: 1750s — 44 tests, 0 leaks, 0 UB
 - 2026-07-29: 801s — 44 tests, 0 leaks, 0 UB
-- 2026-07-29: 1573s — 44 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

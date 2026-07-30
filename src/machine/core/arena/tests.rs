@@ -1516,11 +1516,7 @@ fn spliced_expression_is_rejected_by_the_checked_object_seal() {
         .seal_fresh_object(KObject::Number(7.0), &types)
         .expect("a bare Number borrows no region, so its checked seal cannot fail");
     let spliced = ExpressionPart::Spliced {
-        cell: Delivered::hosted(
-            Sealed::seal(witnessed),
-            Rc::clone(&storage),
-            FrameCoverage::empty(),
-        ),
+        cell: Sealed::seal(witnessed),
     };
     let expression = KExpression::new(vec![spliced.into()]);
     assert!(

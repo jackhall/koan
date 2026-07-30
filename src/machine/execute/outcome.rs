@@ -364,6 +364,8 @@ mod erased_continuation_tests {
             .zip(scope_carrier)
             .open(&cart, |(continuation, scope)| {
                 let effects = std::cell::RefCell::new(Vec::new());
+                // The step's coverage: this off-scheduler shot has one anchor and no deps.
+                let coverage = crate::machine::core::FrameCoverage::of(cart.storage_rc());
                 let view = SchedulerView::new(
                     &sched,
                     &ambient,
@@ -374,6 +376,7 @@ mod erased_continuation_tests {
                         node: crate::machine::NodeId(0),
                     },
                     &effects,
+                    &coverage,
                 );
                 let empty: &[Result<DepTerminal, KError>] = &[];
                 let out = continuation(&view, DepResults::new(empty, 0), 0);

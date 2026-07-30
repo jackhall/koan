@@ -149,10 +149,14 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
     /// its own `Rc` on every pinned region.
     ///
     /// Retention widens to the region's life: what an envelope released when it dropped is now held
-    /// until `dest`'s region dies. That is the price of a `Drop`-free resting cell.
+    /// until `dest`'s region dies. That is the price of a `Drop`-free resting cell. A value already
+    /// resident in `dest`'s own region rests for free: [`RegionHandle::retain_reach`]'s self rule
+    /// strips that region from the bundle, so the coverage may be handed over whole without the
+    /// caller first asking where the value lives.
     pub fn rest_in<'d, P>(&self, dest: RegionHandle<'d, P>) -> Sealed<T, W>
     where
         P: StorageProfile<FrameOwner = F>,
+        F: RegionOwner<Region = Region<P>>,
         Erased<T>: Copy,
         W: Clone,
     {

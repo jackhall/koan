@@ -1,6 +1,7 @@
 //! AST node types shared across the parse module.
 
-use crate::machine::DeliveredCarried;
+use crate::machine::core::read_resting;
+use crate::machine::SplicedCell;
 use std::marker::PhantomData;
 
 use crate::source::{FileId, Span, Spanned};
@@ -108,15 +109,18 @@ pub enum ExpressionPart<'a> {
     /// and it resolves to `KObject::KExpression(<body>)` — the value `$(...)` evaluates. See
     /// [design/expressions-and-parsing.md](../../../design/expressions-and-parsing.md).
     QuotedExpression(Box<KExpression<'a>>),
-    /// A resolved sub-result travelling as its producer's [`DeliveredCarried`] envelope — the sealed
-    /// carrier (value and reach as one unit) bundled with the retained frame owner that pins its
-    /// backing in transit. The lifetime-free `cell` rests on the working expression across steps; the
-    /// consuming decide or bind opens it (to classify) or adopts it (to consume) at its own step
-    /// brand, reading the value under the envelope's own pin — the producer's retention hold for a
-    /// working-copy splice, or the reading scope's own owner for a resident splice, or `None` for a
-    /// frameless / run producer whose backing already outlives it.
+    /// A resolved sub-result **at rest**: its producer's sealed carrier — value and reach description
+    /// as one unit — and nothing else. `Copy` and `Drop`-free; the pins that keep its backing alive
+    /// live one level down, in the region the splice site rested it into
+    /// ([`Scope::rest_delivered`](crate::machine::core::Scope::rest_delivered)), exactly as a binding
+    /// entry's pins do.
+    ///
+    /// The cell rests on the working expression across steps and is read under that region's owner:
+    /// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) re-owns its reach for a
+    /// consuming adoption, [`Scope::read_spliced`](crate::machine::core::Scope::read_spliced) probes
+    /// it in place.
     Spliced {
-        cell: DeliveredCarried,
+        cell: SplicedCell,
     },
     /// A positional argument slot whose eager value is being produced by a sibling dispatch,
     /// awaiting its resolved carrier. The keyworded part walk stages an eager part as an owned
@@ -132,6 +136,8 @@ pub enum ExpressionPart<'a> {
 /// [`ExpressionPart::summarize`]. A type name resolves through the registry, which neither signature
 /// carries, so the type channel renders its content-digest hex — the value's own identity — and an
 /// object renders its type's digest. An unlowered name is already a bare surface string.
+///
+/// Reached through [`read_resting`], which states the coverage a pin-less probe stands under.
 fn spliced_summary(carried: Carried<'_>) -> String {
     match carried {
         Carried::Type(kt) => format!("0x{:032x}", kt.digest().0),
@@ -165,7 +171,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
                 f.debug_tuple("QuotedExpression").field(e).finish()
             }
             ExpressionPart::Spliced { cell, .. } => {
-                write!(f, "Spliced({})", cell.open(spliced_summary))
+                write!(f, "Spliced({})", read_resting(cell, spliced_summary))
             }
             ExpressionPart::StagedSlot => write!(f, "StagedSlot"),
         }
@@ -240,7 +246,7 @@ impl<'a> ExpressionPart<'a> {
                 KLiteral::Boolean(b) => b.to_string(),
                 KLiteral::Null => "null".to_string(),
             },
-            ExpressionPart::Spliced { cell, .. } => cell.open(spliced_summary),
+            ExpressionPart::Spliced { cell, .. } => read_resting(cell, spliced_summary),
             ExpressionPart::StagedSlot => "<staged>".to_string(),
         }
     }
@@ -264,7 +270,10 @@ impl<'a> ExpressionPart<'a> {
     ) -> Held<'a> {
         use crate::machine::model::types::KType;
         if let ExpressionPart::Spliced { cell, .. } = self {
-            return match scope.adopt_carried(cell, AdoptSeam::Retaining) {
+            // The cell rests in this scope's region (the splice site put it there), so the scope's
+            // own owner covers the lift that re-owns its reach for the adoption below.
+            let delivered = scope.lift_spliced(cell);
+            return match scope.adopt_carried(&delivered, AdoptSeam::Retaining) {
                 Carried::Type(kt) => Held::Type(kt),
                 Carried::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
                 Carried::Object(obj) => Held::Object(obj.deep_clone()),
@@ -420,11 +429,9 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(pairs.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
-            // `duplicate` copies the erased carrier value and clones the witness (the envelope is not
-            // `Copy`); the retained frame owner is a plain `Rc` clone.
-            ExpressionPart::Spliced { cell } => ExpressionPart::Spliced {
-                cell: cell.duplicate(),
-            },
+            // A resting cell is plain data — a pointer copy of the erased value and its reach
+            // reference, with no refcount traffic: its pins live in the region, not in the part.
+            ExpressionPart::Spliced { cell } => ExpressionPart::Spliced { cell: *cell },
             ExpressionPart::StagedSlot => ExpressionPart::StagedSlot,
         }
     }

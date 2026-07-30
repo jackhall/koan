@@ -15,9 +15,10 @@ use super::registry::{Relation, TypeRegistry};
 use super::sig_schema::{sig_subtype, SigSchema};
 use super::signature::{ExpressionSignature, SignatureElement};
 use super::type_digest::{empty_schema_digest, TypeDigest};
+use crate::machine::core::read_resting;
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::values::{Carried, Held, KObject};
-use crate::machine::DeliveredCarried;
+use crate::machine::SplicedCell;
 
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
 /// slot: the two constructors are the same type, the two argument records name the same
@@ -453,8 +454,8 @@ impl KType {
     /// so it carries no brand of its own for the opened value's brand to relate to — a
     /// verdict-only walk needs no re-anchoring. The picker may reject the candidate, so this
     /// deliberately does not adopt.
-    pub(crate) fn accepts_cell(self, cell: &DeliveredCarried, types: &TypeRegistry) -> bool {
-        cell.open(|c| self.accepts_carried(c, types))
+    pub(crate) fn accepts_cell(self, cell: &SplicedCell, types: &TypeRegistry) -> bool {
+        read_resting(cell, |c| self.accepts_carried(c, types))
     }
 
     /// Per-`ExpressionPart` admissibility for argument slots. Unevaluated container

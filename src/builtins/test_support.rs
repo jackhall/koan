@@ -32,7 +32,7 @@ use crate::parse::parse;
 #[cfg(test)]
 use crate::scheduler::NodeId;
 #[cfg(test)]
-use crate::witnessed::{Delivered, Sealed, Witnessed};
+use crate::witnessed::{Sealed, Witnessed};
 
 use super::unseeded_scopes;
 
@@ -398,18 +398,17 @@ pub(crate) fn resident_carrier(scope: &Scope<'_>) -> crate::machine::CarrierWitn
 /// Seal a resolved value into a region-pure `ExpressionPart::Spliced` cell — the test-side peer of
 /// the scheduler's splice, so a classification test can build the exact carrier a real splice rests
 /// on the working expression. `Witnessed::resident_in` asserts the empty reach: the value borrows
-/// only caller-held test data, not a foreign region. A fresh throwaway storage is both the region
-/// the description is hosted in and the envelope's host pin, so the pin covers the arena the mint
-/// landed in.
+/// only caller-held test data, not a foreign region.
+///
+/// `host` is the storage the description is minted into, and it must outlive every read of the
+/// returned part: a resting cell owns no pin, so `host` plays the role the region a real splice
+/// rests into plays in production. Borrowed at `'a` so that is a compile error rather than a rule —
+/// every call site already passes the storage its `Carried` was allocated into, which is exactly
+/// what production does.
 #[cfg(test)]
-pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
-    let host = crate::machine::run_root_storage();
+pub(crate) fn spliced_part<'a>(host: &'a Rc<FrameStorage>, c: Carried<'a>) -> ExpressionPart<'a> {
     ExpressionPart::Spliced {
-        cell: Delivered::hosted(
-            Sealed::seal(Witnessed::resident_in(c, &host)),
-            host,
-            crate::machine::core::FrameCoverage::empty(),
-        ),
+        cell: Sealed::seal(Witnessed::resident_in(c, host)),
     }
 }
 

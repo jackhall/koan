@@ -3,7 +3,9 @@
 //! delivery envelope that carries a value's retained frame pin in transit. See
 //! [workgraph/design/reach.md § The carrier states](../../../workgraph/design/reach.md#the-carrier-states).
 
-use crate::machine::model::{retains_home, CarriedFamily, DispatchToken, KObject, UntypedKey};
+use crate::machine::model::{
+    retains_home, Carried, CarriedFamily, DispatchToken, KObject, UntypedKey,
+};
 
 use super::arena::{FrameStorage, KoanRegion};
 use super::kfunction::{KFunction, KFunctionFamily};
@@ -32,6 +34,38 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// rather than choosing a bundle up front.
 pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
+
+/// A resolved sub-result **at rest** inside a working expression: the producer's sealed value
+/// carrier alone, `Copy` and `Drop`-free, with the pins that keep its backing alive lodged one level
+/// down in the region the cell was rested into
+/// ([`Delivered::rest_in`](crate::witnessed::Delivered::rest_in), reached through
+/// [`Scope::rest_delivered`](crate::machine::core::Scope::rest_delivered)). The resting form of a
+/// [`DeliveredCarried`]: same carrier, ownership relocated — which is what lets an
+/// [`ExpressionPart`](crate::machine::model::ExpressionPart) hold one without becoming heap-shaped.
+///
+/// Reading one names its coverage, as every reference-only carrier does: the reach-carrying route is
+/// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) (back to an envelope, for an
+/// adoption), the read-only route [`Scope::read_spliced`](crate::machine::core::Scope::read_spliced).
+pub type SplicedCell = crate::witnessed::Sealed<CarriedFamily, CarrierWitness>;
+
+/// Read a resting splice cell at a site with **no pin vocabulary** — the registry-free renderers
+/// ([`ExpressionPart`](crate::machine::model::ExpressionPart)'s `Debug` / `summarize`) and the slot
+/// classifier ([`KType::accepts_part`](crate::machine::model::KType::accepts_part)). Each is a pure
+/// probe over a part the caller already holds, reached from signatures that carry no scope and (for
+/// `Debug::fmt`) could not be given one.
+///
+/// The coverage is the step's, not the reader's: a probe runs synchronously inside the step holding
+/// the expression, and that step holds the region the cell was rested into — its own cart for a
+/// decide, the run loop's TCO handoff hold across a framed tail hop. So the pointee outlives the read
+/// for a reason outside it, which is exactly what [`NoPins`] names. Stated once here so the
+/// assertion has one home rather than one per call site; every reader that *can* name a pin takes
+/// [`Scope::read_spliced`] or [`Scope::lift_spliced`] instead.
+pub(crate) fn read_resting<R>(
+    cell: &SplicedCell,
+    read: impl for<'b> FnOnce(Carried<'b>) -> R,
+) -> R {
+    cell.open_with(&crate::witnessed::NoPins, read)
+}
 
 /// A callable's **dormant** carrier: the `KFunction` fused to the exact reach description minted for
 /// it, over the [`KFunctionFamily`] the library dispatches on. This is what a `functions` dispatch

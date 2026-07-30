@@ -396,11 +396,13 @@ fn part_walk<'step>(
             }
             match ctx.resolve_bare_carrier(&part.value)? {
                 // A resolved bound name splices inline as its binding-scope carrier — value and reach
-                // as one cell. A resident read: the value lives in this scope's region, so the
-                // delivery envelope's pin is the scope's own region owner (the seal-resident veneer) —
-                // self-covering, identical in shape to a delivered dep.
+                // as one cell — rested into this scope's own region. A name bound here rests for
+                // free (the self rule strips this region from what is retained); one bound further
+                // out lodges its binding scope's coverage, which is what keeps the read live.
                 BareCarrier::Sealed(cell) => new_parts.push(Spanned {
-                    value: ExpressionPart::Spliced { cell },
+                    value: ExpressionPart::Spliced {
+                        cell: ctx.current_scope().rest_delivered(&cell),
+                    },
                     span,
                 }),
                 BareCarrier::Parked(p) => {

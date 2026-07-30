@@ -327,10 +327,10 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
 /// *witnessed* via the envelope's cell
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into)), its reach named on the
 /// result by construction; a finish that parks the carrier on the working expression across steps
-/// (the working-copy splice) duplicates the whole envelope into the
-/// [`Spliced`](crate::machine::model::ExpressionPart::Spliced) cell, keeping the value's backing
-/// retained (its host = the scheduler's retention hold, `None` for a frameless / run-region producer
-/// whose backing already outlives the terminal) through the `Replace` to the step that adopts it.
+/// (the working-copy splice) **rests** the envelope into the finishing step's own region
+/// ([`Scope::rest_delivered`](crate::machine::core::Scope::rest_delivered)), leaving a
+/// [`Spliced`](crate::machine::model::ExpressionPart::Spliced) cell whose backing that region's
+/// union bundle keeps retained through the `Replace` to the step that adopts it.
 /// Defined here in core (not the execute layer that resolves it) so the builtin-`Action` currency —
 /// [`AwaitContinue`] — can name it.
 pub struct DepTerminal<'a> {

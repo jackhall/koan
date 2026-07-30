@@ -537,6 +537,43 @@ fn project_refamilies_under_the_envelopes_own_pins() {
     assert_eq!(projected.open(|r| *r), 31);
 }
 
+/// **A region never retains a pin on itself.** [`RegionHandle::retain_reach`] applies the same self
+/// rule the mint does, so a caller may hand over a whole coverage — a resting cell's claim, home
+/// included — without first asking whether that home happens to be this very region. Folding the
+/// self-`Rc` in would close a cycle nothing breaks: the region would keep its own owner alive, and
+/// the leak detector would report the whole arena at exit.
+///
+/// The rule is on the *door*, not on `rest_in`, so it holds for every retention — a resident bind's
+/// coverage and a run-teardown rehome as much as a splice install. Both cases below run through the
+/// one door; the foreign member proves the strip is targeted, not a blanket refusal to retain.
+#[test]
+fn retain_reach_never_folds_a_regions_own_pin_into_itself() {
+    let dest = frame();
+    let foreign = frame();
+    let handle = RegionHandle::from_owner(&*dest);
+
+    handle.retain_reach(StepCoverage::of(Rc::clone(&dest)));
+    assert_eq!(
+        dest.region().retained_reach_len(),
+        0,
+        "a coverage naming only this region retains nothing — a region owning itself never frees"
+    );
+    assert_eq!(
+        Rc::strong_count(&dest),
+        1,
+        "and takes no `Rc`, so the caller's handle is still the only owner"
+    );
+
+    let mut mixed = StepCoverage::of(Rc::clone(&dest));
+    mixed.absorb(StepCoverage::of(Rc::clone(&foreign)));
+    handle.retain_reach(mixed);
+    assert_eq!(
+        dest.region().retained_reach_len(),
+        1,
+        "the strip is targeted: the foreign member is retained, this region alone is dropped"
+    );
+}
+
 /// The resting cell an embedder stores inside its own bit-copy value — an expression part holding a
 /// resolved sub-result. Deriving `Copy` here is the whole point: it compiles only because the seal
 /// is `Copy`, and the assert below pins that the part carries no `Drop` glue, so region death runs
