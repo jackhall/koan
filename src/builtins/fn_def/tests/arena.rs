@@ -456,3 +456,71 @@ fn let_bound_list_reaching_two_call_regions_keeps_both_live() {
         other => panic!("expected a List, got {:?}", other.ktype()),
     }
 }
+
+/// A `let`-bound container whose cells are **strings** survives every producer region retiring. Each
+/// `LABEL` call bumps its result's bytes into its own per-call region and the list literal sections
+/// those results as cells; the substrate door re-bumps each one into the list's own region
+/// (`section_cells`), which is what makes a string cell's empty-reach run verdict honest — a cell
+/// that named no region while still pointing into a retiring one would dangle. Reading the bytes
+/// back after the calls retire is the check. (Miri: the region-resident-string no-use-after-free
+/// check.)
+#[test]
+fn let_bound_list_of_call_produced_strings_survives_every_producer_free() {
+    use crate::machine::model::{Held, KObject};
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
+        "FN (LABEL n :Number) -> Str = (PRINT n)\n\
+         LET labels = [(LABEL 1) (LABEL 2)]",
+    );
+    let result = test_run.run_one(parse_one("labels"));
+    match result {
+        KObject::List(items, _) => {
+            let rendered: Vec<&str> = items
+                .elements()
+                .iter()
+                .map(|cell| match cell {
+                    Held::Object(KObject::KString(s)) => *s,
+                    other => panic!(
+                        "expected a string cell, got {:?}",
+                        other.ktype(&test_run.types)
+                    ),
+                })
+                .collect();
+            assert_eq!(
+                rendered,
+                vec!["1", "2"],
+                "both string cells must read back intact after their call regions retired",
+            );
+        }
+        other => panic!("expected a List, got {:?}", other.ktype()),
+    }
+}
+
+/// The same check one layer in: a **dict** whose *keys* are call-produced strings. Keys ride a
+/// separate path from value cells — they are staged out of their producer's envelope and re-bumped
+/// as the key→index table freezes (`alloc_dict`) — so a key that kept its producer's pointer would
+/// dangle where a value cell would not. Looking the entry up after the producers retire both reads
+/// the stored key bytes (the `str` compare) and proves they are still there.
+#[test]
+fn let_bound_dict_with_call_produced_string_keys_survives_every_producer_free() {
+    use crate::machine::model::{Held, KKey, KObject};
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
+        "FN (LABEL n :Number) -> Str = (PRINT n)\n\
+         LET entries = {(LABEL 1): 10, (LABEL 2): 20}",
+    );
+    let result = test_run.run_one(parse_one("entries"));
+    match result {
+        KObject::Dict(substrate, _) => {
+            for (key, expected) in [("1", 10.0), ("2", 20.0)] {
+                match substrate.entry(&KKey::String(key)) {
+                    Some(Held::Object(KObject::Number(n))) => assert_eq!(*n, expected),
+                    _ => panic!("expected `{key}` bound to {expected}"),
+                }
+            }
+        }
+        other => panic!("expected a Dict, got {:?}", other.ktype()),
+    }
+}

@@ -97,6 +97,12 @@ group just to silence the stale-anchor check.
   not by `run_step`'s `pin` alone — the real `unsafe` it exercises is the shared `retype` in
   `witnessed.rs`, routed through the `Sealed`/`SealedExtern` opens `run_step` and the dep reads
   perform.
+- `src/machine/model/values/kobject.rs` — the container doors are safe code (bumping a `&'a str`
+  into a region borrowed for `'a` needs no retype), so the file carries no `unsafe`. The
+  region-hosted-string group pins the **re-home rule** those doors implement: a string cell's
+  `Owned` reach verdict names no region, so the door must re-bump the bytes at the destination or
+  the cell points into a region nothing pins. No residence audit can catch that — the bump keeps no
+  address table — which leaves tree borrows as the only check.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -304,6 +310,22 @@ a lost region dangles under tree borrows.
 - `captured_per_call_value_survives_let_bind_and_call`
 - `closure_argument_stays_live_through_user_fn_call`
 - `let_bound_list_reaching_two_call_regions_keeps_both_live`
+
+**Region-hosted string re-home at the substrate door** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
+— a `KObject::KString` carries a `&'a str` bumped into the region the value lives in, and a string
+cell's reach verdict is `Owned`: it names no region at all. That verdict is honest only because the
+door re-bumps the bytes at the destination first (`section_cells` for a value cell, `alloc_dict` for
+a key), so a cell that skipped the re-home would name no region while still pointing into a retiring
+one — the exact shape no reach fold can rescue, and one no residence audit can catch either, since
+the bump keeps no address table. Both tests build their strings inside per-call function regions,
+bind the container in an outer scope so every producer frame retires, then read the bytes back: the
+list test through the value cells, the dict test through a key lookup, which reads the stored key
+bytes on the `str` compare. A door that shared the producer's pointer is a use-after-free here under
+tree borrows. The only `unsafe` routed is the shared `retype` in `witnessed.rs`; the bump itself
+carries none — a `&'a` into a region borrowed for `'a` needs no retype.
+
+- `let_bound_list_of_call_produced_strings_survives_every_producer_free`
+- `let_bound_dict_with_call_produced_string_keys_survives_every_producer_free`
 
 **Retaining adoption's reach-fold reattach** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
 — `Scope::adopt_carried` at the retaining seam re-anchors a foreign producer's carrier at the
@@ -608,9 +630,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-30: 1827s — 45 tests, 0 leaks, 0 UB
 - 2026-07-30: 1794s — 45 tests, 0 leaks, 0 UB
 - 2026-07-29: 1750s — 44 tests, 0 leaks, 0 UB
 - 2026-07-29: 801s — 44 tests, 0 leaks, 0 UB
 - 2026-07-29: 1573s — 44 tests, 0 leaks, 0 UB
-- 2026-07-28: 785s — 44 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

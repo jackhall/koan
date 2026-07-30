@@ -54,14 +54,8 @@ fn number_ieee_semantics() {
 fn string_bool_null_scalars() {
     let types = TypeRegistry::new();
     let s = KObject::KString("a");
-    assert_eq!(
-        s.value_equal(&KObject::KString("a"), &types),
-        Ok(true)
-    );
-    assert_eq!(
-        s.value_equal(&KObject::KString("b"), &types),
-        Ok(false)
-    );
+    assert_eq!(s.value_equal(&KObject::KString("a"), &types), Ok(true));
+    assert_eq!(s.value_equal(&KObject::KString("b"), &types), Ok(false));
     assert_eq!(
         KObject::Bool(true).value_equal(&KObject::Bool(true), &types),
         Ok(true)
@@ -158,38 +152,26 @@ fn dict_key_and_value_equality() {
     container_door!(_storage, door);
     let a = dict(
         door,
-        vec![
-            (KKey::String("x"), num(1.0)),
-            (KKey::String("y"), num(2.0)),
-        ],
+        vec![(KKey::String("x"), num(1.0)), (KKey::String("y"), num(2.0))],
         &types,
     );
     let b = dict(
         door,
-        vec![
-            (KKey::String("y"), num(2.0)),
-            (KKey::String("x"), num(1.0)),
-        ],
+        vec![(KKey::String("y"), num(2.0)), (KKey::String("x"), num(1.0))],
         &types,
     );
     assert_eq!(a.value_equal(&b, &types), Ok(true));
 
     let missing_key = dict(
         door,
-        vec![
-            (KKey::String("x"), num(1.0)),
-            (KKey::String("z"), num(2.0)),
-        ],
+        vec![(KKey::String("x"), num(1.0)), (KKey::String("z"), num(2.0))],
         &types,
     );
     assert_eq!(a.value_equal(&missing_key, &types), Ok(false));
 
     let diff_value = dict(
         door,
-        vec![
-            (KKey::String("x"), num(1.0)),
-            (KKey::String("y"), num(9.0)),
-        ],
+        vec![(KKey::String("x"), num(1.0)), (KKey::String("y"), num(9.0))],
         &types,
     );
     assert_eq!(a.value_equal(&diff_value, &types), Ok(false));
@@ -202,10 +184,7 @@ fn dict_length_mismatch_is_false() {
     let a = dict(door, vec![(KKey::String("x"), num(1.0))], &types);
     let b = dict(
         door,
-        vec![
-            (KKey::String("x"), num(1.0)),
-            (KKey::String("y"), num(2.0)),
-        ],
+        vec![(KKey::String("x"), num(1.0)), (KKey::String("y"), num(2.0))],
         &types,
     );
     assert_eq!(a.value_equal(&b, &types), Ok(false));

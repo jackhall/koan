@@ -11,27 +11,18 @@ fn hash_of(k: &KKey) -> u64 {
 
 #[test]
 fn distinct_strings_hash_differently() {
-    assert_ne!(
-        hash_of(&KKey::String("a")),
-        hash_of(&KKey::String("b"))
-    );
+    assert_ne!(hash_of(&KKey::String("a")), hash_of(&KKey::String("b")));
 }
 
 #[test]
 fn equal_strings_hash_equal() {
-    assert_eq!(
-        hash_of(&KKey::String("a")),
-        hash_of(&KKey::String("a"))
-    );
+    assert_eq!(hash_of(&KKey::String("a")), hash_of(&KKey::String("a")));
     assert_eq!(KKey::String("a"), KKey::String("a"));
 }
 
 #[test]
 fn number_and_string_with_same_text_differ() {
-    assert_ne!(
-        hash_of(&KKey::Number(1.0)),
-        hash_of(&KKey::String("1"))
-    );
+    assert_ne!(hash_of(&KKey::Number(1.0)), hash_of(&KKey::String("1")));
     assert_ne!(KKey::Number(1.0), KKey::String("1"));
 }
 
