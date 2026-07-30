@@ -124,21 +124,21 @@ impl<'b, W: StorageProfile> BumpPlacement<'b, W> {
     /// });
     /// ```
     pub fn value<T: Copy>(self, value: T) -> &'b T {
-        self.handle.region().alloc_side_value(value)
+        self.handle.region().bump_value(value)
     }
 
     /// Copy a `Copy` slice into the region and hand back the co-located `&'b [T]` — the shape an
     /// operator group's member block or an expression's part list takes. Same `T: Copy` rationale as
     /// [`value`](Self::value).
     pub fn slice<T: Copy>(self, items: &[T]) -> &'b [T] {
-        self.handle.region().alloc_side(items)
+        self.handle.region().bump_slice(items)
     }
 
     /// Copy `text` into the region and hand back the co-located `&'b str`. A `str` is a slice of
     /// `Copy` bytes under a UTF-8 invariant, so it carries no destructor either and needs no bound to
     /// say so.
     pub fn text(self, text: &str) -> &'b str {
-        self.handle.region().alloc_side_str(text)
+        self.handle.region().bump_text(text)
     }
 }
 

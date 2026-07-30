@@ -12,12 +12,12 @@
 //! `for<'b>` brand by the library's construction combinators — so a bare `&Region` has no allocation
 //! surface at all.
 //!
-//! Beside the typed cells a region holds a **bump** ([`side`](Region::side)), the storage home for
+//! Beside the typed cells a region holds a **bump** ([`bump`](Region::bump)), the storage home for
 //! any `Drop`-free value family that names the region's own lifetime. It routes no erasure at all —
 //! the allocator is lifetime-free, so `'a` enters only at the allocating call — which is what lets
 //! a bumped value hold an `&'a` back into its own region with no `AuditedStored` residence audit.
-//! The library writes its own side data there ([`alloc_side`](Region::alloc_side) and its siblings,
-//! all crate-private); an embedder reaches it only through the public bump door
+//! The library bumps its own container metadata there ([`bump_slice`](Region::bump_slice) and its
+//! siblings, all crate-private); an embedder reaches it only through the public bump door
 //! ([`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)), which composes the
 //! stored value's reach in the same call.
 //!
@@ -178,9 +178,9 @@ pub struct Region<W: StorageProfile> {
     /// with no replacement.
     retained_descriptions: RefCell<HashSet<usize>>,
     /// The region's **bump**: the storage home for every `Drop`-free value that names the region's
-    /// own lifetime. Two kinds of writer reach it — the library's own side data (a
+    /// own lifetime. Two kinds of writer reach it — the library's own container metadata (a
     /// [`Sectioned`](super::Sectioned) container's run partition and cell index block, through the
-    /// crate-private [`alloc_side`](Self::alloc_side) family) and an embedder converting a
+    /// crate-private [`bump_slice`](Self::bump_slice) family) and an embedder converting a
     /// `Drop`-free value family, which reaches it through the public bump door
     /// ([`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)) and never
     /// directly. Bumped rather than arena'd because the allocator itself is lifetime-free, so `'a`
@@ -200,7 +200,7 @@ pub struct Region<W: StorageProfile> {
     /// Occupancy is one figure for the whole bump ([`bump_bytes`](Self::bump_bytes)) — there is no
     /// per-writer breakdown, because the copy-versus-pin decision reads a region's total against a
     /// candidate value's own copy size and never needs one.
-    side: Bump,
+    bump: Bump,
     /// The region's **union bundle**: one deduped [`PinBundle`] owning a pin for every region
     /// anything resident here reaches, retained for the region's whole life. It is the liveness home
     /// for a value **adopted** copy-free into this region ([`Region::retain_reach`], routed by
@@ -245,7 +245,7 @@ impl<W: StorageProfile> Region<W> {
             membership: RefCell::new(Vec::new()),
             reach_table: FrozenMap::new(),
             retained_descriptions: RefCell::new(HashSet::new()),
-            side: Bump::new(),
+            bump: Bump::new(),
             retained_reach: RefCell::new(PinBundle::empty()),
             host,
         }
@@ -314,31 +314,31 @@ impl<W: StorageProfile> Region<W> {
     /// the `&'a self` borrow is what keeps the chunk alive for the returned slice, exactly as it does
     /// for [`alloc_resident`](Self::alloc_resident), with no lifetime retype needed at all — the
     /// bump hands back `T` at whatever lifetime `T` already carried.
-    pub(crate) fn alloc_side<'a, T: Copy>(&'a self, items: &[T]) -> &'a [T] {
-        self.side.alloc_slice_copy(items)
+    pub(crate) fn bump_slice<'a, T: Copy>(&'a self, items: &[T]) -> &'a [T] {
+        self.bump.alloc_slice_copy(items)
     }
 
-    /// [`alloc_side`](Self::alloc_side) for a single `Copy` value — same bump, same `T: Copy`
+    /// [`bump_slice`](Self::bump_slice) for a single `Copy` value — same bump, same `T: Copy`
     /// rationale, same absence of a lifetime retype. Hands back a **shared** `&'a T`, never the
     /// `&mut` the bump itself returns: a bumped value is region state a holder names, so no writer
     /// gets exclusive access to it after the allocating call.
-    pub(crate) fn alloc_side_value<T: Copy>(&self, value: T) -> &T {
-        self.side.alloc(value)
+    pub(crate) fn bump_value<T: Copy>(&self, value: T) -> &T {
+        self.bump.alloc(value)
     }
 
-    /// [`alloc_side`](Self::alloc_side) for text — a `str` is a `Copy`-element slice with a
+    /// [`bump_slice`](Self::bump_slice) for text — a `str` is a `Copy`-element slice with a
     /// UTF-8 invariant, so it carries no destructor either and needs no bound to say so.
-    pub(crate) fn alloc_side_str<'a>(&'a self, text: &str) -> &'a str {
-        self.side.alloc_str(text)
+    pub(crate) fn bump_text<'a>(&'a self, text: &str) -> &'a str {
+        self.bump.alloc_str(text)
     }
 
     /// The region's bump occupancy, in **total live bytes** — every chunk the bump currently holds,
     /// including the padding and the unused tail of the newest chunk, which is what
     /// `bumpalo::Bump::allocated_bytes` reports. It is a whole-region figure: there is no per-family
     /// or per-writer breakdown, because the copy-versus-pin decision this exists to serve reads a
-    /// region's total against a candidate value's own copy size (see the [`side`](Self::side) field).
+    /// region's total against a candidate value's own copy size (see the [`bump`](Self::bump) field).
     pub fn bump_bytes(&self) -> usize {
-        self.side.allocated_bytes()
+        self.bump.allocated_bytes()
     }
 
     /// Fold an owning [`PinBundle`] into the region's union bundle, retained for the region's whole
