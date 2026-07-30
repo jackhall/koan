@@ -19,6 +19,16 @@ unsafe impl Reattachable for RefFamily {
     type At<'r> = &'r u32;
 }
 
+/// A text carrier family: `&'r str` — the shape a bump-stored string takes. It has **no**
+/// [`Stored`] impl and no [`AuditedStored`] impl on purpose: the bump door
+/// ([`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)) needs neither, which
+/// is what its doctests demonstrate.
+pub struct StrFamily;
+// SAFETY: `&'r str` is one type generic only in `'r` (a fat pointer, layout-invariant).
+unsafe impl Reattachable for StrFamily {
+    type At<'r> = &'r str;
+}
+
 /// An invariant carrier family: `Cell<&'r u32>`.
 pub struct InvFamily;
 // SAFETY: `Cell<&'r u32>` is one type generic only in `'r`.

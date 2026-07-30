@@ -1,0 +1,309 @@
+//! The bump-door slate: what [`FoldedPlacement::fold_and_bump`] composes, what it retains, and what
+//! it costs in bytes — over a library-only profile with an **empty family list**, which is the
+//! acceptance criterion made observable. Nothing here declares a [`Stored`] impl, an
+//! [`AuditedStored`] impl or a residence audit, yet a value holding an `&'b` back into its own
+//! region stores fine.
+//!
+//! Reach counts are read as deltas off the thread-local [`RegionMetrics`], scoped so a test's setup
+//! mints land outside its measured window (mirroring the sectioned slate).
+
+use std::ptr;
+use std::rc::Rc;
+
+use super::super::*;
+
+/// The profile the bump slate runs over: **no families at all**. A region still holds its bump, its
+/// reach side table and its union bundle, which is everything the door touches.
+struct BumpProfile;
+
+impl StorageProfile for BumpProfile {
+    type Families = ();
+    type FrameOwner = RegionHost<BumpProfile>;
+}
+
+type BumpFrame = RegionHost<BumpProfile>;
+
+/// The operand / product family: text living in a region's bump.
+struct WordFamily;
+
+/// A value that holds an `&'r` **back into its own region** — the shape the typed cells cannot store
+/// without erasing the borrow and auditing it back, and the bump stores with neither.
+struct SpanFamily;
+
+reattachable! {
+    WordFamily => &'r str,
+    SpanFamily => &'r (&'r str, usize),
+}
+
+fn frame() -> Rc<BumpFrame> {
+    RegionHost::fresh(None)
+}
+
+/// The reach counters' movement across `body` — a delta rather than a [`reset_region_metrics`]
+/// window, whose zeroing of the live-region gauge the test's own frames would underflow on drop.
+fn reach_delta<R>(body: impl FnOnce() -> R) -> (R, RegionMetrics) {
+    let before = region_metrics();
+    let result = body();
+    let after = region_metrics();
+    (
+        result,
+        RegionMetrics {
+            reach_interned: after.reach_interned - before.reach_interned,
+            reach_intern_hits: after.reach_intern_hits - before.reach_intern_hits,
+            reach_retention_folds: after.reach_retention_folds - before.reach_retention_folds,
+            ..RegionMetrics::default()
+        },
+    )
+}
+
+/// An operand carrier: `text` living in `home`'s region, its borrows reaching every frame in
+/// `members`. Built through [`Opened::adopted`] — the same constructor
+/// [`Sectioned::project`](super::super::Sectioned::project) parts a cell through — so the operand
+/// arrives exactly as a real one does.
+fn operand<'b>(
+    text: &'b str,
+    home: &'b Rc<BumpFrame>,
+    members: &[&Rc<BumpFrame>],
+) -> Opened<'b, WordFamily, Carrier<BumpFrame>> {
+    let bundles: Vec<PinBundle<BumpFrame>> = members
+        .iter()
+        .map(|m| PinBundle::singleton(Rc::clone(m)))
+        .collect();
+    let refs: Vec<&PinBundle<BumpFrame>> = bundles.iter().collect();
+    let (reach, _bundle) = ReachDescription::mint(RegionHandle::from_owner(&**home), &refs);
+    Opened::adopted(text, Carrier::new(reach))
+}
+
+/// The door, over a forged placement — a unit test has no enclosing fold engine to mint one.
+fn placement(dest: &Rc<BumpFrame>) -> FoldedPlacement<'_, BumpProfile> {
+    FoldedPlacement::forge_for_test(RegionHandle::from_owner(&**dest))
+}
+
+/// Whether `description`'s members are exactly `expected`, compared by owner identity.
+fn members_are(description: &ReachDescription<BumpFrame>, expected: &[&Rc<BumpFrame>]) -> bool {
+    let members = description.members();
+    members.len() == expected.len()
+        && expected
+            .iter()
+            .all(|want| members.iter().any(|got| Rc::ptr_eq(got, want)))
+}
+
+/// A door call with no operands: the product's reach is empty *structurally* — there is no coverage
+/// claim for a call site to write — and its residence is still recorded.
+#[test]
+fn no_operands_yields_empty_reach_hosted_in_the_destination() {
+    let dest = frame();
+    let product = placement(&dest).fold_and_bump::<WordFamily, WordFamily, BumpFrame>(
+        &[],
+        |bump, operands| {
+            assert!(operands.is_empty(), "no operands were passed");
+            bump.text("koan")
+        },
+    );
+
+    assert_eq!(product.value(), "koan");
+    assert!(!product.has_reach_members(), "nothing composed in");
+    assert!(product.with_home_region(|home| ptr::eq(home, dest.region())));
+    assert_eq!(
+        dest.region().retained_reach_len(),
+        0,
+        "an empty reach retains nothing"
+    );
+}
+
+/// An operand living somewhere else contributes its own members **and** its home — nothing else
+/// would pin the region it lives in — and the destination's union bundle grows to own both.
+#[test]
+fn a_foreign_operand_contributes_its_members_and_its_home() {
+    let dest = frame();
+    let source = frame();
+    let member = frame();
+    let word = operand("in-flight", &source, &[&member]);
+
+    let product = placement(&dest)
+        .fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[&word], |bump, operands| {
+            bump.text(operands[0])
+        });
+
+    assert_eq!(product.value(), "in-flight");
+    assert!(product.with_reach(|reach| members_are(reach, &[&source, &member])));
+    assert!(
+        product.with_home_region(|home| ptr::eq(home, dest.region())),
+        "the product lives where it was minted"
+    );
+    assert_eq!(
+        dest.region().retained_reach_len(),
+        2,
+        "the destination owns a pin on each region the product reaches"
+    );
+}
+
+/// The run-level self rule: an operand already resident in the destination is covered by the
+/// destination's own liveness, so its home is **not** folded in — while its own members still are.
+#[test]
+fn a_co_resident_operand_does_not_name_the_destination() {
+    let dest = frame();
+    let member = frame();
+    let word = operand("resident", &dest, &[&member]);
+
+    let product = placement(&dest)
+        .fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[&word], |bump, operands| {
+            bump.text(operands[0])
+        });
+
+    assert!(product.with_reach(|reach| members_are(reach, &[&member])));
+    assert!(
+        !product.reach_covers(dest.region()),
+        "living in the destination is not borrowing into it"
+    );
+    assert!(!product.borrows_home());
+}
+
+/// Two operands compose as a union under outer-chain subsumption: a member kept alive by another
+/// member's owner chain is dropped.
+#[test]
+fn two_operands_compose_under_subsumption() {
+    let dest = frame();
+    let outer = frame();
+    let inner = RegionHost::<BumpProfile>::fresh(Some(Rc::clone(&outer)));
+    let left = operand("left", &dest, &[&inner]);
+    let right = operand("right", &dest, &[&outer]);
+
+    let product = placement(&dest)
+        .fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[&left, &right], |bump, operands| {
+            bump.text(&format!("{}+{}", operands[0], operands[1]))
+        });
+
+    assert_eq!(product.value(), "left+right");
+    assert!(
+        product.with_reach(|reach| members_are(reach, &[&inner])),
+        "the inner frame's chain already pins the outer one, so the outer member is subsumed"
+    );
+    assert!(
+        product.with_reach(|reach| reach.pins_region(outer.region())),
+        "and the surviving member genuinely reports it pinned"
+    );
+}
+
+/// A second door call over the same reach is an **intern hit**: the description already exists in
+/// the destination, and the region's union already pins its members, so nothing folds twice.
+#[test]
+fn a_repeat_reach_interns_and_folds_no_second_retention() {
+    let dest = frame();
+    let source = frame();
+    let word = operand("shared", &source, &[]);
+
+    let (_first, first_metrics) = reach_delta(|| {
+        placement(&dest)
+            .fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[&word], |bump, operands| {
+                bump.text(operands[0])
+            });
+    });
+    assert_eq!(first_metrics.reach_interned, 1);
+    assert_eq!(first_metrics.reach_retention_folds, 1);
+
+    let (_second, second_metrics) = reach_delta(|| {
+        placement(&dest)
+            .fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[&word], |bump, operands| {
+                bump.text(operands[0])
+            });
+    });
+    assert_eq!(second_metrics.reach_intern_hits, 1);
+    assert_eq!(second_metrics.reach_interned, 0);
+    assert_eq!(
+        second_metrics.reach_retention_folds, 0,
+        "the region already pins everything this description names"
+    );
+    assert_eq!(dest.region().retained_reach_len(), 1);
+}
+
+/// Occupancy is a whole-region figure that only ever grows: zero before anything is bumped, positive
+/// after, strictly larger once an allocation outgrows the current chunk — and untouched by a door
+/// call that bumps nothing.
+#[test]
+fn bump_bytes_reports_total_live_bytes() {
+    let dest = frame();
+    assert_eq!(dest.region().bump_bytes(), 0, "nothing bumped yet");
+
+    let after_value = {
+        placement(&dest).fold_and_bump::<SpanFamily, WordFamily, BumpFrame>(&[], |bump, _| {
+            bump.value(("koan", 4usize))
+        });
+        dest.region().bump_bytes()
+    };
+    assert!(after_value > 0, "a bumped value occupies a chunk");
+
+    let after_slice = {
+        placement(&dest).fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |bump, _| {
+            let block: Vec<u64> = (0..4096).collect();
+            let _stored: &[u64] = bump.slice(&block);
+            "done"
+        });
+        dest.region().bump_bytes()
+    };
+    assert!(
+        after_slice > after_value,
+        "an allocation past the current chunk grows the total"
+    );
+
+    let after_text = {
+        placement(&dest)
+            .fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |bump, _| bump.text("tail"));
+        dest.region().bump_bytes()
+    };
+    assert!(after_text >= after_slice, "occupancy never shrinks");
+
+    // A door call that bumps nothing — the constructor returns owned `'static` data — costs no bytes.
+    placement(&dest).fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |_bump, _| "literal");
+    assert_eq!(dest.region().bump_bytes(), after_text);
+}
+
+/// The product rests like any other open: [`Opened::reseal`] and re-open round-trip both facts the
+/// carrier holds — what the value reaches, and where it lives.
+#[test]
+fn the_product_reseals_and_reopens_with_its_pairing_intact() {
+    let dest = frame();
+    let source = frame();
+    let member = frame();
+    let word = operand("travelling", &source, &[&member]);
+
+    let product = placement(&dest)
+        .fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[&word], |bump, operands| {
+            bump.text(operands[0])
+        });
+
+    let resealed = product.reseal();
+    let reopened = resealed.open_at(&dest);
+    assert_eq!(reopened.value(), "travelling");
+    assert!(reopened.reach_covers(member.region()));
+    assert!(reopened.reach_covers(source.region()));
+    assert!(reopened.with_home_region(|home| ptr::eq(home, dest.region())));
+}
+
+/// **The acceptance criterion, made observable.** A value stored through the door holds an `&'b`
+/// into the very region it lives in. There is no [`AuditedStored`] impl anywhere in this module and
+/// [`BumpProfile`] declares no family at all, so no residence audit ran — the bump needs none,
+/// because it erases nothing.
+#[test]
+fn a_stored_value_may_borrow_its_own_region_with_no_residence_audit() {
+    let dest = frame();
+
+    let span = placement(&dest).fold_and_bump::<SpanFamily, WordFamily, BumpFrame>(
+        &[],
+        |bump, _operands| {
+            // The text lands in `dest`'s bump, and the pair stored beside it borrows straight back
+            // into that same region.
+            let text: &str = bump.text("self-referential");
+            bump.value((text, text.len()))
+        },
+    );
+
+    let (text, length) = *span.value();
+    assert_eq!(text, "self-referential");
+    assert_eq!(length, "self-referential".len());
+    assert!(
+        !span.has_reach_members(),
+        "borrowing its own region is residence, not reach"
+    );
+    assert!(span.with_home_region(|home| ptr::eq(home, dest.region())));
+}
