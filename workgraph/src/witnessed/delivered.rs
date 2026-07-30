@@ -128,6 +128,39 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
         self.cell
     }
 
+    /// Drop the delivered value **to rest** in `dest`'s region (`Delivered → Sealed`): duplicate the
+    /// dormant carrier and lodge this envelope's whole coverage — the value's home among its
+    /// members — in `dest`'s union bundle, retained for that region's life. The returned [`Sealed`]
+    /// is pure data: `Copy` and `Drop`-free whenever its family and witness are, so it rests inside
+    /// an embedder's own `Copy` value while the pins that keep its pointee alive live one level
+    /// down, in the region.
+    ///
+    /// Fused so the two cannot be split: a caller that received the cell and the coverage separately
+    /// could store the cell and drop the pins, and every later read of it would dangle. Here the
+    /// only way to obtain the cell is to have already lodged its coverage, so any read under a hold
+    /// on `dest`'s region — [`Sealed::open_with`], or an [`Opened`] at `dest`'s own lifetime — is
+    /// covered by construction, for as long as that region lives.
+    ///
+    /// Distinct from [`adopt`](Self::adopt), which *mints* the value's reach into `dest` and hands
+    /// the owned bundle back to a holder that will drop it at scope death: nothing is minted here
+    /// and the value keeps referencing the description its producer stamped, so this is the door for
+    /// a cell whose reach a later composition reads rather than re-homes. The envelope is borrowed,
+    /// not consumed — a producer's value fans out to several resting cells, each duplicate taking
+    /// its own `Rc` on every pinned region.
+    ///
+    /// Retention widens to the region's life: what an envelope released when it dropped is now held
+    /// until `dest`'s region dies. That is the price of a `Drop`-free resting cell.
+    pub fn rest_in<'d, P>(&self, dest: RegionHandle<'d, P>) -> Sealed<T, W>
+    where
+        P: StorageProfile<FrameOwner = F>,
+        Erased<T>: Copy,
+        W: Clone,
+    {
+        let (cell, coverage) = self.duplicate().into_parts();
+        dest.retain_reach(coverage);
+        cell
+    }
+
     /// Re-family the delivered value **in place**: re-anchor it under the envelope's own pins at a
     /// `for<'b>` brand, project it with `f`, and re-erase. Nothing moves and nothing is minted — the
     /// envelope keeps its residence, its coverage and its witness, which stay correct because `f`

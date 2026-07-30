@@ -2,7 +2,8 @@
 //! home riding a delivery envelope's pins as an ordinary member, the copy-versus-pin choice a
 //! relocation site makes through its source-pins claim, envelope duplication, the
 //! [`ReachDescription::mint`] self rule, the three carrier states and the transform verbs between
-//! them, and the [`StepContext::alloc_with`] finish-surface fold. Everything routes production
+//! them, the drop to rest that lodges a value's coverage in a region so its cell rides as plain
+//! data, and the [`StepContext::alloc_with`] finish-surface fold. Everything routes production
 //! verbs over a library-only profile ([`ShapeProfile`] /
 //! `RegionHost` frames, `u32` content) — no embedder type. Each test frees every frame handle a
 //! regression would leave the value dangling into, then reads the value back: a use-after-free
@@ -534,4 +535,86 @@ fn project_refamilies_under_the_envelopes_own_pins() {
         element.project::<RefValFamily>(|(left, _right), _token| left);
     drop(producer);
     assert_eq!(projected.open(|r| *r), 31);
+}
+
+/// The resting cell an embedder stores inside its own bit-copy value — an expression part holding a
+/// resolved sub-result. Deriving `Copy` here is the whole point: it compiles only because the seal
+/// is `Copy`, and the assert below pins that the part carries no `Drop` glue, so region death runs
+/// nothing per cell.
+#[derive(Clone, Copy)]
+struct RestingPart(Sealed<RefValFamily, Carrier<ShapeFrame>>);
+
+const _: () = assert!(
+    !std::mem::needs_drop::<RestingPart>(),
+    "a resting cell is pure data — its pins live one level down, in the region"
+);
+
+/// **`rest_in` — the drop to rest, with the pins lodged one level down.** The envelope's whole
+/// coverage (its value's home among the members) goes into the destination region's union bundle,
+/// and what comes back is a bit-copy cell owning nothing. Every handle the value's backing came
+/// from is dropped before the read, so the retained bundle is the only pin left: a `rest_in` that
+/// lodged nothing is a use-after-free here. Fanning a second cell out of the same envelope costs no
+/// extra `Rc` — the union dedupes the region it already pins.
+#[test]
+fn rest_in_lodges_coverage_for_the_destination_regions_life() {
+    let producer = frame();
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
+        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 41), &producer),
+        Rc::clone(&producer),
+        StepCoverage::empty(),
+    );
+    let dest = frame();
+
+    let cell: Sealed<RefValFamily, Carrier<ShapeFrame>> =
+        element.rest_in(RegionHandle::from_owner(&*dest));
+    let retained = Rc::strong_count(&producer);
+    let twin = element.rest_in(RegionHandle::from_owner(&*dest));
+    assert_eq!(
+        Rc::strong_count(&producer),
+        retained,
+        "a second resting cell over the same region dedupes into the union bundle"
+    );
+
+    drop(element);
+    drop(producer);
+
+    let pin = StepCoverage::<ShapeFrame>::of(Rc::clone(&dest));
+    assert_eq!(
+        cell.open_with(&pin, |r| *r),
+        41,
+        "the region's retained bundle is the sole pin left"
+    );
+    assert_eq!(twin.open_with(&pin, |r| *r), 41);
+}
+
+/// **A resting cell travels as plain data.** Copying it is a bit-copy of the erased value and the
+/// reference-only carrier — no refcount traffic, no clone — so an embedder duplicates it into as
+/// many parts as it likes without touching the ownership tier. Each copy still reads under the
+/// region's own hold, after every handle the backing came from is gone.
+#[test]
+fn a_resting_cell_copies_as_plain_data() {
+    let producer = frame();
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
+        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 47), &producer),
+        Rc::clone(&producer),
+        StepCoverage::empty(),
+    );
+    let dest = frame();
+    let part = RestingPart(element.rest_in(RegionHandle::from_owner(&*dest)));
+
+    let before = Rc::strong_count(&producer);
+    let copies = [part, part, part];
+    assert_eq!(
+        Rc::strong_count(&producer),
+        before,
+        "copying a resting cell moves no ownership — the pins stay in the region"
+    );
+
+    drop(element);
+    drop(producer);
+
+    let pin = StepCoverage::<ShapeFrame>::of(Rc::clone(&dest));
+    for copy in copies {
+        assert_eq!(copy.0.open_with(&pin, |r| *r), 47);
+    }
 }
