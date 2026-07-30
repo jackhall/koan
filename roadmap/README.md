@@ -58,6 +58,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [USING surfaces module type members](type_language/using-type-members.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 - [Region-hosted operator groups](untyped_arena/region-hosted-operator-groups.md)
-- [Region-store string values](untyped_arena/region-store-strings.md)
+- [Region-store expression parts](untyped_arena/region-store-expressions.md)
 - [Residence-audit retirement](untyped_arena/residence-audit-retirement.md)
 

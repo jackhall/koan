@@ -78,18 +78,30 @@ it owns. "`Drop`-free" has no expressible bound, so every placement primitive
 carries `T: Copy` instead — the honest approximation, and the bound that keeps a
 sectioned container `Copy` and free at region teardown.
 
-The embedder's path in is a single door,
-[`FoldedPlacement::fold_and_bump`](../src/witnessed/bump.rs), hung on the fold
-engines' placement capability so its brand `'b` is the enclosing fold's, not one
-the door mints. It takes its operands as carriers, composes and retains their
-reach into the destination *before* running the caller's constructor, and hands
-back one bundled `Opened` — never a bare region reference and never a
-`(value, reach)` pair, so reach stays a consequence of which carriers were passed
-in rather than a claim a call site writes. The constructor writes through a
-`BumpPlacement`, minted only inside a door call, whose primitives are std shapes
-only — a `Copy` value, a `Copy` slice, a `str` — which is what keeps the library
-free of any per-workload verb. A call with no operands is the bytes-only case: its
-reach is empty structurally. Occupancy is one whole-region figure,
+The embedder's path in is two doors, split by whether the bumped value has
+operands whose reach the product must carry.
+
+[`FoldedPlacement::fold_and_bump`](../src/witnessed/bump.rs) is the reach-bearing
+one, hung on the fold engines' placement capability so its brand `'b` is the
+enclosing fold's, not one the door mints. It takes its operands as carriers,
+composes and retains their reach into the destination *before* running the
+caller's constructor, and hands back one bundled `Opened` — never a bare region
+reference and never a `(value, reach)` pair, so reach stays a consequence of
+which carriers were passed in rather than a claim a call site writes. The
+constructor writes through a `BumpPlacement`, minted only inside a door call,
+whose primitives are std shapes only — a `Copy` value, a `Copy` slice, a `str` —
+which is what keeps the library free of any per-workload verb.
+
+[`RegionHandle::bump_text`](../src/witnessed/region.rs) is the bytes-only one,
+for a `Drop`-free byte run wanted at the handle's own frame lifetime rather than
+confined to a fold closure. Bare bytes have no operands and no reach to compose,
+so the fold machinery has nothing to do and no call site can claim anything
+wrongly; what is left is an ordinary borrow, the returned `&'a str` against the
+`&'a Region` the handle holds, which the borrow checker enforces with no audit
+and no `unsafe`. Storing the *value* built around those bytes is gated where it
+always was — `alloc_resident`'s `'static` bound, the family audit on
+`alloc_resident_checked`, or the rank-2 brand on `alloc_resident_folded` — none
+of which this door touches. Occupancy is one whole-region figure,
 [`Region::bump_bytes`](../src/witnessed/region.rs) — **live bytes**, summed over
 what each allocating call actually stored, not the allocator's reserved chunk
 capacity, which would put a whole chunk's floor under a small region. There is no

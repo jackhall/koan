@@ -8,8 +8,14 @@ which also defines *storage family*; other terms of art are in that doc's
 **Problem.** The value-substrate families still held in typed sub-arenas — record, list
 and dict payloads, tagged/wrapped payload slots — run `Drop` at region death even though
 their stored (`'static`) form owns nothing, so teardown walks slots running destructors.
-Strings, expression parts and operator groups reach the bump under their own items and
-are not in that residue. The residual dest-only
+A substrate's **index** metadata is droppy for a second reason: a dict's key→index
+`hashbrown` table and a record's field-name table
+([`ContainerSubstrate`](../../src/machine/model/values/container_substrate.rs)) are
+default-`Global` heap allocations the substrate owns, and a record's field names are
+owned `String`s besides — `Record<V>` is shared with the type registry, where owned keys
+are correct, so the conversion is a change of index representation rather than of the
+value family. Strings, expression parts and operator groups reach the bump under their
+own items and are not in that residue. The residual dest-only
 [`resident_in_visiting`](../../src/machine/model/values/kobject.rs) splice-free gate
 also persists beside the construction doors that already enforce residence at
 compile time.
@@ -20,6 +26,10 @@ compile time.
   per-region bump: the remaining value substrates — record, list and dict payloads,
   tagged/wrapped payload slots — join the strings, expression parts and operator groups
   already hosted there, and no typed sub-arena holds a `Drop`-free family.
+- A substrate's index metadata is bump-hosted too: a dict's key→index table and a
+  record's field-name table are `Copy` bump-hosted structures (a sorted slice of
+  `(&'a str, usize)` entries for the name-keyed ones), so no substrate owns a heap
+  allocation of its own.
 - Region death for those bytes is deallocation only — no per-slot `Drop` glue runs.
 - Families designed to own things — a `FrameSet`'s region holds — remain typed
   and droppy.

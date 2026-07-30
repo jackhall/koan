@@ -72,10 +72,9 @@ member keywords, which owns a heap table and runs `Drop`.
 
 ## Dependencies
 
-The member slice's element type follows whatever
-[region-store string values](region-store-strings.md) settles for tags and keys, but
-neither item blocks the other: a sorted slice of bump-hosted `&str` works before any
-interning decision.
+The member slice's element type is a bump-hosted `&'a str`, the representation tags and
+keys already take ([design/value-substrates.md § Sectioned reach](../../design/value-substrates.md#sectioned-reach)):
+a sorted slice of those, with no interning table behind it.
 
 **Requires:**
 

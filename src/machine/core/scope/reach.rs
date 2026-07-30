@@ -401,11 +401,13 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Rebuild a delivered value's substrate-carrier **projection** into this scope's region through
-    /// the fold door — the copy path for a region-resident substrate, which cannot be pointer-copied
-    /// past the checked residence audit. `project` selects what to copy; the chooser has already
-    /// vetted that it yields a substrate carrier ([`copy_object_into`] rebuilds the whole reachable
-    /// structure). The value relocates under the retention predicate's release-exact answer — a
+    /// Rebuild a delivered value's **projection** into this scope's region through the fold door —
+    /// the copy path for a value that needs a destination door
+    /// ([`KObject::needs_destination_door`]) rather than a pointer copy: a region-resident
+    /// substrate, or a bare `KString` whose bump-hosted bytes the copy must re-home. `project`
+    /// selects what to copy; the chooser has already vetted the shape ([`copy_object_into`]
+    /// rebuilds the whole reachable structure). The value relocates under the retention
+    /// predicate's release-exact answer — a
     /// plain-data rebuild releases the producer (which then frees), a rebuild still borrowing its
     /// home keeps it.
     ///

@@ -66,8 +66,10 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   preserves layers) constructors are door verbs, not a payload wrapper type.
 - `KFunction(&'a KFunction<'a>)` and `Module(&'a Module<'a>)` — bare borrows
   into their defining regions.
-- Scalars (`Number`, `Bool`, `Null`) are owned leaves. `KString` rides an
-  arena `&'a str`, and `KExpression`'s part vectors are arena slices
+- Scalars (`Number`, `Bool`, `Null`) are owned leaves. `KString` rides a
+  bump-hosted `&'a str` ([§ String residence](#string-residence)), as does a
+  `Tagged` discriminant and a `KKey::String` dict key; `KExpression`'s part
+  vectors are arena slices
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
 
 Each cell-bearing substrate is one index-generic **wrapper struct**,
@@ -173,15 +175,21 @@ needs both).
   source — never a subset walk over the container. A cell is `'a`-confined
   to its container's region until such a seam relocates it; the compiler
   forces the seam.
-- **Owned-only channels.** Scalars, strings, and type values are owned data
-  (a koan type value never embeds a value), so they always land in
-  empty-reach runs. **Dict keys are restricted to owned data** by language
-  rule — a function or module key is meaningless — enforced at the one site
-  that turns a carrier into a key on the dict door's own construction path
+- **Owned-only channels.** Scalars and type values are owned data (a koan
+  type value never embeds a value), so they always land in empty-reach runs.
+  A **string** lands in one too, by a different route: its bytes are a
+  region borrow, so the door re-bumps them into its own region before the
+  verdict is read ([§ String residence](#string-residence)) and the cell then
+  borrows nothing outside the container it is landing in. **Dict keys are
+  restricted to owned data** by language rule — a function or module key is
+  meaningless — enforced at the one site that turns a carrier into a key on
+  the dict door's own construction path
   ([`scalar_key`](../src/machine/execute/dispatch/literal.rs)), which rejects
   a carrier naming any reach member by its stored envelope: an O(1) check,
-  not a walk. `KKey` then admits only `String` / `Number` / `Bool`, so a
-  borrow-carrying key is unrepresentable downstream of that site.
+  not a walk. `KKey` then admits only `String` / `Number` / `Bool`, so a key
+  naming a substrate or a closure is unrepresentable downstream of that site,
+  and the one borrow a key does carry — a string's bytes — is re-bumped into
+  the dict's own region as the key table freezes.
 - **Memos are folds over runs.** Contains-borrows ⇔ any run's description
   is non-empty; borrows-home ⇔ any run names the home region; `copy_cost`
   is unchanged. Borrows-home is exact because of the **run-level self rule**
@@ -200,6 +208,46 @@ needs both).
 - **The value-level description stays.** Whole-value carriers (delivery
   envelopes, binding tables) keep their single stored description — the
   get-or-mint of the union over the value's runs, cheap under interning.
+
+## String residence
+
+Every string a value-family slot holds — a `KObject::KString`, a `Tagged`
+discriminant, a `KKey::String` dict key — is a `&'a str` bumped into the
+region the value lives in
+([`RegionBrand::alloc_text`](../src/machine/core/arena.rs), over workgraph's
+[`RegionHandle::bump_text`](../workgraph/src/witnessed/region.rs)). The slot
+owns no allocation, so it runs no destructor at region death and the bytes go
+with the bump's chunks; that is what makes the slot `Copy` and `deep_clone` a
+pointer copy for the string arm. There is no interning table: a run-global one
+is run-rooted state koan does not keep, and a per-region one is itself
+`Drop`-bearing state inside a region being driven `Drop`-free. Comparison and
+hashing stay `str` compares, so a key produced in one region matches a key
+produced in another by content.
+
+The bump keeps **no address table**, so nothing can ask which region a `&str`
+points into. One rule follows, and every string path is an instance of it:
+
+> A path that claims a region's **release** re-bumps the bytes at its
+> destination. A path that **pins** shares the pointer verbatim, under the
+> witness the enclosing fold already composed.
+
+Re-bumping is what makes the empty-reach verdict above honest: a string cell
+that named no region while still pointing into a retiring one would dangle with
+no fold able to rescue it, and no residence audit could catch it. So every
+substrate door re-homes a top-node string cell and every string dict key before
+the verdict is read, the tagged door re-homes its discriminant into the same
+region as its payload substrate, and the copy verb re-bumps at the destination —
+which is what keeps the relocation's release-exact answer exact. Pinning paths
+(a retaining adoption, a projection's `deep_clone`) share the pointer, covered
+by the reach that already names the producer region.
+
+Two gates keep a bare string off the paths that cannot honour the rule. A
+string is **not** a shallow scalar, so a string producer takes a fold door
+rather than the no-fold arm that rebuilds owned at `'static` — there is no
+`'static` rebuild to make. And the residence audit answers `false` for a
+string, so no bare string crosses a runtime-audited move-in; a copying adoption
+routes to the same rebuild-through-a-destination-door path a substrate carrier
+takes.
 
 ## Escape: pin by default
 
@@ -245,7 +293,10 @@ at the seam:
   the memo can never go stale, and because the copy verb rebuilds a shared
   subvalue once per reference, a priceable memoized sum is the copy's *exact*
   cost — no forwarding map, no walk.
-- **the region's allocated total** — its arenas already know their size.
+- **the region's allocated total** — its arenas already know their size, and
+  its bump reports its live occupancy
+  ([`Region::bump_bytes`](../workgraph/src/witnessed/region.rs)), so the string
+  bytes a pin would retain are in the denominator too.
 
 For a priceable value crossing out of its **own home region**, the rule is that
 ratio: copy when `copy_cost < α × region_allocated` — "this value is a small
@@ -333,6 +384,5 @@ the conversion slate; its `Requires` chain encodes the order:
 
 - [Residence-audit retirement](../roadmap/untyped_arena/residence-audit-retirement.md)
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
-- [Region-store string values](../roadmap/untyped_arena/region-store-strings.md)
 - [Region-store expression parts](../roadmap/untyped_arena/region-store-expressions.md)
 - [Drop-free region death](../roadmap/untyped_arena/drop-free-region-death.md)

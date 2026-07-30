@@ -88,9 +88,7 @@ pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mach
             return Action::done(Err(abstract_type_has_no_members(&name)));
         }
     }
-    Action::done(Err(KError::new(KErrorKind::UnboundName(
-        s_name.to_string(),
-    ))))
+    Action::done(Err(KError::new(KErrorKind::UnboundName(s_name))))
 }
 
 /// `ATTR <s:ProperType> <field:_>` — entry for a type-channel lhs, e.g. a first-class signature

@@ -45,8 +45,6 @@ wider than exact, the one cell family run exactness does not yet cover.
 
 - [The region bump door](../../workgraph/src/witnessed/bump.rs) — shipped substrate:
   `FoldedPlacement::fold_and_bump` is the public door spliced part slices land in.
-- [Region-store string values](region-store-strings.md) — expression parts embed
-  strings; project conversion order makes expressions the last substrate to move.
 
 **Unblocks:**
 
