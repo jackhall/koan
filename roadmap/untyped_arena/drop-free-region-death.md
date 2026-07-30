@@ -5,19 +5,21 @@ Capstone of the project — ships the shared untyped arena of
 which also defines *storage family*; other terms of art are in that doc's
 [§ Vocabulary](../../design/value-substrates.md#vocabulary).
 
-**Problem.** Every region storage family is a typed sub-arena whose slots run `Drop`
-at region death, even where the stored (`'static`) form owns nothing — there is no
-shared untyped arena for `Drop`-free families to migrate into, so region teardown
-walks slots running destructors. The residual dest-only
+**Problem.** The value-substrate families still held in typed sub-arenas — record, list
+and dict payloads, tagged/wrapped payload slots — run `Drop` at region death even though
+their stored (`'static`) form owns nothing, so teardown walks slots running destructors.
+Strings, expression parts and operator groups reach the bump under their own items and
+are not in that residue. The residual dest-only
 [`resident_in_visiting`](../../src/machine/model/values/kobject.rs) splice-free gate
 also persists beside the construction doors that already enforce residence at
 compile time.
 
 **Acceptance criteria.**
 
-- A shared untyped bump arena exists per region; every family whose stored
-  (`'static`) form is `Drop`-free lives in it — the value substrates: record, list,
-  and dict payloads, tagged/wrapped payload slots, strings, expression parts.
+- Every family whose stored (`'static`) form is `Drop`-free lives in the shared
+  per-region bump: the remaining value substrates — record, list and dict payloads,
+  tagged/wrapped payload slots — join the strings, expression parts and operator groups
+  already hosted there, and no typed sub-arena holds a `Drop`-free family.
 - Region death for those bytes is deallocation only — no per-slot `Drop` glue runs.
 - Families designed to own things — a `FrameSet`'s region holds — remain typed
   and droppy.
@@ -33,13 +35,13 @@ compile time.
 
 **Directions.**
 
-- *Arena granularity — open.* One untyped bump arena per region versus per-family
-  segments inside it; alignment handling and debuggability decide. A per-region
-  untyped bump already exists for `Copy` side data — the reach-run partitions and
-  cell index blocks a sectioned container names
-  ([`Region::alloc_side`](../../workgraph/src/witnessed/region.rs)) — so the
-  question is whether the value substrates share that one or take segments of
-  their own.
+- *Arena granularity — decided per
+  [region bump storage](../../workgraph/roadmap/region-bump-storage.md).* One bump per
+  region, shared with the `Copy` side data already living there — the reach-run
+  partitions and cell index blocks a sectioned container names
+  ([`Region::alloc_side`](../../workgraph/src/witnessed/region.rs)). No per-family
+  segments: the only occupancy figure anyone reads is the region's total live bytes,
+  which the copy-versus-pin decision weighs against a candidate value's own copy size.
 
 ## Dependencies
 

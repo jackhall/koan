@@ -13,24 +13,27 @@ see. `ScopeKind::Module` holds a second `Rc` clone of the same record
 ([scope.rs](../../src/machine/core/scope.rs)), so a `GROUP` body's scope owns a
 strong reference to data no region hosts, and `Scope::nearest_group_context` hands
 out a clone that outlives the borrow it came from — a resolved reference escaping a
-scope, which the carrier discipline exists to prevent everywhere else.
-`OperatorGroup` is lifetime-free owned data (a `HashSet<String>` of member keywords
-plus a `ReductionMode` whose combiner is a *symbol*, not a resolved function), so
-the `Rc` is sound today; the cost is structural rather than fault-capable. A
-`GROUP` declaration installs one entry per nonempty subset of its members — the
-per-group powerset — and each subset key clones the `Rc`, so registration cost is
-refcount traffic proportional to `2^n`, and region death frees none of it: the
-records die on the last `Rc` drop, on a schedule unrelated to the scope that
-declared them.
+scope, which the carrier discipline exists to prevent everywhere else. A `GROUP`
+declaration installs one entry per nonempty subset of its members — the per-group
+powerset — and each subset key clones the `Rc`, so registration cost is refcount
+traffic proportional to `2^n`, and region death frees none of it: the records die on
+the last `Rc` drop, on a schedule unrelated to the scope that declared them. The
+record's own shape blocks the move: `OperatorGroup` holds a `HashSet<String>` of
+member keywords, which owns a heap table and runs `Drop`.
 
 **Acceptance criteria.**
 
+- `OperatorGroup`'s member set is a sorted slice of bump-hosted keywords, probed by
+  binary search; the record is `Copy` and `Drop`-free.
+- `OperatorGroup` records live in a region's bump; no `Rc<OperatorGroup>` exists
+  in `src/`.
 - `Bindings.operators` maps a probe key to a sealed carrier plus a
   `BindingIndex`, the same entry shape the `data` and `functions` tables use.
-- `OperatorGroup` records live in a region's arena; no `Rc<OperatorGroup>` exists
-  in `src/`.
 - `Bindings` stays lifetime-free — the entry carries no region borrow, exactly as
   the other two tables' entries don't.
+- One allocation per `GROUP` backs every one of its powerset keys, so
+  `write_operator_group`'s cheap identity arm stays an address compare and the install
+  is allocation-free past the first key.
 - `ScopeKind::Module`'s group payload is a sealed carrier, and
   `Scope::nearest_group_context` answers under a pin rather than handing back a
   clone that outlives its borrow.
@@ -43,33 +46,40 @@ declared them.
 
 **Directions.**
 
-- Whether uniformity justifies the move — *open.* The record is lifetime-free by
-  construction (holding the combiner as a symbol is what keeps it so), so
-  region-hosting buys no reach proof the `Rc` lacks; the win is one ownership
-  regime and death tied to the declaring scope instead of to a refcount. The
-  counter-case is that an arena door exists solely for a record with no region
-  borrow — the exact reason the door was deleted when the `Rc` landed.
-  Settle this before plumbing: if the answer is no, the item closes as a
-  documented decision instead of shipping.
-- What the powerset keys share — *open.* Every subset key of one `GROUP` must
-  resolve to the same record. Options: (a) one region allocation, each key holding
-  a sealed carrier over the same pointee, so sharing is address identity as it is
-  for `Rc::ptr_eq` today; (b) one allocation per key with the upsert's structural
-  equality (`mode` + member set) as the sole identity rule, dropping `ptr_eq` from
-  `write_operator_group`. Recommended: (a) — it keeps the cheap identity arm and
-  makes the powerset install allocation-free past the first key.
-- Which region hosts a builtin group — *decided.* The run-global root scope's
+- *Whether the move is justified — decided.* Yes. An `OperatorGroup` is koan semantic
+  data, and koan semantic data lives in a region's bump arena, under one ownership
+  regime with death tied to the declaring scope rather than to a refcount.
+- *Member-set representation — decided.* A sorted slice, not a hash set. Member counts
+  are necessarily tiny — the powerset install is `2^n`, so ten members is already 1023
+  keys — and binary search beats hashing at that size. It also makes the upsert's
+  structural identity rule (`mode` plus member set) a slice compare, and each powerset
+  subset key a sorted sub-slice rather than a rebuilt set. An `elsa` frozen collection
+  is not an option for bump-hosted data: `FrozenIndexSet` owns an `IndexSet` inside an
+  `UnsafeCell` and runs `Drop`, which a bump never runs — elsa earns its place as a
+  `Region` *field* (the reach intern table), dropped by the region itself.
+- *What the powerset keys share — decided.* One region allocation, each key holding a
+  sealed carrier over the same pointee, so sharing is address identity exactly as
+  `Rc::ptr_eq` gives it today.
+- *Which region hosts a builtin group — decided.* The run-global root scope's
   region. `register_builtin_operator_groups`
   ([arithmetic.rs](../../src/builtins/arithmetic.rs)) seeds the comparison /
   additive / multiplicative groups into the root, which outlives every per-call
   region, so an inner scope's resolved carrier names an ordinary foreign member.
-- How `nearest_group_context` is consumed — *open.* Its caller is the `OP`
+- *How `nearest_group_context` is consumed — open.* Its caller is the `OP`
   declaration path, which reads the mode to admit a heterogeneous `->` and writes
   the member's registry entry. Options: a closure-taking `with_group_context`, or
   returning a sealed carrier the `OP` binder opens under the pin it already holds.
 
 ## Dependencies
 
-**Requires:** none — the sealed-carrier entry shape it joins has shipped.
+The member slice's element type follows whatever
+[region-store string values](region-store-strings.md) settles for tags and keys, but
+neither item blocks the other: a sorted slice of bump-hosted `&str` works before any
+interning decision.
+
+**Requires:**
+
+- [Region bump storage for embedder value families](../../workgraph/roadmap/region-bump-storage.md) —
+  the public bump door group records and member slices land in.
 
 **Unblocks:** none — leaf.
