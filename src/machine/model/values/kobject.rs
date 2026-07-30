@@ -837,10 +837,11 @@ pub(crate) enum RegionEscape {
 const ALPHA_DIVISOR: u64 = 4;
 
 /// The escape-seam copy-vs-pin decision for a top-level container `value` (whose cell substrate is
-/// `substrate`) crossing out of producer `host`. O(1) but for the one address-table membership scan
-/// (`owns_substrate`); the release claim on every copying arm is a stored read
-/// ([`retains_home`]). Generic over the substrate's cell payload `C`; only records instantiate it
-/// today. See design/value-substrates.md § Cost-driven copy.
+/// `substrate`) crossing out of producer `host`. O(1), every read a stored fact: the home-crossing
+/// test compares the home the substrate's own reach description records against `host` by region
+/// identity, and the release claim on every copying arm is a stored read ([`retains_home`]).
+/// Generic over the substrate's cell payload `C`; only records instantiate it today. See
+/// design/value-substrates.md § Cost-driven copy.
 pub(crate) fn copy_or_pin<C>(
     substrate: &ContainerSubstrate<'_, C>,
     value: &KObject<'_>,
@@ -866,7 +867,12 @@ pub(crate) fn copy_or_pin<C>(
         };
     }
 
-    let home_crossing = host.owns_substrate(substrate);
+    // The substrate's description records the region its storage lives in — which a pin-bind can
+    // separate from the residence of a wrapper value sharing the substrate. The bit read below is
+    // home-relative to the *substrate's* home, so it only prices a crossing out of that region.
+    let home_crossing = substrate
+        .reach()
+        .with_home_region(|home| std::ptr::eq(home, host));
     if !home_crossing {
         // Foreign crossing: pricing a copy-out at an intermediate host is region evacuation's job.
         return RegionEscape::Pin;

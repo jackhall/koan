@@ -140,6 +140,13 @@ impl<'a, C> ContainerSubstrate<'a, C> {
     /// home-relative query. Exact: a cell resident in this region contributes no home member (the
     /// run-level self rule at the alloc door), so a set bit means a genuine borrow leaf, which is
     /// precisely the gate the cost-driven copy decision reads.
+    ///
+    /// Home is the **substrate's** home — the region its storage and description live in, recorded
+    /// as the description's host. A pin-bind pointer-copies a wrapper value into another region
+    /// while it keeps sharing this substrate, so a wrapper's residence can differ; a consumer
+    /// asking a residence-relative question checks the two match first (as the cost decision's
+    /// home-crossing test does) or passes its region explicitly ([`Self::reach`] +
+    /// `pins_region`).
     pub fn borrows_home(&self) -> bool {
         self.reach.borrows_home()
     }

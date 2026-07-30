@@ -3,11 +3,11 @@
 Converts every composite value substrate to region-allocated, borrow-carried
 storage and drives regions toward `Drop`-free untyped bump arenas — the storage
 model pinned in [design/value-substrates.md](../../design/value-substrates.md).
-What it buys the language: one ownership regime with no per-value refcounts,
-O(1) escape (a region transfer is a refcount bump and a reach mint), a
-cost-driven copy that bounds pin retention, deallocation-only region death, and
-the deletion of the runtime residence audits in favor of compile-enforced
-construction doors.
+What it buys the language: one ownership regime with no per-value refcounts, a
+pinning escape (a region transfer is a refcount bump and a reach mint) with a
+cost-driven copy that bounds how many regions the pins retain, O(1)
+deallocation-only region death, and the deletion of the runtime residence
+audits in favor of compile-enforced construction doors.
 
 Read the design doc first: it pins the whole model and its
 [§ Vocabulary](../../design/value-substrates.md#vocabulary) defines the terms
@@ -18,6 +18,26 @@ of the index-generic `ContainerSubstrate<'a, C>`
 ([src/machine/model/values/container_substrate.rs](../../src/machine/model/values/container_substrate.rs))
 — is the shipped pathfinder — the door and pin pattern realized there is the
 pattern every later conversion copies.
+
+## Unplanned work
+
+Reach or shape derivation still living in koan `src/` that no item below owns
+retiring — candidates for a new item or for folding into an existing one.
+
+- `Scope::chain_reaches_region`
+  ([src/machine/core/scope/reach.rs](../../src/machine/core/scope/reach.rs))
+  answers "does this scope chain pin `region`?" by walking `ancestors()` and
+  comparing region pointers — a reach question answered by a graph walk, not a
+  stored fact. Callers: the cart check in
+  [src/machine/execute/runtime/submit.rs](../../src/machine/execute/runtime/submit.rs).
+- The per-cell `held_copy_cost` fold at every container door
+  ([src/machine/model/values/container_substrate.rs](../../src/machine/model/values/container_substrate.rs),
+  driven from `section_cells` in
+  [src/machine/model/values/kobject.rs](../../src/machine/model/values/kobject.rs))
+  is the remaining shape-driven derivation koan runs at construction — and the
+  only reason `section_cells` touches every cell beyond the verdict map. Storing
+  cost as a workgraph fact beside the run descriptions would reduce the door to
+  pure verdict reads.
 
 ## Next items
 
