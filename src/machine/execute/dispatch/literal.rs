@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::{FoldingBrand, FrameCoverage, KoanRegionExt, KoanStorageProfile};
+use crate::machine::core::{
+    FoldingBrand, FrameCoverage, KoanRegionExt, KoanStorageProfile, SubstrateDoor,
+};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
@@ -152,13 +154,17 @@ struct AggRow {
 
 /// Finish-side assemble hook: the resolved keys (empty unless the rows carry key slots) and the folded
 /// value cells become the aggregate object. Boxed higher-ranked so the record variant captures its
-/// field names and each shape builds its own `KObject` at the fold brand. Every shape opens the
-/// fold's own `FoldingBrand` as a
-/// [`resident_door`](crate::machine::core::FoldingBrand::resident_door) — the cells [`fold_cells`]
-/// pushed were each rebuilt at this very brand, so every one of them is destination-resident and the
-/// door needs no holder of its own.
+/// field names and each shape builds its own `KObject` at the substrate door. Most cells [`fold_cells`]
+/// pushed were rebuilt at this very brand, but a borrow leaf rides its source borrow verbatim, so the
+/// door carries the accumulator's own coverage as its holder — the pins every folded cell's reach was
+/// composed from.
 type AggAssemble = Box<
-    dyn for<'r> FnOnce(FoldingBrand<'r>, Vec<KKey>, Vec<Held<'r>>, &TypeRegistry) -> KObject<'r>,
+    dyn for<'r, 'h> FnOnce(
+        SubstrateDoor<'r, 'h>,
+        Vec<KKey>,
+        Vec<Held<'r>>,
+        &TypeRegistry,
+    ) -> KObject<'r>,
 >;
 
 impl<'step> KoanRuntime<'step> {
@@ -198,13 +204,17 @@ impl<'step> KoanRuntime<'step> {
             // region it was built in, which the accumulator's own pins name.
             let dest_frame = view.dest_frame();
             let types = view.types();
+            // The accumulated coverage pins every region the folded cells reach — the holder-rule
+            // proof the substrate door reads their stored reach under, and the declared reach for a
+            // cell that carries no stored description of its own (a spliced expression).
+            let holder = acc.coverage().clone();
             let built = acc
                 .merge_into_placing::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
                     dest_brand(dest_frame),
                     move |(_region, value_helds), _dest_handle, placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         Carried::Object(region.alloc_object_folded(assemble(
-                            region,
+                            region.with_holder(&holder),
                             keys,
                             value_helds,
                             types,
@@ -232,9 +242,7 @@ impl<'step> KoanRuntime<'step> {
         self.schedule_aggregate(
             deps,
             rows,
-            Box::new(|door, _keys, cells, types| {
-                KObject::list_of_held(door.resident_door(), cells, types)
-            }),
+            Box::new(|door, _keys, cells, types| KObject::list_of_held(door, cells, types)),
         )
     }
 
@@ -260,7 +268,7 @@ impl<'step> KoanRuntime<'step> {
             rows,
             Box::new(|door, keys, value_helds, types| {
                 let map: HashMap<KKey, Held<'_>> = keys.into_iter().zip(value_helds).collect();
-                KObject::dict_of_held(door.resident_door(), map, types)
+                KObject::dict_of_held(door, map, types)
             }),
         )
     }
@@ -285,7 +293,7 @@ impl<'step> KoanRuntime<'step> {
             rows,
             Box::new(move |door, _keys, value_helds, types| {
                 let record: Record<Held<'_>> = names.into_iter().zip(value_helds).collect();
-                KObject::record_of_held(door.resident_door(), record, types)
+                KObject::record_of_held(door, record, types)
             }),
         )
     }
