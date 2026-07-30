@@ -618,3 +618,64 @@ fn a_resting_cell_copies_as_plain_data() {
         assert_eq!(copy.0.open_with(&pin, |r| *r), 47);
     }
 }
+
+/// **Composing the reach of cells at rest.** A value built out of resting cells — parts of a
+/// working expression, each holding a producer's sealed carrier — derives its own reach through
+/// [`RegionHandle::mint_retained_from_carriers`]: the composer names its sources and the library
+/// does the rest, so no embedder unions member sets or reimplements the self rule. Each source
+/// contributes its whole claim (where its value lives, plus everything its borrows reach), the
+/// composed description is hosted in the destination, and every producer handle is dropped before
+/// the values are read back through the cells the description describes.
+#[test]
+fn mint_from_resting_carriers_composes_each_cells_whole_claim() {
+    let left_producer = frame();
+    let right_producer = frame();
+    let foreign = frame();
+
+    // A cell resident in its producer, reaching nothing.
+    let left: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
+        Witnessed::resident_in::<ShapeProfile>(store_val(&left_producer, 3), &left_producer),
+        Rc::clone(&left_producer),
+        StepCoverage::empty(),
+    );
+    // A cell hosted in its producer whose borrows reach a third region.
+    let right = reach_element(&right_producer, &foreign, 5);
+
+    let dest = frame();
+    let handle = RegionHandle::from_owner(&*dest);
+    let left_cell = left.rest_in(handle);
+    let right_cell = right.rest_in(handle);
+
+    // `dest` is the pin: its region retains both cells' coverage, so every source description's
+    // hosting arena is alive for the call.
+    let composed =
+        handle.mint_retained_from_carriers(&[left_cell.witness(), right_cell.witness()], &dest);
+
+    assert!(
+        composed.pins_region(left_producer.region()),
+        "a source's own residence is part of the claim it contributes"
+    );
+    assert!(composed.pins_region(right_producer.region()));
+    assert!(
+        composed.pins_region(foreign.region()),
+        "and so is everything that source's borrows reach"
+    );
+    assert!(
+        !composed.pins_region(dest.region()),
+        "the composition is exact — nothing reaches into the destination"
+    );
+    assert!(
+        composed.with_home_region(|region| std::ptr::eq(region, dest.region())),
+        "the composed value lives where its description was minted"
+    );
+
+    drop(left);
+    drop(right);
+    drop(left_producer);
+    drop(right_producer);
+    drop(foreign);
+
+    let pin = StepCoverage::<ShapeFrame>::of(Rc::clone(&dest));
+    assert_eq!(left_cell.open_with(&pin, |r| *r), 3);
+    assert_eq!(right_cell.open_with(&pin, |r| *r), 5);
+}
