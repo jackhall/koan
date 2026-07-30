@@ -430,12 +430,13 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
             pins: right_pins,
         } = other;
         let left_pins = left_pins.0;
-        let right_pins = right_pins.0;
+        let mut right_pins = right_pins.0;
         let pin = PinBundle::union(&left_pins, &right_pins);
         // As in [`Self::transfer_into`]: the destination operand contributes its foreign reach
         // alone, never its own residence — the mint targets that region and stamps it as the
-        // product's host.
-        let right_pins = right_pins.without_region(RegionOwner::region(&*dest_home));
+        // product's host. Stripped in place: the envelope was consumed above, so these pins are
+        // ours to narrow.
+        right_pins.remove_region(RegionOwner::region(&*dest_home));
         let (product, bundle) = left.unseal().merge_composed(
             right.unseal(),
             &pin,

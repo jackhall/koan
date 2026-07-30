@@ -161,14 +161,23 @@ own itself, and that is the pin the self rule drops.
 - **Every value has a description**, because that is where its residence is
   recorded. A region-pure value references one whose members are empty — one `Weak`
   host and an empty member list, no heap — and owns no pins, so a region-pure bind
-  refcounts nothing. Empty members **are** the empty reach set; every reader treats
+  refcounts nothing. Members are stored **inline up to two** — the singleton a
+  single-region value takes and the pair a two-operand product takes — so a member
+  set costs a heap buffer only for a genuine multi-region reach. The same storage
+  backs the owned bundle (§ The pin bundle), so a fold and the entry it keys share
+  one representation. Empty members **are** the empty reach set; every reader treats
   them as "reaches nothing," never "not yet computed," and asks "reaches anything?"
   of the members rather than of the description's existence.
 
 ## The pin bundle
 
 Owned pins are collected in a **pin bundle** — one region owner per distinct
-region the covered reach names. Where owned pins live:
+region the covered reach names, in the same inline-up-to-two storage a description's
+members take (§ The reach description). A bundle a caller already owns is narrowed
+**in place** — the self rule at a mint, an operand's pins moved out of a consumed
+envelope — so dropping a member costs a `retain` over storage already paid for
+rather than a filtered copy and a second round of refcount traffic. Where owned pins
+live:
 
 - **A `Delivered` carrier's inline set.** A walking value — a cell slot's terminal
   lifted for a pull, a dep crossing steps — carries its own pins, so every fan-out

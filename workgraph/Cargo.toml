@@ -14,3 +14,7 @@ typed-arena = "2"
 stable_deref_trait = "1.2.1"
 elsa = "1"
 bumpalo = "3.20.3"
+# `union`: stores the inline slots in a union rather than an enum, so a two-slot reach set
+# measures exactly what the `Vec` it replaced did (24 bytes for a pointer-sized member) instead of
+# carrying a discriminant word. See `ReachSet` in src/witnessed/reach.rs.
+smallvec = { version = "1.15", features = ["union"] }

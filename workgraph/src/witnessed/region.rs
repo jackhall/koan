@@ -285,6 +285,10 @@ impl<W: StorageProfile> Region<W> {
     /// (`Weak` members), so hosting it pins nothing — the members' liveness is the holder's
     /// [`PinBundle`], not this table. No `unsafe`: the append-stable guarantee is the map's, not a
     /// hand-audited pointer extension.
+    ///
+    /// The probe key is built in the caller's own frame ([`PinBundle::intern_key`], inline for the
+    /// member counts that dominate) and boxed **only on the miss**, where the map takes ownership of
+    /// it: a hit costs a hash and a compare, not an allocation.
     pub(crate) fn intern_reach(
         &self,
         composed: &PinBundle<W::FrameOwner>,
@@ -297,8 +301,10 @@ impl<W: StorageProfile> Region<W> {
         }
         #[cfg(any(test, feature = "test-hooks"))]
         super::host::note_reach_interned();
-        self.reach_table
-            .insert(key, Box::new(composed.describe(self.host())))
+        self.reach_table.insert(
+            key.into_boxed_slice(),
+            Box::new(composed.describe(self.host())),
+        )
     }
 
     /// Fold `bundle` into the region's union bundle **once per distinct reach**: a no-op when
