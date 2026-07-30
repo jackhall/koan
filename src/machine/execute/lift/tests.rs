@@ -608,8 +608,8 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
 
 /// Escape with **pin**: the same `fold_cells` mechanism, but each of the `DEPTH` producers
 /// contributes a record whose field is a genuine borrow leaf into its own producer (a closure
-/// captured in that same frame) — `still_borrows_host` answers true (the leaf's home IS the
-/// delivered cell's own home), so every cell claims its envelope's pins and its producer
+/// captured in that same frame) — the rebuilt cell's run still names that producer (the leaf's home
+/// IS the delivered cell's own home), so every cell claims its envelope's pins and its producer
 /// materializes into the aggregate's reach. Dropping every producer shell and reading each
 /// closure's captured scope back is the no-use-after-free check under tree borrows; a regression
 /// that instead released these producers (mistaking the record for plain data) would dangle here.

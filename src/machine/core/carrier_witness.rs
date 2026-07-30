@@ -3,9 +3,7 @@
 //! delivery envelope that carries a value's retained frame pin in transit. See
 //! [workgraph/design/reach.md § The carrier states](../../../workgraph/design/reach.md#the-carrier-states).
 
-use crate::machine::model::{
-    still_borrows_host, CarriedFamily, DispatchToken, KObject, UntypedKey,
-};
+use crate::machine::model::{reaches_region, CarriedFamily, DispatchToken, KObject, UntypedKey};
 
 use super::arena::{FrameStorage, KoanRegion};
 use super::kfunction::{KFunction, KFunctionFamily};
@@ -30,7 +28,7 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// envelope's member set pins the value's home region alongside everything else it reaches, and the
 /// residence itself is the host of the description the carrier references — so a site that needs the
 /// home back reads it off the value's own record rather than off a side channel on the envelope, and
-/// a relocation derives what it still reaches from the product it built ([`product_still_borrows`])
+/// a relocation derives what it still reaches from the product it built ([`product_reaches_region`])
 /// rather than choosing a bundle up front.
 pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
@@ -85,25 +83,25 @@ impl OverloadSeal {
     }
 }
 
-/// Koan's **retention predicate** for a copying relocation of `envelope`
+/// Koan's **retention claim** for a copying relocation of `envelope`
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into),
-/// design/witness-hosting.md § Escape): whether `product` — the bytes the fold just built at the
-/// destination — still borrows `region`, one of the regions the envelope pins.
+/// design/witness-hosting.md § Escape): whether `product` — what the fold just built at the
+/// destination — still borrows `region`, one of the regions the envelope pins. Answered by
+/// [`reaches_region`], a read over `product`'s stored reach; no probe walks its shape.
 ///
 /// Only the value's **home** region is ever released, and `region` is home exactly when it is the
 /// region the value's own reach description names as its host — read off the carrier through the
 /// envelope's open, so residence is answered per region by identity against the value's own record
 /// rather than a side channel on the envelope.
 /// Every other member is kept: a foreign member may be reached through structure the product's own
-/// walk cannot see (a `KFunction`'s captured environment, a `Module`'s child scope), so releasing
-/// it on a walk that only follows the product's cells would dangle. Home is exact — the walk is
-/// asking whether the copy left a leaf behind in the region it was copied out of, which is
-/// precisely what [`still_borrows_host`] answers.
+/// stored reach does not cover (a `KFunction`'s captured environment reaches on transitively), so
+/// releasing it here would dangle. Home is exact — the question is whether the copy left a leaf
+/// behind in the region it was copied out of, which is precisely what a run naming that region says.
 ///
 /// A `product` of `None` (the fold built no object — a type-channel cell) keeps every member.
 /// Releasing home is what frees a tail loop's retiring region once its delivered carrier drops,
 /// instead of chaining it into every successor region's arena.
-pub(crate) fn product_still_borrows(
+pub(crate) fn product_reaches_region(
     envelope: &DeliveredCarried,
     product: Option<&KObject<'_>>,
     region: &KoanRegion,
@@ -111,13 +109,13 @@ pub(crate) fn product_still_borrows(
     let is_home = envelope
         .open_at()
         .with_home_region(|home| std::ptr::eq(home, region));
-    !is_home || product.is_none_or(|value| still_borrows_host(value, region))
+    !is_home || product.is_none_or(|value| reaches_region(value, region))
 }
 
-/// [`product_still_borrows`] for a relocation whose product is a top-node
+/// [`product_reaches_region`] for a relocation whose product is a top-node
 /// [`deep_clone`](KObject::deep_clone) of the source value — a scalar, a `KFunction` / `Module` /
 /// `KExpression` leaf riding its borrow verbatim. Such a clone borrows exactly what the source
-/// does, so the source *is* the product and the predicate answers off the envelope alone.
-pub(crate) fn clone_still_borrows(envelope: &DeliveredCarried, region: &KoanRegion) -> bool {
-    envelope.open(|live| product_still_borrows(envelope, live.as_object(), region))
+/// does, so the source *is* the product and the claim answers off the envelope alone.
+pub(crate) fn clone_reaches_region(envelope: &DeliveredCarried, region: &KoanRegion) -> bool {
+    envelope.open(|live| product_reaches_region(envelope, live.as_object(), region))
 }

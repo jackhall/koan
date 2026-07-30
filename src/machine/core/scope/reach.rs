@@ -10,7 +10,7 @@ use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::carrier_witness::{OpenedFunction, SealedFunction};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::{
-    product_still_borrows, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
+    product_reaches_region, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
     KoanStorageProfile,
 };
 use crate::machine::model::{
@@ -421,7 +421,7 @@ impl<'a> Scope<'a> {
         let copied = cell
             .transfer_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 dest,
-                |product, region| product_still_borrows(cell, product.as_object(), region),
+                |product, region| product_reaches_region(cell, product.as_object(), region),
                 |value, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement).with_holder(&holder);
                     match project(&value) {

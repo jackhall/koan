@@ -27,7 +27,7 @@ pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
     NodeHandle, WriteGate,
 };
-pub(crate) use carrier_witness::{clone_still_borrows, product_still_borrows, OverloadSeal};
+pub(crate) use carrier_witness::{clone_reaches_region, product_reaches_region, OverloadSeal};
 pub use carrier_witness::{CarrierWitness, DeliveredCarried, OpenedFunction, SealedFunction};
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};

@@ -775,54 +775,29 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: SubstrateDoor<'b, '_>) -> Held<'b> 
     }
 }
 
-/// Exact host-release probe, run only when a container's contains-borrows memo is set: does any
-/// surviving borrow leaf of `value` point into `host`? A `KFunction` / `Module` leaf checks `host`'s
-/// own address tables; a non-splice-free `KExpression` answers conservatively `true`; a substrate
-/// carrier (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) short-circuits on its own clear memo
-/// (the copy releases it), else recurses its cells. A memo-clear carrier answers `false` outright —
-/// the copy releases every host it retired. Read-only; borrows nothing.
-pub(crate) fn still_borrows_host(value: &KObject<'_>, host: &KoanRegion) -> bool {
+/// Whether `value` still borrows `region` — the release question every relocation asks, answered off
+/// **stored facts** with no walk over the value's shape and no address-table probe:
+///
+/// - A composite reads its substrate's stored reach union, which the sectioned alloc door composed
+///   from its cells' own runs. Exact for the question asked: a cell resident in the substrate's own
+///   region contributes no residence of its own (the run-level self rule), so a set answer means a
+///   genuine borrow leaf reaches `region`.
+/// - A `KFunction` / `Module` is a borrow leaf: its region is the one its captured / child scope
+///   names, by identity.
+/// - Owned data — scalars, strings, a splice-free quoted expression — borrows nothing.
+/// - A splice-carrying `KExpression` answers conservatively `true`, the one shape carrying no stored
+///   description of its own.
+pub(crate) fn reaches_region(value: &KObject<'_>, region: &KoanRegion) -> bool {
     match value {
         KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
-        KObject::KFunction(f) => host.owns_function(*f as *const _),
-        KObject::Module(m) => host.owns_module(*m as *const _),
+        KObject::KFunction(f) => std::ptr::eq(f.captured_scope().region(), region),
+        KObject::Module(m) => std::ptr::eq(m.child_scope().region(), region),
         KObject::KExpression(e) => !e.is_splice_free(),
-        KObject::Record(substrate, _) => {
-            substrate.contains_borrows()
-                && substrate
-                    .cells()
-                    .iter()
-                    .any(|cell| held_borrows_host(cell, host))
-        }
-        KObject::List(substrate, _) => {
-            substrate.contains_borrows()
-                && substrate
-                    .cells()
-                    .iter()
-                    .any(|cell| held_borrows_host(cell, host))
-        }
-        KObject::Dict(substrate, _) => {
-            substrate.contains_borrows()
-                && substrate
-                    .cells()
-                    .iter()
-                    .any(|cell| held_borrows_host(cell, host))
-        }
-        KObject::Tagged { value, .. } => {
-            value.contains_borrows() && still_borrows_host(value.payload(), host)
-        }
-        KObject::Wrapped { inner, .. } => {
-            inner.contains_borrows() && still_borrows_host(inner.payload(), host)
-        }
-    }
-}
-
-/// [`still_borrows_host`]'s per-cell dispatch: an object recurses, a type-channel cell owns
-/// its data and borrows no region.
-fn held_borrows_host(cell: &Held<'_>, host: &KoanRegion) -> bool {
-    match cell {
-        Held::Object(o) => still_borrows_host(o, host),
-        Held::Type(_) | Held::UnresolvedType(_) => false,
+        KObject::Record(substrate, _) => substrate.reach().pins_region(region),
+        KObject::List(substrate, _) => substrate.reach().pins_region(region),
+        KObject::Dict(substrate, _) => substrate.reach().pins_region(region),
+        KObject::Tagged { value, .. } => value.reach().pins_region(region),
+        KObject::Wrapped { inner, .. } => inner.reach().pins_region(region),
     }
 }
 
@@ -846,30 +821,31 @@ const ALPHA_DIVISOR: u64 = 4;
 
 /// The escape-seam copy-vs-pin decision for a top-level container `value` (whose cell substrate is
 /// `substrate`) crossing out of producer `host`. O(1) but for the one address-table membership scan
-/// (`owns_substrate`) and, on the unpriceable path only, the exact host-release probe. Generic over
-/// the substrate's cell payload `C`; only records instantiate it today. See
-/// design/value-substrates.md § Cost-driven copy.
+/// (`owns_substrate`); the release claim on every copying arm is a stored read
+/// ([`reaches_region`]). Generic over the substrate's cell payload `C`; only records instantiate it
+/// today. See design/value-substrates.md § Cost-driven copy.
 pub(crate) fn copy_or_pin<C>(
     substrate: &ContainerSubstrate<'_, C>,
     value: &KObject<'_>,
     host: &KoanRegion,
 ) -> RegionEscape {
-    // Forced verification builds override the table for top-level records; `released` is
-    // probe-derived so a forced copy is sound at either crossing.
+    // Forced verification builds override the table for top-level records; `released` is a stored
+    // read, so a forced copy is sound at either crossing.
     match SEAM_POLICY {
         SeamPolicy::ForcePin => return RegionEscape::Pin,
         SeamPolicy::ForceCopy => {
             return RegionEscape::Copy {
-                released: !still_borrows_host(value, host),
+                released: !reaches_region(value, host),
             }
         }
         SeamPolicy::CostDriven => {}
     }
 
-    // Unpriceable: keep today's unconditional total copy, `released` from the exact probe.
+    // Unpriceable: keep today's unconditional total copy. Release is still a stored fact — no
+    // home-relative cost memo is available here, but the reach union answers directly.
     if substrate.copy_cost() == u64::MAX {
         return RegionEscape::Copy {
-            released: !still_borrows_host(value, host),
+            released: !reaches_region(value, host),
         };
     }
 

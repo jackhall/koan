@@ -9,7 +9,7 @@ use std::cell::Cell;
 
 use super::{FrameReach, KoanRegion, KoanRegionExt, KoanStorageProfile};
 use crate::machine::core::bindings::SealedValue;
-use crate::machine::core::{clone_still_borrows, KError, KErrorKind, KFunction, Scope};
+use crate::machine::core::{clone_reaches_region, KError, KErrorKind, KFunction, Scope};
 use crate::machine::model::{
     Carried, CarriedFamily, ContainerSubstrate, KObject, Module, TypeRegistry,
 };
@@ -51,9 +51,10 @@ impl<'a> Scope<'a> {
         // the whole of it. The copy does not reside in the producer's region, so a copy that leaves
         // nothing pointing back drops that region from its claim — which is what lets a tail loop's
         // retiring region free once its delivered carrier drops, instead of riding every later
-        // incarnation's stored reach. The copy is a top-node clone, so the retention predicate reads
-        // off the envelope's own value ([`clone_still_borrows`]) rather than a folded product.
-        let claim = cell.coverage_retaining(|region| clone_still_borrows(cell, region));
+        // incarnation's stored reach. The copy is a top-node clone, so the claim reads the
+        // envelope's own value's stored reach ([`clone_reaches_region`]) rather than a folded
+        // product — no walk either way.
+        let claim = cell.coverage_retaining(|region| clone_reaches_region(cell, region));
         let minted = self.mint_retained(&[&claim]);
         let obj = self.store_projection_reaching(cell, &project, minted, types)?;
         Ok((obj, minted))
