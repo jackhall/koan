@@ -43,8 +43,8 @@ wider than exact, the one cell family run exactness does not yet cover.
 
 **Requires:**
 
-- [Region bump storage for embedder value families](../../workgraph/roadmap/region-bump-storage.md) —
-  the public bump door spliced part slices land in.
+- [The region bump door](../../workgraph/src/witnessed/bump.rs) — shipped substrate:
+  `FoldedPlacement::fold_and_bump` is the public door spliced part slices land in.
 - [Region-store string values](region-store-strings.md) — expression parts embed
   strings; project conversion order makes expressions the last substrate to move.
 

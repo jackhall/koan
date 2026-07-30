@@ -35,13 +35,13 @@ compile time.
 
 **Directions.**
 
-- *Arena granularity — decided per
-  [region bump storage](../../workgraph/roadmap/region-bump-storage.md).* One bump per
-  region, shared with the `Copy` side data already living there — the reach-run
-  partitions and cell index blocks a sectioned container names
-  ([`Region::alloc_side`](../../workgraph/src/witnessed/region.rs)). No per-family
-  segments: the only occupancy figure anyone reads is the region's total live bytes,
-  which the copy-versus-pin decision weighs against a candidate value's own copy size.
+- *Arena granularity — decided.* One bump per region
+  ([`Region::bump`](../../workgraph/src/witnessed/region.rs)), shared with the
+  container metadata already living there — the reach-run partitions and cell index
+  blocks a sectioned container names. No per-family segments: the only occupancy
+  figure anyone reads is the region's total live bytes, reported by
+  [`Region::bump_bytes`](../../workgraph/src/witnessed/region.rs), which the
+  copy-versus-pin decision weighs against a candidate value's own copy size.
 
 ## Dependencies
 

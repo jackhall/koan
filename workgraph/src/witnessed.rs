@@ -1204,9 +1204,10 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
 /// It borrows at `'b` and **pins nothing** — the value's backing is kept alive by the frame the
 /// opening `pin` borrowed, not by the `Opened` (`W` is the reach witness, reference-only for the
 /// collapsed [`Carrier`]). It is `Copy` when its value family and witness are (a thin reference plus
-/// a bit-copy carrier), and constructible **only** by opening a seal or delivery, so the
-/// value↔reach pairing it carries is never fabricated — [`Self::reseal`] returns exactly the seal
-/// the value came from.
+/// a bit-copy carrier), and constructible **only** by the library — by opening a seal or delivery,
+/// or through the crate-internal [`Self::adopted`] for a value the library itself re-anchored at
+/// `'b` — so the value↔reach pairing it carries is never fabricated by a caller. Opened from a seal,
+/// [`Self::reseal`] returns exactly the seal the value came from.
 pub struct Opened<'b, T: Reattachable, W> {
     value: T::At<'b>,
     witness: W,
@@ -1251,12 +1252,13 @@ impl<'b, T: Reattachable, W> Opened<'b, T, W> {
         self.value
     }
 
-    /// Bundle a value the **library itself** re-anchored at `'b` with the witness describing it —
-    /// the constructor behind [`Delivered::open_adopted`](delivered::Delivered::open_adopted),
-    /// whose `'b` is the destination region's own lifetime rather than a borrow of a pin. Crate-
-    /// internal to `witnessed`: the adopt door retains the pins covering `'b` *before* it hands the
-    /// value over, so the value↔reach pairing an `Opened` carries is still never fabricated by a
-    /// caller.
+    /// Bundle a value the **library itself** re-anchored at `'b` with the witness describing it,
+    /// where `'b` is the destination region's own lifetime rather than a borrow of a pin. Three
+    /// doors reach it: [`Delivered::open_adopted`](delivered::Delivered::open_adopted),
+    /// [`Sectioned::project`](sectioned::Sectioned::project), and the bump door
+    /// [`FoldedPlacement::fold_and_bump`]. Crate-internal to `witnessed`, and each door retains the
+    /// pins covering `'b` *before* it hands the value over, so the value↔reach pairing an `Opened`
+    /// carries is still never fabricated by a caller.
     pub(in crate::witnessed) fn adopted(value: T::At<'b>, witness: W) -> Self {
         Opened { value, witness }
     }

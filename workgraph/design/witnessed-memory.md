@@ -53,8 +53,48 @@ The region keeps the typed-arena Drop discipline — each stored value's `Drop`
 runs, and touches only owned contents, never a lifetime-parameterized reference
 (sub-arenas drop together, so any cross-arena `&` is dead before it could be
 observed). This is what makes a byte-bump allocator that forgoes Drop (`bumpalo`)
-the wrong fit: the Drop discipline *is* the soundness argument, and dropping it
-would mean re-proving every stored type leak-free by hand.
+the wrong fit *for the typed families*: their Drop discipline *is* the soundness
+argument, and dropping it would mean re-proving every stored type leak-free by
+hand.
+
+Beside those cells a region holds a **bump**, and it is a second storage tier
+rather than a private scratch area: it is the home for any `Drop`-free value
+family — the library's own container metadata (a sectioned container's run
+partition and cell index block, see
+[sectioned-reach.md](sectioned-reach.md)) *and* an embedder's value families,
+which reach it through one door. Two properties define the tier.
+
+**It routes no erasure.** The allocator's own type carries no lifetime, so `'a`
+enters only at the allocating call. A bumped value may therefore hold an `&'a`
+back into the very region it lives in, with no `erase_to_static`, no
+`AuditedStored` impl and no residence audit — the thing a `FamilyArena` cell
+cannot do, because its `K::At<'static>` slot type forces a region-self-referential
+value's borrow through erasure and back through a vetted reattach. Cycles among
+bumped entries are harmless: everything there dies with the region, at once.
+
+**`Copy` is the static proxy for "no destructor to skip".** A bump releases its
+chunks whole and runs nothing, so a `Drop`-bearing entry would silently leak what
+it owns. "`Drop`-free" has no expressible bound, so every placement primitive
+carries `T: Copy` instead — the honest approximation, and the bound that keeps a
+sectioned container `Copy` and free at region teardown.
+
+The embedder's path in is a single door,
+[`FoldedPlacement::fold_and_bump`](../src/witnessed/bump.rs), hung on the fold
+engines' placement capability so its brand `'b` is the enclosing fold's, not one
+the door mints. It takes its operands as carriers, composes and retains their
+reach into the destination *before* running the caller's constructor, and hands
+back one bundled `Opened` — never a bare region reference and never a
+`(value, reach)` pair, so reach stays a consequence of which carriers were passed
+in rather than a claim a call site writes. The constructor writes through a
+`BumpPlacement`, minted only inside a door call, whose primitives are std shapes
+only — a `Copy` value, a `Copy` slice, a `str` — which is what keeps the library
+free of any per-workload verb. A call with no operands is the bytes-only case: its
+reach is empty structurally. Occupancy is one whole-region figure,
+[`Region::bump_bytes`](../src/witnessed/region.rs) — **live bytes**, summed over
+what each allocating call actually stored, not the allocator's reserved chunk
+capacity, which would put a whole chunk's floor under a small region. There is no
+per-family breakdown, because the copy-versus-pin decision reads a region's total
+against a candidate value's own copy size and never needs one.
 
 The allocation *capability* is a distinct type from the region. The engine's
 `alloc` / `alloc_resident` are `pub(crate)`, so a bare `&Region` has no allocation

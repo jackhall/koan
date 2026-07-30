@@ -113,15 +113,20 @@ because:
   drop together at `KoanRegion` drop, so any cross-sub-arena `&` is dead
   by the time anyone could observe it.
 
-A region also holds a bump allocator for `Copy` side data that names the region's
-own lifetime — the reach-run partitions and cell index blocks a sectioned container
-names ([`Region::alloc_side`](../workgraph/src/witnessed/region.rs)). It is the one
-region storage needing **no** erasure: a bump's own type carries no lifetime, so
-`'a` enters only at the allocation and an entry may hold an `&'a` back into the
-same region. Its `T: Copy` bound is what keeps it honest — a bump releases its
-chunks whole and runs no destructor, so admitting a `Drop`-bearing entry would
-silently skip one. Cross-references among bumped entries need no drop-order
-argument at all: everything there dies with the region, at once.
+A region also holds a bump allocator
+([`Region::bump`](../workgraph/src/witnessed/region.rs)) — the storage home for
+any `Drop`-free value that names the region's own lifetime. The library bumps its
+own container metadata there (the reach-run partitions and cell index blocks a
+sectioned container names); a workload converting a `Drop`-free value family
+reaches it through one public door,
+[`FoldedPlacement::fold_and_bump`](../workgraph/src/witnessed/bump.rs), which
+composes the stored value's reach in the same call. It is the one region storage
+needing **no** erasure: a bump's own type carries no lifetime, so `'a` enters only
+at the allocation and an entry may hold an `&'a` back into the same region with no
+residence audit at all. Its `T: Copy` bound is what keeps it honest — a bump
+releases its chunks whole and runs no destructor, so admitting a `Drop`-bearing
+entry would silently skip one. Cross-references among bumped entries need no
+drop-order argument at all: everything there dies with the region, at once.
 
 The scope-pointer case — `CallFrame`, `Module`, `Signature`, `KFunction`, and a `Scope`'s
 own lexical parent each holding a pointer to a captured, defining, or parent `Scope` — holds that

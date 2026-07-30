@@ -217,45 +217,52 @@ fn a_repeat_reach_interns_and_folds_no_second_retention() {
     assert_eq!(dest.region().retained_reach_len(), 1);
 }
 
-/// Occupancy is a whole-region figure that only ever grows: zero before anything is bumped, positive
-/// after, strictly larger once an allocation outgrows the current chunk — and untouched by a door
-/// call that bumps nothing.
+/// Occupancy is **live bytes**, exactly: each primitive adds the size of what it stored, and a door
+/// call that bumps nothing adds nothing. Asserted as exact totals rather than "it grew", because the
+/// figure prices the copy-versus-pin decision — a chunk-capacity reading would pass a growth
+/// assertion while overstating a small region by a whole chunk.
 #[test]
 fn bump_bytes_reports_total_live_bytes() {
     let dest = frame();
     assert_eq!(dest.region().bump_bytes(), 0, "nothing bumped yet");
 
-    let after_value = {
-        placement(&dest).fold_and_bump::<SpanFamily, WordFamily, BumpFrame>(&[], |bump, _| {
-            bump.value(("koan", 4usize))
-        });
-        dest.region().bump_bytes()
-    };
-    assert!(after_value > 0, "a bumped value occupies a chunk");
-
-    let after_slice = {
-        placement(&dest).fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |bump, _| {
-            let block: Vec<u64> = (0..4096).collect();
-            let _stored: &[u64] = bump.slice(&block);
-            "done"
-        });
-        dest.region().bump_bytes()
-    };
-    assert!(
-        after_slice > after_value,
-        "an allocation past the current chunk grows the total"
+    placement(&dest).fold_and_bump::<SpanFamily, WordFamily, BumpFrame>(&[], |bump, _| {
+        bump.value(("koan", 4usize))
+    });
+    let after_value = size_of::<(&str, usize)>();
+    assert_eq!(
+        dest.region().bump_bytes(),
+        after_value,
+        "a bumped value costs its own size, not the chunk reserved to hold it"
     );
 
-    let after_text = {
-        placement(&dest)
-            .fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |bump, _| bump.text("tail"));
-        dest.region().bump_bytes()
-    };
-    assert!(after_text >= after_slice, "occupancy never shrinks");
+    placement(&dest).fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |bump, _| {
+        let block: Vec<u64> = (0..4096).collect();
+        let _stored: &[u64] = bump.slice(&block);
+        "done"
+    });
+    let after_slice = after_value + 4096 * size_of::<u64>();
+    assert_eq!(
+        dest.region().bump_bytes(),
+        after_slice,
+        "a slice costs its whole span"
+    );
+
+    placement(&dest)
+        .fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |bump, _| bump.text("tail"));
+    assert_eq!(
+        dest.region().bump_bytes(),
+        after_slice + "tail".len(),
+        "text costs its byte length"
+    );
 
     // A door call that bumps nothing — the constructor returns owned `'static` data — costs no bytes.
     placement(&dest).fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |_bump, _| "literal");
-    assert_eq!(dest.region().bump_bytes(), after_text);
+    assert_eq!(
+        dest.region().bump_bytes(),
+        after_slice + "tail".len(),
+        "a door call that stores nothing is free"
+    );
 }
 
 /// The product rests like any other open: [`Opened::reseal`] and re-open round-trip both facts the

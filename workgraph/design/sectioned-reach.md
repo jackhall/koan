@@ -74,8 +74,12 @@ run may hold an `&'a` back into the same region (a `typed_arena` cell's
 own type would have to name `'a`, which is why a `ReachDescription` is
 lifetime-free instead); and a bump releases its chunks whole, running no
 destructor — which is the point, and why only `Copy` data may go in.
-Reference cycles among region-resident side data are harmless: it all
-dies at once.
+Reference cycles among region-resident bumped entries are harmless: it
+all dies at once. A container's two slices are one writer among several:
+the same bump is the storage home for any `Drop`-free value family,
+including an embedder's, reached through the door
+[witnessed-memory.md § The bump allocator](witnessed-memory.md)
+describes.
 
 - **Exact per run.** A run's description is precisely the shared reach
   of its cells; adjacency decides sharing. Exactness is what makes

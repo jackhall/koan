@@ -42,8 +42,8 @@ so the family has nowhere `Drop`-free to land.
 
 **Requires:**
 
-- [Region bump storage for embedder value families](../../workgraph/roadmap/region-bump-storage.md) —
-  the public bump door string bytes land in.
+- [The region bump door](../../workgraph/src/witnessed/bump.rs) — shipped substrate:
+  `FoldedPlacement::fold_and_bump` is the public door string bytes land in.
 
 **Unblocks:**
 
