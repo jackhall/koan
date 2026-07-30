@@ -359,7 +359,7 @@ schedules the value sub-expression via `dispatch_in_scope` and waits on it via a
 dep-finish whose finish closure type-checks against `repr` and produces a
 [`KObject::Wrapped { inner: &'a PayloadSubstrate<'a>, type_id: KType }`](../../src/machine/model/values/kobject.rs)
 carrier — the `inner` payload is a region-resident single-cell substrate
-(`PayloadSubstrate = ContainerSubstrate<KObject>`) born through the fold door.
+(`PayloadSubstrate`) born through the fold door.
 
 **The wrap chooses peel-or-hold by the payload's identity.** Two door verbs record
 the wrapper's intent, each allocating the payload substrate through the enclosing

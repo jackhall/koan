@@ -203,7 +203,7 @@ src/
     │   ├── values.rs
     │   └── values/
     │       ├── kobject.rs         runtime value type
-    │       ├── container_substrate.rs  ContainerSubstrate<C> + SubstrateMemos — the payload-generic region-resident substrate (cells + memo trio); RecordSubstrate is its C = Record<Held> alias
+    │       ├── container_substrate.rs  ContainerSubstrate<'a, C> — the index-generic region-resident substrate (sectioned cells + run union + copy cost); RecordSubstrate is its C = Record<usize> alias
     │       ├── carried.rs         Carried — the scheduler's value currency (Object | Type)
     │       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
     │       ├── named_pairs.rs     shared (name, value) ordered-list helper

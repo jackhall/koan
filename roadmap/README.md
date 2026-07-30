@@ -60,5 +60,4 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Region-hosted operator groups](untyped_arena/region-hosted-operator-groups.md)
 - [Region-store string values](untyped_arena/region-store-strings.md)
 - [Residence-audit retirement](untyped_arena/residence-audit-retirement.md)
-- [Sectioned substrates](untyped_arena/sectioned-substrates.md)
 

@@ -60,7 +60,7 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   free: a sorted-pair slice or a hash table frozen at construction).
 - `Record(&'a RecordSubstrate<'a>, KType)` — the field record in the arena.
 - `Tagged { value: &'a PayloadSubstrate<'a>, .. }` — the single-cell payload
-  substrate (`PayloadSubstrate = ContainerSubstrate<KObject>`) in the arena.
+  substrate in the arena.
 - `Wrapped { inner: &'a PayloadSubstrate<'a>, .. }` — the same one-cell payload
   substrate; the peel (re-tag collapses one layer) and hold (construction
   preserves layers) constructors are door verbs, not a payload wrapper type.
@@ -70,18 +70,17 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   arena `&'a str`, and `KExpression`'s part vectors are arena slices
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
 
-Each cell-bearing substrate is one payload-generic **wrapper struct**,
-[`ContainerSubstrate<C>`](../src/machine/model/values/container_substrate.rs):
-the stored cells (`C`) beside a single `SubstrateMemos` value bundling the
-substrate memos of [§ Construction](#construction-witnessed-doors-only) — the
-copy cost, the contains-borrows bit, and the borrows-home bit ride the
-substrate; the type handle rides the value carrier. The per-container names
-above are aliases of that one wrapper: `RecordSubstrate` is
-`ContainerSubstrate<Record<Held>>`, and each later conversion instantiates the
-same wrapper over its own payload (`ContainerSubstrate<Vec<Held>>` for a list,
-a frozen map for a dict, `ContainerSubstrate<KObject>` — the `PayloadSubstrate`
-alias — for the single payload cell a `Tagged` or `Wrapped` value borrows)
-rather than re-deriving a parallel struct and memo trio.
+Each cell-bearing substrate is one index-generic **wrapper struct**,
+[`ContainerSubstrate<'a, C>`](../src/machine/model/values/container_substrate.rs):
+the cells in workgraph's sectioned storage ([§ Sectioned reach](#sectioned-reach)),
+a payload-specific index `C` mapping a name / key / position onto a cell index,
+the interned union over the runs, and the memoized copy cost. Reach and cost ride
+the substrate; the type handle rides the value carrier. The per-container names
+above are aliases of that one wrapper, differing only in `C`: `Record<usize>`
+for a record's name→index table, a marker type for a list (position *is* the
+index) and for the single-cell payload a `Tagged` or `Wrapped` value borrows, a
+frozen `HashMap<KKey, usize>` for a dict. Each later conversion instantiates the
+same wrapper over its own index rather than re-deriving a parallel struct.
 
 Three consequences define the regime:
 
@@ -111,20 +110,33 @@ discipline that makes this sound is the substrate contract in
 
 Region-free value construction exists only for shapes that own their data
 outright (scalars, quoted expressions); no container is ever built without a
-door in hand. Construction memoizes, in one pass over the cells (the same
-pass that computes the type join):
+door in hand. The door is a brand paired with the **holder-rule proof** its
+per-cell verdicts are read under
+([`SubstrateDoor`](../src/machine/core/arena.rs)), so a container cannot be
+built through a bare brand: a cell that keeps borrowing a foreign source hands
+the alloc door that source's stored description, and reading a description's
+members back out is sound only while something pins every region it names.
+
+Construction memoizes, in one pass over the cells (the same pass that computes
+the type join):
 
 - the value's own **type handle** (the existing memo, [typing/type-registry.md](typing/type-registry.md));
 - its **copy cost** — see [§ Cost-driven copy](#cost-driven-copy-the-optimization);
-- a **contains-borrows bit** — whether any transitive cell is a region-borrow
-  leaf (a closure or module), into *any* region;
-- a **borrows-home bit** — whether any transitive borrow leaf points into the
-  substrate's *own home region*. The exact, home-relative gate the cost decision
-  reads (see [§ Cost-driven copy](#cost-driven-copy-the-optimization)), distinct
-  from the conservative contains-borrows bit above.
+- the value-level **reach description** — the interned union over the cells'
+  runs ([§ Sectioned reach](#sectioned-reach)), which the alloc door mints.
 
-The two borrow bits are folds over the substrate's run descriptions
-([§ Sectioned reach](#sectioned-reach)), not a separate walk.
+The two borrow facts a seam reads are queries on that stored union, not separate
+bits: **contains-borrows** — whether any transitive cell is a region-borrow leaf,
+into *any* region — is "the union is non-empty"; **borrows-home** — whether any
+transitive borrow leaf points into the substrate's *own home region* — is the
+description's own `members ∋ host` query, the exact home-relative gate the cost
+decision reads (see [§ Cost-driven copy](#cost-driven-copy-the-optimization)) and
+sharper than the conservative contains-borrows question.
+
+Per cell, the door's verdict is one O(1) read of stored facts and never a walk:
+owned data (a scalar, a string, a type value, a splice-free quoted expression)
+lands in an empty-reach run; a nested substrate hands in its own stored union;
+a closure or module is a born-borrowing seed naming the scope it captures.
 
 ## Sectioned reach
 
@@ -150,11 +162,20 @@ naming its child scope).
 - **Owned-only channels.** Scalars, strings, and type values are owned data
   (a koan type value never embeds a value), so they always land in
   empty-reach runs. **Dict keys are restricted to owned data** by language
-  rule — a function or module key is meaningless — and the construction
-  door rejects a borrow-carrying key by its stored envelope, an O(1) check.
+  rule — a function or module key is meaningless — enforced at the one site
+  that turns a carrier into a key on the dict door's own construction path
+  ([`scalar_key`](../src/machine/execute/dispatch/literal.rs)), which rejects
+  a carrier naming any reach member by its stored envelope: an O(1) check,
+  not a walk. `KKey` then admits only `String` / `Number` / `Bool`, so a
+  borrow-carrying key is unrepresentable downstream of that site.
 - **Memos are folds over runs.** Contains-borrows ⇔ any run's description
   is non-empty; borrows-home ⇔ any run names the home region; `copy_cost`
-  is unchanged.
+  is unchanged. Borrows-home is exact because of the **run-level self rule**
+  at the alloc door
+  ([sectioned-reach.md § The alloc door](../workgraph/design/sectioned-reach.md#the-alloc-door)):
+  a cell already resident in the destination contributes no residence member
+  of its own, so a set bit means a genuine borrow *leaf* points home rather
+  than merely that the container holds a co-resident sub-container.
 - **Transfer reads stored reach.** A crossing claims the empty source
   bundle exactly when no surviving run names the source region — a stored
   fact, not a probe over the value's shape.
@@ -202,7 +223,7 @@ at the seam:
   contribute their own memoized cost, borrow leaves contribute zero. A cell that
   is a spliced expression is **unpriceable**: it carries no memo of its own, so
   the whole substrate's cost saturates to a sentinel and the value copies
-  unconditionally (releasing per the exact probe below). Because substrates are immutable
+  unconditionally (releasing per the stored read below). Because substrates are immutable
   the memo can never go stale, and because the copy verb rebuilds a shared
   subvalue once per reference, a priceable memoized sum is the copy's *exact*
   cost — no forwarding map, no walk.
@@ -218,16 +239,16 @@ resident in a region the producer host does not own — always pins: pricing a
 copy-out at an intermediate host is region evacuation's job, not the
 per-crossing seam's.
 
-The ratio is gated by the exact **borrows-home bit**. Set, the value **pins
+The ratio is gated by the exact **borrows-home** query. Set, the value **pins
 outright** — a leaf provably borrows the home region, so a copy would pay the
 rebuild *and* keep the pin; the ratio is never consulted. Clear on a priceable
 value, the copy provably releases the host (no surviving borrow reaches it), so
-the ratio alone decides. This is why borrows-home is a *separate*, sharper memo
-than the conservative contains-borrows bit: contains-borrows asks only whether
+the ratio alone decides. This is why borrows-home is a *separate*, sharper
+question than contains-borrows: contains-borrows asks only whether
 *any* borrow leaf exists into *any* region, and remains the seal/reach
 conservatism input; the copy decision needs the home-relative question, and gets
 an exact answer for a priceable value. On the **unpriceable** path, where no
-home-relative memo is available, release is still a stored fact: the copy claims
+home-relative cost memo is available, release is still a stored fact: the copy claims
 the retiring host's release exactly when no surviving run description names it
 ([§ Sectioned reach](#sectioned-reach)), so a value whose leaves all point into
 foreign regions still releases its home.

@@ -548,8 +548,9 @@ surviving the run that built it.
 — two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The
 **container-cell** seam (`copied_seam_mode`, Ruling 4: fresh containers stay self-contained) picks
 the per-cell `Residence` a `Residence::Copied` crossing takes: `Released` when
-`still_borrows_host` ([kobject.rs](../src/machine/model/values/kobject.rs)) finds no surviving
-borrow leaf into the cell's own producer host (the record is totally rebuilt via `copy_object_into`
+`reaches_region` ([kobject.rs](../src/machine/model/values/kobject.rs)) reads no surviving
+borrow leaf into the cell's own producer host off the rebuilt cell's stored reach (the record is
+totally rebuilt via `copy_object_into`
 and the producer frees), `Copied` when it does (the producer materializes into the aggregate's reach
 and stays pinned). Two unit tests mirror `dispatch::literal::fold_cells`'s exact aggregate loop
 (`copied_seam_mode` + `transfer_into_placing` + `copy_held_from_carried`) directly for five

@@ -96,6 +96,15 @@ dies at once.
   model is: the value↔reach pairing is a type invariant rather than
   caller discipline. The cell rides as a *reference*, so parting costs no
   clone however expensive the cell is.
+- **In-place reads are not a parting seam.** An embedder's traversals
+  that never relocate a cell — equality, rendering, a copying rebuild —
+  read the cells directly (`cells()`, `cell(index)`), the twin of the
+  reach-only `reach_at(index)`: one yields cells and no reach, the other
+  reach and no cell. Neither needs to be a seam, because both run under
+  the pin the caller already holds (it holds the container) and a cell
+  reference is `&'a K::At<'a>`, confined to the container's own region by
+  its type. Only `project` pairs the two, and it is the only route by
+  which a cell can travel.
 - **Confinement.** The `Opened` state carries the container's region
   lifetime `'a` through both halves — the cell reference is
   `&'a K::At<'a>`, and the carrier's description is hosted in that same
@@ -105,6 +114,16 @@ dies at once.
   region freely, naming its coverage only at the open. A cell that
   genuinely travels passes the re-seal, which is the mint-consuming
   relocation seam. The compiler enforces the seam.
+- **The relocation seam is one verb.** `Opened::lift_out` re-seals the
+  projection and lifts it into a delivery envelope owning its whole
+  reach: the run description's members upgraded `Weak → Rc`, plus the
+  region the cell lives in — read off the description's own host, so no
+  caller pairs a value with a residence it did not derive. The upgrade
+  runs under the `'b` pin the open already borrows, which is the holder
+  rule. The lifted envelope states exactly the run's reach; the
+  container's union never enters, which is what makes a projection
+  release-exact end to end
+  ([reach.md § The carrier states](reach.md#the-carrier-states)).
 
 ## The alloc door
 
@@ -122,21 +141,38 @@ carrying that sub-run's surviving reach. Three verdicts, and no fourth:
 - **Pinned**: the cell keeps borrowing its source. The run's description
   is get-or-minted from the input's *stored* description's members —
   which are exact, where the envelope coverage a step holds is generally
-  wider — plus the input's home region as an ordinary member; the owning
-  pins fold into the destination's union bundle. The verdict carries the
-  coverage pinning those members across the weak→strong upgrade: the
-  holder rule, discharged at the door.
+  wider — plus, under the run-level self rule below, the input's home
+  region as an ordinary member; the owning pins fold into the
+  destination's union bundle. The verdict carries the coverage pinning
+  those members across the weak→strong upgrade: the holder rule,
+  discharged at the door.
 - **Seed**: a born-borrowing cell, its reach declared at construction
   from pins the caller already holds rather than composed from a stored
   description.
 
+**The run-level self rule.** A `Pinned` cell's own residence joins its
+members only when that residence is somewhere *other than* the
+destination. A cell already resident in the destination is covered by the
+destination's own liveness, so naming it would make every container
+holding a co-resident sub-container read as borrowing its own home, and
+the borrows-home memo folded from these runs would stop answering the
+question it exists for: does a *borrow leaf* point home. A cell resident
+elsewhere is a genuine cross-region borrow and its host folds in as an
+ordinary member — nothing else would pin it. The rule is what makes an
+embedder's borrows-home query exact rather than merely conservative, and
+it is the run-level counterpart of the owned-bundle self rule
+([reach.md § Composition](reach.md#composition-minting-a-description-and-retaining-its-pins)):
+both say a region is never named against itself, one for pins, one for
+members.
+
 **The container's value-level description** is the get-or-mint over the
 union of the per-cell reach sources — the same member set as the union
 over its run descriptions, taken *before* the mint so that a cell
-borrowing into the destination keeps home in it (the self rule strips
-the destination from a returned bundle while leaving it in the
-description). Cheap under interning, so whole-value carriers keep their
-single stored `&ReachDescription` shape unchanged.
+genuinely borrowing into the destination (a born-borrowing seed naming it,
+or a foreign cell whose own description names it) keeps home in the
+description, where the owned-bundle self rule would have stripped it from
+a returned bundle. Cheap under interning, so whole-value carriers keep
+their single stored `&ReachDescription` shape unchanged.
 
 The embedder supplies the copy-or-pin cost predicate, the deep-copy
 hooks, and the born-borrowing seeds. Everything else — grouping into
@@ -154,8 +190,6 @@ the per-input verdicts and the born-borrowing seeds.
 
 ## Open work
 
-- [Sectioned substrates](../../roadmap/untyped_arena/sectioned-substrates.md)
-  — the embedder-side adoption that retires the walks above.
 - [Mint owns its retention](../roadmap/mint-owns-retention.md) — deletes
   the region's "already pinned" bit, so an intern miss *is* the retention
   and a hit *is* proof the region already pins.

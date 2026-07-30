@@ -23,8 +23,8 @@ Items that move the boundary split in three, each landing on its own:
    [sectioned reach](../design/sectioned-reach.md) was scoped this way,
    workgraph-side only.
 2. **Migrate.** koan adopts the new surface, as a separate item in the project
-   owning the callers — for sectioned reach, that is
-   [Sectioned substrates](../../roadmap/untyped_arena/sectioned-substrates.md).
+   owning the callers — for sectioned reach, that was koan's own
+   [value substrates](../../design/value-substrates.md#sectioned-reach).
 3. **Contract.** workgraph deletes the superseded surface. This is an acceptance
    criterion on the migrate item rather than a follow-up: an expand that never
    contracts leaves two ways to say the same thing, and the second one outlives

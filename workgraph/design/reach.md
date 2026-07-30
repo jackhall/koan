@@ -88,6 +88,14 @@ The transform verbs:
 - **`Opened::reseal() -> Sealed`** — the step-end return to rest. Sound because
   `Opened` is `Copy` and constructible only by opening, so the value↔reach pairing
   it reseals is exactly the one it was opened from.
+- **`Opened::lift_out() -> Delivered`** — the relocation seam, `reseal` composed
+  with the lift under the description's **own host**. It is the verb a value
+  parted from a container takes to travel
+  ([sectioned-reach.md](sectioned-reach.md)): the projection is `'b`-confined by
+  its type and states exactly its own reach, and this is the one place that reach
+  becomes owned. Deriving the residence from the description rather than from an
+  argument is what keeps a caller from pairing a value with a home it did not
+  derive.
 - **The lift, `Sealed → Delivered`** — read the description under still-live
   ambient coverage and upgrade the claimed members `Weak → strong` into an owned
   inline set. This is the one place weak becomes strong; the ambient pin gates it,

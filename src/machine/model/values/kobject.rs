@@ -576,8 +576,19 @@ fn object_cell_reach<'a>(
         KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => {
             CellReach::Owned
         }
+        // A `KFunction` is allocated into the very region that owns its captured scope — release-
+        // enforced at `RegionBrand::alloc_function` — so naming that scope names its residence too.
         KObject::KFunction(f) => CellReach::Seed(scope_coverage(f.captured_scope().region_owner())),
-        KObject::Module(m) => CellReach::Seed(scope_coverage(m.child_scope().region_owner())),
+        // A `Module` carries no such invariant: a transparent-ascription view re-tags a foreign
+        // module into the viewing scope's own region, so its residence and its child scope's region
+        // differ, and the residence is not recoverable from the value. The seed therefore names the
+        // child scope — the module door of the design — *and* the door's holder, which pins wherever
+        // the cell was read from.
+        KObject::Module(m) => {
+            let mut declared = scope_coverage(m.child_scope().region_owner());
+            declared.absorb(door.holder());
+            CellReach::Seed(declared)
+        }
         KObject::KExpression(e) => {
             if e.is_splice_free() {
                 CellReach::Owned
@@ -775,29 +786,32 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: SubstrateDoor<'b, '_>) -> Held<'b> 
     }
 }
 
-/// Whether `value` still borrows `region` — the release question every relocation asks, answered off
-/// **stored facts** with no walk over the value's shape and no address-table probe:
+/// Whether `value` still borrows `home` — the region it lives in — after a copying relocation. The
+/// release question every relocation asks, and the only region a relocation may release; answered off
+/// **stored facts**, with no walk over the value's shape and no address-table probe:
 ///
-/// - A composite reads its substrate's stored reach union, which the sectioned alloc door composed
-///   from its cells' own runs. Exact for the question asked: a cell resident in the substrate's own
-///   region contributes no residence of its own (the run-level self rule), so a set answer means a
-///   genuine borrow leaf reaches `region`.
-/// - A `KFunction` / `Module` is a borrow leaf: its region is the one its captured / child scope
-///   names, by identity.
-/// - Owned data — scalars, strings, a splice-free quoted expression — borrows nothing.
+/// - A **borrow leaf** — a `KFunction`, a `Module` — is never rebuilt: a copying relocation carries
+///   its reference verbatim, so it still borrows wherever it lives, which is `home`. That is the
+///   answer regardless of which scope it borrows: a transparent-ascription view re-tags a foreign
+///   module into the viewing scope's own region, so a module's residence and its child scope's
+///   region genuinely differ, and only residence decides whether the reference survives a release.
+/// - A **composite** reads its substrate's stored reach union, which the sectioned alloc door
+///   composed from its cells' own runs. Exact for the question asked: a cell resident in the
+///   substrate's own region contributes no residence of its own (the run-level self rule), so a set
+///   answer means a genuine borrow leaf reaches `home`.
+/// - **Owned data** — scalars, strings, a splice-free quoted expression — borrows nothing.
 /// - A splice-carrying `KExpression` answers conservatively `true`, the one shape carrying no stored
 ///   description of its own.
-pub(crate) fn reaches_region(value: &KObject<'_>, region: &KoanRegion) -> bool {
+pub(crate) fn retains_home(value: &KObject<'_>, home: &KoanRegion) -> bool {
     match value {
         KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
-        KObject::KFunction(f) => std::ptr::eq(f.captured_scope().region(), region),
-        KObject::Module(m) => std::ptr::eq(m.child_scope().region(), region),
+        KObject::KFunction(_) | KObject::Module(_) => true,
         KObject::KExpression(e) => !e.is_splice_free(),
-        KObject::Record(substrate, _) => substrate.reach().pins_region(region),
-        KObject::List(substrate, _) => substrate.reach().pins_region(region),
-        KObject::Dict(substrate, _) => substrate.reach().pins_region(region),
-        KObject::Tagged { value, .. } => value.reach().pins_region(region),
-        KObject::Wrapped { inner, .. } => inner.reach().pins_region(region),
+        KObject::Record(substrate, _) => substrate.reach().pins_region(home),
+        KObject::List(substrate, _) => substrate.reach().pins_region(home),
+        KObject::Dict(substrate, _) => substrate.reach().pins_region(home),
+        KObject::Tagged { value, .. } => value.reach().pins_region(home),
+        KObject::Wrapped { inner, .. } => inner.reach().pins_region(home),
     }
 }
 
@@ -822,7 +836,7 @@ const ALPHA_DIVISOR: u64 = 4;
 /// The escape-seam copy-vs-pin decision for a top-level container `value` (whose cell substrate is
 /// `substrate`) crossing out of producer `host`. O(1) but for the one address-table membership scan
 /// (`owns_substrate`); the release claim on every copying arm is a stored read
-/// ([`reaches_region`]). Generic over the substrate's cell payload `C`; only records instantiate it
+/// ([`retains_home`]). Generic over the substrate's cell payload `C`; only records instantiate it
 /// today. See design/value-substrates.md § Cost-driven copy.
 pub(crate) fn copy_or_pin<C>(
     substrate: &ContainerSubstrate<'_, C>,
@@ -835,7 +849,7 @@ pub(crate) fn copy_or_pin<C>(
         SeamPolicy::ForcePin => return RegionEscape::Pin,
         SeamPolicy::ForceCopy => {
             return RegionEscape::Copy {
-                released: !reaches_region(value, host),
+                released: !retains_home(value, host),
             }
         }
         SeamPolicy::CostDriven => {}
@@ -845,7 +859,7 @@ pub(crate) fn copy_or_pin<C>(
     // home-relative cost memo is available here, but the reach union answers directly.
     if substrate.copy_cost() == u64::MAX {
         return RegionEscape::Copy {
-            released: !reaches_region(value, host),
+            released: !retains_home(value, host),
         };
     }
 

@@ -18,10 +18,11 @@ macro_rules! container_door {
         use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
         use crate::witnessed::FoldedPlacement;
         let $storage = run_root_storage();
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
         let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             $storage.brand().handle(),
         ))
-        .resident_door();
+        .with_holder(&owned_cells);
     };
 }
 
@@ -351,9 +352,10 @@ fn resident_in_true_for_owned_list() {
     use crate::witnessed::FoldedPlacement;
     let types = TypeRegistry::new();
     let dest = run_root_storage();
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let o = KObject::list(
         door,
         vec![KObject::Number(1.0), KObject::Number(2.0)],

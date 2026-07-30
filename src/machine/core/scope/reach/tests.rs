@@ -48,9 +48,10 @@ fn alloc_home_borrowing_record<'run>(
     types: &TypeRegistry,
 ) -> &'run KObject<'run> {
     let closure = alloc_home_closure(home);
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let fields = Record::from_pairs(vec![
         ("v".to_string(), Held::Object(KObject::Number(value))),
         ("f".to_string(), Held::Object(KObject::KFunction(closure))),
@@ -152,9 +153,10 @@ fn alloc_split_reach_record<'run>(
 ) -> &'run KObject<'run> {
     let here = alloc_home_closure(home);
     let there = alloc_home_closure(foreign);
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let fields = Record::from_pairs(vec![
         ("v".to_string(), Held::Object(KObject::Number(1.0))),
         ("here".to_string(), Held::Object(KObject::KFunction(here))),

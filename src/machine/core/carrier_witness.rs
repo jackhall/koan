@@ -3,7 +3,7 @@
 //! delivery envelope that carries a value's retained frame pin in transit. See
 //! [workgraph/design/reach.md § The carrier states](../../../workgraph/design/reach.md#the-carrier-states).
 
-use crate::machine::model::{reaches_region, CarriedFamily, DispatchToken, KObject, UntypedKey};
+use crate::machine::model::{retains_home, CarriedFamily, DispatchToken, KObject, UntypedKey};
 
 use super::arena::{FrameStorage, KoanRegion};
 use super::kfunction::{KFunction, KFunctionFamily};
@@ -87,7 +87,7 @@ impl OverloadSeal {
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into),
 /// design/witness-hosting.md § Escape): whether `product` — what the fold just built at the
 /// destination — still borrows `region`, one of the regions the envelope pins. Answered by
-/// [`reaches_region`], a read over `product`'s stored reach; no probe walks its shape.
+/// [`retains_home`], a read over `product`'s stored reach; no probe walks its shape.
 ///
 /// Only the value's **home** region is ever released, and `region` is home exactly when it is the
 /// region the value's own reach description names as its host — read off the carrier through the
@@ -109,7 +109,7 @@ pub(crate) fn product_reaches_region(
     let is_home = envelope
         .open_at()
         .with_home_region(|home| std::ptr::eq(home, region));
-    !is_home || product.is_none_or(|value| reaches_region(value, region))
+    !is_home || product.is_none_or(|value| retains_home(value, region))
 }
 
 /// [`product_reaches_region`] for a relocation whose product is a top-node

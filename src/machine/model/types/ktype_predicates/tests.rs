@@ -15,10 +15,11 @@ macro_rules! container_door {
         use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
         use crate::witnessed::FoldedPlacement;
         let $storage = run_root_storage();
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
         let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             $storage.brand().handle(),
         ))
-        .resident_door();
+        .with_holder(&owned_cells);
     };
 }
 
@@ -273,8 +274,9 @@ fn record_value_admission_and_matches() {
     use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
     let region = storage.brand();
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region.handle()))
-        .resident_door();
+        .with_holder(&owned_cells);
     let value: &KObject<'_> = door.alloc_object_folded(KObject::record(
         door,
         Record::from_pairs(vec![
@@ -386,8 +388,9 @@ fn of_kind_nominal_is_type_channel_only() {
     use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
     let region = storage.brand();
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region.handle()))
-        .resident_door();
+        .with_holder(&owned_cells);
     let newtype_ty = KType::of_kind(KKind::NewType);
 
     // The NewType *type value* — admitted in the type channel.
@@ -782,9 +785,10 @@ fn union_honors_memoized_list_element_type() {
     use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
     use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let list_value: &KObject<'_> = door.alloc_object_folded(KObject::list_of_held(
         door,
         vec![Held::Object(KObject::Number(1.0))],

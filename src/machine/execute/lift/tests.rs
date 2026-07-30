@@ -62,11 +62,12 @@ fn object_top_node_relocates_into_dest() {
     let dest = CallFrame::new(scope);
 
     let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
         Carried::Object(obj),
         RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
-            .resident_door(),
+            .with_holder(&owned_cells),
     );
     match relocated {
         Carried::Object(r) => {
@@ -96,9 +97,10 @@ fn list_relocation_rebuilds_substrate_into_dest() {
     let dest = CallFrame::new(scope);
     let types = test_run.types.clone();
 
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let source_door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let list: &KObject = source_door.alloc_object_folded(KObject::list_of_held(
         source_door,
         vec![
@@ -108,11 +110,12 @@ fn list_relocation_rebuilds_substrate_into_dest() {
         &types,
     ));
 
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
         Carried::Object(list),
         RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
-            .resident_door(),
+            .with_holder(&owned_cells),
     );
     match relocated {
         Carried::Object(r @ KObject::List(out, _)) => {
@@ -148,19 +151,21 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
     let dest = CallFrame::new(scope);
     let types = test_run.types.clone();
 
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let source_door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let mut map: HashMap<KKey, Held> = HashMap::new();
     map.insert(KKey::String("a".into()), Held::Object(KObject::Number(1.0)));
     let dict: &KObject =
         source_door.alloc_object_folded(KObject::dict_of_held(source_door, map, &types));
 
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
         Carried::Object(dict),
         RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
-            .resident_door(),
+            .with_holder(&owned_cells),
     );
     match relocated {
         Carried::Object(r @ KObject::Dict(out, _)) => {
@@ -207,9 +212,10 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
     });
     let identity =
         types.constructor_apply(ctor, Record::from_pairs([("T".to_string(), KType::NUMBER)]));
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let source_door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let tagged: &KObject = source_door.alloc_object_folded(KObject::tagged(
         source_door,
         "Just".into(),
@@ -217,11 +223,12 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
         identity,
     ));
 
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
         Carried::Object(tagged),
         RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
-            .resident_door(),
+            .with_holder(&owned_cells),
     );
     match relocated {
         Carried::Object(
@@ -274,20 +281,22 @@ fn wrapped_relocation_rebuilds_payload_into_dest() {
         param_names: vec![],
         nonce: None,
     });
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let source_door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let wrapped: &KObject = source_door.alloc_object_folded(KObject::wrapped_hold(
         source_door,
         &KObject::Number(7.0),
         type_id,
     ));
 
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
         Carried::Object(wrapped),
         RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
-            .resident_door(),
+            .with_holder(&owned_cells),
     );
     match relocated {
         Carried::Object(
@@ -337,11 +346,12 @@ fn kfunction_borrow_preserved_verbatim() {
         .alloc_object_checked(KObject::KFunction(kf_ref), &types)
         .expect("f was just allocated into region\'s own region");
 
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
         Carried::Object(obj),
         RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
-            .resident_door(),
+            .with_holder(&owned_cells),
     );
     match relocated {
         Carried::Object(r @ KObject::KFunction(f)) => {
@@ -386,11 +396,12 @@ fn type_recursive_member_relocates_and_navigates() {
     );
     let type_value = tree;
 
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
         Carried::Type(type_value),
         RegionEscape::Copy { released: false },
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle()))
-            .resident_door(),
+            .with_holder(&owned_cells),
     );
     match relocated {
         Carried::Type(out) => {
@@ -458,11 +469,12 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
         FrameCoverage::empty(),
     );
 
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let born: DeliveredCarried = acc
         .merge_into_placing::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
             dest_brand(Rc::clone(&dest_storage)),
             move |(_region, _cells), _dest_handle, placement| {
-                let door = FoldingBrand::in_fold_closure(placement).resident_door();
+                let door = FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells);
                 let fields =
                     Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
                 Carried::Object(
@@ -499,9 +511,10 @@ fn alloc_home_closure_record<'run>(
     types: &TypeRegistry,
 ) -> &'run KObject<'run> {
     let kf = alloc_local_kf(home);
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let fields = Record::from_pairs(vec![(
         "f".to_string(),
         Held::Object(KObject::KFunction(kf)),
@@ -535,10 +548,11 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
     );
     let acc_final = (0..DEPTH).fold(acc0, |acc, i| {
         let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
         let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             producer.brand().handle(),
         ))
-        .resident_door();
+        .with_holder(&owned_cells);
         let fields = Record::from_pairs(vec![(
             "acc".to_string(),
             Held::Object(KObject::Number(i as f64)),
@@ -554,6 +568,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
                 .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
                 .unseal()
         });
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
         let dep: DeliveredCarried =
             Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
         producers.push(producer);
@@ -563,7 +578,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
             |value, (region, mut cells), placement| {
                 cells.push(copy_held_from_carried(
                     value,
-                    FoldingBrand::in_fold_closure(placement).resident_door(),
+                    FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
                 ));
                 (region, cells)
             },
@@ -650,6 +665,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
                 .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
                 .unseal()
         });
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
         let dep: DeliveredCarried =
             Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
         producers.push(producer);
@@ -659,7 +675,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
             |value, (region, mut cells), placement| {
                 cells.push(copy_held_from_carried(
                     value,
-                    FoldingBrand::in_fold_closure(placement).resident_door(),
+                    FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
                 ));
                 (region, cells)
             },
@@ -761,6 +777,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
         // cell the fold just pushed, exactly as `relocate_terminal` answers for its lone
         // product.
         let mut still_borrows = seam_still_borrows(&dep, verb);
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
         let cell_still_borrows =
             move |product: &(RegionHandle<'_, KoanStorageProfile>, Vec<Carried<'_>>),
                   region: &KoanRegion| {
@@ -776,7 +793,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
                 cells.push(copy_carried(
                     value,
                     verb,
-                    FoldingBrand::in_fold_closure(placement).resident_door(),
+                    FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
                 ));
                 (region, cells)
             },
@@ -829,9 +846,10 @@ fn record_memos<'run>(
     fields: Record<Held<'run>>,
     types: &TypeRegistry,
 ) -> (u64, bool) {
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     match door.alloc_object_folded(KObject::record_of_held(door, fields, types)) {
         KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
         other => panic!("expected a Record, got {}", other.ktype().name(types)),
@@ -941,9 +959,10 @@ fn substrate_memo_nested_record_composes_by_memo() {
         ("x".to_string(), Held::Object(KObject::KString("ab".into()))),
         ("f".to_string(), Held::Object(KObject::KFunction(inner_kf))),
     ]);
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let inner = door.alloc_object_folded(KObject::record_of_held(door, inner_fields, &types));
     let (inner_cost, inner_home) = match inner {
         KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
@@ -983,9 +1002,10 @@ fn substrate_memo_list_cell_is_priceable_and_home_free() {
 
     // The list cell is itself born through a door homed in `home`; its one scalar element costs one
     // flat `Held`, which the enclosing record's memo pass reads back through the list's own memo.
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let list_door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
-            .resident_door();
+            .with_holder(&owned_cells);
     let list = KObject::list_of_held(list_door, vec![Held::Object(KObject::Number(1.0))], &types);
     let fields = Record::from_pairs(vec![("l".to_string(), Held::Object(list))]);
     let (cost, borrows_home) = record_memos(&home, fields, &types);
@@ -1013,9 +1033,10 @@ mod seam_verb_table {
         fields: Record<Held<'run>>,
         types: &TypeRegistry,
     ) -> &'run KObject<'run> {
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
         let door =
             FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
-                .resident_door();
+                .with_holder(&owned_cells);
         door.alloc_object_folded(KObject::record_of_held(door, fields, types))
     }
 
@@ -1028,8 +1049,8 @@ mod seam_verb_table {
     }
 
     /// An **unpriceable** record (holds a splice-free `KExpression` cell — unpriceable, but plain
-    /// data with no borrow leaf) copies, and its `released` bit tracks the exact probe: no borrow
-    /// leaf survives, so the copy frees the host.
+    /// data with no borrow leaf) copies, and its `released` bit tracks the stored read: no run names
+    /// the host, so the copy frees it.
     #[test]
     fn seam_verb_unpriceable_plain_data_copies_released() {
         use crate::machine::model::ast::KExpression;

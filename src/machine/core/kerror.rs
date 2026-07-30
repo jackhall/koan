@@ -240,9 +240,12 @@ impl KError {
         seed.restamp_in_place::<CarriedFamily, KoanStorageProfile>(
             &frame,
             |_handle, _dest, placement| {
+                let owned_cells = crate::machine::core::FrameCoverage::empty();
                 let brand = FoldingBrand::in_fold_closure(placement);
                 Carried::Object(
-                    brand.alloc_object_folded(self.to_tagged(brand.resident_door(), types)),
+                    brand.alloc_object_folded(
+                        self.to_tagged(brand.with_holder(&owned_cells), types),
+                    ),
                 )
             },
         )

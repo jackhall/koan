@@ -29,10 +29,11 @@ macro_rules! container_door {
         use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
         use crate::witnessed::FoldedPlacement;
         let $storage = run_root_storage();
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
         let $door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             $storage.brand().handle(),
         ))
-        .resident_door();
+        .with_holder(&owned_cells);
     };
 }
 
@@ -450,11 +451,12 @@ fn function_operand_is_error_at_any_position() {
     // Nested: a function inside a list propagates the error.
     let storage2 = run_root_storage();
     let second_run = TestRun::silent(&storage2);
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door = {
         use crate::machine::core::{FoldingBrand, FrameStorageExt};
         use crate::witnessed::FoldedPlacement;
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage2.brand().handle()))
-            .resident_door()
+            .with_holder(&owned_cells)
     };
     let list_f = KObject::list_of_held(
         door,
@@ -485,11 +487,12 @@ fn length_mismatch_short_circuits_before_banned_cell() {
     let storage = run_root_storage();
     let test_run = TestRun::silent(&storage);
     let types = test_run.types.clone();
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door = {
         use crate::machine::core::{FoldingBrand, FrameStorageExt};
         use crate::witnessed::FoldedPlacement;
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(storage.brand().handle()))
-            .resident_door()
+            .with_holder(&owned_cells)
     };
     let list_f = KObject::list_of_held(
         door,

@@ -4,14 +4,14 @@
 //! implies. The
 //! cost decision itself ([`copy_or_pin`](crate::machine::model::copy_or_pin)), the
 //! total-rebuild verb ([`copy_object_into`](crate::machine::model::copy_object_into)), and the
-//! stored release read ([`reaches_region`](crate::machine::model::reaches_region))
+//! stored release read ([`retains_home`](crate::machine::model::retains_home))
 //! live in the value model, shared with the core binding seams. See
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
 use crate::machine::core::SubstrateDoor;
 use crate::machine::core::{product_reaches_region, KoanRegion, KoanStorageProfile};
 use crate::machine::model::{
-    copy_object_into, copy_or_pin, reaches_region, Carried, Held, KObject, RegionEscape,
+    copy_object_into, copy_or_pin, retains_home, Carried, Held, KObject, RegionEscape,
 };
 use crate::machine::DeliveredCarried;
 use crate::witnessed::RegionHandle;
@@ -99,7 +99,7 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
 /// substrate carrier (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) routes the cost chooser
 /// ([`copy_or_pin`](crate::machine::model::copy_or_pin)); every other value copies its top node
 /// unconditionally, claiming release off the same stored read the chooser's copying arms use
-/// ([`reaches_region`](crate::machine::model::reaches_region)).
+/// ([`retains_home`](crate::machine::model::retains_home)).
 ///
 /// A **type-channel** carrier builds no object at all, so there is nothing to read a claim off and
 /// it keeps every member — the conservatism a `None` product has always carried.
@@ -119,7 +119,7 @@ pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> Re
                 inner: substrate, ..
             } => copy_or_pin(substrate, value, host),
             _ => RegionEscape::Copy {
-                released: !reaches_region(value, host),
+                released: !retains_home(value, host),
             },
         }),
         _ => RegionEscape::Copy { released: false },

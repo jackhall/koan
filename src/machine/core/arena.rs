@@ -357,18 +357,7 @@ impl<'a> FoldingBrand<'a> {
     pub(crate) fn with_holder<'h>(self, holder: &'h FrameCoverage) -> SubstrateDoor<'a, 'h> {
         SubstrateDoor {
             brand: self,
-            holder: Some(holder),
-        }
-    }
-
-    /// This brand as a [`SubstrateDoor`] for cells that are all **owned or destination-resident** —
-    /// a container built from fresh data, or one whose cells were just rebuilt at this very brand. No
-    /// holder is needed: such a cell's stored description is hosted in this region, whose own
-    /// retention keeps every member alive, and the brand itself is the pin on that region.
-    pub(crate) fn resident_door<'h>(self) -> SubstrateDoor<'a, 'h> {
-        SubstrateDoor {
-            brand: self,
-            holder: None,
+            holder,
         }
     }
 }
@@ -384,17 +373,16 @@ impl<'a> FoldingBrand<'a> {
 /// the brand makes that obligation part of the door's type: a container cannot be built through a
 /// brand alone.
 ///
-/// A door minted through [`resident_door`](FoldingBrand::resident_door) carries no holder at all,
-/// which is right where every cell is owned or destination-resident: such a cell's description is
-/// hosted in the destination region, whose own retention holds every member, and the brand is the pin
-/// on that region.
+/// There is no holderless door: a site whose cells are all owned data names
+/// [`FrameCoverage::empty`] explicitly, so "nothing to prove here" is a claim written at the call
+/// site rather than a shape the door lets a caller fall into.
 ///
 /// Everything else derefs to the brand, so a closure that also allocates objects or type identifiers
 /// through the door is unaffected.
 #[derive(Clone, Copy)]
 pub struct SubstrateDoor<'a, 'h> {
     brand: FoldingBrand<'a>,
-    holder: Option<&'h FrameCoverage>,
+    holder: &'h FrameCoverage,
 }
 
 impl<'a> std::ops::Deref for SubstrateDoor<'a, '_> {
@@ -406,10 +394,9 @@ impl<'a> std::ops::Deref for SubstrateDoor<'a, '_> {
 
 impl SubstrateDoor<'_, '_> {
     /// The holder-rule proof this door reads stored cell reach under, as a coverage the door hands
-    /// on to the alloc door per pinned cell — see the type's own doc. Empty for a
-    /// [`resident_door`](FoldingBrand::resident_door).
+    /// on to the alloc door per pinned cell — see the type's own doc.
     pub(crate) fn holder(&self) -> FrameCoverage {
-        self.holder.cloned().unwrap_or_default()
+        self.holder.clone()
     }
 }
 

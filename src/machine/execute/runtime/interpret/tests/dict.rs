@@ -236,6 +236,25 @@ fn non_scalar_key_returns_shape_error() {
     }
 }
 
+/// Dict keys are owned data by language rule, and the rejection is an O(1) read of the key's own
+/// **stored envelope** — a carrier naming any reach member is refused before its shape is even
+/// examined. A module value is the shape that gets there: its carrier names its child scope's
+/// region, so it borrows and cannot key a dict.
+#[test]
+fn borrow_carrying_key_returns_shape_error() {
+    let result = interpret_with_writer(
+        "MODULE m = (LET a = 1)\nLET d = {(m): 1}",
+        Box::new(std::io::sink()),
+    );
+    match result {
+        Err(e) => assert!(
+            matches!(&e.kind, KErrorKind::ShapeError(msg) if msg.contains("dict key must be owned data")),
+            "expected ShapeError naming the owned-data rule, got {e}",
+        ),
+        Ok(()) => panic!("expected ShapeError for a borrow-carrying dict key"),
+    }
+}
+
 #[test]
 fn unbound_identifier_key_returns_unbound_name() {
     let result = interpret_with_writer("LET d = {missing: 1}", Box::new(std::io::sink()));

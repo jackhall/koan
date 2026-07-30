@@ -516,8 +516,9 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
         acc2.into_cell()
             .unseal()
             .map_pinned(&dest_frame, |(region, cells), _token| {
+                let owned_cells = crate::machine::core::FrameCoverage::empty();
                 let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
-                    .resident_door();
+                    .with_holder(&owned_cells);
                 Carried::Object(
                     region.alloc_object_folded(KObject::list_of_held(region, cells, &types)),
                 )
@@ -831,8 +832,9 @@ fn multi_region_list_of_closures_survives_frame_free() {
         acc2.into_cell()
             .unseal()
             .map_pinned(&dest_storage, |(region, cells), _token| {
+                let owned_cells = crate::machine::core::FrameCoverage::empty();
                 let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
-                    .resident_door();
+                    .with_holder(&owned_cells);
                 Carried::Object(
                     region.alloc_object_folded(KObject::list_of_held(region, cells, &types)),
                 )
@@ -921,12 +923,13 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
     // in, so the outer closure now reaches frame_1 / frame_2 through the bound list (the reach tree).
     let outer_storage = frame_outer.storage_rc();
     let source_outer = delivered_closure(&frame_outer);
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let captured = source_outer
         .transfer_into_placing::<AggBuildFamily, CarriedFamily, _>(
             acc2,
             |_product, _region| true,
             |outer_v, (_region, cells), placement| {
-                let region = FoldingBrand::in_fold_closure(placement).resident_door();
+                let region = FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells);
                 if let KObject::KFunction(kf) = outer_v.object() {
                     let list_obj =
                         region.alloc_object_folded(KObject::list_of_held(region, cells, &types));
@@ -1023,8 +1026,9 @@ fn multi_region_record_of_closures_survives_frame_free() {
         acc2.into_cell()
             .unseal()
             .map_pinned(&dest_storage, |(region, cells), _token| {
+                let owned_cells = crate::machine::core::FrameCoverage::empty();
                 let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
-                    .resident_door();
+                    .with_holder(&owned_cells);
                 Carried::Object(region.alloc_object_folded(KObject::record_of_held(
                     region,
                     Record::from_pairs(cells),
@@ -1095,9 +1099,10 @@ fn object_field_reach_fold_survives_producer_frame_free() {
     // The dep's object rides into the result as a `Held` cell — a borrow into the producer's
     // region, which is exactly what the fold has to keep alive.
     let sealed: StepCarried = ctx.alloc_carried_with(&[&dep], |b, views| {
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
         let cells = vec![Held::from_carried(views[0])];
         Carried::Object(b.alloc_object_folded(KObject::list_of_held(
-            b.resident_door(),
+            b.with_holder(&owned_cells),
             cells,
             &types,
         )))
@@ -1150,10 +1155,11 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
     // brand (not a transient `with_scope` sub-brand), so the reference escapes at the frame's own
     // lifetime.
     let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
         producer_frame.brand().handle(),
     ))
-    .resident_door();
+    .with_holder(&owned_cells);
     let fields = Record::from_pairs(vec![
         ("x".to_string(), Held::Object(KObject::Number(1.0))),
         ("y".to_string(), Held::Object(KObject::Number(2.0))),
@@ -1228,10 +1234,11 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     // Producer: a plain-data record resident in its own frame's region, born through the fold door —
     // the shape a declared substrate return arrives as at the Done boundary.
     let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
         producer_frame.brand().handle(),
     ))
-    .resident_door();
+    .with_holder(&owned_cells);
     let fields = Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(3.0)))]);
     let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
     let expected_addr = match obj {
@@ -1250,11 +1257,12 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     // Re-stamp in place: re-tag the top node to `declared`, re-anchored into the producer's own
     // region through the folded placement — the substrate rides shared (`deep_clone` pointer-copies
     // it, `stamp_type` swaps only the handle).
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
     let restamped: DeliveredCarried = envelope
         .restamp_in_place::<CarriedFamily, KoanStorageProfile>(
             &producer_frame.storage_rc(),
             |value, _handle, placement| {
-                let region = FoldingBrand::in_fold_closure(placement).resident_door();
+                let region = FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells);
                 Carried::Object(
                     region.alloc_object_folded(
                         value.object().deep_clone().stamp_type(declared, &types),
@@ -1543,8 +1551,9 @@ fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
         });
     let stored: Witnessed<CarriedFamily, CarrierWitness> =
         acc0.map_pinned(&frame, |(region, _cells), _token| {
+            let owned_cells = crate::machine::core::FrameCoverage::empty();
             let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
-                .resident_door();
+                .with_holder(&owned_cells);
             let fields =
                 Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
             Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, &types)))
@@ -1583,10 +1592,11 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
     let types = TypeRegistry::new();
 
     let list_obj: KObject = {
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
         let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
             producer.brand().handle(),
         ))
-        .resident_door();
+        .with_holder(&owned_cells);
         let fields =
             Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
         let record = KObject::record_of_held(door, fields, &types);

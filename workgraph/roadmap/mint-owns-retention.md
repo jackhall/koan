@@ -42,9 +42,8 @@ public besides, so an embedder folds reach into a region directly
   wants the pins unable to reach the resident door at all.
 - *Koan's direct retentions — open.* Whether `Scope::retain_reach` and the
   run-teardown rehome route through a role-named door or disappear into
-  the sectioned alloc door; settles once
-  [Sectioned substrates](../../roadmap/untyped_arena/sectioned-substrates.md) has
-  moved koan's substrates onto stored reach.
+  the sectioned alloc door koan's substrates already ride
+  ([design/value-substrates.md § Sectioned reach](../../design/value-substrates.md#sectioned-reach)).
 
 ## Dependencies
 
