@@ -116,6 +116,9 @@ per-cell verdicts are read under
 built through a bare brand: a cell that keeps borrowing a foreign source hands
 the alloc door that source's stored description, and reading a description's
 members back out is sound only while something pins every region it names.
+There is no holderless door — a site whose cells are all owned data names the
+empty coverage explicitly, so "nothing to prove here" is a claim written at the
+call site rather than a shape a caller can fall into.
 
 Construction memoizes, in one pass over the cells (the same pass that computes
 the type join):
@@ -136,7 +139,16 @@ sharper than the conservative contains-borrows question.
 Per cell, the door's verdict is one O(1) read of stored facts and never a walk:
 owned data (a scalar, a string, a type value, a splice-free quoted expression)
 lands in an empty-reach run; a nested substrate hands in its own stored union;
-a closure or module is a born-borrowing seed naming the scope it captures.
+a closure or module is a born-borrowing seed naming the scope it borrows.
+
+A seed must also name where the leaf **lives**, and the two coincide for only
+one of them. A closure is allocated into the very region that owns its captured
+scope — release-enforced at the allocation door — so naming the scope names the
+residence too. A module carries no such invariant: transparent ascription
+re-tags a foreign module into the viewing scope's own region, so its residence
+and its child scope's region genuinely differ and the residence is not
+recoverable from the value. A module seed therefore names its child scope *and*
+the door's holder, which pins wherever the cell was read from.
 
 ## Sectioned reach
 
@@ -150,7 +162,9 @@ inputs into runs and folds their pins — is workgraph's
 ([workgraph/design/sectioned-reach.md](../workgraph/design/sectioned-reach.md));
 koan supplies the per-input copy-or-pin verdicts and the born-borrowing
 seeds (the `FN` door naming a closure's captured scope, the module door
-naming its child scope).
+naming its child scope and its residence — see
+[§ Construction](#construction-witnessed-doors-only) for why only the module
+needs both).
 
 - **Exact per run.** A run's description is precisely the shared reach of
   its cells, so a projection or index read hands a cell out with exactly
@@ -178,7 +192,11 @@ naming its child scope).
   than merely that the container holds a co-resident sub-container.
 - **Transfer reads stored reach.** A crossing claims the empty source
   bundle exactly when no surviving run names the source region — a stored
-  fact, not a probe over the value's shape.
+  fact, not a probe over the value's shape. A **bare borrow leaf** has no
+  runs to read and is never rebuilt (every copying relocation carries its
+  reference verbatim), so it keeps the region it lives in unconditionally:
+  the only region a relocation may release is the value's own home, and a
+  leaf still borrows that home by residing in it.
 - **The value-level description stays.** Whole-value carriers (delivery
   envelopes, binding tables) keep their single stored description — the
   get-or-mint of the union over the value's runs, cheap under interning.

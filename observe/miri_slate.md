@@ -539,16 +539,22 @@ consumer frame `retain`s it into `FrameStorage.retained` — at the three read-o
 `run_step` relocate, the root drain, and the `extract_terminal` test harness). Safe code; pinned
 because tree borrows catches a regression in the retention discipline that would dangle an escaped
 closure / module past its per-call frame's drop. The closure shape rides the `KFunction`
-captured-scope group above; the test below pins the **module** shape — a functor-minted module
-surviving the run that built it.
+captured-scope group above; the tests below pin the **module** shape — a functor-minted module
+surviving the run that built it, and a **transparent-ascription view**, the one value shape whose
+residence and the scope it borrows are different regions (the view is re-tagged into the ascribing
+call's own region while its child scope stays where the source module put it). A borrow leaf is never
+rebuilt, so a relocation carrying one out of a dying frame must keep the region it *lives* in, not the
+one it borrows; a release claim derived from the child scope frees the storage the returned value
+points at, which only tree borrows observes — a normal build reads the freed bytes back intact.
 
 - `functor_application_is_generative`
+- `a_returned_transparent_view_keeps_the_region_it_was_minted_in`
 
 **Record escape seam — cost-driven copy vs pin** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
 — two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The
 **container-cell** seam (`copied_seam_mode`, Ruling 4: fresh containers stay self-contained) picks
 the per-cell `Residence` a `Residence::Copied` crossing takes: `Released` when
-`reaches_region` ([kobject.rs](../src/machine/model/values/kobject.rs)) reads no surviving
+`retains_home` ([kobject.rs](../src/machine/model/values/kobject.rs)) reads no surviving
 borrow leaf into the cell's own producer host off the rebuilt cell's stored reach (the record is
 totally rebuilt via `copy_object_into`
 and the producer frees), `Copied` when it does (the producer materializes into the aggregate's reach
@@ -602,9 +608,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-30: 1794s — 45 tests, 0 leaks, 0 UB
 - 2026-07-29: 1750s — 44 tests, 0 leaks, 0 UB
 - 2026-07-29: 801s — 44 tests, 0 leaks, 0 UB
 - 2026-07-29: 1573s — 44 tests, 0 leaks, 0 UB
 - 2026-07-28: 785s — 44 tests, 0 leaks, 0 UB
-- 2026-07-26: 2189s — 44 tests, 0 leaks, 0 UB (slate minus `functor_application_is_generative`; cold rebuild)
 <!-- slate-durations:end -->

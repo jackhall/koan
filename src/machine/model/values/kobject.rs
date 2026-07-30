@@ -795,6 +795,9 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: SubstrateDoor<'b, '_>) -> Held<'b> 
 ///   answer regardless of which scope it borrows: a transparent-ascription view re-tags a foreign
 ///   module into the viewing scope's own region, so a module's residence and its child scope's
 ///   region genuinely differ, and only residence decides whether the reference survives a release.
+///   Answering structurally rather than by reading residence is exact wherever a leaf is resident in
+///   its own carrier's home, and conservatively retains where it is not — a carrier deep-cloned into
+///   a binding scope while its leaf stays where it was. Retaining more can never dangle.
 /// - A **composite** reads its substrate's stored reach union, which the sectioned alloc door
 ///   composed from its cells' own runs. Exact for the question asked: a cell resident in the
 ///   substrate's own region contributes no residence of its own (the run-level self rule), so a set

@@ -273,3 +273,30 @@ fn abstract_member_bound_to_any_type_accepted() {
         "an abstract member supplied at any concrete type must satisfy the signature",
     );
 }
+
+/// A transparent view minted **inside a per-call frame** and returned from it. The re-tagged
+/// `Module` is allocated into the call's own region while the source module's child scope stays in
+/// the run root, so a view's residence and the scope it borrows are genuinely different regions —
+/// the one value shape where they diverge. The return crosses a relocation seam that carries the
+/// module reference verbatim (a borrow leaf is never rebuilt), so a claim that the call's region is
+/// released would free the very storage the returned value points at. Reading the view's member back
+/// after the call frame is gone is the use-after-free check; it is a Miri audit-slate test because a
+/// normal build reads the freed bytes back intact.
+#[test]
+fn a_returned_transparent_view_keeps_the_region_it_was_minted_in() {
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
+        "SIG Ordered = (VAL compare :Number)\n\
+         MODULE int_ord = (LET compare = 7)",
+    );
+    test_run.run("FN (VIEWIT) -> Module = (int_ord :! Ordered)");
+    test_run.run("LET view = (VIEWIT)");
+
+    let m = lookup_module(scope, "view", &test_run.types);
+    assert!(
+        matches!(m.child_scope().lookup("compare"), Some(KObject::Number(n)) if *n == 7.0),
+        "the returned view reads its member back after its minting frame is gone",
+    );
+}
