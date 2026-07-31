@@ -29,15 +29,30 @@ use crate::witnessed::{
 /// on [`FrameStorageExt`] (an extension trait, since a type alias takes no inherent impls of its own).
 pub type FrameStorage = RegionHost<KoanStorageProfile>;
 
-/// The run-root storage: a fresh run region with no `outer` link, stamped at the run tier
-/// ([`RegionHost::is_run_root`]) so anything holding it can tell the run region from a per-call one.
+/// The run-root storage: a fresh run region with no `outer` link, stamped at the eternal tier
+/// ([`RegionHost::is_eternal`]) so anything holding it can tell the run region from a per-call one.
 /// Held by `run_program` (and the test harness) so the run-root scope's region has an owning Rc;
 /// [`CallFrame::adopting`] reuses it as the run frame's storage and the run-root scope records a
 /// `Weak` to it as its `region_owner`. Public: it is the one Koan-side entry point a caller
 /// (production or an integration test) uses to obtain run-root storage — it mints nothing itself,
 /// only building the library's `RegionHost` shell whose region lazily mints on first allocation.
 pub fn run_root_storage() -> Rc<FrameStorage> {
-    RegionHost::fresh_root()
+    RegionHost::fresh_eternal()
+}
+
+/// The **program storage**: where program text and the raw AST live, outside the region model's
+/// per-call tier and above even the run root. Stood up by
+/// [`interpret_with_writer_path`](crate::machine::execute::interpret_with_writer_path) before the run
+/// region and held for the whole run, so it is created first and released last.
+///
+/// Same species as [`run_root_storage`] — a [`FrameStorage`] at the eternal tier — which is what
+/// makes an expression whose parts live only here reach nothing: [`RegionHost::is_eternal`] drives
+/// `needs_no_pin`, and the eternal rule filters such a member out of every pin bundle and reach
+/// description with no special case anywhere. It never enters the frame lifecycle or the scheduler:
+/// no `CallFrame` adopts it, no `Scope` names it as `region_owner`, and its only capability in use is
+/// the bump its [`brand`](FrameStorageExt::brand) hands parse output.
+pub fn program_storage() -> Rc<FrameStorage> {
+    RegionHost::fresh_eternal()
 }
 
 /// Koan's [`RegionBrand`] mint over a [`FrameStorage`] — an extension trait because `FrameStorage`

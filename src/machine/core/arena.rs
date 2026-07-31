@@ -36,7 +36,7 @@ mod residence;
 mod step_allocator;
 
 pub(crate) use frame::FrameStorageExt;
-pub use frame::{run_root_storage, CallFrame, FrameCoverage, FrameReach, FrameStorage};
+pub use frame::{program_storage, run_root_storage, CallFrame, FrameCoverage, FrameReach, FrameStorage};
 pub(crate) use residence::Residence;
 use residence::ResidenceEvidence;
 pub use step_allocator::StepAllocator;

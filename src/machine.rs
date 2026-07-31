@@ -23,7 +23,7 @@ pub(crate) use core::{
     ReturnContract, StepAllocator, TailContract,
 };
 pub use core::{
-    run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, OpenedFunction,
+    program_storage, run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, OpenedFunction,
     Scope, ScopeId, SealedFunction, SplicedCell, WriteGate,
 };
 pub(crate) use core::{

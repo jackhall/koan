@@ -69,8 +69,8 @@ pub unsafe trait PinsRegion: RegionOwner {
 
     /// Whether this owner's storage outlives every region that could retain it, so an owning pin on
     /// it buys nothing and taking one only risks a cycle. `false` by default — the safe answer, an
-    /// extra pin never dangles. A workload overrides it for its eternal tier (Koan's run-root
-    /// [`RegionHost::is_run_root`](super::RegionHost::is_run_root)).
+    /// extra pin never dangles. A workload overrides it for its eternal tier
+    /// ([`RegionHost::is_eternal`](super::RegionHost::is_eternal)).
     ///
     /// # Safety
     ///
