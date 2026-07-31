@@ -23,15 +23,19 @@
 //! itself rather than purely rewriting syntax, since a shared middle operand must evaluate exactly
 //! once.
 
+use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
+use crate::machine::model::Part;
 use crate::machine::model::{binary_key, unary_key, FoldDirection, ReductionMode};
-use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
+use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
+use crate::machine::{KError, KErrorKind, NodeId};
 use crate::scheduler::ResolvedDeps;
 use crate::source::{Span, Spanned};
 
 use super::ctx::SchedulerView;
-use super::{become_dispatch, park_resume, propagate_dep_error, Outcome, ProducerDisposition};
+use super::{
+    become_dispatch, park_resume, propagate_dep_error, working_frame, Outcome, ProducerDisposition,
+};
 
 /// The probe is `Some` for every `OperatorChain` (the classifier guarantees it), so a
 /// `None` probe is a classification bug.
@@ -42,7 +46,7 @@ use super::{become_dispatch, park_resume, propagate_dep_error, Outcome, Producer
 pub(in crate::machine::execute) fn run<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
     s: &'b Scope<'b>,
-    expr: &KExpression<'step>,
+    expr: &WorkingExpression<'step>,
     idx: usize,
 ) -> Outcome<'step> {
     let probe = expr
@@ -75,11 +79,11 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
 }
 
 /// The operator keywords of the chain, in source order (with repeats).
-fn chain_operators<'b>(expr: &'b KExpression<'_>) -> Vec<&'b str> {
+fn chain_operators<'a>(expr: &WorkingExpression<'a>) -> Vec<&'a str> {
     expr.parts
         .iter()
-        .filter_map(|part| match &part.value {
-            ExpressionPart::Keyword(s) => Some(s.as_str()),
+        .filter_map(|part| match part.value.class() {
+            PartClass::Keyword(s) => Some(s),
             _ => None,
         })
         .collect()
@@ -89,18 +93,18 @@ fn chain_operators<'b>(expr: &'b KExpression<'_>) -> Vec<&'b str> {
 /// cloning each `Spanned` wrapper whole — not just the inner value — so source spans survive
 /// into any error message the inner dispatch produces.
 fn split_chain_parts<'step>(
-    expr: &KExpression<'step>,
+    expr: &WorkingExpression<'step>,
 ) -> (
-    Vec<Spanned<ExpressionPart<'step>>>,
-    Vec<Spanned<ExpressionPart<'step>>>,
+    Vec<Spanned<WorkingPart<'step>>>,
+    Vec<Spanned<WorkingPart<'step>>>,
 ) {
     let mut operands = Vec::with_capacity(expr.parts.len() / 2 + 1);
     let mut operator_keywords = Vec::with_capacity(expr.parts.len() / 2);
     for (i, part) in expr.parts.iter().enumerate() {
         if i % 2 == 0 {
-            operands.push(part.clone());
+            operands.push(*part);
         } else {
-            operator_keywords.push(part.clone());
+            operator_keywords.push(*part);
         }
     }
     (operands, operator_keywords)
@@ -108,10 +112,13 @@ fn split_chain_parts<'step>(
 
 /// Wraps a built-up accumulator as the next level's leading operand, carrying its own span
 /// forward rather than inventing a fresh one.
-fn wrap_as_operand<'step>(acc: KExpression<'step>) -> Spanned<ExpressionPart<'step>> {
+fn wrap_as_operand<'step>(
+    brand: RegionBrand<'step>,
+    acc: WorkingExpression<'step>,
+) -> Spanned<WorkingPart<'step>> {
     let span = acc.span;
     Spanned {
-        value: ExpressionPart::Expression(Box::new(acc)),
+        value: WorkingPart::Expression(brand.alloc_value(acc)),
         span,
     }
 }
@@ -126,8 +133,9 @@ fn wrap_as_operand<'step>(acc: KExpression<'step>) -> Spanned<ExpressionPart<'st
 /// `Expression(..)` — so [`become_dispatch`] re-enters ordinary dispatch on it directly.
 fn reduce_fold_left<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: &KExpression<'step>,
+    expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
+    let brand = ctx.current_scope().brand();
     let (operands, operators) = split_chain_parts(expr);
     debug_assert!(
         operands.len() >= 3 && operators.len() == operands.len() - 1,
@@ -142,9 +150,10 @@ fn reduce_fold_left<'step>(
         .next()
         .expect("chain shape guarantees ≥2 operators");
 
-    let mut acc = KExpression::new(vec![first_operand, first_operator, second_operand]);
+    let mut acc =
+        WorkingExpression::new(brand, vec![first_operand, first_operator, second_operand]);
     for (operator, operand) in operators.zip(operands) {
-        acc = KExpression::new(vec![wrap_as_operand(acc), operator, operand]);
+        acc = WorkingExpression::new(brand, vec![wrap_as_operand(brand, acc), operator, operand]);
     }
 
     become_dispatch(ctx, acc)
@@ -160,8 +169,9 @@ fn reduce_fold_left<'step>(
 /// re-enters ordinary dispatch on it directly.
 fn reduce_fold_right<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: &KExpression<'step>,
+    expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
+    let brand = ctx.current_scope().brand();
     let (operands, operators) = split_chain_parts(expr);
     debug_assert!(
         operands.len() >= 3 && operators.len() == operands.len() - 1,
@@ -176,9 +186,12 @@ fn reduce_fold_right<'step>(
         .next()
         .expect("chain shape guarantees ≥2 operators");
 
-    let mut acc = KExpression::new(vec![second_last_operand, last_operator, last_operand]);
+    let mut acc = WorkingExpression::new(
+        brand,
+        vec![second_last_operand, last_operator, last_operand],
+    );
     for (operator, operand) in operators.zip(operands) {
-        acc = KExpression::new(vec![operand, operator, wrap_as_operand(acc)]);
+        acc = WorkingExpression::new(brand, vec![operand, operator, wrap_as_operand(brand, acc)]);
     }
 
     become_dispatch(ctx, acc)
@@ -195,8 +208,9 @@ fn reduce_fold_right<'step>(
 /// dispatches a parenthesized element, so a run's operands need no per-kind rewrite.
 fn reduce_unary<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: &KExpression<'step>,
+    expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
+    let brand = ctx.current_scope().brand();
     let (operands, operators) = split_chain_parts(expr);
     debug_assert!(
         operands.len() >= 3 && operators.len() == operands.len() - 1,
@@ -206,21 +220,29 @@ fn reduce_unary<'step>(
         .into_iter()
         .next()
         .expect("chain shape guarantees ≥2 operators");
-    let sym = match &operator.value {
-        ExpressionPart::Keyword(s) => s.clone(),
-        _ => unreachable!("odd-index chain parts are keywords by shape"),
+    let PartClass::Keyword(sym) = operator.value.class() else {
+        unreachable!("odd-index chain parts are keywords by shape")
     };
-    let list_items: Vec<ExpressionPart<'step>> =
-        operands.into_iter().map(|operand| operand.value).collect();
+    // A chain is parsed syntax, so every operand is still a parser part and rides straight into the
+    // literal run the brand bumps.
+    let list_items: Vec<ExpressionPart<'step>> = operands
+        .into_iter()
+        .map(|operand| {
+            operand
+                .value
+                .as_ast()
+                .expect("an operator chain's operands are parsed parts")
+        })
+        .collect();
     let kw_part = Spanned {
-        value: ExpressionPart::Keyword(sym),
+        value: WorkingPart::Ast(ExpressionPart::Keyword(sym)),
         span: operator.span,
     };
     let list_part = Spanned {
-        value: ExpressionPart::ListLiteral(list_items),
+        value: WorkingPart::Ast(ExpressionPart::ListLiteral(brand.alloc_slice(&list_items))),
         span: expr.span,
     };
-    become_dispatch(ctx, KExpression::new(vec![kw_part, list_part]))
+    become_dispatch(ctx, WorkingExpression::new(brand, vec![kw_part, list_part]))
 }
 
 /// Reduces a `Pairwise`-mode run: `f x < g y < h z` must evaluate `g y` **once**, its value
@@ -236,7 +258,7 @@ fn reduce_unary<'step>(
 /// into a fresh pair-tree rather than back into the original expression's own slots).
 fn reduce_pairwise<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: &KExpression<'step>,
+    expr: &WorkingExpression<'step>,
     combiner: String,
     direction: FoldDirection,
 ) -> Outcome<'step> {
@@ -245,10 +267,7 @@ fn reduce_pairwise<'step>(
         operands.len() >= 3 && operators.len() == operands.len() - 1,
         "OperatorChain shape guarantees ≥3 operands and one fewer operator"
     );
-    let dep_error_frame = Some(crate::machine::TraceFrame::from_expr(
-        "<operator-chain>",
-        expr,
-    ));
+    let dep_error_frame = Some(working_frame("<operator-chain>", expr));
     ctx.install_pairwise_fold(
         operands,
         operators,
@@ -272,19 +291,23 @@ fn reduce_pairwise<'step>(
 ///
 /// `span` labels the synthesized keyword part, which has no source token of its own.
 pub(super) fn combine<'step>(
+    brand: RegionBrand<'step>,
     combiner: &str,
-    left: KExpression<'step>,
-    right: KExpression<'step>,
+    left: WorkingExpression<'step>,
+    right: WorkingExpression<'step>,
     span: Option<Span>,
-) -> KExpression<'step> {
-    KExpression::new(vec![
-        wrap_as_operand(left),
-        Spanned {
-            value: ExpressionPart::Keyword(combiner.to_string()),
-            span,
-        },
-        wrap_as_operand(right),
-    ])
+) -> WorkingExpression<'step> {
+    WorkingExpression::new(
+        brand,
+        vec![
+            wrap_as_operand(brand, left),
+            Spanned {
+                value: WorkingPart::Ast(ExpressionPart::Keyword(brand.alloc_text(combiner))),
+                span,
+            },
+            wrap_as_operand(brand, right),
+        ],
+    )
 }
 
 /// Registry miss: an operator of this chain may still be *being declared*. An `OP` binder installs
@@ -301,7 +324,7 @@ pub(super) fn combine<'step>(
 fn park_on_pending_operators<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
     s: &'b Scope<'b>,
-    expr: &KExpression<'step>,
+    expr: &WorkingExpression<'step>,
     idx: usize,
     probe: &str,
 ) -> Outcome<'step> {
@@ -309,7 +332,7 @@ fn park_on_pending_operators<'step, 'b>(
     for producer in pending_operator_producers(ctx, s, expr) {
         match ctx.producer_disposition(producer, NodeId(idx)) {
             ProducerDisposition::Errored(e) => {
-                let frame = TraceFrame::from_expr("<operator-chain>", expr);
+                let frame = working_frame("<operator-chain>", expr);
                 return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
             }
             ProducerDisposition::Ready | ProducerDisposition::Cycle => {}
@@ -325,7 +348,7 @@ fn park_on_pending_operators<'step, 'b>(
         })));
     }
     let carrier = expr.summarize();
-    let parked_expr = expr.clone();
+    let parked_expr = *expr;
     park_resume(
         to_wait.parks().to_vec(),
         Some(carrier),
@@ -338,7 +361,7 @@ fn park_on_pending_operators<'step, 'b>(
 fn pending_operator_producers<'b>(
     ctx: &SchedulerView<'_, '_>,
     s: &'b Scope<'b>,
-    expr: &KExpression<'_>,
+    expr: &WorkingExpression<'_>,
 ) -> Vec<NodeId> {
     let chain = ctx.chain_deref();
     let mut operators = chain_operators(expr);

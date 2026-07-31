@@ -35,15 +35,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
     // A computed field list is out of scope: each part must be a bare identifier.
     let mut names: Vec<String> = Vec::with_capacity(fields_expr.parts.len());
-    for part in &fields_expr.parts {
-        match &part.value {
+    for part in fields_expr.parts {
+        match part.value {
             ExpressionPart::Identifier(name) => {
                 if names.iter().any(|n| n == name) {
                     return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                         "FROM field list has duplicate field `{name}`",
                     )))));
                 }
-                names.push(name.clone());
+                names.push(name.to_string());
             }
             other => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -264,9 +264,13 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
-        let root = test_run
-            .runtime
-            .dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
+        let root = test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one("(x y) FROM 5"),
+            ),
+            scope,
+        );
         test_run
             .runtime
             .execute()
@@ -298,9 +302,10 @@ mod tests {
         );
 
         // Bare call ties: the full `{x, y, z}` carrier fills both incomparable arms.
-        let root = test_run
-            .runtime
-            .dispatch_in_scope(parse_one("PICK r"), scope);
+        let root = test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("PICK r")),
+            scope,
+        );
         test_run
             .runtime
             .execute()

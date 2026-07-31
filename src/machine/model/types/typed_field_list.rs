@@ -6,10 +6,9 @@ use super::ktype::KType;
 use super::recursive_group_window::RecursiveGroupWindow;
 use super::registry::TypeRegistry;
 use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::ast::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
 use crate::machine::model::values::Carried;
 use crate::machine::model::Record;
-use crate::machine::AdoptSeam;
 use crate::machine::{NodeId, Scope};
 use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
@@ -56,17 +55,18 @@ impl FieldListContext {
     };
 }
 
-pub enum FieldListOutcome<'e> {
+pub enum FieldListOutcome<'a> {
     Done(Vec<(String, KType)>),
-    /// `sub_dispatches` carries each sigil field's wrapped expression in DFS walk
-    /// order. The caller schedules them in that order and, on the dep-finish re-walk,
-    /// feeds the resolved `Carried::Type`s back through a [`ResultFeed`] — the walk
-    /// re-descends in the same order, so no slot index is needed. The expressions
-    /// carry the source `'e` lifetime; they are only walked, never embedded in an
-    /// elaborated type.
+    /// `sub_dispatches` carries each sigil field's body as the scheduler's own node, in DFS walk
+    /// order — the currency an [`OwnedDispatch`](crate::machine::core::OwnedDispatch) takes. The
+    /// caller schedules them in that order and, on the dep-finish re-walk, feeds the resolved
+    /// `Carried::Type`s back through a [`ResultFeed`] — the walk re-descends in the same order, so
+    /// no slot index is needed. A body naming a co-declared sibling carries that sibling's handle
+    /// as a resolved cell ([`rewrite_threaded_self_refs`]), which is why the node is a
+    /// [`WorkingExpression`] rather than raw AST.
     Pending {
         park_producers: Vec<NodeId>,
-        sub_dispatches: Vec<KExpression<'e>>,
+        sub_dispatches: Vec<WorkingExpression<'a>>,
     },
     Err(String),
 }
@@ -105,16 +105,16 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
 /// `Some` on the re-walk (each consumes the next resolved carrier in DFS order). The
 /// re-walk re-descends in the same deterministic order, so positional consumption needs no
 /// slot index and nested field-lists fall out for free.
-pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
-    expr: &KExpression<'e>,
+pub fn parse_typed_field_list_via_elaborator<'a>(
+    expr: &KExpression<'a>,
     context: FieldListContext,
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
     mut results: Option<&mut ResultFeed<'_, 'a>>,
     types: &TypeRegistry,
-) -> FieldListOutcome<'e> {
+) -> FieldListOutcome<'a> {
     let mut parks: Vec<NodeId> = Vec::new();
-    let mut sub_dispatches: Vec<KExpression<'e>> = Vec::new();
+    let mut sub_dispatches: Vec<WorkingExpression<'a>> = Vec::new();
     let FieldListContext {
         list: context_list,
         member: context_member,
@@ -154,7 +154,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                 // reference. It cannot sub-dispatch (parking would deadlock on this very
                 // seal's producer), so it lowers straight to the variant's relative `Sibling`
                 // handle against the ambient window.
-                if let [first, second] = boxed.parts.as_slice() {
+                if let [first, second] = boxed.parts {
                     if let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
                         (&first.value, &second.value)
                     {
@@ -188,17 +188,16 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                     None if results.is_some() => Err(format!(
                         "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
                     )),
+                    // The body dispatches directly — the sigil wrapper's own handler does no more
+                    // than hand its body to the dispatch entry.
                     None => {
-                        let rewritten = rewrite_threaded_self_refs(
+                        sub_dispatches.push(rewrite_threaded_self_refs(
                             boxed,
                             &elaborator.threaded,
                             elaborator.scope,
                             elaborator.window().as_ref(),
                             types,
-                        );
-                        sub_dispatches.push(KExpression::new(vec![Spanned::bare(
-                            ExpressionPart::SigiledTypeExpr(Box::new(rewritten)),
-                        )]));
+                        ));
                         Ok(KType::ANY)
                     }
                 }
@@ -227,22 +226,6 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                     }
                 }
             }
-            // A spliced cell is adopted into the elaborating scope (folding its reach),
-            // then routed through type/non-type handling.
-            ExpressionPart::Spliced { cell, .. } => {
-                let delivered = elaborator.scope.lift_spliced(cell);
-                match elaborator
-                    .scope
-                    .adopt_carried(&delivered, AdoptSeam::Retaining)
-                {
-                    Carried::Type(kt) => checked(kt),
-                    other @ (Carried::Object(_) | Carried::UnresolvedType(_)) => Err(format!(
-                        "{context_list} type for `{}` resolved to non-type value `{}`",
-                        name,
-                        other.summarize(types),
-                    )),
-                }
-            }
             other => Err(format!(
                 "{context_list} type for `{}` must be a type name token, got {}",
                 name,
@@ -265,49 +248,71 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
     }
 }
 
-/// Pre-resolve self-references inside a keyworded sigil body before it sub-Dispatches into
-/// the standalone dispatcher, which carries no window context. Every bare `Type(name)` leaf whose
-/// `name` is in `threaded` becomes a `Spliced` cell sealing the name's relative sibling handle
-/// against `window`, so `STRUCT Tree = (children :(LIST OF Tree))` lowers `Tree` to a `Sibling`
-/// back-edge instead of parking on its own placeholder and closing a scheduler-deadlock cycle.
-/// Recurses into nested sigils and records; non-threaded names — and, with no open window, every
-/// name — are left for the dispatcher.
-fn rewrite_threaded_self_refs<'e, 'a>(
-    inner: &KExpression<'e>,
+/// True iff any `Type` leaf in `inner`'s subtree names a co-declared sibling — the gate deciding
+/// whether a body needs rewriting at all. A body with none crosses to the working form as one slice
+/// copy that keeps its cached shape.
+fn names_threaded_self_ref(inner: &KExpression<'_>, threaded: &HashSet<String>) -> bool {
+    inner.parts.iter().any(|part| match &part.value {
+        ExpressionPart::Type(t) => threaded.contains(t.as_str()),
+        ExpressionPart::Expression(body)
+        | ExpressionPart::SigiledTypeExpr(body)
+        | ExpressionPart::RecordType(body)
+        | ExpressionPart::QuotedExpression(body) => names_threaded_self_ref(body, threaded),
+        _ => false,
+    })
+}
+
+/// The scheduler's node for a keyworded sigil body, with self-references pre-resolved: the
+/// standalone dispatcher the body sub-Dispatches into carries no window context, so every bare
+/// `Type(name)` leaf whose `name` is in `threaded` is written in as a resolved cell sealing that
+/// name's relative sibling handle against `window`. `STRUCT Tree = (children :(LIST OF Tree))` then
+/// lowers `Tree` to a `Sibling` back-edge instead of parking on its own placeholder and closing a
+/// scheduler-deadlock cycle. Non-threaded names — and, with no open window, every name — are left
+/// for the dispatcher.
+fn rewrite_threaded_self_refs<'a>(
+    inner: &KExpression<'a>,
     threaded: &HashSet<String>,
     scope: &Scope<'a>,
     window: Option<&Rc<RecursiveGroupWindow>>,
     types: &TypeRegistry,
-) -> KExpression<'e> {
+) -> WorkingExpression<'a> {
+    let brand = scope.brand();
+    let Some(window) = window.filter(|_| names_threaded_self_ref(inner, threaded)) else {
+        return WorkingExpression::from_ast(brand, *inner);
+    };
     let parts = inner
         .parts
         .iter()
         .map(|p| {
-            let value = match (&p.value, window) {
-                (ExpressionPart::Type(t), Some(window)) if threaded.contains(t.as_str()) => {
+            let value = match &p.value {
+                ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
                     // The sibling handle is minted against the window here, where the window is in
                     // hand — the sub-dispatch it crosses into cannot reach one. The cell is a
                     // resident seal in this scope's own region: a type carrier reaching nothing
                     // foreign, so it rests with no coverage to lodge anywhere.
                     let sibling =
                         window.sibling(&t.render(), crate::machine::model::KKind::NewType, types);
-                    ExpressionPart::Spliced {
+                    WorkingPart::Spliced {
                         cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
                             Carried::Type(sibling),
                         ),
                     }
                 }
-                (ExpressionPart::SigiledTypeExpr(b), _) => {
-                    ExpressionPart::SigiledTypeExpr(Box::new(rewrite_threaded_self_refs(
-                        b, threaded, scope, window, types,
+                // A nested sigil threads its own self-references and rides as a synthesized node:
+                // its slot dispatches the rewritten body, which is what the sigil wrapper's handler
+                // does with a body it is handed.
+                ExpressionPart::SigiledTypeExpr(body)
+                    if names_threaded_self_ref(body, threaded) =>
+                {
+                    WorkingPart::Expression(brand.alloc_value(rewrite_threaded_self_refs(
+                        body,
+                        threaded,
+                        scope,
+                        Some(window),
+                        types,
                     )))
                 }
-                // A record nested inside a sub-dispatched sigil must thread its
-                // self-references the same way.
-                (ExpressionPart::RecordType(b), _) => ExpressionPart::RecordType(Box::new(
-                    rewrite_threaded_self_refs(b, threaded, scope, window, types),
-                )),
-                (other, _) => other.clone(),
+                other => WorkingPart::Ast(*other),
             };
             Spanned {
                 value,
@@ -315,7 +320,7 @@ fn rewrite_threaded_self_refs<'e, 'a>(
             }
         })
         .collect();
-    KExpression::new(parts)
+    WorkingExpression::new(brand, parts)
 }
 
 /// The declared names of a `<name> <slot>` pair list, without elaborating any slot — what a

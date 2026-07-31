@@ -6,17 +6,8 @@ use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
 use crate::machine::model::{KObject, KType};
 use crate::machine::KErrorKind;
-use crate::parse::parse;
 
-fn parse_one<'run>(src: &str) -> crate::machine::model::KExpression<'run> {
-    let mut exprs = parse(src).expect("parse should succeed");
-    assert_eq!(exprs.len(), 1, "test helper expects a single expression");
-    exprs.remove(0)
-}
-
-fn parse_all<'run>(src: &str) -> Vec<crate::machine::model::KExpression<'run>> {
-    parse(src).expect("parse should succeed")
-}
+use super::tests::{working_all as parse_all, working_one as parse_one};
 
 #[test]
 fn single_identifier_short_circuit_returns_value_when_bound() {

@@ -1,12 +1,12 @@
 //! Dispatch-shape classification: read-only view of how a `KFunction`'s
-//! signature matches a `KExpression` for late dispatch.
+//! signature matches the expression a slot is dispatching for late dispatch.
 //!
 //! The classifiers share the "bare-name" predicate ([`is_bare_name`]) — the
 //! load-bearing shape concept the auto-wrap and replay-park rails turn on.
 
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{KType, SignatureElement};
+use crate::machine::model::{Argument, KType, SignatureElement};
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 
 use super::KFunction;
 
@@ -24,7 +24,7 @@ use super::KFunction;
 /// `picked_has_binder_name` distinguishes binder-shaped expressions (literal-name slots are
 /// declarations) from call-shaped expressions (literal-name slots are references that may
 /// need to park). The three index vectors are disjoint by construction over disjoint
-/// `(SignatureElement, ExpressionPart)` shapes — `classify_for_pick` is the sole producer.
+/// `(SignatureElement, WorkingPart)` shapes — `classify_for_pick` is the sole producer.
 pub struct ClassifiedSlots {
     pub eager_indices: Option<Vec<usize>>,
     pub wrap_indices: Vec<usize>,
@@ -37,9 +37,13 @@ impl<'a> KFunction<'a> {
     /// bound by an `ExpressionPart::Expression`; the caller schedules the returned eager
     /// indices as deps and leaves the lazy ones in place for the receiving builtin to
     /// dispatch itself. Returns `None` when `self` isn't a lazy candidate.
+    ///
+    /// A raw-capture slot admits only the AST shape it captures, so those arms read through
+    /// [`WorkingPart::Ast`]; the scheduler's own slots (a resolved sub-result, a staging hole, a
+    /// synthesized nested node) are ordinary value slots and fall to the tail arm.
     pub fn lazy_eager_indices<'e>(
         &self,
-        expr: &KExpression<'e>,
+        expr: &WorkingExpression<'e>,
         types: &TypeRegistry,
     ) -> Option<Vec<usize>> {
         let sig = &self.signature;
@@ -50,36 +54,44 @@ impl<'a> KFunction<'a> {
         let mut has_lazy_slot = false;
         for (i, (el, part)) in sig.elements.iter().zip(expr.parts.iter()).enumerate() {
             match (el, &part.value) {
-                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
+                (SignatureElement::Keyword(s), WorkingPart::Ast(ExpressionPart::Keyword(t)))
+                    if s.as_str() == *t => {}
                 (SignatureElement::Keyword(_), _) => return None,
                 (SignatureElement::Argument(arg), part_value) => match (arg.ktype, part_value) {
-                    (KType::KEXPRESSION, ExpressionPart::Expression(_)) => {
+                    (KType::KEXPRESSION, WorkingPart::Ast(ExpressionPart::Expression(_))) => {
                         has_lazy_slot = true;
                     }
                     // A `#(...)` quote in a `:KExpression` slot is captured raw — the body is data,
                     // so it must never be sub-dispatched.
-                    (KType::KEXPRESSION, ExpressionPart::QuotedExpression(_)) => {
+                    (KType::KEXPRESSION, WorkingPart::Ast(ExpressionPart::QuotedExpression(_))) => {
                         has_lazy_slot = true;
                     }
                     (KType::KEXPRESSION, _) => return None,
                     // `:SigiledTypeExpr` is the lazy sibling of `:KExpression` for a `:(...)`
                     // part — captured raw (`resolve_for`), never sub-dispatched here.
-                    (KType::SIGILED_TYPE_EXPR, ExpressionPart::SigiledTypeExpr(_)) => {
+                    (
+                        KType::SIGILED_TYPE_EXPR,
+                        WorkingPart::Ast(ExpressionPart::SigiledTypeExpr(_)),
+                    ) => {
                         has_lazy_slot = true;
                     }
                     (KType::SIGILED_TYPE_EXPR, _) => return None,
                     // `:RecordType` is the lazy sibling for a `:{…}` part — captured raw so
                     // the NEWTYPE record-repr declarator owns its field-list elaboration.
-                    (KType::RECORD_TYPE, ExpressionPart::RecordType(_)) => {
+                    (KType::RECORD_TYPE, WorkingPart::Ast(ExpressionPart::RecordType(_))) => {
                         has_lazy_slot = true;
                     }
                     (KType::RECORD_TYPE, _) => return None,
-                    (_, ExpressionPart::Expression(_))
-                    | (_, ExpressionPart::SigiledTypeExpr(_))
-                    | (_, ExpressionPart::RecordType(_))
-                    | (_, ExpressionPart::ListLiteral(_))
-                    | (_, ExpressionPart::DictLiteral(_))
-                    | (_, ExpressionPart::RecordLiteral(_)) => {
+                    // A node the scheduler synthesized (an operator-chain fold's accumulator) is
+                    // an eager operand exactly as a parsed `(...)` is; it is already a working
+                    // expression, so staging dispatches it with no AST crossing.
+                    (_, WorkingPart::Expression(_))
+                    | (_, WorkingPart::Ast(ExpressionPart::Expression(_)))
+                    | (_, WorkingPart::Ast(ExpressionPart::SigiledTypeExpr(_)))
+                    | (_, WorkingPart::Ast(ExpressionPart::RecordType(_)))
+                    | (_, WorkingPart::Ast(ExpressionPart::ListLiteral(_)))
+                    | (_, WorkingPart::Ast(ExpressionPart::DictLiteral(_)))
+                    | (_, WorkingPart::Ast(ExpressionPart::RecordLiteral(_))) => {
                         // Speculative: assume the eager-evaluated result will type-match
                         // at late dispatch. SigiledTypeExpr / RecordType ride the Expression
                         // path — sub-dispatch produces a type-side Spliced the slot validates.
@@ -103,7 +115,7 @@ impl<'a> KFunction<'a> {
                         {
                             continue;
                         }
-                        if !arg.matches(other, types) {
+                        if !slot_admits(arg, other, types) {
                             return None;
                         }
                     }
@@ -119,11 +131,11 @@ impl<'a> KFunction<'a> {
 
     /// Per-slot classification of `expr` against `self`'s signature into the three index
     /// buckets of [`ClassifiedSlots`]. Disjointness is guaranteed by construction — each
-    /// `(SignatureElement, ExpressionPart)` shape lands in at most one bucket — and the
+    /// `(SignatureElement, WorkingPart)` shape lands in at most one bucket — and the
     /// downstream scheduler relies on it.
     pub fn classify_for_pick<'e>(
         &self,
-        expr: &KExpression<'e>,
+        expr: &WorkingExpression<'e>,
         types: &TypeRegistry,
     ) -> ClassifiedSlots {
         let eager_indices = self.lazy_eager_indices(expr, types);
@@ -163,13 +175,26 @@ impl<'a> KFunction<'a> {
     }
 }
 
+/// Whether `part` satisfies `arg`'s declared parameter type — the one admissibility reader over a
+/// dispatch-path slot. An AST slot classifies by part shape
+/// ([`KType::accepts_part`](crate::machine::model::KType::accepts_part)); a resolved sub-result
+/// classifies by the carrier resting in its cell, opened at that cell's own brand. A synthesized
+/// nested node and a staging hole denote no value yet, so neither satisfies a slot.
+pub fn slot_admits(arg: &Argument, part: &WorkingPart<'_>, types: &TypeRegistry) -> bool {
+    match part {
+        WorkingPart::Ast(ast) => arg.matches(ast, types),
+        WorkingPart::Spliced { cell } => arg.ktype.accepts_cell(cell, types),
+        WorkingPart::Expression(_) | WorkingPart::StagedSlot => false,
+    }
+}
+
 /// True iff `part` is the "bare-name" shape — a bare `Identifier` or a leaf
 /// `Type`-token. Both name-shaped parts ride the same auto-wrap and replay-park
 /// rails, so the symmetry is load-bearing for `LET T = Number` vs `LET y = z`
 /// walking identical scheduler paths.
-fn is_bare_name(part: &ExpressionPart<'_>) -> bool {
+fn is_bare_name(part: &WorkingPart<'_>) -> bool {
     matches!(
-        part,
-        ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
+        part.as_ast(),
+        Some(ExpressionPart::Identifier(_) | ExpressionPart::Type(_))
     )
 }

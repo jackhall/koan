@@ -160,7 +160,13 @@ fn using_on_non_module_fails_dispatch() {
     let scope = test_run.scope;
     test_run.run("LET n = 5");
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(parse_one("USING n SCOPE (1)"), scope);
+    let root = runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one("USING n SCOPE (1)"),
+        ),
+        scope,
+    );
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");

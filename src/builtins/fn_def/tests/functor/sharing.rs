@@ -49,10 +49,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
             })),
         )
     };
-    assert!(slot.accepts_part(&module_part("num_pinned"), &types));
-    assert!(!slot.accepts_part(&module_part("str_pinned"), &types));
-    assert!(!slot.accepts_part(&module_part("no_elem_pin"), &types));
-    assert!(slot.accepts_part(&module_part("num_bare"), &types));
+    assert!(slot.accepts_working_part(&module_part("num_pinned"), &types));
+    assert!(!slot.accepts_working_part(&module_part("str_pinned"), &types));
+    assert!(!slot.accepts_working_part(&module_part("no_elem_pin"), &types));
+    assert!(slot.accepts_working_part(&module_part("num_bare"), &types));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at
@@ -151,9 +151,13 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         "FN (MAKEBAD p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Str) (LET insert = 0)))",
     );
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("MAKEBAD int_ord_view"), scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one("MAKEBAD int_ord_view"),
+        ),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -188,9 +192,13 @@ fn functor_return_with_matching_sharing_constraint_passes() {
         "FN (MAKEGOOD p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("MAKEGOOD int_ord_view"), scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one("MAKEGOOD int_ord_view"),
+        ),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -238,11 +246,11 @@ fn transparent_view_pin_agreement_reads_source_types() {
     let num_view = scope.lookup("num_view").expect("num_view bound");
     let str_view = scope.lookup("str_view").expect("str_view bound");
     assert!(
-        slot.accepts_part(&spliced_part(&region, Carried::Object(num_view)), &types),
+        slot.accepts_working_part(&spliced_part(&region, Carried::Object(num_view)), &types),
         "transparent view over `Elem = Number` must agree with the `{{Elem = Number}}` pin",
     );
     assert!(
-        !slot.accepts_part(&spliced_part(&region, Carried::Object(str_view)), &types),
+        !slot.accepts_working_part(&spliced_part(&region, Carried::Object(str_view)), &types),
         "transparent view over `Elem = Str` must not agree with the `{{Elem = Number}}` pin",
     );
 }
@@ -281,7 +289,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let view_obj = scope.lookup("view").expect("view bound");
     assert!(
-        slot.accepts_part(&spliced_part(&region, Carried::Object(view_obj)), &types),
+        slot.accepts_working_part(&spliced_part(&region, Carried::Object(view_obj)), &types),
         "opaque view must agree with a pin naming its own per-call abstract `Carrier`",
     );
 }

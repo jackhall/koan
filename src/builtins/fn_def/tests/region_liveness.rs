@@ -8,13 +8,17 @@
 //! run root), and the call's result makes the run root retain the per-call owner — a two-region ring
 //! that only the eternal rule (`PinBundle::without_eternal`) cuts.
 
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{program_brand, TestRun};
 use crate::machine::run_root_storage;
 use crate::witnessed::{region_metrics, reset_region_metrics};
 
 /// Run `source` to completion in a fresh run, drop the whole run, and report how many of its
 /// regions are still live.
 fn live_after(source: &str) -> usize {
+    // Mint the thread's program storage region before the window opens. It is eternal — held for
+    // the test thread's life, exactly as production holds it for the run's — so it belongs outside
+    // a measurement of what one run mints and releases.
+    program_brand();
     reset_region_metrics();
     {
         let region = run_root_storage();
@@ -117,6 +121,7 @@ fn every_call_shape_leaves_no_live_region() {
 /// Run `source` to completion in a fresh run and report the **peak** number of regions live at any
 /// moment during it, alongside the count still live after the whole run drops.
 fn peak_and_live_after(source: &str) -> (usize, usize) {
+    program_brand();
     reset_region_metrics();
     let peak = {
         let region = run_root_storage();

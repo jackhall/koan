@@ -15,10 +15,16 @@ use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
 use crate::machine::model::Held;
-use crate::machine::model::KExpression;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{Carried, KObject, TypeNode, TypeRegistry};
+use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::{BindingIndex, KFunction, Scope};
+
+/// Cross a parsed node into the scheduler against `scope`'s region — the one door a test's AST
+/// takes into dispatch.
+fn working<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> WorkingExpression<'run> {
+    WorkingExpression::from_ast(scope.brand(), expr)
+}
 
 fn dispatch_one<'run>(
     test_run: &mut TestRun<'run>,
@@ -41,7 +47,9 @@ fn sched_read_carried<'run>(
     expr: KExpression<'run>,
 ) -> Carried<'run> {
     let scope = test_run.scope;
-    let id = test_run.runtime.dispatch_in_scope(expr, scope);
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(working(scope, expr), scope);
     test_run
         .runtime
         .execute()
@@ -186,7 +194,9 @@ fn function_value_call_named_args_missing_short_circuits() {
     let expr = parse_one("f {a = 1}");
     reset_resolve_dispatch_entry_count();
     let types = test_run.types.clone();
-    let id = test_run.runtime.dispatch_in_scope(expr, scope);
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(working(scope, expr), scope);
     test_run
         .runtime
         .execute()
@@ -543,7 +553,8 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bind_value should succeed");
-    let producer = runtime.dispatch_in_scope(parse_one("producer_target {y = 1}"), scope);
+    let producer =
+        runtime.dispatch_in_scope(working(scope, parse_one("producer_target {y = 1}")), scope);
     scope
         .install_placeholder(
             "f".to_string(),
@@ -554,7 +565,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
         )
         .expect("install_placeholder should succeed");
 
-    let f_call_id = runtime.dispatch_in_scope(parse_one("f {x = 7}"), scope);
+    let f_call_id = runtime.dispatch_in_scope(working(scope, parse_one("f {x = 7}")), scope);
 
     reset_resolve_dispatch_entry_count();
     let _ = runtime.execute();
@@ -600,7 +611,7 @@ fn classifier_struct_construct_routes_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("MyStruct {x = 1, y = 2}");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
+        matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
         "expected TypeCall for `MyStruct {{x = 1, y = 2}}`",
     );
 }
@@ -612,7 +623,7 @@ fn classifier_tagged_construct_routes_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("Maybe (Some 42)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
+        matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
         "expected TypeCall for `Maybe (Some 42)`",
     );
 }
@@ -624,7 +635,7 @@ fn classifier_newtype_construct_routes_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("Bar (x)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
+        matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
         "expected TypeCall for `Bar (x)`",
     );
 }
@@ -637,7 +648,7 @@ fn classifier_legacy_positional_collapses_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("(List Number)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
+        matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
         "leaf-Type head + leaf-Type args must classify as TypeCall",
     );
 }
@@ -660,7 +671,9 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
     let expr_a = parse_one("(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
-    test_run.runtime.dispatch_in_scope(expr_a, scope);
+    test_run
+        .runtime
+        .dispatch_in_scope(working(scope, expr_a), scope);
     let _ = test_run.runtime.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
@@ -670,7 +683,9 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
     let expr_b = parse_one("(f IF x)");
     reset_resolve_dispatch_entry_count();
-    test_run.runtime.dispatch_in_scope(expr_b, scope);
+    test_run
+        .runtime
+        .dispatch_in_scope(working(scope, expr_b), scope);
     let _ = test_run.runtime.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
@@ -694,9 +709,13 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (FIRST xs :(LIST OF Number)) -> Number = (1)");
-    let exprs = crate::parse::parse("LET y = (FIRST [1 2 3])").expect("parse succeeds");
+    let exprs = crate::parse::parse(
+        crate::builtins::test_support::program_brand(),
+        "LET y = (FIRST [1 2 3])",
+    )
+    .expect("parse succeeds");
     for e in exprs {
-        test_run.runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(working(scope, e), scope);
     }
     test_run
         .runtime
@@ -720,9 +739,13 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     let scope = test_run.scope;
     test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
     test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
-    let exprs = crate::parse::parse("LET out = (DESCRIBE [1 2 3])").expect("parse succeeds");
+    let exprs = crate::parse::parse(
+        crate::builtins::test_support::program_brand(),
+        "LET out = (DESCRIBE [1 2 3])",
+    )
+    .expect("parse succeeds");
     for e in exprs {
-        test_run.runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(working(scope, e), scope);
     }
     test_run
         .runtime
@@ -752,7 +775,7 @@ fn classifier_operator_chain_routes_to_operator_chain() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("a + b + c");
     assert_eq!(
-        classify_dispatch_shape(&expr),
+        classify_dispatch_shape(expr.parts),
         DispatchShape::OperatorChain,
         "`a + b + c` must classify as OperatorChain",
     );
@@ -766,7 +789,7 @@ fn classifier_single_operator_stays_keyworded() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("a + b");
     assert_eq!(
-        classify_dispatch_shape(&expr),
+        classify_dispatch_shape(expr.parts),
         DispatchShape::Keyworded,
         "`a + b` is a single operator — Keyworded, not a chain",
     );
@@ -785,7 +808,7 @@ fn operator_chain_undeclared_errors_cleanly() {
     let types = test_run.types.clone();
     let id = test_run
         .runtime
-        .dispatch_in_scope(parse_one("a % b % c"), scope);
+        .dispatch_in_scope(working(scope, parse_one("a % b % c")), scope);
     test_run
         .runtime
         .execute()
@@ -842,7 +865,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     // single frame covers it and the registry walk is what distinguishes the two sites.
     let inner_id = test_run
         .runtime
-        .dispatch_in_scope(parse_one("10 - 3 - 2"), inner);
+        .dispatch_in_scope(working(inner, parse_one("10 - 3 - 2")), inner);
     test_run
         .runtime
         .execute()
@@ -858,7 +881,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
 
     let root_id = test_run
         .runtime
-        .dispatch_in_scope(parse_one("10 - 3 - 2"), scope);
+        .dispatch_in_scope(working(scope, parse_one("10 - 3 - 2")), scope);
     test_run
         .runtime
         .execute()
@@ -903,7 +926,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
 
     let infix_id = test_run
         .runtime
-        .dispatch_in_scope(parse_one("1 ~ 2 ~ 3 ~ 4"), scope);
+        .dispatch_in_scope(working(scope, parse_one("1 ~ 2 ~ 3 ~ 4")), scope);
     test_run
         .runtime
         .execute()
@@ -919,7 +942,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
 
     let prefix_id = test_run
         .runtime
-        .dispatch_in_scope(parse_one("~ [1 2 3 4]"), scope);
+        .dispatch_in_scope(working(scope, parse_one("~ [1 2 3 4]")), scope);
     test_run
         .runtime
         .execute()
@@ -1101,7 +1124,7 @@ fn non_callable_list_head_errors() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(parse_one("[1 2 3] x"), scope);
+    let root = runtime.dispatch_in_scope(working(scope, parse_one("[1 2 3] x")), scope);
     runtime
         .execute()
         .expect("a non-callable head is slot-terminal, not a fatal execute error");

@@ -23,11 +23,11 @@ use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{DepPlacement, FinishCtx};
 use crate::machine::core::{LexicalFrame, StepAllocator};
 use crate::machine::model::Carried;
-use crate::machine::model::KExpression;
 use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
     FieldNameKind, ResultFeed,
 };
+use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::model::{KType, Record, TypeRegistry};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::scheduler::Deps;
@@ -86,7 +86,10 @@ impl<'step> FieldListRewalk<'step> {
         scope: &Scope<'b>,
         feed: &[Carried<'b>],
         types: &TypeRegistry,
-    ) -> Result<Vec<(String, KType)>, KError> {
+    ) -> Result<Vec<(String, KType)>, KError>
+    where
+        'step: 'b,
+    {
         let mut result_feed = ResultFeed::new(feed);
         let mut elaborator = Elaborator::new(scope)
             .with_threaded(self.threaded.iter().cloned())
@@ -147,7 +150,7 @@ fn compose_field_list<'step>(
 pub(crate) struct FieldListDeferral<'a> {
     expr: KExpression<'a>,
     park_producers: Vec<NodeId>,
-    sub_dispatches: Vec<KExpression<'a>>,
+    sub_dispatches: Vec<WorkingExpression<'a>>,
     context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
@@ -163,7 +166,7 @@ impl<'a> FieldListDeferral<'a> {
     pub(crate) fn new(
         expr: KExpression<'a>,
         park_producers: Vec<NodeId>,
-        sub_dispatches: Vec<KExpression<'a>>,
+        sub_dispatches: Vec<WorkingExpression<'a>>,
         context: FieldListContext,
         name_kind: FieldNameKind,
     ) -> Self {

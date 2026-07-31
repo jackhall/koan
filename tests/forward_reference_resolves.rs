@@ -12,7 +12,6 @@ use std::rc::Rc;
 use koan::builtins::test_support::{lookup_binding, TestRun};
 use koan::machine::model::KObject;
 use koan::machine::{run_root_storage, FrameStorage};
-use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh run inside `region`, run `source` end-to-end through the
 /// scheduler, and hand back the whole run so tests can assert on the root scope's bindings
@@ -20,8 +19,7 @@ use koan::parse::parse;
 fn run<'a>(region: &'a Rc<FrameStorage>, source: &str) -> TestRun<'a> {
     let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    let exprs = parse(source).expect("parse should succeed");
-    test_run.runtime.enter_block(scope.id, exprs, scope);
+    test_run.enter_source_in(scope, source);
     let _ = test_run.runtime.execute();
     test_run
 }
@@ -32,8 +30,7 @@ fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let exprs = parse(source).expect("parse should succeed");
-    let ids: Vec<_> = test_run.runtime.enter_block(scope.id, exprs, scope);
+    let ids = test_run.enter_source_in(scope, source);
     if let Err(e) = test_run.runtime.execute() {
         return Some(e);
     }
@@ -299,15 +296,11 @@ fn producer_error_propagates_to_parked_consumer() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let exprs = parse(
+    let ids = test_run.dispatch_source_in(
+        scope,
         "LET x = (UNDEFINED_FN)\n\
          LET y = (x)",
-    )
-    .expect("parse should succeed");
-    let ids: Vec<_> = exprs
-        .into_iter()
-        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
-        .collect();
+    );
     test_run
         .runtime
         .execute()

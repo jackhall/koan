@@ -9,15 +9,10 @@ use std::rc::Rc;
 use koan::builtins::test_support::{lookup_binding, SharedBuf, TestRun};
 use koan::machine::model::KObject;
 use koan::machine::{run_root_storage, KError, KErrorKind};
-use koan::parse::parse;
 
 fn run_collecting_errors(test_run: &mut TestRun<'_>, source: &str) -> Vec<Result<(), KError>> {
     let scope = test_run.scope;
-    let exprs = parse(source).expect("parse should succeed");
-    let mut ids = Vec::new();
-    for e in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(e, scope));
-    }
+    let ids = test_run.dispatch_source_in(scope, source);
     let _ = test_run.runtime.execute();
     // These tests assert only on `Ok`/`Err`, never on the produced value, so discard the carrier —
     // the scheduler re-anchors a read to its own borrow and the value need not escape it.

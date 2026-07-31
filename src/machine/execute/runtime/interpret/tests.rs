@@ -37,11 +37,17 @@ pub(super) fn run<'run>(
     region: &'run Rc<FrameStorage>,
     captured: Rc<RefCell<Vec<u8>>>,
 ) -> TestRun<'run> {
-    let exprs = parse(source).expect("parse should succeed");
     let mut test_run = TestRun::new(region, Box::new(SharedBuf(captured)));
     let root = test_run.scope;
+    // The test parses into the run's own storage and crosses each statement into the scheduler,
+    // exactly as `run_program` does with program storage.
+    let exprs = parse(crate::builtins::test_support::program_brand(), source)
+        .expect("parse should succeed");
     for expr in exprs {
-        test_run.runtime.dispatch_in_scope(expr, root);
+        test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(root.brand(), expr),
+            root,
+        );
     }
     test_run.runtime.execute().expect("program should run");
     test_run

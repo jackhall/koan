@@ -285,7 +285,13 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
         let runtime = &mut test_run.runtime;
-        let id = runtime.dispatch_in_scope(parse_one("Ordered WITH {Bogus = Number}"), scope);
+        let id = runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one("Ordered WITH {Bogus = Number}"),
+            ),
+            scope,
+        );
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -324,7 +330,13 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("SIG Tagged = ((LET Tag = Number) (VAL value :Number))");
         let runtime = &mut test_run.runtime;
-        let id = runtime.dispatch_in_scope(parse_one("Tagged WITH {Tag = Str}"), scope);
+        let id = runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one("Tagged WITH {Tag = Str}"),
+            ),
+            scope,
+        );
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -365,7 +377,13 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
         let runtime = &mut test_run.runtime;
-        let id = runtime.dispatch_in_scope(parse_one("Ordered WITH {type = Number}"), scope);
+        let id = runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one("Ordered WITH {type = Number}"),
+            ),
+            scope,
+        );
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");

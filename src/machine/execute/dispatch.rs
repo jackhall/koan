@@ -21,7 +21,8 @@
 //! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
 //! names).
 
-use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::core::RegionBrand;
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
 use crate::source::Spanned;
 
@@ -147,7 +148,7 @@ pub(super) fn producer_disposition(
 /// stays by-value. Adding a shape here forces a `stage_eager_part` arm via
 /// match exhaustiveness.
 enum EagerShape {
-    /// `(...)` — the boxed inner expression dispatches directly.
+    /// `(...)` — the nested inner expression dispatches directly.
     Subexpression,
     /// `:(…)` / `:{…}` — the whole part rewraps as a one-part sub-Dispatch
     /// to a type-side carrier.
@@ -177,19 +178,50 @@ pub(in crate::machine::execute) fn is_eager_part(part: &ExpressionPart<'_>) -> b
     eager_shape(part).is_some()
 }
 
-/// Stage one eager part as the [`DepRequest`] the harness realizes; a non-eager
-/// part round-trips back untouched. By-value — no clones on the staging path.
+/// [`is_eager_part`] read through a dispatch slot: only a slot still holding raw AST can be eager —
+/// the scheduler's own arms (a synthesized node, a resolved cell, a staging hole) are past staging.
+pub(in crate::machine::execute) fn is_eager_working_part(part: &WorkingPart<'_>) -> bool {
+    match part {
+        // A node the scheduler synthesized is an operand awaiting its own dispatch, exactly as a
+        // parsed `(...)` is — the operator-chain fold's accumulator is the one that reaches here.
+        WorkingPart::Expression(_) => true,
+        WorkingPart::Ast(ast) => is_eager_part(ast),
+        WorkingPart::Spliced { .. } | WorkingPart::StagedSlot => false,
+    }
+}
+
+/// Stage one slot of a working expression. A slot still holding raw AST classifies through
+/// [`stage_eager_part`]; a node the scheduler synthesized (the operator-chain fold's accumulator)
+/// is already a working expression, so it dispatches directly with no crossing. Every other
+/// scheduler-side arm — a resolved cell, a staging hole — rides through as `Err`.
+pub(in crate::machine::execute) fn stage_eager_working_part<'a>(
+    brand: RegionBrand<'a>,
+    part: WorkingPart<'a>,
+) -> Result<DepRequest<'a>, WorkingPart<'a>> {
+    match part {
+        WorkingPart::Ast(ast) => stage_eager_part(brand, ast).map_err(WorkingPart::Ast),
+        WorkingPart::Expression(inner) => Ok(DepRequest::Dispatch {
+            expr: *inner,
+            placement: DepPlacement::OwnScope,
+            // A synthesized operand is a reduction product, never a nested binder.
+            binder_covered: false,
+        }),
+        other => Err(other),
+    }
+}
+
 pub(in crate::machine::execute) fn stage_eager_part<'a>(
+    brand: RegionBrand<'a>,
     part: ExpressionPart<'a>,
 ) -> Result<DepRequest<'a>, ExpressionPart<'a>> {
     match eager_shape(&part) {
         None => Err(part),
         Some(EagerShape::Subexpression) => {
-            let ExpressionPart::Expression(boxed) = part else {
+            let ExpressionPart::Expression(inner) = part else {
                 unreachable!("eager_shape matched Subexpression")
             };
             Ok(DepRequest::Dispatch {
-                expr: *boxed,
+                expr: WorkingExpression::from_ast(brand, *inner),
                 placement: DepPlacement::OwnScope,
                 // Default uncovered; the keyworded walk marks a binder's own chain slots after staging.
                 binder_covered: false,
@@ -198,7 +230,7 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
         Some(EagerShape::TypeExpression) => Ok(DepRequest::Dispatch {
             // Rewrap the whole part — the same shape `classify_aggregate_part`
             // builds, equivalent to the destructure-and-rewrap the walks did.
-            expr: KExpression::new(vec![Spanned::bare(part)]),
+            expr: WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]),
             placement: DepPlacement::OwnScope,
             binder_covered: false,
         }),
@@ -223,18 +255,42 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
     }
 }
 
-/// The [`ExpressionPart::StagedSlot`] hole a staged slot leaves in `new_parts`, holding the
-/// slot's position/index until `install_eager_subs`'s finish overwrites it with the resolved
-/// `Spliced` cell.
-pub(in crate::machine::execute) fn staged_slot_placeholder<'a>() -> Spanned<ExpressionPart<'a>> {
-    Spanned::bare(ExpressionPart::StagedSlot)
+/// The [`WorkingPart::StagedSlot`] hole a staged slot leaves in `new_parts`, holding the
+/// slot's position/index until `install_eager_subs`'s finish rebuilds the run with the resolved
+/// `Spliced` cell in its place.
+pub(in crate::machine::execute) fn staged_slot_placeholder<'a>() -> Spanned<WorkingPart<'a>> {
+    Spanned::bare(WorkingPart::StagedSlot)
 }
 
 /// Result of a successful keyworded part walk.
 pub(in crate::machine::execute) struct PartWalkResult<'step> {
-    pub new_parts: Vec<Spanned<ExpressionPart<'step>>>,
+    pub new_parts: Vec<Spanned<WorkingPart<'step>>>,
     pub producers_to_wait: Vec<NodeId>,
     pub staged_subs: Vec<(usize, DepRequest<'step>)>,
+}
+
+/// The trace frame for a dispatch node — [`TraceFrame::from_expr`]'s peer for the scheduler's own
+/// per-call node, resolving `span` / `file` to a source location the same way. `function` is the
+/// caller-chosen label (`"<bind>"`, `"<dispatch-park>"`) for a scheduler-internal frame with no
+/// `KFunction` behind it.
+pub(in crate::machine::execute) fn working_frame(
+    function: impl Into<String>,
+    expr: &WorkingExpression<'_>,
+) -> TraceFrame {
+    TraceFrame {
+        function: function.into(),
+        expression: expr.summarize(),
+        location: expr.span.zip(expr.file).map(|(span, file)| {
+            crate::source::with(file, |f| {
+                let (line, col_utf16) = f.resolve(span.start);
+                crate::source::SourceLoc {
+                    path: f.path.clone(),
+                    line,
+                    col_utf16,
+                }
+            })
+        }),
+    }
 }
 
 /// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.
@@ -245,25 +301,26 @@ pub(in crate::machine::execute) struct PartWalkResult<'step> {
 ///   newtypes). The verb-carrier decides which shape it admits; the mismatched shape
 ///   surfaces a loud `DispatchFailed`.
 pub(super) enum CallBody<'step> {
-    Named(Vec<(String, ExpressionPart<'step>)>),
-    Positional(Vec<Spanned<ExpressionPart<'step>>>),
+    Named(&'step [(&'step str, ExpressionPart<'step>)]),
+    Positional(&'step [Spanned<ExpressionPart<'step>>]),
 }
 
 /// Classify the single body part of a `head (...)` / `head {...}` call from
 /// `expr.parts[1..]`. The body must be exactly one nested-parens (`Positional`) or one
-/// record literal (`Named`); anything else is a non-match.
+/// record literal (`Named`); anything else is a non-match. Both surfaces are raw syntax, so the
+/// body rides out as the AST run the parser froze.
 pub(super) fn extract_call_body<'step>(
-    expr: &KExpression<'step>,
+    expr: &WorkingExpression<'step>,
 ) -> Result<CallBody<'step>, KError> {
-    match expr.parts[1..].as_ref() {
+    match &expr.parts[1..] {
         [Spanned {
-            value: ExpressionPart::RecordLiteral(fields),
+            value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
             ..
-        }] => Ok(CallBody::Named(fields.clone())),
+        }] => Ok(CallBody::Named(fields)),
         [Spanned {
-            value: ExpressionPart::Expression(inner),
+            value: WorkingPart::Ast(ExpressionPart::Expression(inner)),
             ..
-        }] => Ok(CallBody::Positional(inner.parts.clone())),
+        }] => Ok(CallBody::Positional(inner.parts)),
         _ => Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
             reason: "no matching function".to_string(),
@@ -279,7 +336,10 @@ pub(super) const POSITIONAL_ONLY: &str =
     "positional construction takes `(value)`, not a record literal `{name = value}`";
 
 /// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
-pub(super) fn body_shape_err<'step>(expr: &KExpression<'step>, reason: &str) -> Outcome<'step> {
+pub(super) fn body_shape_err<'step>(
+    expr: &WorkingExpression<'step>,
+    reason: &str,
+) -> Outcome<'step> {
     Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
         reason: reason.to_string(),
@@ -326,7 +386,7 @@ pub(in crate::machine::execute) fn forward_to_producer<'step>(producer: NodeId) 
 /// this slot holds no contract of its own, so the ambient obligation is the whole winner.
 pub(in crate::machine::execute) fn become_dispatch<'step>(
     view: &SchedulerView<'step, '_>,
-    inner: KExpression<'step>,
+    inner: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     Outcome::Continue {
         work: decide_tail(inner, view.current_obligation_duplicate()),
@@ -349,15 +409,16 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
 /// parking/resume path as `Expression` parts. Callers with no committed pick
 /// (the keyworded `Deferred` arm, which re-resolves on finish) pass `&[]`.
 pub(super) fn stage_all_eager_parts<'step>(
-    parts: Vec<Spanned<ExpressionPart<'step>>>,
+    brand: RegionBrand<'step>,
+    parts: &[Spanned<WorkingPart<'step>>],
     wrap_indices: &[usize],
 ) -> (
-    Vec<Spanned<ExpressionPart<'step>>>,
+    Vec<Spanned<WorkingPart<'step>>>,
     Vec<(usize, DepRequest<'step>)>,
 ) {
-    let mut new_parts: Vec<Spanned<ExpressionPart<'step>>> = Vec::with_capacity(parts.len());
+    let mut new_parts: Vec<Spanned<WorkingPart<'step>>> = Vec::with_capacity(parts.len());
     let mut staged: Vec<(usize, DepRequest<'step>)> = Vec::new();
-    for (i, part) in parts.into_iter().enumerate() {
+    for (i, part) in parts.iter().enumerate() {
         let span = part.span;
         if wrap_indices.contains(&i) {
             // Bare-name value slot: resolve the name through a single-part
@@ -365,10 +426,13 @@ pub(super) fn stage_all_eager_parts<'step>(
             // the resolved `Spliced` carrier reaches `accepts_part` at bind. Not
             // one of the six eager shapes (it wraps bare Identifier/Type parts),
             // so this stays a pre-check before the stager.
-            let wrapped = KExpression::new(vec![Spanned {
-                value: part.value,
-                span,
-            }]);
+            let wrapped = WorkingExpression::new(
+                brand,
+                vec![Spanned {
+                    value: part.value,
+                    span,
+                }],
+            );
             staged.push((
                 i,
                 DepRequest::Dispatch {
@@ -381,12 +445,12 @@ pub(super) fn stage_all_eager_parts<'step>(
             new_parts.push(staged_slot_placeholder());
             continue;
         }
-        match stage_eager_part(part.value) {
+        match stage_eager_working_part(brand, part.value) {
             Ok(dep) => {
                 staged.push((i, dep));
                 new_parts.push(staged_slot_placeholder());
             }
-            Err(value) => new_parts.push(Spanned { value, span }),
+            Err(_) => new_parts.push(*part),
         }
     }
     (new_parts, staged)
@@ -409,7 +473,7 @@ pub(in crate::machine::execute) type ResumeFn<'step> =
 /// state before classifying — the keep-first capture that carries the first caller's declared return
 /// down the chain). Pass `None` for a plain birth dispatch that carries no inherited obligation.
 pub(in crate::machine::execute) fn decide_tail<'step>(
-    expr: KExpression<'step>,
+    expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = expr.summarize();
@@ -444,28 +508,28 @@ pub(in crate::machine::execute) fn decide_error(
 /// closure re-enters [`run_step`], never back through here.
 fn classify_dispatch<'step>(
     view: &SchedulerView<'step, '_>,
-    expr: KExpression<'step>,
+    expr: WorkingExpression<'step>,
     idx: usize,
 ) -> Outcome<'step> {
     match expr.shape() {
         DispatchShape::BareTypeLeaf => {
-            let t = match &expr.parts[0].value {
-                ExpressionPart::Type(t) => t.clone(),
+            let t = match expr.parts[0].value {
+                WorkingPart::Ast(ExpressionPart::Type(t)) => t,
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            view.with_current_scope(|s| single_poll::bare_type_leaf(view, s, &t))
+            view.with_current_scope(|s| single_poll::bare_type_leaf(view, s, t))
         }
         DispatchShape::BareIdentifier => {
-            let name = match &expr.parts[0].value {
-                ExpressionPart::Identifier(n) => n.clone(),
+            let name = match expr.parts[0].value {
+                WorkingPart::Ast(ExpressionPart::Identifier(n)) => n,
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
             view.with_current_scope(|s| single_poll::bare_identifier(view, s, name))
         }
         DispatchShape::FunctionValueCall => fn_value::initial(view, expr),
         DispatchShape::TypeCall => single_poll::type_call(view, expr),
-        DispatchShape::HeadDeferred => head_deferred::initial_expr(expr),
-        DispatchShape::TypeHeadDeferred => head_deferred::initial_type(expr),
+        DispatchShape::HeadDeferred => head_deferred::initial_expr(view, expr),
+        DispatchShape::TypeHeadDeferred => head_deferred::initial_type(view, expr),
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
         // a non-callable head is a runtime error, not a fatal `execute()` abort.
         DispatchShape::NonCallableHead => {

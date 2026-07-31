@@ -219,9 +219,8 @@ impl<'a> Scope<'a> {
     /// lives. A value already resident here rests for free — the library's self rule strips this
     /// region from what is retained.
     ///
-    /// The counterpart reads are [`Self::lift_spliced`] (an adoption, which needs the reach owned
-    /// again) and [`Self::read_spliced`] (a probe). Both name this scope's own region owner as their
-    /// pin, which is what the retention above makes sufficient.
+    /// The counterpart read is [`Self::lift_spliced`], an adoption, which names this scope's own
+    /// region owner as its pin — what the retention above makes sufficient.
     pub(crate) fn rest_delivered(&self, cell: &DeliveredCarried) -> SplicedCell {
         cell.rest_in(self.brand().handle())
     }
@@ -237,18 +236,6 @@ impl<'a> Scope<'a> {
     /// is what makes the `Weak → Rc` upgrade behind the lift succeed.
     pub(crate) fn lift_spliced(&self, cell: &SplicedCell) -> DeliveredCarried {
         cell.open_at(&self.home()).lift_out()
-    }
-
-    /// Read a resting splice cell's value under this scope's own region owner — the probe form of
-    /// [`Self::lift_spliced`], for a caller that only inspects (a type slot's handle, a shape
-    /// classification). Nothing is minted and nothing escapes: the `for<'b>` brand confines the
-    /// re-anchored value to the call. Same coverage obligation on `self` as the lift.
-    pub(crate) fn read_spliced<R>(
-        &self,
-        cell: &SplicedCell,
-        read: impl for<'b> FnOnce(Carried<'b>) -> R,
-    ) -> R {
-        cell.open_with(&self.home(), read)
     }
 
     /// **Lift** a binding's dormant carrier into a delivery envelope pinned by this scope's own
@@ -327,10 +314,11 @@ impl<'a> Scope<'a> {
     /// ([`adopt_disposition`] is the single home of the rules); this door then runs the mechanism
     /// the chooser named.
     ///
-    /// The **type channel** never reaches the chooser: a `KType` and a `TypeIdentifier` are fully
-    /// owned data, so the envelope is opened, the content cloned out, and the clone allocated into
-    /// this scope's own region. That is a copy for every seam — the result borrows only this region,
-    /// so no reach is minted and the producer's region is not pinned.
+    /// The **type channel** never reaches the chooser: a `KType` is a lifetime-free handle and a
+    /// `TypeIdentifier` is a bare surface name, so the envelope is opened and its content copied out
+    /// — the handle by value, the name's bytes bumped into this scope's own region. That is a copy
+    /// for every seam — the result borrows only this region, so no reach is minted and the
+    /// producer's region is not pinned.
     ///
     /// Where [`seal_resident`](Self::seal_resident) seals a value already living **in** this
     /// region, adoption is the consumption verb for a carrier produced **elsewhere**.
@@ -340,22 +328,25 @@ impl<'a> Scope<'a> {
         seam: AdoptSeam<'_>,
     ) -> Carried<'a> {
         /// The content copied out of a type-channel envelope: a `Copy` `KType` handle, or an
-        /// unlowered surface name re-allocated into this scope's region.
-        enum AdoptedType {
+        /// unlowered surface name whose bytes are re-bumped into this scope's region.
+        enum AdoptedType<'t> {
             Lowered(KType),
-            Unlowered(TypeIdentifier),
+            Unlowered(TypeIdentifier<'t>),
         }
 
-        let cloned_type = cell.open(|live| match live {
+        let brand = self.brand();
+        let copied_type = cell.open(|live| match live {
             Carried::Type(kt) => Some(AdoptedType::Lowered(kt)),
-            Carried::UnresolvedType(ti) => Some(AdoptedType::Unlowered(ti.clone())),
+            // The name is read at the envelope's own brand, so it is copied here rather than
+            // carried out: the product names only this region.
+            Carried::UnresolvedType(ti) => Some(AdoptedType::Unlowered(TypeIdentifier::leaf(
+                brand.alloc_text(ti.as_str()),
+            ))),
             Carried::Object(_) => None,
         });
-        match cloned_type {
+        match copied_type {
             Some(AdoptedType::Lowered(handle)) => return Carried::Type(handle),
-            Some(AdoptedType::Unlowered(ti)) => {
-                return Carried::UnresolvedType(self.brand().alloc_type_identifier(ti))
-            }
+            Some(AdoptedType::Unlowered(ti)) => return Carried::UnresolvedType(ti),
             None => {}
         }
 

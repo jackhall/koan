@@ -176,7 +176,7 @@ mod tests {
     fn binder_name_extracts_module_name() {
         let expr = parse_one("MODULE foo = (LET x = 1)");
         let name = crate::machine::model::binder::identifier_part_binder_name(&expr);
-        assert_eq!(name.as_deref(), Some("foo"));
+        assert_eq!(name, Some("foo"));
     }
 
     /// A Type-token module name is refused by the second overload, whose only job is the

@@ -8,35 +8,35 @@
 
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 
-pub(super) fn type_expr_references_any(te: &TypeIdentifier, param_names: &[String]) -> bool {
+pub(super) fn type_expr_references_any(te: TypeIdentifier<'_>, param_names: &[String]) -> bool {
     param_names.iter().any(|n| n.as_str() == te.as_str())
 }
 
 pub(super) fn kexpression_references_any(expr: &KExpression<'_>, param_names: &[String]) -> bool {
     expr.parts
         .iter()
-        .any(|p| part_references_any(&p.value, param_names))
+        .any(|p| part_references_any(p.value, param_names))
 }
 
-fn part_references_any(part: &ExpressionPart<'_>, param_names: &[String]) -> bool {
+fn part_references_any(part: ExpressionPart<'_>, param_names: &[String]) -> bool {
     match part {
         ExpressionPart::Identifier(name) => param_names.iter().any(|n| n == name),
         ExpressionPart::Type(t) => type_expr_references_any(t, param_names),
-        ExpressionPart::Expression(boxed) => kexpression_references_any(boxed, param_names),
-        ExpressionPart::SigiledTypeExpr(boxed) => kexpression_references_any(boxed, param_names),
+        ExpressionPart::Expression(inner) => kexpression_references_any(inner, param_names),
+        ExpressionPart::SigiledTypeExpr(inner) => kexpression_references_any(inner, param_names),
         // A `:{…}` field type can reference a param in a nested sigil (`:{y :er.Carrier}`).
-        ExpressionPart::RecordType(boxed) => kexpression_references_any(boxed, param_names),
+        ExpressionPart::RecordType(inner) => kexpression_references_any(inner, param_names),
         ExpressionPart::ListLiteral(items) => {
-            items.iter().any(|p| part_references_any(p, param_names))
+            items.iter().any(|p| part_references_any(*p, param_names))
         }
         ExpressionPart::DictLiteral(pairs) => pairs.iter().any(|(k, v)| {
-            part_references_any(k, param_names) || part_references_any(v, param_names)
+            part_references_any(*k, param_names) || part_references_any(*v, param_names)
         }),
         // Field names are literal strings, never references; scan the values
         // (e.g. `er` inside `Set WITH {Elt = er.Carrier}`).
         ExpressionPart::RecordLiteral(fields) => fields
             .iter()
-            .any(|(_, v)| part_references_any(v, param_names)),
+            .any(|(_, v)| part_references_any(*v, param_names)),
         _ => false,
     }
 }

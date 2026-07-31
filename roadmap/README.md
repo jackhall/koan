@@ -44,6 +44,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Files and imports](libraries/files-and-imports.md)
 - [EVAL splices in place](metaprogramming/eval-splices-in-place.md)
 - [One kind-blind reader per shape slot](metaprogramming/one-reader-per-shape-slot.md)
+- [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)

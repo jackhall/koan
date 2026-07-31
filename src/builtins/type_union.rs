@@ -82,10 +82,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         OperatorForm {
             signature: sig(
                 KType::of_kind(KKind::AnyType),
-                vec![
-                    kw("|"),
-                    arg("members", types.list(KType::ANY)),
-                ],
+                vec![kw("|"), arg("members", types.list(KType::ANY))],
             ),
             body: Body::Builtin(body_nary),
         },

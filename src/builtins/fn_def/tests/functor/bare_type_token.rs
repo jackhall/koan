@@ -15,7 +15,10 @@ use crate::machine::{KError, KErrorKind};
 /// later refused). Compare `TestRun::run_one_err`, which panics on the
 /// first path.
 fn run_expecting_dispatch_error<'a>(test_run: &mut TestRun<'a>, expr: KExpression<'a>) -> KError {
-    let id = test_run.runtime.dispatch_in_scope(expr, test_run.scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(test_run.scope.brand(), expr),
+        test_run.scope,
+    );
     match test_run.runtime.execute() {
         Err(e) => e,
         Ok(()) => {
@@ -162,9 +165,10 @@ fn deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (BUILD Elt :Type) -> :Elt = (42)");
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("BUILD Str"), scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("BUILD Str")),
+        scope,
+    );
     test_run
         .runtime
         .execute()

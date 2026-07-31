@@ -245,8 +245,11 @@ impl<'run> KoanRuntime<'run> {
                             Err(error) => Outcome::Done(Err(error)),
                         };
                         // Realize the outcome into a `NodeStep`; a ready `Outcome::Forward` becomes
-                        // a `ForwardReady` relocated below into this same `dest`.
-                        rt.apply_outcome(outcome, idx)
+                        // a `ForwardReady` relocated below into this same `dest`. The step scope's
+                        // brand rides along: an owned dep the outcome names may still have to bump
+                        // its own dispatch node (an aggregate literal's elements, a body block's
+                        // statements) into this region as it is realized.
+                        rt.apply_outcome(outcome, scope.brand(), idx)
                     },
                 );
                 // The producer's per-call frame, gated to a *dying* producer (a frameless / run-frame

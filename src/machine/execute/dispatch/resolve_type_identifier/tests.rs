@@ -8,7 +8,7 @@ fn resolve_type_expr_builtin_leaf_resolves_stably() {
     let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
-    let te = TypeIdentifier::leaf("Number".into());
+    let te = TypeIdentifier::leaf("Number");
     let first = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done"),
@@ -27,7 +27,7 @@ fn resolve_type_expr_unbound_returns_unbound() {
     let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
-    let te = TypeIdentifier::leaf("NotABuiltin".into());
+    let te = TypeIdentifier::leaf("NotABuiltin");
     match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Unbound(_) => {}
         _ => panic!("expected Unbound for unknown leaf"),
@@ -43,7 +43,7 @@ fn resolve_type_expr_user_struct_resolves_after_finalize() {
     let scope = test_run.scope;
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
     let types = test_run.types.clone();
-    let te = TypeIdentifier::leaf("Point".into());
+    let te = TypeIdentifier::leaf("Point");
     let kt = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done after the declaration"),
@@ -123,7 +123,7 @@ mod bare_leaf_resolution {
             &mut crate::machine::WriteGate::for_test(),
         );
         let types = TypeRegistry::new();
-        let leaf = TypeIdentifier::leaf("Number".to_string());
+        let leaf = TypeIdentifier::leaf("Number");
         match scope.resolve_type_identifier(&leaf, None, &types) {
             TypeResolution::Done(resolved) if resolved == KType::NUMBER => {}
             other => panic!("expected Done(Number), got {:?}", outcome_tag(&other)),
@@ -135,7 +135,7 @@ mod bare_leaf_resolution {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
         let types = TypeRegistry::new();
-        let leaf = TypeIdentifier::leaf("Missing".to_string());
+        let leaf = TypeIdentifier::leaf("Missing");
         match scope.resolve_type_identifier(&leaf, None, &types) {
             // The bridge surfaces the elaborator's `unknown type name` diagnostic, which
             // names the leaf rather than carrying the bare name.
@@ -177,7 +177,7 @@ mod bare_leaf_resolution {
             .expect("placeholder install");
 
         let types = TypeRegistry::new();
-        let leaf = TypeIdentifier::leaf("Node".to_string());
+        let leaf = TypeIdentifier::leaf("Node");
         match scope.resolve_type_identifier(&leaf, None, &types) {
             TypeResolution::Park(producers) => {
                 assert_eq!(producers, vec![NodeId(7)], "parks on the single producer");
@@ -250,7 +250,7 @@ mod bare_leaf_resolution {
             .alloc_scope(Scope::child_recursive_group(outer, inner_window));
 
         let types = TypeRegistry::new();
-        let leaf = TypeIdentifier::leaf("Node".to_string());
+        let leaf = TypeIdentifier::leaf("Node");
         match inner.resolve_type_identifier(&leaf, None, &types) {
             TypeResolution::Done(_) => {}
             other => panic!(

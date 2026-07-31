@@ -6,7 +6,9 @@ use crate::machine::model::KObject;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
-use super::let_expr;
+use crate::builtins::test_support::program_brand;
+
+use super::{let_expr, working};
 
 #[test]
 fn dispatches_independent_expressions_in_order() {
@@ -46,15 +48,20 @@ fn later_expression_sees_earlier_binding_via_lookup() {
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
 
-    let lookup_a = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Keyword("LET".into())),
-        Spanned::bare(ExpressionPart::Identifier("b".into())),
-        Spanned::bare(ExpressionPart::Keyword("=".into())),
-        Spanned::bare(ExpressionPart::Expression(Box::new(KExpression::new(
-            vec![Spanned::bare(ExpressionPart::Identifier("a".into()))],
-        )))),
-    ]);
-    runtime.enter_block(root.id, vec![let_expr("a", 10.0), lookup_a], root);
+    let brand = program_brand().region();
+    let lookup_a = KExpression::new(
+        brand,
+        vec![
+            Spanned::bare(ExpressionPart::Keyword("LET")),
+            Spanned::bare(ExpressionPart::Identifier("b")),
+            Spanned::bare(ExpressionPart::Keyword("=")),
+            Spanned::bare(ExpressionPart::expression(
+                brand,
+                vec![Spanned::bare(ExpressionPart::Identifier("a"))],
+            )),
+        ],
+    );
+    runtime.enter_block(root.id, vec![let_expr("a", 10.0), working(lookup_a)], root);
 
     runtime.execute().unwrap();
     assert!(matches!(root.lookup("b"), Some(KObject::Number(n)) if *n == 10.0));

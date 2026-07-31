@@ -13,16 +13,12 @@ use std::rc::Rc;
 
 use koan::builtins::test_support::TestRun;
 use koan::machine::{run_root_storage, FrameStorage};
-use koan::parse::parse;
 
 /// Run `src` to completion, returning everything it PRINTed.
 fn run_capture(region: &Rc<FrameStorage>, src: &str) -> String {
     let (mut test_run, captured) = TestRun::with_buf(region);
     let scope = test_run.scope;
-    let exprs = parse(src).expect("parse should succeed");
-    for e in exprs {
-        test_run.runtime.dispatch_in_scope(e, scope);
-    }
+    test_run.dispatch_source_in(scope, src);
     test_run
         .runtime
         .execute()
@@ -35,11 +31,7 @@ fn run_capture(region: &Rc<FrameStorage>, src: &str) -> String {
 fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
     let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    let exprs = parse(src).expect("parse should succeed");
-    let ids: Vec<_> = exprs
-        .into_iter()
-        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
-        .collect();
+    let ids = test_run.dispatch_source_in(scope, src);
     test_run
         .runtime
         .execute()

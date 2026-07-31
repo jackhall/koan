@@ -9,6 +9,9 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
+use crate::machine::core::{program_storage, ProgramBrand, ProgramStorage, RegionBrand};
+#[cfg(test)]
+use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::KObject;
 #[cfg(test)]
@@ -16,8 +19,6 @@ use crate::machine::model::Module;
 use crate::machine::model::TypeRegistry;
 #[cfg(test)]
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
-#[cfg(test)]
-use crate::machine::model::{Carried, ExpressionPart};
 #[cfg(test)]
 use crate::machine::FrameStorageExt;
 #[cfg(test)]
@@ -29,7 +30,6 @@ use crate::machine::{AdoptSeam, FrameStorage, KError, NameLookup, Scope};
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
 use crate::parse::parse;
-#[cfg(test)]
 use crate::scheduler::NodeId;
 #[cfg(test)]
 use crate::witnessed::{Sealed, Witnessed};
@@ -104,6 +104,12 @@ impl<'a> TestRun<'a> {
     pub fn types(&self) -> &TypeRegistry {
         &self.types
     }
+
+    /// This run's own region brand, for a test that builds AST directly rather than through
+    /// [`parse_one`] (which parses into the thread's shared program storage).
+    pub fn brand(&self) -> RegionBrand<'a> {
+        self.scope.brand()
+    }
 }
 
 /// Extract a top-level terminal at the scope lifetime `'a`. The terminal is opened at a rank-2 brand
@@ -171,10 +177,26 @@ pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<
     ))
 }
 
+/// The test tree's program storage brand — minted once per test thread and leaked so a caller can
+/// hand back a `KExpression<'a>` for a caller-chosen `'a` with no storage parameter of its own: a
+/// longer-lived (here, unbounded) node coerces to any shorter lifetime by ordinary covariance.
+/// Test-only churn; a normal test lives and dies within one process, so the leak is bounded by the
+/// test binary's lifetime, not the run's.
+/// One storage per test thread, not one per call: program storage is the eternal tier, so holding
+/// a single one for the thread's life is the shape production has rather than a concession to the
+/// harness. Every test that parses rides this, so test AST sits at the tier production's does.
+pub fn program_brand() -> ProgramBrand<'static> {
+    thread_local! {
+        static TEST_PROGRAM_STORAGE: &'static ProgramStorage =
+            Box::leak(Box::new(program_storage()));
+    }
+    TEST_PROGRAM_STORAGE.with(|storage| storage.brand())
+}
+
 /// Parse a source string expected to contain exactly one top-level expression.
 #[cfg(test)]
 pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
-    let mut exprs = parse(src).expect("parse should succeed");
+    let mut exprs = parse(program_brand(), src).expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test helper expects a single expression");
     exprs.remove(0)
 }
@@ -188,9 +210,12 @@ impl<'a> TestRun<'a> {
     /// individually, so chained calls compose. Tests asserting top-level statement *ordering*
     /// (e.g. forward-ref-fails behavior) call `enter_block` on `runtime` directly instead.
     pub fn run_in(&mut self, scope: &'a Scope<'a>, source: &str) {
-        let exprs = parse(source).expect("parse should succeed");
+        let exprs = parse(program_brand(), source).expect("parse should succeed");
         for expr in exprs {
-            self.runtime.dispatch_in_scope(expr, scope);
+            self.runtime.dispatch_in_scope(
+                crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+                scope,
+            );
         }
         self.runtime.execute().expect("scheduler should succeed");
     }
@@ -198,6 +223,42 @@ impl<'a> TestRun<'a> {
     /// [`TestRun::run_in`] against the bundle's own scope.
     pub fn run(&mut self, source: &str) {
         self.run_in(self.scope, source)
+    }
+
+    /// Submit `source` as one block against `scope`, so its statements share a submission and
+    /// resolve in whatever order the scheduler pops them — the shape a test asserting statement
+    /// *ordering* needs, where [`TestRun::run_in`]'s statement-at-a-time dispatch would not.
+    /// Returns the top-level node ids; the caller drives `execute` itself.
+    pub fn enter_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<NodeId> {
+        let statements = parse(program_brand(), source)
+            .expect("parse should succeed")
+            .into_iter()
+            .map(|statement| {
+                crate::machine::model::WorkingExpression::from_ast(scope.brand(), statement)
+            })
+            .collect();
+        self.runtime.enter_block(scope.id, statements, scope)
+    }
+
+    /// [`TestRun::enter_source_in`] against the bundle's own scope.
+    pub fn enter_source(&mut self, source: &str) -> Vec<NodeId> {
+        self.enter_source_in(self.scope, source)
+    }
+
+    /// Parse `source` and dispatch each statement as its own submission against `scope`, handing
+    /// back one node id per statement. The statement-at-a-time peer of
+    /// [`TestRun::enter_source_in`], for a test that reads each slot's own result; the caller
+    /// drives `execute` itself.
+    pub fn dispatch_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<NodeId> {
+        parse(program_brand(), source)
+            .expect("parse should succeed")
+            .into_iter()
+            .map(|statement| {
+                let working =
+                    crate::machine::model::WorkingExpression::from_ast(scope.brand(), statement);
+                self.runtime.dispatch_in_scope(working, scope)
+            })
+            .collect()
     }
 
     /// Dispatch `expr` against `scope` with REPL-style "complete" visibility, so bindings from
@@ -209,7 +270,10 @@ impl<'a> TestRun<'a> {
         scope: &'a Scope<'a>,
         expr: KExpression<'a>,
     ) -> &'a KObject<'a> {
-        let id = self.runtime.dispatch_in_scope(expr, scope);
+        let id = self.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+            scope,
+        );
         self.runtime.execute().expect("scheduler should succeed");
         extract_terminal(&self.runtime, scope, &self.types, id).object()
     }
@@ -224,7 +288,10 @@ impl<'a> TestRun<'a> {
     /// carrier to its [`Carried::Type`] arm. Panics if the expression produced a runtime value.
     #[cfg(test)]
     pub(crate) fn run_one_type_in(&mut self, scope: &'a Scope<'a>, expr: KExpression<'a>) -> KType {
-        let id = self.runtime.dispatch_in_scope(expr, scope);
+        let id = self.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+            scope,
+        );
         self.runtime.execute().expect("scheduler should succeed");
         match extract_terminal(&self.runtime, scope, &self.types, id) {
             Carried::Type(kt) => kt,
@@ -247,7 +314,10 @@ impl<'a> TestRun<'a> {
 
     /// Like [`TestRun::run_one_in`] but returns the `KError` produced by the dispatched node.
     pub fn run_one_err_in(&mut self, scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
-        let id = self.runtime.dispatch_in_scope(expr, scope);
+        let id = self.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+            scope,
+        );
         self.runtime
             .execute()
             .expect("scheduler should not surface errors directly");
@@ -395,7 +465,7 @@ pub(crate) fn resident_carrier(scope: &Scope<'_>) -> crate::machine::CarrierWitn
     crate::machine::CarrierWitness::new(scope.mint_retained(&[]))
 }
 
-/// Seal a resolved value into a region-pure `ExpressionPart::Spliced` cell — the test-side peer of
+/// Seal a resolved value into a region-pure `WorkingPart::Spliced` cell — the test-side peer of
 /// the scheduler's splice, so a classification test can build the exact carrier a real splice rests
 /// on the working expression. `Witnessed::resident_in` asserts the empty reach: the value borrows
 /// only caller-held test data, not a foreign region.
@@ -406,8 +476,11 @@ pub(crate) fn resident_carrier(scope: &Scope<'_>) -> crate::machine::CarrierWitn
 /// every call site already passes the storage its `Carried` was allocated into, which is exactly
 /// what production does.
 #[cfg(test)]
-pub(crate) fn spliced_part<'a>(host: &'a Rc<FrameStorage>, c: Carried<'a>) -> ExpressionPart<'a> {
-    ExpressionPart::Spliced {
+pub(crate) fn spliced_part<'a>(
+    host: &'a Rc<FrameStorage>,
+    c: Carried<'a>,
+) -> crate::machine::model::WorkingPart<'a> {
+    crate::machine::model::WorkingPart::Spliced {
         cell: Sealed::seal(Witnessed::resident_in(c, host)),
     }
 }

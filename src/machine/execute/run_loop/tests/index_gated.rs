@@ -6,18 +6,18 @@
 
 use std::rc::Rc;
 
+use super::working_all;
 use crate::builtins::test_support::{lookup_module, TestRun};
 use crate::machine::core::{run_root_storage, FrameStorage};
 use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind};
-use crate::parse::parse;
 
 /// Run `source` as one top-level block and hand back the whole bundle, so callers read
 /// both the post-run scope and the run's registry.
 fn run_scope<'run>(region: &'run Rc<FrameStorage>, source: &str) -> TestRun<'run> {
     let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    let exprs = parse(source).expect("parse should succeed");
+    let exprs = working_all(source);
     test_run.runtime.enter_block(scope.id, exprs, scope);
     let _ = test_run.runtime.execute();
     test_run
@@ -27,7 +27,7 @@ fn run_collect_err(source: &str) -> Option<KError> {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let exprs = parse(source).expect("parse should succeed");
+    let exprs = working_all(source);
     let runtime = &mut test_run.runtime;
     let ids: Vec<_> = runtime.enter_block(scope.id, exprs, scope);
     if let Err(e) = runtime.execute() {
@@ -112,7 +112,7 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
     let region = run_root_storage();
     let (mut test_run, _buf) = TestRun::with_buf(&region);
     let scope = test_run.scope;
-    let exprs = parse(
+    let exprs = working_all(
         "UNION Tick = (More :Null Done :Null)\n\
          FN (PING n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
             More -> (PONG (n) (Tick (Done null)))\
@@ -123,8 +123,7 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
             Done -> (n)\
          ))\n\
          LET out = (PING 42 (Tick (More null)))",
-    )
-    .expect("parse should succeed");
+    );
     for e in exprs {
         test_run.runtime.dispatch_in_scope(e, scope);
     }

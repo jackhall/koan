@@ -18,17 +18,13 @@ use std::rc::Rc;
 use koan::builtins::test_support::{lookup_binding, TestRun};
 use koan::machine::model::{KKind, KObject, KType, NodeSchema, TypeNode, TypeRegistry};
 use koan::machine::{run_root_storage, FrameStorage, Scope};
-use koan::parse::parse;
 
 /// Run `src` to completion and hand back the whole run — the seeded scope tests assert
 /// bindings on, plus the run frame's registry that type names render against.
 fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
     let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    let exprs = parse(src).expect("parse should succeed");
-    for e in exprs {
-        test_run.runtime.dispatch_in_scope(e, scope);
-    }
+    test_run.dispatch_source_in(scope, src);
     test_run
         .runtime
         .execute()
@@ -39,11 +35,7 @@ fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
 fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
     let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    let exprs = parse(src).expect("parse should succeed");
-    let ids: Vec<_> = exprs
-        .into_iter()
-        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
-        .collect();
+    let ids = test_run.dispatch_source_in(scope, src);
     test_run
         .runtime
         .execute()

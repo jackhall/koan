@@ -41,16 +41,16 @@ pub type DeliveredCarried =
 /// ([`Delivered::rest_in`](crate::witnessed::Delivered::rest_in), reached through
 /// [`Scope::rest_delivered`](crate::machine::core::Scope::rest_delivered)). The resting form of a
 /// [`DeliveredCarried`]: same carrier, ownership relocated — which is what lets an
-/// [`ExpressionPart`](crate::machine::model::ExpressionPart) hold one without becoming heap-shaped.
+/// [`WorkingPart`](crate::machine::model::WorkingPart) hold one without becoming heap-shaped.
 ///
 /// Reading one names its coverage, as every reference-only carrier does: the reach-carrying route is
-/// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) (back to an envelope, for an
-/// adoption), the read-only route [`Scope::read_spliced`](crate::machine::core::Scope::read_spliced).
+/// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced), back to an envelope for an
+/// adoption; a verdict-only reader opens the cell at its own brand through [`read_resting`].
 pub type SplicedCell = crate::witnessed::Sealed<CarriedFamily, CarrierWitness>;
 
 /// Read a resting splice cell at a site with **no pin vocabulary** — the registry-free renderers
-/// ([`ExpressionPart`](crate::machine::model::ExpressionPart)'s `Debug` / `summarize`) and the slot
-/// classifier ([`KType::accepts_part`](crate::machine::model::KType::accepts_part)). Each is a pure
+/// ([`WorkingPart`](crate::machine::model::WorkingPart)'s `Debug` / `summarize`) and the slot
+/// classifier `KType::accepts_cell`). Each is a pure
 /// probe over a part the caller already holds, reached from signatures that carry no scope and (for
 /// `Debug::fmt`) could not be given one.
 ///
@@ -58,8 +58,9 @@ pub type SplicedCell = crate::witnessed::Sealed<CarriedFamily, CarrierWitness>;
 /// the expression, and that step holds the region the cell was rested into — its own cart for a
 /// decide, the run loop's TCO handoff hold across a framed tail hop. So the pointee outlives the read
 /// for a reason outside it, which is exactly what [`NoPins`] names. Stated once here so the
-/// assertion has one home rather than one per call site; every reader that *can* name a pin takes
-/// [`Scope::read_spliced`] or [`Scope::lift_spliced`] instead.
+/// assertion has one home rather than one per call site; a reader that goes on to *adopt* the value
+/// takes [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) instead, which owns the
+/// reach rather than merely naming it.
 pub(crate) fn read_resting<R>(
     cell: &SplicedCell,
     read: impl for<'b> FnOnce(Carried<'b>) -> R,

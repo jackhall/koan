@@ -49,13 +49,17 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
     // high-water mark starts at zero.
     test_run.reset_slots();
 
+    // Parse before the baseline: the parse bumps into program storage, whose own region mint
+    // belongs to no call.
+    let call = parse_one(&format!("COUNTDOWN n{DEPTH}"));
     // Only the setup's own (no-mint) top-level statements have run so far; the run-root mint is
     // the sole contributor to `peak` at this point.
     let baseline = region_metrics().peak;
 
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(parse_one(&format!("COUNTDOWN n{DEPTH}")), scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -122,11 +126,15 @@ fn tail_recursive_record_thread_stays_o1_in_regions() {
     test_run.run(&source);
     test_run.reset_slots();
 
+    // Parse before the baseline: the parse bumps into program storage, whose own region mint
+    // belongs to no call.
+    let call = parse_one(&format!("THREAD n{DEPTH} {{acc = 0}}"));
     let baseline = region_metrics().peak;
 
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(parse_one(&format!("THREAD n{DEPTH} {{acc = 0}}")), scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -163,6 +171,9 @@ fn no_mint_categories_add_no_region_mints() {
     // Setup: a module to open a `USING` window on. Whatever this costs (module bodies are not
     // among the four categories under test) is folded into `baseline` below.
     test_run.run("MODULE mo = ((LET hidden = 99))");
+    // Parse the forward's source before the baseline: parsing bumps into program storage, and
+    // that storage's own region mint belongs to none of the four categories.
+    let forward = parse_one("a");
     let baseline = region_metrics().minted_total;
 
     test_run.run(
@@ -172,7 +183,10 @@ fn no_mint_categories_add_no_region_mints() {
          LET visible = (USING mo SCOPE (hidden))",
     );
     // Bare-name forward: a submission that is just a name, spliced onto its existing producer.
-    let id = test_run.runtime.dispatch_in_scope(parse_one("a"), scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), forward),
+        scope,
+    );
     test_run
         .runtime
         .execute()

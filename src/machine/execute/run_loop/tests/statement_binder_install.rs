@@ -12,17 +12,17 @@
 
 use std::rc::Rc;
 
+use super::working_all;
 use crate::builtins::test_support::{binds_module, TestRun};
 use crate::machine::core::{run_root_storage, FrameStorage};
 use crate::machine::model::{KObject, KType};
-use crate::parse::parse;
 
 /// Run `source` as one top-level block (source-order index gating) and hand back
 /// the whole bundle, so callers read the post-run scope and the run's registry.
 fn run_block<'run>(region: &'run Rc<FrameStorage>, source: &str) -> TestRun<'run> {
     let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    let exprs = parse(source).expect("parse should succeed");
+    let exprs = working_all(source);
     test_run.runtime.enter_block(scope.id, exprs, scope);
     test_run
         .runtime
@@ -363,8 +363,7 @@ fn a_rejected_binding_write_is_the_binders_error_terminal() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let exprs = parse("OP #(⊛) OVER Number = (left)\nOP #(⊛) OVER Number = (right)")
-        .expect("parse should succeed");
+    let exprs = working_all("OP #(⊛) OVER Number = (left)\nOP #(⊛) OVER Number = (right)");
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, exprs, scope);
     runtime

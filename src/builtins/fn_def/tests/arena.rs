@@ -19,7 +19,10 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
     // store's length is a high-water mark over the whole scheduler's life.
     test_run.reset_slots();
     let runtime = &mut test_run.runtime;
-    runtime.dispatch_in_scope(parse_one("AA"), scope);
+    runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("AA")),
+        scope,
+    );
     runtime.execute().expect("AA should run");
 
     assert_eq!(captured.borrow().as_slice(), b"ok\n");
@@ -48,8 +51,14 @@ fn chained_tail_calls_reuse_frames() {
     // store's length is a high-water mark over the whole scheduler's life.
     test_run.reset_slots();
     let runtime = &mut test_run.runtime;
+    // Parse before the snapshot: the parse bumps into program storage, and that storage's own
+    // region mint is not a call's mint.
+    let call = parse_one("AA");
     let minted_before = region_metrics().minted_total;
-    runtime.dispatch_in_scope(parse_one("AA"), scope);
+    runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
+        scope,
+    );
     runtime.execute().expect("AA should run");
 
     assert_eq!(captured.borrow().as_slice(), b"ok\n");
@@ -115,8 +124,14 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
     // store's length is a high-water mark over the whole scheduler's life.
     test_run.reset_slots();
     let runtime = &mut test_run.runtime;
+    // Parse before the snapshot: the parse bumps into program storage, and that storage's own
+    // region mint is not a call's mint.
+    let call = parse_one("AA");
     let minted_before = region_metrics().minted_total;
-    runtime.dispatch_in_scope(parse_one("AA"), scope);
+    runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
+        scope,
+    );
     runtime.execute().expect("AA should run");
 
     assert_eq!(
@@ -198,7 +213,10 @@ fn tail_call_enforces_first_callers_return_contract() {
          FN (FF) -> Number = (GG)",
     );
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(parse_one("FF"), scope);
+    let id = runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("FF")),
+        scope,
+    );
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -340,7 +358,13 @@ fn body_subexpression_slots_recycle_across_calls() {
     let runtime = &mut test_run.runtime;
 
     // Warmup: populates the free-list with the body's transient pool.
-    runtime.dispatch_in_scope(parse_one("LOOK (Bit (One null))"), scope);
+    runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one("LOOK (Bit (One null))"),
+        ),
+        scope,
+    );
     runtime.execute().expect("LOOK should run");
     let after_warmup = runtime.len();
 
@@ -351,7 +375,10 @@ fn body_subexpression_slots_recycle_across_calls() {
         } else {
             "LOOK (Bit (Zero null))"
         };
-        runtime.dispatch_in_scope(parse_one(src), scope);
+        runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one(src)),
+            scope,
+        );
         runtime.execute().expect("LOOK should run");
     }
     let after_batch = runtime.len();

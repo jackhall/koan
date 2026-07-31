@@ -119,7 +119,13 @@ fn fn_def_parens_param_type_non_type_value_errors() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(parse_one("FN (USE xs (1)) -> Null = (xs)"), scope);
+    let id = runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one("FN (USE xs (1)) -> Null = (xs)"),
+        ),
+        scope,
+    );
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -143,7 +149,13 @@ fn fn_def_sigil_return_type_non_type_value_errors() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(parse_one("FN (NOP) -> :(1) = (1)"), scope);
+    let id = runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one("FN (NOP) -> :(1) = (1)"),
+        ),
+        scope,
+    );
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");

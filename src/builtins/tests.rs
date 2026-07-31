@@ -76,9 +76,13 @@ fn assert_accepted(setup: &str, source: &str) {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     test_run.run(setup);
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(parse_one(source), test_run.scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            test_run.scope.brand(),
+            parse_one(source),
+        ),
+        test_run.scope,
+    );
     test_run
         .runtime
         .execute()

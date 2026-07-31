@@ -1,0 +1,216 @@
+//! Structural classification shared by the two expression nodes.
+//!
+//! [`KExpression`](super::KExpression) holds raw AST parts and
+//! [`WorkingExpression`](super::WorkingExpression) holds the scheduler's per-call parts, but both
+//! answer the same structural questions: which dispatch shape is this, what is its bucket key, and
+//! which operator group does it probe. Each part family reports itself in one shared vocabulary
+//! ([`PartClass`]) and the readers below are written once against that vocabulary, so a shape rule
+//! is stated in exactly one place.
+
+use crate::machine::core::RegionBrand;
+use crate::machine::model::StoredElement;
+use crate::source::Spanned;
+
+/// The structural family a part belongs to — the one axis shape classification, the bucket key, and
+/// the operator probe read. A keyword carries its text because all three readers need it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartClass<'a> {
+    Keyword(&'a str),
+    Identifier,
+    Type,
+    Expression,
+    SigiledTypeExpr,
+    RecordType,
+    ListLiteral,
+    DictLiteral,
+    RecordLiteral,
+    Literal,
+    QuotedExpression,
+    /// A resolved sub-result the scheduler wrote in. Only a working part reports this.
+    Spliced,
+    /// A staging hole awaiting its sibling's carrier. Only a working part reports this.
+    StagedSlot,
+}
+
+/// A part of either expression family, viewed through the one classification the structural readers
+/// need. Implemented by [`ExpressionPart`](super::ExpressionPart) and
+/// [`WorkingPart`](super::WorkingPart).
+pub trait Part<'a>: Copy {
+    fn class(&self) -> PartClass<'a>;
+}
+
+/// Pure-structural classification of an expression into the no-keyword fast-lane shapes, the
+/// chainable operator shape, and the keyword-bearing shape.
+///
+/// A function of expression structure only (no scope, no types), so it is computed once when the
+/// parts run is complete and cached on the node. The dispatch driver reads the cache rather than
+/// re-deriving per call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchShape {
+    BareIdentifier,
+    BareTypeLeaf,
+    /// Bare-`Type`-head call: head is a leaf `Type` and `parts[1..]` is non-empty.
+    /// Resolves the name synchronously and launches type construction via the shared
+    /// apply-a-callable tail.
+    TypeCall,
+    /// Function-value call: head is a lowercase `Identifier`, followed by ≥1
+    /// non-keyword parts.
+    FunctionValueCall,
+    /// Single-part `:(...)` sigiled type-expression wrapper.
+    SigiledTypeExpr,
+    /// Single-part `:{…}` record-type sigil. The handler folds the field list straight
+    /// to `KType::Record` (deferring through a dep-finish when a field type sub-dispatches
+    /// or forward-references), with no internal type-constructor builtin behind it.
+    RecordType,
+    /// Single-part literal-shaped expression — `Literal`, `Spliced`, nested
+    /// `Expression`, `ListLiteral`, `DictLiteral`, or `RecordLiteral`. Surfaces the
+    /// inner value without a bucket lookup.
+    LiteralPassThrough,
+    /// Chainable operator run: a slot-led key whose keywords alternate with slots,
+    /// with two or more keyword positions (`Slot (Keyword Slot)+`, first keyword at
+    /// index 1). A refinement of `Keyworded`: nothing else produces that shape, so it
+    /// carves a track that the fold pre-pass folds into nested binary sub-dispatches.
+    OperatorChain,
+    /// Head-deferred call: head is a nested `Expression` followed by ≥1 non-keyword
+    /// parts. The head is evaluated first; its resulting value (a function or a
+    /// constructible type) is then applied to `parts[1..]` via the shared
+    /// apply-a-callable tail.
+    HeadDeferred,
+    /// Type-position head-deferred call: head is a `:(...)` sigiled type expression
+    /// followed by ≥1 non-keyword parts. Like `HeadDeferred`, but the resumed value
+    /// is admitted only when it is a constructible type; a function or any other value
+    /// surfaces a type-shaped `TypeMismatch`.
+    TypeHeadDeferred,
+    /// A keyword appears anywhere in the parts run (and the chain shape did not match).
+    Keyworded,
+    /// Head is a non-callable surface — a literal, list, dict, or record — in a
+    /// multi-part expression. Heads are always eager and must resolve to something
+    /// callable; this shape surfaces a loud `DispatchFailed` from the dispatch entry.
+    NonCallableHead,
+}
+
+/// Sweeps every part for `Keyword` first so a mixed shape like `(f IF x)` goes to
+/// `Keyworded`; only with the no-keyword precondition established does it branch on
+/// head shape. A keyword-bearing expression is refined to `OperatorChain` when it
+/// matches the `Slot (Keyword Slot)+` shape with ≥2 keyword positions.
+pub fn classify_dispatch_shape<'a, P: Part<'a>>(parts: &[Spanned<P>]) -> DispatchShape {
+    if parts
+        .iter()
+        .any(|p| matches!(p.value.class(), PartClass::Keyword(_)))
+    {
+        if is_operator_chain_shape(parts) {
+            return DispatchShape::OperatorChain;
+        }
+        return DispatchShape::Keyworded;
+    }
+    if let [only] = parts {
+        return match only.value.class() {
+            PartClass::Identifier => DispatchShape::BareIdentifier,
+            PartClass::Type => DispatchShape::BareTypeLeaf,
+            PartClass::SigiledTypeExpr => DispatchShape::SigiledTypeExpr,
+            PartClass::RecordType => DispatchShape::RecordType,
+            PartClass::Literal
+            | PartClass::Spliced
+            | PartClass::Expression
+            | PartClass::QuotedExpression
+            | PartClass::ListLiteral
+            | PartClass::DictLiteral
+            | PartClass::RecordLiteral => DispatchShape::LiteralPassThrough,
+            // A single staged slot is reachable: the post-pick, no-keyword named-argument tail
+            // freezes the freshly staged parts before any dep resolves, and a one-argument
+            // reconstructed call stages that sole part when it is eager. A lone hole classifies as
+            // a bare identifier — the shape a resolvable single part takes.
+            PartClass::StagedSlot => DispatchShape::BareIdentifier,
+            PartClass::Keyword(_) => {
+                unreachable!("no-keyword precondition: the sweep above caught every Keyword part")
+            }
+        };
+    }
+    // `len >= 2` here: the keyword sweep passed and the single-part block did not
+    // match, so an empty parts run falls through as the explicit `NonCallableHead`.
+    let Some(head) = parts.first() else {
+        return DispatchShape::NonCallableHead;
+    };
+    match head.value.class() {
+        PartClass::Type => DispatchShape::TypeCall,
+        PartClass::Identifier => DispatchShape::FunctionValueCall,
+        PartClass::Expression => DispatchShape::HeadDeferred,
+        PartClass::SigiledTypeExpr => DispatchShape::TypeHeadDeferred,
+        // A literal / list / dict / record-literal / record-type / quote / resolved head in a
+        // multi-part expression: heads are always eager and must resolve to something callable, so
+        // a non-callable head surfaces a loud `DispatchFailed`. A record *type* and a quoted
+        // expression are values, not callables, so they join them here.
+        PartClass::Literal
+        | PartClass::Spliced
+        | PartClass::ListLiteral
+        | PartClass::DictLiteral
+        | PartClass::RecordLiteral
+        | PartClass::RecordType
+        | PartClass::QuotedExpression => DispatchShape::NonCallableHead,
+        // A staged slot at the head position is reachable the same way as the single-part case
+        // above. A hole head classifies as a function-value call — the shape a resolvable
+        // identifier head takes.
+        PartClass::StagedSlot => DispatchShape::FunctionValueCall,
+        PartClass::Keyword(_) => {
+            unreachable!("no-keyword precondition: the sweep above caught every Keyword part")
+        }
+    }
+}
+
+/// True iff `parts` is the `Slot (Keyword Slot)+` chainable-operator shape: odd
+/// length ≥ 5 (slot, keyword, slot, …), every odd index a `Keyword`, every even
+/// index a non-keyword slot, with ≥2 keyword positions. The first keyword sits at
+/// index 1, so no keyword-led builtin (`LET …`) collides with it.
+fn is_operator_chain_shape<'a, P: Part<'a>>(parts: &[Spanned<P>]) -> bool {
+    // Need slot, keyword, slot, keyword, slot — at least 5 parts (2 keywords).
+    if parts.len() < 5 || parts.len().is_multiple_of(2) {
+        return false;
+    }
+    parts.iter().enumerate().all(|(index, part)| {
+        let is_keyword = matches!(part.value.class(), PartClass::Keyword(_));
+        // Odd indices must be keywords; even indices must be non-keyword slots.
+        (index % 2 == 1) == is_keyword
+    })
+}
+
+/// The unique operator keywords of an `OperatorChain`, sorted and joined into the probe key the
+/// per-scope operator registry is looked up by, bumped into `brand`'s region. `None` for any other
+/// shape.
+pub fn operator_probe_for<'a, P: Part<'a>>(
+    brand: RegionBrand<'a>,
+    parts: &[Spanned<P>],
+    shape: DispatchShape,
+) -> Option<&'a str> {
+    if shape != DispatchShape::OperatorChain {
+        return None;
+    }
+    let mut operators: Vec<&str> = parts
+        .iter()
+        .filter_map(|part| match part.value.class() {
+            PartClass::Keyword(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    operators.sort_unstable();
+    operators.dedup();
+    Some(brand.alloc_text(&operators.join(" ")))
+}
+
+/// The stored bucket key: `Keyword` parts contribute their text, every other part a `Slot`. Bumped
+/// once at construction, so reading it is a slice borrow and the owned [`UntypedKey`] the bucket
+/// tables are keyed by is materialized only where a lookup needs one.
+///
+/// [`UntypedKey`]: crate::machine::model::types::signature::UntypedKey
+pub fn stored_untyped_key<'a, P: Part<'a>>(
+    brand: RegionBrand<'a>,
+    parts: &[Spanned<P>],
+) -> &'a [StoredElement<'a>] {
+    let elements: Vec<StoredElement<'a>> = parts
+        .iter()
+        .map(|part| match part.value.class() {
+            PartClass::Keyword(s) => StoredElement::Keyword(s),
+            _ => StoredElement::Slot,
+        })
+        .collect();
+    brand.alloc_slice(&elements)
+}

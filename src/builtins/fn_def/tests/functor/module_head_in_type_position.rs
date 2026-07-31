@@ -81,9 +81,13 @@ fn deferred_type_of_param_return_contract_is_the_self_sig() {
          MODULE int_ord = (LET compare = 7)",
     );
     test_run.run("FN (BAD_ORD er :Ordered) -> :(TYPE OF er) = (1)");
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("BAD_ORD int_ord"), scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one("BAD_ORD int_ord"),
+        ),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -151,7 +155,8 @@ fn type_of_module_slot_rejects_a_non_satisfying_module() {
 /// replacement spelling.
 #[test]
 fn module_name_in_a_slot_is_a_parse_error() {
-    let error = crate::parse::parse("FN (TAKE_ORD x :int_ord) -> Number = (1)")
+    use crate::builtins::test_support::program_brand;
+    let error = crate::parse::parse(program_brand(), "FN (TAKE_ORD x :int_ord) -> Number = (1)")
         .expect_err("a value token after `:` must not parse");
     let message = error.to_string();
     assert!(

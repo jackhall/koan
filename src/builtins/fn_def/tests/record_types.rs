@@ -93,9 +93,10 @@ fn record_field_type_mismatch_is_dispatch_failure() {
     let scope = test_run.scope;
     test_run.run("LET r = {x = \"s\"}");
     test_run.run("FN (USE r :{x :Number}) -> Str = (\"ok\")");
-    let root = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("USE r"), scope);
+    let root = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("USE r")),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -119,9 +120,10 @@ fn record_missing_field_is_dispatch_failure() {
     let scope = test_run.scope;
     test_run.run("LET r = {x = 1}");
     test_run.run("FN (NEED r :{x :Number, q :Bool}) -> Str = (\"ok\")");
-    let root = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("NEED r"), scope);
+    let root = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("NEED r")),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -147,9 +149,13 @@ fn record_incomparable_overloads_are_ambiguous() {
     let scope = test_run.scope;
     test_run.run("FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")");
     test_run.run("FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")");
-    let root = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"), scope);
+    let root = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"),
+        ),
+        scope,
+    );
     test_run
         .runtime
         .execute()

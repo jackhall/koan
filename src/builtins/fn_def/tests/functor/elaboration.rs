@@ -32,7 +32,7 @@ fn elaborator_lowers_ktype_value_binding() {
     test_run.run("LET MyList = :(LIST OF Number)");
     let types = test_run.types.clone();
     let mut el = Elaborator::new(scope);
-    match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList".into()), &types) {
+    match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList"), &types) {
         TypeResolution::Done(kt) => assert_eq!(kt, types.list(KType::NUMBER)),
         other => panic!("expected Done(:(List Number)), got {:?}", other),
     }
@@ -85,17 +85,22 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
 /// placeholder and re-runs elaboration against the finalized scope.
 #[test]
 fn let_then_fn_in_same_batch_works() {
+    use crate::builtins::test_support::program_brand;
     use crate::parse::parse;
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let exprs = parse(
+        program_brand(),
         "LET MyList = :(LIST OF Number)\n\
          FN (USE xs :MyList) -> Number = (1)",
     )
     .unwrap();
     for e in exprs {
-        test_run.runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
+            scope,
+        );
     }
     test_run.runtime.execute().unwrap();
     assert!(

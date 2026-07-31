@@ -140,7 +140,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let chain = ctx.chain.clone();
     let site = ctx.declaration_site();
     if let Some(te) = crate::machine::arg_unresolved_type(ctx.args, "repr") {
-        let te = te.clone();
+        let te = *te;
         resolve_or_await(
             ctx.scope,
             "NEWTYPE repr slot",
@@ -157,7 +157,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     } else if let Some(repr_kt) = arg_type(ctx.args, "repr") {
         Action::done_writing(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
-        defer_resolved_sigil(name, inner.clone(), site)
+        defer_resolved_sigil(ctx.scope.brand(), name, *inner, site)
     } else {
         Action::done(Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
@@ -168,16 +168,20 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 /// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): re-wrap the captured sigil,
 /// sub-dispatch it, and seal a plain NewType over the resolved `KType` at dep-finish.
 fn defer_resolved_sigil<'a>(
+    brand: crate::machine::core::RegionBrand<'a>,
     name: String,
     inner: KExpression<'a>,
     site: DeclarationSite,
 ) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::dispatch_type_then;
     use crate::machine::Action;
-    let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
-        Box::new(inner),
-    ))]);
-    dispatch_type_then(wrapped, "NEWTYPE repr slot", move |fctx, kt| {
+    let wrapped = KExpression::new(
+        brand,
+        vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
+            brand.alloc_value(inner),
+        ))],
+    );
+    dispatch_type_then(brand, wrapped, "NEWTYPE repr slot", move |fctx, kt| {
         Action::done_writing(finalize_newtype(fctx, name, kt, site))
     })
 }
@@ -193,7 +197,7 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
         ctx.args, "name", "NEWTYPE", ctx.types
     ));
     let fields = match arg_object(ctx.args, "repr") {
-        Some(KObject::KExpression(e)) => e.clone(),
+        Some(KObject::KExpression(e)) => *e,
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "NEWTYPE record repr slot must be a record type `:{…}`".to_string(),
@@ -339,7 +343,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 #[cfg(test)]
 mod tests {
 
-    use crate::builtins::test_support::{binds_module, parse_one, TestRun};
+    use crate::builtins::test_support::{binds_module, parse_one, program_brand, TestRun};
     use crate::machine::model::{KKind, NodeSchema, TypeNode, TypeRegistry};
     use crate::machine::model::{KObject, KType, Record};
     use crate::machine::run_root_storage;
@@ -505,8 +509,14 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
-        let exprs = crate::parse::parse("NEWTYPE Foo = :{x :Number}\nNEWTYPE Foo = :{x :Str}")
-            .expect("parse should succeed");
+        let exprs = crate::parse::parse(
+            program_brand(),
+            "NEWTYPE Foo = :{x :Number}\nNEWTYPE Foo = :{x :Str}",
+        )
+        .expect("parse should succeed")
+        .into_iter()
+        .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
+        .collect();
         let ids = test_run.runtime.enter_block(scope.id, exprs, scope);
         test_run
             .runtime
@@ -536,8 +546,14 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
-        let exprs = crate::parse::parse("NEWTYPE Foo = Number\nNEWTYPE Foo = Number")
-            .expect("parse should succeed");
+        let exprs = crate::parse::parse(
+            program_brand(),
+            "NEWTYPE Foo = Number\nNEWTYPE Foo = Number",
+        )
+        .expect("parse should succeed")
+        .into_iter()
+        .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
+        .collect();
         let ids = test_run.runtime.enter_block(scope.id, exprs, scope);
         test_run
             .runtime
@@ -718,9 +734,13 @@ mod tests {
             KObject::KString(s) => assert_eq!(*s, "num"),
             other => panic!("expected \"num\", got {:?}", other.ktype()),
         }
-        let root = test_run
-            .runtime
-            .dispatch_in_scope(parse_one("TAKES_NUM (Distance (3.0))"), scope);
+        let root = test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one("TAKES_NUM (Distance (3.0))"),
+            ),
+            scope,
+        );
         test_run
             .runtime
             .execute()
@@ -733,9 +753,13 @@ mod tests {
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Number-slot Distance, got {err}",
         );
-        let root2 = test_run
-            .runtime
-            .dispatch_in_scope(parse_one("TAKES_DIST (3.0)"), scope);
+        let root2 = test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one("TAKES_DIST (3.0)"),
+            ),
+            scope,
+        );
         test_run
             .runtime
             .execute()
@@ -886,10 +910,13 @@ mod tests {
         let src = "SIG Monad = ((TYPE (Type AS Wrap)))\n\
                    MODULE int_list = ((NEWTYPE (Type AS Wrap)))\n\
                    LET view = (int_list :| Monad)";
-        let exprs = crate::parse::parse(src).expect("parse should succeed");
+        let exprs = crate::parse::parse(program_brand(), src).expect("parse should succeed");
         let mut ids = Vec::new();
         for expr in exprs {
-            ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
+            ids.push(test_run.runtime.dispatch_in_scope(
+                crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+                scope,
+            ));
         }
         test_run
             .runtime
@@ -1052,7 +1079,10 @@ mod tests {
     /// `DispatchFailed`, not a fatal execute error).
     fn expect_dispatch_failure(test_run: &mut TestRun<'_>, probe: &str) {
         let scope = test_run.scope;
-        let root = test_run.runtime.dispatch_in_scope(parse_one(probe), scope);
+        let root = test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one(probe)),
+            scope,
+        );
         test_run
             .runtime
             .execute()

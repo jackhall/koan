@@ -138,8 +138,8 @@ fn hk_duplicate_parameter_name_errors() {
 /// The parenthesized `(Param... AS Name)` group inside a parsed `TYPE` declaration.
 fn hk_decl_body(source: &str) -> crate::machine::model::KExpression<'static> {
     let expr = parse_one(source);
-    match &expr.parts.get(1).expect("TYPE decl part").value {
-        ExpressionPart::Expression(inner) => inner.as_ref().clone(),
+    match expr.parts.get(1).expect("TYPE decl part").value {
+        ExpressionPart::Expression(inner) => *inner,
         other => panic!("expected a parenthesized decl, got {other:?}"),
     }
 }
@@ -291,7 +291,10 @@ fn fn_return_type_constructor_apply_root_scope() {
     );
     let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(
-        parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),
+        ),
         scope,
     );
     runtime.execute().expect("scheduler should run");
@@ -324,18 +327,22 @@ fn fn_return_type_constructor_apply_root_scope() {
 /// SIG decl-scope's `bindings.types["Wrap"]` entry.
 #[test]
 fn monad_signature_smoke() {
+    use crate::builtins::test_support::program_brand;
     use crate::parse::parse;
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let src = "SIG Monad = ((TYPE (Type AS Wrap)) \
          (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
-    let exprs = parse(src).expect("parse should succeed");
+    let exprs = parse(program_brand(), src).expect("parse should succeed");
     {
         let runtime = &mut test_run.runtime;
         let mut ids = Vec::new();
         for expr in exprs {
-            ids.push(runtime.dispatch_in_scope(expr, scope));
+            ids.push(runtime.dispatch_in_scope(
+                crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+                scope,
+            ));
         }
         match runtime.execute() {
             Ok(()) => {}

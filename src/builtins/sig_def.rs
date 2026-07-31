@@ -74,14 +74,12 @@ mod tests {
     use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
-    use crate::parse::parse;
 
     #[test]
     fn binder_name_extracts_sig_name() {
-        let mut exprs = parse("SIG Ordered = (VAL x :Number)").expect("parse should succeed");
-        let expr = exprs.remove(0);
+        let expr = parse_one("SIG Ordered = (VAL x :Number)");
         let name = expr.binder_name_from_type_part();
-        assert_eq!(name.as_deref(), Some("Ordered"));
+        assert_eq!(name, Some("Ordered"));
     }
 
     #[test]

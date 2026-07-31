@@ -6,8 +6,8 @@ use crate::machine::model::values::Carried;
 use crate::machine::model::Record;
 use crate::machine::{BindingIndex, DeclarationSite};
 
-fn leaf(n: &str) -> TypeIdentifier {
-    TypeIdentifier::leaf(n.into())
+fn leaf(n: &str) -> TypeIdentifier<'_> {
+    TypeIdentifier::leaf(n)
 }
 
 /// A Type token cannot name a value — the binding maps enforce the token-class partition — so a

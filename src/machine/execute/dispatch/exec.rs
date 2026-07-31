@@ -19,7 +19,7 @@ use crate::machine::core::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, KFunction, OpenedFunction};
 use crate::machine::model::Carried;
-use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{Record, SignatureElement};
 use crate::machine::AdoptSeam;
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
@@ -33,7 +33,7 @@ use crate::scheduler::ResolvedDeps;
 pub(super) fn invoke_continue<'step>(
     view: &SchedulerView<'step, '_>,
     picked: OpenedFunction<'step>,
-    working_expr: KExpression<'step>,
+    working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let frame = match &picked.value().body {
         Body::Builtin(_) => FramePlacement::Inherit,
@@ -59,7 +59,7 @@ pub(super) fn invoke_continue<'step>(
 /// re-deposits the established declared-return checker.
 fn invoke_work<'step>(
     picked: OpenedFunction<'step>,
-    working_expr: KExpression<'step>,
+    working_expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = working_expr.summarize();
@@ -82,7 +82,7 @@ fn invoke_work<'step>(
 pub(super) fn invoke<'step>(
     view: &SchedulerView<'step, '_>,
     picked: OpenedFunction<'step>,
-    working_expr: KExpression<'step>,
+    working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     // Per-argument reach carriers, read back off the spliced cells (value and reach as one unit). A
     // literal arg is region-pure and contributes no cell.
@@ -91,7 +91,8 @@ pub(super) fn invoke<'step>(
     if let Body::Builtin(f) = &function.body {
         let f = *f;
         let arg_carriers = map_arg_carriers(function, &arg_carriers);
-        let args = match function.bind_args(&working_expr, view.current_scope(), view.types()) {
+        let args = match function.bind_args(working_expr.parts, view.current_scope(), view.types())
+        {
             Ok(args) => args,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -101,7 +102,7 @@ pub(super) fn invoke<'step>(
     // A uniquely-picked call is admitted shape-only by dispatch, so validate each argument against
     // its declared parameter type before the type-trusting `bind_by_name` — a non-satisfying typed
     // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
-    if let Err(e) = function.validate_call_args(&working_expr, view.types()) {
+    if let Err(e) = function.validate_call_args(working_expr.parts, view.types()) {
         return Outcome::Done(Err(e));
     }
 
@@ -161,11 +162,17 @@ pub(super) fn invoke<'step>(
             // `Inherit` — a `FreshTail` here would mint a second cart, discarding the one already
             // holding the bound params — and the block entry carries it so the lowering fans any
             // leading statements into it.
+            // The body crosses into the scheduler here, one working node per statement: each is a
+            // slice copy of the parsed run into the installed cart's own region.
+            let brand = view.current_scope().brand();
             super::super::runtime::run_action(
                 view,
                 Action::tail(
-                    leading.into_iter().map(|e| (*e).clone()).collect(),
-                    tail.clone(),
+                    leading
+                        .into_iter()
+                        .map(|e| WorkingExpression::from_ast(brand, *e))
+                        .collect(),
+                    WorkingExpression::from_ast(brand, *tail),
                     TailContract::Eager(Some(contract)),
                     FramePlacement::Inherit,
                     BlockEntry::FrameScope(frame),
@@ -182,14 +189,17 @@ pub(super) fn invoke<'step>(
             // lowering's finish reads the last result (the resolved type) into a `PerCall` contract
             // before tail-replacing into the body terminal, so the recursion — subsequent calls skip
             // resolution — stays TCO-flat.
-            let mut statements: Vec<KExpression<'step>> =
-                leading.into_iter().map(|e| (*e).clone()).collect();
-            statements.push(type_expr.clone());
+            let brand = view.current_scope().brand();
+            let mut statements: Vec<WorkingExpression<'step>> = leading
+                .into_iter()
+                .map(|e| WorkingExpression::from_ast(brand, *e))
+                .collect();
+            statements.push(WorkingExpression::from_ast(brand, *type_expr));
             super::super::runtime::run_action(
                 view,
                 Action::tail(
                     statements,
-                    tail.clone(),
+                    WorkingExpression::from_ast(brand, *tail),
                     TailContract::FromLastResult {
                         func: picked.reseal(),
                     },
@@ -213,13 +223,13 @@ pub(super) fn invoke<'step>(
 /// that region. Once per call, not once per reader.
 fn carriers_from_expr<'step>(
     view: &SchedulerView<'step, '_>,
-    working_expr: &KExpression<'step>,
+    working_expr: &WorkingExpression<'step>,
 ) -> Vec<Option<DeliveredCarried>> {
     working_expr
         .parts
         .iter()
         .map(|part| match &part.value {
-            ExpressionPart::Spliced { cell } => Some(view.lift_spliced(cell)),
+            WorkingPart::Spliced { cell } => Some(view.lift_spliced(cell)),
             _ => None,
         })
         .collect()
@@ -286,13 +296,13 @@ fn run_action_builtin<'step>(
 /// as a diagnostic rather than a panic.
 fn extract_carried_args<'step>(
     view: &SchedulerView<'step, '_>,
-    working_expr: &KExpression<'step>,
+    working_expr: &WorkingExpression<'step>,
     arg_carriers: &[Option<DeliveredCarried>],
 ) -> Option<Vec<Carried<'step>>> {
     let mut args = Vec::new();
     for (part, lifted) in working_expr.parts.iter().zip(arg_carriers) {
         match (&part.value, lifted) {
-            (ExpressionPart::Keyword(_), _) => {}
+            (WorkingPart::Ast(ExpressionPart::Keyword(_)), _) => {}
             // Adopt the spliced cell into the call scope — an object by structural copy (the copy's
             // reach folds in; a residence-only producer host is released with the working
             // expression, so a tail call's retiring region does not chain into the fresh frame's
@@ -305,7 +315,7 @@ fn extract_carried_args<'step>(
             // the lift runs under the step's own coverage and is paid once per call, not once per
             // reader. The two lists are index-parallel, so the `Some` arm is the only shape a
             // `Spliced` part can take; a bare `Spliced` falls through to the diagnostic below.
-            (ExpressionPart::Spliced { .. }, Some(delivered)) => {
+            (WorkingPart::Spliced { .. }, Some(delivered)) => {
                 args.push(
                     view.current_scope()
                         .adopt_carried(delivered, AdoptSeam::ReHome(view.types())),
@@ -315,23 +325,21 @@ fn extract_carried_args<'step>(
             // the args as a `'step` `Carried`. A string literal bumps its bytes here, so the value
             // is region-pure but not `'static` and takes the zero-dep fold door rather than the
             // audited one.
-            (ExpressionPart::Literal(lit), _) => {
+            (WorkingPart::Ast(ExpressionPart::Literal(lit)), _) => {
                 let object = view
                     .current_scope()
                     .fold_resident_object(|brand| lit.to_kobject(*brand));
                 args.push(Carried::Object(object));
             }
-            // A `#(...)` quote's `KObject::KExpression` body is data, but it is invariant in its
-            // region lifetime with no `'static` rebuild and no fold-brand construction, so it keeps
-            // the checked door — whose family audit passes it: a quote body comes from the parser,
-            // which plants no `Spliced` cell, and the scheduler splices only into the parts of an
-            // expression it dispatches, never into quoted data.
-            (ExpressionPart::QuotedExpression(_), _) => {
+            // A `#(...)` quote's `KObject::KExpression` body is data, but the value it rides in is
+            // invariant in its region lifetime with no `'static` rebuild and no fold-brand
+            // construction, so it keeps the checked door.
+            (WorkingPart::Ast(quote @ ExpressionPart::QuotedExpression(_)), _) => {
                 let scope = view.current_scope();
                 let object = scope
                     .brand()
-                    .alloc_object_checked(part.value.resolve(scope.brand()), view.types())
-                    .expect("a resolved quoted expression is splice-free");
+                    .alloc_object_checked(quote.resolve(scope.brand()), view.types())
+                    .expect("a quote body is parsed AST, resident in the storage that parsed it");
                 args.push(Carried::Object(object));
             }
             _ => return None,

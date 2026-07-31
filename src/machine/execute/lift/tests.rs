@@ -1048,11 +1048,12 @@ mod seam_verb_table {
         }
     }
 
-    /// An **unpriceable** record (holds a splice-free `KExpression` cell — unpriceable, but plain
-    /// data with no borrow leaf) copies, and its `released` bit tracks the stored read: no run names
-    /// the host, so the copy frees it.
+    /// An **unpriceable** record (holds a `KExpression` cell — unpriceable, but plain data with no
+    /// borrow leaf) copies, and its `released` bit tracks the stored read: no run names the host, so
+    /// the copy frees it.
     #[test]
     fn seam_verb_unpriceable_plain_data_copies_released() {
+        use crate::machine::core::program_storage;
         use crate::machine::model::ast::KExpression;
         let root = run_root_storage();
         let test_run = TestRun::silent(&root);
@@ -1060,7 +1061,9 @@ mod seam_verb_table {
         let home = CallFrame::new(scope);
         let types = TypeRegistry::new();
 
-        let expr = KObject::KExpression(KExpression::new(Vec::new()));
+        // Program storage is where a raw AST node lives; an expression cell points into it.
+        let program = program_storage();
+        let expr = KObject::KExpression(KExpression::new(program.brand().region(), Vec::new()));
         let fields = Record::from_pairs(vec![("e".to_string(), Held::Object(expr))]);
         let value = build_record(&home, fields, &types);
 

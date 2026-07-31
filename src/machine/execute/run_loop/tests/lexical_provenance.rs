@@ -4,16 +4,12 @@
 
 use std::rc::Rc;
 
-use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
+use crate::builtins::test_support::{lookup_module, parse_one, program_brand, TestRun};
 use crate::machine::core::run_root_storage;
-use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
+use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
 use crate::source::Spanned;
 
-use super::let_expr;
-
-fn lit<'run>(name: &str) -> KExpression<'run> {
-    KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(name.into()))])
-}
+use super::{keyword_expr as lit, let_expr, working_one};
 
 #[test]
 fn top_level_statements_get_root_frames_with_consecutive_indices() {
@@ -71,7 +67,7 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let root = test_run.scope;
-    let module_expr = parse_one("MODULE foo = (LET x = 1)");
+    let module_expr = working_one("MODULE foo = (LET x = 1)");
     let ids = test_run
         .runtime
         .enter_block(root.id, vec![module_expr], root);
@@ -150,9 +146,12 @@ fn add_with_chain_without_chain_panics() {
     let scope = test_run.scope;
     test_run.runtime.add_with_chain(
         crate::machine::execute::dispatch::decide_tail(
-            KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
-                KLiteral::Number(1.0),
-            ))]),
+            WorkingExpression::new(
+                program_brand().region(),
+                vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Literal(
+                    KLiteral::Number(1.0),
+                )))],
+            ),
             None,
         ),
         scope,

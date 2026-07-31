@@ -2,7 +2,7 @@
 //! returns a distinct labeled marker so a test can identify which overload won.
 //! Counterpart `resolve_dispatch`-only assertions live in `machine::core::tests::dispatch`.
 
-use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
+use crate::builtins::test_support::{marker, one_slot_sig, program_brand, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::core::{BindingIndex, FrameStorageExt};
@@ -12,6 +12,8 @@ use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
+
+use super::working;
 use crate::machine::run_root_storage;
 use crate::source::Spanned;
 
@@ -93,12 +95,15 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         &mut crate::machine::WriteGate::for_test(),
     );
 
-    let expr = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Keyword("MARK".into())),
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
-    ]);
+    let expr = KExpression::new(
+        program_brand().region(),
+        vec![
+            Spanned::bare(ExpressionPart::Keyword("MARK")),
+            Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
+        ],
+    );
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(expr, inner);
+    let id = runtime.dispatch_in_scope(working(expr), inner);
     runtime.execute().unwrap();
     let (matched, summary) = runtime
         .read_result_with(id, |v| {
@@ -141,11 +146,12 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         &mut crate::machine::WriteGate::for_test(),
     );
 
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
-        "foo".into(),
-    ))]);
+    let expr = KExpression::new(
+        program_brand().region(),
+        vec![Spanned::bare(ExpressionPart::Identifier("foo"))],
+    );
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(expr, scope);
+    let id = runtime.dispatch_in_scope(working(expr), scope);
     runtime.execute().unwrap();
     let types = TypeRegistry::new();
     let err = match runtime.read_result_with(id, |v| v.summarize(&types)) {
@@ -188,12 +194,15 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         &mut crate::machine::WriteGate::for_test(),
     );
 
-    let expr = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Keyword("FOO".into())),
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
-    ]);
+    let expr = KExpression::new(
+        program_brand().region(),
+        vec![
+            Spanned::bare(ExpressionPart::Keyword("FOO")),
+            Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+        ],
+    );
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(expr, scope);
+    let id = runtime.dispatch_in_scope(working(expr), scope);
     runtime.execute().unwrap();
     assert!(runtime
         .read_result_with(

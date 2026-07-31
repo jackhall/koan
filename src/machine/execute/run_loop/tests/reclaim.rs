@@ -1,8 +1,8 @@
 //! `free` / node-reclamation invariants.
 
-use crate::builtins::test_support::{resident_carrier, TestRun};
+use crate::builtins::test_support::{program_brand, resident_carrier, TestRun};
 use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::model::KExpression;
+use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, KObject};
 use crate::scheduler::DepEdge;
 
@@ -14,8 +14,12 @@ fn free_reclaims_owned_subtree() {
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
     let value: &KObject = region.brand().alloc_object(KObject::Number(42.0));
-    let mk_dispatch =
-        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
+    let mk_dispatch = || {
+        crate::machine::execute::dispatch::decide_tail(
+            WorkingExpression::new(program_brand().region(), Vec::new()),
+            None,
+        )
+    };
     let s0 = runtime.add(mk_dispatch(), root);
     let s1 = runtime.add(mk_dispatch(), root);
     let s2 = runtime.add(mk_dispatch(), root);
@@ -71,8 +75,12 @@ fn free_skips_live_slot_and_is_idempotent() {
     let mut test_run = TestRun::silent(&region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let mk_dispatch =
-        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
+    let mk_dispatch = || {
+        crate::machine::execute::dispatch::decide_tail(
+            WorkingExpression::new(program_brand().region(), Vec::new()),
+            None,
+        )
+    };
     let s = runtime.add(mk_dispatch(), root);
     // Live slot: free must be a no-op.
     runtime.free(s.index());
@@ -103,8 +111,12 @@ fn free_does_not_recurse_through_notify_edges() {
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
     let value: &KObject = region.brand().alloc_object(KObject::Number(7.0));
-    let mk_dispatch =
-        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
+    let mk_dispatch = || {
+        crate::machine::execute::dispatch::decide_tail(
+            WorkingExpression::new(program_brand().region(), Vec::new()),
+            None,
+        )
+    };
     let s_owner = runtime.add(mk_dispatch(), root);
     let s_owned = runtime.add(mk_dispatch(), root);
     let s_sibling = runtime.add(mk_dispatch(), root);
@@ -159,12 +171,11 @@ fn freed_slot_does_not_appear_in_other_notify_lists() {
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
 
-    let exprs = crate::parse::parse(
+    let exprs = super::working_all(
         "LET x = 1\n\
          LET y = 2\n\
          LET z = (LET a = 3)",
-    )
-    .expect("parse should succeed");
+    );
     for e in exprs {
         runtime.dispatch_in_scope(e, root);
     }

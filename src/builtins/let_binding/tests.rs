@@ -3,27 +3,29 @@ use crate::machine::model::{KObject, KType};
 
 #[test]
 fn binder_name_extracts_let_name() {
-    use crate::parse::parse;
-    let mut exprs = parse("LET hello = 1").expect("parse should succeed");
-    let expr = exprs.remove(0);
+    use crate::builtins::test_support::parse_one;
+    let expr = parse_one("LET hello = 1");
     let name = crate::machine::model::binder::identifier_part_binder_name(&expr);
-    assert_eq!(name.as_deref(), Some("hello"));
+    assert_eq!(name, Some("hello"));
 }
 
 /// End-to-end install-then-clear: statement submission installs the placeholder from the
 /// cached binder plan before the body runs; the value write clears it at apply.
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
-    use crate::builtins::test_support::TestRun;
+    use crate::builtins::test_support::{program_brand, TestRun};
     use crate::machine::run_root_storage;
     use crate::parse::parse;
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let exprs = parse("LET hello = 1").unwrap();
+    let exprs = parse(program_brand(), "LET hello = 1").unwrap();
     for e in exprs {
-        runtime.dispatch_in_scope(e, scope);
+        runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
+            scope,
+        );
     }
     runtime.execute().unwrap();
     assert!(scope.bindings().placeholders().get("hello").is_none());
@@ -35,7 +37,7 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
 /// consumer surfaces `UnboundName` rather than self-parking on a cycle.
 #[test]
 fn let_t_cycle_errors() {
-    use crate::builtins::test_support::TestRun;
+    use crate::builtins::test_support::{program_brand, TestRun};
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     use crate::parse::parse;
@@ -43,7 +45,11 @@ fn let_t_cycle_errors() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let exprs = parse("LET Ty = Ty").unwrap();
+    let exprs = parse(program_brand(), "LET Ty = Ty").unwrap();
+    let exprs = exprs
+        .into_iter()
+        .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
+        .collect();
     let ids = runtime.enter_block(scope.id, exprs, scope);
     runtime
         .execute()
@@ -68,6 +74,7 @@ fn let_t_cycle_errors() {
 /// so removing either primitive variant from the allowlist regresses here.
 #[test]
 fn let_type_class_with_non_type_value_errors() {
+    use crate::builtins::test_support::program_brand;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     use crate::parse::parse;
@@ -76,8 +83,14 @@ fn let_type_class_with_non_type_value_errors() {
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         let runtime = &mut test_run.runtime;
-        let exprs = parse(src).unwrap();
-        let id = runtime.dispatch_in_scope(exprs.into_iter().next().unwrap(), scope);
+        let exprs = parse(program_brand(), src).unwrap();
+        let id = runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                exprs.into_iter().next().unwrap(),
+            ),
+            scope,
+        );
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -97,6 +110,7 @@ fn let_type_class_with_non_type_value_errors() {
 /// via `register_type`, reachable through `Scope::resolve_type`.
 #[test]
 fn let_type_class_with_type_value_still_binds() {
+    use crate::builtins::test_support::program_brand;
     use crate::machine::model::KType;
     use crate::machine::run_root_storage;
     use crate::parse::parse;
@@ -104,10 +118,13 @@ fn let_type_class_with_type_value_still_binds() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let exprs = parse("LET Foo = Number").unwrap();
+    let exprs = parse(program_brand(), "LET Foo = Number").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(runtime.dispatch_in_scope(e, scope));
+        ids.push(runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
+            scope,
+        ));
     }
     runtime
         .execute()
@@ -124,16 +141,20 @@ fn let_type_class_with_type_value_still_binds() {
 /// `Held::Type` arm and so isn't subject to the type-class allowlist.
 #[test]
 fn let_identifier_lhs_with_non_type_still_binds() {
+    use crate::builtins::test_support::program_brand;
     use crate::machine::run_root_storage;
     use crate::parse::parse;
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let exprs = parse("LET foo = 1").unwrap();
+    let exprs = parse(program_brand(), "LET foo = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(runtime.dispatch_in_scope(e, scope));
+        ids.push(runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
+            scope,
+        ));
     }
     runtime
         .execute()
@@ -152,6 +173,7 @@ fn let_identifier_lhs_with_non_type_still_binds() {
 /// before the type-class allowlist — regression guard for ordering.
 #[test]
 fn let_parameterized_type_lhs_still_shape_errors() {
+    use crate::builtins::test_support::program_brand;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     use crate::parse::parse;
@@ -159,10 +181,13 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let exprs = parse("LET :(LIST OF Number) = 1").unwrap();
+    let exprs = parse(program_brand(), "LET :(LIST OF Number) = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(runtime.dispatch_in_scope(e, scope));
+        ids.push(runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
+            scope,
+        ));
     }
     runtime
         .execute()

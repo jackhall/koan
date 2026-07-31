@@ -4,10 +4,10 @@
 //! nominal-binder placeholder (cache `Parked`, splice walk installs combined
 //! park, slot commits on wake).
 
+use super::working_all;
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::parse::parse;
 
 /// Self-reference `LET Ty = Ty`: the consumer sees its own placeholder as
 /// hidden under index-gating (same idx, LET binders aren't nominal), so the
@@ -19,7 +19,7 @@ fn self_referential_let_surfaces_unbound_name() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let exprs = parse("LET Ty = Ty").expect("parse should succeed");
+    let exprs = working_all("LET Ty = Ty");
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, exprs, scope);
     runtime
@@ -45,12 +45,11 @@ fn forward_reference_parks_then_resolves_on_wake() {
     let scope = test_run.scope;
     // STRUCT (like MODULE) is a nominal binder, so the placeholder is visible
     // to the forward reference and parks rather than reading as Unbound.
-    let exprs = parse(
+    let exprs = working_all(
         "NEWTYPE Foo = :{x :Number}\n\
          LET Fwd = Foo\n\
          PRINT Fwd",
-    )
-    .expect("parse should succeed");
+    );
     let runtime = &mut test_run.runtime;
     runtime.enter_block(scope.id, exprs, scope);
     runtime

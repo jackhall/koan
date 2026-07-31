@@ -1,7 +1,7 @@
 //! Functor integration: module-typed parameters, signature-bound dispatch,
 //! per-call generativity.
 
-use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
+use crate::builtins::test_support::{lookup_module, parse_one, program_brand, TestRun};
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
@@ -85,10 +85,13 @@ fn functor_application_mints_distinct_abstract_types() {
                FN (MAKESET er :Ordered) -> Module = (er :| Ordered)\n\
                LET set_one = (MAKESET int_ord)\n\
                LET set_two = (MAKESET int_ord)";
-    let exprs = parse(src).expect("parse should succeed");
+    let exprs = parse(program_brand(), src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
+        ids.push(test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+            scope,
+        ));
     }
     test_run
         .runtime
@@ -162,9 +165,10 @@ fn functor_rejects_structurally_unsatisfying_module() {
     );
     test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     test_run.run("LET arg = no_compare");
-    let root = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("MAKESET arg"), scope);
+    let root = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("MAKESET arg")),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -331,10 +335,13 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
                MODULE int_list = ((LET Wrap = Wrapper))\n\
                LET first = (int_list :| Monad)\n\
                LET second = (int_list :| Monad)";
-    let exprs = parse(src).expect("parse should succeed");
+    let exprs = parse(program_brand(), src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
+        ids.push(test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+            scope,
+        ));
     }
     test_run
         .runtime

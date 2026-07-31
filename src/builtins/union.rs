@@ -83,7 +83,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "UNION", ctx.types));
     let schema_expr = match arg_object(ctx.args, "schema") {
-        Some(KObject::KExpression(e)) => e.clone(),
+        Some(KObject::KExpression(e)) => *e,
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "UNION schema slot must be a parenthesized dict literal".to_string(),
@@ -129,7 +129,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{mock_declaration_site, parse_one, TestRun};
+    use crate::builtins::test_support::{mock_declaration_site, parse_one, program_brand, TestRun};
     use crate::machine::model::Carried;
     use crate::machine::model::KType;
     use crate::machine::model::{KKind, NodeSchema, RecursiveGroupWindow, TypeNode, TypeRegistry};
@@ -168,7 +168,7 @@ mod tests {
     fn binder_name_extracts_named_union_name() {
         let expr = parse_one("UNION Maybe = (Some :Number, None :Null)");
         let name = expr.binder_name_from_type_part();
-        assert_eq!(name.as_deref(), Some("Maybe"));
+        assert_eq!(name, Some("Maybe"));
     }
 
     #[test]
@@ -220,7 +220,13 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         let runtime = &mut test_run.runtime;
-        let root = runtime.dispatch_in_scope(parse_one("UNION (Ok :Number Err :Str)"), scope);
+        let root = runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one("UNION (Ok :Number Err :Str)"),
+            ),
+            scope,
+        );
         runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -356,9 +362,13 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         let exprs = crate::parse::parse(
+            program_brand(),
             "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Str None :Null)",
         )
-        .expect("parse should succeed");
+        .expect("parse should succeed")
+        .into_iter()
+        .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
+        .collect();
         let runtime = &mut test_run.runtime;
         let ids = runtime.enter_block(scope.id, exprs, scope);
         runtime
@@ -391,8 +401,13 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         let runtime = &mut test_run.runtime;
-        let first =
-            runtime.dispatch_in_scope(parse_one("UNION Maybe = (Some :Number None :Null)"), scope);
+        let first = runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one("UNION Maybe = (Some :Number None :Null)"),
+            ),
+            scope,
+        );
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -401,8 +416,13 @@ mod tests {
             "the first declaration should succeed, got {:?}",
             runtime.result_error(first).err(),
         );
-        let second =
-            runtime.dispatch_in_scope(parse_one("UNION Maybe = (Some :Str None :Null)"), scope);
+        let second = runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one("UNION Maybe = (Some :Str None :Null)"),
+            ),
+            scope,
+        );
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -425,9 +445,13 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         let exprs = crate::parse::parse(
+            program_brand(),
             "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Number None :Null)",
         )
-        .expect("parse should succeed");
+        .expect("parse should succeed")
+        .into_iter()
+        .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
+        .collect();
         let runtime = &mut test_run.runtime;
         let ids = runtime.enter_block(scope.id, exprs, scope);
         runtime

@@ -80,9 +80,10 @@ fn incomparable_distinct_sigs_are_ambiguous() {
     test_run.run("MODULE implementation = ((LET x = 1) (LET y = 2))");
     test_run.run("LET arg = implementation");
 
-    let root = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("CHOOSE arg"), scope);
+    let root = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("CHOOSE arg")),
+        scope,
+    );
     test_run
         .runtime
         .execute()

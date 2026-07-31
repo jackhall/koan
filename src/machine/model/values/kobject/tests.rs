@@ -291,7 +291,7 @@ fn resident_in_true_for_same_region_kfunction() {
     };
     let f = storage.brand().alloc_function(KFunction::new(
         sig,
-        Body::UserDefined(KExpression::new(Vec::new())),
+        Body::UserDefined(KExpression::new(storage.brand(), Vec::new())),
         scope,
         false,
         &test_run.types,
@@ -322,7 +322,7 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     };
     let f = foreign.brand().alloc_function(KFunction::new(
         sig,
-        Body::UserDefined(KExpression::new(Vec::new())),
+        Body::UserDefined(KExpression::new(foreign.brand(), Vec::new())),
         foreign_scope,
         false,
         &foreign_test_run.types,

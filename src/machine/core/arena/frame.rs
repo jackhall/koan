@@ -50,9 +50,50 @@ pub fn run_root_storage() -> Rc<FrameStorage> {
 /// `needs_no_pin`, and the eternal rule filters such a member out of every pin bundle and reach
 /// description with no special case anywhere. It never enters the frame lifecycle or the scheduler:
 /// no `CallFrame` adopts it, no `Scope` names it as `region_owner`, and its only capability in use is
-/// the bump its [`brand`](FrameStorageExt::brand) hands parse output.
-pub fn program_storage() -> Rc<FrameStorage> {
-    RegionHost::fresh_eternal()
+/// the bump its [`brand`](ProgramStorage::brand) hands parse output.
+pub fn program_storage() -> ProgramStorage {
+    ProgramStorage(RegionHost::fresh_eternal())
+}
+
+/// The one host whose region an AST may borrow. Its own type, not a [`FrameStorage`] alias, because
+/// the property the AST's reach answers rest on is a property of *this host* rather than of the
+/// eternal tier at large: the run root is eternal too, but a `CallFrame` adopts it and a `Scope`
+/// names it, so it can be a `home` and a pin-bundle member. Program storage is neither, and
+/// [`program_storage`] is the sole way to obtain one.
+pub struct ProgramStorage(Rc<FrameStorage>);
+
+impl ProgramStorage {
+    /// Mint this storage's [`ProgramBrand`] — the only allocation capability the parser accepts.
+    pub fn brand(&self) -> ProgramBrand<'_> {
+        ProgramBrand(self.0.brand())
+    }
+}
+
+/// A [`RegionBrand`] carrying the proof that its region is [`ProgramStorage`]'s. The parse entry
+/// points take this rather than a bare `RegionBrand`, so a parsed AST's storage tier is checked at
+/// every call site rather than held by the discipline of one.
+///
+/// What this pins is the *parse* door. Three answers in [`KObject`](crate::machine::model::KObject)
+/// — `resident_in_visiting` admitting an expression unconditionally, `object_cell_reach` calling
+/// its cell `Owned`, `retains_home` answering `false` — hold because no expression reaching the
+/// value channel borrows a region a holder can outlive. Parse output satisfies that by this type.
+/// A node the runtime builds mid-dispatch (`fn_def`'s deferred placeholder, `val_decl`'s type
+/// wrapper, `op_def`'s bridge body) takes an ordinary [`RegionBrand`] at its declaring scope, and
+/// satisfies it instead by never reaching the value channel: each is unwrapped or sub-dispatched
+/// where it is built, and the re-wrap sites pass their program-resident inner straight back out.
+///
+/// The distinction needs a type because `KExpression` is covariant: a node borrowing a per-call
+/// region coerces to any shorter lifetime, so the borrow checker sees nothing to object to.
+/// Widening through [`ProgramBrand::region`] is free; the reverse does not exist.
+#[derive(Clone, Copy)]
+pub struct ProgramBrand<'a>(RegionBrand<'a>);
+
+impl<'a> ProgramBrand<'a> {
+    /// The plain allocation capability underneath — for the parser's own `alloc_*` calls, which
+    /// need no more than a region to bump into.
+    pub fn region(self) -> RegionBrand<'a> {
+        self.0
+    }
 }
 
 /// Koan's [`RegionBrand`] mint over a [`FrameStorage`] — an extension trait because `FrameStorage`

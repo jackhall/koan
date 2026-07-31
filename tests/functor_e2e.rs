@@ -20,17 +20,13 @@ use std::rc::Rc;
 use koan::builtins::test_support::{lookup_binding, SharedBuf, TestRun};
 use koan::machine::model::{KObject, SignatureElement, TypeNode};
 use koan::machine::{run_root_storage, FrameStorage, KFunction, Scope};
-use koan::parse::parse;
 
 /// Run `src` to completion and hand back the whole run — the seeded scope the assertions
 /// read bindings from, plus the run frame's registry type names render against.
 fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
     let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    let exprs = parse(src).expect("parse should succeed");
-    for e in exprs {
-        test_run.runtime.dispatch_in_scope(e, scope);
-    }
+    test_run.dispatch_source_in(scope, src);
     test_run
         .runtime
         .execute()

@@ -451,7 +451,14 @@ impl<'a> KObject<'a> {
             // ([`needs_destination_door`](Self::needs_destination_door)).
             KObject::KString(_) => false,
             KObject::KFunction(f) => residence.owns_function(f),
-            KObject::KExpression(e) => e.is_splice_free(),
+            // An expression is raw AST: its parts run, its keyword text and its structural cache
+            // all live in the program storage that parsed them, which sits at the eternal tier and
+            // outlives every region a holder could have. It names no producer region either — a
+            // resolved sub-result lives only on the scheduler's `WorkingExpression`, which no value
+            // cell can hold — so pointing at one pins nothing and can dangle nowhere. The
+            // `KString` arm's sibling: a borrow no address table can place, settled structurally
+            // rather than by a probe.
+            KObject::KExpression(_) => true,
             // O(1) address-membership check on the substrate borrow — never a cell walk. Every
             // substrate carrier answers residence by its own address, whether it is a bare top-level
             // value (born resident through the fold door) or rides inside another carrier.
@@ -501,7 +508,7 @@ impl<'a> KObject<'a> {
             // A pointer copy: the substrate borrow copies (`Copy`), never rebuilding the cells.
             KObject::List(substrate, list_type) => KObject::List(substrate, *list_type),
             KObject::Dict(substrate, dict_type) => KObject::Dict(substrate, *dict_type),
-            KObject::KExpression(e) => KObject::KExpression(e.clone()),
+            KObject::KExpression(e) => KObject::KExpression(*e),
             KObject::KFunction(f) => KObject::KFunction(f),
             // A pointer copy: the payload substrate borrow copies (`Copy`), never rebuilding the
             // payload.
@@ -569,8 +576,9 @@ impl<'a> KObject<'a> {
     /// no audit can name, so the copy has to re-bump them at the destination
     /// ([`copy_object_into`]) exactly as a substrate has to be re-sectioned there.
     ///
-    /// Everything else — the scalars, a splice-free `KExpression`, a `KFunction` / `Module` borrow
-    /// leaf that rides verbatim — copies as a top node under the fused mint.
+    /// Everything else — the scalars, a `KExpression` whose parts run stays in the eternal-tier
+    /// storage that parsed it, a `KFunction` / `Module` borrow leaf that rides verbatim — copies as
+    /// a top node under the fused mint.
     pub(crate) fn needs_destination_door(&self) -> bool {
         self.embeds_substrate() || matches!(self, KObject::KString(_))
     }
@@ -579,7 +587,7 @@ impl<'a> KObject<'a> {
 /// The sectioned alloc door's reach verdict for one cell — read off **stored facts**, one O(1) read
 /// per cell, never a walk over the cell's contents:
 ///
-/// - **Owned data** — a scalar, a type-channel cell, a splice-free quoted expression — lands in an
+/// - **Owned data** — a scalar, a type-channel cell, a quoted expression — lands in an
 ///   empty-reach run, as does a `KString`, whose bytes [`section_cells`] re-bumped into this
 ///   door's own region before the verdict is read.
 /// - A **substrate carrier** hands in its own nested substrate's stored union, which is exact by
@@ -590,10 +598,6 @@ impl<'a> KObject<'a> {
 ///   memo answering the question it exists for: does a borrow *leaf* point home.
 /// - A `KFunction` / `Module` is a **born-borrowing seed** naming the scope it captures: the `FN`
 ///   door naming a closure's captured scope, the module door naming its child scope.
-/// - A **splice-carrying `KExpression`** is the one conservative arm: an expression carries no stored
-///   description of its own, so its run is declared from the door's whole holder coverage — sound but
-///   wider than exact. Tightened to a composition over the embedded values' own stored reach by
-///   [region-store-expressions](../../../../roadmap/untyped_arena/region-store-expressions.md).
 fn cell_reach<'a>(cell: &Held<'a>, door: SubstrateDoor<'a, '_>) -> CellReach<'a, FrameStorage> {
     match cell {
         Held::Type(_) | Held::UnresolvedType(_) => CellReach::Owned,
@@ -625,13 +629,10 @@ fn object_cell_reach<'a>(
             declared.absorb(door.holder());
             CellReach::Seed(declared)
         }
-        KObject::KExpression(e) => {
-            if e.is_splice_free() {
-                CellReach::Owned
-            } else {
-                CellReach::Seed(door.holder())
-            }
-        }
+        // An expression borrows only the eternal-tier storage that parsed it, and it has no arm
+        // that can name a producer region, so a cell holding one reaches nothing this door has to
+        // pin.
+        KObject::KExpression(_) => CellReach::Owned,
         KObject::Record(substrate, _) => pinned_cell(substrate.reach(), door),
         KObject::List(substrate, _) => pinned_cell(substrate.reach(), door),
         KObject::Dict(substrate, _) => pinned_cell(substrate.reach(), door),
@@ -780,7 +781,7 @@ fn alloc_payload<'a>(door: SubstrateDoor<'a, '_>, value: KObject<'a>) -> &'a Pay
 /// cell recursively and sections a fresh substrate at `dest` through its door (so every run reads the
 /// rebuilt cell's own stored facts — a run that named the source region names it no longer once the
 /// cell rebuilt owned); a scalar rebuilds owned; a `KFunction` / `Module` borrow rides verbatim as a
-/// born-borrowing seed naming its own scope; a `KExpression` clones.
+/// born-borrowing seed naming its own scope; a `KExpression` rides verbatim as a pointer copy.
 /// Total or not at all — a partial spine copy would pay the copy *and* keep the pin. See
 /// [design/value-substrates.md § Escape](../../../../design/value-substrates.md#escape-pin-by-default).
 pub(crate) fn copy_object_into<'b>(
@@ -795,7 +796,9 @@ pub(crate) fn copy_object_into<'b>(
         KObject::KString(s) => KObject::KString(dest.alloc_text(s)),
         KObject::Bool(b) => KObject::Bool(*b),
         KObject::Null => KObject::Null,
-        KObject::KExpression(e) => KObject::KExpression(e.clone()),
+        // A pointer copy: the parts run lives in the eternal-tier storage that parsed it, which the
+        // copy verb's release claim never covers, so there is nothing to re-bump here.
+        KObject::KExpression(e) => KObject::KExpression(*e),
         KObject::KFunction(f) => KObject::KFunction(f),
         KObject::Module(m) => KObject::Module(m),
         KObject::Record(substrate, record_type) => {
@@ -844,7 +847,7 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: SubstrateDoor<'b, '_>) -> Held<'b> 
     match cell {
         Held::Object(o) => Held::Object(copy_object_into(o, dest)),
         Held::Type(t) => Held::Type(*t),
-        Held::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
+        Held::UnresolvedType(ti) => Held::UnresolvedType(*ti),
     }
 }
 
@@ -864,17 +867,19 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: SubstrateDoor<'b, '_>) -> Held<'b> 
 ///   composed from its cells' own runs. Exact for the question asked: a cell resident in the
 ///   substrate's own region contributes no residence of its own (the run-level self rule), so a set
 ///   answer means a genuine borrow leaf reaches `home`.
-/// - **Owned data** — scalars, a splice-free quoted expression — borrows nothing. A **string**
-///   answers `false` for the same reason though its bytes do live in a region: the copy verb
-///   re-bumps them at the destination ([`copy_object_into`]), so the relocation genuinely releases
-///   whichever region held them.
-/// - A splice-carrying `KExpression` answers conservatively `true`, the one shape carrying no stored
-///   description of its own.
+/// - **Owned data** — scalars — borrows nothing. A **string** answers `false` for the same reason
+///   though its bytes do live in a region: the copy verb re-bumps them at the destination
+///   ([`copy_object_into`]), so the relocation genuinely releases whichever region held them. A
+///   **`KExpression`** answers `false` because the only storage it borrows is the eternal-tier
+///   program storage that parsed it, which no relocation releases and `home` is never.
 pub(crate) fn retains_home(value: &KObject<'_>, home: &KoanRegion) -> bool {
     match value {
-        KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => false,
+        KObject::Number(_)
+        | KObject::KString(_)
+        | KObject::Bool(_)
+        | KObject::Null
+        | KObject::KExpression(_) => false,
         KObject::KFunction(_) | KObject::Module(_) => true,
-        KObject::KExpression(e) => !e.is_splice_free(),
         KObject::Record(substrate, _) => substrate.reach().pins_region(home),
         KObject::List(substrate, _) => substrate.reach().pins_region(home),
         KObject::Dict(substrate, _) => substrate.reach().pins_region(home),

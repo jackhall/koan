@@ -1495,41 +1495,33 @@ fn mint_teardown_releases_members() {
     assert_eq!(Rc::strong_count(&b), count_before_b, "C's death releases B");
 }
 
-/// The checked seal's family audit gates a `KObject::KExpression` by
-/// [`is_splice_free`](crate::machine::model::KExpression::is_splice_free): a `Spliced` part is
-/// a resolved value, not raw AST, and its cell carries a producer reach the empty
-/// (foreign-reach-only) witness this door seals under cannot name. Because
-/// `alloc_object_witnessed_checked` is an always-on loud gate rather than a `debug_assert!`, the
-/// rejection surfaces as a structured `KError` — never an assertion failure, never a silently
-/// stored dangle. The quote-capture lane (`dispatch::single_poll::literal_pass_through`) stores
-/// every quoted body through this door.
+/// The checked seal's family audit admits a `KObject::KExpression`: an AST node names no producer
+/// region, so a cell pointing at program text pins nothing the empty (own-region-only) witness this
+/// door seals under would have to name. The quote-capture lane
+/// (`dispatch::single_poll::literal_pass_through`) stores every quoted body through this door.
 #[test]
-fn spliced_expression_is_rejected_by_the_checked_object_seal() {
+fn raw_expression_passes_the_checked_object_seal() {
     use crate::machine::model::{ExpressionPart, KExpression};
-    use crate::witnessed::Sealed;
+    use crate::source::Spanned;
 
+    let program = program_storage();
+    let brand = program.brand().region();
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
     let types = TypeRegistry::new();
 
-    let witnessed = scope
-        .seal_fresh_object(KObject::Number(7.0), &types)
-        .expect("a bare Number borrows no region, so its checked seal cannot fail");
-    let spliced = ExpressionPart::Spliced {
-        cell: Sealed::seal(witnessed),
-    };
-    let expression = KExpression::new(vec![spliced.into()]);
-    assert!(
-        !expression.is_splice_free(),
-        "a Spliced part makes the expression not splice-free"
+    let expression = KExpression::new(
+        brand,
+        vec![Spanned::bare(ExpressionPart::Identifier(
+            brand.alloc_text("x"),
+        ))],
     );
-
     let result = scope
         .brand()
         .alloc_object_witnessed_checked(KObject::KExpression(expression), &types);
     assert!(
-        result.is_err(),
-        "a spliced quoted expression must be rejected, not silently stored"
+        result.is_ok(),
+        "raw AST reaches no producer region, so the checked seal admits it"
     );
 }
 

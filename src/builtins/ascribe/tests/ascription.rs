@@ -1,6 +1,8 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
-use crate::builtins::test_support::{binds_module, lookup_module, parse_one, TestRun};
+use crate::builtins::test_support::{
+    binds_module, lookup_module, parse_one, program_brand, TestRun,
+};
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
@@ -47,10 +49,13 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
          SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          LET first_abstract = (int_ord :| Ordered)\n\
          LET second_abstract = (int_ord :| Ordered)";
-    let exprs = parse(src).expect("parse should succeed");
+    let exprs = parse(program_brand(), src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
+        ids.push(test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+            scope,
+        ));
     }
     test_run
         .runtime

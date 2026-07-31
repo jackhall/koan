@@ -16,7 +16,7 @@ use super::sig_schema::{sig_subtype, SigSchema};
 use super::signature::{ExpressionSignature, SignatureElement};
 use super::type_digest::{empty_schema_digest, TypeDigest};
 use crate::machine::core::read_resting;
-use crate::machine::model::ast::{ExpressionPart, KLiteral};
+use crate::machine::model::ast::{ExpressionPart, KLiteral, WorkingPart};
 use crate::machine::model::values::{Carried, Held, KObject};
 use crate::machine::SplicedCell;
 
@@ -458,18 +458,30 @@ impl KType {
         read_resting(cell, |c| self.accepts_carried(c, types))
     }
 
-    /// Per-`ExpressionPart` admissibility for argument slots. Unevaluated container
-    /// literals admit shape-only (element types unknown until evaluation); a spliced cell
-    /// ([`ExpressionPart::Spliced`]) classifies through [`accepts_cell`](Self::accepts_cell),
-    /// which opens it at its own brand. Non-satisfying containers fall through the scope walk
-    /// rather than failing the bind.
-    pub fn accepts_part(self, part: &ExpressionPart<'_>, types: &TypeRegistry) -> bool {
-        // A spliced cell opens at its own brand through `accepts_cell`, which routes the opened
-        // value through `accepts_carried` — no cast. Every remaining arm is a shape check on the
-        // parser part, so no coercion of `part` is needed.
-        if let ExpressionPart::Spliced { cell } = part {
-            return self.accepts_cell(cell, types);
+    /// Per-[`WorkingPart`] admissibility for argument slots — the dispatch-path peer of
+    /// [`accepts_part`](Self::accepts_part), which classifies raw AST shapes. Only the scheduler's
+    /// own arms are answered here; a part pointing at the AST delegates.
+    pub fn accepts_working_part(self, part: &WorkingPart<'_>, types: &TypeRegistry) -> bool {
+        match part {
+            WorkingPart::Ast(part) => self.accepts_part(part, types),
+            // A resolved sub-result opens at its own brand through `accepts_cell`, which routes the
+            // opened value through `accepts_carried` — no cast.
+            WorkingPart::Spliced { cell } => self.accepts_cell(cell, types),
+            // A slot the scheduler has yet to fill — a node it synthesized and will dispatch, or a
+            // staging hole awaiting its sibling's carrier. Neither denotes a value yet, and both
+            // become a `Spliced` cell before anything binds, so only an `Any` slot admits one.
+            WorkingPart::Expression(_) | WorkingPart::StagedSlot => {
+                matches!(types.node(self), TypeNode::Any)
+            }
         }
+    }
+
+    /// Per-[`ExpressionPart`] admissibility for argument slots: a shape check on raw parser syntax.
+    /// Unevaluated container literals admit shape-only (element types unknown until evaluation).
+    /// Non-satisfying containers fall through the scope walk rather than failing the bind. A part
+    /// the scheduler produced classifies through
+    /// [`accepts_working_part`](Self::accepts_working_part) instead.
+    pub fn accepts_part(self, part: &ExpressionPart<'_>, types: &TypeRegistry) -> bool {
         match types.node(self) {
             TypeNode::Any => true,
             TypeNode::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),

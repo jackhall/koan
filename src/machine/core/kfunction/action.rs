@@ -10,18 +10,22 @@ use std::rc::Rc;
 use super::body::ReturnContract;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::carrier_witness::SealedFunction;
-use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, StepAllocator};
+use crate::machine::core::{
+    CallFrame, FrameStorage, LexicalFrame, RegionBrand, Scope, StepAllocator,
+};
 use crate::machine::execute::StepCarried;
 use crate::machine::model::Held;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KType, Record, TypeNode};
+use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{
     BindingIndex, DeclarationSite, DeliveredCarried, KError, KErrorKind, NodeHandle, NodeId,
 };
 use crate::scheduler::DepResults;
 use crate::scheduler::Deps;
+use crate::source::Spanned;
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -72,7 +76,7 @@ pub fn arg_type(args: &Record<Held<'_>>, name: &str) -> Option<KType> {
 pub fn arg_unresolved_type<'a, 'c>(
     args: &'c Record<Held<'a>>,
     name: &str,
-) -> Option<&'c TypeIdentifier> {
+) -> Option<&'c TypeIdentifier<'a>> {
     match args.get(name) {
         Some(Held::UnresolvedType(ti)) => Some(ti),
         _ => None,
@@ -191,7 +195,7 @@ fn bare_type_name(
     }
 }
 
-/// Extract a cloned `KExpression` from arg `slot`, or the canonical parenthesized-slot
+/// Read the `KExpression` in arg `slot`, or the canonical parenthesized-slot
 /// `ShapeError` (`"<builtin> <slot> slot must be a parenthesized expression"`), owning that error
 /// text so every `KExpression`-slot builtin reports it identically.
 pub fn require_kexpression<'a>(
@@ -200,7 +204,7 @@ pub fn require_kexpression<'a>(
     slot: &str,
 ) -> Result<KExpression<'a>, KError> {
     match arg_object(args, slot) {
-        Some(KObject::KExpression(e)) => Ok(e.clone()),
+        Some(KObject::KExpression(e)) => Ok(*e),
         _ => Err(KError::new(KErrorKind::ShapeError(format!(
             "{builtin} {slot} slot must be a parenthesized expression"
         )))),
@@ -276,6 +280,26 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
         self.arg_carriers.get(name).copied()
     }
 
+    /// The allocation capability for this body's own scope region, branded at the step lifetime
+    /// `'a` — what a body bumping text or freezing a parts run allocates through.
+    pub fn brand(&self) -> RegionBrand<'a> {
+        self.scope.brand()
+    }
+
+    /// The scheduler-side working copy of a body this builtin holds as raw AST: the AST → scheduler
+    /// crossing, made at the moment the body declares the dep that runs the node. One slice copy of
+    /// the parts run into this body's own region, never a rebuild.
+    pub fn working(&self, ast: KExpression<'a>) -> WorkingExpression<'a> {
+        WorkingExpression::from_ast(self.brand(), ast)
+    }
+
+    /// Freeze a run of working slots into a node in this body's own region — the door a builtin
+    /// takes when it assembles the expression it hands the scheduler rather than copying one out of
+    /// the AST.
+    pub fn expression(&self, parts: Vec<Spanned<WorkingPart<'a>>>) -> WorkingExpression<'a> {
+        WorkingExpression::new(self.brand(), parts)
+    }
+
     /// A [`FinishCtx`] over this body's own scope and context — for a synchronous body that hands its
     /// resolve/dispatch continuation the same shape a wake-time finish receives (e.g.
     /// `resolve_or_await`'s synchronous arm).
@@ -316,6 +340,24 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
             types,
         }
     }
+
+    /// The allocation capability for this finish's own scope region, branded at the step lifetime
+    /// `'a`. The wake-time peer of [`BodyCtx::brand`].
+    pub fn brand(&self) -> RegionBrand<'a> {
+        self.scope.brand()
+    }
+
+    /// The scheduler-side working copy of raw AST this finish holds — the wake-time peer of
+    /// [`BodyCtx::working`].
+    pub fn working(&self, ast: KExpression<'a>) -> WorkingExpression<'a> {
+        WorkingExpression::from_ast(self.brand(), ast)
+    }
+
+    /// Freeze a run of working slots into a node in this finish's own region — the wake-time peer
+    /// of [`BodyCtx::expression`].
+    pub fn expression(&self, parts: Vec<Spanned<WorkingPart<'a>>>) -> WorkingExpression<'a> {
+        WorkingExpression::new(self.brand(), parts)
+    }
 }
 
 /// A resolved dep terminal as a continuation receives it. `value` is the terminal re-anchored
@@ -329,7 +371,7 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
 /// result by construction; a finish that parks the carrier on the working expression across steps
 /// (the working-copy splice) **rests** the envelope into the finishing step's own region
 /// ([`Scope::rest_delivered`](crate::machine::core::Scope::rest_delivered)), leaving a
-/// [`Spliced`](crate::machine::model::ExpressionPart::Spliced) cell whose backing that region's
+/// [`Spliced`](WorkingPart::Spliced) cell whose backing that region's
 /// union bundle keeps retained through the `Replace` to the step that adopts it.
 /// Defined here in core (not the execute layer that resolves it) so the builtin-`Action` currency —
 /// [`AwaitContinue`] — can name it.
@@ -391,8 +433,8 @@ impl<'a> Action<'a> {
 
     /// Tail-replace into `tail`. See [`ActionKind::Tail`].
     pub fn tail(
-        leading: Vec<KExpression<'a>>,
-        tail: KExpression<'a>,
+        leading: Vec<WorkingExpression<'a>>,
+        tail: WorkingExpression<'a>,
         contract: TailContract,
         frame_placement: FramePlacement<'a>,
         block_entry: BlockEntry<'a>,
@@ -456,8 +498,8 @@ pub enum ActionKind<'a> {
     /// enters (see [`BlockEntry`]); the harness derives the body-statement chains and the tail's
     /// `body_index` from it + `leading`.
     Tail {
-        leading: Vec<KExpression<'a>>,
-        tail: KExpression<'a>,
+        leading: Vec<WorkingExpression<'a>>,
+        tail: WorkingExpression<'a>,
         contract: TailContract,
         frame_placement: FramePlacement<'a>,
         block_entry: BlockEntry<'a>,
@@ -492,7 +534,7 @@ impl<'a> Action<'a> {
 /// holds structurally, so a builtin cannot install an Owned edge on a
 /// producer it does not own — that shape is unrepresentable here.
 pub struct OwnedDispatch<'a> {
-    pub expr: KExpression<'a>,
+    pub expr: WorkingExpression<'a>,
     pub placement: DepPlacement<'a>,
 }
 
@@ -525,7 +567,7 @@ impl<'a> OwnedDispatch<'a> {
 /// `BodyBlock` each fan their multi-statement body out to one owned result per statement.
 pub enum DepRequest<'a> {
     Dispatch {
-        expr: KExpression<'a>,
+        expr: WorkingExpression<'a>,
         placement: DepPlacement<'a>,
         /// True only when this sub-dispatch stages a binder pick's *own* chain slot (a `LET`/`OP`/`FN`
         /// declaration slot), so the enclosing statement already installed the binder's aggregate and
@@ -535,16 +577,16 @@ pub enum DepRequest<'a> {
         binder_covered: bool,
     },
     Existing(NodeId),
-    ListLit(Vec<ExpressionPart<'a>>),
-    DictLit(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
-    RecordLit(Vec<(String, ExpressionPart<'a>)>),
+    ListLit(&'a [ExpressionPart<'a>]),
+    DictLit(&'a [(ExpressionPart<'a>, ExpressionPart<'a>)]),
+    RecordLit(&'a [(&'a str, ExpressionPart<'a>)]),
     /// A body's non-tail statements dispatched as a block, fanning out to one owned producer per
     /// statement (the harness `extend`s them in declaration order). `placement` picks where they
     /// bind (see [`BodyPlacement`]): a deferred-return FN's first-call body and a leading-carrying
     /// arm bind into a fresh per-call frame's own scope; a leading-carrying USING binds into an
     /// inherited-cart overlay.
     BodyBlock {
-        statements: Vec<KExpression<'a>>,
+        statements: Vec<WorkingExpression<'a>>,
         placement: BodyPlacement<'a>,
     },
 }

@@ -5,20 +5,17 @@
 //! dispatches a call shape matching the still-uninstalled bucket would
 //! hard-error under strict-only admission instead of parking.
 
+use super::working_one;
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
 use crate::machine::model::UntypedElement;
-use crate::parse::parse;
 
 #[test]
 fn nested_binder_installs_inner_placeholder_at_outer_submission() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let mut exprs =
-        parse("LET f = (FN (HELPER x :Number) -> Number = (x))").expect("parse should succeed");
-    assert_eq!(exprs.len(), 1, "test fixture: single top-level expression");
-    let expr = exprs.remove(0);
+    let expr = working_one("LET f = (FN (HELPER x :Number) -> Number = (x))");
     let _id = test_run.runtime.dispatch_in_scope(expr, scope);
     // Read both maps before any `execute()` — installs must land at submission time.
     let placeholders = scope.bindings().placeholders();

@@ -1,7 +1,6 @@
 use std::fmt;
 
-use crate::machine::core::kfunction::KFunction;
-use crate::machine::model::KExpression;
+use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, CarriedFamily, KObject};
 use crate::machine::model::{
     KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
@@ -84,7 +83,7 @@ pub enum KErrorKind {
 }
 
 /// One entry in an error's call-stack trace. `function` and `expression` are
-/// `summarize()` text; `location` is `Some` when the originating `KExpression`
+/// `summarize()` text; `location` is `Some` when the originating expression
 /// had both `span` and `file` populated.
 #[derive(Clone)]
 pub struct TraceFrame {
@@ -94,7 +93,7 @@ pub struct TraceFrame {
 }
 
 impl TraceFrame {
-    /// Locationless frame for call sites without an originating `KExpression`.
+    /// Locationless frame for call sites without an originating expression.
     pub fn bare(function: impl Into<String>, expression: impl Into<String>) -> TraceFrame {
         TraceFrame {
             function: function.into(),
@@ -103,18 +102,9 @@ impl TraceFrame {
         }
     }
 
-    pub fn for_call(function: &KFunction<'_>, expr: &KExpression<'_>) -> TraceFrame {
-        TraceFrame {
-            function: function.summarize(),
-            expression: expr.summarize(),
-            location: location_from_expr(expr),
-        }
-    }
-
-    /// TraceFrame keyed off a `KExpression` but with a caller-chosen `function`
-    /// label (e.g. `"<bind>"`) for scheduler-internal frames without a real
-    /// `KFunction`.
-    pub fn from_expr(function: impl Into<String>, expr: &KExpression<'_>) -> TraceFrame {
+    /// TraceFrame keyed off the expression a slot is dispatching, with a caller-chosen `function`
+    /// label (e.g. `"<bind>"`) for scheduler-internal frames without a real `KFunction`.
+    pub fn from_expr(function: impl Into<String>, expr: &WorkingExpression<'_>) -> TraceFrame {
         TraceFrame {
             function: function.into(),
             expression: expr.summarize(),
@@ -123,7 +113,7 @@ impl TraceFrame {
     }
 }
 
-fn location_from_expr(expr: &KExpression<'_>) -> Option<SourceLoc> {
+fn location_from_expr(expr: &WorkingExpression<'_>) -> Option<SourceLoc> {
     expr.span.zip(expr.file).map(|(span, file)| {
         source::with(file, |f| {
             let (line, col_utf16) = f.resolve(span.start);
@@ -157,10 +147,6 @@ impl KError {
     pub fn with_frame(mut self, frame: TraceFrame) -> Self {
         self.frames.push(frame);
         self
-    }
-
-    pub fn with_call_frame(self, function: &KFunction<'_>, expr: &KExpression<'_>) -> Self {
-        self.with_frame(TraceFrame::for_call(function, expr))
     }
 
     /// Spelled out (vs. `Clone`) so propagation sites read as intent.
