@@ -327,6 +327,20 @@ carries none — a `&'a` into a region borrowed for `'a` needs no retype.
 - `let_bound_list_of_call_produced_strings_survives_every_producer_free`
 - `let_bound_dict_with_call_produced_string_keys_survives_every_producer_free`
 
+**Region-hosted expression at the container door** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
+— the expression peer of the group above, and the one check on the rule that lets
+`KObject::KExpression` answer without a reach description at all: `resident_in_visiting` admits an
+expression unconditionally, an expression cell's reach verdict is `Owned`, and `retains_home`
+answers `false`. All three are honest only because the node's `parts` run, its keyword text and its
+structural cache live in the eternal-tier program storage that parsed them, which no relocation
+releases. A node whose parts were bumped into the call region its producer ran in would satisfy
+every one of those answers while pointing into a retiring region — and no residence audit can catch
+it, since the bump keeps no address table. The test produces its quotes inside per-call function
+regions, binds the list in an outer scope so every producer frame retires, then walks the stored
+`parts` on the read. The door is safe code throughout; tree borrows is the only check.
+
+- `let_bound_list_of_call_produced_quotes_survives_every_producer_free`
+
 **Retaining adoption's reach-fold reattach** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
 — `Scope::adopt_carried` at the retaining seam re-anchors a foreign producer's carrier at the
 consumer scope's own lifetime, copy-free, pinned by the reach the verb folds into the consumer's own

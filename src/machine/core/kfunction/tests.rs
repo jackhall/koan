@@ -1,7 +1,7 @@
 use super::*;
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, run_root_bare, TestRun};
-use crate::machine::core::{run_root_storage, FrameStorageExt, Scope};
+use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt, Scope};
 use crate::machine::model::{Argument, ExpressionSignature, KExpression, KType, ReturnType};
 use crate::machine::model::{KKind, KObject};
 use crate::machine::model::{KLiteral, TypeIdentifier};
@@ -144,8 +144,9 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
 /// not a reference, and `classify_for_pick` must exclude it from `ref_name_indices`.
 #[test]
 fn classify_skips_ref_name_indices_for_binder_function() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let brand = region.brand();

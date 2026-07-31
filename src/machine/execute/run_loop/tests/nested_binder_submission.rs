@@ -7,15 +7,16 @@
 
 use super::working_one;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::run_root_storage;
+use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::UntypedElement;
 
 #[test]
 fn nested_binder_installs_inner_placeholder_at_outer_submission() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let expr = working_one("LET f = (FN (HELPER x :Number) -> Number = (x))");
+    let expr = working_one(&program, "LET f = (FN (HELPER x :Number) -> Number = (x))");
     let _id = test_run.runtime.dispatch_in_scope(expr, scope);
     // Read both maps before any `execute()` — installs must land at submission time.
     let placeholders = scope.bindings().placeholders();

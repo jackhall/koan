@@ -6,12 +6,15 @@ use std::rc::Rc;
 use super::*;
 
 use super::run;
+use crate::machine::program_storage;
 
 #[test]
 fn tagged_union_full_program_via_type_token() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
+        &program,
         "UNION Outcome = (Ok :Str Err :Str)\n\
          LET r = (Outcome (Ok \"all good\"))\n\
          MATCH (r) -> :Str WITH (Ok -> (PRINT it) Err -> (PRINT \"failed\"))",
@@ -23,9 +26,11 @@ fn tagged_union_full_program_via_type_token() {
 
 #[test]
 fn tagged_union_full_program_constructs_and_matches() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
+        &program,
         "UNION Outcome = (Ok :Str Err :Str)\n\
          LET r = (Outcome (Err \"oops\"))\n\
          MATCH (r) -> :Str WITH (Ok -> (PRINT \"good\") Err -> (PRINT it))",
@@ -37,9 +42,11 @@ fn tagged_union_full_program_constructs_and_matches() {
 
 #[test]
 fn tagged_union_none_branch_runs() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
+        &program,
         "UNION Maybe = (Some :Number None :Null)\n\
          LET m = (Maybe (None null))\n\
          MATCH (m) -> :Str WITH (Some -> (PRINT \"some-branch\") None -> (PRINT \"none-branch\"))",
@@ -53,9 +60,11 @@ fn tagged_union_none_branch_runs() {
 /// `:(Maybe None)` select by the value's variant identity, the criterion-1/3 headline.
 #[test]
 fn variant_typed_overloads_dispatch_by_variant() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
+        &program,
         "UNION Maybe = (Some :Number None :Null)\n\
          FN (DESC x :(Maybe Some)) -> :Str = (\"is-some\")\n\
          FN (DESC x :(Maybe None)) -> :Str = (\"is-none\")\n\
@@ -92,9 +101,11 @@ fn variant_typed_slot_rejects_other_variant() {
 /// even though that value's `ktype()` is now the `None` variant refinement.
 #[test]
 fn union_typed_slot_admits_any_variant() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
+        &program,
         "UNION Maybe = (Some :Number None :Null)\n\
          FN (ANY x :Maybe) -> :Str = (\"any-variant\")\n\
          PRINT (ANY (Maybe (None null)))",
@@ -108,9 +119,11 @@ fn union_typed_slot_admits_any_variant() {
 /// per-tag newtype `SetMember`, which renders by its own member name.
 #[test]
 fn variant_type_value_renders_member_name() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
+        &program,
         "UNION Maybe = (Some :Number None :Null)\n\
          PRINT :(Maybe Some)",
         &region,

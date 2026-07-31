@@ -439,8 +439,9 @@ fn a_function<'a>(
 fn function_operand_is_error_at_any_position() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::run_root_storage;
+    let program = program_storage();
     let storage = run_root_storage();
-    let test_run = TestRun::silent(&storage);
+    let test_run = TestRun::silent(&program, &storage);
     let types = test_run.types.clone();
     let f = a_function(&storage, test_run.scope, &types);
     assert_eq!(
@@ -452,8 +453,9 @@ fn function_operand_is_error_at_any_position() {
         Err(ValueEqualityError::Function)
     );
     // Nested: a function inside a list propagates the error.
+    let program2 = program_storage();
     let storage2 = run_root_storage();
-    let second_run = TestRun::silent(&storage2);
+    let second_run = TestRun::silent(&program2, &storage2);
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door = {
         use crate::machine::core::{FoldingBrand, FrameStorageExt};
@@ -487,8 +489,9 @@ fn length_mismatch_short_circuits_before_banned_cell() {
     // cell returns `Ok(false)` before any `Err`.
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::run_root_storage;
+    let program = program_storage();
     let storage = run_root_storage();
-    let test_run = TestRun::silent(&storage);
+    let test_run = TestRun::silent(&program, &storage);
     let types = test_run.types.clone();
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door = {
@@ -513,8 +516,9 @@ fn module_operand_is_error() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::run_root_storage;
     use crate::machine::model::values::Module;
+    let program = program_storage();
     let storage = run_root_storage();
-    let test_run = TestRun::silent(&storage);
+    let test_run = TestRun::silent(&program, &storage);
     let types = test_run.types.clone();
     let m = Module::new("m".into(), test_run.scope);
     let module = KObject::Module(&m);

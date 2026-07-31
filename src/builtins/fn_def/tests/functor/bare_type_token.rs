@@ -7,7 +7,7 @@
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KExpression;
 use crate::machine::model::{KObject, KType};
-use crate::machine::run_root_storage;
+use crate::machine::{program_storage, run_root_storage};
 use crate::machine::{KError, KErrorKind};
 
 /// Tolerates the error surfacing either from `KoanRuntime::execute()` (resolve
@@ -38,10 +38,11 @@ fn run_expecting_dispatch_error<'a>(test_run: &mut TestRun<'a>, expr: KExpressio
 
 #[test]
 fn functor_admits_bare_number_token_at_type_slot() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
-    let result = test_run.run_one(parse_one("MAKETREE Number"));
+    let result = test_run.run_one(parse_one(&program, "MAKETREE Number"));
     match result {
         KObject::Module(_) => {}
         other => {
@@ -55,12 +56,13 @@ fn functor_admits_bare_number_token_at_type_slot() {
 
 #[test]
 fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
     for token in ["Str", "Bool", "Null"] {
         let src = format!("MAKETREE {token}");
-        let result = test_run.run_one(parse_one(&src));
+        let result = test_run.run_one(parse_one(&program, &src));
         match result {
             KObject::Module(_) => {}
             other => {
@@ -75,13 +77,14 @@ fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
 
 #[test]
 fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (MAKETREE Elt :Type) -> Module = \
          (MODULE generated = ((LET ElemType = Elt) (LET inner = 1)))",
     );
-    let result = test_run.run_one(parse_one("MAKETREE Number"));
+    let result = test_run.run_one(parse_one(&program, "MAKETREE Number"));
     let module = match result {
         KObject::Module(module) => *module,
         other => panic!(
@@ -104,10 +107,11 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
 /// scope walk.
 #[test]
 fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
-    let err = run_expecting_dispatch_error(&mut test_run, parse_one("MAKETREE 7"));
+    let err = run_expecting_dispatch_error(&mut test_run, parse_one(&program, "MAKETREE 7"));
     match &err.kind {
         KErrorKind::DispatchFailed { .. } | KErrorKind::UnboundName(_) => {}
         _ => panic!("expected dispatch no-match (DispatchFailed) for non-type carrier, got {err}",),
@@ -121,13 +125,14 @@ fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
 /// (committed-then-failed bind) satisfies the wall's contract.
 #[test]
 fn functor_module_carrier_does_not_fill_type_slot() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))\n\
          MODULE int_mod = (LET inner = 1)",
     );
-    let _ = run_expecting_dispatch_error(&mut test_run, parse_one("MAKETREE int_mod"));
+    let _ = run_expecting_dispatch_error(&mut test_run, parse_one(&program, "MAKETREE int_mod"));
 }
 
 /// Deferred-return re-elaboration with a builtin-keyed bind — pins that the
@@ -136,8 +141,9 @@ fn functor_module_carrier_does_not_fill_type_slot() {
 #[test]
 fn deferred_return_resolves_against_builtin_keyed_bind() {
     use crate::machine::model::ReturnType;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (BUILD Elt :Type) -> :Elt = (42)");
     let f = crate::builtins::test_support::lookup_fn(scope, "BUILD");
@@ -146,7 +152,7 @@ fn deferred_return_resolves_against_builtin_keyed_bind() {
         "BUILD's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
-    let result = test_run.run_one(parse_one("BUILD Number"));
+    let result = test_run.run_one(parse_one(&program, "BUILD Number"));
     match result {
         KObject::Number(n) if *n == 42.0 => {}
         other => panic!(
@@ -161,12 +167,16 @@ fn deferred_return_resolves_against_builtin_keyed_bind() {
 /// route through the same dep-finish slot check.
 #[test]
 fn deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (BUILD Elt :Type) -> :Elt = (42)");
     let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("BUILD Str")),
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one(&program, "BUILD Str"),
+        ),
         scope,
     );
     test_run

@@ -1,7 +1,7 @@
 //! Scope-aware type elaboration of FN signatures: signature-bound params, LET→FN ordering, type-value bindings.
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, TestRun};
-use crate::machine::run_root_storage;
+use crate::machine::{program_storage, run_root_storage};
 
 /// `LET MyList = :(LIST OF Number)` writes the elaborated `KType::list(Number)`
 /// to `bindings.types` (reachable via `Scope::resolve_type`); the `Held::Type`
@@ -9,8 +9,9 @@ use crate::machine::run_root_storage;
 #[test]
 fn list_of_let_binding_is_ktype_value() {
     use crate::machine::model::KType;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET MyList = :(LIST OF Number)");
     let kt = scope
@@ -26,8 +27,9 @@ fn elaborator_lowers_ktype_value_binding() {
     use crate::machine::model::KType;
     use crate::machine::model::TypeIdentifier;
     use crate::machine::model::{elaborate_type_identifier, Elaborator, TypeResolution};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET MyList = :(LIST OF Number)");
     let types = test_run.types.clone();
@@ -45,8 +47,9 @@ fn elaborator_lowers_ktype_value_binding() {
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     use crate::machine::model::{Argument, SignatureElement, TypeNode};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -85,13 +88,13 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
 /// placeholder and re-runs elaboration against the finalized scope.
 #[test]
 fn let_then_fn_in_same_batch_works() {
-    use crate::builtins::test_support::program_brand;
     use crate::parse::parse;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let exprs = parse(
-        program_brand(),
+        test_run.program_brand(),
         "LET MyList = :(LIST OF Number)\n\
          FN (USE xs :MyList) -> Number = (1)",
     )

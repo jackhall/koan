@@ -277,13 +277,14 @@ fn wrapped_deep_clone_shares_inner_substrate_and_type_id() {
 fn resident_in_true_for_same_region_kfunction() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::Body;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
     use crate::machine::model::ast::KExpression;
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
     use crate::machine::KFunction;
 
+    let program = program_storage();
     let storage = run_root_storage();
-    let test_run = TestRun::silent(&storage);
+    let test_run = TestRun::silent(&program, &storage);
     let scope = test_run.scope;
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::NUMBER),
@@ -307,14 +308,15 @@ fn resident_in_true_for_same_region_kfunction() {
 fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::Body;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
     use crate::machine::model::ast::KExpression;
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
     use crate::machine::KFunction;
     use std::rc::Rc;
 
+    let foreign_program = program_storage();
     let foreign = run_root_storage();
-    let foreign_test_run = TestRun::silent(&foreign);
+    let foreign_test_run = TestRun::silent(&foreign_program, &foreign);
     let foreign_scope = foreign_test_run.scope;
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::NUMBER),

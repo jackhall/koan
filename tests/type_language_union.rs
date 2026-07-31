@@ -12,11 +12,11 @@
 use std::rc::Rc;
 
 use koan::builtins::test_support::TestRun;
-use koan::machine::{run_root_storage, FrameStorage};
+use koan::machine::{program_storage, run_root_storage, FrameStorage, ProgramStorage};
 
 /// Run `src` to completion, returning everything it PRINTed.
-fn run_capture(region: &Rc<FrameStorage>, src: &str) -> String {
-    let (mut test_run, captured) = TestRun::with_buf(region);
+fn run_capture(program: &ProgramStorage, region: &Rc<FrameStorage>, src: &str) -> String {
+    let (mut test_run, captured) = TestRun::with_buf(program, region);
     let scope = test_run.scope;
     test_run.dispatch_source_in(scope, src);
     test_run
@@ -28,8 +28,8 @@ fn run_capture(region: &Rc<FrameStorage>, src: &str) -> String {
 }
 
 /// Run `src`, expecting the last top-level slot to be a slot-terminal error; returns its text.
-fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
-    let mut test_run = TestRun::silent(region);
+fn run_expect_err(program: &ProgramStorage, region: &Rc<FrameStorage>, src: &str) -> String {
+    let mut test_run = TestRun::silent(program, region);
     let scope = test_run.scope;
     let ids = test_run.dispatch_source_in(scope, src);
     test_run
@@ -46,8 +46,10 @@ fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
 /// AC1: a union FN parameter `:(Number | Str)` admits a `Number` and a `Str` argument.
 #[test]
 fn union_param_admits_each_member() {
+    let program = program_storage();
     let region = run_root_storage();
     let out = run_capture(
+        &program,
         &region,
         "FN (ACCEPT v :(Number | Str)) -> Str = (\"ok\")\n\
          PRINT (ACCEPT 5)\n\
@@ -64,8 +66,10 @@ fn union_param_admits_each_member() {
 /// dispatch falls through with no matching overload.
 #[test]
 fn union_param_rejects_non_member() {
+    let program = program_storage();
     let region = run_root_storage();
     let err = run_expect_err(
+        &program,
         &region,
         "FN (ACCEPT v :(Number | Str)) -> Str = (\"ok\")\n\
          ACCEPT true",
@@ -80,8 +84,10 @@ fn union_param_rejects_non_member() {
 /// same arguments a `:(Number | Str)` one does.
 #[test]
 fn union_param_order_blind() {
+    let program = program_storage();
     let region = run_root_storage();
     let out = run_capture(
+        &program,
         &region,
         "FN (ACCEPT v :(Str | Number)) -> Str = (\"ok\")\n\
          PRINT (ACCEPT 5)\n\
@@ -98,8 +104,10 @@ fn union_param_order_blind() {
 /// still rejects a `Str`, exactly as a bare `:Number` parameter would.
 #[test]
 fn duplicate_member_behaves_as_single() {
+    let program = program_storage();
     let region = run_root_storage();
     let out = run_capture(
+        &program,
         &region,
         "FN (ONLY_NUM v :(Number | Number)) -> Str = (\"num\")\n\
          PRINT (ONLY_NUM 5)",
@@ -109,8 +117,10 @@ fn duplicate_member_behaves_as_single() {
         "collapsed union admits Number; got {out:?}"
     );
 
+    let program = program_storage();
     let region = run_root_storage();
     let err = run_expect_err(
+        &program,
         &region,
         "FN (ONLY_NUM v :(Number | Number)) -> Str = (\"num\")\n\
          ONLY_NUM \"hi\"",
@@ -126,8 +136,10 @@ fn duplicate_member_behaves_as_single() {
 /// type-dispatched function lands on the `:Number` arm, and a returned `Str` lands on `:Str`.
 #[test]
 fn union_return_keeps_runtime_type_for_dispatch() {
+    let program = program_storage();
     let region = run_root_storage();
     let out = run_capture(
+        &program,
         &region,
         "FN (WIDEN_NUM n :Number) -> :(Number | Str) = (n)\n\
          FN (WIDEN_STR s :Str) -> :(Number | Str) = (s)\n\
@@ -147,8 +159,10 @@ fn union_return_keeps_runtime_type_for_dispatch() {
 /// downstream type-dispatched function classifies it.
 #[test]
 fn match_union_return_type() {
+    let program = program_storage();
     let region = run_root_storage();
     let out = run_capture(
+        &program,
         &region,
         "FN (CLASSIFY x :Number) -> Str = (\"num\")\n\
          FN (CLASSIFY x :Str) -> Str = (\"str\")\n\
@@ -167,8 +181,10 @@ fn match_union_return_type() {
 /// against `:(Number | Str)` without re-tagging.
 #[test]
 fn try_union_return_type() {
+    let program = program_storage();
     let region = run_root_storage();
     let out = run_capture(
+        &program,
         &region,
         "FN (CLASSIFY x :Number) -> Str = (\"num\")\n\
          FN (CLASSIFY x :Str) -> Str = (\"str\")\n\
@@ -186,8 +202,10 @@ fn try_union_return_type() {
 /// a function parameter typed with it admits all three members.
 #[test]
 fn three_member_union_admits_all() {
+    let program = program_storage();
     let region = run_root_storage();
     let out = run_capture(
+        &program,
         &region,
         "FN (ANY v :(Number | Str | Bool)) -> Str = (\"ok\")\n\
          PRINT (ANY 5)\n\
@@ -205,8 +223,9 @@ fn three_member_union_admits_all() {
 /// slot/keyword-alternating, so it falls to keyworded dispatch and fails. Users parenthesize.
 #[test]
 fn unparenthesized_compound_member_fails() {
+    let program = program_storage();
     let region = run_root_storage();
-    let err = run_expect_err(&region, "LET Ty = :(LIST OF Number | Str)");
+    let err = run_expect_err(&program, &region, "LET Ty = :(LIST OF Number | Str)");
     assert!(
         err.contains("dispatch failed") || err.contains("no matching function"),
         "an unparenthesized compound member must fail dispatch; got {err}",
@@ -217,8 +236,10 @@ fn unparenthesized_compound_member_fails() {
 /// typed with it admits a matching list and a Str, and rejects a bare Number.
 #[test]
 fn parenthesized_compound_member_succeeds() {
+    let program = program_storage();
     let region = run_root_storage();
     let out = run_capture(
+        &program,
         &region,
         "FN (TAKE v :((LIST OF Number) | Str)) -> Str = (\"ok\")\n\
          PRINT (TAKE [1 2 3])\n\
@@ -230,8 +251,10 @@ fn parenthesized_compound_member_succeeds() {
         "the parenthesized compound union admits a list and a Str; got {out:?}",
     );
 
+    let program = program_storage();
     let region = run_root_storage();
     let err = run_expect_err(
+        &program,
         &region,
         "FN (TAKE v :((LIST OF Number) | Str)) -> Str = (\"ok\")\n\
          TAKE 5",
@@ -247,9 +270,10 @@ fn parenthesized_compound_member_succeeds() {
 /// records that the surface accepts the expression rather than erroring.
 #[test]
 fn value_context_union_builds_a_type_value() {
+    let program = program_storage();
     let region = run_root_storage();
     // No PRINT — just assert the program runs to completion binding the type value.
-    let _ = run_capture(&region, "LET number_or_string = (Number | Str)");
+    let _ = run_capture(&program, &region, "LET number_or_string = (Number | Str)");
 }
 
 // -- Phase 3: a union schema field typed as a sibling variant via `:(Tree Leaf)` -----------
@@ -260,8 +284,10 @@ fn value_context_union_builds_a_type_value() {
 /// and the whole value projects (`PRINT` renders it structurally).
 #[test]
 fn sibling_variant_sigil_types_a_field() {
+    let program = program_storage();
     let region = run_root_storage();
     let out = run_capture(
+        &program,
         &region,
         "UNION Tree = (Leaf :Number Node :(Tree Leaf))\n\
          LET tree = (Tree (Node (Tree (Leaf 1))))\n\
@@ -272,8 +298,10 @@ fn sibling_variant_sigil_types_a_field() {
         "the outer value is a `Node`, so its MATCH arm fires; got {out:?}"
     );
 
+    let program = program_storage();
     let region = run_root_storage();
     let projected = run_capture(
+        &program,
         &region,
         "UNION Tree = (Leaf :Number Node :(Tree Leaf))\n\
          LET tree = (Tree (Node (Tree (Leaf 1))))\n\
@@ -290,8 +318,13 @@ fn sibling_variant_sigil_types_a_field() {
 /// `index_of` and surfaces the standard unsealed-reference error naming the bad tag.
 #[test]
 fn sibling_variant_typo_references_unsealed_type() {
+    let program = program_storage();
     let region = run_root_storage();
-    let err = run_expect_err(&region, "UNION Tree = (Leaf :Number Node :(Tree Bogus))");
+    let err = run_expect_err(
+        &program,
+        &region,
+        "UNION Tree = (Leaf :Number Node :(Tree Bogus))",
+    );
     assert!(
         err.contains("UNION `Tree` schema references unsealed type `Bogus`"),
         "a misspelled sibling variant names the bad tag; got {err}",
@@ -302,8 +335,9 @@ fn sibling_variant_typo_references_unsealed_type() {
 /// and stays an unknown-type error — only `:(Tree Leaf)` reaches a sibling variant.
 #[test]
 fn bare_sibling_tag_stays_unknown_type_error() {
+    let program = program_storage();
     let region = run_root_storage();
-    let err = run_expect_err(&region, "UNION Tree = (Leaf :Number Node :Leaf)");
+    let err = run_expect_err(&program, &region, "UNION Tree = (Leaf :Number Node :Leaf)");
     assert!(
         err.contains("unknown type name `Leaf` in UNION schema for `Node`"),
         "a bare sibling tag stays an unknown-type error; got {err}",

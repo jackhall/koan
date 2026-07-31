@@ -2,7 +2,7 @@
 //! returns a distinct labeled marker so a test can identify which overload won.
 //! Counterpart `resolve_dispatch`-only assertions live in `machine::core::tests::dispatch`.
 
-use crate::builtins::test_support::{marker, one_slot_sig, program_brand, run_root_bare};
+use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::core::{BindingIndex, FrameStorageExt};
@@ -14,7 +14,7 @@ use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, Si
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 
 use super::working;
-use crate::machine::run_root_storage;
+use crate::machine::{program_storage, run_root_storage};
 use crate::source::Spanned;
 
 fn body_identifier<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
@@ -51,6 +51,7 @@ fn summarize_marker(obj: &KObject<'_>) -> String {
 /// consult overload buckets.
 #[test]
 fn dispatch_inner_scope_shadows_outer_more_specific() {
+    let program = program_storage();
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     let outer_sig = ExpressionSignature {
@@ -96,14 +97,14 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     );
 
     let expr = KExpression::new(
-        program_brand().region(),
+        program.brand().region(),
         vec![
             Spanned::bare(ExpressionPart::Keyword("MARK")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
         ],
     );
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(working(expr), inner);
+    let id = runtime.dispatch_in_scope(working(&program, expr), inner);
     runtime.execute().unwrap();
     let (matched, summary) = runtime
         .read_result_with(id, |v| {
@@ -127,6 +128,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
 #[test]
 fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
+    let program = program_storage();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     register_builtin(
@@ -147,11 +149,11 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     );
 
     let expr = KExpression::new(
-        program_brand().region(),
+        program.brand().region(),
         vec![Spanned::bare(ExpressionPart::Identifier("foo"))],
     );
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(working(expr), scope);
+    let id = runtime.dispatch_in_scope(working(&program, expr), scope);
     runtime.execute().unwrap();
     let types = TypeRegistry::new();
     let err = match runtime.read_result_with(id, |v| v.summarize(&types)) {
@@ -173,6 +175,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
 /// function. (Once monadic effects exist, this should also produce a warning effect.)
 #[test]
 fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
+    let program = program_storage();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
@@ -195,14 +198,14 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     );
 
     let expr = KExpression::new(
-        program_brand().region(),
+        program.brand().region(),
         vec![
             Spanned::bare(ExpressionPart::Keyword("FOO")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
         ],
     );
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(working(expr), scope);
+    let id = runtime.dispatch_in_scope(working(&program, expr), scope);
     runtime.execute().unwrap();
     assert!(runtime
         .read_result_with(

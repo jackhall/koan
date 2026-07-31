@@ -8,24 +8,27 @@
 //! run root), and the call's result makes the run root retain the per-call owner — a two-region ring
 //! that only the eternal rule (`PinBundle::without_eternal`) cuts.
 
-use crate::builtins::test_support::{program_brand, TestRun};
-use crate::machine::run_root_storage;
+use crate::builtins::test_support::TestRun;
+use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::{region_metrics, reset_region_metrics};
 
 /// Run `source` to completion in a fresh run, drop the whole run, and report how many of its
 /// regions are still live.
 fn live_after(source: &str) -> usize {
-    // Mint the thread's program storage region before the window opens. It is eternal — held for
-    // the test thread's life, exactly as production holds it for the run's — so it belongs outside
-    // a measurement of what one run mints and releases.
-    program_brand();
     reset_region_metrics();
+    let program = program_storage();
+    // Mint the program storage region into the baseline rather than the run's toll: it holds the
+    // source's AST for as long as anything reads it, exactly as production holds it for the run,
+    // so it is alive on both sides of the measurement and cancels out. Resetting first and
+    // baselining after keeps the counter from going negative when the storage finally drops.
+    program.brand();
+    let baseline = region_metrics().live;
     {
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run(source);
     }
-    region_metrics().live
+    region_metrics().live - baseline
 }
 
 /// A module value crossing into a per-call region as a call argument. The per-call region retains
@@ -121,15 +124,19 @@ fn every_call_shape_leaves_no_live_region() {
 /// Run `source` to completion in a fresh run and report the **peak** number of regions live at any
 /// moment during it, alongside the count still live after the whole run drops.
 fn peak_and_live_after(source: &str) -> (usize, usize) {
-    program_brand();
     reset_region_metrics();
+    let program = program_storage();
+    // Baselined exactly as [`live_after`] does, and subtracted from the peak too: the storage is
+    // live for the whole window, so it inflates both readings by the same one region.
+    program.brand();
+    let baseline = region_metrics().live;
     let peak = {
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run(source);
         region_metrics().peak
     };
-    (peak, region_metrics().live)
+    (peak - baseline, region_metrics().live - baseline)
 }
 
 /// A tail loop whose every iteration splices an eagerly-dispatched sub-result into its own working

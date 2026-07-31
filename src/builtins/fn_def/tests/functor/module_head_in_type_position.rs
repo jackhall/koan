@@ -6,7 +6,7 @@
 
 use crate::builtins::test_support::{lookup_fn, parse_one, TestRun};
 use crate::machine::model::KObject;
-use crate::machine::{run_root_storage, KErrorKind};
+use crate::machine::{program_storage, run_root_storage, KErrorKind};
 
 /// `-> :(TYPE OF er)` with a module-valued parameter is a legal return: the return type defers as an
 /// expression carrier and resolves per-call to `Signature { SelfOf(er) }`, and the body returns the
@@ -14,8 +14,9 @@ use crate::machine::{run_root_storage, KErrorKind};
 #[test]
 fn deferred_type_of_param_return_yields_the_module() {
     use crate::machine::model::ReturnType;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -28,7 +29,7 @@ fn deferred_type_of_param_return_yields_the_module() {
         "USE_ORD's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
-    match test_run.run_one(parse_one("USE_ORD int_ord")) {
+    match test_run.run_one(parse_one(&program, "USE_ORD int_ord")) {
         KObject::Module(m) => assert_eq!(m.path, "int_ord"),
         other => panic!(
             "USE_ORD int_ord must return the passed-through module value, got {}",
@@ -45,8 +46,9 @@ fn deferred_type_of_param_return_yields_the_module() {
 /// the member read afterwards proves its child scope is still live.
 #[test]
 fn deferred_type_of_param_return_admits_a_per_call_region_module() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
@@ -54,7 +56,7 @@ fn deferred_type_of_param_return_admits_a_per_call_region_module() {
          LET int_set = (MAKESET int_ord)\n\
          FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
-    match test_run.run_one(parse_one("USE_ORD int_set")) {
+    match test_run.run_one(parse_one(&program, "USE_ORD int_set")) {
         KObject::Module(m) => assert_eq!(m.path, "generated"),
         other => panic!(
             "USE_ORD int_set must return the functor-minted module, got {}",
@@ -63,7 +65,7 @@ fn deferred_type_of_param_return_admits_a_per_call_region_module() {
     }
     test_run.run("LET back = (USE_ORD int_set)");
     assert!(
-        matches!(test_run.run_one(parse_one("back.compare")), KObject::Number(n) if *n == 3.0),
+        matches!(test_run.run_one(parse_one(&program, "back.compare")), KObject::Number(n) if *n == 3.0),
         "the returned module's child scope must still be readable",
     );
 }
@@ -73,8 +75,9 @@ fn deferred_type_of_param_return_admits_a_per_call_region_module() {
 /// renders as the module path).
 #[test]
 fn deferred_type_of_param_return_contract_is_the_self_sig() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -84,7 +87,7 @@ fn deferred_type_of_param_return_contract_is_the_self_sig() {
     let id = test_run.runtime.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one("BAD_ORD int_ord"),
+            parse_one(&program, "BAD_ORD int_ord"),
         ),
         scope,
     );
@@ -114,19 +117,20 @@ fn deferred_type_of_param_return_contract_is_the_self_sig() {
 /// subtypes int_ord's — no ascription required, and the module need not be int_ord itself.
 #[test]
 fn type_of_module_slot_admits_a_structurally_satisfying_module() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
          MODULE also_ord = ((LET Carrier = Number) (LET compare = 3))",
     );
     test_run.run("FN (TAKE_ORD x :(TYPE OF int_ord)) -> Number = (1)");
     assert!(
-        matches!(test_run.run_one(parse_one("TAKE_ORD int_ord")), KObject::Number(n) if *n == 1.0),
+        matches!(test_run.run_one(parse_one(&program, "TAKE_ORD int_ord")), KObject::Number(n) if *n == 1.0),
         "the module itself satisfies its own self-sig",
     );
     assert!(
-        matches!(test_run.run_one(parse_one("TAKE_ORD also_ord")), KObject::Number(n) if *n == 1.0),
+        matches!(test_run.run_one(parse_one(&program, "TAKE_ORD also_ord")), KObject::Number(n) if *n == 1.0),
         "a structurally-satisfying module is admitted without ascription",
     );
 }
@@ -135,14 +139,15 @@ fn type_of_module_slot_admits_a_structurally_satisfying_module() {
 /// the call falls through to "no overload".
 #[test]
 fn type_of_module_slot_rejects_a_non_satisfying_module() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
          MODULE not_ord = (LET other = 1)",
     );
     test_run.run("FN (TAKE_ORD x :(TYPE OF int_ord)) -> Number = (1)");
-    let error = test_run.run_one_err(parse_one("TAKE_ORD not_ord"));
+    let error = test_run.run_one_err(parse_one(&program, "TAKE_ORD not_ord"));
     assert!(
         matches!(&error.kind, KErrorKind::DispatchFailed { reason, .. }
             if reason.contains("no matching function")),
@@ -155,8 +160,8 @@ fn type_of_module_slot_rejects_a_non_satisfying_module() {
 /// replacement spelling.
 #[test]
 fn module_name_in_a_slot_is_a_parse_error() {
-    use crate::builtins::test_support::program_brand;
-    let error = crate::parse::parse(program_brand(), "FN (TAKE_ORD x :int_ord) -> Number = (1)")
+    let program = program_storage();
+    let error = crate::parse::parse(program.brand(), "FN (TAKE_ORD x :int_ord) -> Number = (1)")
         .expect_err("a value token after `:` must not parse");
     let message = error.to_string();
     assert!(
@@ -170,10 +175,11 @@ fn module_name_in_a_slot_is_a_parse_error() {
 /// value-named-return overload exists to say so and to name the replacement spelling.
 #[test]
 fn module_param_in_return_position_errors() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("SIG Ordered = (VAL compare :Number)");
-    let error = test_run.run_one_err(parse_one("FN (USE_ORD er :Ordered) -> er = (er)"));
+    let error = test_run.run_one_err(parse_one(&program, "FN (USE_ORD er :Ordered) -> er = (er)"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg)
             if msg.contains("names a type, but `er` is a value")
@@ -187,14 +193,15 @@ fn module_param_in_return_position_errors() {
 /// module-valued parameter spells snake_case.
 #[test]
 fn type_token_param_cannot_take_a_module() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
          FN (USE_ORD Er :Ordered) -> Number = (1)",
     );
-    let error = test_run.run_one_err(parse_one("USE_ORD int_ord"));
+    let error = test_run.run_one_err(parse_one(&program, "USE_ORD int_ord"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Er` is a Type token")),
@@ -206,10 +213,11 @@ fn type_token_param_cannot_take_a_module() {
 /// the `OF` type slot takes a type, and a module head resolves to a value.
 #[test]
 fn module_head_in_type_language_dispatch_is_an_error() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE int_ord = (LET compare = 7)");
-    let error = test_run.run_one_err(parse_one("LET xs :(LIST OF int_ord) = [1]"));
+    let error = test_run.run_one_err(parse_one(&program, "LET xs :(LIST OF int_ord) = [1]"));
     assert!(
         matches!(&error.kind, KErrorKind::DispatchFailed { reason, .. }
             if reason.contains("no matching function")),

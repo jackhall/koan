@@ -1,11 +1,12 @@
 use super::*;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::run_root_storage;
+use crate::machine::core::{program_storage, run_root_storage};
 
 #[test]
 fn resolve_type_expr_builtin_leaf_resolves_stably() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let te = TypeIdentifier::leaf("Number");
@@ -23,8 +24,9 @@ fn resolve_type_expr_builtin_leaf_resolves_stably() {
 
 #[test]
 fn resolve_type_expr_unbound_returns_unbound() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let te = TypeIdentifier::leaf("NotABuiltin");
@@ -38,8 +40,9 @@ fn resolve_type_expr_unbound_returns_unbound() {
 /// its sealed member handle, and re-resolves to the same one.
 #[test]
 fn resolve_type_expr_user_struct_resolves_after_finalize() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
     let types = test_run.types.clone();

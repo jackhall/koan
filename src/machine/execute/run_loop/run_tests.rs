@@ -3,7 +3,7 @@
 //! [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)).
 use crate::builtins::test_support::binds_module;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::run_root_storage;
+use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::{KObject, KType};
 use crate::machine::KErrorKind;
 
@@ -11,15 +11,16 @@ use super::tests::{working_all as parse_all, working_one as parse_one};
 
 #[test]
 fn single_identifier_short_circuit_returns_value_when_bound() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    for e in parse_all("LET x = 42") {
+    for e in parse_all(&program, "LET x = 42") {
         runtime.dispatch_in_scope(e, scope);
     }
     runtime.execute().unwrap();
-    let id = runtime.dispatch_in_scope(parse_one("(x)"), scope);
+    let id = runtime.dispatch_in_scope(parse_one(&program, "(x)"), scope);
     runtime.execute().unwrap();
     assert!(runtime
         .read_result_with(
@@ -33,11 +34,16 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
 /// name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let ids = runtime.enter_block(scope.id, parse_all("LET y = (x)\nLET x = 1"), scope);
+    let ids = runtime.enter_block(
+        scope.id,
+        parse_all(&program, "LET y = (x)\nLET x = 1"),
+        scope,
+    );
     runtime.execute().unwrap();
     let err = runtime
         .result_error(ids[0])
@@ -52,11 +58,12 @@ fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
 
 #[test]
 fn single_identifier_short_circuit_falls_through_when_unbound() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(parse_one("(missing)"), scope);
+    let id = runtime.dispatch_in_scope(parse_one(&program, "(missing)"), scope);
     runtime.execute().unwrap();
     let err = match runtime.result_error(id) {
         Err(e) => e.clone(),
@@ -70,11 +77,12 @@ fn single_identifier_short_circuit_falls_through_when_unbound() {
 
 #[test]
 fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    for e in parse_all("LET z = 7\nLET y = z") {
+    for e in parse_all(&program, "LET z = 7\nLET y = z") {
         runtime.dispatch_in_scope(e, scope);
     }
     runtime.execute().unwrap();
@@ -85,11 +93,12 @@ fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
 /// surface `UnboundName` under the gate, not park on the later-sibling binding.
 #[test]
 fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let ids = runtime.enter_block(scope.id, parse_all("LET y = z\nLET z = 9"), scope);
+    let ids = runtime.enter_block(scope.id, parse_all(&program, "LET y = z\nLET z = 9"), scope);
     runtime.execute().unwrap();
     let err = runtime
         .result_error(ids[0])
@@ -106,11 +115,13 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
 /// them, and the multi-producer wrap-slot replay-park wakes once both finalize.
 #[test]
 fn multiple_value_slot_placeholders_park_on_distinct_producers() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
     for e in parse_all(
+        &program,
         "FN (ADD a :Number BY b :Number) -> Number = (a)\n\
          LET aa = 3\n\
          LET bb = 4\n\
@@ -126,13 +137,15 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
 /// name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn forward_keyword_function_reference_is_unbound() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(
         scope.id,
         parse_all(
+            &program,
             "LET out = (DOUBLE 7)\n\
              FN (DOUBLE x :Number) -> Number = (x)",
         ),
@@ -155,11 +168,13 @@ fn forward_keyword_function_reference_is_unbound() {
 
 #[test]
 fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
     for e in parse_all(
+        &program,
         "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 11\n\
          LET bb = 22\n\
@@ -176,11 +191,12 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
 /// contract](../../../../design/execution/name-placeholders.md#miri-forward-splice-and-replay-park-lifetime-contract).
 #[test]
 fn lift_park_minimal_program_for_miri() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    for e in parse_all("LET z = 11\nLET y = z") {
+    for e in parse_all(&program, "LET z = 11\nLET y = z") {
         runtime.dispatch_in_scope(e, scope);
     }
     runtime.execute().unwrap();
@@ -191,11 +207,13 @@ fn lift_park_minimal_program_for_miri() {
 /// slot's scope must stay valid across the wake and the re-dispatch.
 #[test]
 fn replay_park_minimal_program_for_miri() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
     for e in parse_all(
+        &program,
         "FN (DOUBLE x :Number) -> Number = (x)\n\
          LET aa = 7\n\
          LET out = (DOUBLE aa)",
@@ -211,11 +229,13 @@ fn replay_park_minimal_program_for_miri() {
 /// `execute` aborting.
 #[test]
 fn replay_park_propagates_producer_error() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
     let ids: Vec<_> = parse_all(
+        &program,
         "LET y = (x)\n\
          LET x = (UNDEFINED_FN)",
     )
@@ -244,11 +264,13 @@ fn replay_park_propagates_producer_error() {
 /// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
     for e in parse_all(
+        &program,
         "LET a_result = (int_ord :| Ordered)\n\
          MODULE int_ord = (LET compare = 0)\n\
          SIG Ordered = (VAL compare :Number)",
@@ -270,12 +292,13 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
 /// as Type names.)
 #[test]
 fn let_type_to_value_name_rejected() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let id = test_run
         .runtime
-        .dispatch_in_scope(parse_one("LET ty = Number"), scope);
+        .dispatch_in_scope(parse_one(&program, "LET ty = Number"), scope);
     test_run.runtime.execute().unwrap();
     let types = test_run.types.clone();
     match test_run
@@ -291,7 +314,7 @@ fn let_type_to_value_name_rejected() {
     }
 
     // The Type-classified alias is the legal form: it lands type-side.
-    for e in parse_all("LET Ty = Number") {
+    for e in parse_all(&program, "LET Ty = Number") {
         test_run.runtime.dispatch_in_scope(e, scope);
     }
     test_run.runtime.execute().unwrap();

@@ -6,7 +6,7 @@
 
 use super::working_all;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::run_root_storage;
+use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::KErrorKind;
 
 /// Self-reference `LET Ty = Ty`: the consumer sees its own placeholder as
@@ -16,10 +16,11 @@ use crate::machine::KErrorKind;
 /// separate path.
 #[test]
 fn self_referential_let_surfaces_unbound_name() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let exprs = working_all("LET Ty = Ty");
+    let exprs = working_all(&program, "LET Ty = Ty");
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, exprs, scope);
     runtime
@@ -40,12 +41,14 @@ fn self_referential_let_surfaces_unbound_name() {
 /// combined park, and on wake the rebuilt cache resolves and dispatch commits.
 #[test]
 fn forward_reference_parks_then_resolves_on_wake() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, buf) = TestRun::with_buf(&region);
+    let (mut test_run, buf) = TestRun::with_buf(&program, &region);
     let scope = test_run.scope;
     // STRUCT (like MODULE) is a nominal binder, so the placeholder is visible
     // to the forward reference and parks rather than reading as Unbound.
     let exprs = working_all(
+        &program,
         "NEWTYPE Foo = :{x :Number}\n\
          LET Fwd = Foo\n\
          PRINT Fwd",

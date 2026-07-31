@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::machine::core::{program_storage, ProgramBrand, ProgramStorage, RegionBrand};
+use crate::machine::core::{ProgramBrand, ProgramStorage, RegionBrand};
 #[cfg(test)]
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
@@ -60,6 +60,10 @@ pub(crate) fn mock_declaration_site(node: usize, index: usize) -> DeclarationSit
 /// that true across successive `run`/`run_one` calls: they share the run frame, and with it the
 /// registry. Scope-only tests take `scope` and ignore the rest.
 pub struct TestRun<'a> {
+    /// The storage this run's AST is parsed into, borrowed for at least the run's life exactly as
+    /// production borrows it: declared before the run storage, so it outlives every node read out
+    /// of it.
+    pub program: &'a ProgramStorage,
     /// The `RunScope` child of the seeded run root — the dispatch target.
     pub scope: &'a Scope<'a>,
     /// The runtime holding the run frame. Tests that drive the scheduler directly use it in place
@@ -71,7 +75,11 @@ pub struct TestRun<'a> {
 
 impl<'a> TestRun<'a> {
     /// Seed a run root inside `run_storage`, sending `PRINT` output to `out`.
-    pub fn new(run_storage: &'a Rc<FrameStorage>, out: Box<dyn Write + 'a>) -> Self {
+    pub fn new(
+        program: &'a ProgramStorage,
+        run_storage: &'a Rc<FrameStorage>,
+        out: Box<dyn Write + 'a>,
+    ) -> Self {
         let (root, child) = unseeded_scopes(run_storage, out);
         let mut runtime = KoanRuntime::new();
         // The run frame adopts `child`, exactly as `interpret` does: dispatch targets it, and the
@@ -82,6 +90,7 @@ impl<'a> TestRun<'a> {
             .expect("run frame was just established");
         crate::machine::seed_run_root(root, &types);
         Self {
+            program,
             scope: child,
             runtime,
             types,
@@ -89,14 +98,17 @@ impl<'a> TestRun<'a> {
     }
 
     /// [`TestRun::new`] with `PRINT` output discarded.
-    pub fn silent(run_storage: &'a Rc<FrameStorage>) -> Self {
-        Self::new(run_storage, Box::new(std::io::sink()))
+    pub fn silent(program: &'a ProgramStorage, run_storage: &'a Rc<FrameStorage>) -> Self {
+        Self::new(program, run_storage, Box::new(std::io::sink()))
     }
 
     /// [`TestRun::new`] with `PRINT` output mirrored into a buffer the caller reads back.
-    pub fn with_buf(run_storage: &'a Rc<FrameStorage>) -> (Self, Rc<RefCell<Vec<u8>>>) {
+    pub fn with_buf(
+        program: &'a ProgramStorage,
+        run_storage: &'a Rc<FrameStorage>,
+    ) -> (Self, Rc<RefCell<Vec<u8>>>) {
         let buf = Rc::new(RefCell::new(Vec::new()));
-        let run = Self::new(run_storage, Box::new(SharedBuf(buf.clone())));
+        let run = Self::new(program, run_storage, Box::new(SharedBuf(buf.clone())));
         (run, buf)
     }
 
@@ -105,10 +117,15 @@ impl<'a> TestRun<'a> {
         &self.types
     }
 
-    /// This run's own region brand, for a test that builds AST directly rather than through
-    /// [`parse_one`] (which parses into the thread's shared program storage).
+    /// This run's own region brand, for a test that builds AST directly rather than parsing it.
     pub fn brand(&self) -> RegionBrand<'a> {
         self.scope.brand()
+    }
+
+    /// The brand of the storage this run's AST is parsed into — the door every `parse` in a test
+    /// rides, as `interpret` rides program storage's.
+    pub fn program_brand(&self) -> ProgramBrand<'a> {
+        self.program.brand()
     }
 }
 
@@ -177,26 +194,11 @@ pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<
     ))
 }
 
-/// The test tree's program storage brand — minted once per test thread and leaked so a caller can
-/// hand back a `KExpression<'a>` for a caller-chosen `'a` with no storage parameter of its own: a
-/// longer-lived (here, unbounded) node coerces to any shorter lifetime by ordinary covariance.
-/// Test-only churn; a normal test lives and dies within one process, so the leak is bounded by the
-/// test binary's lifetime, not the run's.
-/// One storage per test thread, not one per call: program storage is the eternal tier, so holding
-/// a single one for the thread's life is the shape production has rather than a concession to the
-/// harness. Every test that parses rides this, so test AST sits at the tier production's does.
-pub fn program_brand() -> ProgramBrand<'static> {
-    thread_local! {
-        static TEST_PROGRAM_STORAGE: &'static ProgramStorage =
-            Box::leak(Box::new(program_storage()));
-    }
-    TEST_PROGRAM_STORAGE.with(|storage| storage.brand())
-}
-
-/// Parse a source string expected to contain exactly one top-level expression.
+/// Parse a source string expected to contain exactly one top-level expression into `program`,
+/// which the caller declares ahead of its run storage so the node outlives every reader.
 #[cfg(test)]
-pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
-    let mut exprs = parse(program_brand(), src).expect("parse should succeed");
+pub(crate) fn parse_one<'a>(program: &'a ProgramStorage, src: &str) -> KExpression<'a> {
+    let mut exprs = parse(program.brand(), src).expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test helper expects a single expression");
     exprs.remove(0)
 }
@@ -210,7 +212,7 @@ impl<'a> TestRun<'a> {
     /// individually, so chained calls compose. Tests asserting top-level statement *ordering*
     /// (e.g. forward-ref-fails behavior) call `enter_block` on `runtime` directly instead.
     pub fn run_in(&mut self, scope: &'a Scope<'a>, source: &str) {
-        let exprs = parse(program_brand(), source).expect("parse should succeed");
+        let exprs = parse(self.program_brand(), source).expect("parse should succeed");
         for expr in exprs {
             self.runtime.dispatch_in_scope(
                 crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
@@ -230,7 +232,7 @@ impl<'a> TestRun<'a> {
     /// *ordering* needs, where [`TestRun::run_in`]'s statement-at-a-time dispatch would not.
     /// Returns the top-level node ids; the caller drives `execute` itself.
     pub fn enter_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<NodeId> {
-        let statements = parse(program_brand(), source)
+        let statements = parse(self.program_brand(), source)
             .expect("parse should succeed")
             .into_iter()
             .map(|statement| {
@@ -250,7 +252,7 @@ impl<'a> TestRun<'a> {
     /// [`TestRun::enter_source_in`], for a test that reads each slot's own result; the caller
     /// drives `execute` itself.
     pub fn dispatch_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<NodeId> {
-        parse(program_brand(), source)
+        parse(self.program_brand(), source)
             .expect("parse should succeed")
             .into_iter()
             .map(|statement| {

@@ -8,26 +8,31 @@ use std::rc::Rc;
 
 use super::working_all;
 use crate::builtins::test_support::{lookup_module, TestRun};
-use crate::machine::core::{run_root_storage, FrameStorage};
+use crate::machine::core::{program_storage, run_root_storage, FrameStorage, ProgramStorage};
 use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind};
 
 /// Run `source` as one top-level block and hand back the whole bundle, so callers read
 /// both the post-run scope and the run's registry.
-fn run_scope<'run>(region: &'run Rc<FrameStorage>, source: &str) -> TestRun<'run> {
-    let mut test_run = TestRun::silent(region);
+fn run_scope<'run>(
+    program: &'run ProgramStorage,
+    region: &'run Rc<FrameStorage>,
+    source: &str,
+) -> TestRun<'run> {
+    let mut test_run = TestRun::silent(program, region);
     let scope = test_run.scope;
-    let exprs = working_all(source);
+    let exprs = working_all(program, source);
     test_run.runtime.enter_block(scope.id, exprs, scope);
     let _ = test_run.runtime.execute();
     test_run
 }
 
 fn run_collect_err(source: &str) -> Option<KError> {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let exprs = working_all(source);
+    let exprs = working_all(&program, source);
     let runtime = &mut test_run.runtime;
     let ids: Vec<_> = runtime.enter_block(scope.id, exprs, scope);
     if let Err(e) = runtime.execute() {
@@ -62,8 +67,9 @@ fn later_sibling_reference_is_unbound_name() {
 
 #[test]
 fn backward_value_let_resolves() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = run_scope(&region, "LET z = 1\nLET y = z");
+    let test_run = run_scope(&program, &region, "LET z = 1\nLET y = z");
     let scope = test_run.scope;
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0));
 }
@@ -73,8 +79,10 @@ fn backward_value_let_resolves() {
 /// members regardless of their inner indices.
 #[test]
 fn returned_block_locals_visible_from_outer_chain() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_scope(
+        &program,
         &region,
         "MODULE mo = ((LET inside = 7) (LET also = 9))\n\
          LET result = mo.inside",
@@ -91,8 +99,10 @@ fn returned_block_locals_visible_from_outer_chain() {
 /// and its own index, so an inner backward ref resolves against the inner producer.
 #[test]
 fn nested_block_cutoff_is_per_scope() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_scope(
+        &program,
         &region,
         "LET top = 1\n\
          MODULE mo = ((LET a = 2) (LET b = a))",
@@ -109,10 +119,12 @@ fn nested_block_cutoff_is_per_scope() {
 /// def index. UNION-tagged termination predicate bounds the recursion.
 #[test]
 fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, _buf) = TestRun::with_buf(&region);
+    let (mut test_run, _buf) = TestRun::with_buf(&program, &region);
     let scope = test_run.scope;
     let exprs = working_all(
+        &program,
         "UNION Tick = (More :Null Done :Null)\n\
          FN (PING n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
             More -> (PONG (n) (Tick (Done null)))\
@@ -142,8 +154,10 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
 /// references to mo's members inside the block resolve.
 #[test]
 fn using_block_post_reference_visible() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_scope(
+        &program,
         &region,
         "MODULE mo = ((LET hidden = 99))\n\
          LET visible = (USING mo SCOPE (hidden))",
@@ -162,8 +176,10 @@ fn using_block_post_reference_visible() {
 /// overload from a consumer between two overloads.
 #[test]
 fn overload_pre_filter_hides_later_sibling_overload() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_scope(
+        &program,
         &region,
         "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
          LET xs = [1 2 3]\n\
@@ -238,8 +254,10 @@ fn fn_return_type_forward_reference_is_position_error() {
 /// A backward return-type reference (the type is declared earlier) still resolves.
 #[test]
 fn fn_return_type_backward_reference_resolves() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_scope(
+        &program,
         &region,
         "NEWTYPE Early = :{n :Number}\n\
          FN (FOO x :Number) -> Early = (Early {n = x})\n\

@@ -1,13 +1,14 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::{run_root_storage, KoanRegionTestExt};
+use crate::machine::{program_storage, run_root_storage, KoanRegionTestExt};
 use crate::witnessed::region_metrics;
 
 #[test]
 fn chained_user_fn_tail_calls_reuse_one_slot() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     let scope = test_run.scope;
 
     test_run.run(
@@ -20,7 +21,10 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
     test_run.reset_slots();
     let runtime = &mut test_run.runtime;
     runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("AA")),
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one(&program, "AA"),
+        ),
         scope,
     );
     runtime.execute().expect("AA should run");
@@ -36,8 +40,9 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
 
 #[test]
 fn chained_tail_calls_reuse_frames() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     let scope = test_run.scope;
 
     test_run.run(
@@ -53,7 +58,7 @@ fn chained_tail_calls_reuse_frames() {
     let runtime = &mut test_run.runtime;
     // Parse before the snapshot: the parse bumps into program storage, and that storage's own
     // region mint is not a call's mint.
-    let call = parse_one("AA");
+    let call = parse_one(&program, "AA");
     let minted_before = region_metrics().minted_total;
     runtime.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
@@ -82,8 +87,9 @@ fn chained_tail_calls_reuse_frames() {
 /// the terminal first (`ok, a, b, c, d`).
 #[test]
 fn leading_statements_run_before_tail_across_chain() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
 
     test_run.run(
         "FN (DD) -> Str = ((PRINT \"d\") (PRINT \"ok\"))\n\
@@ -109,8 +115,9 @@ fn leading_statements_run_before_tail_across_chain() {
 /// would climb to 5).
 #[test]
 fn chained_tail_calls_with_leading_stay_tco_flat() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
 
     test_run.run(
@@ -126,7 +133,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
     let runtime = &mut test_run.runtime;
     // Parse before the snapshot: the parse bumps into program storage, and that storage's own
     // region mint is not a call's mint.
-    let call = parse_one("AA");
+    let call = parse_one(&program, "AA");
     let minted_before = region_metrics().minted_total;
     runtime.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
@@ -156,8 +163,9 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
 /// [tail-call-optimization.md](../../../../design/tail-call-optimization.md).
 #[test]
 fn match_driven_tail_recursion_completes() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
 
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
@@ -179,8 +187,9 @@ fn match_driven_tail_recursion_completes() {
 /// the recursion continues, giving `hop` (the One arm) then `done` (the Zero arm) in order.
 #[test]
 fn match_arm_leading_statement_runs_before_tail_recursion() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
 
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
@@ -205,8 +214,9 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
 #[test]
 fn tail_call_enforces_first_callers_return_contract() {
     use crate::machine::KErrorKind;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "FN (GG) -> Str = (\"hello\")\n\
@@ -214,7 +224,10 @@ fn tail_call_enforces_first_callers_return_contract() {
     );
     let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one("FF")),
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one(&program, "FF"),
+        ),
         scope,
     );
     runtime
@@ -237,13 +250,14 @@ fn tail_call_enforces_first_callers_return_contract() {
 #[test]
 fn tail_call_stamps_result_against_first_callers_return_contract() {
     use crate::machine::model::{KObject, KType};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (GG) -> :(LIST OF Number) = ([1 2 3])\n\
          FN (FF) -> :(LIST OF Any) = (GG)",
     );
-    let result = test_run.run_one(parse_one("FF"));
+    let result = test_run.run_one(parse_one(&program, "FF"));
     match result {
         KObject::List(_, list_type) => assert_eq!(
             *list_type,
@@ -265,8 +279,9 @@ fn tail_call_stamps_result_against_first_callers_return_contract() {
 #[test]
 fn deep_tail_chain_satisfies_arm_return_contract() {
     use crate::machine::model::KObject;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
          FN (CC) -> Any = (\"ok\")\n\
@@ -276,6 +291,7 @@ fn deep_tail_chain_satisfies_arm_return_contract() {
     );
     let types = test_run.types.clone();
     let result = test_run.run_one(parse_one(
+        &program,
         "MATCH (b) -> :Str WITH (\
                  One -> (AA)\
                  Zero -> (\"unused\")\
@@ -295,8 +311,9 @@ fn deep_tail_chain_satisfies_arm_return_contract() {
 #[test]
 fn deep_tail_chain_violates_arm_return_contract() {
     use crate::machine::KErrorKind;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
          FN (CC) -> Any = (42)\n\
@@ -305,6 +322,7 @@ fn deep_tail_chain_violates_arm_return_contract() {
          LET b = (Bit (One null))",
     );
     let err = test_run.run_one_err(parse_one(
+        &program,
         "MATCH (b) -> :Str WITH (\
                  One -> (AA)\
                  Zero -> (\"unused\")\
@@ -318,12 +336,13 @@ fn deep_tail_chain_violates_arm_return_contract() {
 
 #[test]
 fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (ECHO v :Number) -> Number = (v)");
     let baseline = region.region().alloc_count();
     for _ in 0..50 {
-        let _ = test_run.run_one(parse_one("ECHO 7"));
+        let _ = test_run.run_one(parse_one(&program, "ECHO 7"));
     }
     let after = region.region().alloc_count();
     let growth = after - baseline;
@@ -343,8 +362,9 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
 /// body's transient fanout (~5+ slots/call) behind.
 #[test]
 fn body_subexpression_slots_recycle_across_calls() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     let scope = test_run.scope;
 
     test_run.run(
@@ -361,7 +381,7 @@ fn body_subexpression_slots_recycle_across_calls() {
     runtime.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one("LOOK (Bit (One null))"),
+            parse_one(&program, "LOOK (Bit (One null))"),
         ),
         scope,
     );
@@ -376,7 +396,10 @@ fn body_subexpression_slots_recycle_across_calls() {
             "LOOK (Bit (Zero null))"
         };
         runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), parse_one(src)),
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one(&program, src),
+            ),
             scope,
         );
         runtime.execute().expect("LOOK should run");
@@ -411,14 +434,15 @@ fn body_subexpression_slots_recycle_across_calls() {
 #[test]
 fn captured_per_call_value_survives_let_bind_and_call() {
     use crate::machine::model::KObject;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
          (FN (GET q :Number) -> Number = (base))\n\
          LET hold = (MAKE_HOLDER 99)",
     );
-    let result = test_run.run_one(parse_one("hold {q = 0}"));
+    let result = test_run.run_one(parse_one(&program, "hold {q = 0}"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 99.0),
         "the let-bound closure must read its captured base=99, got {:?}",
@@ -433,15 +457,16 @@ fn captured_per_call_value_survives_let_bind_and_call() {
 #[test]
 fn closure_argument_stays_live_through_user_fn_call() {
     use crate::machine::model::KObject;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
          (FN (GET q :Number) -> Number = (base))\n\
          FN (CALL_IT f :(FN (q :Number) -> Number)) -> Number = (f {q = 0})\n\
          LET answer = (CALL_IT (MAKE_HOLDER 77))",
     );
-    let result = test_run.run_one(parse_one("answer"));
+    let result = test_run.run_one(parse_one(&program, "answer"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 77.0),
         "the closure arg invoked inside CALL_IT must read base=77, got {:?}",
@@ -457,14 +482,15 @@ fn closure_argument_stays_live_through_user_fn_call() {
 #[test]
 fn let_bound_list_reaching_two_call_regions_keeps_both_live() {
     use crate::machine::model::{Held, KObject};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
          (FN (GET q :Number) -> Number = (base))\n\
          LET holders = [(MAKE_HOLDER 1) (MAKE_HOLDER 2)]",
     );
-    let result = test_run.run_one(parse_one("holders"));
+    let result = test_run.run_one(parse_one(&program, "holders"));
     match result {
         KObject::List(items, _) => {
             assert_eq!(
@@ -494,13 +520,14 @@ fn let_bound_list_reaching_two_call_regions_keeps_both_live() {
 #[test]
 fn let_bound_list_of_call_produced_strings_survives_every_producer_free() {
     use crate::machine::model::{Held, KObject};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (LABEL n :Number) -> Str = (PRINT n)\n\
          LET labels = [(LABEL 1) (LABEL 2)]",
     );
-    let result = test_run.run_one(parse_one("labels"));
+    let result = test_run.run_one(parse_one(&program, "labels"));
     match result {
         KObject::List(items, _) => {
             let rendered: Vec<&str> = items
@@ -532,13 +559,14 @@ fn let_bound_list_of_call_produced_strings_survives_every_producer_free() {
 #[test]
 fn let_bound_dict_with_call_produced_string_keys_survives_every_producer_free() {
     use crate::machine::model::{Held, KKey, KObject};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (LABEL n :Number) -> Str = (PRINT n)\n\
          LET entries = {(LABEL 1): 10, (LABEL 2): 20}",
     );
-    let result = test_run.run_one(parse_one("entries"));
+    let result = test_run.run_one(parse_one(&program, "entries"));
     match result {
         KObject::Dict(substrate, _) => {
             for (key, expected) in [("1", 10.0), ("2", 20.0)] {
@@ -549,5 +577,45 @@ fn let_bound_dict_with_call_produced_string_keys_survives_every_producer_free() 
             }
         }
         other => panic!("expected a Dict, got {:?}", other.ktype()),
+    }
+}
+
+/// The expression peer of the region-hosted-string checks: a `KObject::KExpression` cell's reach
+/// verdict is `Owned`, naming no region, and that verdict is honest only because the node's `parts`
+/// run, its keyword text and its cache all live in the eternal-tier program storage that parsed
+/// them. A cell that pointed into the call region its producer ran in would name no region while
+/// pointing into a retiring one — the shape no reach fold rescues and no residence audit catches,
+/// since the bump keeps no address table. Both quotes are produced inside per-call function regions
+/// and the list is bound in an outer scope, so every producer frame retires before the read walks
+/// the stored `parts`.
+#[test]
+fn let_bound_list_of_call_produced_quotes_survives_every_producer_free() {
+    use crate::machine::model::{Held, KObject};
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "FN (MAKE_AST) -> KExpression = (#(PRINT \"hi\"))\n\
+         LET quotes = [(MAKE_AST) (MAKE_AST)]",
+    );
+    let result = test_run.run_one(parse_one(&program, "quotes"));
+    match result {
+        KObject::List(items, _) => {
+            for cell in items.elements() {
+                match cell {
+                    // Walking `parts` is the read under test: it dereferences the stored run.
+                    Held::Object(KObject::KExpression(e)) => assert_eq!(
+                        e.parts.len(),
+                        2,
+                        "the quoted body must read back intact after its call region retired",
+                    ),
+                    other => panic!(
+                        "expected an expression cell, got {:?}",
+                        other.ktype(&test_run.types)
+                    ),
+                }
+            }
+        }
+        other => panic!("expected a List, got {:?}", other.ktype()),
     }
 }

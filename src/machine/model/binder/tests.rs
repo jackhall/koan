@@ -41,8 +41,9 @@ fn overload_mask(f: &crate::machine::KFunction<'_>) -> Vec<bool> {
 /// Walk the seeded root's registered function buckets into a `key -> LiveBucket` map, recomputing
 /// each bucket's hook flag and (AND-folded) binder mask straight from the live `KFunction`s.
 fn live_buckets() -> HashMap<UntypedKey, LiveBucket> {
+    let program = crate::machine::core::program_storage();
     let storage = crate::machine::core::run_root_storage();
-    let run = crate::builtins::test_support::TestRun::silent(&storage);
+    let run = crate::builtins::test_support::TestRun::silent(&program, &storage);
     let mut table: HashMap<UntypedKey, LiveBucket> = HashMap::new();
     for scope in run.scope.ancestors() {
         // Snapshot the bucket's dormant carriers, then read each under the scope's own pin — the

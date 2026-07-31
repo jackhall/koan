@@ -9,8 +9,8 @@
 //! pool.
 
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::core::run_root_storage;
 use crate::machine::core::{arg_object, Action, BodyCtx};
+use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
@@ -114,9 +114,10 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
 /// fast-lane handler routes through `Scope::resolve_type_identifier`.
 #[test]
 fn bare_type_leaf_short_circuits() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
-    let expr = parse_one("(Number)");
+    let mut test_run = TestRun::silent(&program, &region);
+    let expr = parse_one(&program, "(Number)");
     reset_resolve_dispatch_entry_count();
     let result = dispatch_one_carried(&mut test_run, expr);
     assert_eq!(
@@ -137,10 +138,11 @@ fn bare_type_leaf_short_circuits() {
 /// `picked = Some(f)` — no entry into `resolve_dispatch`.
 #[test]
 fn function_value_call_named_args_short_circuits() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN (DOUBLE x :Number) -> Number = (x))");
-    let expr = parse_one("f {x = 7}");
+    let expr = parse_one(&program, "f {x = 7}");
     reset_resolve_dispatch_entry_count();
     let result = dispatch_one(&mut test_run, expr);
     assert_eq!(
@@ -162,10 +164,11 @@ fn function_value_call_named_args_short_circuits() {
 /// reconstruction weaves keywords back in at their signature positions.
 #[test]
 fn function_value_call_named_args_out_of_order_short_circuits() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
-    let expr = parse_one("f {b = 2, a = 1}");
+    let expr = parse_one(&program, "f {b = 2, a = 1}");
     reset_resolve_dispatch_entry_count();
     let result = dispatch_one(&mut test_run, expr);
     assert_eq!(
@@ -187,11 +190,12 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
 #[test]
 fn function_value_call_named_args_missing_short_circuits() {
     use crate::machine::KErrorKind;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
-    let expr = parse_one("f {a = 1}");
+    let expr = parse_one(&program, "f {a = 1}");
     reset_resolve_dispatch_entry_count();
     let types = test_run.types.clone();
     let id = test_run
@@ -231,11 +235,12 @@ fn function_value_call_named_args_missing_short_circuits() {
 /// named-arg admission, fast-lane bound directly.
 #[test]
 fn fast_lane_fn_callable_via_named_args() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     reset_resolve_dispatch_entry_count();
-    let result = test_run.run_one(parse_one("f {x = 7}"));
+    let result = test_run.run_one(parse_one(&program, "f {x = 7}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -250,11 +255,12 @@ fn fast_lane_fn_callable_via_named_args() {
 /// reordered args at reconstruction time.
 #[test]
 fn fast_lane_weaves_internal_keyword() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
     reset_resolve_dispatch_entry_count();
-    let result = test_run.run_one(parse_one("f {a = 1, b = 2}"));
+    let result = test_run.run_one(parse_one(&program, "f {a = 1, b = 2}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
@@ -263,11 +269,12 @@ fn fast_lane_weaves_internal_keyword() {
 /// `(a PICK b)` the same as `(a = 1, b = 2)`.
 #[test]
 fn fast_lane_named_args_order_independent() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
     reset_resolve_dispatch_entry_count();
-    let result = test_run.run_one(parse_one("f {b = 2, a = 1}"));
+    let result = test_run.run_one(parse_one(&program, "f {b = 2, a = 1}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
@@ -278,11 +285,12 @@ fn fast_lane_named_args_order_independent() {
 /// returns `Number(1)`.
 #[test]
 fn fast_lane_extra_named_arg_dropped() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
     reset_resolve_dispatch_entry_count();
-    let result = test_run.run_one(parse_one("f {a = 1, b = 2, c = 3}"));
+    let result = test_run.run_one(parse_one(&program, "f {a = 1, b = 2, c = 3}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
@@ -293,11 +301,12 @@ fn fast_lane_extra_named_arg_dropped() {
 #[test]
 fn fast_lane_legacy_paren_args_rejected() {
     use crate::machine::KErrorKind;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     reset_resolve_dispatch_entry_count();
-    let err = test_run.run_one_err(parse_one("f (a 1)"));
+    let err = test_run.run_one_err(parse_one(&program, "f (a 1)"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { reason, .. } if reason.contains("record literal")),
@@ -312,11 +321,12 @@ fn fast_lane_legacy_paren_args_rejected() {
 #[test]
 fn fast_lane_on_non_function_returns_error() {
     use crate::machine::KErrorKind;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET x = 42");
     reset_resolve_dispatch_entry_count();
-    let err = test_run.run_one_err(parse_one("x {foo = 7}"));
+    let err = test_run.run_one_err(parse_one(&program, "x {foo = 7}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(
         matches!(
@@ -337,11 +347,12 @@ fn fast_lane_on_non_function_returns_error() {
 /// nothing enters `resolve_dispatch`.
 #[test]
 fn fast_lane_on_tagged_union_constructs() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("UNION Maybe = (Some :Number None :Null)");
     reset_resolve_dispatch_entry_count();
-    let result = test_run.run_one(parse_one("Maybe (Some 42)"));
+    let result = test_run.run_one(parse_one(&program, "Maybe (Some 42)"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -379,11 +390,12 @@ fn fast_lane_on_tagged_union_constructs() {
 /// `resolve_dispatch`.
 #[test]
 fn fast_lane_on_newtype_record_type_constructs() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE Pt = :{x :Number, y :Number}");
     reset_resolve_dispatch_entry_count();
-    let result = test_run.run_one(parse_one("Pt {x = 3, y = 4}"));
+    let result = test_run.run_one(parse_one(&program, "Pt {x = 3, y = 4}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -416,10 +428,11 @@ fn fast_lane_on_newtype_record_type_constructs() {
 /// because the fast lane surfaces the literal without consulting buckets.
 #[test]
 fn literal_pass_through_routes_via_fast_lane() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     reset_resolve_dispatch_entry_count();
-    let result = test_run.run_one(parse_one("(99)"));
+    let result = test_run.run_one(parse_one(&program, "(99)"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -433,10 +446,11 @@ fn literal_pass_through_routes_via_fast_lane() {
 /// `Lift(Pending)` shape, never entering `resolve_dispatch`.
 #[test]
 fn literal_pass_through_routes_list_literal_via_fast_lane() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     reset_resolve_dispatch_entry_count();
-    let result = test_run.run_one(parse_one("([1 2 3])"));
+    let result = test_run.run_one(parse_one(&program, "([1 2 3])"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     match result {
         KObject::List(items, _) => {
@@ -451,10 +465,11 @@ fn literal_pass_through_routes_list_literal_via_fast_lane() {
 #[test]
 fn fast_lane_unbound_returns_error() {
     use crate::machine::KErrorKind;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     reset_resolve_dispatch_entry_count();
-    let err = test_run.run_one_err(parse_one("undefined {foo = 7}"));
+    let err = test_run.run_one_err(parse_one(&program, "undefined {foo = 7}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(name) if name == "undefined"),
@@ -468,13 +483,14 @@ fn fast_lane_unbound_returns_error() {
 /// that region alive past frame drop, so the later invocation does not dangle.
 #[test]
 fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (MAKE) -> :(FN () -> Str) = (FN (INNER) -> Str = (\"hi\"))\n\
          LET f = (MAKE)",
     );
-    let result = test_run.run_one(parse_one("f {}"));
+    let result = test_run.run_one(parse_one(&program, "f {}"));
     assert!(
         matches!(result, KObject::KString(s) if *s == "hi"),
         "expected KString(\"hi\"), got {}",
@@ -486,13 +502,14 @@ fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
 /// after escape.
 #[test]
 fn fast_lane_escaped_closure_with_param_returns_body_value() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (MAKE) -> :(FN (x :Number) -> Number) = (FN (ECHO x :Number) -> Number = (x))\n\
          LET f = (MAKE)",
     );
-    let result = test_run.run_one(parse_one("f {x = 42}"));
+    let result = test_run.run_one(parse_one(&program, "f {x = 42}"));
     assert!(matches!(result, KObject::Number(n) if *n == 42.0));
 }
 
@@ -504,10 +521,11 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
 /// `FN :{…}` form — a named `FN` is a binder and cannot appear in a list element.
 #[test]
 fn fast_lane_list_of_closures_escapes_outer_call() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (MAKE) -> List = ([(FN :{x :Number} -> Number = (x))])");
-    let result = test_run.run_one(parse_one("(MAKE)"));
+    let result = test_run.run_one(parse_one(&program, "(MAKE)"));
     let items = match result {
         KObject::List(items, _) => items,
         other => panic!(
@@ -535,8 +553,9 @@ fn fast_lane_list_of_closures_escapes_outer_call() {
 /// finalize binds the name, which then resolves to a `Value`, not a `Placeholder`.)
 #[test]
 fn function_value_call_forward_ref_routes_via_placeholder() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
 
@@ -553,8 +572,10 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bind_value should succeed");
-    let producer =
-        runtime.dispatch_in_scope(working(scope, parse_one("producer_target {y = 1}")), scope);
+    let producer = runtime.dispatch_in_scope(
+        working(scope, parse_one(&program, "producer_target {y = 1}")),
+        scope,
+    );
     scope
         .install_placeholder(
             "f".to_string(),
@@ -565,7 +586,8 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
         )
         .expect("install_placeholder should succeed");
 
-    let f_call_id = runtime.dispatch_in_scope(working(scope, parse_one("f {x = 7}")), scope);
+    let f_call_id =
+        runtime.dispatch_in_scope(working(scope, parse_one(&program, "f {x = 7}")), scope);
 
     reset_resolve_dispatch_entry_count();
     let _ = runtime.execute();
@@ -585,9 +607,10 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
 /// `resolve_dispatch` runs at least once to find the bucket.
 #[test]
 fn keyworded_unchanged() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
-    let expr = parse_one("(PRINT 5)");
+    let mut test_run = TestRun::silent(&program, &region);
+    let expr = parse_one(&program, "(PRINT 5)");
     reset_resolve_dispatch_entry_count();
     let _ = dispatch_one(&mut test_run, expr);
     assert!(
@@ -609,7 +632,8 @@ fn keyworded_unchanged() {
 #[test]
 fn classifier_struct_construct_routes_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
-    let expr = parse_one("MyStruct {x = 1, y = 2}");
+    let program = program_storage();
+    let expr = parse_one(&program, "MyStruct {x = 1, y = 2}");
     assert!(
         matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
         "expected TypeCall for `MyStruct {{x = 1, y = 2}}`",
@@ -621,7 +645,8 @@ fn classifier_struct_construct_routes_to_type_call() {
 #[test]
 fn classifier_tagged_construct_routes_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
-    let expr = parse_one("Maybe (Some 42)");
+    let program = program_storage();
+    let expr = parse_one(&program, "Maybe (Some 42)");
     assert!(
         matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
         "expected TypeCall for `Maybe (Some 42)`",
@@ -633,7 +658,8 @@ fn classifier_tagged_construct_routes_to_type_call() {
 #[test]
 fn classifier_newtype_construct_routes_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
-    let expr = parse_one("Bar (x)");
+    let program = program_storage();
+    let expr = parse_one(&program, "Bar (x)");
     assert!(
         matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
         "expected TypeCall for `Bar (x)`",
@@ -646,7 +672,8 @@ fn classifier_newtype_construct_routes_to_type_call() {
 #[test]
 fn classifier_legacy_positional_collapses_to_type_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
-    let expr = parse_one("(List Number)");
+    let program = program_storage();
+    let expr = parse_one(&program, "(List Number)");
     assert!(
         matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
         "leaf-Type head + leaf-Type args must classify as TypeCall",
@@ -664,12 +691,13 @@ fn classifier_legacy_positional_collapses_to_type_call() {
 /// - `(f IF x)`: lowercase Identifier head, keyword `IF` in body.
 #[test]
 fn keyworded_unchanged_with_keyword_in_body() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     bind_identity_fn(scope, &test_run.types);
 
-    let expr_a = parse_one("(List MAYBE Number)");
+    let expr_a = parse_one(&program, "(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
     test_run
         .runtime
@@ -681,7 +709,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
         resolve_dispatch_entry_count(),
     );
 
-    let expr_b = parse_one("(f IF x)");
+    let expr_b = parse_one(&program, "(f IF x)");
     reset_resolve_dispatch_entry_count();
     test_run
         .runtime
@@ -705,15 +733,13 @@ fn keyworded_unchanged_with_keyword_in_body() {
 /// splices `Spliced(1)` into the LET expression and re-resolves.
 #[test]
 fn stateful_keyworded_eager_subs_resumes_through_state() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (FIRST xs :(LIST OF Number)) -> Number = (1)");
-    let exprs = crate::parse::parse(
-        crate::builtins::test_support::program_brand(),
-        "LET y = (FIRST [1 2 3])",
-    )
-    .expect("parse succeeds");
+    let exprs = crate::parse::parse(test_run.program_brand(), "LET y = (FIRST [1 2 3])")
+        .expect("parse succeeds");
     for e in exprs {
         test_run.runtime.dispatch_in_scope(working(scope, e), scope);
     }
@@ -734,16 +760,14 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
 /// `:(LIST OF Number)` arm.
 #[test]
 fn stateful_keyworded_deferred_resolves_after_eager_subs() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
     test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
-    let exprs = crate::parse::parse(
-        crate::builtins::test_support::program_brand(),
-        "LET out = (DESCRIBE [1 2 3])",
-    )
-    .expect("parse succeeds");
+    let exprs = crate::parse::parse(test_run.program_brand(), "LET out = (DESCRIBE [1 2 3])")
+        .expect("parse succeeds");
     for e in exprs {
         test_run.runtime.dispatch_in_scope(working(scope, e), scope);
     }
@@ -773,7 +797,8 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
 #[test]
 fn classifier_operator_chain_routes_to_operator_chain() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
-    let expr = parse_one("a + b + c");
+    let program = program_storage();
+    let expr = parse_one(&program, "a + b + c");
     assert_eq!(
         classify_dispatch_shape(expr.parts),
         DispatchShape::OperatorChain,
@@ -787,7 +812,8 @@ fn classifier_operator_chain_routes_to_operator_chain() {
 #[test]
 fn classifier_single_operator_stays_keyworded() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
-    let expr = parse_one("a + b");
+    let program = program_storage();
+    let expr = parse_one(&program, "a + b");
     assert_eq!(
         classify_dispatch_shape(expr.parts),
         DispatchShape::Keyworded,
@@ -802,13 +828,14 @@ fn classifier_single_operator_stays_keyworded() {
 /// need to resolve.
 #[test]
 fn operator_chain_undeclared_errors_cleanly() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let id = test_run
         .runtime
-        .dispatch_in_scope(working(scope, parse_one("a % b % c")), scope);
+        .dispatch_in_scope(working(scope, parse_one(&program, "a % b % c")), scope);
     test_run
         .runtime
         .execute()
@@ -844,8 +871,9 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     use std::collections::HashSet;
     use std::rc::Rc;
 
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let inner = scope.brand().alloc_scope(scope.child_for_call());
@@ -865,7 +893,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     // single frame covers it and the registry walk is what distinguishes the two sites.
     let inner_id = test_run
         .runtime
-        .dispatch_in_scope(working(inner, parse_one("10 - 3 - 2")), inner);
+        .dispatch_in_scope(working(inner, parse_one(&program, "10 - 3 - 2")), inner);
     test_run
         .runtime
         .execute()
@@ -881,7 +909,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
 
     let root_id = test_run
         .runtime
-        .dispatch_in_scope(working(scope, parse_one("10 - 3 - 2")), scope);
+        .dispatch_in_scope(working(scope, parse_one(&program, "10 - 3 - 2")), scope);
     test_run
         .runtime
         .execute()
@@ -908,8 +936,9 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     use std::collections::HashSet;
     use std::rc::Rc;
 
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let members: HashSet<String> = ["~"].iter().map(|s| s.to_string()).collect();
@@ -926,7 +955,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
 
     let infix_id = test_run
         .runtime
-        .dispatch_in_scope(working(scope, parse_one("1 ~ 2 ~ 3 ~ 4")), scope);
+        .dispatch_in_scope(working(scope, parse_one(&program, "1 ~ 2 ~ 3 ~ 4")), scope);
     test_run
         .runtime
         .execute()
@@ -942,7 +971,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
 
     let prefix_id = test_run
         .runtime
-        .dispatch_in_scope(working(scope, parse_one("~ [1 2 3 4]")), scope);
+        .dispatch_in_scope(working(scope, parse_one(&program, "~ [1 2 3 4]")), scope);
     test_run
         .runtime
         .execute()
@@ -969,10 +998,11 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
 /// constructs a struct value directly off the resolved identity.
 #[test]
 fn type_call_constructs_struct() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
-    let out = test_run.run_one(parse_one("Point {x = 1, y = 2}"));
+    let out = test_run.run_one(parse_one(&program, "Point {x = 1, y = 2}"));
     assert_eq!(
         out.ktype().name(&test_run.types),
         "Point",
@@ -985,13 +1015,14 @@ fn type_call_constructs_struct() {
 /// (`(GET_F)` returning a `FN`) is applied with named args via the shared tail.
 #[test]
 fn head_deferred_calls_returned_function() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (GET_F) -> :(FN (n :Number) -> Number) = \
          (FN (INNER n :Number) -> Number = (n))",
     );
-    let out = test_run.run_one(parse_one("(GET_F) {n = 7}"));
+    let out = test_run.run_one(parse_one(&program, "(GET_F) {n = 7}"));
     assert!(
         matches!(out, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
         "(GET_F) {{n = 7}} must call the returned FN and yield 7.0; got {}",
@@ -1004,13 +1035,14 @@ fn head_deferred_calls_returned_function() {
 /// functor-application-as-function-call decision.
 #[test]
 fn head_deferred_applies_returned_functor_to_module() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (GET_FUNCTOR) -> Any = \
          (FN (APPLYIT x :Number) -> Module = (MODULE inner = (LET inner = x)))",
     );
-    let out = test_run.run_one(parse_one("(GET_FUNCTOR) {x = 5}"));
+    let out = test_run.run_one(parse_one(&program, "(GET_FUNCTOR) {x = 5}"));
     assert!(
         matches!(out, KObject::Module(_)),
         "applying a functor value must yield a module; got {}",
@@ -1023,12 +1055,13 @@ fn head_deferred_applies_returned_functor_to_module() {
 /// `Constructor` arm.
 #[test]
 fn head_deferred_constructs_from_returned_type_value() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
     // `(Point) {x = 1, y = 2}`: the nested-`Expression` head `(Point)` resolves the
     // type leaf to the type-carried `Point` identity, then the body constructs.
-    let out = test_run.run_one(parse_one("(Point) {x = 1, y = 2}"));
+    let out = test_run.run_one(parse_one(&program, "(Point) {x = 1, y = 2}"));
     assert_eq!(
         out.ktype().name(&test_run.types),
         "Point",
@@ -1042,10 +1075,11 @@ fn head_deferred_constructs_from_returned_type_value() {
 #[test]
 fn head_deferred_non_callable_value_errors() {
     use crate::machine::KErrorKind;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (GET_NUM) -> Number = (42)");
-    let err = test_run.run_one_err(parse_one("(GET_NUM) {x = 1}"));
+    let err = test_run.run_one_err(parse_one(&program, "(GET_NUM) {x = 1}"));
     match &err.kind {
         KErrorKind::DispatchFailed { reason, .. } => assert!(
             reason.contains("non-callable"),
@@ -1062,9 +1096,10 @@ fn head_deferred_non_callable_value_errors() {
 #[test]
 fn type_head_deferred_non_type_value_type_mismatches() {
     use crate::machine::KErrorKind;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
-    let err = test_run.run_one_err(parse_one(":(Number) {x = 1}"));
+    let mut test_run = TestRun::silent(&program, &region);
+    let err = test_run.run_one_err(parse_one(&program, ":(Number) {x = 1}"));
     match &err.kind {
         KErrorKind::TypeMismatch { expected, .. } => {
             assert_eq!(
@@ -1080,10 +1115,11 @@ fn type_head_deferred_non_type_value_type_mismatches() {
 /// identity; the body constructs the struct value.
 #[test]
 fn type_head_deferred_constructs_from_sigil_type() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
-    let out = test_run.run_one(parse_one(":(Point) {x = 1, y = 2}"));
+    let out = test_run.run_one(parse_one(&program, ":(Point) {x = 1, y = 2}"));
     assert_eq!(
         out.ktype().name(&test_run.types),
         "Point",
@@ -1100,10 +1136,11 @@ fn type_head_deferred_constructs_from_sigil_type() {
 /// no longer pre-gates on `SetMember`.
 #[test]
 fn type_head_deferred_constructs_union_variant() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("UNION Maybe = (Some :Number None :Null)");
-    let result = test_run.run_one(parse_one(":(Maybe) (Some 42)"));
+    let result = test_run.run_one(parse_one(&program, ":(Maybe) (Some 42)"));
     match result {
         KObject::Tagged { tag, value, .. } => {
             assert_eq!(*tag, "Some");
@@ -1120,11 +1157,12 @@ fn type_head_deferred_constructs_union_variant() {
 #[test]
 fn non_callable_list_head_errors() {
     use crate::machine::KErrorKind;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(working(scope, parse_one("[1 2 3] x")), scope);
+    let root = runtime.dispatch_in_scope(working(scope, parse_one(&program, "[1 2 3] x")), scope);
     runtime
         .execute()
         .expect("a non-callable head is slot-terminal, not a fatal execute error");
@@ -1145,12 +1183,13 @@ fn non_callable_list_head_errors() {
 /// `resolve_dispatch` entry counter (mirrors the fast-lane routing claims).
 #[test]
 fn type_call_and_head_deferred_skip_resolve_dispatch() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
 
     reset_resolve_dispatch_entry_count();
-    let _ = dispatch_one(&mut test_run, parse_one("Point {x = 1, y = 2}"));
+    let _ = dispatch_one(&mut test_run, parse_one(&program, "Point {x = 1, y = 2}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -1159,7 +1198,7 @@ fn type_call_and_head_deferred_skip_resolve_dispatch() {
     );
 
     reset_resolve_dispatch_entry_count();
-    let _ = dispatch_one(&mut test_run, parse_one("(Point) {x = 1, y = 2}"));
+    let _ = dispatch_one(&mut test_run, parse_one(&program, "(Point) {x = 1, y = 2}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,

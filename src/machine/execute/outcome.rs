@@ -326,7 +326,7 @@ mod erased_continuation_tests {
 
     use super::*;
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{run_root_storage, CallFrame, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage, CallFrame, FrameStorageExt};
     use crate::machine::model::KObject;
     use crate::scheduler::{Erased, Scheduler};
     use crate::witnessed::SealedExtern;
@@ -339,8 +339,9 @@ mod erased_continuation_tests {
     /// continuation open + single-shot call (`run_step`); fails on UB, not values.
     #[test]
     fn erased_continuation_open_roundtrip() {
+        let program = program_storage();
         let region = run_root_storage();
-        let test_run = TestRun::silent(&region);
+        let test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         // The captured value lives in the run region — the ancestor the cart's `outer` chain pins.
         let captured: &KObject = region.brand().alloc_object(KObject::Number(7.0));

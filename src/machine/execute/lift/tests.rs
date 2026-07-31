@@ -8,7 +8,8 @@
 use super::*;
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{
-    run_root_storage, FoldingBrand, FrameCoverage, KoanRegion, KoanRegionExt, KoanStorageProfile,
+    program_storage, run_root_storage, FoldingBrand, FrameCoverage, KoanRegion, KoanRegionExt,
+    KoanStorageProfile,
 };
 use crate::machine::execute::run_loop::{dest_brand, DestHandleFamily};
 use crate::machine::model::CarriedFamily;
@@ -55,8 +56,9 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
 /// source — that relocation (so the copy outlives the producer's dying frame) is the whole point.
 #[test]
 fn object_top_node_relocates_into_dest() {
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
@@ -90,8 +92,9 @@ fn object_top_node_relocates_into_dest() {
 /// substrate, not a shared `Rc` spine.
 #[test]
 fn list_relocation_rebuilds_substrate_into_dest() {
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
@@ -144,8 +147,9 @@ fn list_relocation_rebuilds_substrate_into_dest() {
 fn dict_relocation_rebuilds_substrate_into_dest() {
     use crate::machine::model::KKey;
     use std::collections::HashMap;
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
@@ -195,8 +199,9 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
 fn tagged_relocation_rebuilds_payload_into_dest() {
     use crate::machine::core::ScopeId;
     use crate::machine::model::TypeNode;
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
@@ -268,8 +273,9 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
 fn wrapped_relocation_rebuilds_payload_into_dest() {
     use crate::machine::core::ScopeId;
     use crate::machine::model::TypeNode;
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
@@ -333,8 +339,9 @@ fn wrapped_relocation_rebuilds_payload_into_dest() {
 /// back into the source region; the carrier's witness set keeps that region alive.
 #[test]
 fn kfunction_borrow_preserved_verbatim() {
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
@@ -376,8 +383,9 @@ fn kfunction_borrow_preserved_verbatim() {
 #[test]
 fn type_recursive_member_relocates_and_navigates() {
     use crate::machine::model::{NodeSchema, RecursiveGroupWindow, RelativeSchema, TypeNode};
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest = CallFrame::new(scope);
     let types = crate::machine::model::TypeRegistry::new();
@@ -451,8 +459,9 @@ reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held
 /// description; there is no bit to consult, and nothing rebuilds the witness after the fold.
 #[test]
 fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
     let types = TypeRegistry::new();
@@ -531,8 +540,9 @@ fn alloc_home_closure_record<'run>(
 #[test]
 fn plain_record_cells_select_released_and_survive_every_producer_free() {
     const DEPTH: usize = 5;
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
     let types = TypeRegistry::new();
@@ -631,8 +641,9 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
 #[test]
 fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
     const DEPTH: usize = 5;
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
     let types = TypeRegistry::new();
@@ -732,8 +743,9 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
 #[test]
 fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
     const DEPTH: usize = 5;
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
     let types = TypeRegistry::new();
@@ -859,8 +871,9 @@ fn record_memos<'run>(
 /// A scalar-only record is priceable at one flat `Held` per cell and borrows nothing home.
 #[test]
 fn substrate_memo_scalar_record_is_priceable_and_home_free() {
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
     let types = TypeRegistry::new();
@@ -877,8 +890,9 @@ fn substrate_memo_scalar_record_is_priceable_and_home_free() {
 /// A `KString` cell adds its byte length to the flat `Held` width.
 #[test]
 fn substrate_memo_string_cell_adds_its_length() {
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
     let types = TypeRegistry::new();
@@ -900,8 +914,9 @@ fn substrate_memo_string_cell_adds_its_length() {
 /// `borrows_home`. A foreign-captured closure is equally weightless but leaves the bit clear.
 #[test]
 fn substrate_memo_home_vs_foreign_closure_leaf() {
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
     let foreign = CallFrame::new(scope);
@@ -948,8 +963,9 @@ fn substrate_memo_home_vs_foreign_closure_leaf() {
 /// closure, so both bits are non-trivial and must ride up to the outer substrate.
 #[test]
 fn substrate_memo_nested_record_composes_by_memo() {
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
     let types = TypeRegistry::new();
@@ -994,8 +1010,9 @@ fn substrate_memo_nested_record_composes_by_memo() {
 /// element substrate's cost, and the enclosing record stays priceable and borrows nothing home.
 #[test]
 fn substrate_memo_list_cell_is_priceable_and_home_free() {
+    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&root);
+    let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
     let types = TypeRegistry::new();
@@ -1053,16 +1070,15 @@ mod seam_verb_table {
     /// the copy frees it.
     #[test]
     fn seam_verb_unpriceable_plain_data_copies_released() {
-        use crate::machine::core::program_storage;
         use crate::machine::model::ast::KExpression;
+        let program = program_storage();
         let root = run_root_storage();
-        let test_run = TestRun::silent(&root);
+        let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
         let types = TypeRegistry::new();
 
         // Program storage is where a raw AST node lives; an expression cell points into it.
-        let program = program_storage();
         let expr = KObject::KExpression(KExpression::new(program.brand().region(), Vec::new()));
         let fields = Record::from_pairs(vec![("e".to_string(), Held::Object(expr))]);
         let value = build_record(&home, fields, &types);
@@ -1078,8 +1094,9 @@ mod seam_verb_table {
     /// captured in the home region) pins outright — a copy would pay the rebuild and still keep the pin.
     #[test]
     fn seam_verb_priceable_borrows_home_pins() {
+        let program = program_storage();
         let root = run_root_storage();
-        let test_run = TestRun::silent(&root);
+        let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
         let types = TypeRegistry::new();
@@ -1101,8 +1118,9 @@ mod seam_verb_table {
     /// ratio.
     #[test]
     fn seam_verb_priceable_small_cost_vs_fat_host_copies_released() {
+        let program = program_storage();
         let root = run_root_storage();
-        let test_run = TestRun::silent(&root);
+        let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
         let types = TypeRegistry::new();
@@ -1132,8 +1150,9 @@ mod seam_verb_table {
     #[test]
     fn seam_verb_priceable_cost_over_ratio_pins() {
         let big = "x".repeat(8192);
+        let program = program_storage();
         let root = run_root_storage();
-        let test_run = TestRun::silent(&root);
+        let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
         let types = TypeRegistry::new();
@@ -1163,8 +1182,9 @@ mod seam_verb_table {
     /// evacuation's job.
     #[test]
     fn seam_verb_foreign_crossing_pins() {
+        let program = program_storage();
         let root = run_root_storage();
-        let test_run = TestRun::silent(&root);
+        let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
         let foreign = CallFrame::new(scope);

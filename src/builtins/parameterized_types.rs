@@ -238,14 +238,16 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 mod tests {
     use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::model::{KKind, KType, Record, TypeNode};
+    use crate::machine::program_storage;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
 
     #[test]
     fn list_of_number_lowers_to_list_number() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let result = test_run.run_one_type(parse_one(":(LIST OF Number)"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let result = test_run.run_one_type(parse_one(&program, ":(LIST OF Number)"));
         let types = test_run.types();
         assert_eq!(result, types.list(KType::NUMBER));
     }
@@ -255,8 +257,9 @@ mod tests {
     #[test]
     fn apply_as_lowers_to_constructor_apply() {
         use crate::machine::model::{declarator_window, RelativeSchema};
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         // Seal a singleton `Wrap` constructor member through the real declaration window, then
         // bind its absolute handle as a builtin type.
@@ -276,7 +279,7 @@ mod tests {
             sealed.members[0],
             &mut crate::machine::WriteGate::for_test(),
         );
-        let result = test_run.run_one_type(parse_one(":(Number AS Wrap)"));
+        let result = test_run.run_one_type(parse_one(&program, ":(Number AS Wrap)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::ConstructorApply {
@@ -300,18 +303,21 @@ mod tests {
 
     #[test]
     fn map_str_number_lowers_to_dict() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let result = test_run.run_one_type(parse_one(":(MAP Str -> Number)"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let result = test_run.run_one_type(parse_one(&program, ":(MAP Str -> Number)"));
         let types = test_run.types();
         assert_eq!(result, types.dict(KType::STR, KType::NUMBER));
     }
 
     #[test]
     fn fn_lowers_to_kfunction() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let result = test_run.run_one_type(parse_one(":(FN (x :Number, y :Str) -> Bool)"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let result =
+            test_run.run_one_type(parse_one(&program, ":(FN (x :Number, y :Str) -> Bool)"));
         let types = test_run.types();
         assert_eq!(
             result,
@@ -324,9 +330,10 @@ mod tests {
 
     #[test]
     fn fn_nullary_lowers_to_kfunction() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let result = test_run.run_one_type(parse_one(":(FN () -> Number)"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let result = test_run.run_one_type(parse_one(&program, ":(FN () -> Number)"));
         let types = test_run.types();
         assert_eq!(result, types.function_type(Record::new(), KType::NUMBER));
     }
@@ -335,9 +342,10 @@ mod tests {
     // Param name `Ty` uses two letters because koan rejects single-uppercase-letter tokens.
     #[test]
     fn fn_with_type_param_and_module_return_lowers_to_kfunction() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let result = test_run.run_one_type(parse_one(":(FN (Ty :Signature) -> Module)"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let result = test_run.run_one_type(parse_one(&program, ":(FN (Ty :Signature) -> Module)"));
         let types = test_run.types();
         assert_eq!(
             result,
@@ -352,9 +360,11 @@ mod tests {
     /// shared field-list parser and lands in the parameter record.
     #[test]
     fn fn_with_nested_list_param_lowers_to_kfunction() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let result = test_run.run_one_type(parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let result =
+            test_run.run_one_type(parse_one(&program, ":(FN (xs :(LIST OF Number)) -> Bool)"));
         let types = test_run.types();
         assert_eq!(
             result,
@@ -372,10 +382,12 @@ mod tests {
     /// sub-Dispatch carrier from the fed views.
     #[test]
     fn record_sigil_defers_and_mixes_scope_read_with_sub_dispatch() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("LET Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(":{x :Wrapped, y :(LIST OF Number)}"));
+        let result =
+            test_run.run_one_type(parse_one(&program, ":{x :Wrapped, y :(LIST OF Number)}"));
         let types = test_run.types();
         let inner = types.record(Record::from_pairs(vec![("a".into(), KType::NUMBER)]));
         assert_eq!(
@@ -395,10 +407,14 @@ mod tests {
     /// successful compose proves the carrier-view path ran.
     #[test]
     fn fn_deferred_with_reaching_ret_composes_from_carrier_view() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(":(FN (xs :(LIST OF Number)) -> Wrapped)"));
+        let result = test_run.run_one_type(parse_one(
+            &program,
+            ":(FN (xs :(LIST OF Number)) -> Wrapped)",
+        ));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
@@ -422,9 +438,10 @@ mod tests {
     /// rewalk's `Err` before any allocation runs.
     #[test]
     fn record_field_sub_dispatch_to_non_type_value_errors() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let err = test_run.run_one_err(parse_one(":{x :(1)}"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run.run_one_err(parse_one(&program, ":{x :(1)}"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("resolved to non-type value")),
             "expected a non-type-value ShapeError through the deferred side-channel, got {err}",
@@ -436,7 +453,8 @@ mod tests {
     /// it shares the scope's lifetime, keeping the comparison off `'static`.
     fn assert_round_trips(test_run: &mut TestRun<'_>, expected: KType) {
         let rendered = expected.name(test_run.types());
-        let result = test_run.run_one_type(parse_one(&rendered));
+        let program = test_run.program;
+        let result = test_run.run_one_type(parse_one(program, &rendered));
         assert_eq!(
             result, expected,
             "round-trip of `{rendered}` did not reproduce the original KType",
@@ -445,8 +463,9 @@ mod tests {
 
     #[test]
     fn fn_multi_param_round_trips() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let expected = test_run.types().function_type(
             Record::from_pairs(vec![("x".into(), KType::NUMBER), ("y".into(), KType::STR)]),
             KType::BOOL,
@@ -456,16 +475,18 @@ mod tests {
 
     #[test]
     fn fn_nullary_round_trips() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let expected = test_run.types().function_type(Record::new(), KType::ANY);
         assert_round_trips(&mut test_run, expected);
     }
 
     #[test]
     fn fn_nested_param_round_trips() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let types = test_run.types();
         let expected = types.function_type(
             Record::from_pairs(vec![("xs".into(), types.list(KType::NUMBER))]),
@@ -476,8 +497,9 @@ mod tests {
 
     #[test]
     fn fn_capitalized_param_round_trips_and_preserves_name() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let types = test_run.types();
         let expected = types.function_type(
             Record::from_pairs(vec![("Ty".into(), KType::of_kind(KKind::Signature))]),
@@ -495,10 +517,11 @@ mod tests {
     /// lands in `k` and the reaching type survives the carrier-view crossing into `v`.
     #[test]
     fn map_scalar_key_reaching_value_correlates() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(":(MAP Str -> Wrapped)"));
+        let result = test_run.run_one_type(parse_one(&program, ":(MAP Str -> Wrapped)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::Dict { key, value } => {
@@ -517,10 +540,11 @@ mod tests {
     /// the scalar lands in `v`, proving the correlation is positional, not carrier-presence-based.
     #[test]
     fn map_reaching_key_scalar_value_correlates() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(":(MAP Wrapped -> Str)"));
+        let result = test_run.run_one_type(parse_one(&program, ":(MAP Wrapped -> Str)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::Dict { key, value } => {
@@ -540,10 +564,11 @@ mod tests {
     /// directly from the elaborated pairs, where the `SetMember` field survives as owned data.
     #[test]
     fn record_sync_reaching_field_folds_at_brand() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(":{x :Wrapped}"));
+        let result = test_run.run_one_type(parse_one(&program, ":{x :Wrapped}"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::Record { fields: record } => {
@@ -563,10 +588,11 @@ mod tests {
     /// the `SetMember` param survives as owned data alongside the plain `Bool` return type.
     #[test]
     fn fn_sync_reaching_param_folds_at_brand() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(":(FN (x :Wrapped) -> Bool)"));
+        let result = test_run.run_one_type(parse_one(&program, ":(FN (x :Wrapped) -> Bool)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
@@ -586,10 +612,11 @@ mod tests {
     /// argument the caller closed over crosses into the composed carrier as owned data.
     #[test]
     fn fn_sync_reaching_ret_folds_at_brand() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(":(FN (x :Number) -> Wrapped)"));
+        let result = test_run.run_one_type(parse_one(&program, ":(FN (x :Number) -> Wrapped)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
@@ -612,10 +639,11 @@ mod tests {
     /// crossing (the single-operand analog of the MAP correlation tests above).
     #[test]
     fn list_of_reaching_elem_lowers() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(":(LIST OF Wrapped)"));
+        let result = test_run.run_one_type(parse_one(&program, ":(LIST OF Wrapped)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::List { element } => {

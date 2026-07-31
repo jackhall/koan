@@ -123,19 +123,20 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 mod tests {
     use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::model::{KType, TypeNode};
-    use crate::machine::run_root_storage;
+    use crate::machine::{program_storage, run_root_storage};
 
     /// `WITH` folds the pin into the schema: the abstract member becomes a manifest one fixed to
     /// the pinned type, so the specialized interface is a fully concrete schema, distinct from
     /// the bare (still-abstract) source.
     #[test]
     fn with_one_slot_folds_the_pin_into_the_schema() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
         let bare = scope.resolve_type("Ordered").expect("Ordered binds");
-        let result = test_run.run_one_type(parse_one("Ordered WITH {Carrier = Number}"));
+        let result = test_run.run_one_type(parse_one(&program, "Ordered WITH {Carrier = Number}"));
         assert_ne!(result, bare, "a pin refines away from the bare signature");
         match test_run.types().node(result) {
             TypeNode::Signature { schema, .. } => {
@@ -154,14 +155,15 @@ mod tests {
     /// same content as a SIG declaring the member manifest outright.
     #[test]
     fn with_fold_substitutes_slot_references_and_unifies_with_concrete_sig() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run(
             "SIG Ordered = ((TYPE Carrier) (VAL compare :Carrier))\n\
              SIG IntOrdered = ((LET Carrier = Number) (VAL compare :Carrier))",
         );
-        let pinned = test_run.run_one_type(parse_one("Ordered WITH {Carrier = Number}"));
+        let pinned = test_run.run_one_type(parse_one(&program, "Ordered WITH {Carrier = Number}"));
         match test_run.types().node(pinned) {
             TypeNode::Signature { schema, .. } => {
                 assert_eq!(
@@ -183,10 +185,14 @@ mod tests {
     /// either record-literal order interns the same specialized type.
     #[test]
     fn with_two_slots_fold_order_independently() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))");
-        let result = test_run.run_one_type(parse_one("OrderedSet WITH {Ord = Str, Elt = Number}"));
+        let result = test_run.run_one_type(parse_one(
+            &program,
+            "OrderedSet WITH {Ord = Str, Elt = Number}",
+        ));
         match test_run.types().node(result) {
             TypeNode::Signature { schema, .. } => {
                 assert_eq!(schema.manifest_members.get("Elt"), Some(&KType::NUMBER));
@@ -194,8 +200,10 @@ mod tests {
             }
             _ => panic!("expected Signature type, got {result:?}"),
         }
-        let literal_order =
-            test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number, Ord = Str}"));
+        let literal_order = test_run.run_one_type(parse_one(
+            &program,
+            "OrderedSet WITH {Elt = Number, Ord = Str}",
+        ));
         assert_eq!(
             result, literal_order,
             "either literal order interns the same specialized type",
@@ -206,16 +214,20 @@ mod tests {
     /// the same type as the one-shot form.
     #[test]
     fn with_pins_accumulate_across_chained_with() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run(
             "SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))\n\
              LET ByElt = (OrderedSet WITH {Elt = Number})\n\
              LET ByOrd = (OrderedSet WITH {Ord = Str})",
         );
-        let both = test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number, Ord = Str}"));
-        let elt_then_ord = test_run.run_one_type(parse_one("ByElt WITH {Ord = Str}"));
-        let ord_then_elt = test_run.run_one_type(parse_one("ByOrd WITH {Elt = Number}"));
+        let both = test_run.run_one_type(parse_one(
+            &program,
+            "OrderedSet WITH {Elt = Number, Ord = Str}",
+        ));
+        let elt_then_ord = test_run.run_one_type(parse_one(&program, "ByElt WITH {Ord = Str}"));
+        let ord_then_elt = test_run.run_one_type(parse_one(&program, "ByOrd WITH {Elt = Number}"));
         assert_eq!(elt_then_ord, both, "chained WITH accumulates the first pin");
         assert_eq!(
             ord_then_elt, both,
@@ -228,19 +240,20 @@ mod tests {
     #[test]
     fn with_repin_normalizes_when_equal_and_errors_when_conflicting() {
         use crate::machine::KErrorKind;
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run(
             "SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))\n\
              LET ByElt = (OrderedSet WITH {Elt = Number})",
         );
-        let pinned = test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number}"));
-        let repinned = test_run.run_one_type(parse_one("ByElt WITH {Elt = Number}"));
+        let pinned = test_run.run_one_type(parse_one(&program, "OrderedSet WITH {Elt = Number}"));
+        let repinned = test_run.run_one_type(parse_one(&program, "ByElt WITH {Elt = Number}"));
         assert_eq!(
             repinned, pinned,
             "an equal re-pin keeps the source identity"
         );
-        let err = test_run.run_one_err(parse_one("ByElt WITH {Elt = Str}"));
+        let err = test_run.run_one_err(parse_one(&program, "ByElt WITH {Elt = Str}"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(m) if m.contains("manifest")),
             "a conflicting re-pin hits the manifest-fixity rule (the fold made the first pin \
@@ -253,15 +266,16 @@ mod tests {
     /// handler could not take (was `#[ignore]`d there).
     #[test]
     fn with_inner_module_attr_path_pins_abstract_type() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run(
             "MODULE int_ord = ((LET Carrier = Number) (LET compare = 0))\n\
              SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
              SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
              LET elem = (int_ord :| Ordered)",
         );
-        let result = test_run.run_one_type(parse_one("Set WITH {Elt = elem.Carrier}"));
+        let result = test_run.run_one_type(parse_one(&program, "Set WITH {Elt = elem.Carrier}"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::Signature { schema, .. } => {
@@ -280,15 +294,16 @@ mod tests {
 
     #[test]
     fn with_rejects_unknown_slot() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
         let runtime = &mut test_run.runtime;
         let id = runtime.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
-                parse_one("Ordered WITH {Bogus = Number}"),
+                parse_one(&program, "Ordered WITH {Bogus = Number}"),
             ),
             scope,
         );
@@ -308,14 +323,15 @@ mod tests {
     /// empty and the resulting signature compares equal to the bare sig.
     #[test]
     fn with_equal_manifest_pin_normalizes_away() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("SIG Tagged = ((LET Tag = Number) (VAL value :Number))");
         let bare = scope
             .resolve_type("Tagged")
             .expect("Tagged must bind a Signature KType");
-        let result = test_run.run_one_type(parse_one("Tagged WITH {Tag = Number}"));
+        let result = test_run.run_one_type(parse_one(&program, "Tagged WITH {Tag = Number}"));
         assert_eq!(
             result, bare,
             "an equal manifest pin must preserve signature identity"
@@ -325,15 +341,16 @@ mod tests {
     /// A pin unequal to a manifest member's fixed type is a manifest-fixity error.
     #[test]
     fn with_rejects_unequal_manifest_pin() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("SIG Tagged = ((LET Tag = Number) (VAL value :Number))");
         let runtime = &mut test_run.runtime;
         let id = runtime.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
-                parse_one("Tagged WITH {Tag = Str}"),
+                parse_one(&program, "Tagged WITH {Tag = Str}"),
             ),
             scope,
         );
@@ -356,10 +373,12 @@ mod tests {
     /// leaving the member exactly as declared.
     #[test]
     fn with_mixed_record_folds_only_abstract_pin() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("SIG Mixed = ((TYPE Elt) (LET Tag = Number) (VAL value :Number))");
-        let result = test_run.run_one_type(parse_one("Mixed WITH {Elt = Str, Tag = Number}"));
+        let result =
+            test_run.run_one_type(parse_one(&program, "Mixed WITH {Elt = Str, Tag = Number}"));
         match test_run.types().node(result) {
             TypeNode::Signature { schema, .. } => {
                 assert!(schema.abstract_members.is_empty());
@@ -372,15 +391,16 @@ mod tests {
 
     #[test]
     fn with_rejects_lowercase_slot_name() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
         let runtime = &mut test_run.runtime;
         let id = runtime.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
-                parse_one("Ordered WITH {type = Number}"),
+                parse_one(&program, "Ordered WITH {type = Number}"),
             ),
             scope,
         );

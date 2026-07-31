@@ -14,15 +14,19 @@ use std::rc::Rc;
 
 use super::working_all;
 use crate::builtins::test_support::{binds_module, TestRun};
-use crate::machine::core::{run_root_storage, FrameStorage};
+use crate::machine::core::{program_storage, run_root_storage, FrameStorage, ProgramStorage};
 use crate::machine::model::{KObject, KType};
 
 /// Run `source` as one top-level block (source-order index gating) and hand back
 /// the whole bundle, so callers read the post-run scope and the run's registry.
-fn run_block<'run>(region: &'run Rc<FrameStorage>, source: &str) -> TestRun<'run> {
-    let mut test_run = TestRun::silent(region);
+fn run_block<'run>(
+    program: &'run ProgramStorage,
+    region: &'run Rc<FrameStorage>,
+    source: &str,
+) -> TestRun<'run> {
+    let mut test_run = TestRun::silent(program, region);
     let scope = test_run.scope;
-    let exprs = working_all(source);
+    let exprs = working_all(program, source);
     test_run.runtime.enter_block(scope.id, exprs, scope);
     test_run
         .runtime
@@ -49,8 +53,10 @@ fn number(test_run: &TestRun<'_>, name: &str) -> f64 {
 /// `LET _ = _`, value overload: a later sibling reads the value-channel binding.
 #[test]
 fn let_value_install_lets_sibling_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "LET base = 10\n\
          LET derived = (base + 5)",
@@ -62,8 +68,10 @@ fn let_value_install_lets_sibling_resolve() {
 /// aliases the alias, and both resolve to the same underlying type.
 #[test]
 fn let_type_alias_install_lets_sibling_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "LET MyNum = Number\n\
          LET Echo = MyNum",
@@ -84,8 +92,10 @@ fn let_type_alias_install_lets_sibling_resolve() {
 /// providing `Carrier` satisfies it.
 #[test]
 fn type_bare_install_in_sig_body_lets_sibling_val_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "SIG WithCarrier = ((TYPE Carrier) (VAL zero :Carrier))\n\
          MODULE carrier_impl = ((LET Carrier = Number) (LET zero = 0))\n\
@@ -107,8 +117,9 @@ fn type_bare_install_in_sig_body_lets_sibling_val_resolve() {
 /// position for this bucket.
 #[test]
 fn type_higher_kinded_install_in_sig_body_declares() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = run_block(&region, "SIG Mappable = ((TYPE (Elem AS Wrap)))");
+    let test_run = run_block(&program, &region, "SIG Mappable = ((TYPE (Elem AS Wrap)))");
     assert!(
         test_run.scope.resolve_type("Mappable").is_some(),
         "a SIG with a higher-kinded `TYPE (Elem AS Wrap)` member must build",
@@ -119,8 +130,10 @@ fn type_higher_kinded_install_in_sig_body_declares() {
 /// the module value's dot-projection.
 #[test]
 fn module_install_lets_sibling_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "MODULE mo = (LET x = 42)\n\
          LET got = mo.x",
@@ -132,8 +145,10 @@ fn module_install_lets_sibling_resolve() {
 /// member of the group module through dot-projection.
 #[test]
 fn group_install_lets_sibling_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "GROUP nums FOLD LEFT = ((OP #(+) OVER Number = (left)) (LET seed = 7))\n\
          LET got = nums.seed",
@@ -144,8 +159,10 @@ fn group_install_lets_sibling_resolve() {
 /// `SIG _ = _`: a later sibling aliases the signature type.
 #[test]
 fn sig_install_lets_sibling_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
          LET OrdAlias = Ordered",
@@ -163,8 +180,10 @@ fn sig_install_lets_sibling_resolve() {
 /// `UNION _ = _`: a later sibling constructs a value at the union type.
 #[test]
 fn union_install_lets_sibling_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "UNION Color = (Red :Null Green :Null)\n\
          LET picked = (Color (Red null))",
@@ -178,8 +197,10 @@ fn union_install_lets_sibling_resolve() {
 /// `NEWTYPE _ = _`: a later sibling aliases the newtype identity.
 #[test]
 fn newtype_equals_install_lets_sibling_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "NEWTYPE Distance = Number\n\
          LET DistAlias = Distance",
@@ -198,8 +219,10 @@ fn newtype_equals_install_lets_sibling_resolve() {
 /// family through `AS`.
 #[test]
 fn newtype_constructor_family_install_lets_sibling_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "NEWTYPE (Elem AS Boxed)\n\
          LET NumberBox = :(Number AS Boxed)",
@@ -213,8 +236,10 @@ fn newtype_constructor_family_install_lets_sibling_resolve() {
 /// `RECURSIVE TYPES _ = _`: a later sibling aliases a co-declared member.
 #[test]
 fn recursive_types_install_lets_sibling_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "RECURSIVE TYPES Pair = (\n\
         \x20 NEWTYPE Aa = :{b :Bb}\n\
@@ -236,8 +261,10 @@ fn recursive_types_install_lets_sibling_resolve() {
 /// a later sibling call parks on it and resolves when the FN registers.
 #[test]
 fn fn_named_install_lets_sibling_call_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "FN (DOUBLE x :Number) -> Number = (x + x)\n\
          LET out = (DOUBLE 5)",
@@ -249,8 +276,10 @@ fn fn_named_install_lets_sibling_call_resolve() {
 /// a later sibling use of the operator parks on it and resolves.
 #[test]
 fn op_install_lets_sibling_use_resolve() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "OP #(⊕) OVER Number = (left + right)\n\
          LET out = (1 ⊕ 2)",
@@ -268,8 +297,10 @@ fn op_install_lets_sibling_use_resolve() {
 /// `make_set` completes.
 #[test]
 fn functor_chain_sibling_call_parks_then_resolves() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
@@ -293,8 +324,10 @@ fn functor_chain_sibling_call_parks_then_resolves() {
 /// `a` parks and resolves.
 #[test]
 fn let_chain_sibling_reads_inner_binding() {
+    let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
+        &program,
         &region,
         "LET z = (LET a = 3)\n\
          LET use_a = a",
@@ -313,8 +346,9 @@ fn let_chain_sibling_reads_inner_binding() {
 /// slot insert, leaving the enclosing signature bound to nothing.
 #[test]
 fn val_inside_sig_installs_no_binder() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = run_block(&region, "SIG Ordered = ((VAL zero :Number))");
+    let test_run = run_block(&program, &region, "SIG Ordered = ((VAL zero :Number))");
     let scope = test_run.scope;
     assert!(
         scope.resolve_type("Ordered").is_some(),
@@ -334,13 +368,15 @@ fn val_inside_sig_installs_no_binder() {
 /// fails shape-check. Confirms the negative above is "no binder", not "no slot".
 #[test]
 fn val_slot_is_a_real_requirement() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "SIG WithCompare = ((VAL compare :Number))\n\
          MODULE empty = (LET unrelated = 0)",
     );
     let err = test_run.run_one_err(crate::builtins::test_support::parse_one(
+        &program,
         "empty :| WithCompare",
     ));
     assert!(
@@ -360,10 +396,14 @@ fn val_slot_is_a_real_requirement() {
 /// by a sequential re-entry.
 #[test]
 fn a_rejected_binding_write_is_the_binders_error_terminal() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let exprs = working_all("OP #(⊛) OVER Number = (left)\nOP #(⊛) OVER Number = (right)");
+    let exprs = working_all(
+        &program,
+        "OP #(⊛) OVER Number = (left)\nOP #(⊛) OVER Number = (right)",
+    );
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, exprs, scope);
     runtime
@@ -390,8 +430,9 @@ fn a_rejected_binding_write_is_the_binders_error_terminal() {
 /// data, so an error terminal carries none of them.
 #[test]
 fn a_binder_that_errors_installs_nothing() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = run_block(&region, "LET x = nonexistent_name");
+    let test_run = run_block(&program, &region, "LET x = nonexistent_name");
     assert!(
         test_run.scope.lookup("x").is_none(),
         "a failed binder must leave no binding behind",

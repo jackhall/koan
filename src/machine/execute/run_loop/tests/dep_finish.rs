@@ -1,8 +1,8 @@
 //! combine, defer_to, and tail-call slot reuse.
 
 use super::super::super::outcome::Outcome;
-use crate::builtins::test_support::{program_brand, resident_carrier, TestRun};
-use crate::machine::core::{run_root_storage, FrameStorageExt};
+use crate::builtins::test_support::{resident_carrier, TestRun};
+use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
 use crate::machine::model::ReturnType;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, KObject};
@@ -14,12 +14,13 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     // Pins that dep-finish waits on every dep before invoking finish and that
     // finish-returned Outcome::Done(Value) lands in the slot's result.
     use crate::machine::execute::TerminalDepFinish;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let dep_a = runtime.dispatch_in_scope(let_expr("ca", 7.0), scope);
-    let dep_b = runtime.dispatch_in_scope(let_expr("cb", 11.0), scope);
+    let dep_a = runtime.dispatch_in_scope(let_expr(&program, "ca", 7.0), scope);
+    let dep_b = runtime.dispatch_in_scope(let_expr(&program, "cb", 11.0), scope);
     let finish: TerminalDepFinish = Box::new(|_sched, terminals| {
         let a = match terminals.owned(0).value {
             Carried::Object(KObject::Number(n)) => *n,
@@ -63,8 +64,9 @@ fn dep_finish_short_circuits_on_dep_error() {
     use crate::machine::{KError, KErrorKind};
     use std::cell::Cell;
     use std::rc::Rc;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
 
@@ -72,7 +74,7 @@ fn dep_finish_short_circuits_on_dep_error() {
     // doesn't revisit them, then overwrite their results directly.
     let mk_dispatch = || {
         crate::machine::execute::dispatch::decide_tail(
-            WorkingExpression::new(program_brand().region(), Vec::new()),
+            WorkingExpression::new(program.brand().region(), Vec::new()),
             None,
         )
     };
@@ -137,19 +139,20 @@ fn retention_hold_foreign_bundle_releases_at_pull_zero() {
     use crate::machine::execute::TerminalDepFinish;
     use std::rc::Rc;
 
+    let program = program_storage();
     let region = run_root_storage();
     // A distinct region the producer's terminal reaches; the hold's foreign bundle will be its sole
     // strong owner once we drop our own handle.
     let foreign = run_root_storage();
     let weak = Rc::downgrade(&foreign);
 
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
 
     let mk_dispatch = || {
         crate::machine::execute::dispatch::decide_tail(
-            WorkingExpression::new(program_brand().region(), Vec::new()),
+            WorkingExpression::new(program.brand().region(), Vec::new()),
             None,
         )
     };
@@ -221,8 +224,9 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         Action::await_deps(crate::scheduler::Deps::new(), finish)
     }
 
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     register_builtin(
         scope,
@@ -237,7 +241,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     );
 
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(super::keyword_expr("DEFERTEST"), scope);
+    let id = runtime.dispatch_in_scope(super::keyword_expr(&program, "DEFERTEST"), scope);
     runtime.execute().unwrap();
     assert!(
         runtime
@@ -254,12 +258,16 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
 fn tail_call_reuses_node_slot_in_place() {
     // Pins that an `Outcome::Continue` tail rewrites the caller's slot in place rather
     // than spawning a fresh one (verified via runtime.len() == 1 below).
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(
-        working_one("MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))"),
+        working_one(
+            &program,
+            "MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))",
+        ),
         root,
     );
 

@@ -299,10 +299,11 @@ fn record_value_admission_and_matches() {
 #[test]
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let t = KType::of_kind(KKind::AnyType);
@@ -827,12 +828,13 @@ fn union_specificity_ordering() {
 #[test]
 fn module_object_ktype_reports_self_sig() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
     use crate::machine::Scope;
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -886,12 +888,13 @@ fn module_object_ktype_reports_self_sig() {
 #[test]
 fn matches_value_admits_module_object_via_signature_slot() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
     use crate::machine::Scope;
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -936,9 +939,10 @@ fn matches_value_admits_module_object_via_signature_slot() {
 fn specificity_self_sig_refines_declared_and_empty() {
     use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
-    use crate::machine::run_root_storage;
+    use crate::machine::{program_storage, run_root_storage};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -973,9 +977,10 @@ fn specificity_self_sig_refines_declared_and_empty() {
 fn self_sig_type_equals_member_free_declared_sig() {
     use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
-    use crate::machine::run_root_storage;
+    use crate::machine::{program_storage, run_root_storage};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -1003,9 +1008,10 @@ fn self_sig_type_equals_member_free_declared_sig() {
 fn self_sig_type_equals_fully_manifest_declared_sig() {
     use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
-    use crate::machine::run_root_storage;
+    use crate::machine::{program_storage, run_root_storage};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -1033,9 +1039,10 @@ fn self_sig_type_equals_fully_manifest_declared_sig() {
 fn self_sig_stays_distinct_from_and_refines_abstract_sig() {
     use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
-    use crate::machine::run_root_storage;
+    use crate::machine::{program_storage, run_root_storage};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
