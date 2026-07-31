@@ -25,10 +25,13 @@ wider than exact, the one cell family run exactness does not yet cover.
 - Region death for a spliced expression's part storage runs no per-part `Drop`.
 - An expression whose parts live only in program-lifetime storage has empty reach — the
   storage is a `needs_no_pin` eternal member, so pointing at program text pins nothing.
-- A splice-carrying expression cell entering a sectioned container carries an
-  exact run description, composed by the door from the carriers of the splice operands
-  the part slice was built from; the conservative operand-envelope verdict at the
-  sectioned alloc door is deleted.
+- A resolved sub-result spliced into an expression is unreachable from the value
+  channel: the scheduler's working form is a distinct type from the AST, so no
+  expression cell entering a sectioned container can carry a producer reach. The
+  conservative operand-envelope verdict at the sectioned alloc door is deleted, along
+  with the structural splice-free audit the rest of the value family consults.
+- Koan composes no reach description for an expression — no stored reach field, no
+  per-part walk, no union over splice operands. Reach knowledge stays the envelope's.
 - The Miri audit slate is green with region-resident expressions exercised.
 
 **Directions.**
@@ -38,6 +41,16 @@ wider than exact, the one cell family run exactness does not yet cover.
   region; only the per-node copies made for splicing are region-bump allocated. Both
   storages produce the same part-slice type, which is what makes the split invisible to
   `KExpression` and the copy a slice copy.
+- *How exactness is reached — decided.* Not by teaching the door to compose a
+  splice-carrying expression's reach, but by removing the case: the splice cell and the
+  staging hole leave `ExpressionPart` for a scheduler-only working form, leaving the AST
+  type structurally splice-free and program-resident. Exactness is then a property of the
+  type, not a description koan maintains.
+- *The one blocker — decided.* The `:KExpression` slot capture of a `ListLiteral`
+  (`resolve_for`) is the only site that builds a fresh expression **value** per call, and
+  its sole consumer is the n-ary union `:(A|B|C)`, which immediately re-dispatches the
+  parts it was handed. The unary operator run synthesizes an evaluated list instead, so
+  the members arrive as an ordinary container carrier and that capture arm is deleted.
 
 ## Dependencies
 

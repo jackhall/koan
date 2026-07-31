@@ -190,7 +190,9 @@ fn reduce_fold_right<'step>(
 /// 2-part expression `[ Keyword(sym), ListLiteral([x1, x2, x3]) ]`, the same shape `HEAD [1 2 3]`
 /// dispatches through (a keyword-first call whose single slot carries a list). Unary is
 /// homogeneous — a well-formed run names one operator throughout — so the first operator
-/// keyword's span and text stand in for the whole run.
+/// keyword's span and text stand in for the whole run. Each operand rides into the literal
+/// verbatim: a list literal's own element scheduling resolves a bare name against scope and
+/// dispatches a parenthesized element, so a run's operands need no per-kind rewrite.
 fn reduce_unary<'step>(
     ctx: &SchedulerView<'step, '_>,
     expr: &KExpression<'step>,
@@ -208,10 +210,8 @@ fn reduce_unary<'step>(
         ExpressionPart::Keyword(s) => s.clone(),
         _ => unreachable!("odd-index chain parts are keywords by shape"),
     };
-    let list_items: Vec<ExpressionPart<'step>> = operands
-        .into_iter()
-        .map(|operand| as_list_item(operand.value))
-        .collect();
+    let list_items: Vec<ExpressionPart<'step>> =
+        operands.into_iter().map(|operand| operand.value).collect();
     let kw_part = Spanned {
         value: ExpressionPart::Keyword(sym),
         span: operator.span,
@@ -221,22 +221,6 @@ fn reduce_unary<'step>(
         span: expr.span,
     };
     become_dispatch(ctx, KExpression::new(vec![kw_part, list_part]))
-}
-
-/// An operand as a list-literal element. A list literal does not name-resolve a bare `Identifier`
-/// element — it interns it as a symbol (see
-/// [`schedule_list_literal`](crate::machine::execute::KoanRuntime::schedule_list_literal)) — but a
-/// unary run's operands are *expressions*, so a named operand is wrapped in its own one-part
-/// expression, which the literal's materialization dispatches like any other element expression.
-/// Every other part kind (a literal, a parenthesized expression, a type token) already means in a
-/// list what it means in a run, so it rides through untouched.
-fn as_list_item<'step>(operand: ExpressionPart<'step>) -> ExpressionPart<'step> {
-    match operand {
-        identifier @ ExpressionPart::Identifier(_) => {
-            ExpressionPart::Expression(Box::new(KExpression::new(vec![Spanned::bare(identifier)])))
-        }
-        other => other,
-    }
 }
 
 /// Reduces a `Pairwise`-mode run: `f x < g y < h z` must evaluate `g y` **once**, its value

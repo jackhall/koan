@@ -93,6 +93,35 @@ fn block_union_typed_cross_ref_to_a_filled_sibling_seals() {
     }
 }
 
+/// A cross-reference inside a **three-member** union (`:(Aa | Null | Number)`) reduces through the
+/// unary `|` group, so the members ride an evaluated list literal rather than the two-member
+/// keyworded form. The sibling name therefore reaches the finalize gate as a list *element*, and
+/// list-element scheduling must park on a still-finalizing name exactly as the binary form does.
+#[test]
+fn nary_union_typed_cross_ref_to_a_finalizing_sibling_seals() {
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
+        "RECURSIVE TYPES Trio = (\n  NEWTYPE Cc = :{d :Dd}\n  \
+         NEWTYPE Dd = :{c :(Cc | Null | Number)}\n)",
+    );
+    let types = test_run.types();
+    let (c_scc, c_size, _) = member_scc_and_fields(scope, types, "Cc");
+    let (d_scc, _, d_fields) = member_scc_and_fields(scope, types, "Dd");
+    assert_eq!(c_scc, d_scc, "Cc and Dd seal into one component");
+    assert_eq!(c_size, 2);
+    let cc_handle = scope.resolve_type("Cc").unwrap();
+    match types.node(d_fields[0].1) {
+        TypeNode::Union { members } => assert_eq!(
+            members,
+            vec![cc_handle, KType::NULL, KType::NUMBER],
+            "`c` unions Cc's absolute member handle with the two scalar members",
+        ),
+        _ => panic!("expected `c` to carry a union, got {:?}", d_fields[0].1),
+    }
+}
+
 /// The group name binds a `Group` handle over the block's declared members.
 #[test]
 fn block_group_name_binds_the_group_handle() {

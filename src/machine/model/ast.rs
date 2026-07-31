@@ -291,13 +291,6 @@ impl<'a> ExpressionPart<'a> {
         if let (ExpressionPart::RecordType(inner), KType::RECORD_TYPE) = (self, *slot) {
             return Held::Object(KObject::KExpression((**inner).clone()));
         }
-        // A `Unary`-mode operator run reduces to `[Keyword, ListLiteral]`; a `:KExpression` slot
-        // captures the list literal raw as a one-per-part `KExpression`, so the receiving builtin
-        // walks the operand parts itself rather than seeing an eager-evaluated list value.
-        if let (ExpressionPart::ListLiteral(items), KType::KEXPRESSION) = (self, *slot) {
-            let parts = items.iter().cloned().map(Spanned::bare).collect();
-            return Held::Object(KObject::KExpression(KExpression::new(parts)));
-        }
         Held::Object(self.resolve(scope.brand()))
     }
 

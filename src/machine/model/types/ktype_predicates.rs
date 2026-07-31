@@ -486,14 +486,10 @@ impl KType {
             TypeNode::KFunction { .. } => false,
             TypeNode::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             // A `:KExpression` slot captures a parenthesized expression raw, and a `#(...)` quote —
-            // whose body is already data — with it. It also captures a bare list literal raw, the
-            // shape a `Unary`-mode operator run reduces to (`[Keyword, ListLiteral]`), so the
-            // receiving builtin owns the operand run.
+            // whose body is already data — with it.
             TypeNode::KExpression => matches!(
                 part,
-                ExpressionPart::Expression(_)
-                    | ExpressionPart::QuotedExpression(_)
-                    | ExpressionPart::ListLiteral(_)
+                ExpressionPart::Expression(_) | ExpressionPart::QuotedExpression(_)
             ),
             TypeNode::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
             TypeNode::RecordType => matches!(part, ExpressionPart::RecordType(_)),

@@ -147,7 +147,7 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
     assert_eq!(
         list_numbers(test_run.run_one(parse_one("gather.named")), &types),
         vec![1.0, 2.0, 3.0],
-        "a named operand of a run is an element expression, not an interned symbol",
+        "a named operand of a run resolves against scope, not as an interned symbol",
     );
     assert_eq!(
         list_numbers(test_run.run_one(parse_one("gather.chained")), &types),
