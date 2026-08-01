@@ -1,18 +1,19 @@
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{run_root_storage, FrameStorageExt};
+use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
 use crate::machine::execute::dispatch::{
     producer_disposition, resolve_name_part, ProducerDisposition,
 };
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
 use crate::machine::BindingIndex;
 use crate::machine::NameOutcome;
 use crate::source::Spanned;
 
 #[test]
 fn resolve_name_part_identifier_resolved() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let bound = region.brand().alloc_object(KObject::Number(7.0));
     scope
@@ -23,7 +24,7 @@ fn resolve_name_part_identifier_resolved() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let part = ExpressionPart::Identifier("x".to_string());
+    let part = ExpressionPart::Identifier("x");
     match resolve_name_part(
         scope,
         &part,
@@ -41,10 +42,11 @@ fn resolve_name_part_identifier_resolved() {
 
 #[test]
 fn resolve_name_part_type_resolved() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".to_string()));
+    let part = ExpressionPart::Type(TypeIdentifier::leaf("Number"));
     match resolve_name_part(
         scope,
         &part,
@@ -68,11 +70,17 @@ fn resolve_name_part_type_resolved() {
 
 #[test]
 fn resolve_name_part_parked() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let producer = test_run.runtime.dispatch_in_scope(
-        KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_".into()))]),
+        WorkingExpression::new(
+            scope.brand(),
+            vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Identifier(
+                "_",
+            )))],
+        ),
         scope,
     );
     scope
@@ -84,7 +92,7 @@ fn resolve_name_part_parked() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let part = ExpressionPart::Identifier("fwd".to_string());
+    let part = ExpressionPart::Identifier("fwd");
     match resolve_name_part(
         scope,
         &part,
@@ -99,10 +107,11 @@ fn resolve_name_part_parked() {
 
 #[test]
 fn resolve_name_part_unbound() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let part = ExpressionPart::Identifier("missing".to_string());
+    let part = ExpressionPart::Identifier("missing");
     match resolve_name_part(
         scope,
         &part,
@@ -119,13 +128,17 @@ fn resolve_name_part_unbound() {
 /// cycle arm `resolve_name_part` no longer carries (it screens consumer-less) lives here.
 #[test]
 fn producer_disposition_self_park_is_cycle() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let slot = test_run.runtime.dispatch_in_scope(
-        KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
-            "self_ref".into(),
-        ))]),
+        WorkingExpression::new(
+            scope.brand(),
+            vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Identifier(
+                "self_ref",
+            )))],
+        ),
         scope,
     );
     match producer_disposition(test_run.runtime.scheduler(), slot, slot) {

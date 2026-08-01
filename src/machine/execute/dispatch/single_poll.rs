@@ -8,10 +8,10 @@
 //! closure.
 
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
+use crate::machine::model::FieldParts;
 use crate::machine::model::{Carried, KObject};
-use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
-use crate::source::Spanned;
 
 use super::super::lift::{copy_carried, seam_still_borrows, seam_verb};
 use super::super::run_loop::{dest_brand, DestHandleFamily};
@@ -31,9 +31,9 @@ use crate::scheduler::Deps;
 pub(super) fn bare_identifier<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
     s: &'b Scope<'b>,
-    name: String,
+    name: &str,
 ) -> Outcome<'step> {
-    match s.resolve_value_delivered(&name, ctx.chain_deref()) {
+    match s.resolve_value_delivered(name, ctx.chain_deref()) {
         // The bound value rides out on a carrier lifted at its binding scope, pinned by that
         // scope's own region owner — so the read names the value's reach by construction rather
         // than reconstructing it from the value.
@@ -42,18 +42,18 @@ pub(super) fn bare_identifier<'step, 'b>(
             Outcome::Done(Ok(StepCarried::born_pinned(cell.unseal(), pins)))
         }
         Some(NameLookup::Parked(producer)) => forward_to_producer(producer),
-        None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name)))),
+        None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name.to_string())))),
     }
 }
 
 pub(super) fn bare_type_leaf<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
     s: &'b Scope<'b>,
-    t: &TypeIdentifier,
+    t: TypeIdentifier<'step>,
 ) -> Outcome<'step> {
     // The leaf wants the raw resident carrier, not the sealed envelope, so it consumes the shared
     // type-channel + first-producer surface rather than the full sealing ladder.
-    match type_channel(s, t, ctx.active_chain(), ctx.types()) {
+    match type_channel(s, &t, ctx.active_chain(), ctx.types()) {
         // A resolved type leaf is carried in place under `s` (the scope it was resolved
         // against): a `KType` is a `Copy` registry handle, so the read is a plain handle copy
         // — no reach to name, no re-home, no `child_scope()` walk.
@@ -73,32 +73,27 @@ pub(super) fn bare_type_leaf<'step, 'b>(
             // value), so on wake `resume` re-resolves the leaf through the now-sealed memo rather
             // than lifting the producer's value. No spliced expression to render, so carrier is
             // `None`.
-            ProducerStanding::Park => {
-                let leaf = t.clone();
-                park_resume(
-                    vec![producer],
-                    None,
-                    Box::new(move |ctx, _idx| {
-                        ctx.with_current_scope(|s| bare_type_leaf(ctx, s, &leaf))
-                    }),
-                )
-            }
+            ProducerStanding::Park => park_resume(
+                vec![producer],
+                None,
+                Box::new(move |ctx, _idx| ctx.with_current_scope(|s| bare_type_leaf(ctx, s, t))),
+            ),
         },
     }
 }
 
 pub(super) fn sigiled_type_expr<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: KExpression<'step>,
+    expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    let inner = match expr.parts.into_iter().next() {
-        Some(Spanned {
-            value: ExpressionPart::SigiledTypeExpr(boxed),
-            ..
-        }) => *boxed,
+    let inner = match expr.parts.first().map(|part| part.value) {
+        Some(WorkingPart::Ast(ExpressionPart::SigiledTypeExpr(inner))) => *inner,
         _ => unreachable!("SigiledTypeExpr shape implies single SigiledTypeExpr part"),
     };
-    become_dispatch(ctx, inner)
+    become_dispatch(
+        ctx,
+        WorkingExpression::from_ast(ctx.current_scope().brand(), inner),
+    )
 }
 
 /// `:{x :Number, y :Str}` — a single-part record-type sigil. Folds the field list straight
@@ -107,13 +102,13 @@ pub(super) fn sigiled_type_expr<'step>(
 /// builtin is involved — the record type is structural.
 pub(super) fn record_type<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: KExpression<'step>,
+    expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    let fields = match expr.parts.into_iter().next() {
-        Some(Spanned {
-            value: ExpressionPart::RecordType(boxed),
-            ..
-        }) => *boxed,
+    let fields = match expr.parts.first().map(|part| part.value) {
+        Some(WorkingPart::Ast(ExpressionPart::RecordType(fields))) => FieldParts::of(fields),
+        // A body whose co-declared references the declarator already threaded — same field list,
+        // read through the part family that can hold a resolved sibling handle.
+        Some(WorkingPart::RecordType(fields)) => FieldParts::threaded(fields),
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
     let chain = ctx.active_chain();
@@ -127,19 +122,18 @@ pub(super) fn record_type<'step>(
 /// the Keyworded path would otherwise route through.
 pub(super) fn literal_pass_through<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: KExpression<'step>,
+    expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let only = expr
         .parts
-        .into_iter()
-        .next()
+        .first()
         .expect("LiteralPassThrough shape implies one part");
     match only.value {
         // A literal is region-pure — every borrow it carries points into this scope's own frame, a
         // string literal's bumped bytes included — so the `KObject` is built inside a zero-dep fold,
         // born co-located with that frame as its sole reach. It comes from `expr`, not a scope
         // resolve, so it stays on the cart region.
-        ExpressionPart::Literal(lit) => {
+        WorkingPart::Ast(ExpressionPart::Literal(lit)) => {
             let frame = ctx.dest_frame();
             let carrier = KoanRegion::fold_witnessed(frame, move |brand| {
                 Carried::Object(brand.alloc_object_folded(lit.to_kobject(*brand)))
@@ -149,30 +143,36 @@ pub(super) fn literal_pass_through<'step>(
         // A spliced cell already *is* the producer's own carrier — recover it directly with `unseal`
         // rather than re-wrapping the read-back value under a freshly-asserted witness. Strictly
         // better witnessing: the value arrives with the exact reach its producer named.
-        ExpressionPart::Spliced { cell } => {
-            // The spliced cell is the producer's own delivery envelope; recover its whole coverage
-            // — the producer's own region among them — before unsealing, so the recovered carrier's
-            // reach is threaded, not re-derived.
-            let coverage = cell.coverage().clone();
-            Outcome::Done(Ok(StepCarried::born_pinned(
-                cell.into_cell().unseal(),
-                coverage,
-            )))
+        WorkingPart::Spliced { cell } => {
+            // Lift the resting cell back into its producer's own delivery envelope under the step's
+            // coverage: the whole claim — the producer's own region among its members — is re-owned
+            // there, so the recovered carrier's reach is threaded, not re-derived.
+            let (recovered, coverage) = ctx.lift_spliced(&cell).into_parts();
+            Outcome::Done(Ok(StepCarried::born_pinned(recovered.unseal(), coverage)))
         }
         // A quote is its body as data: seal the `KObject::KExpression` into this scope's region
-        // through the **checked** door. `KExpression<'a>` is invariant with no `'static` rebuild,
-        // so the family audit — which gates a `KExpression` by `is_splice_free` — runs as an
-        // always-on loud gate, and a spliced cell surfaces as a structured error rather than an
-        // assert. Parse output is splice-free, so the gate passes for every source quote.
-        ExpressionPart::QuotedExpression(body) => Outcome::Done(
+        // through the **checked** door. The value is invariant in its region lifetime with no
+        // `'static` rebuild, so the family audit stays the way in.
+        WorkingPart::Ast(ExpressionPart::QuotedExpression(body)) => Outcome::Done(
             ctx.current_scope()
                 .brand()
                 .alloc_object_witnessed_checked(KObject::KExpression(*body), ctx.types()),
         ),
-        ExpressionPart::Expression(boxed) => become_dispatch(ctx, *boxed),
-        ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),
-        ExpressionPart::DictLiteral(pairs) => park_on_literal(DepRequest::DictLit(pairs)),
-        ExpressionPart::RecordLiteral(fields) => park_on_literal(DepRequest::RecordLit(fields)),
+        WorkingPart::Ast(ExpressionPart::Expression(inner)) => become_dispatch(
+            ctx,
+            WorkingExpression::from_ast(ctx.current_scope().brand(), *inner),
+        ),
+        // A node the scheduler synthesized dispatches in place — it is already working form.
+        WorkingPart::Expression(inner) => become_dispatch(ctx, *inner),
+        WorkingPart::Ast(ExpressionPart::ListLiteral(items)) => {
+            park_on_literal(DepRequest::ListLit(items))
+        }
+        WorkingPart::Ast(ExpressionPart::DictLiteral(pairs)) => {
+            park_on_literal(DepRequest::DictLit(pairs))
+        }
+        WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)) => {
+            park_on_literal(DepRequest::RecordLit(fields))
+        }
         _ => unreachable!("LiteralPassThrough classifier only routes Literal/Spliced/Expression/ListLiteral/DictLiteral/RecordLiteral"),
     }
 }
@@ -222,10 +222,10 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
 /// with no producer and no binding is `UnboundName`.
 pub(super) fn type_call<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: KExpression<'step>,
+    expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    let head_t = match &expr.parts[0].value {
-        ExpressionPart::Type(t) => t.clone(),
+    let head_t = match expr.parts[0].value {
+        WorkingPart::Ast(ExpressionPart::Type(t)) => t,
         _ => unreachable!("TypeCall shape implies leaf Type head"),
     };
     let chain = ctx.chain_deref();

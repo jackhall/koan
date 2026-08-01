@@ -8,8 +8,8 @@ mod functor;
 use crate::builtins::test_support::{binds_module, parse_one, TestRun};
 use crate::machine::model::Held;
 use crate::machine::model::{KObject, TypeRegistry};
-use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
+use crate::machine::{program_storage, run_root_storage};
 
 /// The numbers of a `KObject::List` — the member bodies below return one of their two list
 /// operands, so association is observable in which list comes back.
@@ -39,8 +39,9 @@ const LISTS: &str = "LET xs = [1]\nLET ys = [2]\nLET zs = [3]\n";
 /// = `xs - zs` = `zs`. Both members run: neither one alone could produce `zs`.
 #[test]
 fn group_mixed_run_reduces_fold_left_inside_the_body_and_through_using() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let types = test_run.types.clone();
     test_run.run(&format!(
         "{LISTS}\
@@ -51,12 +52,15 @@ fn group_mixed_run_reduces_fold_left_inside_the_body_and_through_using() {
          LET outside = (USING vec_ops SCOPE (xs + ys - zs))",
     ));
     assert_eq!(
-        list_numbers(test_run.run_one(parse_one("vec_ops.inside")), &types),
+        list_numbers(
+            test_run.run_one(parse_one(&program, "vec_ops.inside")),
+            &types
+        ),
         vec![3.0],
         "the mixed run reduces fold-left through both member bodies inside the group body",
     );
     assert_eq!(
-        list_numbers(test_run.run_one(parse_one("outside")), &types),
+        list_numbers(test_run.run_one(parse_one(&program, "outside")), &types),
         vec![3.0],
         "a USING window surfaces the group's registry entries alongside its operator bodies",
     );
@@ -67,8 +71,9 @@ fn group_mixed_run_reduces_fold_left_inside_the_body_and_through_using() {
 /// and the group's own record overrides it for the operand types the group declares.
 #[test]
 fn group_fold_right_nests_right_associated() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let types = test_run.types.clone();
     test_run.run(&format!(
         "{LISTS}\
@@ -78,7 +83,10 @@ fn group_fold_right_nests_right_associated() {
            (LET inside = (xs + ys - zs)))",
     ));
     assert_eq!(
-        list_numbers(test_run.run_one(parse_one("vec_ops.inside")), &types),
+        list_numbers(
+            test_run.run_one(parse_one(&program, "vec_ops.inside")),
+            &types
+        ),
         vec![1.0],
         "a fold-right run nests `xs + (ys - zs)`, which returns `xs`",
     );
@@ -90,8 +98,9 @@ fn group_fold_right_nests_right_associated() {
 /// whether the whole run is ordered.
 #[test]
 fn pairwise_group_folds_heterogeneous_pairs_through_the_combiner() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "GROUP num_compare PAIRWISE FOLD #(BOTH) LEFT = (\
            (OP #(BOTH) OVER Bool = (left AND right))\
@@ -101,11 +110,11 @@ fn pairwise_group_folds_heterogeneous_pairs_through_the_combiner() {
            (LET unordered = (3 ≺ 2 ≼ 3)))",
     );
     assert!(
-        matches!(test_run.run_one(parse_one("num_compare.ordered")), KObject::Bool(b) if *b),
+        matches!(test_run.run_one(parse_one(&program, "num_compare.ordered")), KObject::Bool(b) if *b),
         "1 ≺ 2 and 2 ≼ 3 both hold, so the combiner folds them to true",
     );
     assert!(
-        matches!(test_run.run_one(parse_one("num_compare.unordered")), KObject::Bool(b) if !*b),
+        matches!(test_run.run_one(parse_one(&program, "num_compare.unordered")), KObject::Bool(b) if !*b),
         "3 ≺ 2 fails, so the combiner folds the pair results to false",
     );
 }
@@ -116,15 +125,16 @@ fn pairwise_group_folds_heterogeneous_pairs_through_the_combiner() {
 #[test]
 fn pairwise_group_folds_pair_results_in_the_declared_direction() {
     for (direction, expected) in [("LEFT", 8.0), ("RIGHT", 10.0)] {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run(&format!(
             "GROUP tally PAIRWISE FOLD #(⊖) {direction} = (\
                (OP #(%) OVER Number = (left + right))\
                (OP #(⊖) OVER Number = (left - right))\
                (LET folded = (10 % 4 % 1 % 0)))",
         ));
-        let result = test_run.run_one(parse_one("tally.folded"));
+        let result = test_run.run_one(parse_one(&program, "tally.folded"));
         assert!(
             matches!(result, KObject::Number(n) if *n == expected),
             "a {direction} fold of the pair results must give {expected}; got {}",
@@ -138,8 +148,9 @@ fn pairwise_group_folds_pair_results_in_the_declared_direction() {
 /// through `⊖` to `-2`) leave exactly one line of output.
 #[test]
 fn pairwise_group_evaluates_a_shared_operand_once() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     test_run.run(
         "FN (LOUD x :Number) -> Number = ((PRINT x) (x))\n\
          GROUP tally PAIRWISE FOLD #(⊖) LEFT = (\
@@ -148,7 +159,7 @@ fn pairwise_group_evaluates_a_shared_operand_once() {
            (LET once = (1 % (LOUD 2) % 3)))",
     );
     assert!(
-        matches!(test_run.run_one(parse_one("tally.once")), KObject::Number(n) if *n == -2.0),
+        matches!(test_run.run_one(parse_one(&program, "tally.once")), KObject::Number(n) if *n == -2.0),
         "the pairs are 1 + 2 = 3 and 2 + 3 = 5, folded through `⊖` to 3 - 5 = -2",
     );
     let bytes = captured.borrow().clone();
@@ -164,8 +175,9 @@ fn pairwise_group_evaluates_a_shared_operand_once() {
 /// bind as members of the group's module value like any other module body statement.
 #[test]
 fn group_body_holds_ordinary_module_statements() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "GROUP shifts FOLD LEFT = (\
            (LET bump = 10)\
@@ -173,13 +185,13 @@ fn group_body_holds_ordinary_module_statements() {
            (LET total = (1 ⊕ 2 ⊕ 3)))",
     );
     assert!(
-        matches!(test_run.run_one(parse_one("shifts.bump")), KObject::Number(n) if *n == 10.0),
+        matches!(test_run.run_one(parse_one(&program, "shifts.bump")), KObject::Number(n) if *n == 10.0),
         "a LET in a group body binds a member of the group's module value",
     );
     // fold-left: (1 ⊕ 2) = 13, (13 ⊕ 3) = 26 — the body reads its sibling `bump` through the scope
     // it captures, exactly as a module-level `OP` does.
     assert!(
-        matches!(test_run.run_one(parse_one("shifts.total")), KObject::Number(n) if *n == 26.0),
+        matches!(test_run.run_one(parse_one(&program, "shifts.total")), KObject::Number(n) if *n == 26.0),
     );
 }
 
@@ -187,10 +199,12 @@ fn group_body_holds_ordinary_module_statements() {
 /// refuses it before the group is allocated.
 #[test]
 fn unary_op_in_a_group_body_errors() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let error = test_run.run_one_err(parse_one(
+        &program,
         "GROUP gather FOLD LEFT = (\
            (UNARY OP #(~) OVER Number -> :(LIST OF Number) = (operands)))",
     ));
@@ -209,10 +223,12 @@ fn unary_op_in_a_group_body_errors() {
 /// against its group context, and the failing body statement short-circuits the group's finalize.
 #[test]
 fn heterogeneous_member_in_a_fold_group_errors() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let error = test_run.run_one_err(parse_one(
+        &program,
         "GROUP bad_fold FOLD LEFT = (\
            (OP #(≺) OVER Number -> Bool = (left < right))\
            (OP #(≼) OVER Number -> Bool = (left <= right)))",
@@ -230,9 +246,10 @@ fn heterogeneous_member_in_a_fold_group_errors() {
 /// A group's members come from its body: a body declaring no operator declares no group.
 #[test]
 fn empty_group_errors() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
-    let error = test_run.run_one_err(parse_one("GROUP empty FOLD LEFT = (LET x = 1)"));
+    let mut test_run = TestRun::silent(&program, &region);
+    let error = test_run.run_one_err(parse_one(&program, "GROUP empty FOLD LEFT = (LET x = 1)"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains("at least one")),
         "expected the empty-group diagnostic, got {error}",
@@ -243,9 +260,11 @@ fn empty_group_errors() {
 /// respelling diagnostic MODULE's Type-named overload reports.
 #[test]
 fn type_token_group_name_errors_with_the_snake_case_respelling() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let error = test_run.run_one_err(parse_one(
+        &program,
         "GROUP VecOps FOLD LEFT = ((OP #(⊕) OVER Number = (left)))",
     ));
     assert!(

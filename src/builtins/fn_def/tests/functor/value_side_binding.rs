@@ -4,7 +4,7 @@
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::{KObject, TypeNode};
-use crate::machine::run_root_storage;
+use crate::machine::{program_storage, run_root_storage};
 
 const SETUP: &str = "SIG Ordered = (VAL compare :Number)\n\
                      MODULE int_ord = (LET compare = 7)\n\
@@ -13,8 +13,9 @@ const SETUP: &str = "SIG Ordered = (VAL compare :Number)\n\
 
 #[test]
 fn module_returning_fn_binds_value_side() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(SETUP);
 
@@ -28,8 +29,9 @@ fn module_returning_fn_binds_value_side() {
 
 #[test]
 fn module_returning_fn_ktype_is_kfunction() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(SETUP);
 
@@ -46,11 +48,12 @@ fn module_returning_fn_ktype_is_kfunction() {
 
 #[test]
 fn module_returning_fn_applies_by_the_keyworded_call_convention() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(SETUP);
 
-    let result = test_run.run_one(parse_one("MAKESET int_ord"));
+    let result = test_run.run_one(parse_one(&program, "MAKESET int_ord"));
     let module = match result {
         KObject::Module(module) => module,
         other => panic!(

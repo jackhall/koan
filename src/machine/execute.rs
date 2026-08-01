@@ -1,7 +1,8 @@
 //! Execute — drives parsed `KExpression`s through a work-stealing scheduler to final
-//! `KObject`s. Top-level expressions enter as `Dispatch` nodes against a run-root scope;
-//! producer/consumer slots park on each other via `pending_deps` and wake on terminal
-//! writes.
+//! `KObject`s. A statement crosses into the scheduler as a `WorkingExpression` — the dispatcher's
+//! own per-call node, whose slots the scheduler writes resolved sub-results into — and enters as a
+//! `Dispatch` node against a run-root scope; producer/consumer slots park on each other via
+//! `pending_deps` and wake on terminal writes.
 //!
 //! See [design/execution/README.md](../../design/execution/README.md) and
 //! [design/memory-model.md](../../design/memory-model.md).

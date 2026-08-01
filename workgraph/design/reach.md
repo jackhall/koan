@@ -44,7 +44,7 @@ posture and connected by *transform verbs* — never by wrapping one in another:
 | State | Reach members | Posture | Where it lives |
 |---|---|---|---|
 | [`Delivered`](../src/witnessed/delivered.rs) | **owned** — region owners in an inline set | in transit, borrows nothing | retention holds, cell slots, dep terminals, and the pull / adopt / relocate verbs |
-| [`Sealed`](../src/witnessed.rs) | **weak** — a reference to the region-hosted description | at rest, borrows nothing | embedder binding tables, parked cell slots |
+| [`Sealed`](../src/witnessed.rs) | **weak** — a reference to the region-hosted description | at rest, borrows nothing | embedder binding tables, parked cell slots, resting cells inline in embedder values |
 | [`Opened<'b>`](../src/witnessed.rs) | weak, read under a pin | in use at a step lifetime `'b` | within a step |
 
 - `Delivered` owns its members outright, so it can **walk between regions**: the
@@ -110,6 +110,19 @@ The transform verbs:
   which is sound because the retained bundle covers that region's whole life. That
   is what lets an adopted value ride a step-lifetime type position no pin borrow
   reaches.
+- **`Delivered::rest_in`, the second `Delivered → Sealed`** — hand the envelope's
+  *ownership* to a region without minting anything. The cell keeps the producer's
+  own description, still hosted in the producer's region, so the value's residence
+  is unchanged; what moves is the coverage, folded whole — home as an ordinary
+  member — into the destination region's union bundle (§ The pin bundle), where
+  the self rule drops the destination itself, so a value already resident there
+  rests for free. Where the adopt buys a resting carrier with a fresh description
+  at the destination, this buys one with a retention that outlives every read, at
+  the price of widening it to the destination region's life: what the envelope
+  released when it dropped is now held until that region dies. It is how an
+  embedder parks a resolved sub-result **inside a value it owns** — the cell is
+  `Copy` and `Drop`-free, so it can sit inline in the embedder's own bit-copy data
+  rather than in a slot the library holds.
 - **`Delivered::project`** re-families an envelope *in place* — no mint, no copy,
   no relocation. The envelope keeps its residence, coverage and witness, which stay
   correct because the projection selects a part **of** the value the envelope

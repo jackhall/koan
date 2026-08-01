@@ -29,6 +29,7 @@ use crate::machine::WriteGate;
 use std::rc::Rc;
 
 use crate::machine::core::bindings::{operator_group_ops, WriteOp};
+use crate::machine::core::RegionBrand;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
@@ -86,11 +87,11 @@ use crate::machine::OverloadSeal;
 
 /// Body-side symbol read: a quoted slot's raw `KObject::KExpression` is the quote body. Shared with
 /// `GROUP`, whose pairwise `combiner` slot names an operator the same way (`super::group_def`).
-pub(super) fn symbol_from_slot(
-    args: &Record<Held<'_>>,
+pub(super) fn symbol_from_slot<'a>(
+    args: &Record<Held<'a>>,
     builtin: &str,
     slot: &str,
-) -> Result<String, KError> {
+) -> Result<&'a str, KError> {
     let quoted = require_kexpression(args, builtin, slot)?;
     symbol_from_quote_body(&quoted)
 }
@@ -100,9 +101,9 @@ pub(super) fn symbol_from_slot(
 /// A type slot's state across the (possible) dep-finish boundary: resolved outright, parked on a
 /// still-finalizing type binder, or sub-dispatched as a `:(…)` expression at owned position
 /// `owned_pos`.
-enum TypeCapture {
+enum TypeCapture<'a> {
     Done(KType),
-    Park(TypeIdentifier),
+    Park(TypeIdentifier<'a>),
     Sub { owned_pos: usize },
 }
 
@@ -112,7 +113,7 @@ fn capture_type_slot<'a>(
     state: ReturnTypeState<'a>,
     parks: &mut Vec<NodeId>,
     subs: &mut Vec<KExpression<'a>>,
-) -> Result<TypeCapture, KError> {
+) -> Result<TypeCapture<'a>, KError> {
     match state {
         ReturnTypeState::Done(kt) => Ok(TypeCapture::Done(kt)),
         ReturnTypeState::Pending { te, producers } => {
@@ -150,7 +151,7 @@ fn checked_value_type(kt: KType, label: &str, types: &TypeRegistry) -> Result<KT
 
 /// The `Done` arm alone — the synchronous path, taken exactly when no slot parked or
 /// sub-dispatched.
-fn done_type(capture: TypeCapture, label: &str, types: &TypeRegistry) -> Result<KType, KError> {
+fn done_type(capture: TypeCapture<'_>, label: &str, types: &TypeRegistry) -> Result<KType, KError> {
     match capture {
         TypeCapture::Done(kt) => checked_value_type(kt, label, types),
         _ => Err(KError::new(KErrorKind::ShapeError(format!(
@@ -163,7 +164,7 @@ fn done_type(capture: TypeCapture, label: &str, types: &TypeRegistry) -> Result<
 /// sub-dispatched expression reads its terminal's type. The type is owned data, cloned out of the
 /// terminal, so it crosses into the declaring scope by value.
 fn resolve_capture<'a>(
-    capture: TypeCapture,
+    capture: TypeCapture<'a>,
     fctx: &FinishCtx<'a, '_>,
     results: &DepResults<'_, &DepTerminal<'a>>,
     label: &str,
@@ -191,12 +192,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", "body"));
     let has_result = arg_held(ctx.args, "return_type").is_some();
     let group = ctx.scope.nearest_group_context();
-    crate::try_action!(check_group_context(
-        kind,
-        has_result,
-        group.as_deref(),
-        &sym
-    ));
+    crate::try_action!(check_group_context(kind, has_result, group.as_deref(), sym));
 
     let operand_raw = crate::try_action!(extract_type_slot_raw(ctx.args, "operand", OPERAND_SLOT));
     let operand_state = crate::try_action!(classify_return_type(
@@ -255,10 +251,11 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
     }
     // Builds the structural `[park… ++ sub…]` split directly: parks first, then the subs owned in
     // declaration order — the order `capture_type_slot` recorded their positions in.
+    let brand = ctx.scope.brand();
     let mut deps = Deps::from_parks(parks);
     for expr in subs {
         deps.own(OwnedDispatch {
-            expr,
+            expr: crate::machine::model::WorkingExpression::from_ast(brand, expr),
             placement: DepPlacement::OwnScope,
         });
     }
@@ -319,7 +316,7 @@ fn check_group_context(
 /// Everything the finalize needs that does not come out of the dep results, captured whole into the
 /// dep-finish closure so the deferred and synchronous paths run the same code.
 struct OpPlan<'a> {
-    sym: String,
+    sym: &'a str,
     kind: OpKind,
     body_expr: KExpression<'a>,
     /// Inside a `GROUP` body the group owns the registry entry for every member, so the declaration
@@ -350,11 +347,11 @@ impl<'a> OpPlan<'a> {
         let mut writes: Vec<WriteOp> = Vec::new();
         let carrier = match kind {
             OpKind::Binary => {
-                let elements = vec![arg(LEFT, operand), kw(&sym), arg(RIGHT, operand)];
+                let elements = vec![arg(LEFT, operand), kw(sym), arg(RIGHT, operand)];
                 let result_type = result.unwrap_or(operand);
                 let (registered, overload) = register_body(
                     scope,
-                    &sym,
+                    sym,
                     sig(result_type, elements),
                     Body::UserDefined(body_expr),
                     bind_index,
@@ -362,9 +359,9 @@ impl<'a> OpPlan<'a> {
                 )?;
                 writes.push(overload);
                 if !in_group {
-                    let members = std::iter::once(sym.clone()).collect();
+                    let members = std::iter::once(sym.to_string()).collect();
                     let group = Rc::new(OperatorGroup::new(members, ReductionMode::FoldLeft));
-                    writes.extend(operator_group_ops(&[sym.as_str()], &group, bind_index));
+                    writes.extend(operator_group_ops(&[sym], &group, bind_index));
                 }
                 registered
             }
@@ -376,7 +373,7 @@ impl<'a> OpPlan<'a> {
                 })?;
                 let list_signature = sig(
                     result_type,
-                    vec![kw(&sym), arg(OPERANDS, types.list(operand))],
+                    vec![kw(sym), arg(OPERANDS, types.list(operand))],
                 );
                 // The binary bridge: `a ~ b` names one keyword, so it dispatches as a plain
                 // keyworded call, not an operator chain — without a two-operand body it would
@@ -384,21 +381,21 @@ impl<'a> OpPlan<'a> {
                 // takes, so both surfaces land on the one list body the user wrote.
                 let bridge_signature = sig(
                     result_type,
-                    vec![arg(LEFT, operand), kw(&sym), arg(RIGHT, operand)],
+                    vec![arg(LEFT, operand), kw(sym), arg(RIGHT, operand)],
                 );
                 // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
                 // built, so `in_group` cannot hold here; the door asserts that rather than take
                 // it on trust, since it writes the single-member group unconditionally.
                 let (registered, unary_writes) = register_unary_operator(
                     scope,
-                    &sym,
+                    sym,
                     OperatorForm {
                         signature: list_signature,
                         body: Body::UserDefined(body_expr),
                     },
                     OperatorForm {
                         signature: bridge_signature,
-                        body: Body::UserDefined(bridge_body(&sym)),
+                        body: Body::UserDefined(bridge_body(scope.brand(), sym)),
                     },
                     in_group,
                     bind_index,
@@ -521,19 +518,20 @@ fn register_body<'a>(
 /// expression element: a list literal interns a bare `Identifier` element as a symbol rather than
 /// resolving it, so the two operands ride in as element expressions (exactly as a reduced infix run
 /// carries its named operands).
-fn bridge_body<'a>(sym: &str) -> KExpression<'a> {
-    let operand = |name: &str| {
-        ExpressionPart::Expression(Box::new(KExpression::new(vec![Spanned::bare(
-            ExpressionPart::Identifier(name.to_string()),
-        )])))
+fn bridge_body<'a>(brand: RegionBrand<'a>, sym: &str) -> KExpression<'a> {
+    let sym = brand.alloc_text(sym);
+    let operand = |name: &'a str| {
+        ExpressionPart::expression(brand, vec![Spanned::bare(ExpressionPart::Identifier(name))])
     };
-    KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Keyword(sym.to_string())),
-        Spanned::bare(ExpressionPart::ListLiteral(vec![
-            operand(LEFT),
-            operand(RIGHT),
-        ])),
-    ])
+    KExpression::new(
+        brand,
+        vec![
+            Spanned::bare(ExpressionPart::Keyword(sym)),
+            Spanned::bare(ExpressionPart::ListLiteral(
+                brand.alloc_slice(&[operand(LEFT), operand(RIGHT)]),
+            )),
+        ],
+    )
 }
 
 /// Seal a finalize result as the slot's terminal — the operator function value, built witnessed in

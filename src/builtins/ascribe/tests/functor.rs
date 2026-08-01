@@ -3,14 +3,15 @@
 
 use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
 use crate::machine::model::{KObject, KType, TypeNode};
-use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
+use crate::machine::{program_storage, run_root_storage};
 use crate::parse::parse;
 
 #[test]
 fn functor_returns_a_module() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -27,8 +28,9 @@ fn functor_returns_a_module() {
 
 #[test]
 fn functor_body_reads_signature_typed_parameter() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -50,8 +52,9 @@ fn functor_body_reads_signature_typed_parameter() {
 /// require multi-statement-FN-body forward refs that don't share lexical bindings.
 #[test]
 fn functor_application_is_generative() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -77,18 +80,22 @@ fn functor_application_is_generative() {
 /// [`functor_application_is_generative`], which pins the same property on bare `scope_id`s.
 #[test]
 fn functor_application_mints_distinct_abstract_types() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let src = "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
                MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
                FN (MAKESET er :Ordered) -> Module = (er :| Ordered)\n\
                LET set_one = (MAKESET int_ord)\n\
                LET set_two = (MAKESET int_ord)";
-    let exprs = parse(src).expect("parse should succeed");
+    let exprs = parse(program.brand(), src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
+        ids.push(test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+            scope,
+        ));
     }
     test_run
         .runtime
@@ -124,8 +131,9 @@ fn functor_application_mints_distinct_abstract_types() {
 /// succeeds and produces the generated module.
 #[test]
 fn functor_admits_unascribed_module_structurally() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -153,8 +161,9 @@ fn functor_admits_unascribed_module_structurally() {
 /// finds no admitting overload and the slot terminates in `DispatchFailed`.
 #[test]
 fn functor_rejects_structurally_unsatisfying_module() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -162,9 +171,13 @@ fn functor_rejects_structurally_unsatisfying_module() {
     );
     test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     test_run.run("LET arg = no_compare");
-    let root = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("MAKESET arg"), scope);
+    let root = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one(&program, "MAKESET arg"),
+        ),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -183,8 +196,9 @@ fn functor_rejects_structurally_unsatisfying_module() {
 /// (`Ordered` vs `Hashed`); dispatch routes by the argument's satisfied sig.
 #[test]
 fn functor_overloads_dispatch_by_signature_bound_param() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -221,8 +235,9 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
 /// (opaque) view does, and the body still reads the underlying member through the view.
 #[test]
 fn transparent_ascription_satisfies_signature_bound_slot() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -255,8 +270,9 @@ fn monad_program() -> &'static str {
 /// `:(Number AS Wrap)` slot end to end.
 #[test]
 fn hk_value_slot_satisfies_after_substitution() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(monad_program());
     test_run.run("LET view = (id_monad :| Monad)");
@@ -274,10 +290,11 @@ fn hk_value_slot_satisfies_after_substitution() {
 /// `Wrapper (x)` — the per-call return check passing on an identity-wrapper value.
 #[test]
 fn pure_call_passes_return_check() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
-    let result = test_run.run_one(parse_one("id_monad.pure {x = 3.0}"));
+    let result = test_run.run_one(parse_one(&program, "id_monad.pure {x = 3.0}"));
     match result {
         KObject::Wrapped { inner, type_id } => {
             assert!(
@@ -298,8 +315,9 @@ fn pure_call_passes_return_check() {
 /// just like the lowercase-identifier and parens-wrapped forms do.
 #[test]
 fn functor_argument_bare_type_token_auto_wraps() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -323,18 +341,22 @@ fn functor_argument_bare_type_token_auto_wraps() {
 #[test]
 fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     use crate::machine::model::KKind;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let src = "NEWTYPE (Type AS Wrapper)\n\
                SIG Monad = ((TYPE (Type AS Wrap)))\n\
                MODULE int_list = ((LET Wrap = Wrapper))\n\
                LET first = (int_list :| Monad)\n\
                LET second = (int_list :| Monad)";
-    let exprs = parse(src).expect("parse should succeed");
+    let exprs = parse(program.brand(), src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
+        ids.push(test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+            scope,
+        ));
     }
     test_run
         .runtime
@@ -389,8 +411,9 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
 /// survive subsequent region churn under tree borrows.
 #[test]
 fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     // Plain `LET` plus `LET = FN` so the re-bind walk hits both the `data` replay
     // and the `functions` bucket replay.
@@ -405,7 +428,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     // scope. The original `held` must still walk through to its own pair.
     test_run.run("FN (CHURNCALL) -> Number = (1)");
     for _ in 0..20 {
-        test_run.run_one(parse_one("CHURNCALL"));
+        test_run.run_one(parse_one(&program, "CHURNCALL"));
     }
     test_run.run("LET held2 = (int_ord :| Ordered)");
 

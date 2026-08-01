@@ -12,8 +12,8 @@
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
+use crate::machine::model::KExpression;
 use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
-use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
 use crate::machine::Action;
 use crate::machine::KFunction;
@@ -308,12 +308,14 @@ pub(crate) fn fn_action<'a>(
 /// Dep order is `[park ++ rt? ++ subs]`, so the owned indices `splice_layout` and
 /// `ReturnTypeExpr` record stay stable regardless of how many producers are parked.
 pub(crate) fn defer<'a>(
+    scope: &'a Scope<'a>,
     signature_expr: KExpression<'a>,
     inputs: DeferredInputs<'a>,
     body_expr: KExpression<'a>,
     kind: FnKind,
     bind_index: BindingIndex,
 ) -> crate::machine::Action<'a> {
+    use crate::machine::model::WorkingExpression;
     use crate::machine::{Action, AwaitContinue, DepPlacement, OwnedDispatch};
     use crate::scheduler::Deps;
     let DeferredInputs {
@@ -323,14 +325,15 @@ pub(crate) fn defer<'a>(
         sub_dispatches,
         prebuilt_elements,
     } = inputs;
+    let brand = scope.brand();
     // Builds the structural split directly: parks first, then owned `[rt?, subs...]`, so the
     // return-type sub is owned index 0 and the signature subs follow. `splice_layout` records each
-    // sub's owned index for the finish.
+    // sub's owned index (and its signature part-index) for the finish.
     let mut deps = Deps::from_parks(park_producers.iter().copied());
     let mut owned_count = 0usize;
     if let Some(rt_expr) = return_type_sub {
         deps.own(OwnedDispatch {
-            expr: rt_expr,
+            expr: WorkingExpression::from_ast(brand, rt_expr),
             placement: DepPlacement::OwnScope,
         });
         owned_count += 1;
@@ -338,14 +341,14 @@ pub(crate) fn defer<'a>(
     let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
     for (slot_idx, sub_expr) in sub_dispatches {
         deps.own(OwnedDispatch {
-            expr: sub_expr,
+            expr: WorkingExpression::from_ast(brand, sub_expr),
             placement: DepPlacement::OwnScope,
         });
         splice_layout.push((slot_idx, owned_count));
         owned_count += 1;
     }
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        let mut spliced_parts = signature_expr.parts.clone();
+        let mut resolved: Vec<(usize, Carried<'a>)> = Vec::with_capacity(splice_layout.len());
         for &(slot_idx, owned_pos) in &splice_layout {
             let terminal = results.owned(owned_pos);
             if !matches!(terminal.value, Carried::Type(_)) {
@@ -355,17 +358,8 @@ pub(crate) fn defer<'a>(
                     terminal.value.ktype(fctx.types).name(fctx.types),
                 )))));
             }
-            // The resolved type slot travels as its producer's own delivery envelope — carrier and
-            // retained producer-frame owner as one unit — opened where the signature is assembled
-            // (`parse_fn_param_list` adopts it through the elaborator's scope). The early-error check
-            // above reads `terminal.value`, still delivered at the step brand; the envelope is the
-            // survival, not a relocated copy, its host keeping the type's backing retained to the
-            // adopting elaboration.
-            spliced_parts[slot_idx].value = ExpressionPart::Spliced {
-                cell: terminal.delivered.duplicate(),
-            };
+            resolved.push((slot_idx, terminal.value));
         }
-        let spliced_signature = KExpression::new(spliced_parts);
         let return_type: ReturnType<'a> = crate::try_action!(resolve_capture_at_finish(
             capture, fctx.scope, results, fctx.types
         ));
@@ -373,7 +367,12 @@ pub(crate) fn defer<'a>(
             Some(es) => es,
             None => {
                 let mut elaborator = Elaborator::new(fctx.scope);
-                match parse_fn_param_list(&spliced_signature, &mut elaborator, fctx.types) {
+                match parse_fn_param_list(
+                    &signature_expr,
+                    &mut elaborator,
+                    fctx.types,
+                    Some(&resolved),
+                ) {
                     ParamListOutcome::Done(es) => es,
                     ParamListOutcome::Err(msg) => {
                         return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))))
@@ -391,7 +390,7 @@ pub(crate) fn defer<'a>(
             fctx.scope,
             elements,
             return_type,
-            body_expr.clone(),
+            body_expr,
             kind,
             bind_index,
             fctx.types,

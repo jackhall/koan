@@ -8,12 +8,19 @@ use crate::machine::model::Held;
 use crate::machine::model::KObject;
 
 use super::run;
+use crate::machine::program_storage;
 
 #[test]
 fn interprets_let_and_print() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run("LET x = 42\nPRINT \"hello\"\n", &region, captured.clone());
+    let test_run = run(
+        &program,
+        "LET x = 42\nPRINT \"hello\"\n",
+        &region,
+        captured.clone(),
+    );
     let scope = test_run.scope;
 
     assert_eq!(captured.borrow().as_slice(), b"hello\n");
@@ -22,9 +29,11 @@ fn interprets_let_and_print() {
 
 #[test]
 fn interprets_match_via_print() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
+        &program,
         r#"PRINT (MATCH true -> :Str WITH (true -> ("yes") false -> ("no")))"#,
         &region,
         captured.clone(),
@@ -37,9 +46,11 @@ fn match_branch_resolves_outer_name() {
     // The branch body's lazy slot evaluates in the surrounding scope, so a name bound
     // before the MATCH (`greeting`) resolves through the outer chain at branch-dispatch
     // time.
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
+        &program,
         "LET greeting = \"hi\"\nPRINT (MATCH true -> :Str WITH (true -> (greeting) false -> (\"no\")))\n",
         &region,
         captured.clone(),
@@ -51,9 +62,11 @@ fn match_branch_resolves_outer_name() {
 fn match_unmatched_branch_skips_let_side_effect() {
     // The unmatched branch's body is never dispatched, so its `LET y = 1` must not
     // execute and `y` must remain unbound.
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run(
+        &program,
         "MATCH false -> :Null WITH (true -> (LET y = 1) false -> (null))\nPRINT \"after\"\n",
         &region,
         captured.clone(),
@@ -87,9 +100,10 @@ fn nested_let_in_print_argument_is_a_nested_binder_error() {
 
 #[test]
 fn let_binds_a_list_literal_of_numbers() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run("LET xs = [1 2 3]\n", &region, captured);
+    let test_run = run(&program, "LET xs = [1 2 3]\n", &region, captured);
     let scope = test_run.scope;
     match scope.lookup("xs") {
         Some(KObject::List(items, _)) => {
@@ -106,9 +120,11 @@ fn let_binds_a_list_literal_of_numbers() {
 /// empty-container rule.
 #[test]
 fn let_binds_stamped_empty_list_from_typed_fn_return() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run(
+        &program,
         "FN (EMPTY) -> :(LIST OF Number) = ([])\nLET xs = (EMPTY)\n",
         &region,
         captured,
@@ -144,9 +160,10 @@ fn let_binds_an_empty_list_literal_errors() {
 
 #[test]
 fn list_literal_with_subexpression_element_evaluates_eagerly() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run("LET xs = [1 (2 + 5) 3]\n", &region, captured);
+    let test_run = run(&program, "LET xs = [1 (2 + 5) 3]\n", &region, captured);
     let scope = test_run.scope;
     match scope.lookup("xs") {
         Some(KObject::List(items, _)) => {
@@ -176,9 +193,15 @@ fn list_literal_let_element_is_a_nested_binder_error() {
 
 #[test]
 fn multiline_list_literal_binds_correctly() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run("LET xs = [\n  1\n  2\n  3\n]\n", &region, captured);
+    let test_run = run(
+        &program,
+        "LET xs = [\n  1\n  2\n  3\n]\n",
+        &region,
+        captured,
+    );
     let scope = test_run.scope;
     match scope.lookup("xs") {
         Some(KObject::List(items, _)) => {
@@ -192,9 +215,10 @@ fn multiline_list_literal_binds_correctly() {
 
 #[test]
 fn nested_list_literal_produces_list_of_lists() {
+    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run("LET xs = [[1 2] [3 4]]\n", &region, captured);
+    let test_run = run(&program, "LET xs = [[1 2] [3 4]]\n", &region, captured);
     let scope = test_run.scope;
     match scope.lookup("xs") {
         Some(KObject::List(outer, _)) => {

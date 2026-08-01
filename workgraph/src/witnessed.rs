@@ -776,6 +776,25 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     }
 }
 
+/// A bundled carrier whose value family is a bit-copy (a thin/fat reference) and whose witness is
+/// too — the reference-only [`Carrier`], never an owned [`PinBundle`] — is itself `Copy`, so it
+/// rides inside a `Copy` embedder value (a resting cell held in an expression part) instead of
+/// forcing that value to carry `Drop` glue. It grants nothing [`Self::duplicate`] does not already:
+/// both copy the erased value and duplicate the witness, and a witness that *owns* pins is
+/// excluded by the `W: Copy` bound, so no pin is ever silently duplicated.
+///
+/// Manual rather than derived: a derive would bound `T: Copy` (the family marker, which is never
+/// `Copy`) instead of the erased value.
+impl<T: Reattachable, W: Copy> Clone for Witnessed<T, W>
+where
+    T::At<'static>: Copy,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T: Reattachable, W: Copy> Copy for Witnessed<T, W> where T::At<'static>: Copy {}
+
 /// Adapt a folded-placement relocate closure into the [`FoldToken`]-shaped closure
 /// [`Witnessed::merge_composed`] expects: mint a [`FoldedPlacement`] over the destination operand's
 /// own handle at the fold brand, then run the caller's `relocate`. The destination handle comes from
@@ -1139,6 +1158,30 @@ impl<T: Reattachable, W> Sealed<T, W> {
         &self.inner.value
     }
 }
+
+/// A seal over a bit-copy value family and a bit-copy witness — the reference-only [`Carrier`],
+/// never an owned [`PinBundle`] — is itself `Copy` and **`Drop`-free**, so a dormant carrier rests
+/// inside an embedder's own `Copy` value (a resolved sub-result at rest in an expression part)
+/// rather than making that value heap-shaped. Copying is exactly [`Self::duplicate`] — the erased
+/// value bit-copied, the witness duplicated — so it grants no capability the seal did not already
+/// have; a witness that owns pins does not meet `W: Copy`, so a pin is never silently duplicated.
+///
+/// What a copied seal does **not** carry is coverage: the witness pins nothing, so each copy still
+/// opens under an externally supplied pin ([`Self::open_with`]), and whoever holds the copies owes
+/// the storage that keeps their pointee alive ([`Delivered::rest_in`](delivered::Delivered::rest_in)
+/// is the door that lodges it).
+///
+/// Manual rather than derived: a derive would bound `T: Copy` (the family marker, which is never
+/// `Copy`) instead of the erased value.
+impl<T: Reattachable, W: Copy> Clone for Sealed<T, W>
+where
+    T::At<'static>: Copy,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T: Reattachable, W: Copy> Copy for Sealed<T, W> where T::At<'static>: Copy {}
 
 /// The bundled-witness re-anchors — gated on `W: Witness`, so they exist only for a witness that
 /// genuinely pins. A reference-only carrier witness has no bundled coverage: its seal opens

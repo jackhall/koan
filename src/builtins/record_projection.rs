@@ -35,15 +35,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
     // A computed field list is out of scope: each part must be a bare identifier.
     let mut names: Vec<String> = Vec::with_capacity(fields_expr.parts.len());
-    for part in &fields_expr.parts {
-        match &part.value {
+    for part in fields_expr.parts {
+        match part.value {
             ExpressionPart::Identifier(name) => {
                 if names.iter().any(|n| n == name) {
                     return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                         "FROM field list has duplicate field `{name}`",
                     )))));
                 }
-                names.push(name.clone());
+                names.push(name.to_string());
             }
             other => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -163,13 +163,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 mod tests {
     use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::model::{KObject, KType, TypeNode};
+    use crate::machine::program_storage;
     use crate::machine::run_root_storage;
 
     #[test]
     fn from_narrows_carried_type_keeping_all_fields_present() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let result = test_run.run_one(parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let result = test_run.run_one(parse_one(&program, "(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
             KObject::Record(substrate, record_type) => {
                 assert_eq!(substrate.len(), 3);
@@ -192,9 +194,10 @@ mod tests {
     /// admits it and no second overload is needed.
     #[test]
     fn from_single_field_projection() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let result = test_run.run_one(parse_one("(x) FROM {x = 1, y = 2}"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let result = test_run.run_one(parse_one(&program, "(x) FROM {x = 1, y = 2}"));
         match result {
             KObject::Record(substrate, record_type) => {
                 assert_eq!(substrate.len(), 2);
@@ -212,9 +215,10 @@ mod tests {
 
     #[test]
     fn from_empty_field_list_yields_empty_record() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let result = test_run.run_one(parse_one("() FROM {x = 1}"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let result = test_run.run_one(parse_one(&program, "() FROM {x = 1}"));
         match result {
             KObject::Record(substrate, record_type) => {
                 assert_eq!(substrate.len(), 1);
@@ -230,9 +234,10 @@ mod tests {
 
     #[test]
     fn from_unknown_field_errors() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let err = test_run.run_one_err(parse_one("(x w) FROM {x = 1}"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run.run_one_err(parse_one(&program, "(x w) FROM {x = 1}"));
         let msg = format!("{err}");
         assert!(
             msg.contains("no field `w`"),
@@ -242,9 +247,10 @@ mod tests {
 
     #[test]
     fn from_duplicate_field_errors() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let err = test_run.run_one_err(parse_one("(x x) FROM {x = 1}"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run.run_one_err(parse_one(&program, "(x x) FROM {x = 1}"));
         let msg = format!("{err}");
         assert!(
             msg.contains("duplicate field `x`"),
@@ -261,12 +267,17 @@ mod tests {
     fn from_non_record_operand_is_dispatch_non_match() {
         use crate::machine::KErrorKind;
 
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let root = test_run
-            .runtime
-            .dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
+        let root = test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one(&program, "(x y) FROM 5"),
+            ),
+            scope,
+        );
         test_run
             .runtime
             .execute()
@@ -288,8 +299,9 @@ mod tests {
     fn from_breaks_ambiguous_record_dispatch_tie() {
         use crate::machine::KErrorKind;
 
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run(
             "FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")\n\
@@ -298,9 +310,13 @@ mod tests {
         );
 
         // Bare call ties: the full `{x, y, z}` carrier fills both incomparable arms.
-        let root = test_run
-            .runtime
-            .dispatch_in_scope(parse_one("PICK r"), scope);
+        let root = test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one(&program, "PICK r"),
+            ),
+            scope,
+        );
         test_run
             .runtime
             .execute()
@@ -315,7 +331,7 @@ mod tests {
         );
 
         // `(x y) FROM r` re-tags the carrier to `{x, y}`; only `:{x,y}` admits.
-        let picked = test_run.run_one(parse_one("PICK ((x y) FROM r)"));
+        let picked = test_run.run_one(parse_one(&program, "PICK ((x y) FROM r)"));
         match picked {
             KObject::KString(s) => assert_eq!(*s, "xy"),
             other => panic!("expected \"xy\", got {:?}", other.ktype()),

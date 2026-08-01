@@ -11,11 +11,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::DepPlacement;
-use crate::machine::core::{FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope};
+use crate::machine::core::{
+    FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand, Scope,
+};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject, Record};
-use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{
     CarrierWitness, DeliveredCarried, FrameCoverage, KError, KErrorKind, KoanRegion,
@@ -78,17 +80,14 @@ reattachable!(RecordFieldsFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<(
 /// value — the tag/value-type checks and the witnessed `KObject::Tagged` build live in
 /// [`finish_witnessed`], which folds the value carrier's reach onto the result.
 pub(in crate::machine::execute) fn prepare_args<'step>(
-    args_parts: Vec<Spanned<ExpressionPart<'step>>>,
+    args_parts: &[Spanned<ExpressionPart<'step>>],
 ) -> Result<(String, ExpressionPart<'step>), KError> {
-    if args_parts.len() != 2 {
+    let [tag_part, value_part] = args_parts else {
         return Err(KError::new(KErrorKind::ArityMismatch {
             expected: 2,
             got: args_parts.len(),
         }));
-    }
-    let mut iter = args_parts.into_iter();
-    let tag_part = iter.next().unwrap();
-    let value_part = iter.next().unwrap();
+    };
     let tag = match tag_part.value {
         ExpressionPart::Type(t) => t.render(),
         other => {
@@ -111,40 +110,57 @@ mod tests;
 /// dispatches its lone value); a multi-part value (`Bar (Foo 3.0)`) wraps into one `Expression`
 /// so `launch` dispatches it as one unit.
 fn single_value_cell<'step>(
-    mut value_parts: Vec<Spanned<ExpressionPart<'step>>>,
+    brand: RegionBrand<'step>,
+    mut value_parts: &[Spanned<ExpressionPart<'step>>],
 ) -> Result<ExpressionPart<'step>, KError> {
     if let [Spanned {
         value: ExpressionPart::Expression(inner),
         ..
-    }] = value_parts.as_slice()
+    }] = value_parts
     {
-        value_parts = inner.parts.clone();
+        value_parts = inner.parts;
     }
-    if value_parts.is_empty() {
-        return Err(KError::new(KErrorKind::ArityMismatch {
+    match value_parts {
+        [] => Err(KError::new(KErrorKind::ArityMismatch {
             expected: 1,
             got: 0,
-        }));
+        })),
+        [only] => Ok(only.value),
+        many => Ok(ExpressionPart::expression(brand, many.to_vec())),
     }
-    Ok(if value_parts.len() == 1 {
-        value_parts.into_iter().next().expect("len == 1").value
-    } else {
-        ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
-    })
+}
+
+/// The construction body's parts as parser parts. Construction reaches its value expression through
+/// `expr.parts[1..]`, which is raw syntax on every lane that gets here — a resolved head never
+/// splices into the trailing slots.
+fn value_parts_of<'step>(
+    parts: &[Spanned<WorkingPart<'step>>],
+) -> Vec<Spanned<ExpressionPart<'step>>> {
+    parts
+        .iter()
+        .map(|part| Spanned {
+            value: part
+                .value
+                .as_ast()
+                .expect("a construction body is parsed syntax"),
+            span: part.span,
+        })
+        .collect()
 }
 
 /// Construct a newtype value (record-repr or scalar). `value_parts` is the whole value
 /// expression (`expr.parts[1..]`), collapsed to one value cell by [`single_value_cell`]; the
 /// finish type-checks it against the member's `repr` and wraps with `identity`.
 pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
+    brand: RegionBrand<'step>,
     identity: KType,
-    value_parts: Vec<Spanned<ExpressionPart<'step>>>,
+    value_parts: &[Spanned<WorkingPart<'step>>],
 ) -> Outcome<'step> {
-    let value_cell = match single_value_cell(value_parts) {
+    let value_cell = match single_value_cell(brand, &value_parts_of(value_parts)) {
         Ok(cell) => cell,
         Err(e) => return Outcome::Done(Err(e)),
     };
-    launch(vec![value_cell], CtorKind::NewType { identity })
+    launch(brand, vec![value_cell], CtorKind::NewType { identity })
 }
 
 /// Direct-construct a record-repr newtype from a named record-literal body. Launches one
@@ -152,13 +168,17 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
 /// binds synchronously; a chained construction like `(Boxed (p))` depends on that. The finish
 /// builds the `KObject::Record` and wraps it.
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
+    brand: RegionBrand<'step>,
     identity: KType,
-    record_fields: Vec<(String, ExpressionPart<'step>)>,
+    record_fields: &[(&'step str, ExpressionPart<'step>)],
 ) -> Outcome<'step> {
-    let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
-    let value_parts: Vec<ExpressionPart<'step>> =
-        record_fields.into_iter().map(|(_, p)| p).collect();
+    let field_names: Vec<String> = record_fields
+        .iter()
+        .map(|(n, _)| (*n).to_string())
+        .collect();
+    let value_parts: Vec<ExpressionPart<'step>> = record_fields.iter().map(|(_, p)| *p).collect();
     launch(
+        brand,
         value_parts,
         CtorKind::RecordNewType {
             identity,
@@ -244,29 +264,35 @@ fn check_record_newtype_repr(
 /// arm) stamps the value's type as the applied arg and wraps it with a
 /// `ConstructorApply(<ctor SetMember>, {<param> = arg})` identity.
 pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
+    brand: RegionBrand<'step>,
     constructor: KType,
-    value_parts: Vec<Spanned<ExpressionPart<'step>>>,
+    value_parts: &[Spanned<ExpressionPart<'step>>],
 ) -> Outcome<'step> {
-    let value_cell = match single_value_cell(value_parts) {
+    let value_cell = match single_value_cell(brand, value_parts) {
         Ok(cell) => cell,
         Err(e) => return Outcome::Done(Err(e)),
     };
-    launch(vec![value_cell], CtorKind::ApplyConstructor { constructor })
+    launch(
+        brand,
+        vec![value_cell],
+        CtorKind::ApplyConstructor { constructor },
+    )
 }
 
 /// Direct-construct a tagged-union value from the variant schema of its sealed member. Shared by
 /// named UNIONs (`Tagged` kind) and the builtin `Result` constructor (`TypeConstructor` kind) —
 /// both name a sealed member by its handle.
 pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
+    brand: RegionBrand<'step>,
     member: KType,
     schema: Rc<HashMap<String, KType>>,
-    args_parts: Vec<Spanned<ExpressionPart<'step>>>,
+    args_parts: &[Spanned<ExpressionPart<'step>>],
 ) -> Outcome<'step> {
     let (tag, value_part) = match prepare_args(args_parts) {
         Ok(v) => v,
         Err(e) => return Outcome::Done(Err(e)),
     };
-    construct_tagged(member, schema, tag, value_part)
+    construct_tagged(brand, member, schema, tag, value_part)
 }
 
 /// Construct a tagged value from an already-split `(tag, value)` pair — the core both the
@@ -274,12 +300,14 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
 /// variant path ([`apply_union_construct`](super::apply_callable)) share. The finish type-checks
 /// the value against `schema[tag]` and builds `KObject::Tagged { tag, value, identity: member }`.
 pub(in crate::machine::execute) fn construct_tagged<'step>(
+    brand: RegionBrand<'step>,
     member: KType,
     schema: Rc<HashMap<String, KType>>,
     tag: String,
     value_part: ExpressionPart<'step>,
 ) -> Outcome<'step> {
     launch(
+        brand,
         vec![value_part],
         CtorKind::Tagged {
             schema,
@@ -295,7 +323,11 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
 /// the slot always parks as a [`Outcome::ParkThenContinue`]. The finish folds the resolved value
 /// carriers into the wrapped value **inside the witness closure** ([`finish_witnessed`]) so it names
 /// every region it reaches; dep errors propagate frameless.
-fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind) -> Outcome<'step> {
+fn launch<'step>(
+    brand: RegionBrand<'step>,
+    value_parts: Vec<ExpressionPart<'step>>,
+    kind: CtorKind,
+) -> Outcome<'step> {
     debug_assert!(
         !value_parts.is_empty(),
         "launch requires at least one value part (arity-zero is rejected upstream)"
@@ -303,7 +335,7 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind) -> Out
     let deps: Vec<DepRequest<'step>> = value_parts
         .into_iter()
         .map(|part| DepRequest::Dispatch {
-            expr: KExpression::new(vec![Spanned::bare(part)]),
+            expr: WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]),
             placement: DepPlacement::OwnScope,
             binder_covered: false,
         })

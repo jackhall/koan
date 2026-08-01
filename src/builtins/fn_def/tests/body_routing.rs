@@ -3,15 +3,16 @@
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, TestRun};
 use crate::machine::model::{KType, ReturnType};
-use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
+use crate::machine::{program_storage, run_root_storage};
 
 /// Parens-form return type carrying a bare lowercase identifier matching a parameter
 /// name must defer.
 #[test]
 fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (USE xs :Number) -> :(somefn xs) = (xs)");
     let f = lookup_fn(scope, "USE");
@@ -25,8 +26,9 @@ fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
 /// must defer.
 #[test]
 fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (USE xs :Number) -> :([xs]) = (xs)");
     let f = lookup_fn(scope, "USE");
@@ -40,8 +42,9 @@ fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
 /// in a value position must defer.
 #[test]
 fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (USE xs :Number) -> :({\"k\": xs}) = (xs)");
     let f = lookup_fn(scope, "USE");
@@ -57,8 +60,9 @@ fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
 /// into `ReturnType::Deferred(_)` once the SIG terminalizes.
 #[test]
 fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -78,8 +82,9 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
 /// of the owned dep results by its recorded position.
 #[test]
 fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "FN (USE xs :MyT) -> :(LIST OF Number) = ([1])\n\
@@ -96,8 +101,9 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
 /// and routes through `ReturnTypeCapture::Unresolved(name)` (`make_capture`).
 #[test]
 fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "FN (NOP) -> MyT = (1)\n\
@@ -115,11 +121,18 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
 /// rejection to the right signature slot rather than an opaque elaborator failure.
 #[test]
 fn fn_def_parens_param_type_non_type_value_errors() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(parse_one("FN (USE xs (1)) -> Null = (xs)"), scope);
+    let id = runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one(&program, "FN (USE xs (1)) -> Null = (xs)"),
+        ),
+        scope,
+    );
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -139,11 +152,18 @@ fn fn_def_parens_param_type_non_type_value_errors() {
 /// `ReturnTypeCapture::ReturnTypeExpr` arm of the dep-finish).
 #[test]
 fn fn_def_sigil_return_type_non_type_value_errors() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(parse_one("FN (NOP) -> :(1) = (1)"), scope);
+    let id = runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one(&program, "FN (NOP) -> :(1) = (1)"),
+        ),
+        scope,
+    );
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");

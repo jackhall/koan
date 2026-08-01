@@ -8,8 +8,9 @@
 use std::rc::Rc;
 
 use crate::machine::core::bindings::WriteGate;
-use crate::machine::model::KExpression;
+use crate::machine::core::RegionBrand;
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::Scope;
 use crate::machine::{split_body_statements, ReturnContract};
 use crate::machine::{Action, BlockEntry, FramePlacement, TailContract};
@@ -48,8 +49,11 @@ pub(crate) enum BlockScope<'a> {
 pub(crate) type BlockSeed<'a> =
     Box<dyn for<'b> FnOnce(&Scope<'b>, &TypeRegistry, &mut WriteGate) + 'a>;
 
-/// Run a block and yield its last statement as the tail — the shared constructor.
+/// Run a block and yield its last statement as the tail — the shared constructor. `brand` is the
+/// region the working copies of the body's statements are frozen into: the body arrives as raw AST
+/// and crosses to the scheduler here, at the point the tail is declared.
 pub(crate) fn block_tail<'a>(
+    brand: RegionBrand<'a>,
     frame_placement: FramePlacement<'a>,
     block: BlockScope<'a>,
     seed: Option<BlockSeed<'a>>,
@@ -83,9 +87,12 @@ pub(crate) fn block_tail<'a>(
         }
     };
     let (leading, tail) = match body {
-        BlockBody::Single(expr) => (Vec::new(), expr),
+        BlockBody::Single(expr) => (Vec::new(), WorkingExpression::from_ast(brand, expr)),
         BlockBody::Block(body) => {
-            let mut statements = split_body_statements(body);
+            let mut statements: Vec<WorkingExpression<'a>> = split_body_statements(body)
+                .into_iter()
+                .map(|statement| WorkingExpression::from_ast(brand, statement))
+                .collect();
             let tail = statements
                 .pop()
                 .expect("split_body_statements always yields at least one");

@@ -4,12 +4,25 @@ use super::super::{run_root_storage, FrameStorageExt, Scope};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
+use crate::machine::core::RegionBrand;
 use crate::machine::model::Carried;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
-use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
+use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, DispatchOutcome, LexicalFrame};
 use crate::source::Spanned;
+
+/// Freeze a run of raw AST parts as the working node a dispatch entry receives — the shape
+/// `WorkingExpression::from_ast` produces for a parsed statement, assembled part-by-part here.
+fn working<'a>(brand: RegionBrand<'a>, parts: Vec<ExpressionPart<'a>>) -> WorkingExpression<'a> {
+    WorkingExpression::new(
+        brand,
+        parts
+            .into_iter()
+            .map(|part| Spanned::bare(WorkingPart::Ast(part)))
+            .collect(),
+    )
+}
 
 fn body_a<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done_resident(ctx.scope, Carried::Object(marker(ctx.scope, "a")))
@@ -49,9 +62,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
-        "foo".into(),
-    ))]);
+    let expr = working(region.brand(), vec![ExpressionPart::Identifier("foo")]);
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Resolved(r) => {
@@ -84,11 +95,14 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let expr = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
-        Spanned::bare(ExpressionPart::Keyword("OP".into())),
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
-    ]);
+    let expr = working(
+        region.brand(),
+        vec![
+            ExpressionPart::Literal(KLiteral::Number(5.0)),
+            ExpressionPart::Keyword("OP"),
+            ExpressionPart::Literal(KLiteral::Number(7.0)),
+        ],
+    );
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Ambiguous(n) => assert_eq!(n, 2),
@@ -131,11 +145,14 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let expr = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
-        Spanned::bare(ExpressionPart::Keyword("OP".into())),
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
-    ]);
+    let expr = working(
+        region.brand(),
+        vec![
+            ExpressionPart::Literal(KLiteral::Number(5.0)),
+            ExpressionPart::Keyword("OP"),
+            ExpressionPart::Literal(KLiteral::Number(7.0)),
+        ],
+    );
     let chain = LexicalFrame::detached();
     match inner.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Ambiguous(_) => {}
@@ -178,12 +195,15 @@ fn resolve_marks_binder_pick_for_binder_function() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let expr = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
-        Spanned::bare(ExpressionPart::Identifier("foo".into())),
-        Spanned::bare(ExpressionPart::Keyword("=".into())),
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
-    ]);
+    let expr = working(
+        region.brand(),
+        vec![
+            ExpressionPart::Keyword("LETLIKE"),
+            ExpressionPart::Identifier("foo"),
+            ExpressionPart::Keyword("="),
+            ExpressionPart::Literal(KLiteral::Number(1.0)),
+        ],
+    );
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Resolved(r) => {
@@ -211,9 +231,10 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
-        KLiteral::Number(5.0),
-    ))]);
+    let expr = working(
+        region.brand(),
+        vec![ExpressionPart::Literal(KLiteral::Number(5.0))],
+    );
     let chain = LexicalFrame::detached();
     assert!(matches!(
         scope.resolve_dispatch(&expr, Some(&chain), &[], &types),
@@ -239,14 +260,19 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
-        "deep_call".into(),
-    ))]);
-    let expr = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Expression(Box::new(inner))),
-        Spanned::bare(ExpressionPart::Keyword("OP".into())),
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
-    ]);
+    let brand = region.brand();
+    let inner = ExpressionPart::expression(
+        brand,
+        vec![Spanned::bare(ExpressionPart::Identifier("deep_call"))],
+    );
+    let expr = working(
+        brand,
+        vec![
+            inner,
+            ExpressionPart::Keyword("OP"),
+            ExpressionPart::Literal(KLiteral::Number(1.0)),
+        ],
+    );
     let chain = LexicalFrame::detached();
     assert!(matches!(
         scope.resolve_dispatch(&expr, Some(&chain), &[], &types),
@@ -277,10 +303,13 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
         )
         .expect("install_pending_overload");
 
-    let bare = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Keyword("MAKESET".into())),
-        Spanned::bare(ExpressionPart::Identifier("fwd".into())),
-    ]);
+    let bare = working(
+        region.brand(),
+        vec![
+            ExpressionPart::Keyword("MAKESET"),
+            ExpressionPart::Identifier("fwd"),
+        ],
+    );
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&bare, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![NodeId(42)]),
@@ -290,12 +319,15 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
         ),
     }
 
-    let multi = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Keyword("MAKESET".into())),
-        Spanned::bare(ExpressionPart::Identifier("fwd".into())),
-        Spanned::bare(ExpressionPart::Keyword("USING".into())),
-        Spanned::bare(ExpressionPart::Identifier("other".into())),
-    ]);
+    let multi = working(
+        region.brand(),
+        vec![
+            ExpressionPart::Keyword("MAKESET"),
+            ExpressionPart::Identifier("fwd"),
+            ExpressionPart::Keyword("USING"),
+            ExpressionPart::Identifier("other"),
+        ],
+    );
     assert!(
         matches!(
             scope.resolve_dispatch(&multi, Some(&chain), &[], &types),
@@ -338,10 +370,13 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     );
 
     let inner = region.brand().alloc_scope(outer.child_for_call());
-    let expr = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Keyword("MARK".into())),
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
-    ]);
+    let expr = working(
+        region.brand(),
+        vec![
+            ExpressionPart::Keyword("MARK"),
+            ExpressionPart::Literal(KLiteral::Number(7.0)),
+        ],
+    );
     // Inner pending sibling on the same bucket key, body not yet finalized.
     scope_install_pending(inner, &expr, NodeId(55));
 
@@ -385,14 +420,19 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let nested = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
-        "deep_call".into(),
-    ))]);
-    let expr = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Expression(Box::new(nested))),
-        Spanned::bare(ExpressionPart::Keyword("OP".into())),
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
-    ]);
+    let brand = region.brand();
+    let nested = ExpressionPart::expression(
+        brand,
+        vec![Spanned::bare(ExpressionPart::Identifier("deep_call"))],
+    );
+    let expr = working(
+        brand,
+        vec![
+            nested,
+            ExpressionPart::Keyword("OP"),
+            ExpressionPart::Literal(KLiteral::Number(1.0)),
+        ],
+    );
     let chain = LexicalFrame::detached();
     assert!(
         matches!(
@@ -432,9 +472,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
-        "fwd".into(),
-    ))]);
+    let expr = working(region.brand(), vec![ExpressionPart::Identifier("fwd")]);
     let bare_outcomes = vec![Some(NameOutcome::Unbound("fwd".into()))];
     let chain = LexicalFrame::detached();
     match inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &types) {
@@ -491,10 +529,13 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register pick_num overload");
-    let expr = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Keyword("PICK".into())),
-        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
-    ]);
+    let expr = working(
+        region.brand(),
+        vec![
+            ExpressionPart::Keyword("PICK"),
+            ExpressionPart::Literal(KLiteral::Number(7.0)),
+        ],
+    );
     // In-flight pending sibling on the same bucket key, finalizing at index 3.
     scope
         .install_pending_overload(
@@ -559,7 +600,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
 /// Install a pending overload keyed by `expr`'s bucket key onto `scope`.
 fn scope_install_pending<'a>(
     scope: &'a Scope<'a>,
-    expr: &KExpression<'a>,
+    expr: &WorkingExpression<'a>,
     producer: crate::machine::NodeId,
 ) {
     scope
@@ -609,10 +650,13 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
         entries,
     );
 
-    let expr = KExpression::new(vec![
-        Spanned::bare(ExpressionPart::Keyword("PICK".into())),
-        Spanned::bare(ExpressionPart::Identifier("fwd".into())),
-    ]);
+    let expr = working(
+        region.brand(),
+        vec![
+            ExpressionPart::Keyword("PICK"),
+            ExpressionPart::Identifier("fwd"),
+        ],
+    );
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => {

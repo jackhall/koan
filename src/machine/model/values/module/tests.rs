@@ -4,12 +4,13 @@
 //! single site. See [`design/memory-model.md`](../../../../../design/memory-model.md).
 use super::*;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{run_root_storage, FrameStorageExt};
+use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
 use std::ptr;
 #[test]
 fn module_child_scope_transmute_does_not_dangle() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let module = region
         .brand()
@@ -30,8 +31,9 @@ fn module_child_scope_transmute_does_not_dangle() {
 /// borrows is strict about interior mutation under a live shared borrow.
 #[test]
 fn module_type_members_refcell_mutation_with_held_module_ref() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = &test_run.types;
     let module = region.brand().alloc_module(Module::new("M".into(), scope));
@@ -69,8 +71,9 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
 /// borrow. Pinned independently so a regression attributes to this map's site.
 #[test]
 fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = &test_run.types;
     let module = region.brand().alloc_module(Module::new("M".into(), scope));
@@ -106,8 +109,9 @@ fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
 /// and sealed at mint, so reading it back through the sealed cell yields an empty interface.
 #[test]
 fn bare_module_self_sig_is_empty_after_raw_seal() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = &test_run.types;
     let module = region

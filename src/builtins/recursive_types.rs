@@ -43,16 +43,16 @@ fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KErr
             .parts
             .iter()
             .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
-    let decls: Vec<&KExpression<'_>> = if is_multi {
+    let decls: Vec<KExpression<'_>> = if is_multi {
         body.parts
             .iter()
-            .filter_map(|p| match &p.value {
-                ExpressionPart::Expression(e) => Some(e.as_ref()),
+            .filter_map(|p| match p.value {
+                ExpressionPart::Expression(e) => Some(*e),
                 _ => None,
             })
             .collect()
     } else {
-        vec![body]
+        vec![*body]
     };
     if decls.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
@@ -62,7 +62,7 @@ fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KErr
     let mut members: Vec<(String, KKind)> = Vec::with_capacity(decls.len());
     let mut seen: HashSet<String> = HashSet::new();
     for decl in decls {
-        let kind = match leading_keyword(decl) {
+        let kind = match leading_keyword(&decl) {
             Some("UNION") | Some("NEWTYPE") => KKind::NewType,
             other => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
@@ -77,20 +77,20 @@ fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KErr
                 "RECURSIVE TYPES member declaration is missing a type name".to_string(),
             ))
         })?;
-        if !seen.insert(name.clone()) {
+        if !seen.insert(name.to_string()) {
             return Err(KError::new(KErrorKind::ShapeError(format!(
                 "RECURSIVE TYPES has a duplicate member `{name}`",
             ))));
         }
-        members.push((name, kind));
+        members.push((name.to_string(), kind));
     }
     Ok(members)
 }
 
 /// The first keyword token of a declaration expression (`UNION` / `NEWTYPE`).
 fn leading_keyword<'b>(decl: &'b KExpression<'_>) -> Option<&'b str> {
-    decl.parts.iter().find_map(|p| match &p.value {
-        ExpressionPart::Keyword(s) => Some(s.as_str()),
+    decl.parts.iter().find_map(|p| match p.value {
+        ExpressionPart::Keyword(s) => Some(s),
         _ => None,
     })
 }

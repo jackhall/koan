@@ -83,7 +83,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "UNION", ctx.types));
     let schema_expr = match arg_object(ctx.args, "schema") {
-        Some(KObject::KExpression(e)) => e.clone(),
+        Some(KObject::KExpression(e)) => *e,
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "UNION schema slot must be a parenthesized dict literal".to_string(),
@@ -133,7 +133,7 @@ mod tests {
     use crate::machine::model::Carried;
     use crate::machine::model::KType;
     use crate::machine::model::{KKind, NodeSchema, RecursiveGroupWindow, TypeNode, TypeRegistry};
-    use crate::machine::run_root_storage;
+    use crate::machine::{program_storage, run_root_storage};
     use crate::machine::{KErrorKind, Scope};
 
     /// The newtype repr of union `name`'s `variant` member — each variant is a per-tag newtype
@@ -166,19 +166,24 @@ mod tests {
 
     #[test]
     fn binder_name_extracts_named_union_name() {
-        let expr = parse_one("UNION Maybe = (Some :Number, None :Null)");
+        let program = program_storage();
+        let expr = parse_one(&program, "UNION Maybe = (Some :Number, None :Null)");
         let name = expr.binder_name_from_type_part();
-        assert_eq!(name.as_deref(), Some("Maybe"));
+        assert_eq!(name, Some("Maybe"));
     }
 
     #[test]
     fn union_named_registers_type_in_scope() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         // UNION is type-only: the declaration binds an anonymous `Union` node over one
         // per-variant newtype `SetMember` each, registered into `types`.
-        let result = test_run.run_one_type(parse_one("UNION Maybe = (Some :Number None :Null)"));
+        let result = test_run.run_one_type(parse_one(
+            &program,
+            "UNION Maybe = (Some :Number None :Null)",
+        ));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::Union { members } => {
@@ -216,11 +221,18 @@ mod tests {
     /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
     #[test]
     fn anonymous_union_fails_dispatch() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         let runtime = &mut test_run.runtime;
-        let root = runtime.dispatch_in_scope(parse_one("UNION (Ok :Number Err :Str)"), scope);
+        let root = runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one(&program, "UNION (Ok :Number Err :Str)"),
+            ),
+            scope,
+        );
         runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -235,9 +247,10 @@ mod tests {
 
     #[test]
     fn union_rejects_unknown_type_name() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let err = test_run.run_one_err(parse_one("UNION Bad = (Some :Bogus)"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run.run_one_err(parse_one(&program, "UNION Bad = (Some :Bogus)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
             "expected ShapeError mentioning Bogus, got {err}",
@@ -246,9 +259,10 @@ mod tests {
 
     #[test]
     fn union_rejects_empty_schema() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let err = test_run.run_one_err(parse_one("UNION Empty = ()"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run.run_one_err(parse_one(&program, "UNION Empty = ()"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("at least one tag")),
             "expected ShapeError on empty schema, got {err}",
@@ -257,9 +271,11 @@ mod tests {
 
     #[test]
     fn union_rejects_duplicate_tag() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let err = test_run.run_one_err(parse_one("UNION Dupe = (Some :Number Some :Str)"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let err =
+            test_run.run_one_err(parse_one(&program, "UNION Dupe = (Some :Number Some :Str)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`Some`")),
             "expected ShapeError on duplicate tag, got {err}",
@@ -276,8 +292,9 @@ mod tests {
     /// [design/typing/type-identity.md](../../design/typing/type-identity.md).
     #[test]
     fn finalize_union_seals_then_is_idempotent() {
+        let program = program_storage();
         let region = run_root_storage();
-        let test_run = TestRun::silent(&region);
+        let test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         let types = test_run.types.clone();
         let fctx = crate::machine::FinishCtx::for_scope(scope, &types);
@@ -352,13 +369,18 @@ mod tests {
     /// `enter_block` is what gives the two statements their distinct nodes.
     #[test]
     fn same_scope_union_redeclare_rebinds() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         let exprs = crate::parse::parse(
+            program.brand(),
             "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Str None :Null)",
         )
-        .expect("parse should succeed");
+        .expect("parse should succeed")
+        .into_iter()
+        .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
+        .collect();
         let runtime = &mut test_run.runtime;
         let ids = runtime.enter_block(scope.id, exprs, scope);
         runtime
@@ -387,12 +409,18 @@ mod tests {
     /// This is the item's headline gap: equal arity through the detached path.
     #[test]
     fn detached_chain_union_redeclare_rebinds() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         let runtime = &mut test_run.runtime;
-        let first =
-            runtime.dispatch_in_scope(parse_one("UNION Maybe = (Some :Number None :Null)"), scope);
+        let first = runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one(&program, "UNION Maybe = (Some :Number None :Null)"),
+            ),
+            scope,
+        );
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -401,8 +429,13 @@ mod tests {
             "the first declaration should succeed, got {:?}",
             runtime.result_error(first).err(),
         );
-        let second =
-            runtime.dispatch_in_scope(parse_one("UNION Maybe = (Some :Str None :Null)"), scope);
+        let second = runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(
+                scope.brand(),
+                parse_one(&program, "UNION Maybe = (Some :Str None :Null)"),
+            ),
+            scope,
+        );
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -421,13 +454,18 @@ mod tests {
     /// `NodeHandle` under `enter_block` — is a rebind despite identical content.
     #[test]
     fn identical_content_union_redeclare_rebinds() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         let exprs = crate::parse::parse(
+            program.brand(),
             "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Number None :Null)",
         )
-        .expect("parse should succeed");
+        .expect("parse should succeed")
+        .into_iter()
+        .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
+        .collect();
         let runtime = &mut test_run.runtime;
         let ids = runtime.enter_block(scope.id, exprs, scope);
         runtime
@@ -451,9 +489,10 @@ mod tests {
     fn union_rejects_odd_part_count() {
         // Typed variants parse as `[Identifier, Type]` pairs; odd-count parts are
         // rejected by the pair-list walker.
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
-        let err = test_run.run_one_err(parse_one("UNION Pair = (Some :Number None)"));
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run.run_one_err(parse_one(&program, "UNION Pair = (Some :Number None)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("pair") || msg.contains("multiple of 2")),
             "expected ShapeError on odd part count, got {err}",

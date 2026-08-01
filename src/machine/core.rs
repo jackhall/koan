@@ -19,16 +19,21 @@ mod tests;
 #[cfg(test)]
 pub(crate) use arena::KoanRegionTestExt;
 pub use arena::{
-    run_root_storage, CallFrame, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
-    RegionBrand, RegionTypeFamily, StepAllocator, SubstrateDoor,
+    program_storage, run_root_storage, CallFrame, FoldingBrand, FrameCoverage, FrameReach,
+    FrameStorage, KoanRegion, ProgramBrand, ProgramStorage, RegionBrand, RegionTypeFamily,
+    StepAllocator, SubstrateDoor,
 };
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
 pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
     NodeHandle, WriteGate,
 };
-pub(crate) use carrier_witness::{clone_reaches_region, product_reaches_region, OverloadSeal};
-pub use carrier_witness::{CarrierWitness, DeliveredCarried, OpenedFunction, SealedFunction};
+pub(crate) use carrier_witness::{
+    clone_reaches_region, product_reaches_region, read_resting, OverloadSeal,
+};
+pub use carrier_witness::{
+    CarrierWitness, DeliveredCarried, OpenedFunction, SealedFunction, SplicedCell,
+};
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub(crate) use kfunction::action::{

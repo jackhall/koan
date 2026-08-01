@@ -14,6 +14,7 @@
 //!
 //! [`Held::UnresolvedType`]: crate::machine::model::Held::UnresolvedType
 
+use crate::machine::core::RegionBrand;
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KKind, KObject, KType, TypeNode, TypeRegistry};
 use crate::machine::FinishCtx;
@@ -25,7 +26,11 @@ use crate::source::Spanned;
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 
-fn typeexpr_from_carrier(kt: KType, types: &TypeRegistry) -> CarrierForm {
+fn typeexpr_from_carrier<'a>(
+    brand: RegionBrand<'a>,
+    kt: KType,
+    types: &TypeRegistry,
+) -> CarrierForm<'a> {
     // The builtin leaf type names re-resolve against decl_scope through the same name path so a
     // SIG-local shadow wins over the builtin table. `:Module` lowers to the empty signature —
     // its `name()` is "Module" — and joins that leaf path. A user-declared signature (a non-empty
@@ -43,17 +48,17 @@ fn typeexpr_from_carrier(kt: KType, types: &TypeRegistry) -> CarrierForm {
             | TypeNode::OfKind(KKind::AnyType | KKind::Signature | KKind::ProperType)
     );
     if is_leaf_builtin || kt == KType::EMPTY_SIGNATURE {
-        CarrierForm::Leaf(TypeIdentifier::leaf(kt.name(types)))
+        CarrierForm::Leaf(TypeIdentifier::leaf(brand.alloc_text(&kt.name(types))))
     } else {
         CarrierForm::Direct(kt)
     }
 }
 
-enum CarrierForm {
+enum CarrierForm<'a> {
     /// Builtin leaf synthesized from `kt.name()`; re-elaborated against decl_scope
     /// so a SIG-local shadow wins over the builtin table.
-    Leaf(TypeIdentifier),
-    Raw(TypeIdentifier),
+    Leaf(TypeIdentifier<'a>),
+    Raw(TypeIdentifier<'a>),
     /// Structural carrier accepted as-is; inner names are not re-bound.
     Direct(KType),
 }
@@ -98,9 +103,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     }
 
     let carrier = match arg_unresolved_type(ctx.args, "ty") {
-        Some(te) => CarrierForm::Raw(te.clone()),
+        Some(te) => CarrierForm::Raw(*te),
         None => match arg_type(ctx.args, "ty") {
-            Some(kt) => typeexpr_from_carrier(kt, ctx.types),
+            Some(kt) => typeexpr_from_carrier(ctx.scope.brand(), kt, ctx.types),
             None => {
                 return done_err(match arg_object(ctx.args, "ty") {
                     Some(other) => KError::new(KErrorKind::TypeMismatch {
@@ -123,8 +128,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         CarrierForm::Raw(te) => te,
     };
 
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te))]);
-    dispatch_type_then(expr, "VAL type slot", move |fctx, kt| {
+    let brand = ctx.scope.brand();
+    let expr = KExpression::new(brand, vec![Spanned::bare(ExpressionPart::Type(te))]);
+    dispatch_type_then(brand, expr, "VAL type slot", move |fctx, kt| {
         finalize_val(fctx, name, kt)
     })
 }

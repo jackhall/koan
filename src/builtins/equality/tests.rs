@@ -4,16 +4,18 @@
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KObject;
+use crate::machine::program_storage;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 fn eval_bool(source_setup: &str, probe: &str) -> bool {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     if !source_setup.is_empty() {
         test_run.run(source_setup);
     }
-    let result = test_run.run_one(parse_one(probe));
+    let result = test_run.run_one(parse_one(&program, probe));
     match result {
         KObject::Bool(b) => *b,
         other => panic!(
@@ -147,12 +149,13 @@ fn opaque_views_have_distinct_type_of() {
 // --- banned operands --------------------------------------------------------------
 
 fn err_kind_user(setup: &str, probe: &str) -> String {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     if !setup.is_empty() {
         test_run.run(setup);
     }
-    let err = test_run.run_one_err(parse_one(probe));
+    let err = test_run.run_one_err(parse_one(&program, probe));
     match &err.kind {
         KErrorKind::User(msg) => msg.clone(),
         _ => panic!("expected a User error, got: {err}"),
@@ -185,9 +188,10 @@ fn function_operand_is_error() {
 fn equality_does_not_chain() {
     // `==` is in no operator group, so a three-operand chain resolves to nothing and surfaces a
     // real (non-empty) resolution error rather than reducing pairwise.
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
-    let err = test_run.run_one_err(parse_one("1 == 2 == 3"));
+    let mut test_run = TestRun::silent(&program, &region);
+    let err = test_run.run_one_err(parse_one(&program, "1 == 2 == 3"));
     assert!(
         !err.to_string().is_empty(),
         "a chain of `==` should surface a resolution error",

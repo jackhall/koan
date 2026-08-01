@@ -1,15 +1,16 @@
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::core::{run_root_storage, KErrorKind};
+use crate::machine::core::{program_storage, run_root_storage, KErrorKind};
 use crate::machine::model::KObject;
 
 /// The tagged-union value-type check fires when the value-cell resolves to a
 /// `KObject` that doesn't match the tag's expected type.
 #[test]
 fn ctor_fast_lane_rejects_value_of_wrong_type() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("UNION Maybe = (Some :Number None :Null)");
-    let err = test_run.run_one_err(parse_one("Maybe (Some \"oops\")"));
+    let err = test_run.run_one_err(parse_one(&program, "Maybe (Some \"oops\")"));
     match &err.kind {
         KErrorKind::TypeMismatch { arg, expected, got } => {
             assert_eq!(arg, "value");
@@ -23,10 +24,11 @@ fn ctor_fast_lane_rejects_value_of_wrong_type() {
 /// `TypeCall` fast lane (leaf-Type head) propagates the schema's tag check.
 #[test]
 fn ctor_fast_lane_propagates_tag_validation_error() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("UNION Maybe = (Some :Number None :Null)");
-    let err = test_run.run_one_err(parse_one("Maybe (Other 42)"));
+    let err = test_run.run_one_err(parse_one(&program, "Maybe (Other 42)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`Other`")),
         "expected ShapeError mentioning `Other`, got {err}",
@@ -40,10 +42,11 @@ fn ctor_fast_lane_propagates_tag_validation_error() {
 #[test]
 fn ctor_fast_lane_with_sub_expression_value() {
     use crate::machine::model::TypeNode;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("UNION Maybe = (Some :Number None :Null)\nLET x = 7");
-    let result = test_run.run_one(parse_one("Maybe (Some (x))"));
+    let result = test_run.run_one(parse_one(&program, "Maybe (Some (x))"));
     match result {
         KObject::Tagged {
             tag,

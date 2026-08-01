@@ -37,6 +37,13 @@ use crate::witnessed::{Reattachable, StepContext};
 /// are crate-confined, so no external caller can mint one. The confinement rests on the brand
 /// lifetime and on the constructors' visibility — builtins receive an allocator already branded at
 /// their step (`BodyCtx.ctx` / `FinishCtx.ctx`) and cannot mint one at a lifetime of their choosing.
+///
+/// Every door here yields a *carrier*, whose value is erased and re-anchored on read, so each takes
+/// a fresh `for<'b>` brand. A [`WorkingExpression`](crate::machine::model::WorkingExpression) is not
+/// a carrier — it is a plain borrowing node that must live at `'step` — and this context holds its
+/// destination frame as an owned `Rc`, which no `'step` brand can be derived from. Its doors
+/// (`BodyCtx::expression` / `working`, and their `FinishCtx` peers) hang off the step's own scope
+/// instead, whose [`RegionBrand`] is already at `'step` and names this same destination region.
 #[derive(Clone)]
 pub struct StepAllocator<'step> {
     context: StepContext<FrameStorage>,

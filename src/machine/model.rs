@@ -14,20 +14,22 @@ pub use types::{
     Record, RecursiveGroupWindow, RelativeSchema, ReturnType, SealedGroup, SignatureElement,
     TypeNode, UntypedElement, UntypedKey,
 };
+pub use types::{owned_untyped_key, StoredElement};
 pub use values::{
     Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, ValueEqualityError,
 };
 
 pub(crate) use ast::{
-    classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier,
+    classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass,
+    TypeIdentifier, WorkingExpression, WorkingPart,
 };
-pub(crate) use binder::{symbol_from_parts, symbol_from_quote_body, BinderKey};
+pub(crate) use binder::{symbol_from_parts, symbol_from_quote_body, BinderKey, StoredBinderKey};
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn};
 pub(crate) use types::{
     constructor_param_names, declarator_window, elaborate_type_identifier, finalize_nominal_member,
     pair_list_names, parse_typed_field_list_via_elaborator, unsaturated_constructor_message,
-    Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, ResultFeed, SealOutcome,
-    SigSchema, TypeResolution,
+    Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
+    SealOutcome, SigSchema, TypeResolution,
 };
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
 pub(crate) use types::{sig_subtype, substitute_sig_members, TypeDigest};

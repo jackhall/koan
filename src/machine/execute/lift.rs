@@ -12,6 +12,7 @@ use crate::machine::core::SubstrateDoor;
 use crate::machine::core::{product_reaches_region, KoanRegion, KoanStorageProfile};
 use crate::machine::model::{
     copy_object_into, copy_or_pin, retains_home, Carried, Held, KObject, RegionEscape,
+    TypeIdentifier,
 };
 use crate::machine::DeliveredCarried;
 use crate::witnessed::RegionHandle;
@@ -40,8 +41,11 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
             Carried::Object(dest.alloc_object_folded(relocate_object_into(v, verb, dest)))
         }
         Carried::Type(t) => Carried::Type(t),
+        // Re-bump the name at the destination, the honest peer of the `KString` arm in
+        // [`copy_object_into`]: the copy verb claims release of the source region, so the rebuilt
+        // identifier must not keep borrowing bytes that region owns.
         Carried::UnresolvedType(ti) => {
-            Carried::UnresolvedType(dest.alloc_type_identifier(ti.clone()))
+            Carried::UnresolvedType(TypeIdentifier::leaf(dest.alloc_text(ti.as_str())))
         }
     }
 }
@@ -91,7 +95,10 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
             dest,
         )),
         Carried::Type(t) => Held::Type(t),
-        Carried::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
+        // A cell always rebuilds at the door, so the name's bytes are re-bumped with it.
+        Carried::UnresolvedType(ti) => {
+            Held::UnresolvedType(TypeIdentifier::leaf(dest.alloc_text(ti.as_str())))
+        }
     }
 }
 
