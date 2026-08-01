@@ -348,11 +348,11 @@ fn lift_reowns_description_into_transit_bundle() {
     drop(content);
 }
 
-/// **`Delivered::adopt`** — the `Delivered → Sealed` transform mints the value's reach into `dest`
-/// and hands the owned bundle back to the holder that adopted it, re-sealing the value resident. A
-/// value living in its producer is adopted into `dest`; after the producer handle drops, the
-/// returned bundle (standing in for the scope's union bundle) is the sole pin under which the
-/// resident seal reads back. A bundle that failed to name the producer is a UAF here.
+/// **`Delivered::open_adopted`** — the adoption mints the value's reach into `dest` and retains the
+/// owned bundle there in the same act, so the resealed carrier rests resident with its liveness
+/// carried by `dest`'s region. A value living in its producer is adopted into `dest`; after the
+/// producer handle drops, `dest`'s own pin is the sole coverage under which the resident seal reads
+/// back. A mint that failed to name the producer, or a retention the mint skipped, is a UAF here.
 #[test]
 fn adopt_settles_resident_value_into_dest() {
     let producer = frame();
@@ -362,12 +362,12 @@ fn adopt_settles_resident_value_into_dest() {
         StepCoverage::empty(),
     );
     let dest = frame();
-    let (sealed, pins): (
-        Sealed<RefValFamily, Carrier<ShapeFrame>>,
-        StepCoverage<ShapeFrame>,
-    ) = element.adopt(RegionHandle::from_owner(&*dest));
+    let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = element
+        .open_adopted(RegionHandle::from_owner(&*dest))
+        .reseal();
     drop(element);
     drop(producer);
+    let pins = StepCoverage::of(Rc::clone(&dest));
     assert_eq!(sealed.open_with(&pins, |r| *r), 7);
 }
 
@@ -418,10 +418,11 @@ fn region_retention_folds_into_one_deduped_bundle() {
     );
 }
 
-/// **The three states and the four transform verbs, end to end** — `Delivered → adopt → Sealed →
-/// open_at → Opened → reseal → Sealed → lift → Delivered`, with every intermediate handle dropped
-/// before the final read. The value lives in `producer`'s region throughout; the only thing keeping
-/// that region alive after the drops is the chain of pins each verb hands to the next, so a verb
+/// **The three states and the four transform verbs, end to end** — `Delivered → open_adopted →
+/// Opened → reseal → Sealed → open_at → Opened → reseal → Sealed → lift → Delivered`, with every
+/// intermediate handle dropped before the final read. The value lives in `producer`'s region
+/// throughout; the only thing keeping that region alive after the drops is the chain of pins each
+/// verb hands to the next — the adoption's own retention into `dest`, then `dest`'s pin — so a verb
 /// that loses a member is a use-after-free here and one that gains a phantom member is a leak.
 #[test]
 fn transform_verb_round_trip_preserves_liveness() {
@@ -433,11 +434,14 @@ fn transform_verb_round_trip_preserves_liveness() {
     );
     let dest = frame();
 
-    // Delivered → Sealed: at rest in `dest`'s table, its pins held by the adopting holder.
-    let (sealed, pins) = element.adopt(RegionHandle::from_owner(&*dest));
+    // Delivered → Sealed: at rest in `dest`'s table, its pins retained by `dest`'s own region.
+    let sealed = element
+        .open_adopted(RegionHandle::from_owner(&*dest))
+        .reseal();
+    let pins = StepCoverage::of(Rc::clone(&dest));
     assert!(
         sealed.open_at(&pins).reach_covers(producer.region()),
-        "adopt composed the value's home into dest's description as an ordinary member"
+        "the adoption composed the value's home into dest's description as an ordinary member"
     );
     drop(element);
     drop(producer);

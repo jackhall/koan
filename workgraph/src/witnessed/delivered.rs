@@ -141,12 +141,12 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
     /// on `dest`'s region — [`Sealed::open_with`], or an [`Opened`] at `dest`'s own lifetime — is
     /// covered by construction, for as long as that region lives.
     ///
-    /// Distinct from [`adopt`](Self::adopt), which *mints* the value's reach into `dest` and hands
-    /// the owned bundle back to a holder that will drop it at scope death: nothing is minted here
-    /// and the value keeps referencing the description its producer stamped, so this is the door for
-    /// a cell whose reach a later composition reads rather than re-homes. The envelope is borrowed,
-    /// not consumed — a producer's value fans out to several resting cells, each duplicate taking
-    /// its own `Rc` on every pinned region.
+    /// Distinct from [`adopt_into`](Self::adopt_into), which *mints* the value's reach into `dest`
+    /// and re-anchors the value at `dest`'s own lifetime: nothing is minted here and the value keeps
+    /// referencing the description its producer stamped, so this is the door for a cell whose reach
+    /// a later composition reads rather than re-homes. The envelope is borrowed, not consumed — a
+    /// producer's value fans out to several resting cells, each duplicate taking its own `Rc` on
+    /// every pinned region.
     ///
     /// Retention widens to the region's life: what an envelope released when it dropped is now held
     /// until `dest`'s region dies. That is the price of a `Drop`-free resting cell. A value already
@@ -331,35 +331,6 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
             unsafe { erased.reattach::<'d>() },
             Carrier::new(minted),
         )
-    }
-
-    /// **Adopt** the delivered value into `dest`, dropping to rest as a [`Sealed`] (`Delivered →
-    /// Sealed`): mint the value's reach into `dest`'s arena (home an ordinary member, with `dest`'s
-    /// own region stripped from the owned bundle by the never-pin-a-region-into-itself rule) and
-    /// re-seal the value under a resident [`Carrier`] that references the minted (now weak)
-    /// description. The value keeps its identity in the producer's region.
-    ///
-    /// Hands the owned [`PinBundle`] **back to the caller** rather than retaining it into `dest`'s
-    /// region: the bind seam that adopts a value is the holder of the scope's union bundle (design
-    /// § Threading), and folding the adopted pins there is what makes them drop at scope death
-    /// instead of at region death. The seal is only readable while that bundle is held.
-    ///
-    /// The dual of [`Self::adopt_into`] (which re-anchors to a live `T::At<'d>` and retains into the
-    /// region, having no holder to hand pins to): `adopt` hands back a dormant seal for a table
-    /// entry / node slot instead.
-    pub fn adopt<'d, P>(
-        &self,
-        dest: RegionHandle<'d, P>,
-    ) -> (Sealed<T, Carrier<F>>, StepCoverage<F>)
-    where
-        P: StorageProfile<FrameOwner = F> + 'static,
-        F: RegionOwner<Region = Region<P>>,
-        T::At<'static>: Copy,
-    {
-        let (minted, bundle) = self.mint_reach(dest);
-        let erased: Erased<T> = self.open(Erased::<T>::erase);
-        let sealed = Sealed::seal(Witnessed::from_erased(erased, Carrier::new(minted)));
-        (sealed, StepCoverage(bundle))
     }
 
     /// Relocate the delivered value into a destination and re-seal it under the composed carrier
