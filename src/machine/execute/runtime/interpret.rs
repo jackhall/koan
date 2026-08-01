@@ -7,9 +7,9 @@
 
 use super::{DestHandleFamily, KoanRuntime};
 use crate::builtins::{seed_builtins, unseeded_scopes};
-use crate::machine::core::{program_storage, run_root_storage};
+use crate::machine::core::run_root_storage;
+use crate::machine::model::KExpression;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::{KError, KErrorKind, Scope, WriteGate};
 use crate::parse::{parse, parse_with_path};
 use crate::witnessed::ReachDescription;
@@ -42,14 +42,9 @@ pub fn interpret_with_writer_path(
     path: Option<&str>,
     out: Box<dyn std::io::Write>,
 ) -> Result<(), KError> {
-    // Program storage: where the source's text and its raw AST live. Declared before the run region
-    // so it is created first and released last — the whole run reads nodes out of it. It sits at the
-    // eternal tier, so a value pointing into it pins nothing, and `KExpression` is covariant, so a
-    // node parsed here flows into `'run` code by ordinary subtyping.
-    let program = program_storage();
     let exprs = match path {
-        Some(p) => parse_with_path(program.brand(), source, p)?,
-        None => parse(program.brand(), source)?,
+        Some(p) => parse_with_path(source, p)?,
+        None => parse(source)?,
     };
     // The run region lives inside an `Rc<FrameStorage>` so the run-root scope's region has an owning
     // handle: top-level-defined FNs resolve their captured-region owner to it (`Scope::region_owner`),
@@ -79,13 +74,7 @@ impl<'run> KoanRuntime<'run> {
         root: &'run Scope<'run>,
         exprs: Vec<KExpression<'run>>,
     ) -> Result<(), KError> {
-        // Each top-level statement crosses into the scheduler here — one slice copy of its parts run
-        // into the run region, the door every AST node enters dispatch through.
-        let statements: Vec<WorkingExpression<'run>> = exprs
-            .into_iter()
-            .map(|expr| WorkingExpression::from_ast(root.brand(), expr))
-            .collect();
-        let top_level = self.enter_block(root.id, statements, root);
+        let top_level = self.enter_block(root.id, exprs, root);
         self.execute()?;
         // Each top-level statement is a consumer-less root: its terminal stays pinned in the
         // producer's per-call frame, since no consumer ever pull-lifts it. Relocate every root that

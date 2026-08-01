@@ -117,7 +117,7 @@ pub(crate) fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(Vec<String>, Stri
     let as_pos = decl
         .parts
         .iter()
-        .position(|p| matches!(p.value, ExpressionPart::Keyword(k) if k == "AS"))
+        .position(|p| matches!(&p.value, ExpressionPart::Keyword(k) if k == "AS"))
         .ok_or_else(shape_error)?;
     let param_parts = &decl.parts[..as_pos];
     let name_parts = &decl.parts[as_pos + 1..];

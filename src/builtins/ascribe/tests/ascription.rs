@@ -2,15 +2,14 @@
 
 use crate::builtins::test_support::{binds_module, lookup_module, parse_one, TestRun};
 use crate::machine::model::{KObject, KType, TypeNode};
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage};
 use crate::parse::parse;
 
 #[test]
 fn transparent_ascription_returns_module() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE int_ord = (LET compare = 0)\n\
@@ -23,14 +22,13 @@ fn transparent_ascription_returns_module() {
 
 #[test]
 fn ascription_missing_member_errors() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "MODULE empty = (LET unrelated = 0)\n\
          SIG Ordered = (VAL compare :Number)",
     );
-    let err = test_run.run_one_err(parse_one(&program, "empty :| Ordered"));
+    let err = test_run.run_one_err(parse_one("empty :| Ordered"));
     // Ruling 12: a signature renders structurally, not by declared name — the diagnostic names
     // the interface `SIG (compare: Number)` and the missing member, not "Ordered".
     assert!(
@@ -42,21 +40,17 @@ fn ascription_missing_member_errors() {
 
 #[test]
 fn opaque_ascription_mints_distinct_module_type_per_application() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let src = "MODULE int_ord = ((LET Carrier = Number) (LET compare = 0))\n\
          SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          LET first_abstract = (int_ord :| Ordered)\n\
          LET second_abstract = (int_ord :| Ordered)";
-    let exprs = parse(program.brand(), src).expect("parse should succeed");
+    let exprs = parse(src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
-            scope,
-        ));
+        ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
     }
     test_run
         .runtime
@@ -89,9 +83,8 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
 
 #[test]
 fn transparent_ascription_does_not_mint_module_types() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE int_ord = (LET compare = 0)\n\
@@ -105,9 +98,8 @@ fn transparent_ascription_does_not_mint_module_types() {
 /// End-to-end example from [design/typing/modules.md](../../../../design/typing/modules.md).
 #[test]
 fn roadmap_example_int_ord_with_ordered_sig() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
@@ -144,9 +136,8 @@ fn roadmap_example_int_ord_with_ordered_sig() {
 /// abstract identity, so `view.Tag` resolves to `Number`.
 #[test]
 fn opaque_view_reads_manifest_type_member_concretely() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE implementation = ((LET Tag = Number) (LET item = 5))\n\
@@ -168,9 +159,8 @@ fn opaque_view_reads_manifest_type_member_concretely() {
 /// entry for it and `view.x` reads the underlying `Number` unwrapped.
 #[test]
 fn opaque_view_manifest_typed_val_slot_reads_concrete() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE implementation = ((LET Tag = Number) (LET x = 3))\n\
@@ -182,7 +172,7 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
         view.slot_type_tags.borrow().get("x").is_none(),
         "a manifest-typed VAL slot must not be re-tagged in slot_type_tags",
     );
-    let result = test_run.run_one(parse_one(&program, "view.x"));
+    let result = test_run.run_one(parse_one("view.x"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 3.0),
         "view.x on a manifest-typed slot reads the underlying Number(3), got {:?}",
@@ -194,14 +184,13 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
 /// check with the "missing type member" error.
 #[test]
 fn opaque_missing_abstract_member_rejected() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "MODULE implementation = (LET item = 0)\n\
          SIG Container = ((TYPE Elt) (VAL item :Number))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "implementation :| Container"));
+    let err = test_run.run_one_err(parse_one("implementation :| Container"));
     // Ruling 12: the signature is named structurally, not "Container".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
@@ -213,14 +202,13 @@ fn opaque_missing_abstract_member_rejected() {
 /// The same absent abstract member is rejected through transparent (`:!`) ascription too.
 #[test]
 fn transparent_missing_abstract_member_rejected() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "MODULE implementation = (LET item = 0)\n\
          SIG Container = ((TYPE Elt) (VAL item :Number))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "implementation :! Container"));
+    let err = test_run.run_one_err(parse_one("implementation :! Container"));
     // Ruling 12: the signature is named structurally, not "Container".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
@@ -233,14 +221,13 @@ fn transparent_missing_abstract_member_rejected() {
 /// signature fixing `LET Tag = Number`) is rejected with the "fixes it to" error.
 #[test]
 fn manifest_type_member_mismatch_rejected() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "MODULE implementation = ((LET Tag = Str) (LET item = 0))\n\
          SIG Tagged = ((LET Tag = Number) (VAL item :Number))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "implementation :| Tagged"));
+    let err = test_run.run_one_err(parse_one("implementation :| Tagged"));
     // Ruling 12: the signature is named structurally, not "Tagged".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
@@ -255,9 +242,8 @@ fn manifest_type_member_mismatch_rejected() {
 /// sides) satisfies the signature.
 #[test]
 fn manifest_type_member_match_accepted() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE implementation = ((LET Tag = Number) (LET item = 0))\n\
@@ -274,9 +260,8 @@ fn manifest_type_member_match_accepted() {
 /// `TYPE Elt` satisfies the signature regardless of the concrete type it chooses.
 #[test]
 fn abstract_member_bound_to_any_type_accepted() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE implementation = ((LET Elt = Str) (LET item = 0))\n\
@@ -299,9 +284,8 @@ fn abstract_member_bound_to_any_type_accepted() {
 /// normal build reads the freed bytes back intact.
 #[test]
 fn a_returned_transparent_view_keeps_the_region_it_was_minted_in() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\

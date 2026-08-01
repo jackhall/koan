@@ -6,8 +6,8 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
     constructor_param_names, declarator_window, KKind, KType, RelativeSchema, TypeNode,
 };
+use crate::machine::run_root_storage;
 use crate::machine::ScopeId;
-use crate::machine::{program_storage, run_root_storage, ProgramStorage};
 
 /// Resolve a SIG-declared type member's stored `KType` out of the signature's schema —
 /// abstract members (`TYPE`) and manifest members (`LET`) both live there, classified by
@@ -39,9 +39,8 @@ fn member_type(
 /// member's binder is the canonical sentinel (ruling 12), never a per-declaration id.
 #[test]
 fn bare_type_binds_abstract_member() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG Container = ((TYPE Elt))");
     match test_run
@@ -60,9 +59,8 @@ fn bare_type_binds_abstract_member() {
 /// carrying `param_names == ["Type"]`.
 #[test]
 fn hk_type_binds_abstract_constructor() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG Monad = ((TYPE (Type AS Wrap)))");
     match test_run
@@ -87,9 +85,8 @@ fn hk_type_binds_abstract_constructor() {
 /// sibling as `KKind::ProperType`.
 #[test]
 fn abstract_member_kind_tracks_parameters() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG Monad = ((TYPE Elt) (TYPE (Type AS Wrap)))");
     let types = test_run.types.clone();
@@ -106,9 +103,8 @@ fn abstract_member_kind_tracks_parameters() {
 /// `TYPE Elt` outside a SIG body errors.
 #[test]
 fn bare_type_outside_sig_errors() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("TYPE Elt");
     assert!(
@@ -120,8 +116,7 @@ fn bare_type_outside_sig_errors() {
 /// `TYPE (Key Val AS Dict)` — two parameters before `AS` — declares an arity-2 constructor.
 #[test]
 fn hk_arity_above_one_declares() {
-    let program = program_storage();
-    let inner = hk_decl_body(&program, "TYPE (Key Val AS Dict)");
+    let inner = hk_decl_body("TYPE (Key Val AS Dict)");
     let (param_names, member_name) =
         super::parse_hk_decl(&inner).expect("arity above 1 must declare");
     assert_eq!(param_names, vec!["Key".to_string(), "Val".to_string()]);
@@ -132,8 +127,7 @@ fn hk_arity_above_one_declares() {
 /// application record, so they must be distinct.
 #[test]
 fn hk_duplicate_parameter_name_errors() {
-    let program = program_storage();
-    let inner = hk_decl_body(&program, "TYPE (Key Key AS Dict)");
+    let inner = hk_decl_body("TYPE (Key Key AS Dict)");
     let error = super::parse_hk_decl(&inner).expect_err("a duplicate parameter name must error");
     assert!(
         error.to_string().contains("duplicate parameter name `Key`"),
@@ -142,13 +136,10 @@ fn hk_duplicate_parameter_name_errors() {
 }
 
 /// The parenthesized `(Param... AS Name)` group inside a parsed `TYPE` declaration.
-fn hk_decl_body<'a>(
-    program: &'a ProgramStorage,
-    source: &str,
-) -> crate::machine::model::KExpression<'a> {
-    let expr = parse_one(program, source);
-    match expr.parts.get(1).expect("TYPE decl part").value {
-        ExpressionPart::Expression(inner) => *inner,
+fn hk_decl_body(source: &str) -> crate::machine::model::KExpression<'static> {
+    let expr = parse_one(source);
+    match &expr.parts.get(1).expect("TYPE decl part").value {
+        ExpressionPart::Expression(inner) => inner.as_ref().clone(),
         other => panic!("expected a parenthesized decl, got {other:?}"),
     }
 }
@@ -157,9 +148,8 @@ fn hk_decl_body<'a>(
 /// slot lives in the signature's stored schema (`value_slots`), not the decl scope's type table.
 #[test]
 fn val_slot_after_type_records_abstract_member() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG Container = ((TYPE Elt) (VAL item :Elt))");
     let handle = scope
@@ -188,9 +178,8 @@ fn val_slot_after_type_records_abstract_member() {
 /// a distinct identity from the SIG-decl-time member it was threaded from.
 #[test]
 fn opaque_ascription_mints_module_abstract_for_type_member() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE implementation = ((LET Elt = Number) (LET item = 0))\n\
@@ -227,9 +216,8 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
 /// fresh child scope, so the per-application `nonce` differs even though `source` and name agree.
 #[test]
 fn two_ascriptions_of_one_sig_mint_distinct_slot_types() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE implementation = ((LET Elt = Number) (LET item = 0))\n\
@@ -292,9 +280,8 @@ fn wrap_type_constructor(scope: &crate::machine::Scope<'_>, types: &TypeRegistry
 /// `ConstructorApply` carrier.
 #[test]
 fn fn_return_type_constructor_apply_root_scope() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let wrap = wrap_type_constructor(scope, test_run.types());
     scope.register_builtin_type(
@@ -304,13 +291,7 @@ fn fn_return_type_constructor_apply_root_scope() {
     );
     let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(
-                &program,
-                "LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))",
-            ),
-        ),
+        parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),
         scope,
     );
     runtime.execute().expect("scheduler should run");
@@ -344,21 +325,17 @@ fn fn_return_type_constructor_apply_root_scope() {
 #[test]
 fn monad_signature_smoke() {
     use crate::parse::parse;
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let src = "SIG Monad = ((TYPE (Type AS Wrap)) \
          (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
-    let exprs = parse(program.brand(), src).expect("parse should succeed");
+    let exprs = parse(src).expect("parse should succeed");
     {
         let runtime = &mut test_run.runtime;
         let mut ids = Vec::new();
         for expr in exprs {
-            ids.push(runtime.dispatch_in_scope(
-                crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
-                scope,
-            ));
+            ids.push(runtime.dispatch_in_scope(expr, scope));
         }
         match runtime.execute() {
             Ok(()) => {}
@@ -420,9 +397,8 @@ fn monad_signature_smoke() {
 /// slot's kind and parameter-name check.
 #[test]
 fn module_attr_access_returns_type_constructor() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "NEWTYPE (Type AS Wrapper)\n\

@@ -2,15 +2,14 @@
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, TestRun};
 use crate::machine::model::{KObject, KType, ReturnType};
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage};
 use crate::parse::parse;
 
 #[test]
 fn fn_parses_declared_return_type_onto_signature() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
 
@@ -26,17 +25,12 @@ fn fn_parses_declared_return_type_onto_signature() {
 /// load-bearing assertion is that `DOUBLE` isn't registered.
 #[test]
 fn fn_without_return_type_annotation_does_not_register() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let exprs = parse(program.brand(), "FN (DOUBLE x :Number) = (PRINT \"x\")")
-        .expect("parse should succeed");
+    let exprs = parse("FN (DOUBLE x :Number) = (PRINT \"x\")").expect("parse should succeed");
     for expr in exprs {
-        test_run.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
-            scope,
-        );
+        test_run.runtime.dispatch_in_scope(expr, scope);
     }
     let _ = test_run.runtime.execute();
     assert!(
@@ -50,24 +44,15 @@ fn fn_without_return_type_annotation_does_not_register() {
 /// differ — the second definition is a duplicate, not a new overload.
 #[test]
 fn return_type_only_difference_is_a_duplicate_overload() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "FN (DOUBLE x :Number) -> Number = (x)"),
-        ),
-        scope,
-    );
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "FN (DOUBLE x :Number) -> Str = (\"a\")"),
-        ),
-        scope,
-    );
+    test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Number = (x)"), scope);
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Str = (\"a\")"), scope);
     test_run
         .runtime
         .execute()
@@ -84,17 +69,12 @@ fn return_type_only_difference_is_a_duplicate_overload() {
 
 #[test]
 fn fn_with_unknown_return_type_name_errors() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "FN (DOUBLE x :Number) -> Bogus = (x)"),
-        ),
-        scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
     test_run
         .runtime
         .execute()
@@ -111,18 +91,11 @@ fn fn_with_unknown_return_type_name_errors() {
 
 #[test]
 fn user_fn_return_type_mismatch_surfaces_as_kerror() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (LIE) -> Number = (\"oops\")");
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "LIE"),
-        ),
-        scope,
-    );
+    let id = test_run.runtime.dispatch_in_scope(parse_one("LIE"), scope);
     test_run
         .runtime
         .execute()
@@ -175,17 +148,12 @@ fn fn_with_forward_user_bound_return_type_works() {
 /// see [ktype/slots-and-signatures.md § TypeNameRef](../../../../design/typing/ktype/slots-and-signatures.md#ktypeunresolved--surface-form-survives-bind).
 #[test]
 fn fn_return_type_surface_name_preserved_in_error() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "FN (DOIT) -> SomeWeirdName = (1)"),
-        ),
-        scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
     test_run
         .runtime
         .execute()
@@ -202,11 +170,10 @@ fn fn_return_type_surface_name_preserved_in_error() {
 
 #[test]
 fn user_fn_with_any_return_type_accepts_anything() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (PURE) -> Any = (\"a string\")");
-    let result = test_run.run_one(parse_one(&program, "PURE"));
+    let result = test_run.run_one(parse_one("PURE"));
     assert!(matches!(result, KObject::KString(s) if *s == "a string"));
 }
 
@@ -220,20 +187,15 @@ fn user_fn_with_any_return_type_accepts_anything() {
 /// two-deep cross-function chain, not self-recursion.
 #[test]
 fn keep_first_across_tail_chain_errors_against_outer_contract() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (INNER) -> Any = (\"nope\")");
     test_run.run("FN (MIDDLE) -> Any = (INNER)");
     test_run.run("FN (OUTER) -> Number = (MIDDLE)");
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "OUTER"),
-        ),
-        scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("OUTER"), scope);
     test_run
         .runtime
         .execute()
@@ -276,23 +238,14 @@ fn keep_first_across_tail_chain_errors_against_outer_contract() {
 #[test]
 fn spliced_bare_name_tail_checks_declared_return() {
     // Non-matching: the bare-name tail forwards a Str; the splice check rejects it against -> Number.
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let bad_ids: Vec<_> = parse(
-        program.brand(),
-        "FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = \"nope\"",
-    )
-    .expect("parse succeeds")
-    .into_iter()
-    .map(|e| {
-        test_run.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
-            scope,
-        )
-    })
-    .collect();
+    let bad_ids: Vec<_> = parse("FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = \"nope\"")
+        .expect("parse succeeds")
+        .into_iter()
+        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
+        .collect();
     test_run
         .runtime
         .execute()
@@ -316,23 +269,14 @@ fn spliced_bare_name_tail_checks_declared_return() {
     );
 
     // Matching: the bare-name tail forwards a Number; the splice check passes and the value arrives.
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let ok_ids: Vec<_> = parse(
-        program.brand(),
-        "FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = 7",
-    )
-    .expect("parse succeeds")
-    .into_iter()
-    .map(|e| {
-        test_run.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
-            scope,
-        )
-    })
-    .collect();
+    let ok_ids: Vec<_> = parse("FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = 7")
+        .expect("parse succeeds")
+        .into_iter()
+        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
+        .collect();
     test_run
         .runtime
         .execute()

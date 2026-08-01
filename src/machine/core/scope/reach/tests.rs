@@ -11,7 +11,7 @@ use crate::builtins::test_support::TestRun;
 use crate::machine::model::{
     ExpressionSignature, Held, Record, RecordSubstrate, ReturnType, SignatureElement,
 };
-use crate::machine::{program_storage, run_root_storage};
+use crate::machine::run_root_storage;
 use crate::machine::{Body, CallFrame, KFunction};
 use crate::witnessed::FoldedPlacement;
 
@@ -76,9 +76,8 @@ fn substrate_address(value: &KObject<'_>) -> usize {
 /// pinning — see the `mod tests` declaration in the parent.)
 #[test]
 fn adopt_for_binding_pins_a_home_borrowing_record() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let consumer = test_run.scope;
     let producer: Rc<CallFrame> = CallFrame::new(consumer);
     let types = TypeRegistry::new();
@@ -172,9 +171,8 @@ fn alloc_split_reach_record<'run>(
 /// a subset walk over the whole value would over-state every cell.
 #[test]
 fn a_projected_cell_carries_its_own_run_not_the_containers_union() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let consumer = test_run.scope;
     // Two sibling frames: neither one's owner chain keeps the other's region alive, so a run naming
     // one provably does not cover the other.

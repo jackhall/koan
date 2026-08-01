@@ -2,7 +2,7 @@
 
 use crate::builtins::test_support::{binds_module, lookup_fn, parse_one, TestRun};
 use crate::machine::model::{KObject, KType, TypeNode};
-use crate::machine::{program_storage, run_root_storage};
+use crate::machine::run_root_storage;
 use crate::witnessed::region_metrics;
 
 /// Bare parameter-name return type: `-> er` resolves per-call to the carried type. The parameter is
@@ -11,9 +11,8 @@ use crate::witnessed::region_metrics;
 #[test]
 fn functor_return_bare_parameter_name_resolves_per_call() {
     use crate::machine::model::ReturnType;
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG Ordered = (VAL compare :Number)");
     test_run.run("MODULE int_ord = (LET compare = 7)");
@@ -24,7 +23,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         "USE_ID's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
-    let result = test_run.run_one(parse_one(&program, "USE_ID Ordered"));
+    let result = test_run.run_one(parse_one("USE_ID Ordered"));
     match result {
         KObject::Module(_) => {}
         other => {
@@ -43,9 +42,8 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
 #[test]
 fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     use crate::machine::model::ReturnType;
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
@@ -75,16 +73,15 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
 /// carrier yields the underlying `Number(0)`.
 #[test]
 fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
          MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
          LET int_ord_view = (int_ord :| WithZero)",
     );
     test_run.run("FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero)");
-    let result = test_run.run_one(parse_one(&program, "GET_ZERO int_ord_view"));
+    let result = test_run.run_one(parse_one("GET_ZERO int_ord_view"));
     match result {
         KObject::Wrapped { inner, type_id } => {
             assert!(
@@ -119,9 +116,8 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
 #[test]
 fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     use crate::machine::model::ReturnType;
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
@@ -148,16 +144,15 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
 /// incidental `Number` element type would leak through.
 #[test]
 fn functor_deferred_return_coarsens_list_carrier() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "SIG Seq = ((TYPE Carrier) (VAL items :Carrier))\n\
          MODULE ints = ((LET Carrier = :(LIST OF Any)) (LET items = [1 2 3]))\n\
          LET ints_view = (ints :! Seq)",
     );
     test_run.run("FN (ITEMS er :Seq) -> er.Carrier = (er.items)");
-    let result = test_run.run_one(parse_one(&program, "ITEMS ints_view"));
+    let result = test_run.run_one(parse_one("ITEMS ints_view"));
     match result {
         KObject::List(_, list_type) => assert_eq!(
             *list_type,
@@ -178,9 +173,8 @@ fn functor_deferred_return_coarsens_list_carrier() {
 /// TCO-flat. (The pre-`PerCall` dep-finish lowering held a frame per call and would not collapse.)
 #[test]
 fn deferred_return_tail_call_stays_tco_flat() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     // `Er` is `:Signature`-kind, so the deferred `-> Er` return resolves per-call to a signature (a
     // valid return type, unlike a concrete module identity); each body returns a module ascribed to
@@ -196,13 +190,9 @@ fn deferred_return_tail_call_stays_tco_flat() {
     // Measure this program's own slot footprint: release the setup phase's slots so the store's
     // high-water mark starts at zero.
     test_run.reset_slots();
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "AA Seq"),
-        ),
-        scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("AA Seq"), scope);
     test_run
         .runtime
         .execute()
@@ -227,9 +217,8 @@ fn deferred_return_tail_call_stays_tco_flat() {
 /// the body as dep-finish dependencies, making each onward call a dep — O(n).)
 #[test]
 fn deferred_expression_return_tail_chain_stays_flat() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Seq = ((TYPE Carrier) (VAL v :Number))\n\
@@ -242,13 +231,10 @@ fn deferred_expression_return_tail_chain_stays_flat() {
          FN (BB er :Seq) -> er.Carrier = (CC er)\n\
          FN (AA er :Seq) -> er.Carrier = (BB er)",
     );
-    // Parse before the snapshot: program storage's own region mint is not a call's mint.
-    let call = parse_one(&program, "AA view");
     let minted_before = region_metrics().minted_total;
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
-        scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("AA view"), scope);
     test_run
         .runtime
         .execute()
@@ -276,9 +262,8 @@ fn deferred_expression_return_tail_chain_stays_flat() {
 #[test]
 fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     use crate::machine::KErrorKind;
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
@@ -290,13 +275,9 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     // member, not the builtin `Type` name — module member access is module-own and does not
     // fall through to the builtin root.)
     test_run.run("FN (BAD er :Ordered) -> er.Carrier = (1)");
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "BAD int_ord_view"),
-        ),
-        scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("BAD int_ord_view"), scope);
     test_run
         .runtime
         .execute()

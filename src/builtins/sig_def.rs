@@ -72,24 +72,23 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, TestRun};
-    use crate::machine::program_storage;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
+    use crate::parse::parse;
 
     #[test]
     fn binder_name_extracts_sig_name() {
-        let program = program_storage();
-        let expr = parse_one(&program, "SIG Ordered = (VAL x :Number)");
+        let mut exprs = parse("SIG Ordered = (VAL x :Number)").expect("parse should succeed");
+        let expr = exprs.remove(0);
         let name = expr.binder_name_from_type_part();
-        assert_eq!(name, Some("Ordered"));
+        assert_eq!(name.as_deref(), Some("Ordered"));
     }
 
     #[test]
     fn sig_binds_under_name_in_scope() {
         use crate::machine::model::TypeNode;
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = (VAL x :Number)");
         // SIG installs a single type-side identity; nothing lands in `bindings.data`.
@@ -106,9 +105,8 @@ mod tests {
     #[test]
     fn sig_name_renders_structurally_not_by_declaration_name() {
         use crate::machine::model::TypeNode;
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = (VAL x :Number)");
         let handle = scope.resolve_type("Ordered").expect("Ordered binds");
@@ -125,9 +123,8 @@ mod tests {
     /// outer-scope-bound type alias and resolves once the alias finalizes.
     #[test]
     fn sig_body_parks_on_outer_placeholder() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         use crate::machine::model::{KType, TypeNode};
@@ -154,12 +151,10 @@ mod tests {
     /// pins that the `Type` spelling does not declare a member.
     #[test]
     fn sig_member_named_type_collides_with_builtin_type() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         let err = test_run.run_one_err(parse_one(
-            &program,
             "SIG Ordered = ((TYPE Type) (VAL compare :Number))",
         ));
         assert!(
@@ -176,9 +171,8 @@ mod tests {
     /// `Foo` (type side) in the parent scope.
     #[test]
     fn sig_body_error_short_circuits_finalize() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("SIG Foo = (VAL x :NonexistentType)");
         assert!(
@@ -193,9 +187,8 @@ mod tests {
     #[test]
     fn identical_sigs_share_identity_differing_members_distinguish() {
         use crate::machine::model::TypeNode;
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run(
             "SIG Alpha = ((VAL x :Number) (VAL y :Str))\n\
@@ -222,9 +215,8 @@ mod tests {
     #[test]
     fn sig_self_referential_slot_canonicalizes() {
         use crate::machine::model::TypeNode;
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run(
             "SIG OrdA = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))\n\
@@ -256,9 +248,8 @@ mod tests {
     #[test]
     fn with_pins_distinguish_signature_identity() {
         use crate::machine::model::{KType, TypeNode};
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("SIG Container = ((TYPE Elem) (VAL item :Elem))");
         let types = test_run.types();

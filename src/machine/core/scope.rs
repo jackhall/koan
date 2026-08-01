@@ -162,18 +162,18 @@ impl<'a> Scope<'a> {
 
     /// The storage pin [`CallFrame::new`](super::arena::CallFrame::new) chains for a frame whose
     /// child scope borrows into this scope's region: the region's owning storage — or no pin when
-    /// that owner is at the eternal tier
-    /// ([`is_eternal`](crate::witnessed::RegionHost::is_eternal)), whose region outlives everything
-    /// that could retain it and must not be strong-chained (a root chain plus an escaping value's
-    /// reach-set pin is the region↔value `Rc` cycle the frame design excludes). The owner answers
-    /// its own tier, so the two outcomes stay distinct: the `expect` reports a **dead owner**, which
-    /// is a bug, while `None` reports the eternal-tier **policy**.
+    /// that owner is the run root
+    /// ([`is_run_root`](crate::witnessed::RegionHost::is_run_root)), whose region outlives the run and
+    /// must not be strong-chained (a root chain plus an escaping value's reach-set pin is the
+    /// region↔value `Rc` cycle the frame design excludes). The owner answers its own tier, so the
+    /// two outcomes stay distinct: the `expect` reports a **dead owner**, which is a bug, while
+    /// `None` reports the run-root **policy**.
     pub(crate) fn parent_frame_pin(&self) -> Option<Rc<FrameStorage>> {
         let owner = self
             .region_owner
             .upgrade()
             .expect("a live scope reference implies a live region owner");
-        (!owner.is_eternal()).then_some(owner)
+        (!owner.is_run_root()).then_some(owner)
     }
 
     /// The [`FrameStorage`] (cloned `Weak`) whose region this scope lives in — see [`Self::brand`]'s

@@ -19,16 +19,18 @@ use std::rc::Rc;
 
 use koan::builtins::test_support::{lookup_binding, SharedBuf, TestRun};
 use koan::machine::model::{KObject, SignatureElement, TypeNode};
-use koan::machine::{
-    program_storage, run_root_storage, FrameStorage, KFunction, ProgramStorage, Scope,
-};
+use koan::machine::{run_root_storage, FrameStorage, KFunction, Scope};
+use koan::parse::parse;
 
 /// Run `src` to completion and hand back the whole run — the seeded scope the assertions
 /// read bindings from, plus the run frame's registry type names render against.
-fn run<'a>(program: &'a ProgramStorage, region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
-    let mut test_run = TestRun::silent(program, region);
+fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
+    let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    test_run.dispatch_source_in(scope, src);
+    let exprs = parse(src).expect("parse should succeed");
+    for e in exprs {
+        test_run.runtime.dispatch_in_scope(e, scope);
+    }
     test_run
         .runtime
         .execute()
@@ -63,7 +65,6 @@ fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
 /// result to `int_set`.
 #[test]
 fn functor_e2e_makeset_produces_module() {
-    let program = program_storage();
     let region = run_root_storage();
     // `(MAKESET int_ord)` works directly when `int_ord`'s carrier carries the declared
     // signature in its `compatible_sigs` set. The LET partition guard
@@ -73,7 +74,6 @@ fn functor_e2e_makeset_produces_module() {
     // then consults `compatible_sigs` at the signature-typed slot, so no parens-wrap or
     // ascription-view workaround is required at the call site.
     let test_run = run(
-        &program,
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord_base = ((LET compare = 7))\n\
@@ -127,10 +127,8 @@ fn functor_e2e_makeset_produces_module() {
 /// `bindings.types`.
 #[test]
 fn let_bound_fn_applied_by_named_args_yields_module() {
-    let program = program_storage();
     let region = run_root_storage();
     let test_run = run(
-        &program,
         &region,
         "LET apply_it = (FN (APPLYIT x :Number) -> Module = \
             (MODULE inner = ((LET tag = x))))\n\
@@ -188,10 +186,8 @@ fn run_expect_err(src: &str) -> String {
 /// `got`.
 #[test]
 fn signature_param_satisfied_via_named_args() {
-    let program = program_storage();
     let region = run_root_storage();
     let test_run = run(
-        &program,
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord_base = ((LET compare = 7))\n\

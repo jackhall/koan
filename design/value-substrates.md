@@ -68,9 +68,8 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   into their defining regions.
 - Scalars (`Number`, `Bool`, `Null`) are owned leaves. `KString` rides a
   bump-hosted `&'a str` ([§ String residence](#string-residence)), as does a
-  `Tagged` discriminant and a `KKey::String` dict key.
-  [`KExpression`](../src/machine/model/ast.rs) is a `Copy` handle whose parts run
-  is a bumped slice of `Copy` parts
+  `Tagged` discriminant and a `KKey::String` dict key; `KExpression`'s part
+  vectors are arena slices
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
 
 Each cell-bearing substrate is one index-generic **wrapper struct**,
@@ -111,10 +110,9 @@ and no structural residence walk** for composite values. The rank-2 brand
 discipline that makes this sound is the substrate contract in
 [witnessed-memory.md](../workgraph/design/witnessed-memory.md).
 
-Region-free value construction exists only for shapes that need no door — the
-scalars, which own their data outright, and a quoted expression, whose parts run
-already sits in the eternal-tier storage that parsed it; no container is ever
-built without a door in hand. The door is a brand paired with the **holder-rule proof** its
+Region-free value construction exists only for shapes that own their data
+outright (scalars, quoted expressions); no container is ever built without a
+door in hand. The door is a brand paired with the **holder-rule proof** its
 per-cell verdicts are read under
 ([`SubstrateDoor`](../src/machine/core/arena.rs)), so a container cannot be
 built through a bare brand: a cell that keeps borrowing a foreign source hands
@@ -141,7 +139,7 @@ decision reads (see [§ Cost-driven copy](#cost-driven-copy-the-optimization)) a
 sharper than the conservative contains-borrows question.
 
 Per cell, the door's verdict is one O(1) read of stored facts and never a walk:
-owned data (a scalar, a string, a type value, a quoted expression)
+owned data (a scalar, a string, a type value, a splice-free quoted expression)
 lands in an empty-reach run; a nested substrate hands in its own stored union;
 a closure or module is a born-borrowing seed naming the scope it borrows.
 
@@ -288,14 +286,12 @@ at the seam:
 - **`copy_cost`** — memoized on every substrate at construction: leaves
   contribute their weight (cell count as the first cut; byte-weighted where a
   leaf's size varies, a string being the motivating case), nested substrates
-  contribute their own memoized cost, borrow leaves contribute zero. An
-  expression cell is one of those borrow leaves: it holds its node by value, and
-  the node's parts run, keyword text and structural cache all live in the
-  eternal-tier storage that parsed them, so copying the cell copies pointers and
-  rebuilds nothing. **Every cell family prices**, so the decision below is never
-  taken blind. Because substrates are immutable
+  contribute their own memoized cost, borrow leaves contribute zero. A cell that
+  is a spliced expression is **unpriceable**: it carries no memo of its own, so
+  the whole substrate's cost saturates to a sentinel and the value copies
+  unconditionally (releasing per the stored read below). Because substrates are immutable
   the memo can never go stale, and because the copy verb rebuilds a shared
-  subvalue once per reference, the memoized sum is the copy's *exact*
+  subvalue once per reference, a priceable memoized sum is the copy's *exact*
   cost — no forwarding map, no walk.
 - **the region's allocated total** — its arenas already know their size, and
   its bump reports its live occupancy
@@ -314,13 +310,14 @@ per-crossing seam's.
 
 The ratio is gated by the exact **borrows-home** query. Set, the value **pins
 outright** — a leaf provably borrows the home region, so a copy would pay the
-rebuild *and* keep the pin; the ratio is never consulted. Clear, the copy
-provably releases the host (no surviving borrow reaches it), so
+rebuild *and* keep the pin; the ratio is never consulted. Clear on a priceable
+value, the copy provably releases the host (no surviving borrow reaches it), so
 the ratio alone decides. This is why borrows-home is a *separate*, sharper
 question than contains-borrows: contains-borrows asks only whether
 *any* borrow leaf exists into *any* region, and remains the seal/reach
 conservatism input; the copy decision needs the home-relative question, and gets
-an exact answer. Release is a stored fact on either verdict: the copy claims
+an exact answer for a priceable value. On the **unpriceable** path, where no
+home-relative cost memo is available, release is still a stored fact: the copy claims
 the retiring host's release exactly when no surviving run description names it
 ([§ Sectioned reach](#sectioned-reach)), so a value whose leaves all point into
 foreign regions still releases its home.
@@ -364,29 +361,6 @@ the pins keeping the entry's reach alive live one level down, in the region's ow
 union bundle, which drops whole at region death
 ([reach.md § The pin bundle](../workgraph/design/reach.md#the-pin-bundle)).
 
-Expression parts are not in it either, for the same reason. Both node families —
-the raw AST [`KExpression`](../src/machine/model/ast.rs) and the scheduler's
-[`WorkingExpression`](../src/machine/model/ast/working.rs) — are `Copy` handles
-over bumped slices of `Copy` parts, so no expression slot carries `Drop` glue and
-region death for a spliced node's part storage is chunk deallocation. Their
-storage tiers differ and that difference is what the value channel reads:
-
-- **Raw AST lives in program storage**, a `FrameStorage` at the eternal tier
-  minted by [`program_storage`](../src/machine/core/arena/frame.rs) above the run
-  root ([memory-model.md](memory-model.md)). The eternal rule filters such a
-  member out of every pin bundle and reach description, so a value pointing at
-  program text reaches nothing.
-- **A working node's parts are bump-allocated in the dispatching step's region**,
-  because that is where the scheduler writes a resolved sub-result's resting
-  `Sealed` cell when it splices one in.
-
-`KObject::KExpression` takes a `KExpression`, and there is no conversion the other
-way, so a resolved sub-result is **unreachable from the value channel** by typing
-rather than by audit. That is what lets the alloc door call an expression cell's
-run empty, `retains_home` answer `false` for one, and the cost memo price it at
-zero as a borrow leaf ([§ Cost-driven copy](#cost-driven-copy-the-optimization)) —
-each an O(1) read of a structural fact, with no walk over the node behind it.
-
 ## Invariants preserved
 
 - **Cycle-freedom needs no gate.** No stored value owns an `Rc` back to any
@@ -410,4 +384,5 @@ the conversion slate; its `Requires` chain encodes the order:
 
 - [Residence-audit retirement](../roadmap/untyped_arena/residence-audit-retirement.md)
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
+- [Region-store expression parts](../roadmap/untyped_arena/region-store-expressions.md)
 - [Drop-free region death](../roadmap/untyped_arena/drop-free-region-death.md)

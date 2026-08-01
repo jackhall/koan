@@ -520,39 +520,31 @@ mod tests {
     use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::model::KObject;
     use crate::machine::model::KType;
-    use crate::machine::program_storage;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
 
     #[test]
     fn attr_reads_field_from_named_struct() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})");
-        let result = test_run.run_one(parse_one(&program, "p.x"));
+        let result = test_run.run_one(parse_one("p.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 3.0));
     }
 
     #[test]
     fn attr_reads_each_field_independently() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})");
-        assert!(
-            matches!(test_run.run_one(parse_one(&program, "p.x")), KObject::Number(n) if *n == 3.0)
-        );
-        assert!(
-            matches!(test_run.run_one(parse_one(&program, "p.y")), KObject::Number(n) if *n == 4.0)
-        );
+        assert!(matches!(test_run.run_one(parse_one("p.x")), KObject::Number(n) if *n == 3.0));
+        assert!(matches!(test_run.run_one(parse_one("p.y")), KObject::Number(n) if *n == 4.0));
     }
 
     #[test]
     fn attr_chained_through_nested_struct() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run(
             "NEWTYPE Point = :{x :Number, y :Number}\n\
              NEWTYPE Line = :{start :Point, finish :Point}\n\
@@ -560,16 +552,15 @@ mod tests {
              LET tip = (Point {x = 3, y = 4})\n\
              LET seg = (Line {start = origin, finish = tip})",
         );
-        let result = test_run.run_one(parse_one(&program, "seg.finish.x"));
+        let result = test_run.run_one(parse_one("seg.finish.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 3.0));
     }
 
     #[test]
     fn attr_unbound_name_errors() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
-        let err = test_run.run_one_err(parse_one(&program, "ghost.x"));
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one("ghost.x"));
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(name) if name == "ghost"),
             "expected UnboundName(\"ghost\"), got {err}",
@@ -578,11 +569,10 @@ mod tests {
 
     #[test]
     fn attr_on_non_struct_value_errors() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("LET n = 5");
-        let err = test_run.run_one_err(parse_one(&program, "n.x"));
+        let err = test_run.run_one_err(parse_one("n.x"));
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {
                 assert_eq!(arg, "s");
@@ -595,11 +585,10 @@ mod tests {
 
     #[test]
     fn attr_unknown_field_errors() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})");
-        let err = test_run.run_one_err(parse_one(&program, "p.z"));
+        let err = test_run.run_one_err(parse_one("p.z"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("Point") && msg.contains("`z`")),
@@ -609,9 +598,8 @@ mod tests {
 
     #[test]
     fn attr_chained_unknown_field_errors() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run(
             "NEWTYPE Point = :{x :Number, y :Number}\n\
              NEWTYPE Line = :{start :Point, finish :Point}\n\
@@ -619,7 +607,7 @@ mod tests {
              LET tip = (Point {x = 3, y = 4})\n\
              LET seg = (Line {start = origin, finish = tip})",
         );
-        let err = test_run.run_one_err(parse_one(&program, "seg.start.bogus"));
+        let err = test_run.run_one_err(parse_one("seg.start.bogus"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("Point") && msg.contains("`bogus`")),
@@ -630,34 +618,28 @@ mod tests {
     /// `b.x` on a NEWTYPE-wrapped record-newtype reads through to the underlying field.
     #[test]
     fn access_field_falls_through_wrapped_record_newtype() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run(
             "NEWTYPE Point = :{x :Number, y :Number}\n\
              NEWTYPE Boxed = Point\n\
              LET p = (Point {x = 1, y = 2})\n\
              LET b = (Boxed (p))",
         );
-        assert!(
-            matches!(test_run.run_one(parse_one(&program, "b.x")), KObject::Number(n) if *n == 1.0)
-        );
-        assert!(
-            matches!(test_run.run_one(parse_one(&program, "b.y")), KObject::Number(n) if *n == 2.0)
-        );
+        assert!(matches!(test_run.run_one(parse_one("b.x")), KObject::Number(n) if *n == 1.0));
+        assert!(matches!(test_run.run_one(parse_one("b.y")), KObject::Number(n) if *n == 2.0));
     }
 
     /// Wrapping a scalar doesn't grow fields: `d.x` on a NEWTYPE-over-Number errors.
     #[test]
     fn access_field_rejects_wrapped_non_struct() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run(
             "NEWTYPE Distance = Number\n\
              LET d = (Distance (3.0))",
         );
-        let err = test_run.run_one_err(parse_one(&program, "d.x"));
+        let err = test_run.run_one_err(parse_one("d.x"));
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {
                 assert_eq!(arg, "s");
@@ -673,16 +655,15 @@ mod tests {
     /// underlying `Number`, so a deferred return `er.Carrier` accepts the body.
     #[test]
     fn opaque_view_slot_read_re_tags_with_abstract_type() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run(
             "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
              MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
              LET int_ord_view = (int_ord :| WithZero)",
         );
         let types = test_run.types.clone();
-        let result = test_run.run_one(parse_one(&program, "int_ord_view.zero"));
+        let result = test_run.run_one(parse_one("int_ord_view.zero"));
         assert_eq!(
             result.ktype().name(&types),
             "Carrier",
@@ -695,15 +676,14 @@ mod tests {
     /// concrete: `int_ord_view.zero` reads as the underlying `Number`, not the abstract `Type`.
     #[test]
     fn transparent_view_slot_read_stays_concrete() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run(
             "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
              MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
              LET int_ord_view = (int_ord :! WithZero)",
         );
-        let result = test_run.run_one(parse_one(&program, "int_ord_view.zero"));
+        let result = test_run.run_one(parse_one("int_ord_view.zero"));
         assert!(
             matches!(result, KObject::Number(n) if *n == 0.0),
             "transparent-view slot read must stay the underlying Number, got {:?}",
@@ -717,11 +697,10 @@ mod tests {
     /// result (a `VAL` slot is a specification, never a value).
     #[test]
     fn attr_on_signature_type_reads_val_slot_declared_type() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("SIG Ordered = (VAL compare :Number)");
-        let kt = test_run.run_one_type(parse_one(&program, "Ordered.compare"));
+        let kt = test_run.run_one_type(parse_one("Ordered.compare"));
         assert_eq!(kt, KType::NUMBER);
     }
 
@@ -730,16 +709,15 @@ mod tests {
     /// `b = Boxed(p)` wraps the bare record tagged `Boxed`; the diagnostic names `Boxed`.
     #[test]
     fn access_field_falls_through_wrapped_with_missing_field() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run(
             "NEWTYPE Point = :{x :Number, y :Number}\n\
              NEWTYPE Boxed = Point\n\
              LET p = (Point {x = 1, y = 2})\n\
              LET b = (Boxed (p))",
         );
-        let err = test_run.run_one_err(parse_one(&program, "b.z"));
+        let err = test_run.run_one_err(parse_one("b.z"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("Boxed") && msg.contains("`z`")),

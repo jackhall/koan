@@ -207,7 +207,7 @@ mod tests {
 
     use super::*;
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::KObject;
     use crate::machine::BindingIndex;
 
@@ -218,9 +218,8 @@ mod tests {
     /// a sibling pointer while the opened scope is live; fails on UB, not values.
     #[test]
     fn node_scope_yoked_child_erase_open_roundtrip() {
-        let program = program_storage();
         let region = run_root_storage();
-        let test_run = TestRun::silent(&program, &region);
+        let test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         let types = test_run.types.clone();
         scope

@@ -2,15 +2,14 @@
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, TestRun};
 use crate::machine::model::{KObject, SignatureElement};
-use crate::machine::{program_storage, run_root_storage};
+use crate::machine::run_root_storage;
 
 use super::capture_program_output;
 
 #[test]
 fn fn_registers_user_function_under_keyword_signature() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (GREET) -> Null = (PRINT \"hi\")");
 
@@ -23,12 +22,11 @@ fn fn_registers_user_function_under_keyword_signature() {
 
 #[test]
 fn fn_call_dispatches_body_at_call_time() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("LET x = 42\nFN (GETX) -> Number = (x)");
 
-    let result = test_run.run_one(parse_one(&program, "GETX"));
+    let result = test_run.run_one(parse_one("GETX"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 42.0),
         "GETX should return the value bound to x at call time"
@@ -37,9 +35,8 @@ fn fn_call_dispatches_body_at_call_time() {
 
 #[test]
 fn fn_rejects_non_keyword_name() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (greet) -> Null = (PRINT \"hi\")");
     assert!(!fn_is_registered(scope, "greet"));
@@ -48,13 +45,12 @@ fn fn_rejects_non_keyword_name() {
 
 #[test]
 fn fn_call_runs_body_each_time() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("LET x = 7\nFN (GETX) -> Number = (x)");
 
     for _ in 0..2 {
-        let result = test_run.run_one(parse_one(&program, "GETX"));
+        let result = test_run.run_one(parse_one("GETX"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 }
@@ -137,20 +133,18 @@ fn fn_param_resolves_inside_nested_subexpression() {
 
 #[test]
 fn fn_returns_param_value_directly() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (ECHO v :Number) -> Number = (v)");
 
-    let result = test_run.run_one(parse_one(&program, "ECHO 7"));
+    let result = test_run.run_one(parse_one("ECHO 7"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
 
 #[test]
 fn fn_signature_with_no_keyword_is_rejected() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (x :Number) -> Null = (PRINT \"oops\")");
     assert!(!fn_is_registered(scope, "x"));
@@ -160,10 +154,9 @@ fn fn_signature_with_no_keyword_is_rejected() {
 /// callable handle via `LET f = (FN ...)`.
 #[test]
 fn fn_def_returns_the_registered_kfunction() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "FN (DOUBLE x :Number) -> Number = (x)"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("FN (DOUBLE x :Number) -> Number = (x)"));
     assert!(
         matches!(result, KObject::KFunction(_)),
         "FN should return its registered KFunction",

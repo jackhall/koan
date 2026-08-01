@@ -4,36 +4,32 @@
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KObject;
-use crate::machine::program_storage;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 #[test]
 fn add_dispatches_to_number() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "1 + 2"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("1 + 2"));
     assert!(matches!(result, KObject::Number(n) if *n == 3.0));
 }
 
 #[test]
 fn less_than_dispatches_to_bool() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "1 < 2"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("1 < 2"));
     assert!(matches!(result, KObject::Bool(true)));
 }
 
 #[test]
 fn and_dispatches_to_bool() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     // koan's boolean literals are lowercase (`true` / `false` — see
     // `src/parse/tokens.rs::try_literal`); `AND` is the keyword.
-    let result = test_run.run_one(parse_one(&program, "true AND false"));
+    let result = test_run.run_one(parse_one("true AND false"));
     assert!(matches!(result, KObject::Bool(false)));
 }
 
@@ -43,37 +39,29 @@ fn and_dispatches_to_bool() {
 /// expressions.
 #[test]
 fn nested_parenthesized_binary_evaluates() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "1 + (2 * 3)"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("1 + (2 * 3)"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
 
 #[test]
 fn subtract_multiply_and_ordering_comparisons_dispatch() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    assert!(
-        matches!(test_run.run_one(parse_one(&program, "5 - 2")), KObject::Number(n) if *n == 3.0)
-    );
-    assert!(
-        matches!(test_run.run_one(parse_one(&program, "3 * 4")), KObject::Number(n) if *n == 12.0)
-    );
-    assert!(
-        matches!(test_run.run_one(parse_one(&program, "6 / 2")), KObject::Number(n) if *n == 3.0)
-    );
+    let mut test_run = TestRun::silent(&region);
+    assert!(matches!(test_run.run_one(parse_one("5 - 2")), KObject::Number(n) if *n == 3.0));
+    assert!(matches!(test_run.run_one(parse_one("3 * 4")), KObject::Number(n) if *n == 12.0));
+    assert!(matches!(test_run.run_one(parse_one("6 / 2")), KObject::Number(n) if *n == 3.0));
     assert!(matches!(
-        test_run.run_one(parse_one(&program, "2 <= 2")),
+        test_run.run_one(parse_one("2 <= 2")),
         KObject::Bool(true)
     ));
     assert!(matches!(
-        test_run.run_one(parse_one(&program, "3 > 2")),
+        test_run.run_one(parse_one("3 > 2")),
         KObject::Bool(true)
     ));
     assert!(matches!(
-        test_run.run_one(parse_one(&program, "2 >= 3")),
+        test_run.run_one(parse_one("2 >= 3")),
         KObject::Bool(false)
     ));
 }
@@ -82,10 +70,9 @@ fn subtract_multiply_and_ordering_comparisons_dispatch() {
 /// divisor raises a structured `KError` rather than an IEEE-754 infinity/NaN.
 #[test]
 fn divide_by_zero_raises_structured_error() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "1 / 0"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("1 / 0"));
     assert!(matches!(&err.kind, KErrorKind::User(msg) if msg.contains("division by zero")));
 }
 
@@ -94,10 +81,9 @@ fn divide_by_zero_raises_structured_error() {
 /// function" registry-miss diagnostic.
 #[test]
 fn add_over_non_number_is_dispatch_miss() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "true + 1"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("true + 1"));
     assert!(matches!(&err.kind, KErrorKind::DispatchFailed { .. }));
 }
 
@@ -110,10 +96,9 @@ fn add_over_non_number_is_dispatch_miss() {
 /// `[ Expression([1, +, 2]), +, 3 ]` and evaluates left-to-right.
 #[test]
 fn additive_chain_folds_left_through_seeded_group() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "1 + 2 + 3"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("1 + 2 + 3"));
     assert!(matches!(result, KObject::Number(n) if *n == 6.0));
 }
 
@@ -121,10 +106,9 @@ fn additive_chain_folds_left_through_seeded_group() {
 /// `10 - (3 - 2)` = 9, but `FoldLeft` gives `(10 - 3) - 2` = 5.
 #[test]
 fn subtractive_chain_left_associates_through_seeded_group() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "10 - 3 - 2"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("10 - 3 - 2"));
     assert!(matches!(result, KObject::Number(n) if *n == 5.0));
 }
 
@@ -135,10 +119,9 @@ fn subtractive_chain_left_associates_through_seeded_group() {
 /// mix is written when the multiplication should bind first.
 #[test]
 fn additive_multiplicative_mix_is_registry_miss() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "1 + 2 * 3"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("1 + 2 * 3"));
     assert!(matches!(&err.kind, KErrorKind::DispatchFailed { .. }));
 }
 
@@ -153,10 +136,9 @@ fn additive_multiplicative_mix_is_registry_miss() {
 /// both the `1 < 2` and `2 < 3` pairs, and folds the two Bool results through `AND`.
 #[test]
 fn comparison_chain_reduces_pairwise_through_seeded_group() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "1 < 2 < 3"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("1 < 2 < 3"));
     assert!(matches!(result, KObject::Bool(true)));
 }
 
@@ -165,10 +147,9 @@ fn comparison_chain_reduces_pairwise_through_seeded_group() {
 /// subset of the group's members, not just singletons).
 #[test]
 fn mixed_comparison_operators_reduce_pairwise_through_seeded_group() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "1 <= 1 < 10"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("1 <= 1 < 10"));
     assert!(matches!(result, KObject::Bool(true)));
 }
 
@@ -176,10 +157,9 @@ fn mixed_comparison_operators_reduce_pairwise_through_seeded_group() {
 /// though the first pair (`1 < 5`) is true; both pairs evaluate (no short-circuit).
 #[test]
 fn comparison_chain_pairwise_false_when_any_pair_fails() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "1 < 5 < 2"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("1 < 5 < 2"));
     assert!(matches!(result, KObject::Bool(false)));
 }
 
@@ -194,11 +174,10 @@ fn comparison_chain_pairwise_false_when_any_pair_fails() {
 /// which must contain exactly one `"2\n"` line rather than two.
 #[test]
 fn pairwise_shared_middle_operand_evaluates_exactly_once() {
-    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
     test_run.run("FN (LOUD x :Number) -> Number = ((PRINT x) (x))");
-    let result = test_run.run_one(parse_one(&program, "1 < (LOUD 2) < 3"));
+    let result = test_run.run_one(parse_one("1 < (LOUD 2) < 3"));
     assert!(matches!(result, KObject::Bool(true)));
     let bytes = captured.borrow().clone();
     assert_eq!(

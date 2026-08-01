@@ -3,17 +3,16 @@
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KObject;
-use crate::machine::{program_storage, run_root_storage};
+use crate::machine::run_root_storage;
 
 use super::capture_program_output;
 
 #[test]
 fn multi_statement_fn_body_returns_last_value() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
-    let v = test_run.run_one(parse_one(&program, "FOO"));
+    let v = test_run.run_one(parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 2.0));
 }
 
@@ -45,10 +44,9 @@ fn multi_statement_fn_body_runs_each_statement() {
 /// admits the read because `a` was submitted at a lower chain index.
 #[test]
 fn backward_reference_across_statements_works() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (FOO) -> Number = ((LET a = 10) (LET b = (a)) (b))");
-    let v = test_run.run_one(parse_one(&program, "FOO"));
+    let v = test_run.run_one(parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 10.0));
 }

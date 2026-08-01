@@ -2,16 +2,15 @@
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, TestRun};
 use crate::machine::model::{Argument, KObject, KType, SignatureElement};
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage};
 
 use super::capture_program_output;
 
 #[test]
 fn fn_typed_param_records_ktype_on_signature() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
 
@@ -28,11 +27,10 @@ fn fn_typed_param_records_ktype_on_signature() {
 
 #[test]
 fn fn_typed_param_dispatches_on_matching_call() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
-    let result = test_run.run_one(parse_one(&program, "DOUBLE 7"));
+    let result = test_run.run_one(parse_one("DOUBLE 7"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
 
@@ -40,18 +38,13 @@ fn fn_typed_param_dispatches_on_matching_call() {
 /// runs out, and the queue stalls — surfaces as `DispatchFailed` from `execute()` itself.
 #[test]
 fn fn_typed_param_rejects_mismatched_call() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
-    let root = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "DOUBLE \"hi\""),
-        ),
-        scope,
-    );
+    let root = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("DOUBLE \"hi\""), scope);
     test_run
         .runtime
         .execute()
@@ -81,17 +74,12 @@ fn fn_overloads_dispatch_by_param_type() {
 
 #[test]
 fn fn_param_without_annotation_is_rejected() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "FN (DOUBLE x) -> Number = (x)"),
-        ),
-        scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
     test_run
         .runtime
         .execute()
@@ -112,17 +100,12 @@ fn fn_param_without_annotation_is_rejected() {
 
 #[test]
 fn fn_param_with_unknown_type_name_is_rejected() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "FN (DOUBLE x :Bogus) -> Number = (x)"),
-        ),
-        scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
     test_run
         .runtime
         .execute()

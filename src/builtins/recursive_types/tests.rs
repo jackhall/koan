@@ -6,7 +6,6 @@
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KType;
 use crate::machine::model::{NodeSchema, TypeDigest, TypeNode, TypeRegistry};
-use crate::machine::program_storage;
 use crate::machine::run_root_storage;
 use crate::machine::{KErrorKind, Scope};
 
@@ -47,9 +46,8 @@ fn member_scc_and_fields(
 /// enclosing scope.
 #[test]
 fn block_mutual_pair_seals_one_component_with_member_handle_cross_refs() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)");
     let types = test_run.types();
@@ -73,9 +71,8 @@ fn block_mutual_pair_seals_one_component_with_member_handle_cross_refs() {
 /// the reference parks on a producer that has already finished and screens to unbound.
 #[test]
 fn block_union_typed_cross_ref_to_a_filled_sibling_seals() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :(Aa | Null)}\n)",
@@ -96,42 +93,11 @@ fn block_union_typed_cross_ref_to_a_filled_sibling_seals() {
     }
 }
 
-/// A cross-reference inside a **three-member** union (`:(Aa | Null | Number)`) reduces through the
-/// unary `|` group, so the members ride an evaluated list literal rather than the two-member
-/// keyworded form. The sibling name therefore reaches the finalize gate as a list *element*, and
-/// list-element scheduling must park on a still-finalizing name exactly as the binary form does.
-#[test]
-fn nary_union_typed_cross_ref_to_a_finalizing_sibling_seals() {
-    let program = program_storage();
-    let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let scope = test_run.scope;
-    test_run.run(
-        "RECURSIVE TYPES Trio = (\n  NEWTYPE Cc = :{d :Dd}\n  \
-         NEWTYPE Dd = :{c :(Cc | Null | Number)}\n)",
-    );
-    let types = test_run.types();
-    let (c_scc, c_size, _) = member_scc_and_fields(scope, types, "Cc");
-    let (d_scc, _, d_fields) = member_scc_and_fields(scope, types, "Dd");
-    assert_eq!(c_scc, d_scc, "Cc and Dd seal into one component");
-    assert_eq!(c_size, 2);
-    let cc_handle = scope.resolve_type("Cc").unwrap();
-    match types.node(d_fields[0].1) {
-        TypeNode::Union { members } => assert_eq!(
-            members,
-            vec![cc_handle, KType::NULL, KType::NUMBER],
-            "`c` unions Cc's absolute member handle with the two scalar members",
-        ),
-        _ => panic!("expected `c` to carry a union, got {:?}", d_fields[0].1),
-    }
-}
-
 /// The group name binds a `Group` handle over the block's declared members.
 #[test]
 fn block_group_name_binds_the_group_handle() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)");
     let types = test_run.types();
@@ -154,9 +120,8 @@ fn block_group_name_binds_the_group_handle() {
 /// absolute handle.
 #[test]
 fn block_three_way_seals_one_component() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "RECURSIVE TYPES Trio = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{c :Cc}\n  NEWTYPE Cc = :{a :Aa}\n)",
@@ -175,12 +140,10 @@ fn block_three_way_seals_one_component() {
 /// A non-declaration statement in the block body is a shape error, and nothing binds.
 #[test]
 fn block_body_rejects_non_declaration() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let err = test_run.run_one_err(parse_one(
-        &program,
         "RECURSIVE TYPES Grp = (\n  NEWTYPE Aa = :{x :Number}\n  LET y = 1\n)",
     ));
     assert!(
@@ -198,9 +161,8 @@ fn block_body_rejects_non_declaration() {
 /// the group handle binds (the block guarantees resolution at its boundary).
 #[test]
 fn block_member_referencing_non_member_does_not_bind() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("RECURSIVE TYPES Grp = (NEWTYPE Aa = :{b :Nope})");
     assert!(
@@ -216,11 +178,9 @@ fn block_member_referencing_non_member_does_not_bind() {
 /// A duplicate member name in the body is a shape error.
 #[test]
 fn block_rejects_duplicate_member() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let err = test_run.run_one_err(parse_one(
-        &program,
         "RECURSIVE TYPES Grp = (\n  NEWTYPE Aa = :{x :Number}\n  NEWTYPE Aa = :{y :Number}\n)",
     ));
     assert!(

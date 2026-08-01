@@ -227,31 +227,24 @@ Nothing in Koan has to be alias-aware.
 
 ## Working-copy splice
 
-The scheduler dispatches each expression through its own
-[`WorkingExpression`](../../src/machine/model/ast/working.rs) — a **working copy**
-whose parts run lives in the dispatching step's region, distinct from the raw AST
-type so that no value can ever hold one
-([expressions-and-parsing.md § Two nodes](../expressions-and-parsing.md#two-nodes-raw-ast-and-the-schedulers-working-copy)).
-The keyworded dispatcher extracts every nested sub-expression out of
-the parent's `parts` (replacing each with a placeholder `StagedSlot`) and
+The scheduler dispatches each expression by mutating an **owned working
+copy** of it. The keyworded dispatcher extracts every nested sub-expression out of
+the parent's `parts` (replacing each with a placeholder `Identifier`) and
 declares them as the deps of a
 [`ParkThenContinue`](#the-dispatcher--scheduler-boundary) whose continuation
 is a `Continuation::FinishTerminal` — the dispatch flavor of a dep-finish. The
 harness submits each dep as a sub-Dispatch and parks the parent on a
 [`NodeWork`](../../src/machine/execute/nodes.rs) whose `cont` is a dep-finish wrapping
 that *splice finish* (a [`TerminalDepFinish`](../../src/machine/execute/outcome.rs)
-closure). When the deps terminalize, that finish rests each resolved value's
-delivery envelope in the finishing step's own region and freezes a new parts run
-with each staging hole replaced by its resting cell —
-`WorkingPart::Spliced { cell }` — through
-[`WorkingExpression::respliced`](../../src/machine/model/ast/working.rs). Every
-part is `Copy`, so that is a memcpy with the holes patched, not a rebuild. The splice
+closure). When the deps terminalize, that finish runs and writes each
+resolved value back into the working copy:
+`working_expr.parts[part_idx] = ExpressionPart::Future(value)`. The splice
 lives **entirely inside the finish** — the scheduler resolves deps and hands
-values back exactly as it does for any dep-finish, learning nothing about
-`Spliced` cells. The assembled `Spliced`-laden expression then goes through
+values back exactly as it does for any dep-finish, learning nothing about `Future`
+cells. The assembled `Future`-laden expression then goes through
 `resolve_dispatch` as if it had been written with literals.
 
-(This *expression* splice — rewriting `parts` to `Spliced` cells — is distinct
+(This *expression* splice — rewriting `parts` to `Future` cells — is distinct
 from the *slot* splice of [Bare-name forward splice](#bare-name-forward-splice),
 which aliases one slot to another. They share the word but not the mechanism.)
 
@@ -314,7 +307,7 @@ and Koan's part is the *timing*: it runs in
 its `Outcome` and before the harness applies it — so a dispatch splice finish's
 freed indices are on the free list before the harness dispatches the spliced body.
 By that point the consumer has read its dep results and either spliced them into
-`working_expr.parts` as `Spliced` cells (the eager-subs splice finish) or handed
+`working_expr.parts` as `Future(value)` (the eager-subs splice finish) or handed
 them to its dep-finish / catch finish, so its owned dep slots are unreachable.
 
 The net effect: recursive bodies whose only persistent state is the call result run

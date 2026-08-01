@@ -3,8 +3,8 @@
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KType;
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage};
 
 use super::capture_program_output;
 
@@ -13,22 +13,20 @@ use super::capture_program_output;
 /// `List<Any>`, the contract, not the body's incidental `List<Number>` precision.
 #[test]
 fn fn_return_coarsens_list_carrier_to_declared() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (NUMS) -> :(LIST OF Any) = ([1 2 3])");
-    let result = test_run.run_one(parse_one(&program, "NUMS"));
+    let result = test_run.run_one(parse_one("NUMS"));
     assert_eq!(result.ktype(), test_run.types.list(KType::ANY));
 }
 
 /// Without an annotation, a list keeps its precise memoized join type.
 #[test]
 fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (NUMS) -> :(LIST OF Number) = ([1 2 3])");
-    let result = test_run.run_one(parse_one(&program, "NUMS"));
+    let result = test_run.run_one(parse_one("NUMS"));
     assert_eq!(result.ktype(), test_run.types.list(KType::NUMBER));
 }
 
@@ -36,19 +34,12 @@ fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
 /// declared element type.
 #[test]
 fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (BAD) -> :(LIST OF Number) = ([2 \"hello\"])");
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "BAD"),
-        ),
-        scope,
-    );
+    let id = runtime.dispatch_in_scope(parse_one("BAD"), scope);
     runtime.execute().expect("scheduler runs to completion");
     assert!(runtime.result_error(id).is_err());
 }
@@ -57,11 +48,10 @@ fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
 /// passes and the declared element type is stamped.
 #[test]
 fn fn_return_empty_list_stamps_declared_element_type() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (EMPTY) -> :(LIST OF Number) = ([])");
-    let result = test_run.run_one(parse_one(&program, "EMPTY"));
+    let result = test_run.run_one(parse_one("EMPTY"));
     assert_eq!(result.ktype(), test_run.types.list(KType::NUMBER));
 }
 
@@ -133,19 +123,12 @@ fn fn_returning_typed_list_accepts_matching_value() {
 /// failing `execute`, so we read the slot via `result_error` to assert the failure.
 #[test]
 fn fn_returning_typed_list_rejects_wrong_element_type() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (BAD) -> :(LIST OF Number) = ([1 \"x\"])");
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "BAD"),
-        ),
-        scope,
-    );
+    let id = runtime.dispatch_in_scope(parse_one("BAD"), scope);
     runtime.execute().expect("scheduler runs to completion");
     let res = runtime.result_error(id);
     assert!(
@@ -181,20 +164,13 @@ fn fn_with_typed_function_param_accepts_matching_function() {
 /// `DispatchFailed` rather than binding the structurally-similar function.
 #[test]
 fn fn_with_typed_function_param_rejects_name_mismatch() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
     test_run.run("LET g = (FN (SHOW n :Number) -> Str = (\"hi\"))");
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "USE g"),
-        ),
-        scope,
-    );
+    let root = runtime.dispatch_in_scope(parse_one("USE g"), scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -250,20 +226,13 @@ fn fn_with_typed_function_param_admits_width_drop() {
 /// other overload the call surfaces `DispatchFailed`.
 #[test]
 fn fn_with_typed_function_param_rejects_width_extra() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
     test_run.run("LET g = (FN (SHOW x :Number, y :Str) -> Str = (\"hi\"))");
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "USE g"),
-        ),
-        scope,
-    );
+    let root = runtime.dispatch_in_scope(parse_one("USE g"), scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -303,21 +272,14 @@ fn fn_typed_function_param_contravariant_tiebreak() {
 /// are mutually incomparable, so neither wins → `AmbiguousDispatch`.
 #[test]
 fn fn_typed_function_param_incomparable_is_ambiguous() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"num\")");
     test_run.run("FN (USE f :(FN (x :Str) -> Str)) -> Str = (\"str\")");
     test_run.run("LET g = (FN (GET x :Any) -> Str = (\"v\"))");
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "USE g"),
-        ),
-        scope,
-    );
+    let root = runtime.dispatch_in_scope(parse_one("USE g"), scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -417,20 +379,13 @@ fn dispatch_disambiguates_element_only_overloads_on_bound_variable() {
 /// generic `DispatchFailed`.
 #[test]
 fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
     test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "DESCRIBE nope"),
-        ),
-        scope,
-    );
+    let root = runtime.dispatch_in_scope(parse_one("DESCRIBE nope"), scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -448,20 +403,13 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
 /// than tying as ambiguous.
 #[test]
 fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
     test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "DESCRIBE [1 \"a\"]"),
-        ),
-        scope,
-    );
+    let root = runtime.dispatch_in_scope(parse_one("DESCRIBE [1 \"a\"]"), scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -522,19 +470,12 @@ fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
 /// no other overload to fall through to, the call surfaces no match.
 #[test]
 fn fn_typed_list_param_wrong_element_type_finds_no_match() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("FN (HEAD xs :(LIST OF Number)) -> Number = (1)");
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "HEAD [\"a\"]"),
-        ),
-        scope,
-    );
+    let root = runtime.dispatch_in_scope(parse_one("HEAD [\"a\"]"), scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -552,21 +493,19 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
 /// contract.
 #[test]
 fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)");
-    let result = test_run.run_one(parse_one(&program, "ECHO [1]"));
+    let result = test_run.run_one(parse_one("ECHO [1]"));
     assert_eq!(result.ktype(), test_run.types.list(KType::ANY));
 }
 
 /// A correct-element call into a precise slot keeps the precise element type.
 #[test]
 fn fn_typed_list_param_accepts_matching_element_at_call() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
-    let result = test_run.run_one(parse_one(&program, "ECHO [1]"));
+    let result = test_run.run_one(parse_one("ECHO [1]"));
     assert_eq!(result.ktype(), test_run.types.list(KType::NUMBER));
 }

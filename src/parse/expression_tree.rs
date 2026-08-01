@@ -16,7 +16,6 @@ use std::collections::HashMap;
 
 use std::rc::Rc;
 
-use crate::machine::core::{ProgramBrand, RegionBrand};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::KError;
 use crate::parse::quotes::{mask_quotes, JUMP_MARK, LEN_SEP, LITERAL_MARK};
@@ -206,12 +205,10 @@ impl<'a> Reader<'a> {
 }
 
 pub fn build_tree<'a>(
-    program: ProgramBrand<'a>,
     masked: &[u8],
     quotes: &HashMap<usize, String>,
 ) -> Result<KExpression<'a>, KError> {
-    let brand = program.region();
-    let mut stack = ParseStack::new(brand);
+    let mut stack = ParseStack::new();
     let mut buf = String::new();
     let mut token_start: Option<u32> = None;
     let mut reader = Reader::new(masked);
@@ -263,7 +260,7 @@ pub fn build_tree<'a>(
                 reader.advance_byte();
                 if let Some(type_start) = pending_type_paren_cursor.take() {
                     stack.push_frame(BracketFrame::SigiledTypeExpr {
-                        parts: Vec::new(),
+                        expr: KExpression::new(Vec::new()),
                         span_start: type_start,
                     });
                 } else if let Some(('#', sigil_cursor)) = pending_sigil {
@@ -271,7 +268,7 @@ pub fn build_tree<'a>(
                     // call. `$(...)` keeps the head channel — evaluation is a runtime operation.
                     pending_sigil = None;
                     stack.push_frame(BracketFrame::Quote {
-                        parts: Vec::new(),
+                        expr: KExpression::new(Vec::new()),
                         span_start,
                         sigil_cursor,
                     });
@@ -281,7 +278,7 @@ pub fn build_tree<'a>(
                         _ => (None, None),
                     };
                     stack.push_frame(BracketFrame::Expression {
-                        parts: Vec::new(),
+                        expr: KExpression::new(Vec::new()),
                         head,
                         span_start,
                         sigil_cursor,
@@ -295,7 +292,7 @@ pub fn build_tree<'a>(
                 let frame = stack.pop_top().ok_or_else(|| {
                     KError::parse("closed paren without matching open paren", None)
                 })?;
-                stack.push_part(close_paren_to_part(brand, frame, end)?);
+                stack.push_part(close_paren_to_part(frame, end)?);
             }
             '[' => {
                 let span_start = reader.cursor;
@@ -333,7 +330,7 @@ pub fn build_tree<'a>(
                     // bypasses the collection adjacency check, mirroring `:(`).
                     flush_token(&mut stack, &mut buf, &mut token_start)?;
                     stack.push_frame(BracketFrame::RecordTypeExpr {
-                        parts: Vec::new(),
+                        expr: KExpression::new(Vec::new()),
                         span_start: type_start,
                     });
                 } else {
@@ -343,7 +340,7 @@ pub fn build_tree<'a>(
                         '{',
                         prev,
                         BracketFrame::Dict {
-                            dict: DictFrame::new(brand),
+                            dict: DictFrame::new(),
                             span_start,
                         },
                         &mut token_start,
@@ -397,7 +394,10 @@ pub fn build_tree<'a>(
                                 start: colon_cursor,
                                 end: reader.cursor,
                             };
-                            stack.push_part(Spanned::at(ExpressionPart::Keyword(":|"), span));
+                            stack.push_part(Spanned::at(
+                                ExpressionPart::Keyword(":|".to_string()),
+                                span,
+                            ));
                             prev = Some('|');
                             continue;
                         }
@@ -407,7 +407,10 @@ pub fn build_tree<'a>(
                                 start: colon_cursor,
                                 end: reader.cursor,
                             };
-                            stack.push_part(Spanned::at(ExpressionPart::Keyword(":!"), span));
+                            stack.push_part(Spanned::at(
+                                ExpressionPart::Keyword(":!".to_string()),
+                                span,
+                            ));
                             prev = Some('!');
                             continue;
                         }
@@ -497,17 +500,11 @@ pub fn build_tree<'a>(
                 flush_token(&mut stack, &mut buf, &mut token_start)?;
                 let start = reader.cursor;
                 reader.advance_byte();
-                let glued_equals = reader.peek_byte() == Some(b'=');
-                if glued_equals {
+                let mut text = c.to_string();
+                if reader.peek_byte() == Some(b'=') {
                     reader.advance_byte();
+                    text.push('=');
                 }
-                // This arm admits only `'<'` and `'>'`, so the wildcard is `'>'`.
-                let text = match (c, glued_equals) {
-                    ('<', false) => "<",
-                    ('<', true) => "<=",
-                    (_, false) => ">",
-                    (_, true) => ">=",
-                };
                 let span = Span {
                     start,
                     end: reader.cursor,
@@ -533,7 +530,7 @@ pub fn build_tree<'a>(
                             end: reader.cursor,
                         };
                         stack.push_part(Spanned::at(
-                            ExpressionPart::Literal(KLiteral::String("")),
+                            ExpressionPart::Literal(KLiteral::String(String::new())),
                             span,
                         ));
                     }
@@ -551,7 +548,7 @@ pub fn build_tree<'a>(
                         if reader.peek_byte() == Some(JUMP_MARK) {
                             reader.read_jump()?;
                         }
-                        let literal = quotes.get(&idx).ok_or_else(|| {
+                        let literal = quotes.get(&idx).cloned().ok_or_else(|| {
                             KError::parse(format!("unknown literal placeholder index: {idx}"), None)
                         })?;
                         let span = Span {
@@ -559,7 +556,7 @@ pub fn build_tree<'a>(
                             end: reader.cursor,
                         };
                         stack.push_part(Spanned::at(
-                            ExpressionPart::Literal(KLiteral::String(brand.alloc_text(literal))),
+                            ExpressionPart::Literal(KLiteral::String(literal)),
                             span,
                         ));
                     }
@@ -599,122 +596,107 @@ pub fn build_tree<'a>(
 /// dispatch the same. The outermost `(span, file)` is re-stamped onto the
 /// survivor so diagnostics point at the user-visible region, not the innermost
 /// wrapper.
-///
-/// The survivor is a fresh node: its parts are rewritten into a scratch `Vec` and frozen once,
-/// through [`KExpression::build`], so the structural cache is filled from the shape the parse
-/// exit actually hands on.
-fn peel_redundant<'a>(brand: RegionBrand<'a>, expression: KExpression<'a>) -> KExpression<'a> {
-    let outer_span = expression.span;
-    let outer_file = expression.file;
-    let mut survivor = expression;
-    while let [Spanned {
-        value: ExpressionPart::Expression(inner),
-        ..
-    }] = survivor.parts
-    {
-        survivor = **inner;
+fn peel_redundant<'a>(mut expr: KExpression<'a>) -> KExpression<'a> {
+    let outer_span = expr.span;
+    let outer_file = expr.file;
+    while expr.parts.len() == 1 && matches!(expr.parts[0].value, ExpressionPart::Expression(_)) {
+        if let Some(Spanned {
+            value: ExpressionPart::Expression(inner),
+            ..
+        }) = expr.parts.pop()
+        {
+            expr = *inner;
+        }
     }
-    let parts: Vec<Spanned<ExpressionPart<'a>>> = survivor
-        .parts
-        .iter()
-        .map(|part| peel_spanned(brand, *part))
-        .collect();
-    KExpression::build(
-        brand,
-        parts,
-        outer_span.or(survivor.span),
-        outer_file.or(survivor.file),
-    )
+    expr.parts = expr.parts.into_iter().map(peel_spanned).collect();
+    if outer_span.is_some() {
+        expr.span = outer_span;
+    }
+    if outer_file.is_some() {
+        expr.file = outer_file;
+    }
+    // `peel_redundant` is the universal parse-exit normalizer; the wrapper-collapse
+    // and per-part rewrite above may change the parts vector, so refresh the
+    // structural cache from the final shape.
+    expr.fill_cache();
+    expr
 }
 
-fn peel_spanned<'a>(
-    brand: RegionBrand<'a>,
-    part: Spanned<ExpressionPart<'a>>,
-) -> Spanned<ExpressionPart<'a>> {
+fn peel_spanned<'a>(part: Spanned<ExpressionPart<'a>>) -> Spanned<ExpressionPart<'a>> {
     Spanned {
-        value: peel_part(brand, part.value),
+        value: peel_part(part.value),
         span: part.span,
     }
 }
 
-fn peel_part<'a>(brand: RegionBrand<'a>, part: ExpressionPart<'a>) -> ExpressionPart<'a> {
+fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
     match part {
         ExpressionPart::Expression(inner) => {
-            ExpressionPart::Expression(brand.alloc_value(peel_redundant(brand, *inner)))
+            ExpressionPart::Expression(Box::new(peel_redundant(*inner)))
         }
         // Peel *inside* the quote, never out of it: the indent collapse wraps a sigil-led line's
         // body in its own group (`#(+)` on its own line becomes `#((+))`), so without this the
         // quote would hold a redundant wrapper instead of the body the user wrote.
         ExpressionPart::QuotedExpression(inner) => {
-            ExpressionPart::QuotedExpression(brand.alloc_value(peel_redundant(brand, *inner)))
+            ExpressionPart::QuotedExpression(Box::new(peel_redundant(*inner)))
         }
         ExpressionPart::ListLiteral(items) => {
-            let peeled: Vec<ExpressionPart<'a>> =
-                items.iter().map(|item| peel_part(brand, *item)).collect();
-            ExpressionPart::ListLiteral(brand.alloc_slice(&peeled))
+            ExpressionPart::ListLiteral(items.into_iter().map(peel_part).collect())
         }
-        ExpressionPart::DictLiteral(pairs) => {
-            let peeled: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)> = pairs
-                .iter()
-                .map(|(k, v)| (peel_part(brand, *k), peel_part(brand, *v)))
-                .collect();
-            ExpressionPart::DictLiteral(brand.alloc_slice(&peeled))
-        }
-        ExpressionPart::RecordLiteral(pairs) => {
-            let peeled: Vec<(&'a str, ExpressionPart<'a>)> = pairs
-                .iter()
-                .map(|(name, v)| (*name, peel_part(brand, *v)))
-                .collect();
-            ExpressionPart::RecordLiteral(brand.alloc_slice(&peeled))
-        }
+        ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (peel_part(k), peel_part(v)))
+                .collect(),
+        ),
+        ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(
+            pairs
+                .into_iter()
+                .map(|(name, v)| (name, peel_part(v)))
+                .collect(),
+        ),
         other => other,
     }
 }
 
-/// Returns one `KExpression` per top-level line, built into `program`'s region and registering the
-/// input under the synthetic path `<input>`. Use [`parse_with_path`] to supply a real path.
-pub fn parse<'a>(program: ProgramBrand<'a>, input: &str) -> Result<Vec<KExpression<'a>>, KError> {
-    parse_with_path(program, input, "<input>")
+/// Returns one `KExpression` per top-level line, registering the input under
+/// the synthetic path `<input>`. Use [`parse_with_path`] to supply a real path.
+pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, KError> {
+    parse_with_path(input, "<input>")
 }
 
 /// [`parse`] variant that registers the source under a caller-supplied `path`
 /// so error frames render real filenames.
 pub fn parse_with_path<'a>(
-    program: ProgramBrand<'a>,
     input: &str,
     path: impl Into<Rc<str>>,
 ) -> Result<Vec<KExpression<'a>>, KError> {
     let id = source::register(SourceFile::new(path, input.to_string()));
-    parse_with_source(program, id)
+    parse_with_source(id)
 }
 
 /// Parse against a pre-registered `SourceFile`. Installs `id` as the active
 /// `CURRENT_FILE` via [`CurrentFileGuard`] so `KError::parse` sees the right
-/// file. Every token string and every parts run the products hold is bumped into `program`'s
-/// region, so the caller owns the storage the whole AST lives in.
-pub fn parse_with_source<'a>(
-    program: ProgramBrand<'a>,
-    id: FileId,
-) -> Result<Vec<KExpression<'a>>, KError> {
-    let brand = program.region();
+/// file.
+pub fn parse_with_source<'a>(id: FileId) -> Result<Vec<KExpression<'a>>, KError> {
     let _guard = CurrentFileGuard::push(id);
     let (masked, quotes) = source::with(id, |f| mask_quotes(&f.text));
     let collapsed = collapse_whitespace(&masked)?;
-    let root = build_tree(program, &collapsed, &quotes)?;
+    let root = build_tree(&collapsed, &quotes)?;
     root.parts
-        .iter()
+        .into_iter()
         .map(|part| match part.value {
-            ExpressionPart::Expression(e) => Ok(peel_redundant(brand, *e)),
+            ExpressionPart::Expression(e) => Ok(peel_redundant(*e)),
             // The indent collapse wraps a sigil-led line *inside* the sigil, so a whole-line
             // `#(...)` reaches the root as a bare quote part: lift it into the one-part
             // expression every top-level statement is.
             quoted @ ExpressionPart::QuotedExpression(_) => {
                 let span = part.span;
                 let peeled = Spanned {
-                    value: peel_part(brand, quoted),
+                    value: peel_part(quoted),
                     span,
                 };
-                Ok(KExpression::build(brand, vec![peeled], span, Some(id)))
+                Ok(KExpression::build(vec![peeled], span, Some(id)))
             }
             other => Err(KError::parse(
                 format!("unexpected top-level part: {:?}", other),

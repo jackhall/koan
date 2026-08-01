@@ -5,12 +5,11 @@
 //! dispatches it back.
 
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{program_storage, run_root_storage};
+use crate::machine::core::run_root_storage;
 
 fn run_program(source: &str) -> Vec<u8> {
-    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
     test_run.run(source);
     let bytes = captured.borrow().clone();
     bytes

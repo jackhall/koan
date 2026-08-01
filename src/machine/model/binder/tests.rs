@@ -3,8 +3,7 @@
 
 use std::collections::HashMap;
 
-use super::{BinderExtract, BinderSpec, StoredBinderKey, BINDER_SPECS};
-use crate::machine::core::{program_storage, ProgramBrand, RegionBrand};
+use super::{BinderExtract, BinderKey, BinderSpec, BINDER_SPECS};
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
 use crate::machine::model::{KType, SignatureElement, UntypedKey};
 use crate::parse::parse;
@@ -41,9 +40,8 @@ fn overload_mask(f: &crate::machine::KFunction<'_>) -> Vec<bool> {
 /// Walk the seeded root's registered function buckets into a `key -> LiveBucket` map, recomputing
 /// each bucket's hook flag and (AND-folded) binder mask straight from the live `KFunction`s.
 fn live_buckets() -> HashMap<UntypedKey, LiveBucket> {
-    let program = crate::machine::core::program_storage();
     let storage = crate::machine::core::run_root_storage();
-    let run = crate::builtins::test_support::TestRun::silent(&program, &storage);
+    let run = crate::builtins::test_support::TestRun::silent(&storage);
     let mut table: HashMap<UntypedKey, LiveBucket> = HashMap::new();
     for scope in run.scope.ancestors() {
         // Snapshot the bucket's dormant carriers, then read each under the scope's own pin — the
@@ -92,16 +90,20 @@ fn live_buckets() -> HashMap<UntypedKey, LiveBucket> {
 
 /// Build a bucket-shaped `KExpression` from a spec key (keywords verbatim, slots as bare
 /// identifiers) so its cached `DispatchShape` can be inspected.
-fn expression_for_key<'a>(brand: RegionBrand<'a>, spec: &BinderSpec) -> KExpression<'a> {
+fn expression_for_key(spec: &BinderSpec) -> KExpression<'static> {
     let parts = spec
         .key
         .iter()
         .map(|element| match element {
-            super::UntypedElementSpec::Keyword(k) => Spanned::bare(ExpressionPart::Keyword(k)),
-            super::UntypedElementSpec::Slot => Spanned::bare(ExpressionPart::Identifier("x")),
+            super::UntypedElementSpec::Keyword(k) => {
+                Spanned::bare(ExpressionPart::Keyword((*k).to_string()))
+            }
+            super::UntypedElementSpec::Slot => {
+                Spanned::bare(ExpressionPart::Identifier("x".to_string()))
+            }
         })
         .collect();
-    KExpression::new(brand, parts)
+    KExpression::new(parts)
 }
 
 /// A spec entry with extractors exists for a bucket key iff that bucket carries a binder hook; each
@@ -110,8 +112,6 @@ fn expression_for_key<'a>(brand: RegionBrand<'a>, spec: &BinderSpec) -> KExpress
 /// table.
 #[test]
 fn spec_table_matches_live_registration() {
-    let program = program_storage();
-    let brand = program.brand();
     let live = live_buckets();
 
     // Forward: every spec entry has a matching live bucket, with the derived mask and shape.
@@ -152,7 +152,7 @@ fn spec_table_matches_live_registration() {
         }
 
         assert_eq!(
-            expression_for_key(brand.region(), spec).shape(),
+            expression_for_key(spec).shape(),
             DispatchShape::Keyworded,
             "spec key {key:?} does not classify Keyworded"
         );
@@ -189,30 +189,29 @@ fn extractor_channels_route_to_install_kinds() {
 
 // ---------- parse-time aggregation ----------
 
-/// The lone top-level statement `src` parses to, with its cache filled, built into `brand`'s
-/// region.
-fn parse_one<'a>(brand: ProgramBrand<'a>, src: &str) -> KExpression<'a> {
-    parse(brand, src)
+/// The lone top-level statement `src` parses to, with its cache filled.
+fn parse_one(src: &str) -> KExpression<'static> {
+    parse(src)
         .expect("parse")
         .into_iter()
         .next()
         .expect("one statement")
 }
 
-fn names(installs: &[StoredBinderKey<'_>]) -> Vec<String> {
+fn names(installs: &[BinderKey]) -> Vec<String> {
     installs
         .iter()
         .filter_map(|k| match k {
-            StoredBinderKey::Name(name, _) => Some((*name).to_string()),
-            StoredBinderKey::Bucket(_) => None,
+            BinderKey::Name(name, _) => Some(name.clone()),
+            BinderKey::Bucket(_) => None,
         })
         .collect()
 }
 
-fn bucket_count(installs: &[StoredBinderKey<'_>]) -> usize {
+fn bucket_count(installs: &[BinderKey]) -> usize {
     installs
         .iter()
-        .filter(|k| matches!(k, StoredBinderKey::Bucket(_)))
+        .filter(|k| matches!(k, BinderKey::Bucket(_)))
         .count()
 }
 
@@ -220,12 +219,7 @@ fn bucket_count(installs: &[StoredBinderKey<'_>]) -> usize {
 /// LET value slot is a chain slot and the FN child is not block-shaped.
 #[test]
 fn nested_chain_aggregates_both_keys() {
-    let program = program_storage();
-    let brand = program.brand();
-    let stmt = parse_one(
-        brand,
-        "LET make_set = (FN (MAKESET item :Number) -> Number = (item))",
-    );
+    let stmt = parse_one("LET make_set = (FN (MAKESET item :Number) -> Number = (item))");
     assert_eq!(names(stmt.binder_installs()), vec!["make_set".to_string()]);
     assert_eq!(bucket_count(stmt.binder_installs()), 1);
 }
@@ -234,9 +228,7 @@ fn nested_chain_aggregates_both_keys() {
 /// the inner LET is not block-shaped.
 #[test]
 fn nested_let_chain_aggregates_both_names() {
-    let program = program_storage();
-    let brand = program.brand();
-    let stmt = parse_one(brand, "LET z = (LET a = 3)");
+    let stmt = parse_one("LET z = (LET a = 3)");
     let mut got = names(stmt.binder_installs());
     got.sort();
     assert_eq!(got, vec!["a".to_string(), "z".to_string()]);
@@ -245,16 +237,11 @@ fn nested_let_chain_aggregates_both_names() {
 /// A redundant single-`Expression` paren wrapper passes its child's aggregate straight through.
 #[test]
 fn redundant_parens_pass_through() {
-    let program = program_storage();
-    let brand = program.brand();
-    let inner = parse_one(brand, "LET x = 1");
+    let inner = parse_one("LET x = 1");
     let expected = names(inner.binder_installs());
-    let wrapped = KExpression::new(
-        brand.region(),
-        vec![Spanned::bare(ExpressionPart::Expression(
-            brand.region().alloc_value(inner),
-        ))],
-    );
+    let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::Expression(Box::new(
+        inner,
+    )))]);
     assert_eq!(names(wrapped.binder_installs()), expected);
     assert_eq!(names(wrapped.binder_installs()), vec!["x".to_string()]);
 }
@@ -263,9 +250,7 @@ fn redundant_parens_pass_through() {
 /// the binders inside the block.
 #[test]
 fn block_child_cut_off() {
-    let program = program_storage();
-    let brand = program.brand();
-    let stmt = parse_one(brand, "LET x = (LET a = 1  LET b = 2)");
+    let stmt = parse_one("LET x = (LET a = 1  LET b = 2)");
     assert_eq!(names(stmt.binder_installs()), vec!["x".to_string()]);
 }
 
@@ -273,12 +258,7 @@ fn block_child_cut_off() {
 /// does not join the aggregate.
 #[test]
 fn lazy_body_cut_off() {
-    let program = program_storage();
-    let brand = program.brand();
-    let stmt = parse_one(
-        brand,
-        "LET f = (FN (g :Number) -> Number = (LET inner = 1))",
-    );
+    let stmt = parse_one("LET f = (FN (g :Number) -> Number = (LET inner = 1))");
     assert_eq!(names(stmt.binder_installs()), vec!["f".to_string()]);
     // The FN bucket still aggregates; only the lazy body is cut off.
     assert_eq!(bucket_count(stmt.binder_installs()), 1);
@@ -287,9 +267,7 @@ fn lazy_body_cut_off() {
 /// A quote on a chain slot is not an `Expression` part, so it is cut off.
 #[test]
 fn quote_cut_off() {
-    let program = program_storage();
-    let brand = program.brand();
-    let stmt = parse_one(brand, "LET q = #(LET x = 1)");
+    let stmt = parse_one("LET q = #(LET x = 1)");
     assert_eq!(names(stmt.binder_installs()), vec!["q".to_string()]);
     assert_eq!(bucket_count(stmt.binder_installs()), 0);
 }
@@ -297,9 +275,7 @@ fn quote_cut_off() {
 /// A list literal on a chain slot is not an `Expression` part, so its elements are cut off.
 #[test]
 fn literal_elements_cut_off() {
-    let program = program_storage();
-    let brand = program.brand();
-    let stmt = parse_one(brand, "LET lst = [1 (LET y = 2)]");
+    let stmt = parse_one("LET lst = [1 (LET y = 2)]");
     assert_eq!(names(stmt.binder_installs()), vec!["lst".to_string()]);
 }
 
@@ -307,9 +283,7 @@ fn literal_elements_cut_off() {
 /// plan is `None` and it aggregates no install.
 #[test]
 fn val_installs_nothing() {
-    let program = program_storage();
-    let brand = program.brand();
-    let stmt = parse_one(brand, "VAL x :Number");
+    let stmt = parse_one("VAL x :Number");
     assert!(stmt.binder_plan().is_none());
     assert!(stmt.binder_installs().is_empty());
 }

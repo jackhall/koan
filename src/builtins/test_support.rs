@@ -9,9 +9,6 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::machine::core::{ProgramBrand, ProgramStorage, RegionBrand};
-#[cfg(test)]
-use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::KObject;
 #[cfg(test)]
@@ -19,6 +16,8 @@ use crate::machine::model::Module;
 use crate::machine::model::TypeRegistry;
 #[cfg(test)]
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+#[cfg(test)]
+use crate::machine::model::{Carried, ExpressionPart};
 #[cfg(test)]
 use crate::machine::FrameStorageExt;
 #[cfg(test)]
@@ -30,9 +29,10 @@ use crate::machine::{AdoptSeam, FrameStorage, KError, NameLookup, Scope};
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
 use crate::parse::parse;
+#[cfg(test)]
 use crate::scheduler::NodeId;
 #[cfg(test)]
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::{Delivered, Sealed, Witnessed};
 
 use super::unseeded_scopes;
 
@@ -60,10 +60,6 @@ pub(crate) fn mock_declaration_site(node: usize, index: usize) -> DeclarationSit
 /// that true across successive `run`/`run_one` calls: they share the run frame, and with it the
 /// registry. Scope-only tests take `scope` and ignore the rest.
 pub struct TestRun<'a> {
-    /// The storage this run's AST is parsed into, borrowed for at least the run's life exactly as
-    /// production borrows it: declared before the run storage, so it outlives every node read out
-    /// of it.
-    pub program: &'a ProgramStorage,
     /// The `RunScope` child of the seeded run root — the dispatch target.
     pub scope: &'a Scope<'a>,
     /// The runtime holding the run frame. Tests that drive the scheduler directly use it in place
@@ -75,11 +71,7 @@ pub struct TestRun<'a> {
 
 impl<'a> TestRun<'a> {
     /// Seed a run root inside `run_storage`, sending `PRINT` output to `out`.
-    pub fn new(
-        program: &'a ProgramStorage,
-        run_storage: &'a Rc<FrameStorage>,
-        out: Box<dyn Write + 'a>,
-    ) -> Self {
+    pub fn new(run_storage: &'a Rc<FrameStorage>, out: Box<dyn Write + 'a>) -> Self {
         let (root, child) = unseeded_scopes(run_storage, out);
         let mut runtime = KoanRuntime::new();
         // The run frame adopts `child`, exactly as `interpret` does: dispatch targets it, and the
@@ -90,7 +82,6 @@ impl<'a> TestRun<'a> {
             .expect("run frame was just established");
         crate::machine::seed_run_root(root, &types);
         Self {
-            program,
             scope: child,
             runtime,
             types,
@@ -98,34 +89,20 @@ impl<'a> TestRun<'a> {
     }
 
     /// [`TestRun::new`] with `PRINT` output discarded.
-    pub fn silent(program: &'a ProgramStorage, run_storage: &'a Rc<FrameStorage>) -> Self {
-        Self::new(program, run_storage, Box::new(std::io::sink()))
+    pub fn silent(run_storage: &'a Rc<FrameStorage>) -> Self {
+        Self::new(run_storage, Box::new(std::io::sink()))
     }
 
     /// [`TestRun::new`] with `PRINT` output mirrored into a buffer the caller reads back.
-    pub fn with_buf(
-        program: &'a ProgramStorage,
-        run_storage: &'a Rc<FrameStorage>,
-    ) -> (Self, Rc<RefCell<Vec<u8>>>) {
+    pub fn with_buf(run_storage: &'a Rc<FrameStorage>) -> (Self, Rc<RefCell<Vec<u8>>>) {
         let buf = Rc::new(RefCell::new(Vec::new()));
-        let run = Self::new(program, run_storage, Box::new(SharedBuf(buf.clone())));
+        let run = Self::new(run_storage, Box::new(SharedBuf(buf.clone())));
         (run, buf)
     }
 
     /// The run's registry as a plain reference — the `types` argument the type-system surface takes.
     pub fn types(&self) -> &TypeRegistry {
         &self.types
-    }
-
-    /// This run's own region brand, for a test that builds AST directly rather than parsing it.
-    pub fn brand(&self) -> RegionBrand<'a> {
-        self.scope.brand()
-    }
-
-    /// The brand of the storage this run's AST is parsed into — the door every `parse` in a test
-    /// rides, as `interpret` rides program storage's.
-    pub fn program_brand(&self) -> ProgramBrand<'a> {
-        self.program.brand()
     }
 }
 
@@ -194,11 +171,10 @@ pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<
     ))
 }
 
-/// Parse a source string expected to contain exactly one top-level expression into `program`,
-/// which the caller declares ahead of its run storage so the node outlives every reader.
+/// Parse a source string expected to contain exactly one top-level expression.
 #[cfg(test)]
-pub(crate) fn parse_one<'a>(program: &'a ProgramStorage, src: &str) -> KExpression<'a> {
-    let mut exprs = parse(program.brand(), src).expect("parse should succeed");
+pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
+    let mut exprs = parse(src).expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test helper expects a single expression");
     exprs.remove(0)
 }
@@ -212,12 +188,9 @@ impl<'a> TestRun<'a> {
     /// individually, so chained calls compose. Tests asserting top-level statement *ordering*
     /// (e.g. forward-ref-fails behavior) call `enter_block` on `runtime` directly instead.
     pub fn run_in(&mut self, scope: &'a Scope<'a>, source: &str) {
-        let exprs = parse(self.program_brand(), source).expect("parse should succeed");
+        let exprs = parse(source).expect("parse should succeed");
         for expr in exprs {
-            self.runtime.dispatch_in_scope(
-                crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
-                scope,
-            );
+            self.runtime.dispatch_in_scope(expr, scope);
         }
         self.runtime.execute().expect("scheduler should succeed");
     }
@@ -225,42 +198,6 @@ impl<'a> TestRun<'a> {
     /// [`TestRun::run_in`] against the bundle's own scope.
     pub fn run(&mut self, source: &str) {
         self.run_in(self.scope, source)
-    }
-
-    /// Submit `source` as one block against `scope`, so its statements share a submission and
-    /// resolve in whatever order the scheduler pops them — the shape a test asserting statement
-    /// *ordering* needs, where [`TestRun::run_in`]'s statement-at-a-time dispatch would not.
-    /// Returns the top-level node ids; the caller drives `execute` itself.
-    pub fn enter_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<NodeId> {
-        let statements = parse(self.program_brand(), source)
-            .expect("parse should succeed")
-            .into_iter()
-            .map(|statement| {
-                crate::machine::model::WorkingExpression::from_ast(scope.brand(), statement)
-            })
-            .collect();
-        self.runtime.enter_block(scope.id, statements, scope)
-    }
-
-    /// [`TestRun::enter_source_in`] against the bundle's own scope.
-    pub fn enter_source(&mut self, source: &str) -> Vec<NodeId> {
-        self.enter_source_in(self.scope, source)
-    }
-
-    /// Parse `source` and dispatch each statement as its own submission against `scope`, handing
-    /// back one node id per statement. The statement-at-a-time peer of
-    /// [`TestRun::enter_source_in`], for a test that reads each slot's own result; the caller
-    /// drives `execute` itself.
-    pub fn dispatch_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<NodeId> {
-        parse(self.program_brand(), source)
-            .expect("parse should succeed")
-            .into_iter()
-            .map(|statement| {
-                let working =
-                    crate::machine::model::WorkingExpression::from_ast(scope.brand(), statement);
-                self.runtime.dispatch_in_scope(working, scope)
-            })
-            .collect()
     }
 
     /// Dispatch `expr` against `scope` with REPL-style "complete" visibility, so bindings from
@@ -272,10 +209,7 @@ impl<'a> TestRun<'a> {
         scope: &'a Scope<'a>,
         expr: KExpression<'a>,
     ) -> &'a KObject<'a> {
-        let id = self.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
-            scope,
-        );
+        let id = self.runtime.dispatch_in_scope(expr, scope);
         self.runtime.execute().expect("scheduler should succeed");
         extract_terminal(&self.runtime, scope, &self.types, id).object()
     }
@@ -290,10 +224,7 @@ impl<'a> TestRun<'a> {
     /// carrier to its [`Carried::Type`] arm. Panics if the expression produced a runtime value.
     #[cfg(test)]
     pub(crate) fn run_one_type_in(&mut self, scope: &'a Scope<'a>, expr: KExpression<'a>) -> KType {
-        let id = self.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
-            scope,
-        );
+        let id = self.runtime.dispatch_in_scope(expr, scope);
         self.runtime.execute().expect("scheduler should succeed");
         match extract_terminal(&self.runtime, scope, &self.types, id) {
             Carried::Type(kt) => kt,
@@ -316,10 +247,7 @@ impl<'a> TestRun<'a> {
 
     /// Like [`TestRun::run_one_in`] but returns the `KError` produced by the dispatched node.
     pub fn run_one_err_in(&mut self, scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
-        let id = self.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
-            scope,
-        );
+        let id = self.runtime.dispatch_in_scope(expr, scope);
         self.runtime
             .execute()
             .expect("scheduler should not surface errors directly");
@@ -467,23 +395,21 @@ pub(crate) fn resident_carrier(scope: &Scope<'_>) -> crate::machine::CarrierWitn
     crate::machine::CarrierWitness::new(scope.mint_retained(&[]))
 }
 
-/// Seal a resolved value into a region-pure `WorkingPart::Spliced` cell — the test-side peer of
+/// Seal a resolved value into a region-pure `ExpressionPart::Spliced` cell — the test-side peer of
 /// the scheduler's splice, so a classification test can build the exact carrier a real splice rests
 /// on the working expression. `Witnessed::resident_in` asserts the empty reach: the value borrows
-/// only caller-held test data, not a foreign region.
-///
-/// `host` is the storage the description is minted into, and it must outlive every read of the
-/// returned part: a resting cell owns no pin, so `host` plays the role the region a real splice
-/// rests into plays in production. Borrowed at `'a` so that is a compile error rather than a rule —
-/// every call site already passes the storage its `Carried` was allocated into, which is exactly
-/// what production does.
+/// only caller-held test data, not a foreign region. A fresh throwaway storage is both the region
+/// the description is hosted in and the envelope's host pin, so the pin covers the arena the mint
+/// landed in.
 #[cfg(test)]
-pub(crate) fn spliced_part<'a>(
-    host: &'a Rc<FrameStorage>,
-    c: Carried<'a>,
-) -> crate::machine::model::WorkingPart<'a> {
-    crate::machine::model::WorkingPart::Spliced {
-        cell: Sealed::seal(Witnessed::resident_in(c, host)),
+pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
+    let host = crate::machine::run_root_storage();
+    ExpressionPart::Spliced {
+        cell: Delivered::hosted(
+            Sealed::seal(Witnessed::resident_in(c, &host)),
+            host,
+            crate::machine::core::FrameCoverage::empty(),
+        ),
     }
 }
 

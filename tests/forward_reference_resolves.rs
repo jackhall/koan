@@ -11,15 +11,17 @@ use std::rc::Rc;
 
 use koan::builtins::test_support::{lookup_binding, TestRun};
 use koan::machine::model::KObject;
-use koan::machine::{program_storage, run_root_storage, FrameStorage, ProgramStorage};
+use koan::machine::{run_root_storage, FrameStorage};
+use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh run inside `region`, run `source` end-to-end through the
 /// scheduler, and hand back the whole run so tests can assert on the root scope's bindings
 /// post-run and render type names against the run's own registry.
-fn run<'a>(program: &'a ProgramStorage, region: &'a Rc<FrameStorage>, source: &str) -> TestRun<'a> {
-    let mut test_run = TestRun::silent(program, region);
+fn run<'a>(region: &'a Rc<FrameStorage>, source: &str) -> TestRun<'a> {
+    let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    test_run.enter_source_in(scope, source);
+    let exprs = parse(source).expect("parse should succeed");
+    test_run.runtime.enter_block(scope.id, exprs, scope);
     let _ = test_run.runtime.execute();
     test_run
 }
@@ -27,11 +29,11 @@ fn run<'a>(program: &'a ProgramStorage, region: &'a Rc<FrameStorage>, source: &s
 /// Run `source`, returning the first errored top-level slot's error (or `None` if every
 /// slot succeeded). Pairs with the `UnboundName`-surfacing tests below.
 fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let ids = test_run.enter_source_in(scope, source);
+    let exprs = parse(source).expect("parse should succeed");
+    let ids: Vec<_> = test_run.runtime.enter_block(scope.id, exprs, scope);
     if let Err(e) = test_run.runtime.execute() {
         return Some(e);
     }
@@ -64,9 +66,8 @@ fn forward_value_let_at_same_level_is_unbound() {
 /// directly or parks on the live placeholder, and the slot wakes when `LET z` finalizes.
 #[test]
 fn backward_value_let_at_same_level_resolves() {
-    let program = program_storage();
     let region = run_root_storage();
-    let scope = run(&program, &region, "LET z = 1\nLET y = z").scope;
+    let scope = run(&region, "LET z = 1\nLET y = z").scope;
     assert!(matches!(lookup_binding(scope, "y"), Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -88,14 +89,8 @@ fn module_body_forward_value_reference_is_unbound() {
 /// resolution succeeds normally.
 #[test]
 fn module_body_backward_value_reference_resolves() {
-    let program = program_storage();
     let region = run_root_storage();
-    let scope = run(
-        &program,
-        &region,
-        "MODULE some_module = ((LET x = 1) (LET y = x))",
-    )
-    .scope;
+    let scope = run(&region, "MODULE some_module = ((LET x = 1) (LET y = x))").scope;
     // A module is a value — the `&Module` rides the Object-arm value in `data`.
     let m = match lookup_binding(scope, "some_module") {
         Some(KObject::Module(m)) => *m,
@@ -132,10 +127,8 @@ fn multi_name_forward_reference_is_unbound() {
 /// references visible under the gate and the call resolves normally.
 #[test]
 fn multi_name_backward_reference_resolves() {
-    let program = program_storage();
     let region = run_root_storage();
     let scope = run(
-        &program,
         &region,
         "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 1\n\
@@ -196,10 +189,8 @@ fn forward_attr_lookup_through_value_let_is_unbound() {
 /// earlier index than `v`, so both references resolve.
 #[test]
 fn backward_attr_lookup_resolves_after_struct_binding() {
-    let program = program_storage();
     let region = run_root_storage();
     let scope = run(
-        &program,
         &region,
         "NEWTYPE Pt = :{x :Number, y :Number}\n\
          LET p = (Pt {x = 7, y = 9})\n\
@@ -232,9 +223,8 @@ fn forward_let_type_alias_is_unbound() {
 #[test]
 fn backward_let_type_alias_resolves_to_number() {
     use koan::machine::model::KType;
-    let program = program_storage();
     let region = run_root_storage();
-    let scope = run(&program, &region, "LET Un = Number\nLET Ty = Un").scope;
+    let scope = run(&region, "LET Un = Number\nLET Ty = Un").scope;
     assert!(
         scope.resolve_type("Ty") == Some(KType::NUMBER),
         "expected Ty to resolve to Number, got {:?}",
@@ -251,13 +241,8 @@ fn backward_let_type_alias_resolves_to_number() {
 #[test]
 fn let_alias_via_module_qualified_type_resolves() {
     use koan::machine::model::KType;
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = run(
-        &program,
-        &region,
-        "MODULE mo = ((LET Ty = Number))\nLET MyT = mo.Ty",
-    );
+    let test_run = run(&region, "MODULE mo = ((LET Ty = Number))\nLET MyT = mo.Ty");
     let scope = test_run.scope;
     assert!(
         scope.resolve_type("MyT") == Some(KType::NUMBER),
@@ -271,10 +256,8 @@ fn let_alias_via_module_qualified_type_resolves() {
 /// carve-out so it's visible to the sibling `LET MyList`.
 #[test]
 fn type_frame_with_module_qualified_element_resolves() {
-    let program = program_storage();
     let region = run_root_storage();
     let scope = run(
-        &program,
         &region,
         "MODULE mo = ((LET Ty = Number))\n\
          LET MyList = :(LIST OF mo.Ty)",
@@ -291,10 +274,8 @@ fn type_frame_with_module_qualified_element_resolves() {
 #[test]
 fn chained_module_qualified_type_resolves() {
     use koan::machine::model::KType;
-    let program = program_storage();
     let region = run_root_storage();
     let scope = run(
-        &program,
         &region,
         "MODULE outer = ((MODULE inner = ((LET Ty = Number))))\n\
          LET MyT = outer.inner.Ty",
@@ -315,15 +296,18 @@ fn chained_module_qualified_type_resolves() {
 #[test]
 fn producer_error_propagates_to_parked_consumer() {
     use koan::machine::KErrorKind;
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let ids = test_run.dispatch_source_in(
-        scope,
+    let exprs = parse(
         "LET x = (UNDEFINED_FN)\n\
          LET y = (x)",
-    );
+    )
+    .expect("parse should succeed");
+    let ids: Vec<_> = exprs
+        .into_iter()
+        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
+        .collect();
     test_run
         .runtime
         .execute()

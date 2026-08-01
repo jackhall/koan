@@ -129,10 +129,7 @@ impl Drop for CurrentFileGuard {
 
 /// Wraps an AST node with optional span metadata. Used for `ExpressionPart`;
 /// the enclosing `KExpression` keeps span as a direct field instead.
-///
-/// `Copy` for a `Copy` payload, so a run of spanned parts is a `Drop`-free byte run a region's bump
-/// hands back whole ([`RegionHandle::bump_slice`](crate::witnessed::RegionHandle::bump_slice)).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Spanned<T> {
     pub value: T,
     pub span: Option<Span>,

@@ -103,14 +103,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 mod tests {
     use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::model::KObject;
-    use crate::machine::program_storage;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
 
     fn run_program(source: &str) -> Vec<u8> {
-        let program = program_storage();
         let region = run_root_storage();
-        let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+        let (mut test_run, captured) = TestRun::with_buf(&region);
         test_run.run(source);
         let bytes = captured.borrow().clone();
         bytes
@@ -148,12 +146,10 @@ mod tests {
 
     #[test]
     fn match_inexhaustive_errors() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (None null))");
         let err = test_run.run_one_err(parse_one(
-            &program,
             "MATCH (m) -> :Str WITH (Some -> (PRINT \"yes\"))",
         ));
         // The no-arm error names the scrutinee's runtime type — a `None` value is a per-variant
@@ -166,13 +162,11 @@ mod tests {
 
     #[test]
     fn match_arm_violating_declared_return_type_errors() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))");
         // Declared `:Number`, but the taken arm returns a Str (PRINT's rendered string).
         let err = test_run.run_one_err(parse_one(
-            &program,
             "MATCH (m) -> :Number WITH (Some -> (PRINT \"x\") None -> (PRINT \"y\"))",
         ));
         assert!(
@@ -237,11 +231,9 @@ mod tests {
 
     #[test]
     fn match_on_bool_inexhaustive_errors() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let err = test_run.run_one_err(parse_one(
-            &program,
             "MATCH true -> :Str WITH (false -> (PRINT \"x\"))",
         ));
         // No `true` arm admits the `true` scrutinee; the error names its runtime type `Bool`.
@@ -311,11 +303,9 @@ mod tests {
     #[test]
     fn match_f1_ambiguous_arms_error_naming_both() {
         // Two `Number` arms both admit a Number with no strict specificity winner → ambiguity.
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let err = test_run.run_one_err(parse_one(
-            &program,
             "MATCH (42) -> :Str WITH (Number -> (PRINT \"a\") Number -> (PRINT \"b\"))",
         ));
         assert!(
@@ -327,17 +317,14 @@ mod tests {
 
     #[test]
     fn match_bogus_head_over_variant_scrutinee_is_inexhaustive() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))");
         // A user-union value is a `Tagged` matched by tag string, so a head that is not the
         // scrutinee's own tag is a silent non-match — leaving the match with no admitting arm.
         // The error names the scrutinee's runtime variant type, `Some`.
-        let err = test_run.run_one_err(parse_one(
-            &program,
-            "MATCH (m) -> :Str WITH (Bogus -> (PRINT \"x\"))",
-        ));
+        let err =
+            test_run.run_one_err(parse_one("MATCH (m) -> :Str WITH (Bogus -> (PRINT \"x\"))"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg == "inexhaustive match = no branch for value of type `Some`"),
@@ -350,11 +337,9 @@ mod tests {
     /// resolves it by scope walk. An unbound one keeps the not-a-known-type diagnostic.
     #[test]
     fn match_unresolved_return_type_name_reports_not_a_known_type() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let err = test_run.run_one_err(parse_one(
-            &program,
             "MATCH (42) -> :Bogus WITH (Number -> (PRINT \"x\"))",
         ));
         assert!(
@@ -368,14 +353,10 @@ mod tests {
     /// carrier is a real resolution path, not just an error channel.
     #[test]
     fn match_return_type_resolves_a_user_bound_name_through_the_carrier() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("NEWTYPE Tag = Number");
-        let result = test_run.run_one(parse_one(
-            &program,
-            "MATCH (42) -> :Tag WITH (Number -> (Tag (7)))",
-        ));
+        let result = test_run.run_one(parse_one("MATCH (42) -> :Tag WITH (Number -> (Tag (7)))"));
         assert!(matches!(result, KObject::Wrapped { .. }));
     }
 
@@ -383,11 +364,9 @@ mod tests {
     fn match_bogus_head_over_non_variant_scrutinee_stays_short() {
         // A non-variant scrutinee (a plain Number) resolves heads through the scope; a bogus head
         // keeps the short unresolved-type message with no variants hint.
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let err = test_run.run_one_err(parse_one(
-            &program,
             "MATCH (42) -> :Str WITH (Bogus -> (PRINT \"x\"))",
         ));
         assert!(
@@ -411,11 +390,9 @@ mod tests {
     fn match_on_bool_two_admitting_literal_heads_are_ambiguous() {
         // Two `true ->` heads both admit the `true` scrutinee as exact matches with no strict
         // winner → ambiguity.
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let err = test_run.run_one_err(parse_one(
-            &program,
             "MATCH true -> :Str WITH (true -> (PRINT \"a\") true -> (PRINT \"b\"))",
         ));
         assert!(

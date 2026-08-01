@@ -11,7 +11,7 @@ use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KType;
 use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
-    FieldNameKind, FieldParts,
+    FieldNameKind,
 };
 use crate::machine::{Action, BodyCtx, FinishCtx};
 use crate::machine::{DeclarationSite, KError, KErrorKind, TraceFrame};
@@ -55,7 +55,7 @@ pub(crate) fn nominal_schema_action<'a>(
         .with_window(std::rc::Rc::clone(&window))
         .with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
-        FieldParts::of(&schema_expr),
+        &schema_expr,
         context,
         name_kind,
         &mut elaborator,
@@ -73,7 +73,7 @@ pub(crate) fn nominal_schema_action<'a>(
             let finish_name = name.clone();
             let finish_window = std::rc::Rc::clone(&window);
             FieldListDeferral::new(
-                FieldParts::of(&schema_expr),
+                schema_expr,
                 park_producers,
                 sub_dispatches,
                 context,

@@ -3,26 +3,24 @@
 
 use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
 use crate::machine::model::{KObject, KType, TypeNode};
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage};
 
 #[test]
 fn type_of_number_literal_is_number() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one_type(parse_one(&program, "TYPE OF 5"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one_type(parse_one("TYPE OF 5"));
     assert_eq!(result, KType::NUMBER);
 }
 
 /// A bound container reports its memoized carried element type, not a walk of its contents.
 #[test]
 fn type_of_bound_list_is_list_of_element_type() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("LET xs = [1, 2, 3]");
-    let result = test_run.run_one_type(parse_one(&program, "TYPE OF xs"));
+    let result = test_run.run_one_type(parse_one("TYPE OF xs"));
     let types = test_run.types();
     assert_eq!(result, types.list(KType::NUMBER));
 }
@@ -31,13 +29,12 @@ fn type_of_bound_list_is_list_of_element_type() {
 /// introspection a module name in type position no longer performs implicitly.
 #[test]
 fn type_of_module_is_its_self_sig() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("MODULE int_ord = ((LET Elt = Number) (LET zero = 7))");
     let module = lookup_module(scope, "int_ord", &test_run.types);
-    let result = test_run.run_one_type(parse_one(&program, "TYPE OF int_ord"));
+    let result = test_run.run_one_type(parse_one("TYPE OF int_ord"));
     assert!(
         matches!(test_run.types().node(result), TypeNode::Signature { .. }),
         "TYPE OF a module is a signature",
@@ -53,9 +50,8 @@ fn type_of_module_is_its_self_sig() {
 /// *view's* signature — its abstract per-call identities — not the source module's concrete ones.
 #[test]
 fn type_of_opaque_view_reports_the_view_not_its_source() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
@@ -64,7 +60,7 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
     );
     let view = lookup_module(scope, "view", &test_run.types);
     let source = lookup_module(scope, "int_ord", &test_run.types);
-    let result = test_run.run_one_type(parse_one(&program, "TYPE OF view"));
+    let result = test_run.run_one_type(parse_one("TYPE OF view"));
     let types = test_run.types();
     match types.node(result) {
         TypeNode::Signature { schema, .. } => {
@@ -93,15 +89,14 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
 /// members — the complement of the opaque case above.
 #[test]
 fn type_of_transparent_view_reports_concrete_slots() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET view = (int_ord :! Ordered)",
     );
-    let result = test_run.run_one_type(parse_one(&program, "TYPE OF view"));
+    let result = test_run.run_one_type(parse_one("TYPE OF view"));
     let types = test_run.types();
     match types.node(result) {
         TypeNode::Signature { schema, .. } => {
@@ -119,14 +114,13 @@ fn type_of_transparent_view_reports_concrete_slots() {
 /// signature in the slot, so the module satisfies it as an argument.
 #[test]
 fn type_of_module_types_a_parameter_slot() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          FN (TAKE_ORD m :(TYPE OF int_ord)) -> Number = (m.zero)",
     );
-    let result = test_run.run_one(parse_one(&program, "TAKE_ORD int_ord"));
+    let result = test_run.run_one(parse_one("TAKE_ORD int_ord"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 7.0),
         "expected the module's `zero`, got {}",
@@ -138,15 +132,14 @@ fn type_of_module_types_a_parameter_slot() {
 /// as an expression carrier over the parameter and the returned module satisfies it.
 #[test]
 fn type_of_parameter_defers_a_return_type() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
-    let result = test_run.run_one(parse_one(&program, "USE_ORD int_ord"));
+    let result = test_run.run_one(parse_one("USE_ORD int_ord"));
     assert!(
         matches!(result, KObject::Module(_)),
         "the deferred return must admit the module it was resolved from, got {}",
@@ -160,9 +153,8 @@ fn type_of_parameter_defers_a_return_type() {
 /// nothing else pins, so a type-channel reach that dropped it would refuse the slot.
 #[test]
 fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          FN (MAKESET er :Ordered) -> Module = \
@@ -172,7 +164,7 @@ fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
          LET SetType = (TYPE OF int_set)\n\
          FN (TAKE m :SetType) -> Number = (m.zero)",
     );
-    let result = test_run.run_one(parse_one(&program, "TAKE int_set"));
+    let result = test_run.run_one(parse_one("TAKE int_set"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 3.0),
         "the alias must admit the functor-minted module, got {}",
@@ -185,10 +177,9 @@ fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
 /// rather than a dispatch miss.
 #[test]
 fn type_of_a_type_errors() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "TYPE OF Number"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("TYPE OF Number"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("is already a type")),
         "expected a value-channel ShapeError, got {err}",
@@ -198,10 +189,9 @@ fn type_of_a_type_errors() {
 /// An empty container carries no stamped element type, so it has no knowable type to report.
 #[test]
 fn type_of_unstamped_empty_container_errors() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "TYPE OF []"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("TYPE OF []"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknowable")),
         "expected an unknowable-element-type ShapeError, got {err}",
@@ -214,9 +204,8 @@ fn type_of_unstamped_empty_container_errors() {
 /// types, not values — so the distinct module differs by a manifest member type.)
 #[test]
 fn identical_modules_share_type_of() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE m1 = ((LET Elt = Number) (LET zero = 7))\n\

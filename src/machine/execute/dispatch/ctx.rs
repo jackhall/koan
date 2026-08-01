@@ -16,14 +16,11 @@ use std::rc::Rc;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::{scope_frame, DepPlacement};
-use crate::machine::core::{FrameCoverage, FrameStorage, StepAllocator};
+use crate::machine::core::{FrameStorage, StepAllocator};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::FoldDirection;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
-use crate::machine::{
-    CallFrame, DeliveredCarried, KError, LexicalFrame, NameOutcome, NodeHandle, NodeId, Scope,
-    SplicedCell,
-};
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeHandle, NodeId, Scope};
 use crate::source::{Span, Spanned};
 
 use super::super::ambient::AmbientContext;
@@ -87,8 +84,8 @@ pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
     ambient: &'view AmbientContext,
     /// The active slot's scope, opened at the step brand and handed in by the run-loop step `open`,
     /// so [`Self::current_scope`] returns it directly. It carries the cart content lifetime `'step`
-    /// every decide runs at; a longer-lived program-storage `KExpression` reaches that lifetime by
-    /// ordinary subtyping, the node being covariant.
+    /// every decide runs at; the pristine-AST lifetime `'ast` lives only at the submission boundary,
+    /// where a borrowed `&KExpression<'ast>` is read against the cart scope.
     scope: &'step Scope<'step>,
     /// The `Rc<FrameStorage>` owning the active scope's region — resolved once per step by the run
     /// loop while the step machinery holds it, so step code reads a live frame with no failure path.
@@ -105,22 +102,9 @@ pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
     /// as outcome *data* on their `Action`; this is a harness-internal hop from `run_action` to the
     /// run loop's apply point, not a channel bodies write through.
     effects: &'view RefCell<Vec<WriteOp>>,
-    /// **The step's coverage**: every region this step's own machinery keeps alive for its whole
-    /// duration — the slot's memory anchor, each dep envelope's members, and a framed tail hop's TCO
-    /// handoff hold (the retiring incarnation's frame). Assembled by
-    /// [`run_step`](super::super::run_loop) before the step open and held across it, so it outlives
-    /// every read taken under it.
-    ///
-    /// It is what [`Self::lift_spliced`] opens a resting splice cell under. A cell rests in the
-    /// region the splice site named — the dispatching step's own cart — and the reading step may be a
-    /// *later* incarnation of the same slot, running against a freshly minted cart whose ancestor
-    /// chain does not reach the retiring one. The handoff hold is precisely the pin that spans that
-    /// hop, so it is named here rather than re-derived from the reader's scope.
-    coverage: &'view FrameCoverage,
 }
 
 impl<'step, 'view> SchedulerView<'step, 'view> {
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::machine::execute) fn new(
         sched: &'view Scheduler<KoanWorkload>,
         ambient: &'view AmbientContext,
@@ -128,7 +112,6 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         dest_frame: Rc<FrameStorage>,
         node: NodeHandle,
         effects: &'view RefCell<Vec<WriteOp>>,
-        coverage: &'view FrameCoverage,
     ) -> Self {
         Self {
             sched,
@@ -137,17 +120,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             dest_frame,
             node,
             effects,
-            coverage,
         }
-    }
-
-    /// **Lift** a resting splice cell back into a delivery envelope owning its whole reach, under
-    /// [the step's coverage](Self::coverage) — the read door for a consumer that goes on to adopt the
-    /// value. The scope-level twin ([`Scope::lift_spliced`]) covers a read inside the region that did
-    /// the resting; this one also covers a read *after* a framed tail hop, where the resting region
-    /// survives only as the run loop's handoff hold.
-    pub(in crate::machine::execute) fn lift_spliced(&self, cell: &SplicedCell) -> DeliveredCarried {
-        cell.open_at(self.coverage).lift_out()
     }
 
     /// Append this step's next batch of binding writes to the run-loop-owned sink, preserving the
@@ -261,22 +234,20 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     /// is deferred to the splice walk.
     pub(super) fn build_bare_outcomes(
         &self,
-        parts: &[Spanned<WorkingPart<'step>>],
+        parts: &[Spanned<ExpressionPart<'step>>],
     ) -> Result<Vec<Option<NameOutcome>>, KError> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         parts
             .iter()
-            .map(|p| match p.value.as_ast() {
-                Some(ast @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => {
-                    resolve_name_part(
-                        self.current_scope(),
-                        &ast,
-                        self.sched,
-                        active_chain,
-                        self.types(),
-                    )
-                    .map(Some)
-                }
+            .map(|p| match &p.value {
+                ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => resolve_name_part(
+                    self.current_scope(),
+                    &p.value,
+                    self.sched,
+                    active_chain,
+                    self.types(),
+                )
+                .map(Some),
                 _ => Ok(None),
             })
             .collect()
@@ -288,7 +259,6 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         &self,
         part: &ExpressionPart<'step>,
     ) -> Result<BareCarrier, KError> {
-        // The bare-name ladder reads a parser token, so a wrap slot hands its AST part straight in.
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         resolve_bare_carrier(
             self.current_scope(),
@@ -303,16 +273,15 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     /// `DepRequest` currency — `Existing` parks on its pre-existing producer, every other variant
     /// is a fresh owned edge the harness submits. Nothing is read and spliced inline here — that
     /// would embed a producer's frame-local terminal, which its per-call frame frees at Done (it
-    /// never lifts), so it would dangle. The finish rebuilds `working_expr` with the resolved
-    /// carriers in its staged slots — one rebuild for the whole batch, the parts run being frozen
-    /// once its door bumps it — and routes on `picked`: `Some(f)` folds the committed call into a
+    /// never lifts), so it would dangle. The finish splices the resolved carriers into
+    /// `working_expr` and routes on `picked`: `Some(f)` folds the committed call into a
     /// frame-installing `Continue`, `None` re-resolves via
     /// [`keyworded::finish`](super::keyworded::finish). With no deps, that routing happens now. The
     /// `<bind>` dep-error frame rides on `dep_error_frame`. Read-only — every write the outcome
     /// implies is the harness's.
     pub(super) fn install_eager_subs(
         &self,
-        working_expr: WorkingExpression<'step>,
+        mut working_expr: KExpression<'step>,
         staged_subs: Vec<(usize, DepRequest<'step>)>,
         picked: Option<OpenedFunction<'step>>,
     ) -> Outcome<'step> {
@@ -323,31 +292,25 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             // Nothing to resolve — `working_expr` is already fully spliced, so route now not park.
             return finish_eager_subs(self, working_expr, picked);
         }
-        let dep_error_frame = Some(super::working_frame("<bind>", &working_expr));
+        let dep_error_frame = Some(crate::machine::TraceFrame::from_expr(
+            "<bind>",
+            &working_expr,
+        ));
         let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
             // Every dep resolved. Splice each value into its staged slot as the producer's own sealed
             // carrier — value and reach as one unit, adopted by the consuming bind at its own step
             // brand; `invoke` reads each cell back for the body-facing reach. Owned deps land in the
             // owned suffix in staging order — 1:1 with `part_indices`.
-            //
-            // A parts run is frozen once its door bumps it, so the whole batch lands in one rebuild:
-            // the run is copied out, each staging hole overwritten with its cell, and the result
-            // re-frozen through `respliced` (which carries `span` / `file` / the binder plan over and
-            // refills the structural cache from the spliced run).
-            let scope = ctx.current_scope();
-            let mut parts: Vec<Spanned<WorkingPart<'step>>> = working_expr.parts.to_vec();
             for (slot, terminal) in part_indices.iter().zip(terminals.owned_slice()) {
-                // Rest the dep's delivery envelope into this step's own region: the cell keeps the
-                // producer's carrier, the envelope's whole coverage moves into the region's union
-                // bundle. That is what keeps the value's backing retained across the `Replace` to the
-                // re-dispatch step where `extract_carried_args` adopts it — a framed tail hop's TCO
-                // handoff holds this retiring region across exactly that step.
-                parts[*slot].value = WorkingPart::Spliced {
-                    cell: scope.rest_delivered(&terminal.delivered),
+                // Duplicate the dep's delivery envelope — its carrier bundled with the retained
+                // producer-frame owner — so the value's backing stays retained across the `Replace`
+                // to the re-dispatch step where `extract_carried_args` adopts it. A frameless / run
+                // producer carries a `None` host inside the envelope, its backing outliving the cell.
+                working_expr.parts[*slot].value = ExpressionPart::Spliced {
+                    cell: terminal.delivered.duplicate(),
                 };
             }
-            let spliced = working_expr.respliced(scope.brand(), parts);
-            finish_eager_subs(ctx, spliced, picked)
+            finish_eager_subs(ctx, working_expr, picked)
         });
         Await::on(Deps::from_owned(deps))
             .error_frame(dep_error_frame)
@@ -371,8 +334,8 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     /// no single source token of their own.
     pub(super) fn install_pairwise_fold(
         &self,
-        operands: Vec<Spanned<WorkingPart<'step>>>,
-        operators: Vec<Spanned<WorkingPart<'step>>>,
+        operands: Vec<Spanned<ExpressionPart<'step>>>,
+        operators: Vec<Spanned<ExpressionPart<'step>>>,
         combiner: String,
         direction: FoldDirection,
         chain_span: Option<Span>,
@@ -381,41 +344,37 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         use super::super::TerminalDepFinish;
         use super::operator_chain::combine;
 
-        let brand = self.current_scope().brand();
         let operand_spans: Vec<Option<Span>> =
             operands.iter().map(|operand| operand.span).collect();
         let deps: Vec<DepRequest<'step>> = operands
             .into_iter()
             .map(|operand| DepRequest::Dispatch {
-                expr: WorkingExpression::new(brand, vec![operand]),
+                expr: KExpression::new(vec![operand]),
                 placement: DepPlacement::OwnScope,
                 // A pairwise operand is an eager position, never a binder's own chain slot.
                 binder_covered: false,
             })
             .collect();
         let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
-            // Every operand resolved. Build one pair per operator, resting each shared middle
-            // operand's resolved cell into both of the adjacent pairs it feeds — the splice that
-            // makes evaluation once-only. The region's union bundle dedupes the repeated coverage,
-            // so a middle operand costs one retention however many pairs read it.
+            // Every operand resolved. Build one pair per operator, duplicating each shared
+            // middle operand's resolved cell into both of the adjacent pairs it feeds — the
+            // splice that makes evaluation once-only.
             let cells = terminals.owned_slice();
             let mut pairs = Vec::with_capacity(operators.len());
-            let scope = ctx.current_scope();
-            let brand = scope.brand();
             for (i, operator) in operators.into_iter().enumerate() {
                 let left = Spanned {
-                    value: WorkingPart::Spliced {
-                        cell: scope.rest_delivered(&cells[i].delivered),
+                    value: ExpressionPart::Spliced {
+                        cell: cells[i].delivered.duplicate(),
                     },
                     span: operand_spans[i],
                 };
                 let right = Spanned {
-                    value: WorkingPart::Spliced {
-                        cell: scope.rest_delivered(&cells[i + 1].delivered),
+                    value: ExpressionPart::Spliced {
+                        cell: cells[i + 1].delivered.duplicate(),
                     },
                     span: operand_spans[i + 1],
                 };
-                pairs.push(WorkingExpression::new(brand, vec![left, operator, right]));
+                pairs.push(KExpression::new(vec![left, operator, right]));
             }
             // Fold the pairs through the combiner in the declared direction, nesting exactly like
             // `reduce_fold_left` / `reduce_fold_right`'s accumulator loops.
@@ -424,7 +383,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
                     let mut pairs = pairs.into_iter();
                     let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
                     for pair in pairs {
-                        acc = combine(brand, &combiner, acc, pair, chain_span);
+                        acc = combine(&combiner, acc, pair, chain_span);
                     }
                     acc
                 }
@@ -432,7 +391,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
                     let mut pairs = pairs.into_iter().rev();
                     let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
                     for pair in pairs {
-                        acc = combine(brand, &combiner, pair, acc, chain_span);
+                        acc = combine(&combiner, pair, acc, chain_span);
                     }
                     acc
                 }
@@ -458,7 +417,7 @@ const PAIRWISE_HAS_TWO_PAIRS: &str =
 /// a sub surfaces as a slot-terminal `DispatchFailed`. Pure data — no `&mut`.
 fn finish_eager_subs<'step>(
     view: &SchedulerView<'step, '_>,
-    working_expr: WorkingExpression<'step>,
+    working_expr: KExpression<'step>,
     picked: Option<OpenedFunction<'step>>,
 ) -> Outcome<'step> {
     match picked {

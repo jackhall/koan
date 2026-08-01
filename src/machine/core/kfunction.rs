@@ -2,10 +2,10 @@
 //! a `Body` (an action `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
-use crate::machine::core::{KError, KErrorKind, RegionBrand, Scope};
+use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, Record, SignatureElement};
 use crate::machine::model::{Held, NamedPairs};
@@ -22,7 +22,6 @@ pub mod pick;
 pub use crate::scheduler::NodeId;
 pub use action::ActionFn;
 pub use body::Body;
-use pick::slot_admits;
 pub use pick::ClassifiedSlots;
 
 /// SAFETY: the captured scope is allocated in a `KoanRegion` that outlives this
@@ -122,41 +121,41 @@ impl<'a> KFunction<'a> {
         format!("fn({})", parts.join(" "))
     }
 
-    /// Validate a positional call's `parts` against this signature: arity, keyword spellings, and
-    /// each argument's type ([`slot_admits`]). Shared by [`Self::bind_args`] and the `exec`
-    /// executor — the latter binds via `bind_by_name` (a pure rename that trusts the picker), so for
-    /// a uniquely-picked call (admitted shape-only by dispatch) this is where a non-satisfying typed
+    /// Validate a positional call `expr` against this signature: arity, keyword spellings, and each
+    /// argument's type ([`Argument::matches`]). Shared by [`Self::bind_args`] and the `exec` executor —
+    /// the latter binds via `bind_by_name` (a pure rename that trusts the picker), so for a
+    /// uniquely-picked call (admitted shape-only by dispatch) this is where a non-satisfying typed
     /// argument becomes a hard `TypeMismatch` rather than slipping through.
     pub(crate) fn validate_call_args(
         &'a self,
-        parts: &[Spanned<WorkingPart<'a>>],
+        expr: &KExpression<'a>,
         types: &TypeRegistry,
     ) -> Result<(), KError> {
-        if self.signature.elements.len() != parts.len() {
+        if self.signature.elements.len() != expr.parts.len() {
             return Err(KError::new(KErrorKind::ArityMismatch {
                 expected: self.signature.elements.len(),
-                got: parts.len(),
+                got: expr.parts.len(),
             }));
         }
-        for (el, part) in self.signature.elements.iter().zip(parts.iter()) {
+        for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
             match el {
-                SignatureElement::Keyword(s) => match part.value.as_ast() {
-                    Some(ExpressionPart::Keyword(t)) if s == t => {}
-                    Some(ExpressionPart::Keyword(t)) => {
+                SignatureElement::Keyword(s) => match &part.value {
+                    ExpressionPart::Keyword(t) if s == t => {}
+                    ExpressionPart::Keyword(t) => {
                         return Err(KError::new(KErrorKind::DispatchFailed {
-                            expr: summarize_parts(parts),
+                            expr: expr.summarize(),
                             reason: format!("expected keyword '{s}', got '{t}'"),
                         }));
                     }
                     _ => {
                         return Err(KError::new(KErrorKind::DispatchFailed {
-                            expr: summarize_parts(parts),
+                            expr: expr.summarize(),
                             reason: format!("expected keyword '{s}'"),
                         }));
                     }
                 },
                 SignatureElement::Argument(arg) => {
-                    if !slot_admits(arg, &part.value, types) {
+                    if !arg.matches(&part.value, types) {
                         return Err(KError::new(KErrorKind::TypeMismatch {
                             arg: arg.name.clone(),
                             expected: arg.ktype.name(types),
@@ -169,29 +168,28 @@ impl<'a> KFunction<'a> {
         Ok(())
     }
 
-    /// Bind a builtin call's positional argument `parts` to this signature's parameters, producing
-    /// the owned argument record [`Record<Held>`] directly. Each argument is resolved against its
-    /// declared parameter type by the slot-aware [`WorkingPart::resolve_for`], which lifts a
-    /// resolved sub-result out of its cell and lowers a raw `Type` / `SigiledTypeExpr` /
-    /// `RecordType` part into the matching [`Held`] arm.
+    /// Bind a builtin call's positional arguments to this signature's parameters, producing the
+    /// owned argument record [`Record<Held>`] directly. Each argument is resolved against its
+    /// declared parameter type by the slot-aware [`ExpressionPart::resolve_for`], which lowers a raw
+    /// `Type` / `SigiledTypeExpr` / `RecordType` part into the matching [`Held`] arm.
     ///
     /// This is the builtin counterpart to [`Self::bind_by_name`] (the user-defined-call binder).
     /// The two hold *different currencies for a reason*: this binder produces owned `Held` cells
-    /// because a builtin receives raw argument parts that `resolve_for` resolves into fresh values;
-    /// `bind_by_name` produces borrowed `Record<Carried>` because a user-defined call arrives with
-    /// its value parts already resolved into `Carried` by dispatch, so it is a trusted rename of
-    /// existing region values. `scope` is the call scope: `resolve_for` adopts a spliced **cell**
-    /// into it before owning the value, so an owned type that still borrows the producer region
-    /// stays pinned.
+    /// because a builtin receives raw un-`Spliced` argument parts that `resolve_for` resolves into
+    /// fresh values; `bind_by_name` produces borrowed `Record<Carried>` because a user-defined call
+    /// arrives with its value parts already resolved into `Carried` by dispatch, so it is a trusted
+    /// rename of existing region values. `scope` is the call scope: `resolve_for` adopts a spliced
+    /// **cell** into it before owning the value, so an owned type that still borrows the producer
+    /// region stays pinned.
     pub fn bind_args(
         &'a self,
-        parts: &[Spanned<WorkingPart<'a>>],
+        expr: &KExpression<'a>,
         scope: &'a Scope<'a>,
         types: &TypeRegistry,
     ) -> Result<Record<Held<'a>>, KError> {
-        self.validate_call_args(parts, types)?;
+        self.validate_call_args(expr, types)?;
         let mut args: Record<Held<'a>> = Record::new();
-        for (el, part) in self.signature.elements.iter().zip(parts.iter()) {
+        for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
             if let SignatureElement::Argument(arg) = el {
                 args.insert(
                     arg.name.clone(),
@@ -211,45 +209,29 @@ impl<'a> KFunction<'a> {
     /// surplus named args simply go unbound on the reconstructed exact-arity expression.
     /// `NamedPairs` rejects duplicate names, so consuming every declared argument
     /// witnesses an exact-arity reconstruction regardless of leftover (now-dropped) names.
-    ///
-    /// The reconstruction is the scheduler's own node: it goes straight to the eager-subs staging
-    /// that dispatches the call, so it is built as a [`WorkingExpression`] in `brand`'s region, with
-    /// each supplied field riding through as a [`WorkingPart::Ast`] slot and each signature keyword
-    /// bumped there as its own text.
     pub fn reconstruct_positional<'b>(
         &self,
-        brand: RegionBrand<'b>,
         fields: Vec<(String, ExpressionPart<'b>)>,
-    ) -> Result<WorkingExpression<'b>, KError> {
+    ) -> Result<KExpression<'b>, KError> {
         let mut pairs = NamedPairs::from_fields(fields)
             .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)))?;
-        let mut parts: Vec<Spanned<WorkingPart<'b>>> =
+        let mut parts: Vec<Spanned<ExpressionPart<'b>>> =
             Vec::with_capacity(self.signature.elements.len());
         for el in &self.signature.elements {
             match el {
-                SignatureElement::Keyword(s) => parts.push(Spanned::bare(WorkingPart::Ast(
-                    ExpressionPart::Keyword(brand.alloc_text(s)),
-                ))),
+                SignatureElement::Keyword(s) => {
+                    parts.push(Spanned::bare(ExpressionPart::Keyword(s.clone())))
+                }
                 SignatureElement::Argument(a) => match pairs.take(&a.name) {
-                    Some(v) => parts.push(Spanned::bare(WorkingPart::Ast(v))),
+                    Some(v) => parts.push(Spanned::bare(v)),
                     None => {
                         return Err(KError::new(KErrorKind::MissingArg(a.name.clone())));
                     }
                 },
             }
         }
-        Ok(WorkingExpression::new(brand, parts))
+        Ok(KExpression::new(parts))
     }
-}
-
-/// Surface rendering of a call's parts for a diagnostic — the same text
-/// [`WorkingExpression::summarize`] produces, from the parts run alone.
-fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>]) -> String {
-    parts
-        .iter()
-        .map(|part| part.value.summarize())
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Intern the function type a `KFunction` value reports. The parameter record keys each

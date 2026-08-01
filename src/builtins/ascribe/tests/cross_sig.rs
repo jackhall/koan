@@ -4,17 +4,16 @@
 
 use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
 use crate::machine::model::KObject;
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage};
 
 /// `SIG Wide` requires everything `SIG Base` does, plus more (`Wide` strictly `sig_subtype`s
 /// `Base`), so `Wide` is strictly more specific: a module satisfying both dispatches to the
 /// `:Wide` overload, never `:Base`.
 #[test]
 fn strict_cross_sig_subtype_wins_dispatch() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Base = ((VAL x :Number))\n\
@@ -39,9 +38,8 @@ fn strict_cross_sig_subtype_wins_dispatch() {
 /// (`forward && !reverse`) is order-independent.
 #[test]
 fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Base = ((VAL x :Number))\n\
@@ -70,9 +68,8 @@ fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
 /// interfaces like these, never from mutual satisfaction.)
 #[test]
 fn incomparable_distinct_sigs_are_ambiguous() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Alpha = ((VAL x :Number))\n\
@@ -83,13 +80,9 @@ fn incomparable_distinct_sigs_are_ambiguous() {
     test_run.run("MODULE implementation = ((LET x = 1) (LET y = 2))");
     test_run.run("LET arg = implementation");
 
-    let root = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "CHOOSE arg"),
-        ),
-        scope,
-    );
+    let root = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("CHOOSE arg"), scope);
     test_run
         .runtime
         .execute()
@@ -109,9 +102,8 @@ fn incomparable_distinct_sigs_are_ambiguous() {
 /// pinned to the same abstract `Elt = Number`.
 #[test]
 fn cross_sig_specificity_with_pinned_abstract_member() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Base = ((TYPE Elt) (VAL x :Number))\n\

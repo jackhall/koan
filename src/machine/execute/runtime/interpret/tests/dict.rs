@@ -9,7 +9,6 @@ use crate::machine::model::{DictSubstrate, Held, KKey};
 use crate::machine::KErrorKind;
 
 use super::run;
-use crate::machine::program_storage;
 
 /// Dict value cells are `Held`; these helpers narrow to the `Object` arm so the
 /// scalar-value assertions read unchanged.
@@ -30,10 +29,9 @@ fn lookup_bool_key<'run>(d: &DictSubstrate<'run>, key: bool) -> Option<&'run KOb
 /// `LET` succeeds rather than tripping the empty-container rule.
 #[test]
 fn let_binds_an_empty_record_literal() {
-    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run(&program, "LET d = {}", &region, captured);
+    let test_run = run("LET d = {}", &region, captured);
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Record(substrate, _)) => {
@@ -48,10 +46,9 @@ fn let_binds_an_empty_record_literal() {
 
 #[test]
 fn let_binds_a_dict_with_string_keys() {
-    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run(&program, r#"LET d = {"a": 1, "b": 2}"#, &region, captured);
+    let test_run = run(r#"LET d = {"a": 1, "b": 2}"#, &region, captured);
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
@@ -70,10 +67,9 @@ fn let_binds_a_dict_with_string_keys() {
 
 #[test]
 fn let_binds_a_dict_with_number_keys() {
-    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run(&program, r#"LET d = {1: "a", 2: "b"}"#, &region, captured);
+    let test_run = run(r#"LET d = {1: "a", 2: "b"}"#, &region, captured);
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
@@ -92,10 +88,9 @@ fn let_binds_a_dict_with_number_keys() {
 
 #[test]
 fn let_binds_a_dict_with_bool_keys() {
-    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run(&program, "LET d = {true: 1, false: 0}\n", &region, captured);
+    let test_run = run("LET d = {true: 1, false: 0}\n", &region, captured);
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
@@ -114,11 +109,9 @@ fn let_binds_a_dict_with_bool_keys() {
 
 #[test]
 fn bare_identifier_key_is_looked_up() {
-    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let test_run = run(
-        &program,
         "LET name = \"alice\"\nLET d = {name: 1}\n",
         &region,
         captured,
@@ -139,10 +132,9 @@ fn bare_identifier_key_is_looked_up() {
 
 #[test]
 fn sub_expression_as_value_evaluates_eagerly() {
-    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run(&program, r#"LET d = {"a": (2 + 5)}"#, &region, captured);
+    let test_run = run(r#"LET d = {"a": (2 + 5)}"#, &region, captured);
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
@@ -172,15 +164,9 @@ fn dict_value_let_is_a_nested_binder_error() {
 
 #[test]
 fn sub_expression_as_key_evaluates() {
-    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run(
-        &program,
-        "LET k = \"x\"\nLET d = {(k): 1}\n",
-        &region,
-        captured,
-    );
+    let test_run = run("LET k = \"x\"\nLET d = {(k): 1}\n", &region, captured);
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
@@ -195,15 +181,9 @@ fn sub_expression_as_key_evaluates() {
 
 #[test]
 fn multiline_dict_binds_correctly() {
-    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run(
-        &program,
-        "LET d = {\n  \"a\": 1\n  \"b\": 2\n}\n",
-        &region,
-        captured,
-    );
+    let test_run = run("LET d = {\n  \"a\": 1\n  \"b\": 2\n}\n", &region, captured);
     let scope = test_run.scope;
     match scope.lookup("d") {
         Some(KObject::Dict(substrate, _)) => {
@@ -222,15 +202,9 @@ fn multiline_dict_binds_correctly() {
 
 #[test]
 fn nested_dict_in_list_binds_correctly() {
-    let program = program_storage();
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let test_run = run(
-        &program,
-        r#"LET xs = [{"a": 1} {"b": 2}]"#,
-        &region,
-        captured,
-    );
+    let test_run = run(r#"LET xs = [{"a": 1} {"b": 2}]"#, &region, captured);
     let scope = test_run.scope;
     match scope.lookup("xs") {
         Some(KObject::List(outer, _)) => {

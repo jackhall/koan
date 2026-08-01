@@ -35,7 +35,7 @@ use std::rc::Rc;
 
 use super::{
     Delivered, Erased, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable, Region,
-    RegionHandle, RegionOwner, StorageProfile, Witness, Witnessed,
+    RegionHandle, RegionOwner, StorageProfile, Witnessed,
 };
 // `with_branded_ref` re-anchors the erased reach reference: for the `Sealed → Delivered` lift's
 // description-to-bundle upgrade ([`Carrier::upgrade_bundle`]) and for the membership queries the
@@ -125,7 +125,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// bundle keeps its reached regions alive. `pin` covers the description's hosting arena for the
     /// whole call (the holder rule), so [`ReachDescription::to_bundle`]'s member upgrades all
     /// succeed. A region-pure carrier (empty members) yields the empty bundle.
-    pub(in crate::witnessed) fn upgrade_bundle<Pin: Witness>(&self, pin: &Pin) -> PinBundle<F> {
+    pub(in crate::witnessed) fn upgrade_bundle(&self, pin: &Rc<F>) -> PinBundle<F> {
         // `pin` keeps the description's hosting arena live for the whole call — the same role the
         // envelope host plays for a reach read; the branded re-anchor confines the reference exactly
         // as `with_reach_impl` does, and the upgrade re-owns the members before it ends.

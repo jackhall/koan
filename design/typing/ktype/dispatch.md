@@ -32,17 +32,14 @@ reads each bare-name slot's cached
 [`NameOutcome`](../../../src/machine/execute/dispatch/resolve_dispatch.rs) once and
 admits accordingly. The forms:
 
-- **Evaluated argument** (`DESCRIBE (xs)`, a call result) — the scheduler has
-  already spliced the resolved sub-result in as a
-  [`WorkingPart::Spliced`](../../../src/machine/model/ast/working.rs) cell, so
-  admission opens the cell and runs
-  [`KType::accepts_cell`](../../../src/machine/model/types/ktype_predicates.rs)
-  for the carried-type check — no part shape is consulted.
+- **Evaluated argument** (`DESCRIBE (xs)`, a call result) — already a typed
+  `Future`; admission runs `arg.matches(part)` and `accepts_part` for the
+  carried-type check.
 - **Bare variable** (`DESCRIBE xs`) — the cache entry is
-  `NameOutcome::Resolved(Delivered)`. Admission opens the delivered envelope and
-  tests
-  [`KType::accepts_carried`](../../../src/machine/model/types/ktype_predicates.rs)
-  against the carried value (an object or a `Type` arm — no clone). A bare name whose value has the
+  `NameOutcome::Resolved(Carried)`. Admission tests
+  [`KType::accepts_part`](../../../src/machine/model/types/ktype_predicates.rs)
+  against `ExpressionPart::Future(Carried)` (the `Future` arm holds a `Carried`
+  reference — an object or a `Type` arm — no clone). A bare name whose value has the
   wrong carrier type strict-rejects the overload; the call surfaces as `DispatchFailed`
   rather than a bind-time `TypeMismatch`. Binder (`Identifier` / `OfKind(Proper)`) and
   lazy (`KExpression`) slots skip the cache and admit shape-only — the slot

@@ -17,14 +17,18 @@ use std::rc::Rc;
 
 use koan::builtins::test_support::{lookup_binding, TestRun};
 use koan::machine::model::{KKind, KObject, KType, NodeSchema, TypeNode, TypeRegistry};
-use koan::machine::{program_storage, run_root_storage, FrameStorage, ProgramStorage, Scope};
+use koan::machine::{run_root_storage, FrameStorage, Scope};
+use koan::parse::parse;
 
 /// Run `src` to completion and hand back the whole run — the seeded scope tests assert
 /// bindings on, plus the run frame's registry that type names render against.
-fn run<'a>(program: &'a ProgramStorage, region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
-    let mut test_run = TestRun::silent(program, region);
+fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
+    let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    test_run.dispatch_source_in(scope, src);
+    let exprs = parse(src).expect("parse should succeed");
+    for e in exprs {
+        test_run.runtime.dispatch_in_scope(e, scope);
+    }
     test_run
         .runtime
         .execute()
@@ -32,10 +36,14 @@ fn run<'a>(program: &'a ProgramStorage, region: &'a Rc<FrameStorage>, src: &str)
     test_run
 }
 
-fn run_expect_err(program: &ProgramStorage, region: &Rc<FrameStorage>, src: &str) -> String {
-    let mut test_run = TestRun::silent(program, region);
+fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
+    let mut test_run = TestRun::silent(region);
     let scope = test_run.scope;
-    let ids = test_run.dispatch_source_in(scope, src);
+    let exprs = parse(src).expect("parse should succeed");
+    let ids: Vec<_> = exprs
+        .into_iter()
+        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
+        .collect();
     test_run
         .runtime
         .execute()
@@ -76,13 +84,8 @@ fn lookup_sig_value_kt(
 /// `:(LIST OF Number)` lowers to `KType::List(Number)` and binds via VAL.
 #[test]
 fn sigil_list_of_lowers_to_list_carrier() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = run(
-        &program,
-        &region,
-        "SIG Holder = ((VAL items :(LIST OF Number)))",
-    );
+    let test_run = run(&region, "SIG Holder = ((VAL items :(LIST OF Number)))");
     let items_kt = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "items");
     match test_run.types.node(items_kt) {
         TypeNode::List { element } => assert_eq!(element, KType::NUMBER),
@@ -94,9 +97,8 @@ fn sigil_list_of_lowers_to_list_carrier() {
 /// `LIST` has no overload registered without the connector keyword `OF`.
 #[test]
 fn sigil_list_of_missing_of_keyword_errors() {
-    let program = program_storage();
     let region = run_root_storage();
-    let err = run_expect_err(&program, &region, "LET Ty = :(LIST Number)");
+    let err = run_expect_err(&region, "LET Ty = :(LIST Number)");
     assert!(
         err.contains("dispatch failed") || err.contains("no matching function"),
         "expected DispatchFailed surface, got: {err}",
@@ -109,13 +111,8 @@ fn sigil_list_of_missing_of_keyword_errors() {
 /// changed; underlying carrier identity is unchanged from the legacy `Dict`.
 #[test]
 fn sigil_map_lowers_to_dict_carrier() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = run(
-        &program,
-        &region,
-        "SIG Holder = ((VAL table :(MAP Str -> Number)))",
-    );
+    let test_run = run(&region, "SIG Holder = ((VAL table :(MAP Str -> Number)))");
     let table_kt = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "table");
     match test_run.types.node(table_kt) {
         TypeNode::Dict { key, value } => {
@@ -132,10 +129,8 @@ fn sigil_map_lowers_to_dict_carrier() {
 /// whose `params` record keys each parameter type by its declared name.
 #[test]
 fn sigil_fn_lowers_to_kfunction_named() {
-    let program = program_storage();
     let region = run_root_storage();
     let test_run = run(
-        &program,
         &region,
         "SIG Holder = ((VAL compare :(FN (x :Number, y :Str) -> Bool)))",
     );
@@ -154,13 +149,8 @@ fn sigil_fn_lowers_to_kfunction_named() {
 /// Nullary FN: `:(FN () -> Number)` lowers to a zero-arg function type.
 #[test]
 fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = run(
-        &program,
-        &region,
-        "SIG Holder = ((VAL gen :(FN () -> Number)))",
-    );
+    let test_run = run(&region, "SIG Holder = ((VAL gen :(FN () -> Number)))");
     let gen = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "gen");
     match test_run.types.node(gen) {
         TypeNode::KFunction { params, ret } => {
@@ -176,10 +166,8 @@ fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
 /// empty signature.
 #[test]
 fn sigil_fn_type_param_and_module_return_lowers_to_kfunction() {
-    let program = program_storage();
     let region = run_root_storage();
     let test_run = run(
-        &program,
         &region,
         "SIG Holder = ((VAL mk :(FN (Ty :Signature) -> Module)))",
     );
@@ -198,10 +186,8 @@ fn sigil_fn_type_param_and_module_return_lowers_to_kfunction() {
 /// `:(FUNCTOR …)` sigil is an ordinary dispatch no-match.
 #[test]
 fn sigil_functor_is_unbound() {
-    let program = program_storage();
     let region = run_root_storage();
     let err = run_expect_err(
-        &program,
         &region,
         "SIG Holder = ((VAL mk :(FUNCTOR (Ty :Signature) -> Module)))",
     );
@@ -225,9 +211,8 @@ fn sigil_functor_is_unbound() {
 /// field-walker splices back as the field's resolved KType inside the record repr.
 #[test]
 fn newtype_record_field_accepts_keyworded_list_of_sigil() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = run(&program, &region, "NEWTYPE Foo = :{xs :(LIST OF Number)}");
+    let test_run = run(&region, "NEWTYPE Foo = :{xs :(LIST OF Number)}");
     // NEWTYPE is type-only — its record repr rides the sealed `SetMember` in `types`.
     let foo = test_run
         .scope
@@ -256,10 +241,8 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
 /// inside a UNION field. Same sub-Dispatch path, different field-walker invocation.
 #[test]
 fn union_field_accepts_keyworded_map_sigil() {
-    let program = program_storage();
     let region = run_root_storage();
     let test_run = run(
-        &program,
         &region,
         "UNION Maybe = (Some :(MAP Str -> Number), None :Null)",
     );
@@ -309,10 +292,8 @@ fn union_field_accepts_keyworded_map_sigil() {
 /// `Ordered`'s producer and resumes via dep-finish.
 #[test]
 fn sigil_fn_forward_reference_defers_via_combine() {
-    let program = program_storage();
     let region = run_root_storage();
     let test_run = run(
-        &program,
         &region,
         "SIG Outer = ((VAL mk :(FN (Ty :Ordered) -> Module)))\n\
          SIG Ordered = (VAL compare :Number)",
@@ -346,10 +327,8 @@ fn sigil_fn_forward_reference_defers_via_combine() {
 /// surface: the test pins that a functor application rides the same lane as any other call.
 #[test]
 fn user_functor_application_through_dispatch() {
-    let program = program_storage();
     let region = run_root_storage();
     let test_run = run(
-        &program,
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord_base = ((LET compare = 7))\n\

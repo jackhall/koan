@@ -103,7 +103,7 @@ fn reduction_mode<'a>(
         GroupMode::Fold(FoldDirection::Left) => ReductionMode::FoldLeft,
         GroupMode::Fold(FoldDirection::Right) => ReductionMode::FoldRight,
         GroupMode::Pairwise(direction) => ReductionMode::Pairwise {
-            combiner: symbol_from_slot(ctx.args, "GROUP", "combiner")?.to_string(),
+            combiner: symbol_from_slot(ctx.args, "GROUP", "combiner")?,
             direction,
         },
     })
@@ -127,8 +127,8 @@ fn scan_members(body: &KExpression<'_>, name: &str) -> Result<Vec<String>, KErro
             }
             (Some("OP"), _) => {
                 let symbol = symbol_from_parts(statement)?;
-                if !members.iter().any(|m| m == symbol) {
-                    members.push(symbol.to_string());
+                if !members.contains(&symbol) {
+                    members.push(symbol);
                 }
             }
             _ => {}
@@ -145,8 +145,8 @@ fn scan_members(body: &KExpression<'_>, name: &str) -> Result<Vec<String>, KErro
 /// The keyword at part `index` of `expr`, if that part is one — the structural read the member scan
 /// leads with.
 fn lead_keyword<'x>(expr: &'x KExpression<'_>, index: usize) -> Option<&'x str> {
-    match expr.parts.get(index)?.value {
-        ExpressionPart::Keyword(k) => Some(k),
+    match &expr.parts.get(index)?.value {
+        ExpressionPart::Keyword(k) => Some(k.as_str()),
         _ => None,
     }
 }

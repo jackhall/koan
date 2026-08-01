@@ -5,13 +5,10 @@
 //! delegate to `accept_colon`, `accept_equals`, `accept_comma`, and `finish`; multi-part
 //! keys/values collapse into a sub-expression via `single_or_wrapped`.
 
-use crate::machine::core::RegionBrand;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::KError;
-use crate::source::Spanned;
 
 pub(super) struct DictFrame<'a> {
-    brand: RegionBrand<'a>,
     pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
     state: DictPairState<'a>,
     mode: BraceMode,
@@ -30,7 +27,7 @@ enum BraceMode {
 /// `(field-name, value)` pairs (record keys are bare identifiers, validated at `finish`).
 pub(super) enum BraceContents<'a> {
     Dict(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
-    Record(Vec<(&'a str, ExpressionPart<'a>)>),
+    Record(Vec<(String, ExpressionPart<'a>)>),
 }
 
 const MIXED_DELIMITERS: &str =
@@ -47,17 +44,11 @@ enum DictPairState<'a> {
 }
 
 /// Single part stays as-is; multiple parts wrap as a sub-expression so the scheduler
-/// dispatches them. The wrapper is spanless: a brace frame stores bare parts, so no span
-/// survives to stamp on it.
-fn single_or_wrapped<'a>(
-    brand: RegionBrand<'a>,
-    parts: Vec<ExpressionPart<'a>>,
-) -> ExpressionPart<'a> {
+/// dispatches them.
+fn single_or_wrapped<'a>(parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     match <[ExpressionPart<'a>; 1]>::try_from(parts) {
         Ok([single]) => single,
-        Err(parts) => {
-            ExpressionPart::expression(brand, parts.into_iter().map(Spanned::bare).collect())
-        }
+        Err(parts) => ExpressionPart::expression(parts),
     }
 }
 
@@ -76,9 +67,8 @@ fn is_dict_key_start_part(part: &ExpressionPart<'_>) -> bool {
 }
 
 impl<'a> DictFrame<'a> {
-    pub(super) fn new(brand: RegionBrand<'a>) -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            brand,
             pairs: Vec::new(),
             state: DictPairState::Empty,
             mode: BraceMode::Unknown,
@@ -88,7 +78,6 @@ impl<'a> DictFrame<'a> {
     /// When the value side already has content and the new part could start a fresh
     /// key, auto-commit the in-progress pair before opening a new key.
     pub(super) fn push(&mut self, part: ExpressionPart<'a>) {
-        let brand = self.brand;
         match &mut self.state {
             DictPairState::Empty => {
                 self.state = DictPairState::Key(vec![part]);
@@ -98,7 +87,7 @@ impl<'a> DictFrame<'a> {
                 if !value.is_empty() && is_dict_key_start_part(&part) {
                     let prev = std::mem::replace(&mut self.state, DictPairState::Empty);
                     if let DictPairState::Value { key, value } = prev {
-                        self.pairs.push((key, single_or_wrapped(brand, value)));
+                        self.pairs.push((key, single_or_wrapped(value)));
                     }
                     self.state = DictPairState::Key(vec![part]);
                 } else {
@@ -128,7 +117,7 @@ impl<'a> DictFrame<'a> {
             DictPairState::Key(parts) if parts.is_empty() => Err(KError::parse(missing, None)),
             DictPairState::Key(parts) => {
                 self.state = DictPairState::Value {
-                    key: single_or_wrapped(self.brand, parts),
+                    key: single_or_wrapped(parts),
                     value: Vec::new(),
                 };
                 Ok(())
@@ -202,7 +191,7 @@ impl<'a> DictFrame<'a> {
                 None,
             )),
             DictPairState::Value { key, value } => {
-                self.pairs.push((key, single_or_wrapped(self.brand, value)));
+                self.pairs.push((key, single_or_wrapped(value)));
                 Ok(())
             }
         }
@@ -239,7 +228,7 @@ impl<'a> DictFrame<'a> {
                 ));
             }
             DictPairState::Value { key, value } => {
-                self.pairs.push((key, single_or_wrapped(self.brand, value)));
+                self.pairs.push((key, single_or_wrapped(value)));
             }
         }
         if is_record {
@@ -249,7 +238,7 @@ impl<'a> DictFrame<'a> {
                     ExpressionPart::Identifier(s) => s,
                     // A capitalized Type token is a valid literal field name (kept verbatim,
                     // never name-resolved) — e.g. abstract type-slot names in `WITH {Elt = T}`.
-                    ExpressionPart::Type(t) => t.as_str(),
+                    ExpressionPart::Type(t) => t.render(),
                     other => {
                         return Err(KError::parse(
                             format!(

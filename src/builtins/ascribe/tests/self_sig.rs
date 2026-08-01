@@ -9,7 +9,7 @@ use crate::machine::model::KType;
 use crate::machine::model::Module;
 use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
-use crate::machine::{program_storage, run_root_storage};
+use crate::machine::run_root_storage;
 use crate::machine::{KErrorKind, Scope};
 
 fn module_named<'a>(scope: &'a Scope<'a>, name: &str, types: &TypeRegistry) -> &'a Module<'a> {
@@ -18,9 +18,8 @@ fn module_named<'a>(scope: &'a Scope<'a>, name: &str, types: &TypeRegistry) -> &
 
 #[test]
 fn plain_module_self_sig_is_manifest_and_raw_value_slots() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("MODULE int_ord = ((LET Tag = Number) (LET compare = 5))");
     let m = module_named(scope, "int_ord", &test_run.types);
@@ -36,9 +35,8 @@ fn plain_module_self_sig_is_manifest_and_raw_value_slots() {
 
 #[test]
 fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE int_ord = ((LET Elem = Number) (LET zero = 0) \
@@ -80,9 +78,8 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
 
 #[test]
 fn transparent_view_self_sig_reads_source_concrete_types() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE int_ord = ((LET Elem = Number) (LET zero = 0) \
@@ -110,9 +107,8 @@ fn transparent_view_self_sig_reads_source_concrete_types() {
 
 #[test]
 fn two_opaque_views_carry_distinct_abstract_identities() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
@@ -136,14 +132,13 @@ fn two_opaque_views_carry_distinct_abstract_identities() {
 
 #[test]
 fn value_slot_type_mismatch_is_rejected() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "SIG Numeric = ((VAL v :Number))\n\
          MODULE str_mod = ((LET v = (\"hi\")))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "str_mod :| Numeric"));
+    let err = test_run.run_one_err(parse_one("str_mod :| Numeric"));
     // Ruling 12: the signature renders structurally (`SIG (v: Number)`), not as "Numeric".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
@@ -154,15 +149,14 @@ fn value_slot_type_mismatch_is_rejected() {
 
 #[test]
 fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     // A proper type cannot fill a `TYPE (Type AS Wrap)` constructor slot.
     test_run.run(
         "SIG Monad = ((TYPE (Type AS Wrap)))\n\
          MODULE int_list = ((LET Wrap = Number))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "int_list :| Monad"));
+    let err = test_run.run_one_err(parse_one("int_list :| Monad"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Wrap`") && msg.contains("type constructor") && msg.contains("parameters {Type}")),
@@ -172,9 +166,8 @@ fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
 
 #[test]
 fn satisfying_module_ascribes_and_repeat_hits_verdict() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     // A module satisfying every rule ascribes; a second ascription of the same module+sig
     // succeeds too — the run's registry records the first verdict and the repeat check hits it.
@@ -209,14 +202,13 @@ fn satisfying_module_ascribes_and_repeat_hits_verdict() {
 
 #[test]
 fn manifest_member_mismatch_names_the_member() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(
         "SIG Tagged = ((LET Tag = Number) (VAL item :Number))\n\
          MODULE bad = ((LET Tag = Str) (LET item = 5))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "bad :| Tagged"));
+    let err = test_run.run_one_err(parse_one("bad :| Tagged"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Tag`") && msg.contains("fixes it to")),
@@ -229,9 +221,8 @@ fn manifest_member_mismatch_names_the_member() {
 /// though both self-sigs digest by content — each mint carries its own generativity `nonce`.
 #[test]
 fn opaque_views_have_distinct_type_of() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
@@ -262,9 +253,8 @@ fn opaque_views_have_distinct_type_of() {
 /// registry of a single retained runtime.
 #[test]
 fn identical_modules_share_satisfaction_verdict() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let (registry, hits_before, misses_before) = test_run.run_probe_returning_registry(
         "SIG Ord = ((VAL x :Number))\n\
          MODULE a = ((LET x = 1) (LET extra = 9))\n\
@@ -295,9 +285,8 @@ fn identical_modules_share_satisfaction_verdict() {
 /// verdict and the miss count rises across `TAKE c`.
 #[test]
 fn differing_module_interface_misses_the_shared_verdict() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let (registry, _, misses_before) = test_run.run_probe_returning_registry(
         "SIG Ord = ((VAL x :Number))\n\
          MODULE a = ((LET x = 1))\n\

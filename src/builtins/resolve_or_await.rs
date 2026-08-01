@@ -3,7 +3,6 @@
 //! Park-on-producer, re-resolve-on-wake, and the second-park protocol error live here, so every
 //! routing site states its own carrier shape and slot name and nothing else.
 
-use crate::machine::core::RegionBrand;
 use crate::machine::model::KExpression;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
@@ -103,7 +102,6 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
 /// Sub-dispatch `expr` in the slot's own scope and hand the resolved type to `on_resolved` at
 /// dep-finish. The resolved `KType` is owned data, so the dep carrier stays behind.
 pub(crate) fn dispatch_type_then<'a>(
-    brand: RegionBrand<'a>,
     expr: KExpression<'a>,
     slot: &'static str,
     on_resolved: impl for<'r> FnOnce(&FinishCtx<'a, 'r>, KType) -> Action<'a> + 'a,
@@ -114,7 +112,7 @@ pub(crate) fn dispatch_type_then<'a>(
     });
     Action::await_deps(
         Deps::from_owned([OwnedDispatch {
-            expr: crate::machine::model::WorkingExpression::from_ast(brand, expr),
+            expr,
             placement: DepPlacement::OwnScope,
         }]),
         finish,

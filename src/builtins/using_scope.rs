@@ -81,7 +81,6 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         seed
     });
     block_tail(
-        ctx.scope.brand(),
         FramePlacement::Inherit,
         BlockScope::Overlay(overlay),
         seed,

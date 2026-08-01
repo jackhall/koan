@@ -25,9 +25,7 @@ pub enum Carried<'a> {
     Object(&'a KObject<'a>),
     Type(KType),
     /// A surface type name the bind seam left unlowered; resolved by scope walk at the consumer.
-    /// Held by value: a [`TypeIdentifier`] is a `Copy` borrow of a name already resident in the
-    /// storage that parsed it, so there is nothing for a reference to add.
-    UnresolvedType(TypeIdentifier<'a>),
+    UnresolvedType(&'a TypeIdentifier),
 }
 
 /// `Reattachable` family for [`Carried`] — the value channel's erase/reattach owner and the
@@ -100,17 +98,17 @@ pub enum Held<'a> {
     Type(KType),
     /// The owned dual of [`Carried::UnresolvedType`] — the bind seam's carrier for a bare type
     /// name that is not a builtin leaf. Consumers resolve it against their scope chain.
-    UnresolvedType(TypeIdentifier<'a>),
+    UnresolvedType(TypeIdentifier),
 }
 
 impl<'a> Held<'a> {
-    /// Owned-ify a borrowed [`Carried`] into a cell: deep-clone the object arm, copy the
+    /// Owned-ify a borrowed [`Carried`] into a cell: deep-clone the object arm, clone the
     /// type-channel arms.
     pub fn from_carried(c: Carried<'a>) -> Held<'a> {
         match c {
             Carried::Object(o) => Held::Object(o.deep_clone()),
             Carried::Type(t) => Held::Type(t),
-            Carried::UnresolvedType(ti) => Held::UnresolvedType(ti),
+            Carried::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
         }
     }
 
@@ -146,12 +144,12 @@ impl<'a> Held<'a> {
         }
     }
 
-    /// Independent copy: deep-clone the object arm, copy the type-channel arms.
+    /// Independent copy: deep-clone the object arm, clone the type-channel arms.
     pub fn deep_clone(&self) -> Held<'a> {
         match self {
             Held::Object(o) => Held::Object(o.deep_clone()),
             Held::Type(t) => Held::Type(*t),
-            Held::UnresolvedType(ti) => Held::UnresolvedType(*ti),
+            Held::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
         }
     }
 

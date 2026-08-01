@@ -7,8 +7,8 @@
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KObject;
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage};
 
 use super::capture_program_output;
 
@@ -16,11 +16,10 @@ use super::capture_program_output;
 /// by record runs the body against the named field.
 #[test]
 fn anonymous_fn_call_by_record_runs_body() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("LET f = (FN :{x :Number} -> Number = (x))");
-    let result = test_run.run_one(parse_one(&program, "f {x = 7}"));
+    let result = test_run.run_one(parse_one("f {x = 7}"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 7.0),
         "f {{x = 7}} should run the body and return 7",
@@ -30,11 +29,10 @@ fn anonymous_fn_call_by_record_runs_body() {
 /// The bound value is a `KFunction` — the only handle to an anonymous function.
 #[test]
 fn anonymous_fn_binds_a_function_value() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("LET f = (FN :{x :Number} -> Number = (x))");
-    let result = test_run.run_one(parse_one(&program, "f"));
+    let result = test_run.run_one(parse_one("f"));
     assert!(
         matches!(result, KObject::KFunction(..)),
         "an anonymous FN binds a callable value",
@@ -90,11 +88,10 @@ fn anonymous_fn_with_sub_dispatched_field_type() {
 /// surfaces the `NAMED_ONLY` dispatch failure rather than binding.
 #[test]
 fn anonymous_fn_rejects_positional_call() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("LET f = (FN :{x :Number} -> Number = (x))");
-    let error = test_run.run_one_err(parse_one(&program, "f (1)"));
+    let error = test_run.run_one_err(parse_one("f (1)"));
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "a positional call on an anonymous FN should fail dispatch, got {error:?}",
@@ -105,10 +102,9 @@ fn anonymous_fn_rejects_positional_call() {
 /// binder demands a record schema.
 #[test]
 fn anonymous_fn_non_record_signature_is_shape_error() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let error = test_run.run_one_err(parse_one(&program, "FN :Number -> Number = (1)"));
+    let mut test_run = TestRun::silent(&region);
+    let error = test_run.run_one_err(parse_one("FN :Number -> Number = (1)"));
     assert!(
         matches!(error.kind, KErrorKind::ShapeError(_)),
         "a non-record `:T` signature should be a shape error, got {error:?}",

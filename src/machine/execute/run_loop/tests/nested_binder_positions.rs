@@ -7,7 +7,7 @@
 //! which installs nothing.
 
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::core::{program_storage, run_root_storage};
+use crate::machine::core::run_root_storage;
 use crate::machine::model::KObject;
 use crate::machine::KErrorKind;
 
@@ -22,41 +22,37 @@ fn assert_nested_binder(err: crate::machine::KError, position: &str) {
 /// `f (LET x = 1)` — a user-call argument is an eager value position.
 #[test]
 fn let_in_user_call_argument_is_nested_binder() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (CALL n :Number) -> Number = (n)");
-    let err = test_run.run_one_err(parse_one(&program, "CALL (LET x = 1)"));
+    let err = test_run.run_one_err(parse_one("CALL (LET x = 1)"));
     assert_nested_binder(err, "a user-call argument");
 }
 
 /// `(LET y = 1) + 2` — an operator-chain operand is an eager value position.
 #[test]
 fn let_in_operator_operand_is_nested_binder() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "(LET y = 1) + 2"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("(LET y = 1) + 2"));
     assert_nested_binder(err, "an operator operand");
 }
 
 /// `{a = (LET v = 2)}` — a record-literal element is an eager value position.
 #[test]
 fn let_in_record_literal_element_is_nested_binder() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "LET r = {a = (LET v = 2)}"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("LET r = {a = (LET v = 2)}"));
     assert_nested_binder(err, "a record-literal element");
 }
 
 /// `(LET g = 5) (1)` — a deferred head is an eager value position.
 #[test]
 fn let_as_deferred_head_is_nested_binder() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "(LET g = 5) (1)"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("(LET g = 5) (1)"));
     assert_nested_binder(err, "a deferred head");
 }
 
@@ -64,25 +60,19 @@ fn let_as_deferred_head_is_nested_binder() {
 /// argument it is the same position error as a `LET`, not a function value.
 #[test]
 fn named_fn_in_user_call_argument_is_nested_binder() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "USE (FN (SHOW x :Number) -> Str = (\"hi\"))",
-    ));
+    let err = test_run.run_one_err(parse_one("USE (FN (SHOW x :Number) -> Str = (\"hi\"))"));
     assert_nested_binder(err, "a user-call argument (named FN)");
 }
 
 /// A named `FN` in a list-literal element is likewise rejected.
 #[test]
 fn named_fn_in_list_element_is_nested_binder() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let err = test_run.run_one_err(parse_one(
-        &program,
         "LET xs = [(FN (ECHO x :Number) -> Number = (x))]",
     ));
     assert_nested_binder(err, "a list-literal element (named FN)");
@@ -91,13 +81,9 @@ fn named_fn_in_list_element_is_nested_binder() {
 /// A named `OP` definition in an eager argument position is likewise rejected.
 #[test]
 fn named_op_in_builtin_argument_is_nested_binder() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "PRINT (OP #(⊕) OVER Number = (left + right))",
-    ));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("PRINT (OP #(⊕) OVER Number = (left + right))"));
     assert_nested_binder(err, "a builtin argument (named OP)");
 }
 
@@ -105,9 +91,8 @@ fn named_op_in_builtin_argument_is_nested_binder() {
 /// list-element position that rejects the named form.
 #[test]
 fn anonymous_fn_in_list_element_is_legal() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run("LET xs = [(FN :{x :Number} -> Number = (x))]");
     match test_run.scope.lookup("xs") {
         Some(KObject::List(items, _)) => {
@@ -127,9 +112,8 @@ fn anonymous_fn_in_list_element_is_legal() {
 /// The error is slot-terminal and TRY-catchable like any structured error.
 #[test]
 fn nested_binder_error_is_try_catchable() {
-    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
     test_run.run(
         "TRY (PRINT (LET x = 1)) -> :Str WITH (\
              NestedBinder -> (PRINT \"caught\")\

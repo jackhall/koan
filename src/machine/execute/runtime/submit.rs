@@ -1,6 +1,6 @@
-//! Dispatch-submission wrappers: each resolves the Koan name-resolution payload
+//! AST-aware dispatch-submission wrappers: each resolves the Koan name-resolution payload
 //! `(scope, node_scope, chain)` and forwards to [`KoanRuntime::submit_expression`], the only path
-//! that turns a [`WorkingExpression`] into scheduler work. Payload construction lives here on the workload;
+//! that turns a `KExpression` into scheduler work. Payload construction lives here on the workload;
 //! the scheduler core exposes only the payload-agnostic [`Scheduler::alloc_node`] and frame-lifecycle
 //! accessors.
 
@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use crate::machine::core::scope_frame;
 use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
-use crate::machine::model::WorkingExpression;
+use crate::machine::model::KExpression;
 use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
 use crate::witnessed::SealedExtern;
 
@@ -129,7 +129,7 @@ impl<'run> KoanRuntime<'run> {
     pub fn enter_block<'a>(
         &mut self,
         scope_id: ScopeId,
-        statements: Vec<WorkingExpression<'a>>,
+        statements: Vec<KExpression<'a>>,
         scope: &'a Scope<'a>,
     ) -> Vec<NodeId> {
         let parent = self.active_payload().map(|p| p.chain.clone());
@@ -148,11 +148,7 @@ impl<'run> KoanRuntime<'run> {
     /// Submit an unresolved expression for the scheduler to dispatch + execute against `scope`,
     /// inheriting the ambient (or, at top level, detached) lexical chain. The only public way to
     /// add work.
-    pub fn dispatch_in_scope<'a>(
-        &mut self,
-        expr: WorkingExpression<'a>,
-        scope: &'a Scope<'a>,
-    ) -> NodeId {
+    pub fn dispatch_in_scope<'a>(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         let chain = self.ambient_or_detached_chain();
         self.dispatch_in_scope_with_chain(expr, scope, chain)
     }
@@ -161,7 +157,7 @@ impl<'run> KoanRuntime<'run> {
     /// [`NodeScope`] handle, then submit with the caller's resolved lexical `chain`.
     fn dispatch_in_scope_with_chain<'a>(
         &mut self,
-        expr: WorkingExpression<'a>,
+        expr: KExpression<'a>,
         scope: &'a Scope<'a>,
         chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
@@ -177,7 +173,7 @@ impl<'run> KoanRuntime<'run> {
     /// [`Self::dispatch_body`] does it transiently).
     pub(in crate::machine::execute) fn dispatch_in_active_frame<'a>(
         &mut self,
-        expr: WorkingExpression<'a>,
+        expr: KExpression<'a>,
         chain: Option<Rc<LexicalFrame>>,
         ctx: SubmitContext,
     ) -> NodeId {
@@ -196,7 +192,7 @@ impl<'run> KoanRuntime<'run> {
     /// own declaration slot, so a nested binder outside one is rejected.
     pub(in crate::machine::execute) fn dispatch_in_own_scope<'a>(
         &mut self,
-        expr: WorkingExpression<'a>,
+        expr: KExpression<'a>,
         ctx: SubmitContext,
     ) -> NodeId {
         let node_scope = self
@@ -226,7 +222,7 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn dispatch_body<'a>(
         &mut self,
         frame: &Rc<CallFrame>,
-        statements: Vec<WorkingExpression<'a>>,
+        statements: Vec<KExpression<'a>>,
     ) -> Vec<NodeId> {
         let call_site_chain = self
             .active_payload()

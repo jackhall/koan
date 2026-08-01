@@ -10,16 +10,20 @@
 //! value with no wrapper. This builtin only constructs the union *type* as a first-class type
 //! value.
 
-use crate::machine::model::Held;
+use crate::machine::model::KExpression;
 use crate::machine::model::KKind;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::WriteGate;
-use crate::machine::{arg_object, require_ktype, Action};
+use crate::machine::{
+    arg_object, require_ktype, Action, AwaitContinue, DepPlacement, OwnedDispatch,
+};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
+use crate::scheduler::Deps;
 
 use super::op_def::OperatorForm;
+use super::resolve_or_await::expect_type_terminal;
 use super::{arg, kw, sig};
 
 const MEMBERS_SLOT: &str = "`|` members";
@@ -36,39 +40,45 @@ fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
         .type_carried(ctx.types.union_of(vec![left, right]))))
 }
 
-/// The reduced `Unary` form `[Keyword("|"), ListLiteral([members...])]`: the members ride an
-/// ordinary evaluated list, exactly as a user-declared `UNARY OP`'s `operands` slot does. Each
-/// element resolves through the list literal's own element scheduling — a bare type leaf resolves
-/// against scope and parks on a still-finalizing name, a `:(...)` member rides its own
-/// sub-dispatch — so every member kind reaches the body already lowered to a `KType` cell, and the
-/// composite union builds through [`TypeRegistry::union_of`].
+/// The reduced `Unary` form `[Keyword("|"), ListLiteral([members...])]`: the list literal arrives
+/// raw as a one-per-part `KExpression` (the `:KExpression` slot captures it unevaluated). Each
+/// member part is sub-dispatched on its own — a bare type leaf resolves against scope and parks on
+/// a forward reference, a `:(...)` member sub-dispatches to its `KType` — so every member-part kind
+/// rides the ordinary type-resolution machinery. `expect_type_terminal` clones each resolved member
+/// out of its terminal as owned data, and the composite union builds through [`TypeRegistry::union_of`].
 fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
-    let substrate = match arg_object(ctx.args, "members") {
-        Some(KObject::List(substrate, _)) => *substrate,
+    let members = match arg_object(ctx.args, "members") {
+        Some(KObject::KExpression(e)) => e.clone(),
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "{MEMBERS_SLOT} slot must be a run of type operands",
             )))))
         }
     };
-    if substrate.is_empty() {
+    if members.parts.is_empty() {
         return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
             "{MEMBERS_SLOT}: a union needs at least one member",
         )))));
     }
-    let mut members: Vec<KType> = Vec::with_capacity(substrate.len());
-    for cell in substrate.elements() {
-        match cell {
-            Held::Type(kt) => members.push(*kt),
-            other => {
-                return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "{MEMBERS_SLOT}: every member must be a type, got `{}`",
-                    other.summarize(ctx.types),
-                )))))
-            }
+    let count = members.parts.len();
+    let deps = Deps::from_owned(members.parts.into_iter().map(|part| OwnedDispatch {
+        expr: KExpression::new(vec![part]),
+        placement: DepPlacement::OwnScope,
+    }));
+    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
+        let mut members: Vec<KType> = Vec::with_capacity(count);
+        for position in 0..count {
+            let kt = crate::try_action!(expect_type_terminal(
+                &results,
+                position,
+                MEMBERS_SLOT,
+                fctx.types
+            ));
+            members.push(kt);
         }
-    }
-    Action::done(Ok(ctx.ctx.type_carried(ctx.types.union_of(members))))
+        Action::done(Ok(fctx.ctx.type_carried(fctx.types.union_of(members))))
+    });
+    Action::await_deps(deps, finish)
 }
 
 /// `|` seeds its triple — the reduced `Unary` form `| [members...]`, the two-member keyworded form
@@ -82,7 +92,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         OperatorForm {
             signature: sig(
                 KType::of_kind(KKind::AnyType),
-                vec![kw("|"), arg("members", types.list(KType::ANY))],
+                vec![kw("|"), arg("members", KType::KEXPRESSION)],
             ),
             body: Body::Builtin(body_nary),
         },

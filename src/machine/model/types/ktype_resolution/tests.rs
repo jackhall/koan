@@ -2,8 +2,8 @@ use super::*;
 use crate::machine::model::types::Record;
 use crate::machine::model::TypeRegistry;
 
-fn leaf(n: &str) -> TypeIdentifier<'_> {
-    TypeIdentifier::leaf(n)
+fn leaf(n: &str) -> TypeIdentifier {
+    TypeIdentifier::leaf(n.into())
 }
 
 #[test]

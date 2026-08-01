@@ -326,7 +326,7 @@ mod erased_continuation_tests {
 
     use super::*;
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage, CallFrame, FrameStorageExt};
+    use crate::machine::core::{run_root_storage, CallFrame, FrameStorageExt};
     use crate::machine::model::KObject;
     use crate::scheduler::{Erased, Scheduler};
     use crate::witnessed::SealedExtern;
@@ -339,9 +339,8 @@ mod erased_continuation_tests {
     /// continuation open + single-shot call (`run_step`); fails on UB, not values.
     #[test]
     fn erased_continuation_open_roundtrip() {
-        let program = program_storage();
         let region = run_root_storage();
-        let test_run = TestRun::silent(&program, &region);
+        let test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         // The captured value lives in the run region — the ancestor the cart's `outer` chain pins.
         let captured: &KObject = region.brand().alloc_object(KObject::Number(7.0));
@@ -365,8 +364,6 @@ mod erased_continuation_tests {
             .zip(scope_carrier)
             .open(&cart, |(continuation, scope)| {
                 let effects = std::cell::RefCell::new(Vec::new());
-                // The step's coverage: this off-scheduler shot has one anchor and no deps.
-                let coverage = crate::machine::core::FrameCoverage::of(cart.storage_rc());
                 let view = SchedulerView::new(
                     &sched,
                     &ambient,
@@ -377,7 +374,6 @@ mod erased_continuation_tests {
                         node: crate::machine::NodeId(0),
                     },
                     &effects,
-                    &coverage,
                 );
                 let empty: &[Result<DepTerminal, KError>] = &[];
                 let out = continuation(&view, DepResults::new(empty, 0), 0);

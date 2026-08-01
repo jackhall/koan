@@ -2,13 +2,12 @@
 //! no-match and wildcard `_` coverage of dispatcher-internal kinds.
 
 use crate::builtins::test_support::{parse_one, TestRun};
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage};
 
 fn run_program(source: &str) -> Vec<u8> {
-    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
     test_run.run(source);
     let bytes = captured.borrow().clone();
     bytes
@@ -29,11 +28,9 @@ fn ok_binds_it_to_success_value() {
 #[test]
 fn arm_violating_declared_return_type_errors() {
     // Declared `:Number`, but the `ok` arm returns a Str (PRINT's rendered string).
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let err = test_run.run_one_err(parse_one(
-        &program,
         "TRY (PRINT \"v\") -> :Number WITH (Ok -> (PRINT \"caught\"))",
     ));
     assert!(
@@ -99,11 +96,9 @@ fn type_mismatch_arm_catches_record_newtype_value_mismatch() {
 
 #[test]
 fn re_raise_when_no_arm_matches_error_kind() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let err = test_run.run_one_err(parse_one(
-        &program,
         "TRY (foo) -> :Str WITH (TypeMismatch -> (PRINT \"never\"))",
     ));
     assert!(
@@ -114,11 +109,9 @@ fn re_raise_when_no_arm_matches_error_kind() {
 
 #[test]
 fn missing_ok_arm_on_success_raises_shape_error() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let err = test_run.run_one_err(parse_one(
-        &program,
         "TRY (PRINT \"x\") -> :Str WITH (TypeMismatch -> (PRINT \"never\"))",
     ));
     assert!(

@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
-use crate::machine::core::{program_storage, ReturnContract};
+use crate::machine::core::ReturnContract;
 use crate::machine::execute::nodes::{NodePayload, NodeScope};
 use crate::machine::execute::obligation::ReturnObligation;
 use crate::machine::model::KType;
@@ -25,9 +25,8 @@ fn sample_obligation() -> ReturnObligation {
 
 #[test]
 fn slot_step_bracket_restores_ambient_on_unwind() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let obligation = sample_obligation();
     let runtime = &mut test_run.runtime;
     let frame = runtime.run_frame_ref().expect("seeded run frame").clone();
@@ -58,9 +57,8 @@ fn slot_step_bracket_restores_ambient_on_unwind() {
 
 #[test]
 fn slot_step_bracket_restores_ambient_on_normal_return() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let obligation = sample_obligation();
     let runtime = &mut test_run.runtime;
     let frame = runtime.run_frame_ref().expect("seeded run frame").clone();

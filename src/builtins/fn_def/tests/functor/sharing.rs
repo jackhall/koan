@@ -2,7 +2,7 @@
 
 use crate::builtins::test_support::{lookup_fn, lookup_module, parse_one, spliced_part, TestRun};
 use crate::machine::model::Carried;
-use crate::machine::{program_storage, run_root_storage, FrameStorageExt};
+use crate::machine::{run_root_storage, FrameStorageExt};
 
 /// Pinned-slot admissibility: a `Signature` slot with `{Elem = Number}` folded in admits a
 /// module iff its self-sig satisfies the folded schema — the pin is a manifest member, so
@@ -12,9 +12,8 @@ use crate::machine::{program_storage, run_root_storage, FrameStorageExt};
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
     use crate::machine::model::{KType, SigSchema};
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     // An empty signature: every module bare-satisfies it, so the pins alone gate. Declared
@@ -43,17 +42,14 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     // on the Object channel — its satisfaction of a `Signature` slot goes through
     // `accepts_carried`'s `Carried::Object(KObject::Module)` arm.
     let module_part = |name: &str| {
-        spliced_part(
-            &region,
-            Carried::Object(scope.lookup(name).unwrap_or_else(|| {
-                panic!("{name} must bind a module value-side");
-            })),
-        )
+        spliced_part(Carried::Object(scope.lookup(name).unwrap_or_else(|| {
+            panic!("{name} must bind a module value-side");
+        })))
     };
-    assert!(slot.accepts_working_part(&module_part("num_pinned"), &types));
-    assert!(!slot.accepts_working_part(&module_part("str_pinned"), &types));
-    assert!(!slot.accepts_working_part(&module_part("no_elem_pin"), &types));
-    assert!(slot.accepts_working_part(&module_part("num_bare"), &types));
+    assert!(slot.accepts_part(&module_part("num_pinned"), &types));
+    assert!(!slot.accepts_part(&module_part("str_pinned"), &types));
+    assert!(!slot.accepts_part(&module_part("no_elem_pin"), &types));
+    assert!(slot.accepts_part(&module_part("num_bare"), &types));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at
@@ -61,9 +57,8 @@ fn sharing_constraint_rejects_mismatched_module_type() {
 /// same type the `WITH` expression evaluates to on its own.
 #[test]
 fn functor_with_two_pinned_slots_round_trips() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))\n\
@@ -75,10 +70,7 @@ fn functor_with_two_pinned_slots_round_trips() {
         "FN (TWOPIN p :Ordered) -> :(OrderedSet WITH {Elt = Number, Ord = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
     );
-    let expected = test_run.run_one_type(parse_one(
-        &program,
-        "OrderedSet WITH {Elt = Number, Ord = Number}",
-    ));
+    let expected = test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number, Ord = Number}"));
     let f = lookup_fn(scope, "TWOPIN");
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
@@ -98,9 +90,8 @@ fn functor_with_two_pinned_slots_round_trips() {
 #[test]
 fn functor_return_with_sharing_constraint_pins_output_type() {
     use crate::machine::model::KType;
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -112,7 +103,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         "FN (MAKESETN p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
-    let expected = test_run.run_one_type(parse_one(&program, "Set WITH {Elt = Number}"));
+    let expected = test_run.run_one_type(parse_one("Set WITH {Elt = Number}"));
     let f = lookup_fn(scope, "MAKESETN");
     use crate::machine::model::{ReturnType, TypeNode};
     match &f.signature.return_type {
@@ -144,9 +135,8 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
 /// counterpart is `functor_return_with_matching_sharing_constraint_passes`.
 #[test]
 fn functor_return_with_mismatched_sharing_constraint_errors() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -158,13 +148,9 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         "FN (MAKEBAD p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Str) (LET insert = 0)))",
     );
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "MAKEBAD int_ord_view"),
-        ),
-        scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("MAKEBAD int_ord_view"), scope);
     test_run
         .runtime
         .execute()
@@ -186,9 +172,8 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
 /// required. Counterpart to `functor_return_with_mismatched_sharing_constraint_errors`.
 #[test]
 fn functor_return_with_matching_sharing_constraint_passes() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -200,13 +185,9 @@ fn functor_return_with_matching_sharing_constraint_passes() {
         "FN (MAKEGOOD p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "MAKEGOOD int_ord_view"),
-        ),
-        scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("MAKEGOOD int_ord_view"), scope);
     test_run
         .runtime
         .execute()
@@ -231,9 +212,8 @@ fn functor_return_with_matching_sharing_constraint_passes() {
 #[test]
 fn transparent_view_pin_agreement_reads_source_types() {
     use crate::machine::model::{KType, TypeNode};
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     test_run.run(
@@ -255,11 +235,11 @@ fn transparent_view_pin_agreement_reads_source_types() {
     let num_view = scope.lookup("num_view").expect("num_view bound");
     let str_view = scope.lookup("str_view").expect("str_view bound");
     assert!(
-        slot.accepts_working_part(&spliced_part(&region, Carried::Object(num_view)), &types),
+        slot.accepts_part(&spliced_part(Carried::Object(num_view)), &types),
         "transparent view over `Elem = Number` must agree with the `{{Elem = Number}}` pin",
     );
     assert!(
-        !slot.accepts_working_part(&spliced_part(&region, Carried::Object(str_view)), &types),
+        !slot.accepts_part(&spliced_part(Carried::Object(str_view)), &types),
         "transparent view over `Elem = Str` must not agree with the `{{Elem = Number}}` pin",
     );
 }
@@ -270,9 +250,8 @@ fn transparent_view_pin_agreement_reads_source_types() {
 #[test]
 fn opaque_view_pin_agreement_names_its_abstract_identity() {
     use crate::machine::model::TypeNode;
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     test_run.run(
@@ -299,7 +278,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let view_obj = scope.lookup("view").expect("view bound");
     assert!(
-        slot.accepts_working_part(&spliced_part(&region, Carried::Object(view_obj)), &types),
+        slot.accepts_part(&spliced_part(Carried::Object(view_obj)), &types),
         "opaque view must agree with a pin naming its own per-call abstract `Carrier`",
     );
 }

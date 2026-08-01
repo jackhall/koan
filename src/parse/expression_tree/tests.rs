@@ -12,7 +12,6 @@ mod type_sigil;
 mod value_sigil;
 
 use super::{build_tree, parse};
-use crate::machine::core::program_storage;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::quotes::mask_quotes;
 
@@ -65,6 +64,12 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
             ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
+            ExpressionPart::Spliced { .. } => "future".to_string(),
+            // Parse output never contains a `StagedSlot` — it's a scheduler-internal marker the
+            // dispatcher introduces after parsing, never produced by `parse`/`build_tree`.
+            ExpressionPart::StagedSlot => {
+                unreachable!("StagedSlot is scheduler-internal; parse output never contains one")
+            }
         }
     }
     let parts: Vec<String> = e.parts.iter().map(|p| describe_part(&p.value)).collect();
@@ -72,16 +77,14 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
 }
 
 pub(super) fn tree(input: &str) -> Result<String, String> {
-    let program = program_storage();
     let (masked, dict) = mask_quotes(input);
-    build_tree(program.brand(), &masked, &dict)
+    build_tree(&masked, &dict)
         .map(|e| describe(&e))
         .map_err(|e| e.to_string())
 }
 
 pub(super) fn top(input: &str) -> Result<Vec<String>, String> {
-    let program = program_storage();
-    parse(program.brand(), input)
+    parse(input)
         .map(|exprs| exprs.iter().map(describe).collect())
         .map_err(|e| e.to_string())
 }

@@ -75,13 +75,14 @@ impl<'run> KoanRuntime<'run> {
     pub fn execute(&mut self) -> Result<(), KError> {
         while let Some(idx) = self.sched.pop_next() {
             let id = NodeId(idx);
-            // A framed tail replace's retiring incarnation frame rides into the step as part of its
-            // coverage: the reinstalled incarnation adopts the carried arguments here
-            // (`extract_carried_args`), reading them out of the retiring region — where the
-            // dispatching step rested them — which must stay live until it does. `None` for any
-            // non-reinstalled step, or a frameless replace, which turns over no region.
-            let (work, anchor, handoff) = self.sched.take_for_run(id);
-            self.run_step(id, work, anchor, handoff);
+            // Hold a framed tail replace's retiring incarnation frame across this step: the reinstalled
+            // incarnation adopts the carried arguments here (`extract_carried_args`), reading them out
+            // of the retiring region, which must stay live until it does. Dropping `_handoff` after the
+            // step orders the retiring region's free after the adoption (`None` for any non-reinstalled
+            // step, or a frameless replace). Redundant while the loop-carried carriers still pin the
+            // region; load-bearing once the carrier collapses.
+            let (work, anchor, _handoff) = self.sched.take_for_run(id);
+            self.run_step(id, work, anchor);
         }
         // Slots still parked after drain are on a dependency that can never fire —
         // surface the cycle rather than panic on the top-level result read.
@@ -115,7 +116,6 @@ impl<'run> KoanRuntime<'run> {
         id: NodeId,
         work: NodeWork<KoanWorkload>,
         anchor: Rc<super::nodes::SlotFrame>,
-        handoff: Option<Rc<super::nodes::SlotFrame>>,
     ) {
         let idx = id.index();
         // The step's binding-write sink: every `Action` the step interprets deposits its `WriteOp`s
@@ -172,13 +172,6 @@ impl<'run> KoanRuntime<'run> {
         for terminal in dep_sources.iter().flatten() {
             combined.absorb(terminal.delivered.coverage().clone());
         }
-        // A framed tail replace's retiring incarnation, held for this step alone. It covers the
-        // splice cells this slot's previous incarnation rested into that region — the reads
-        // `SchedulerView::lift_spliced` takes — and is released when the coverage drops at return,
-        // ordering the retiring region's free after the adoption.
-        if let Some(retiring) = &handoff {
-            combined.absorb(FrameCoverage::of(Rc::clone(retiring.owner())));
-        }
         // Open the three externally-witnessed carriers — continuation, active scope, dep slice —
         // together at one rank-2 `for<'b>` brand witnessed by `combined` (see the doc comment for why
         // nothing branded escapes).
@@ -218,7 +211,6 @@ impl<'run> KoanRuntime<'run> {
                                     node: id,
                                 },
                                 &step_effects,
-                                &combined,
                             ),
                             deps.results(&dep_sources),
                             idx,
@@ -245,11 +237,8 @@ impl<'run> KoanRuntime<'run> {
                             Err(error) => Outcome::Done(Err(error)),
                         };
                         // Realize the outcome into a `NodeStep`; a ready `Outcome::Forward` becomes
-                        // a `ForwardReady` relocated below into this same `dest`. The step scope's
-                        // brand rides along: an owned dep the outcome names may still have to bump
-                        // its own dispatch node (an aggregate literal's elements, a body block's
-                        // statements) into this region as it is realized.
-                        rt.apply_outcome(outcome, scope.brand(), idx)
+                        // a `ForwardReady` relocated below into this same `dest`.
+                        rt.apply_outcome(outcome, idx)
                     },
                 );
                 // The producer's per-call frame, gated to a *dying* producer (a frameless / run-frame

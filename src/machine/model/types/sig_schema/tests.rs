@@ -411,11 +411,10 @@ fn value_slot_list_of_abstract_ref_substitutes_nested() {
 #[test]
 fn pin_converts_abstract_to_manifest_via_parsed_sig() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage};
+    use crate::machine::core::run_root_storage;
 
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG Pinnable = ((TYPE Elt) (VAL v :Number))");
     let sig_schema = match scope.resolve_type("Pinnable") {
@@ -452,11 +451,10 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
 #[test]
 fn sig_to_sig_entailment_over_shared_abstract() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage};
+    use crate::machine::core::run_root_storage;
 
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Alpha = ((TYPE Elem) (VAL compare :(FN (x :Elem) -> Number)))\n\

@@ -1,8 +1,8 @@
 use super::*;
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, run_root_bare, TestRun};
-use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt, Scope};
-use crate::machine::model::{Argument, ExpressionSignature, KExpression, KType, ReturnType};
+use crate::machine::core::{run_root_storage, FrameStorageExt, Scope};
+use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType};
 use crate::machine::model::{KKind, KObject};
 use crate::machine::model::{KLiteral, TypeIdentifier};
 
@@ -72,16 +72,12 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let brand = region.brand();
-    let expr = KExpression::new(
-        brand,
-        vec![
-            Spanned::bare(ExpressionPart::Keyword("OP")),
-            Spanned::bare(ExpressionPart::Identifier("someName")),
-        ],
-    );
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("OP".into())),
+        Spanned::bare(ExpressionPart::Identifier("someName".into())),
+    ]);
     let f = find_match(scope, &expr, &types).expect("OP <Number> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
+    let pick = f.classify_for_pick(&expr, &types);
     assert_eq!(pick.wrap_indices, vec![1]);
     assert!(pick.ref_name_indices.is_empty());
     assert!(!pick.picked_has_binder_name);
@@ -117,25 +113,18 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let brand = region.brand();
-    let inner = ExpressionPart::expression(
-        brand,
-        vec![
-            Spanned::bare(ExpressionPart::Identifier("x")),
-            Spanned::bare(ExpressionPart::Keyword(":")),
-            Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
-        ],
-    );
-    let expr = KExpression::new(
-        brand,
-        vec![
-            Spanned::bare(ExpressionPart::Identifier("myFn")),
-            Spanned::bare(inner),
-        ],
-    );
+    let inner = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Identifier("x".into())),
+        Spanned::bare(ExpressionPart::Keyword(":".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+    ]);
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Identifier("myFn".into())),
+        Spanned::bare(ExpressionPart::Expression(Box::new(inner))),
+    ]);
     let f = find_match(scope, &expr, &types)
         .expect("test overload should match an Identifier-leading expression");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
+    let pick = f.classify_for_pick(&expr, &types);
     assert!(pick.ref_name_indices.contains(&0));
     assert!(!pick.picked_has_binder_name);
 }
@@ -144,23 +133,18 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
 /// not a reference, and `classify_for_pick` must exclude it from `ref_name_indices`.
 #[test]
 fn classify_skips_ref_name_indices_for_binder_function() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&program, &region);
+    let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
-    let brand = region.brand();
-    let expr = KExpression::new(
-        brand,
-        vec![
-            Spanned::bare(ExpressionPart::Keyword("LET")),
-            Spanned::bare(ExpressionPart::Identifier("x")),
-            Spanned::bare(ExpressionPart::Keyword("=")),
-            Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
-        ],
-    );
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("LET".into())),
+        Spanned::bare(ExpressionPart::Identifier("x".into())),
+        Spanned::bare(ExpressionPart::Keyword("=".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+    ]);
     let f = find_match(scope, &expr, &types).expect("LET should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
+    let pick = f.classify_for_pick(&expr, &types);
     assert!(pick.picked_has_binder_name);
     assert!(
         pick.ref_name_indices.is_empty(),
@@ -196,16 +180,12 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let brand = region.brand();
-    let expr = KExpression::new(
-        brand,
-        vec![
-            Spanned::bare(ExpressionPart::Keyword("OP")),
-            Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("IntOrd"))),
-        ],
-    );
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("OP".into())),
+        Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("IntOrd".into()))),
+    ]);
     let f = find_match(scope, &expr, &types).expect("OP <ProperType> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
+    let pick = f.classify_for_pick(&expr, &types);
     assert_eq!(pick.ref_name_indices, vec![1]);
     assert!(pick.wrap_indices.is_empty());
     assert!(!pick.picked_has_binder_name);
@@ -267,16 +247,12 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let brand = region.brand();
-    let expr = KExpression::new(
-        brand,
-        vec![
-            Spanned::bare(ExpressionPart::Keyword("OP")),
-            Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Number"))),
-        ],
-    );
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("OP".into())),
+        Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Number".into()))),
+    ]);
     let f = find_match(scope, &expr, &types).expect("OP <Any> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
+    let pick = f.classify_for_pick(&expr, &types);
     assert_eq!(pick.wrap_indices, vec![1]);
     assert!(pick.ref_name_indices.is_empty());
     assert!(!pick.picked_has_binder_name);

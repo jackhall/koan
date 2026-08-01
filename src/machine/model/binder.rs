@@ -7,13 +7,10 @@
 //! spec⟺registration consistency test, so a new binder builtin that forgets its spec entry (or a
 //! spec entry with no live registration) fails the suite.
 
-use crate::machine::core::{KError, KErrorKind, RegionBrand};
-#[cfg(test)]
-use crate::machine::model::UntypedElement;
-use crate::machine::model::UntypedKey;
-use crate::machine::model::{owned_untyped_key, StoredElement};
+use crate::machine::core::{KError, KErrorKind};
+use crate::machine::model::{binary_key, unary_key};
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::source::Spanned;
+use crate::machine::model::{UntypedElement, UntypedKey};
 
 /// Whether a binding — committed or an in-flight placeholder — lives in the value
 /// language or the type language. The `data`/`types` partition is mutually exclusive
@@ -27,13 +24,11 @@ pub enum BindKind {
 }
 
 /// Structural name extractor for a binder builtin. Returning `Some(name)` names the placeholder a
-/// forward reference parks on while the binder's body is in flight. The name is a token of the
-/// node's own parts run, so it is already resident at the node's lifetime and the read allocates
-/// nothing.
-pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<&'a str>;
+/// forward reference parks on while the binder's body is in flight.
+pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<String>;
 
 /// Structural bucket-key extractor for a binder that registers a callable
-/// (`FN`, `OP`). Returns every bucket key a *call* to the to-be-registered
+/// (`FN`, `OP`). Returns every `UntypedKey` a *call* to the to-be-registered
 /// overloads would compute (e.g. `(MAKESET er :Ordered)` → one key
 /// `[Keyword("MAKESET"), Slot]`; a `UNARY OP` → both the keyword-first list key
 /// `[Keyword(sym), Slot]` and the binary bridge key `[Slot, Keyword(sym), Slot]`);
@@ -45,11 +40,7 @@ pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<&'a str>;
 /// in `resolve_dispatch`. Keying on the full bucket (not just the lead keyword)
 /// keeps overloads sharing a head keyword but differing in later keywords
 /// (`MAKESET _` vs `MAKESET _ USING _`) from colliding on the park edge.
-///
-/// A bucket key is synthesized rather than read straight out of the parts run, so the extractor
-/// takes the brand that bumps each key into the node's own region.
-pub type BinderBucketFn =
-    for<'a> fn(RegionBrand<'a>, &KExpression<'a>) -> Option<Vec<&'a [StoredElement<'a>]>>;
+pub type BinderBucketFn = for<'a> fn(&KExpression<'a>) -> Option<Vec<UntypedKey>>;
 
 /// The two install channels a binder may use, mutually exclusive per binder. `Bucket` carries
 /// every key the binder's body registers an overload under — a `UNARY OP` declares two.
@@ -59,34 +50,13 @@ pub enum BinderKey {
     Bucket(Vec<UntypedKey>),
 }
 
-/// The stored form of a [`BinderKey`]: every string is a borrow at the node's own lifetime, so a
-/// node's install aggregate is a bumped run rather than an owned Vec.
-#[derive(Clone, Copy, Debug)]
-pub enum StoredBinderKey<'a> {
-    Name(&'a str, BindKind),
-    Bucket(&'a [&'a [StoredElement<'a>]]),
-}
-
-impl<'a> StoredBinderKey<'a> {
-    /// The owned [`BinderKey`] this stands for — materialized where an install path needs a map
-    /// key for the bindings tables.
-    pub fn to_owned_key(self) -> BinderKey {
-        match self {
-            StoredBinderKey::Name(name, kind) => BinderKey::Name(name.to_string(), kind),
-            StoredBinderKey::Bucket(keys) => {
-                BinderKey::Bucket(keys.iter().copied().map(owned_untyped_key).collect())
-            }
-        }
-    }
-}
-
 // ---------- extractors (pure structural readers) ----------
 
 /// Shared [`BinderNameFn`] for typed-binder builtins (SIG / UNION / RECURSIVE TYPES / NEWTYPE):
 /// the binder name is `parts[1]`'s `Type(t)` token. A free function (not the
 /// `KExpression::binder_name_from_type_part` method reference) so the signature is higher-ranked
 /// over the expression lifetime, as `BinderNameFn` requires.
-pub(crate) fn type_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<&'a str> {
+pub(crate) fn type_part_binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
@@ -94,9 +64,9 @@ pub(crate) fn type_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<&'a st
 /// binder name is `parts[1]`'s `Identifier` token. The Identifier-part twin of
 /// [`type_part_binder_name`], so each overload's extractor matches exactly its own name-part kind
 /// and the placeholder is tagged `Value` xor `Type` to match where the bind lands.
-pub(crate) fn identifier_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<&'a str> {
-    match expr.parts.get(1)?.value {
-        ExpressionPart::Identifier(s) => Some(s),
+pub(crate) fn identifier_part_binder_name(expr: &KExpression<'_>) -> Option<String> {
+    match &expr.parts.get(1)?.value {
+        ExpressionPart::Identifier(s) => Some(s.clone()),
         _ => None,
     }
 }
@@ -104,11 +74,11 @@ pub(crate) fn identifier_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<
 /// Placeholder extractor covering both `TYPE` overloads: the bare form's name is the `Type` part at
 /// `parts[1]`; the higher-kinded form's name is the *last* inner part of the parenthesized
 /// `(Param AS Name)` expression.
-pub(crate) fn type_decl_binder_name<'a>(expr: &KExpression<'a>) -> Option<&'a str> {
-    match expr.parts.get(1)?.value {
-        ExpressionPart::Type(t) => Some(t.as_str()),
-        ExpressionPart::Expression(inner) => match inner.parts.last()?.value {
-            ExpressionPart::Type(t) => Some(t.as_str()),
+pub(crate) fn type_decl_binder_name(expr: &KExpression<'_>) -> Option<String> {
+    match &expr.parts.get(1)?.value {
+        ExpressionPart::Type(t) => Some(t.render()),
+        ExpressionPart::Expression(inner) => match &inner.parts.last()?.value {
+            ExpressionPart::Type(t) => Some(t.render()),
             _ => None,
         },
         _ => None,
@@ -116,58 +86,72 @@ pub(crate) fn type_decl_binder_name<'a>(expr: &KExpression<'a>) -> Option<&'a st
 }
 
 /// Bucket-key extractor for FN. The key must match what a future call would compute via
-/// `KExpression::stored_key`: each Keyword maps to `StoredElement::Keyword`, and each
-/// `<name> :<Type>` pair collapses to one `StoredElement::Slot`.
+/// `KExpression::untyped_key`: each Keyword maps to `UntypedElement::Keyword`, and each
+/// `<name> :<Type>` pair collapses to one `UntypedElement::Slot`.
 ///
 /// Unknown shapes advance silently — the body's full parse surfaces `ShapeError` on real
 /// malformations, so we err toward producing the bucket key for well-formed signatures. An FN
 /// registers exactly one overload, so the returned vector holds one key. Returns `None` only when
 /// the signature slot itself is missing.
-pub(crate) fn fn_def_binder_bucket<'a>(
-    brand: RegionBrand<'a>,
-    expr: &KExpression<'a>,
-) -> Option<Vec<&'a [StoredElement<'a>]>> {
+pub(crate) fn fn_def_binder_bucket(expr: &KExpression<'_>) -> Option<Vec<UntypedKey>> {
     let signature_expr = signature_expr_part(expr)?;
-    let parts = signature_expr.parts;
-    let mut key: Vec<StoredElement<'a>> = Vec::with_capacity(parts.len());
+    let parts = &signature_expr.parts;
+    let mut key = Vec::with_capacity(parts.len());
     let mut i = 0;
     while i < parts.len() {
-        match parts[i].value {
+        match &parts[i].value {
             ExpressionPart::Keyword(s) => {
-                key.push(StoredElement::Keyword(s));
+                key.push(UntypedElement::Keyword(s.clone()));
                 i += 1;
             }
-            ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
-                if next_is_type_slot(parts, i + 1) =>
-            {
-                key.push(StoredElement::Slot);
-                i += 2;
+            ExpressionPart::Identifier(_) => {
+                let next_is_type_slot = parts.get(i + 1).is_some_and(|p| {
+                    matches!(
+                        p.value,
+                        ExpressionPart::Type(_)
+                            | ExpressionPart::Expression(_)
+                            | ExpressionPart::SigiledTypeExpr(_)
+                            | ExpressionPart::RecordType(_)
+                            | ExpressionPart::Spliced { .. }
+                    )
+                });
+                if next_is_type_slot {
+                    key.push(UntypedElement::Slot);
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            ExpressionPart::Type(_) => {
+                let next_is_type_slot = parts.get(i + 1).is_some_and(|p| {
+                    matches!(
+                        p.value,
+                        ExpressionPart::Type(_)
+                            | ExpressionPart::Expression(_)
+                            | ExpressionPart::SigiledTypeExpr(_)
+                            | ExpressionPart::RecordType(_)
+                            | ExpressionPart::Spliced { .. }
+                    )
+                });
+                if next_is_type_slot {
+                    key.push(UntypedElement::Slot);
+                    i += 2;
+                } else {
+                    i += 1;
+                }
             }
             _ => {
                 i += 1;
             }
         }
     }
-    Some(vec![brand.alloc_slice(&key)])
+    Some(vec![key])
 }
 
-/// True iff the part at `index` is a type ascription — the second half of a `<name> :<Type>` pair,
-/// which collapses to one slot in the bucket key.
-fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> bool {
-    parts.get(index).is_some_and(|p| {
-        matches!(
-            p.value,
-            ExpressionPart::Type(_)
-                | ExpressionPart::Expression(_)
-                | ExpressionPart::SigiledTypeExpr(_)
-                | ExpressionPart::RecordType(_)
-        )
-    })
-}
-
-fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>> {
-    match expr.parts.get(1)?.value {
-        ExpressionPart::Expression(inner) => Some(inner),
+fn signature_expr_part<'a, 'b>(expr: &'b KExpression<'a>) -> Option<&'b KExpression<'a>> {
+    let sig_part = expr.parts.get(1)?;
+    match &sig_part.value {
+        ExpressionPart::Expression(boxed) => Some(boxed.as_ref()),
         _ => None,
     }
 }
@@ -184,19 +168,19 @@ const RESERVED_SYMBOLS: [&str; 12] = [
 /// typed `:KExpression`, so a `QuotedExpression` part arrives raw and un-dispatched (it makes the
 /// declaration a lazy candidate) and its body is read here as data. A multi-part body, a
 /// non-keyword token, or a reserved symbol is a shape error.
-pub(crate) fn symbol_from_quote_body<'a>(inner: &KExpression<'a>) -> Result<&'a str, KError> {
-    let [part] = inner.parts else {
+pub(crate) fn symbol_from_quote_body(inner: &KExpression<'_>) -> Result<String, KError> {
+    let [part] = inner.parts.as_slice() else {
         return Err(symbol_shape_error());
     };
-    let ExpressionPart::Keyword(sym) = part.value else {
+    let ExpressionPart::Keyword(sym) = &part.value else {
         return Err(symbol_shape_error());
     };
-    if RESERVED_SYMBOLS.contains(&sym) {
+    if RESERVED_SYMBOLS.contains(&sym.as_str()) {
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "`{sym}` is reserved by the operator-declaration surface and cannot name an operator",
         ))));
     }
-    Ok(sym)
+    Ok(sym.clone())
 }
 
 fn symbol_shape_error() -> KError {
@@ -209,12 +193,12 @@ fn symbol_shape_error() -> KError {
 /// unevaluated body block with this to collect its members; the binder hook uses it to decide
 /// whether to install park edges (discarding the diagnostic — the body's own extraction surfaces
 /// it).
-pub(crate) fn symbol_from_parts<'a>(expr: &KExpression<'a>) -> Result<&'a str, KError> {
+pub(crate) fn symbol_from_parts(expr: &KExpression<'_>) -> Result<String, KError> {
     let quoted = expr
         .parts
         .iter()
-        .find_map(|part| match part.value {
-            ExpressionPart::QuotedExpression(inner) => Some(inner),
+        .find_map(|part| match &part.value {
+            ExpressionPart::QuotedExpression(inner) => Some(inner.as_ref()),
             _ => None,
         })
         .ok_or_else(symbol_shape_error)?;
@@ -224,7 +208,7 @@ pub(crate) fn symbol_from_parts<'a>(expr: &KExpression<'a>) -> Result<&'a str, K
 /// True iff the declaration leads with `UNARY`.
 fn is_unary_form(expr: &KExpression<'_>) -> bool {
     matches!(
-        expr.parts.first().map(|p| p.value),
+        expr.parts.first().map(|p| &p.value),
         Some(ExpressionPart::Keyword(k)) if k == "UNARY",
     )
 }
@@ -232,36 +216,13 @@ fn is_unary_form(expr: &KExpression<'_>) -> bool {
 /// Park keys: every bucket this declaration's body registers an overload under, so a later sibling
 /// statement using the operator parks on the `OP` slot instead of failing dispatch while the
 /// declaration is still finalizing. A `UNARY OP` registers two bodies, so it names two keys.
-pub(crate) fn op_def_binder_bucket<'a>(
-    brand: RegionBrand<'a>,
-    expr: &KExpression<'a>,
-) -> Option<Vec<&'a [StoredElement<'a>]>> {
+pub(crate) fn op_def_binder_bucket(expr: &KExpression<'_>) -> Option<Vec<UntypedKey>> {
     let sym = symbol_from_parts(expr).ok()?;
     if is_unary_form(expr) {
-        Some(vec![
-            stored_unary_key(brand, sym),
-            stored_binary_key(brand, sym),
-        ])
+        Some(vec![unary_key(&sym), binary_key(&sym)])
     } else {
-        Some(vec![stored_binary_key(brand, sym)])
+        Some(vec![binary_key(&sym)])
     }
-}
-
-/// Stored twin of [`binary_key`](crate::machine::model::binary_key): the `[Slot, Keyword(sym),
-/// Slot]` run a reduced binary call computes, bumped into `brand`'s region. Byte-for-byte agreement
-/// with the owned builder is what lets a park edge installed here be found by a later call's key.
-fn stored_binary_key<'a>(brand: RegionBrand<'a>, symbol: &'a str) -> &'a [StoredElement<'a>] {
-    brand.alloc_slice(&[
-        StoredElement::Slot,
-        StoredElement::Keyword(symbol),
-        StoredElement::Slot,
-    ])
-}
-
-/// Stored twin of [`unary_key`](crate::machine::model::unary_key): the `[Keyword(sym), Slot]` run a
-/// reduced unary run computes.
-fn stored_unary_key<'a>(brand: RegionBrand<'a>, symbol: &'a str) -> &'a [StoredElement<'a>] {
-    brand.alloc_slice(&[StoredElement::Keyword(symbol), StoredElement::Slot])
 }
 
 // ---------- the spec table ----------
@@ -274,21 +235,10 @@ pub enum UntypedElementSpec {
 }
 
 impl UntypedElementSpec {
-    #[cfg(test)]
     fn matches(&self, element: &UntypedElement) -> bool {
         match (self, element) {
             (UntypedElementSpec::Keyword(a), UntypedElement::Keyword(b)) => *a == b.as_str(),
             (UntypedElementSpec::Slot, UntypedElement::Slot) => true,
-            _ => false,
-        }
-    }
-
-    /// Stored-key peer of [`Self::matches`], so spec matching reads a node's bucket key straight
-    /// off the run bumped at construction.
-    fn matches_stored(&self, element: &StoredElement<'_>) -> bool {
-        match (self, element) {
-            (UntypedElementSpec::Keyword(a), StoredElement::Keyword(b)) => a == b,
-            (UntypedElementSpec::Slot, StoredElement::Slot) => true,
             _ => false,
         }
     }
@@ -301,18 +251,12 @@ pub enum BinderExtract {
 }
 
 impl BinderExtract {
-    fn run<'a>(
-        &self,
-        brand: RegionBrand<'a>,
-        expr: &KExpression<'a>,
-    ) -> Option<StoredBinderKey<'a>> {
+    fn run(&self, expr: &KExpression<'_>) -> Option<BinderKey> {
         match self {
             BinderExtract::Name(extractor, kind) => {
-                extractor(expr).map(|name| StoredBinderKey::Name(name, *kind))
+                extractor(expr).map(|name| BinderKey::Name(name, *kind))
             }
-            BinderExtract::Bucket(extractor) => {
-                extractor(brand, expr).map(|keys| StoredBinderKey::Bucket(brand.alloc_slice(&keys)))
-            }
+            BinderExtract::Bucket(extractor) => extractor(expr).map(BinderKey::Bucket),
         }
     }
 }
@@ -334,7 +278,6 @@ pub struct BinderSpec {
 
 impl BinderSpec {
     /// True iff this spec's key matches the runtime bucket key element-for-element.
-    #[cfg(test)]
     pub fn matches_key(&self, key: &UntypedKey) -> bool {
         self.key.len() == key.len()
             && self
@@ -342,16 +285,6 @@ impl BinderSpec {
                 .iter()
                 .zip(key.iter())
                 .all(|(spec, element)| spec.matches(element))
-    }
-
-    /// [`Self::matches_key`] against a node's stored bucket key, with no owned key materialized.
-    pub fn matches_stored_key(&self, key: &[StoredElement<'_>]) -> bool {
-        self.key.len() == key.len()
-            && self
-                .key
-                .iter()
-                .zip(key.iter())
-                .all(|(spec, element)| spec.matches_stored(element))
     }
 }
 
@@ -510,22 +443,19 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     },
 ];
 
-/// The binder channel and chain-slot mask for `expression`, if its bucket key matches a
-/// [`BINDER_SPECS`] entry whose extractors read a binder out of the AST. The key is read off the
-/// node's own stored run, and a synthesized bucket key is bumped into `brand`'s region — the
-/// node's, since this runs from the construction door. Returns `None` for a non-binder shape, and
-/// for a declaration form whose extractors install nothing (`VAL`).
-pub(crate) fn binder_plan_for<'a>(
-    brand: RegionBrand<'a>,
-    expression: &KExpression<'a>,
-) -> Option<(StoredBinderKey<'a>, &'static [bool])> {
-    let spec = BINDER_SPECS
-        .iter()
-        .find(|spec| spec.matches_stored_key(expression.stored_key()))?;
+/// The binder channel and chain-slot mask for `expr`, if its untyped key matches a
+/// [`BINDER_SPECS`] entry whose extractors read a binder out of the AST. `key` is `expr`'s
+/// already-computed untyped key. Returns `None` for a non-binder shape, and for a declaration form
+/// whose extractors install nothing (`VAL`).
+pub(crate) fn binder_plan_for(
+    expr: &KExpression<'_>,
+    key: &UntypedKey,
+) -> Option<(BinderKey, &'static [bool])> {
+    let spec = BINDER_SPECS.iter().find(|spec| spec.matches_key(key))?;
     let binder_key = spec
         .extractors
         .iter()
-        .find_map(|extract| extract.run(brand, expression))?;
+        .find_map(|extract| extract.run(expr))?;
     Some((binder_key, spec.chain_slot_mask))
 }
 

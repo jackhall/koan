@@ -79,10 +79,8 @@ pub(in crate::machine::execute) fn resolve_bare_carrier(
         ExpressionPart::Identifier(name) => {
             match scope.resolve_value_delivered(name, chain.map(|c| &**c)) {
                 Some(NameLookup::Bound(delivered)) => Ok(BareCarrier::Sealed(delivered)),
-                Some(NameLookup::Parked(producer)) => {
-                    screen(scheduler, producer, (*name).to_string())
-                }
-                None => Ok(BareCarrier::Unbound((*name).to_string())),
+                Some(NameLookup::Parked(producer)) => screen(scheduler, producer, name.clone()),
+                None => Ok(BareCarrier::Unbound(name.clone())),
             }
         }
         ExpressionPart::Type(t) => match type_channel(scope, t, chain.cloned(), types) {
@@ -127,7 +125,7 @@ pub(in crate::machine::execute) fn resolve_name_part(
     types: &TypeRegistry,
 ) -> Result<NameOutcome, KError> {
     let (name, is_type) = match part {
-        ExpressionPart::Identifier(n) => (*n, None),
+        ExpressionPart::Identifier(n) => (n.as_str(), None),
         ExpressionPart::Type(t) => (t.as_str(), Some(t)),
         _ => unreachable!("resolve_name_part only called on bare-name parts"),
     };
@@ -176,7 +174,7 @@ fn screen_outcome(
 /// the `cycle in type alias <name>` deadlock sample.
 pub(in crate::machine::execute) fn bare_name_of(part: &ExpressionPart<'_>) -> Option<String> {
     match part {
-        ExpressionPart::Identifier(n) => Some((*n).to_string()),
+        ExpressionPart::Identifier(n) => Some(n.clone()),
         ExpressionPart::Type(t) => Some(t.render()),
         _ => None,
     }

@@ -9,9 +9,7 @@ use std::rc::{Rc, Weak};
 
 use super::NodeFinalize;
 use crate::builtins::test_support::{parse_one, run_root_bare, TestRun};
-use crate::machine::core::{
-    program_storage, run_root_storage, CarrierWitness, FrameCoverage, FrameStorage,
-};
+use crate::machine::core::{run_root_storage, CarrierWitness, FrameCoverage, FrameStorage};
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
@@ -50,9 +48,8 @@ fn resident_scalar(
 /// frame. Frame release is a function of deliveries only, never of the value's reach.
 #[test]
 fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     let producer = CallFrame::new(scope);
 
@@ -99,9 +96,8 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
 /// re-derived.
 #[test]
 fn delivery_envelope_foreign_bundle_releases_at_envelope_drop() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let producer = CallFrame::new(test_run.scope);
     // A distinct region the terminal reaches; the envelope's foreign bundle will be its sole owner.
     let foreign = run_root_storage();
@@ -131,9 +127,8 @@ fn delivery_envelope_foreign_bundle_releases_at_envelope_drop() {
 /// mint, never as a lifecycle input. The frame's lifetime is retention's either way.
 #[test]
 fn home_borrowing_value_keeps_its_home_membership_and_rides_retention() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     let producer = CallFrame::new(scope);
 
@@ -219,14 +214,13 @@ fn live_frames() -> usize {
 #[test]
 fn user_fn_call_releases_callee_frame() {
     FRAME_CENSUS.with(|census| census.borrow_mut().clear());
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     register_probe(scope, &test_run.types);
     test_run.run("FN (GETONE) -> Number = (PROBE)");
 
-    let result = test_run.run_one(parse_one(&program, "GETONE"));
+    let result = test_run.run_one(parse_one("GETONE"));
     // The census reads frame *retention*, so release the drained slots that still hold their
     // terminals' producer frames; only a frame outliving the scheduler would survive this.
     test_run.reset_slots();
@@ -249,9 +243,8 @@ fn user_fn_call_releases_callee_frame() {
 #[test]
 fn aggregate_of_call_results_releases_every_producer_frame() {
     FRAME_CENSUS.with(|census| census.borrow_mut().clear());
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     register_probe(scope, &test_run.types);
     test_run.run("FN (GETONE) -> Number = (PROBE)");
@@ -260,7 +253,7 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
     test_run.run(&format!("LET results = [{calls}]"));
 
     // The aggregate is live and complete...
-    let results = test_run.run_one(parse_one(&program, "results"));
+    let results = test_run.run_one(parse_one("results"));
     match results {
         KObject::List(items, _) => {
             assert_eq!(items.elements().len(), 100, "all 100 results retained")
@@ -288,9 +281,8 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
 #[test]
 fn aggregate_of_plain_record_results_releases_every_producer_frame() {
     FRAME_CENSUS.with(|census| census.borrow_mut().clear());
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     register_probe(scope, &test_run.types);
     test_run.run("FN (GETREC) -> :{acc :Number, tag :Number} = ({acc = 1, tag = (PROBE)})");
@@ -299,7 +291,7 @@ fn aggregate_of_plain_record_results_releases_every_producer_frame() {
     let calls = ["(GETREC)"; DEPTH].join(" ");
     test_run.run(&format!("LET results = [{calls}]"));
 
-    let results = test_run.run_one(parse_one(&program, "results"));
+    let results = test_run.run_one(parse_one("results"));
     match results {
         KObject::List(items, _) => {
             assert_eq!(items.elements().len(), DEPTH, "all records retained");
@@ -340,9 +332,8 @@ fn aggregate_of_plain_record_results_releases_every_producer_frame() {
 /// sole owner of the producer's storage and the adopted read stays live.
 #[test]
 fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     let producer = CallFrame::new(scope);
 
@@ -391,9 +382,8 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
 /// delivery pays is the envelope's single frame-level retention bump.
 #[test]
 fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     let producer = CallFrame::new(scope);
 

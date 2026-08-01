@@ -69,10 +69,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     });
     Action::catch(
         DepRequest::Dispatch {
-            expr: crate::machine::model::WorkingExpression::from_ast(
-                body_scope.brand(),
-                expr_inner,
-            ),
+            expr: expr_inner,
             placement: DepPlacement::InScope(body_scope),
             // The watched body enters a fresh block (`InScope`) — a statement position.
             binder_covered: false,

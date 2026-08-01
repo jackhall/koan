@@ -19,45 +19,34 @@
 use crate::machine::core::DepPlacement;
 use crate::machine::model::Carried;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
 
 use super::super::TerminalDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::ctx::SchedulerView;
 use super::{Await, DepRequest, Outcome};
 use crate::machine::AdoptSeam;
 use crate::scheduler::Deps;
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
 /// applied to `parts[1..]` once it resolves.
-pub(in crate::machine::execute) fn initial_expr<'step>(
-    ctx: &SchedulerView<'step, '_>,
-    expr: WorkingExpression<'step>,
-) -> Outcome<'step> {
-    let head = match expr.parts[0].value {
-        WorkingPart::Ast(ExpressionPart::Expression(inner)) => {
-            WorkingExpression::from_ast(ctx.current_scope().brand(), *inner)
-        }
-        // A synthesized head node is already working form.
-        WorkingPart::Expression(inner) => *inner,
+pub(in crate::machine::execute) fn initial_expr<'step>(expr: KExpression<'step>) -> Outcome<'step> {
+    let head = match &expr.parts[0].value {
+        ExpressionPart::Expression(boxed) => (**boxed).clone(),
         _ => unreachable!("HeadDeferred shape implies nested Expression head"),
     };
     park_on_head(expr, head, false)
 }
 
 /// `TypeHeadDeferred` entry: head is a `:(...)` sigil. Wrap it as a one-part
-/// node so the type marker survives the sub-dispatch (mirrors
+/// `KExpression` so the type marker survives the sub-dispatch (mirrors
 /// `stage_all_eager_parts`).
-pub(in crate::machine::execute) fn initial_type<'step>(
-    ctx: &SchedulerView<'step, '_>,
-    expr: WorkingExpression<'step>,
-) -> Outcome<'step> {
-    let head = match expr.parts[0].value {
-        head @ WorkingPart::Ast(ExpressionPart::SigiledTypeExpr(_)) => {
-            WorkingExpression::new(ctx.current_scope().brand(), vec![Spanned::bare(head)])
-        }
+pub(in crate::machine::execute) fn initial_type<'step>(expr: KExpression<'step>) -> Outcome<'step> {
+    let head = match &expr.parts[0].value {
+        ExpressionPart::SigiledTypeExpr(boxed) => KExpression::new(vec![Spanned::bare(
+            ExpressionPart::SigiledTypeExpr(boxed.clone()),
+        )]),
         _ => unreachable!("TypeHeadDeferred shape implies SigiledTypeExpr head"),
     };
     park_on_head(expr, head, true)
@@ -68,8 +57,8 @@ pub(in crate::machine::execute) fn initial_type<'step>(
 /// re-park, so the finish must be re-park-capable. A dep error short-circuits frameless in
 /// `run_step`, so the finish only runs on a resolved head.
 fn park_on_head<'step>(
-    expr: WorkingExpression<'step>,
-    head: WorkingExpression<'step>,
+    expr: KExpression<'step>,
+    head: KExpression<'step>,
     type_only: bool,
 ) -> Outcome<'step> {
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {

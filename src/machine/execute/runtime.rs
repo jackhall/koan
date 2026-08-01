@@ -13,19 +13,19 @@
 //! [`interpret_with_writer_path`]); they parse, stand up the region/root scope, and drive the run via
 //! [`KoanRuntime::run_program`]. The [`submit`] submodule holds the AST-aware dispatch-submission
 //! wrappers ([`KoanRuntime::enter_block`], [`KoanRuntime::dispatch_in_scope`], `dispatch_in_own_scope`,
-//! `dispatch_body`, `submit_dep_finish_in_own_scope`) — the only callers that turn a
-//! [`WorkingExpression`] into scheduler work.
+//! `dispatch_body`, `submit_dep_finish_in_own_scope`) — the only callers that turn a `KExpression` into
+//! scheduler work.
 
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::machine::core::ReturnContract;
+use crate::machine::core::{split_body_statements, ReturnContract};
 use crate::machine::core::{
     Action, ActionKind, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
 };
-use crate::machine::core::{FoldingBrand, RegionBrand, ScopeRefFamily};
+use crate::machine::core::{FoldingBrand, ScopeRefFamily};
 use crate::machine::model::Carried;
-use crate::machine::model::{ExpressionPart, Part, PartClass, WorkingExpression, WorkingPart};
+use crate::machine::model::KExpression;
 use crate::machine::{
     CallFrame, CarrierWitness, FrameCoverage, FrameStorage, KError, KErrorKind, NodeId, RunId,
 };
@@ -164,10 +164,11 @@ impl<'run> KoanRuntime<'run> {
     ///
     /// The seam verb is the cost-driven [`seam_verb`] decision: a top-level record pins (rides under
     /// `Kept`, its substrate borrow covered by the producer's minted reach) when the pin is cheaper
-    /// than the rebuild, a leaf borrows home, or the crossing is foreign; a record a small
+    /// than the rebuild, a leaf borrows home, or the crossing is foreign; a priceable record a small
     /// fraction of the host's allocated total is a released copy (the producer frees at retention
-    /// discharge). Every non-record value keeps the `Copied` pointer-copy of its top node,
-    /// claiming release off the same stored read.
+    /// discharge); an unpriceable record copies, claiming release off its stored reach. Every
+    /// non-record value keeps the `Copied` pointer-copy of its top node, claiming release off the
+    /// same stored read.
     ///
     /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as a re-sealed
     /// [`Witnessed`], not at a step brand. The consumer-pull dep slice does not route this — it opens
@@ -256,35 +257,6 @@ fn block_entry_scope(block_entry: &BlockEntry<'_>) -> Option<crate::machine::cor
         BlockEntry::FrameScope(frame) => Some(frame.scope_id()),
         BlockEntry::Overlay(overlay) => Some(overlay.id),
     }
-}
-
-/// Split a body block into the statements it fans out to, one working node apiece. The
-/// scheduler-side peer of [`split_body_statements`](crate::machine::split_body_statements): a block
-/// (two or more parts, every one an expression) yields its children, and any other body is the one
-/// statement it already is. A parsed child crosses into the scheduler here, at `brand`; a child the
-/// scheduler synthesized is already working form.
-fn split_working_body<'a>(
-    brand: RegionBrand<'a>,
-    body: WorkingExpression<'a>,
-) -> Vec<WorkingExpression<'a>> {
-    let is_block = body.parts.len() >= 2
-        && body
-            .parts
-            .iter()
-            .all(|part| matches!(part.value.class(), PartClass::Expression));
-    if !is_block {
-        return vec![body];
-    }
-    body.parts
-        .iter()
-        .filter_map(|part| match part.value {
-            WorkingPart::Ast(ExpressionPart::Expression(child)) => {
-                Some(WorkingExpression::from_ast(brand, *child))
-            }
-            WorkingPart::Expression(child) => Some(*child),
-            _ => None,
-        })
-        .collect()
 }
 
 /// The coverage a callable [`ReturnContract`] re-opens under: the step's own frame storage. A
@@ -487,7 +459,7 @@ impl<'run> KoanRuntime<'run> {
     /// separately — see the `InScope` arm of [`Self::apply_outcome`] and [`Self::dispatch_body`].
     fn realize_dispatch<'a>(
         &mut self,
-        expr: WorkingExpression<'a>,
+        expr: KExpression<'a>,
         placement: DepPlacement<'a>,
         binder_covered: bool,
     ) -> NodeId {
@@ -504,12 +476,10 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Realize one staged eager dep as its producer node — the four shapes
-    /// [`stage_eager_part`](super::dispatch::stage_eager_part) emits. `brand` is the realizing
-    /// step's, where an aggregate literal's per-element dispatch node is bumped. `Existing` /
-    /// `BodyBlock` never reach here (the stager doesn't produce them).
+    /// [`stage_eager_part`](super::dispatch::stage_eager_part) emits. `Existing` / `BodyBlock` never
+    /// reach here (the stager doesn't produce them).
     pub(in crate::machine::execute) fn realize_eager_dep<'a>(
         &mut self,
-        brand: RegionBrand<'a>,
         dep: DepRequest<'a>,
     ) -> NodeId {
         match dep {
@@ -518,9 +488,9 @@ impl<'run> KoanRuntime<'run> {
                 placement,
                 binder_covered,
             } => self.realize_dispatch(expr, placement, binder_covered),
-            DepRequest::ListLit(items) => self.schedule_list_literal(brand, items),
-            DepRequest::DictLit(pairs) => self.schedule_dict_literal(brand, pairs),
-            DepRequest::RecordLit(fields) => self.schedule_record_literal(brand, fields),
+            DepRequest::ListLit(items) => self.schedule_list_literal(items),
+            DepRequest::DictLit(pairs) => self.schedule_dict_literal(pairs),
+            DepRequest::RecordLit(fields) => self.schedule_record_literal(fields),
             DepRequest::Existing(_) | DepRequest::BodyBlock { .. } => {
                 unreachable!("eager staging emits only Dispatch / literal deps")
             }
@@ -582,7 +552,6 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn apply_outcome<'step>(
         &mut self,
         outcome: Outcome<'step>,
-        brand: RegionBrand<'step>,
         idx: usize,
     ) -> NodeStep<'step> {
         match outcome {
@@ -654,7 +623,7 @@ impl<'run> KoanRuntime<'run> {
                             placement: DepPlacement::InScope(scope),
                             ..
                         } => {
-                            let statements = split_working_body(scope.brand(), expr);
+                            let statements = split_body_statements(expr);
                             for id in self.enter_block(scope.id, statements, scope) {
                                 resolved.own(id);
                             }
@@ -663,7 +632,7 @@ impl<'run> KoanRuntime<'run> {
                         | DepRequest::ListLit(_)
                         | DepRequest::DictLit(_)
                         | DepRequest::RecordLit(_)) => {
-                            resolved.own(self.realize_eager_dep(brand, dep));
+                            resolved.own(self.realize_eager_dep(dep));
                         }
                         // A body block fans out one owned producer per statement: into a fresh
                         // per-call frame's own scope (`dispatch_body`), or — under `Inherit` — into a
@@ -780,7 +749,7 @@ impl<'run> KoanRuntime<'run> {
                     };
                     match checked {
                         Ok(()) => NodeStep::ForwardReady(producer),
-                        Err(error) => self.apply_outcome(Outcome::Done(Err(error)), brand, idx),
+                        Err(error) => self.apply_outcome(Outcome::Done(Err(error)), idx),
                     }
                 } else {
                     // The producer is not yet resolved: park a checker micro-step on it (an
@@ -806,7 +775,7 @@ impl<'run> KoanRuntime<'run> {
                         continuation: Continuation::FinishTerminal(finish),
                         dep_error_frame: Some(dep_error_frame()),
                     };
-                    self.apply_outcome(park, brand, idx)
+                    self.apply_outcome(park, idx)
                 }
             }
         }

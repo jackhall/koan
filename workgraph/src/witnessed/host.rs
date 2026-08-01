@@ -25,13 +25,12 @@ pub struct RegionHost<P: StorageProfile> {
     /// host's own borrows into it — and the link [`Self::pins_region`] walks for subsumption. Drop
     /// tears down the chain in order.
     outer: Option<Rc<RegionHost<P>>>,
-    /// The host's **tier**: `true` for an eternal host ([`Self::fresh_eternal`]), whose region
-    /// outlives every region that could retain it; `false` for every per-call host
-    /// ([`Self::fresh`]). Not derivable from the chain — a per-call host started at a fresh tail
-    /// also has `outer: None` — so the owner carries the bit, and a workload asking "is this
-    /// eternal?" reads it here rather than stamping a shadow copy on every structure the region
-    /// backs.
-    eternal: bool,
+    /// The host's **tier**: `true` for the one run-root host ([`Self::fresh_root`]), whose region
+    /// outlives the whole run; `false` for every per-call host ([`Self::fresh`]). Not derivable from
+    /// the chain — a per-call host started at a fresh tail also has `outer: None` — so the owner
+    /// carries the bit, and a workload asking "is this the run root?" reads it here rather than
+    /// stamping a shadow copy on every structure the region backs.
+    run_root: bool,
     /// This host's own `Weak`, captured at construction through `Rc::new_cyclic` — the back-link
     /// [`Self::region`] hands the region it mints, so every reach description frozen into that
     /// region's side table can stamp the owner it is hosted by ([`Region::host`]). A `Weak`, so it
@@ -49,32 +48,29 @@ impl<P: StorageProfile<FrameOwner = RegionHost<P>>> RegionHost<P> {
         Rc::new_cyclic(|me| RegionHost {
             region: OnceCell::new(),
             outer,
-            eternal: false,
+            run_root: false,
             me: me.clone(),
         })
     }
 
-    /// Build an **eternal** host: no region minted yet, no ancestor, and marked at the eternal tier
-    /// ([`Self::is_eternal`]) — its region outlives every region that could retain it, so nothing
-    /// ever takes an owning pin on it. A workload's run root is one; so is storage a workload stands
-    /// up ahead of the run and holds for the whole of it.
-    pub fn fresh_eternal() -> Rc<Self> {
+    /// Build the **run-root** host: no region minted yet, no ancestor, and marked as the run tier
+    /// ([`Self::is_run_root`]). A run has exactly one; every other host is a [`Self::fresh`] per-call.
+    pub fn fresh_root() -> Rc<Self> {
         Rc::new_cyclic(|me| RegionHost {
             region: OnceCell::new(),
             outer: None,
-            eternal: true,
+            run_root: true,
             me: me.clone(),
         })
     }
 }
 
 impl<P: StorageProfile> RegionHost<P> {
-    /// Whether this host is at the eternal tier ([`Self::fresh_eternal`]) rather than a per-call
-    /// frame. The tier a caller consults to decide whether chaining a strong pin to this storage is
-    /// meaningful: an eternal region outlives everything that could retain it, so pinning it buys
-    /// nothing and closes an `Rc` cycle.
-    pub fn is_eternal(&self) -> bool {
-        self.eternal
+    /// Whether this host is the run-root ([`Self::fresh_root`]) rather than a per-call frame. The
+    /// tier a caller consults to decide whether chaining a strong pin to this storage is meaningful:
+    /// the run-root region outlives the run, so pinning it buys nothing and closes an `Rc` cycle.
+    pub fn is_run_root(&self) -> bool {
+        self.run_root
     }
 
     /// The backing region, minting it on first call. This is the **sole** mint point: nothing else
@@ -151,7 +147,7 @@ unsafe impl<P: StorageProfile> PinsRegion for RegionHost<P> {
     }
 
     fn needs_no_pin(&self) -> bool {
-        self.eternal
+        self.run_root
     }
 }
 
@@ -276,10 +272,10 @@ mod tests {
     }
 
     #[test]
-    fn only_fresh_eternal_carries_the_eternal_tier() {
-        assert!(RegionHost::<TestProfile>::fresh_eternal().is_eternal());
+    fn only_fresh_root_carries_the_run_tier() {
+        assert!(RegionHost::<TestProfile>::fresh_root().is_run_root());
         // A per-call host with no ancestor — a fresh-tail frame — is still per-call.
-        assert!(!RegionHost::<TestProfile>::fresh(None).is_eternal());
+        assert!(!RegionHost::<TestProfile>::fresh(None).is_run_root());
     }
 
     #[test]

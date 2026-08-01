@@ -1,10 +1,10 @@
-//! Dispatch-layer submission: the one entry point that turns a [`WorkingExpression`] into a
-//! submitted dispatch slot. Binder discovery is parse-static — every parsed node caches the set of
-//! binders its subtree installs into the enclosing scope ([`KExpression::binder_installs`], per the
-//! position rule) — so submission does no AST recursion. It allocates the slot via
-//! [`Scheduler::alloc_node`] and, for a statement submission, stamps each cached binder's
-//! placeholder / pending-overload entry on the scope before the slot is ever popped, so a later
-//! sibling parks rather than surfacing `UnboundName` / `DispatchFailed`.
+//! Dispatch-layer submission: the one entry point that turns a `KExpression` into a submitted
+//! dispatch slot. Binder discovery is parse-static — every node caches the set of binders its subtree
+//! installs into the enclosing scope ([`KExpression::binder_installs`], per the position rule) — so
+//! submission does no AST recursion. It allocates the slot via [`Scheduler::alloc_node`] and, for a
+//! statement submission, stamps each cached binder's placeholder / pending-overload entry on the scope
+//! before the slot is ever popped, so a later sibling parks rather than surfacing `UnboundName` /
+//! `DispatchFailed`.
 //!
 //! A submission carries a [`SubmitContext`]: a `Statement` position installs the aggregate; a
 //! `SubDispatch` that is not binder-covered rejects a nested binder with
@@ -13,7 +13,7 @@
 //! [design/execution/name-placeholders.md](../../../../design/execution/name-placeholders.md)).
 
 use crate::machine::model::BinderKey;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::KExpression;
 use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope, WriteGate};
 
 use super::super::nodes::{NodeScope, SlotFrame};
@@ -39,9 +39,9 @@ impl<'run> KoanRuntime<'run> {
     /// scope with this slot's freshly allocated node id — before the slot is ever popped, so a later
     /// sibling parks rather than failing. A [`SubmitContext::SubDispatch`] that is not binder-covered
     /// pre-errors the node when the aggregate is non-empty (an eager-position nested binder).
-    pub(in crate::machine::execute) fn submit_expression<'a, 'step>(
+    pub(in crate::machine::execute) fn submit_expression<'ast, 'step>(
         &mut self,
-        expr: WorkingExpression<'a>,
+        expr: KExpression<'ast>,
         scope: &'step Scope<'step>,
         node_scope: NodeScope,
         explicit_chain: Option<std::rc::Rc<LexicalFrame>>,
@@ -58,13 +58,12 @@ impl<'run> KoanRuntime<'run> {
         // soundly, and a definition whose registration silently vanished would be worse than an error.
         // Value positions take the anonymous form (`FN :{…} -> T = (…)`, which installs nothing) or a
         // name bound through a legal binder chain (`LET f = (FN …)`).
-        let installs = statement_binder_installs(&expr);
         if matches!(
             ctx,
             SubmitContext::SubDispatch {
                 binder_covered: false
             }
-        ) && !installs.is_empty()
+        ) && !expr.binder_installs().is_empty()
         {
             let carrier = expr.summarize();
             let error = KError::new(KErrorKind::NestedBinder {
@@ -77,9 +76,9 @@ impl<'run> KoanRuntime<'run> {
                 .alloc_node(super::decide_error(error, carrier), anchor, framed);
         }
 
-        // Only a statement installs; the aggregate read above also gates the sub-dispatch rejection.
-        let installs = match ctx {
-            SubmitContext::Statement => installs,
+        // Read the aggregate before `expr` moves into the node work; only a statement installs.
+        let installs: Vec<BinderKey> = match ctx {
+            SubmitContext::Statement => expr.binder_installs().to_vec(),
             SubmitContext::SubDispatch { .. } => Vec::new(),
         };
 
@@ -113,39 +112,4 @@ impl<'run> KoanRuntime<'run> {
         }
         id
     }
-}
-
-/// The binder aggregate of a statement, read back off the working node the parsed statement crossed
-/// over as. [`KExpression::binder_installs`] states the position rule and computes the aggregate at
-/// parse time; this reads the same answer through the slots the crossing preserved — the node's own
-/// plan key, then, transitively, what each of its chain-slot children installs. A node the scheduler
-/// synthesized carries no plan and installs nothing, which is the whole rule for it: a binder is
-/// always a parsed statement.
-fn statement_binder_installs(expr: &WorkingExpression<'_>) -> Vec<BinderKey> {
-    // A redundant single-`Expression` paren wrapper (`((…))`) passes its child's aggregate straight
-    // through. A binder is always keyword-led, so this never co-occurs with the plan branch below.
-    if let [only] = expr.parts {
-        if let WorkingPart::Ast(ExpressionPart::Expression(child)) = only.value {
-            return child
-                .binder_installs()
-                .iter()
-                .map(|key| key.to_owned_key())
-                .collect();
-        }
-    }
-    let Some(plan) = expr.binder_plan() else {
-        return Vec::new();
-    };
-    let mut installs = vec![plan.key.to_owned_key()];
-    for (index, part) in expr.parts.iter().enumerate() {
-        if !plan.chain_slot_mask.get(index).copied().unwrap_or(false) {
-            continue;
-        }
-        if let WorkingPart::Ast(ExpressionPart::Expression(child)) = part.value {
-            if !child.is_statement_block() {
-                installs.extend(child.binder_installs().iter().map(|key| key.to_owned_key()));
-            }
-        }
-    }
-    installs
 }

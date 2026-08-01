@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use crate::machine::core::{DepPlacement, OpenedFunction};
 use crate::machine::model::{constructor_param_names, Carried, Record};
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, NodeSchema, TypeNode, TypeRegistry};
 use crate::machine::{KError, KErrorKind};
 use crate::scheduler::Deps;
@@ -58,7 +58,7 @@ pub(in crate::machine::execute) enum ResolvedCallable<'step> {
 pub(in crate::machine::execute) fn apply_callable<'step>(
     ctx: &SchedulerView<'step, '_>,
     callable: ResolvedCallable<'step>,
-    expr: &WorkingExpression<'step>,
+    expr: &KExpression<'step>,
 ) -> Outcome<'step> {
     match callable {
         // A constructor branches on the projected schema before deciding what body shape it
@@ -87,9 +87,8 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
 fn apply_constructor<'step>(
     ctx: &SchedulerView<'step, '_>,
     identity: KType,
-    expr: &WorkingExpression<'step>,
+    expr: &KExpression<'step>,
 ) -> Outcome<'step> {
-    let brand = ctx.current_scope().brand();
     // A user `UNION` binds an anonymous union of per-variant newtype members. `Maybe Some`
     // names the variant type; `Maybe (Some v)` newtype-constructs the named member.
     if let TypeNode::Union { members } = ctx.types().node(identity) {
@@ -102,12 +101,12 @@ fn apply_constructor<'step>(
     if let Some(param_names) = constructor_param_names(identity, ctx.types()) {
         if let Some(
             [Spanned {
-                value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
+                value: ExpressionPart::RecordLiteral(fields),
                 ..
             }],
         ) = expr.parts.get(1..)
         {
-            return apply_named_type_args(ctx, identity, param_names, fields);
+            return apply_named_type_args(ctx, identity, param_names, fields.clone());
         }
     }
     // A SIG's abstract constructor slot names a kind; it has no representation to build values
@@ -136,11 +135,11 @@ fn apply_constructor<'step>(
         NodeSchema::NewType(_) => match expr.parts.get(1..) {
             Some(
                 [Spanned {
-                    value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
+                    value: ExpressionPart::RecordLiteral(fields),
                     ..
                 }],
-            ) => constructors::dispatch_construct_record_newtype(brand, identity, fields),
-            _ => constructors::dispatch_construct_newtype(brand, identity, &expr.parts[1..]),
+            ) => constructors::dispatch_construct_record_newtype(identity, fields.clone()),
+            _ => constructors::dispatch_construct_newtype(identity, expr.parts[1..].to_vec()),
         },
         // A non-empty schema is `Result`'s variant schema — the sealed tagged-union path. An
         // empty schema is a declared constructor family (`NEWTYPE (Elem AS Wrapper)`); it
@@ -149,12 +148,9 @@ fn apply_constructor<'step>(
             schema: variant_schema,
             ..
         } if !variant_schema.is_empty() => match extract_call_body(expr) {
-            Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
-                brand,
-                identity,
-                Rc::new(variant_schema),
-                parts,
-            ),
+            Ok(CallBody::Positional(parts)) => {
+                constructors::dispatch_construct_tagged(identity, Rc::new(variant_schema), parts)
+            }
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
             Err(e) => Outcome::Done(Err(e)),
         },
@@ -170,7 +166,7 @@ fn apply_constructor<'step>(
         }
         NodeSchema::TypeConstructor { .. } => match extract_call_body(expr) {
             Ok(CallBody::Positional(parts)) => {
-                constructors::dispatch_construct_apply(brand, identity, parts)
+                constructors::dispatch_construct_apply(identity, parts)
             }
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
             Err(e) => Outcome::Done(Err(e)),
@@ -188,7 +184,7 @@ fn apply_named_type_args<'step>(
     ctx: &SchedulerView<'step, '_>,
     identity: KType,
     param_names: Vec<String>,
-    fields: &[(&'step str, ExpressionPart<'step>)],
+    fields: Vec<(String, ExpressionPart<'step>)>,
 ) -> Outcome<'step> {
     // An empty argument record supplies no dep to park on, so it decides here — against the same
     // key check every other arity runs.
@@ -200,15 +196,12 @@ fn apply_named_type_args<'step>(
             }),
         );
     }
-    let brand = ctx.current_scope().brand();
-    let (names, value_parts): (Vec<String>, Vec<ExpressionPart<'step>>) = fields
-        .iter()
-        .map(|(name, part)| ((*name).to_string(), *part))
-        .unzip();
+    let (names, value_parts): (Vec<String>, Vec<ExpressionPart<'step>>) =
+        fields.into_iter().unzip();
     let deps: Vec<DepRequest<'step>> = value_parts
         .into_iter()
         .map(|part| DepRequest::Dispatch {
-            expr: WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]),
+            expr: KExpression::new(vec![Spanned::bare(part)]),
             placement: DepPlacement::OwnScope,
             binder_covered: false,
         })
@@ -308,14 +301,14 @@ fn quoted_list(names: &[&str]) -> String {
 fn apply_union_construct<'step>(
     ctx: &SchedulerView<'step, '_>,
     members: Vec<KType>,
-    expr: &WorkingExpression<'step>,
+    expr: &KExpression<'step>,
 ) -> Outcome<'step> {
     // Bare variant-tag token with no payload (`Maybe Some`) names the variant *type*, reached
     // through its union — yielded as a first-class type value.
     if let [Spanned {
-        value: WorkingPart::Ast(ExpressionPart::Type(t)),
+        value: ExpressionPart::Type(t),
         ..
-    }] = &expr.parts[1..]
+    }] = expr.parts[1..].as_ref()
     {
         let name = t.render();
         return match union_member(&members, &name, ctx.types()) {
@@ -335,7 +328,6 @@ fn apply_union_construct<'step>(
             };
             match union_member(&members, &tag, ctx.types()) {
                 Some(member) => constructors::construct_tagged(
-                    ctx.current_scope().brand(),
                     member,
                     Rc::new(union_variant_schema(&members, ctx.types())),
                     tag,
@@ -403,23 +395,14 @@ fn union_member_names(members: &[KType], types: &TypeRegistry) -> String {
 fn apply_function<'step>(
     ctx: &SchedulerView<'step, '_>,
     f: OpenedFunction<'step>,
-    expr: &WorkingExpression<'step>,
+    expr: &KExpression<'step>,
     body: CallBody<'step>,
 ) -> Outcome<'step> {
     match body {
-        // The rebuilt call is the record's own value parts re-ordered onto the signature's
-        // keywords, minted straight in working form for the eager-subs track.
-        CallBody::Named(fields) => {
-            let brand = ctx.current_scope().brand();
-            let fields = fields
-                .iter()
-                .map(|(name, part)| ((*name).to_string(), *part))
-                .collect();
-            match f.value().reconstruct_positional(brand, fields) {
-                Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f),
-                Err(e) => Outcome::Done(Err(e)),
-            }
-        }
+        CallBody::Named(fields) => match f.value().reconstruct_positional(fields) {
+            Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f),
+            Err(e) => Outcome::Done(Err(e)),
+        },
         CallBody::Positional(_) => body_shape_err(expr, NAMED_ONLY),
     }
 }
@@ -429,19 +412,18 @@ fn apply_function<'step>(
 /// `FunctionValueCall` lane and every head-deferred / type-call function arm.
 pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: WorkingExpression<'step>,
+    expr: KExpression<'step>,
     picked: OpenedFunction<'step>,
 ) -> Outcome<'step> {
     // `picked` is already committed (the head uniquely resolved to it), so bare-name value slots
     // resolve by sub-Dispatch rather than the keyword path's pre-pick `bare_outcomes` lookup —
     // each rides `bare_identifier`'s reach carrier through the eager-subs finish and reaches
     // `accepts_part` at bind. No slot resolves inline here.
-    let brand = ctx.current_scope().brand();
     let wrap_indices = picked
         .value()
         .classify_for_pick(&expr, ctx.types())
         .wrap_indices;
-    let (new_parts, staged_subs) = stage_all_eager_parts(brand, expr.parts, &wrap_indices);
-    let working_expr = expr.respliced(brand, new_parts);
+    let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
+    let working_expr = KExpression::new(new_parts);
     ctx.install_eager_subs(working_expr, staged_subs, Some(picked))
 }

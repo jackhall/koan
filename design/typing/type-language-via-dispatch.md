@@ -28,7 +28,7 @@ against a registered overload, and the picked overload's body returns a
 ## AST representation
 
 The sigil rides on the slot it occupies via
-`ExpressionPart::SigiledTypeExpr(&KExpression)`. The variant wraps
+`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`. The variant wraps
 the inner expression as a first-class `KExpression`, so splicing,
 lifting, and dispatch-time transformations preserve the type-context
 without per-site flag propagation. Pattern-matching against the variant
@@ -139,7 +139,7 @@ awaiting this field; a bare sibling tag (`Node :Leaf`) stays an unknown-type err
 schema lowering to a [`TypeNode::Record`](ktype/records-and-limits.md#record-fields-and-ktype-hashing) node,
 distinct from any nominal struct. The `:` type-sigil anchors to `{` (not only `(`),
 and the parser emits a first-class `ExpressionPart::RecordType(<field list>)` part
-([frame.rs](../../src/parse/frame.rs)) whose nested `KExpression` is the bare
+([frame.rs](../../src/parse/frame.rs)) whose boxed `KExpression` is the bare
 `(x :Number, …)` field list. Unlike `:(...)` (which wraps a `SigiledTypeExpr` for the
 dispatcher to route), `:{...}` is matched *structurally*: the `DispatchShape::RecordType`
 handler folds the field list straight to a `Record` node via the shared field-list parser
@@ -274,18 +274,6 @@ sub-Dispatch. This lowers `NEWTYPE Tree = :{children :(LIST OF Tree)}`'s
 field to `List` over that `Sibling`, which seals to `List` over `Tree`'s own absolute
 member handle, rather than parking on `Tree`'s own placeholder and
 deadlocking the scheduler.
-
-The rewrite descends into a nested record type as well as a nested sigil, so
-`NEWTYPE Tree = :{kids :(LIST OF :{next :Tree})}` threads its inner `next` field
-the same way. A rewritten body is a
-[`WorkingExpression`](../../src/machine/model/ast/working.rs) — the only node type
-that can hold a resolved cell — and a rewritten record body keeps a record-type slot
-class of its own (`WorkingPart::RecordType`) rather than riding the transparent
-sigil arm, because a record body is a field list its handler elaborates inline
-rather than an expression to dispatch. The walker reads a parsed field list and a
-threaded one through one `FieldSlot` vocabulary that both part families answer
-([shape.rs](../../src/machine/model/ast/shape.rs)), so there is a single walk, not a
-parallel one per family.
 
 ## Binder install: name-keyed vs bucket-keyed
 

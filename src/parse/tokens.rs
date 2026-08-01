@@ -19,7 +19,6 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::machine::core::RegionBrand;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeIdentifier};
 use crate::machine::model::is_keyword_token;
 use crate::machine::KError;
@@ -31,13 +30,8 @@ static FLOAT: LazyLock<Regex> =
 
 /// Whole-token literal match runs first so e.g. `3.14` stays a number rather than
 /// being desugared as `(attr 3 14)`. `start` is the token's original-source byte
-/// offset, used to compute absolute spans for atoms and operator triggers. Every name the
-/// classification keeps is bumped into `brand`'s region, so the part borrows nothing from `tok`.
-pub fn classify_token<'a>(
-    brand: RegionBrand<'a>,
-    tok: &str,
-    start: u32,
-) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+/// offset, used to compute absolute spans for atoms and operator triggers.
+pub fn classify_token<'a>(tok: &str, start: u32) -> Result<Spanned<ExpressionPart<'a>>, KError> {
     let token_span = Span {
         start,
         end: start + tok.len() as u32,
@@ -46,7 +40,7 @@ pub fn classify_token<'a>(
         return Ok(Spanned::at(part, token_span));
     }
     let mut chars = tok.char_indices().peekable();
-    let part = parse_compound(brand, &mut chars, start, token_span)?;
+    let part = parse_compound(&mut chars, start, token_span)?;
     if let Some(&(_, c)) = chars.peek() {
         return Err(KError::parse(
             format!("unexpected {:?} in token {:?}", c, tok),
@@ -80,16 +74,12 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
 /// type-position binding. Types and Identifiers reject non-alphanumeric content so
 /// glue like `Number>` or `a@b` errors instead of sneaking through; Keywords are
 /// exempt because `=` / `->` / `+` are legitimate keyword shapes.
-fn classify_atom<'a>(
-    brand: RegionBrand<'a>,
-    tok: &str,
-    token_span: Span,
-) -> Result<ExpressionPart<'a>, KError> {
+fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, KError> {
     if let Some(part) = try_literal(tok) {
         return Ok(part);
     }
     if is_keyword_token(tok) {
-        return Ok(ExpressionPart::Keyword(brand.alloc_text(tok)));
+        return Ok(ExpressionPart::Keyword(tok.to_string()));
     }
     if is_type_name(tok) {
         if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric()) {
@@ -101,9 +91,7 @@ fn classify_atom<'a>(
                 Some(token_span),
             ));
         }
-        return Ok(ExpressionPart::Type(TypeIdentifier::leaf(
-            brand.alloc_text(tok),
-        )));
+        return Ok(ExpressionPart::Type(TypeIdentifier::leaf(tok.to_string())));
     }
     if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
         return Err(KError::parse(
@@ -127,7 +115,7 @@ fn classify_atom<'a>(
             Some(token_span),
         ));
     }
-    Ok(ExpressionPart::Identifier(brand.alloc_text(tok)))
+    Ok(ExpressionPart::Identifier(tok.to_string()))
 }
 
 /// The lexical Type-token classifier: first char ASCII-uppercase plus at least one
@@ -150,12 +138,11 @@ pub(crate) fn is_type_name(tok: &str) -> bool {
 /// the output shape; the dispatcher just knows arity. Operator triggers take a
 /// 1-codepoint span at their position so error messages can point at the trigger char.
 fn parse_compound<'a>(
-    brand: RegionBrand<'a>,
     chars: &mut Peekable<CharIndices>,
     start: u32,
     token_span: Span,
 ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
-    let mut expr = read_atom(brand, chars, start, token_span)?;
+    let mut expr = read_atom(chars, start, token_span)?;
 
     while let Some(&(ci, c)) = chars.peek() {
         let Some(op) = find_suffix(c) else { break };
@@ -163,10 +150,10 @@ fn parse_compound<'a>(
         let trigger = trigger_span(start, ci, c);
         expr = match op {
             SuffixOp::Infix(build) => {
-                let rhs = read_atom(brand, chars, start, token_span)?;
-                build(brand, expr, rhs, trigger)
+                let rhs = read_atom(chars, start, token_span)?;
+                build(expr, rhs, trigger)
             }
-            SuffixOp::Suffix(build) => build(brand, expr, trigger),
+            SuffixOp::Suffix(build) => build(expr, trigger),
         };
     }
 
@@ -183,7 +170,6 @@ fn trigger_span(token_start: u32, ci: usize, c: char) -> Span {
 
 /// Errors on an empty atom — operators must have an atom between them.
 fn read_atom<'a>(
-    brand: RegionBrand<'a>,
     chars: &mut Peekable<CharIndices>,
     token_start: u32,
     token_span: Span,
@@ -218,13 +204,12 @@ fn read_atom<'a>(
         start: token_start + atom_start_ci as u32,
         end: token_start + end_ci as u32,
     };
-    classify_atom(brand, &s, token_span).map(|part| Spanned::at(part, span))
+    classify_atom(&s, token_span).map(|part| Spanned::at(part, span))
 }
 
 #[cfg(test)]
 mod tests {
     use super::classify_token;
-    use crate::machine::core::program_storage;
     use crate::machine::model::ast::{ExpressionPart, KLiteral};
 
     fn describe(p: &ExpressionPart<'_>) -> String {
@@ -252,6 +237,7 @@ mod tests {
             ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
+            ExpressionPart::Spliced { .. } => "spliced".to_string(),
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(describe).collect();
                 format!("L[{}]", inner.join(" "))
@@ -270,12 +256,16 @@ mod tests {
                     .collect();
                 format!("R{{{}}}", inner.join(", "))
             }
+            // Token classification never produces a `StagedSlot` — it's a scheduler-internal
+            // marker the dispatcher introduces after parsing, never a token.
+            ExpressionPart::StagedSlot => {
+                unreachable!("StagedSlot is scheduler-internal; classify_token never produces one")
+            }
         }
     }
 
     fn classify(tok: &str) -> Result<String, String> {
-        let program = program_storage();
-        classify_token(program.brand().region(), tok, 0)
+        classify_token(tok, 0)
             .map(|s| describe(&s.value))
             .map_err(|e| e.to_string())
     }

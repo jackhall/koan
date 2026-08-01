@@ -10,7 +10,6 @@
 //! [`unsaturated_constructor_message`]: crate::machine::model::unsaturated_constructor_message
 
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::program_storage;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
@@ -51,11 +50,10 @@ fn assert_kind_error_after(
     params: &[&str],
     position: &str,
 ) {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(setup);
-    let error = test_run.run_one_err(parse_one(&program, source));
+    let error = test_run.run_one_err(parse_one(source));
     let KErrorKind::ShapeError(message) = &error.kind else {
         panic!("expected a ShapeError for `{source}`, got {error}");
     };
@@ -75,17 +73,12 @@ fn assert_kind_error(source: &str, constructor: &str, params: &[&str], position:
 /// Assert `source` (run after `setup`) raises no error — the well-kinded half.
 #[track_caller]
 fn assert_accepted(setup: &str, source: &str) {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
+    let mut test_run = TestRun::silent(&region);
     test_run.run(setup);
-    let id = test_run.runtime.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            test_run.scope.brand(),
-            parse_one(&program, source),
-        ),
-        test_run.scope,
-    );
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one(source), test_run.scope);
     test_run
         .runtime
         .execute()

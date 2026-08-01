@@ -25,12 +25,11 @@ mod return_type;
 mod tail_region_turnover;
 
 use crate::builtins::test_support::TestRun;
-use crate::machine::{program_storage, run_root_storage};
+use crate::machine::run_root_storage;
 
 pub(super) fn capture_program_output(source: &str) -> Vec<u8> {
-    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
     test_run.run(source);
     let bytes = captured.borrow().clone();
     bytes

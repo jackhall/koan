@@ -19,7 +19,7 @@ above the substrate.
 
 ## The Koan profile
 
-`KoanRegion` is `Region<KoanStorageProfile>` over ten sub-arenas. The witness is
+`KoanRegion` is `Region<KoanStorageProfile>` over seven sub-arenas. The witness is
 the per-call `Rc<FrameStorage>`, whose held `Rc` heap-pins the region for its life.
 [arena.rs](../src/machine/core/arena.rs) holds only that profile
 (`KoanStorageProfile`, `KoanRegion`, `FrameSet`, `CallFrame`) plus a thin
@@ -40,37 +40,23 @@ allocation.
 region-derived parts) is a `yoke` whose closure is the single allocation.
 
 A value embedding an AST — a quoted expression, an FN body — also `yoke`s, because
-the embedded AST reaches no region a holder could outlive. Both are `Copy`
-[`KExpression`](../src/machine/model/ast.rs) handles (the `KObject::KExpression`
-and `Body::UserDefined` payloads) borrowing their whole content — parts run,
-keyword text, structural cache — from the region that built them, and two
-separate facts make that borrow harmless:
-
-- **The value channel borrows program storage.** Every `KObject::KExpression` cell
-  holds parsed AST, whose storage is the eternal-tier
-  [`ProgramStorage`](../src/machine/core/arena/frame.rs) the parse door bumped it
-  into. The eternal rule filters such a member out of every reach description
-  ([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)),
-  so the cell reaches nothing. The parse door takes a `ProgramBrand`, which types
-  that tier; a node the runtime synthesizes mid-dispatch takes an ordinary
-  `RegionBrand` and stays out of the value channel by flow rather than by type —
-  the residual, stated in [`ProgramBrand`](../src/machine/core/arena/frame.rs)'s
-  own doc and owned by
-  [Typed expression value channel](../roadmap/compile_safety/expression-value-channel-guard.md).
-- **No expression names a producer region.** The per-call resolved sub-result the
-  scheduler folds into a parent's parts lives on a different type —
-  `WorkingPart::Spliced` on the scheduler's
-  [`WorkingExpression`](../src/machine/model/ast/working.rs), which
-  `KObject::KExpression` cannot hold — and an `FN` body is co-located with the
-  `KFunction` that names it, so the function's own seed already covers it.
-
-So the AST-embedding object is **region-pure**, born under the empty
-(foreign-reach-only) set exactly as any region-pure leaf. The quote-capture site
-still takes the audited door
-([`RegionBrand::alloc_object_witnessed_checked`](../src/machine/core/arena.rs))
-rather than `alloc_object_witnessed`, but for a lifetime reason only: `KObject<'a>`
-is invariant, so a cell holding raw AST has no `'static` rebuild to offer the
-unchecked signature. Its residence walk has nothing left to reject.
+the embedded AST is *owned data*, not a borrow. An FN body and a quoted expression
+are owned [`KExpression`](../src/machine/model/ast.rs) clones (the
+`KObject::KExpression` and `Body::UserDefined` payloads). A `KExpression`'s
+lifetime parameter names no live borrow: its one non-owned variant —
+`ExpressionPart::Spliced`, the per-call resolved sub-result the scheduler folds
+into a parent's parts — holds a lifetime-free `Sealed` carrier cell, so `'a` is a
+phantom across every `KExpression`, re-anchored invariantly by a zero-size
+`PhantomData` marker. Raw, unevaluated AST is additionally *splice-free*: it holds
+no `Spliced` cell at all. `KExpression` is therefore a layout-invariant carrier
+family, and a splice-free embed contributes no foreign region: the AST-embedding
+object is **region-pure** and allocs through the witnessed object surface
+(`alloc_object_witnessed`), born under the empty (foreign-reach-only) set exactly
+as any region-pure leaf. The sole residual obligation — that the embed is
+splice-free — is a runtime-checked gate at the quote-capture site
+([`RegionBrand::alloc_object_witnessed_checked`](../src/machine/core/arena.rs), the
+audited twin of `alloc_object_witnessed`): a spliced part rejects with a structured
+`KError` rather than landing unvetted.
 
 **`merge_pinned` / `transfer_into` — everything that references a pre-existing
 value.** An aggregate folds its *element carriers* (deps arriving witnessed from

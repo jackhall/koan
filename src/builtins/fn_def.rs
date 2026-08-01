@@ -44,20 +44,19 @@ pub(crate) fn build_fn_like<'a>(
         "FN return-type slot",
         ctx.types,
     ));
-    let params =
-        match signature::parse_fn_param_list(&signature_expr, &mut elaborator, ctx.types, None) {
-            ParamListOutcome::Done(es) => ParamListResult::Done(es),
-            ParamListOutcome::Err(msg) => {
-                return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))))
-            }
-            ParamListOutcome::Pending {
-                park_producers,
-                sub_dispatches,
-            } => ParamListResult::Pending {
-                park_producers,
-                sub_dispatches,
-            },
-        };
+    let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator, ctx.types) {
+        ParamListOutcome::Done(es) => ParamListResult::Done(es),
+        ParamListOutcome::Err(msg) => {
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))))
+        }
+        ParamListOutcome::Pending {
+            park_producers,
+            sub_dispatches,
+        } => ParamListResult::Pending {
+            park_producers,
+            sub_dispatches,
+        },
+    };
     let bind_index = ctx.bind_index();
     match classify(return_type_state, params) {
         FnPlan::Synchronous {
@@ -72,14 +71,7 @@ pub(crate) fn build_fn_like<'a>(
             bind_index,
             ctx.types,
         )),
-        FnPlan::Deferred(inputs) => defer(
-            ctx.scope,
-            signature_expr,
-            inputs,
-            body_expr,
-            kind,
-            bind_index,
-        ),
+        FnPlan::Deferred(inputs) => defer(signature_expr, inputs, body_expr, kind, bind_index),
     }
 }
 
@@ -177,8 +169,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
         FnPlan::Deferred(mut inputs) => {
             inputs.prebuilt_elements = Some(elements);
             defer(
-                ctx.scope,
-                crate::machine::model::KExpression::new(ctx.scope.brand(), Vec::new()),
+                crate::machine::model::KExpression::new(Vec::new()),
                 inputs,
                 body_expr,
                 FnKind::Anonymous,

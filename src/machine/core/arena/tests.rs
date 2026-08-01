@@ -78,9 +78,8 @@ fn single_owner_exposes_its_own_region() {
 /// scope's own region), so nothing branded escapes.
 #[test]
 fn with_scope_opens_child_scope_at_brand() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&program, &region);
+    let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
     // Scalar copy-out: matches `scope_id`.
@@ -113,9 +112,8 @@ fn with_scope_relocates_seed_value_into_brand() {
     let it_value: KObject<'_> = caller_region
         .alloc_object(KObject::Number(99.0))
         .deep_clone();
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&program, &region);
+    let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
     let types = test_run.types.clone();
@@ -143,9 +141,8 @@ fn with_scope_relocates_seed_value_into_brand() {
 /// tree borrows.
 #[test]
 fn call_frame_scope_survives_subsequent_alloc() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&program, &region);
+    let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let frame = CallFrame::new(scope);
     frame.with_scope(|s| {
@@ -159,9 +156,8 @@ fn call_frame_scope_survives_subsequent_alloc() {
 /// reconstructed region reference stays live.
 #[test]
 fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&program, &region);
+    let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
     frame.with_scope(|child| {
@@ -189,9 +185,8 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
 /// keeping the outer region alive while we read through `inner`'s child scope's `outer`.
 #[test]
 fn call_frame_chained_outer_frame_walkable() {
-    let program = program_storage();
     let region = run_root_storage();
-    let run_test_run = TestRun::silent(&program, &region);
+    let run_test_run = TestRun::silent(&region);
     let run_scope = run_test_run.scope;
     let outer = CallFrame::new(run_scope);
     // The returned `Rc<CallFrame>` carries no brand lifetime, so it escapes the open.
@@ -214,9 +209,8 @@ fn call_frame_chained_outer_frame_walkable() {
 /// storage has no `outer` — matching the former hand-passed `outer_frame == None` at top level.
 #[test]
 fn builtin_frame_at_top_level_chains_nothing() {
-    let program = program_storage();
     let region = run_root_storage();
-    let run_test_run = TestRun::silent(&program, &region);
+    let run_test_run = TestRun::silent(&region);
     let run_scope = run_test_run.scope;
     assert!(run_scope.parent_frame_pin().is_none());
     let frame = CallFrame::new(run_scope);
@@ -228,9 +222,8 @@ fn builtin_frame_at_top_level_chains_nothing() {
 /// scope's own `region_owner`, so a caller cannot mis-wire it.
 #[test]
 fn builtin_frame_under_per_call_parent_chains_region_owner() {
-    let program = program_storage();
     let region = run_root_storage();
-    let run_test_run = TestRun::silent(&program, &region);
+    let run_test_run = TestRun::silent(&region);
     let run_scope = run_test_run.scope;
     let outer = CallFrame::new(run_scope);
     let inner = outer.with_scope(|outer_child| {
@@ -260,9 +253,8 @@ fn builtin_frame_under_per_call_parent_chains_region_owner() {
 /// [`builtin_frame_at_top_level_chains_nothing`]), keeping the common tail loop constant-space.
 #[test]
 fn fresh_tail_hop_over_per_call_captured_scope_pins_it() {
-    let program = program_storage();
     let region = run_root_storage();
-    let run_test_run = TestRun::silent(&program, &region);
+    let run_test_run = TestRun::silent(&region);
     let run_scope = run_test_run.scope;
     let outer = CallFrame::new(run_scope);
     // The fresh-tail hop's `outer` is the callee's captured scope; here that scope is per-call.
@@ -664,9 +656,8 @@ fn alloc_engine_brand_coexists_with_sibling_alloc() {
 /// region under the stored carrier.
 #[test]
 fn reference_only_carrier_survives_producer_shell_drop_under_retention_hold() {
-    let program = program_storage();
     let outer_region = run_root_storage();
-    let outer_test_run = TestRun::silent(&program, &outer_region);
+    let outer_test_run = TestRun::silent(&outer_region);
     let outer_scope = outer_test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(outer_scope);
 
@@ -792,9 +783,8 @@ crate::witnessed::reattachable!(RecordCellFamily => (RegionHandle<'r, KoanStorag
 /// not values.
 #[test]
 fn multi_region_list_of_closures_survives_frame_free() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     // Two closure homes and two reader frames — four distinct regions, no shared ancestry, each
     // dying on its own — plus the dest the list node lands in.
@@ -889,9 +879,8 @@ fn multi_region_list_of_closures_survives_frame_free() {
 /// use-after-free the moment an inner region is dropped from the union. Fails on UB, not values.
 #[test]
 fn multi_region_closure_capturing_closures_survives_frame_free() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     // A capturing frame and two capture-target frames — three distinct regions forming a reach tree.
     let frame_outer: Rc<CallFrame> = CallFrame::new(scope);
@@ -996,9 +985,8 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
 /// use-after-free if either field's region is dropped from the union. Fails on UB, not values.
 #[test]
 fn multi_region_record_of_closures_survives_frame_free() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     // Two independent frames whose closures the record's fields reach, plus the dest it lands in.
     let frame_a: Rc<CallFrame> = CallFrame::new(scope);
@@ -1084,9 +1072,8 @@ fn multi_region_record_of_closures_survives_frame_free() {
 /// unfolded allocation leaves open.
 #[test]
 fn object_field_reach_fold_survives_producer_frame_free() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -1158,9 +1145,8 @@ fn object_field_reach_fold_survives_producer_frame_free() {
 /// copies," while Miri is what catches a dangling read if the reach fold is skipped.
 #[test]
 fn record_retype_shares_substrate_across_producer_frame_free() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -1240,9 +1226,8 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
 /// region after every intermediate handle drops.
 #[test]
 fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
-    let program = program_storage();
     let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
+    let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -1510,33 +1495,45 @@ fn mint_teardown_releases_members() {
     assert_eq!(Rc::strong_count(&b), count_before_b, "C's death releases B");
 }
 
-/// The checked seal's family audit admits a `KObject::KExpression`: an AST node names no producer
-/// region, so a cell pointing at program text pins nothing the empty (own-region-only) witness this
-/// door seals under would have to name. The quote-capture lane
-/// (`dispatch::single_poll::literal_pass_through`) stores every quoted body through this door.
+/// The checked seal's family audit gates a `KObject::KExpression` by
+/// [`is_splice_free`](crate::machine::model::KExpression::is_splice_free): a `Spliced` part is
+/// a resolved value, not raw AST, and its cell carries a producer reach the empty
+/// (foreign-reach-only) witness this door seals under cannot name. Because
+/// `alloc_object_witnessed_checked` is an always-on loud gate rather than a `debug_assert!`, the
+/// rejection surfaces as a structured `KError` — never an assertion failure, never a silently
+/// stored dangle. The quote-capture lane (`dispatch::single_poll::literal_pass_through`) stores
+/// every quoted body through this door.
 #[test]
-fn raw_expression_passes_the_checked_object_seal() {
+fn spliced_expression_is_rejected_by_the_checked_object_seal() {
     use crate::machine::model::{ExpressionPart, KExpression};
-    use crate::source::Spanned;
+    use crate::witnessed::Sealed;
 
-    let program = program_storage();
-    let brand = program.brand().region();
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
     let types = TypeRegistry::new();
 
-    let expression = KExpression::new(
-        brand,
-        vec![Spanned::bare(ExpressionPart::Identifier(
-            brand.alloc_text("x"),
-        ))],
+    let witnessed = scope
+        .seal_fresh_object(KObject::Number(7.0), &types)
+        .expect("a bare Number borrows no region, so its checked seal cannot fail");
+    let spliced = ExpressionPart::Spliced {
+        cell: Delivered::hosted(
+            Sealed::seal(witnessed),
+            Rc::clone(&storage),
+            FrameCoverage::empty(),
+        ),
+    };
+    let expression = KExpression::new(vec![spliced.into()]);
+    assert!(
+        !expression.is_splice_free(),
+        "a Spliced part makes the expression not splice-free"
     );
+
     let result = scope
         .brand()
         .alloc_object_witnessed_checked(KObject::KExpression(expression), &types);
     assert!(
-        result.is_ok(),
-        "raw AST reaches no producer region, so the checked seal admits it"
+        result.is_err(),
+        "a spliced quoted expression must be rejected, not silently stored"
     );
 }
 

@@ -6,11 +6,11 @@
 //! [circular-value-construction.md](../../../../../roadmap/type_language/circular-value-construction.md)),
 //! so the walk carries no cycle guard.
 //!
-//! The comparison is cross-lifetime (`&KObject<'a>` vs `&KObject<'b>`): the two operands reach the
-//! `==` builtin as independently delivered carriers, each opened at its own brand, so they never
-//! share a lifetime. The whole suite therefore threads independent slot (`'a`) and value (`'b`)
-//! lifetimes, resting on the heterogeneous `KType` predicate suite ([`KType::satisfied_by`],
-//! `KType`'s cross-lifetime `PartialEq`).
+//! The comparison is cross-lifetime (`&KObject<'a>` vs `&KObject<'b>`): a spliced expression part
+//! opens its delivery envelope at a fresh brand per side, so the two carried values never share a
+//! lifetime. The whole suite therefore threads independent slot (`'a`) and value (`'b`) lifetimes,
+//! resting on the heterogeneous `KType` predicate suite ([`KType::satisfied_by`], `KType`'s
+//! cross-lifetime `PartialEq`).
 //!
 //! Container variants (`List`/`Dict`/`Record`) gate on a *comparability* relation: contents are
 //! compared only when the memoized/ascribed container types are **related** (one `satisfied_by` the
@@ -20,7 +20,7 @@
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{KType, TypeRegistry};
-use crate::machine::model::values::Held;
+use crate::machine::model::values::{Carried, Held};
 
 use super::KObject;
 
@@ -201,7 +201,7 @@ fn part_equal<'a, 'b>(
     match (a, b) {
         (Keyword(x), Keyword(y)) => Ok(x == y),
         (Identifier(x), Identifier(y)) => Ok(x == y),
-        (Type(x), Type(y)) => Ok(x.as_str() == y.as_str()),
+        (Type(x), Type(y)) => Ok(x.render() == y.render()),
         (Literal(x), Literal(y)) => Ok(literal_equal(x, y)),
         (Expression(x), Expression(y))
         | (SigiledTypeExpr(x), SigiledTypeExpr(y))
@@ -240,6 +240,10 @@ fn part_equal<'a, 'b>(
             }
             Ok(true)
         }
+        // A spliced result compares by the value walk: open both envelopes at their own brand (hence
+        // the cross-lifetime comparison) and compare the carried values.
+        (Spliced { cell: cell_a }, Spliced { cell: cell_b }) => cell_a
+            .open(|carried_a| cell_b.open(|carried_b| carried_equal(carried_a, carried_b, types))),
         _ => Ok(false),
     }
 }
@@ -252,5 +256,19 @@ fn literal_equal(a: &KLiteral, b: &KLiteral) -> bool {
         (KLiteral::Boolean(x), KLiteral::Boolean(y)) => x == y,
         (KLiteral::Null, KLiteral::Null) => true,
         _ => false,
+    }
+}
+
+/// Two spliced carried values: objects walk structurally, types compare by digest, a mixed pair is
+/// unequal — the [`Held`] semantics over the borrowed [`Carried`] currency.
+fn carried_equal<'a, 'b>(
+    a: Carried<'a>,
+    b: Carried<'b>,
+    types: &TypeRegistry,
+) -> Result<bool, ValueEqualityError> {
+    match (a, b) {
+        (Carried::Object(oa), Carried::Object(ob)) => oa.value_equal(ob, types),
+        (Carried::Type(ta), Carried::Type(tb)) => Ok(ta == tb),
+        _ => Ok(false),
     }
 }

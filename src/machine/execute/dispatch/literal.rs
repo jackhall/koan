@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::{
-    FoldingBrand, FrameCoverage, KoanRegionExt, KoanStorageProfile, RegionBrand, SubstrateDoor,
+    FoldingBrand, FrameCoverage, KoanRegionExt, KoanStorageProfile, SubstrateDoor,
 };
 use crate::machine::model::CarriedFamily;
+use crate::machine::model::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{
     CarrierWitness, DeliveredCarried, FrameStorage, KError, KErrorKind, KoanRegion, NodeId,
     TraceFrame,
@@ -263,13 +263,12 @@ impl<'step> KoanRuntime<'step> {
     /// value and the memoized element type joins the resolved values' types.
     pub(in crate::machine::execute) fn schedule_list_literal<'a>(
         &mut self,
-        brand: RegionBrand<'a>,
-        items: &[ExpressionPart<'a>],
+        items: Vec<ExpressionPart<'a>>,
     ) -> NodeId {
         let mut deps = ResolvedDeps::new();
         let mut rows = Vec::with_capacity(items.len());
-        for &part in items {
-            let value = self.classify_aggregate_part(brand, part, &mut deps);
+        for part in items {
+            let value = self.classify_aggregate_part(part, &mut deps);
             rows.push(AggRow { key: None, value });
         }
         self.schedule_aggregate(
@@ -284,14 +283,13 @@ impl<'step> KoanRuntime<'step> {
     /// symbols). Non-scalar keys produce `KErrorKind::ShapeError`, raised before the value fold.
     pub(in crate::machine::execute) fn schedule_dict_literal<'a>(
         &mut self,
-        brand: RegionBrand<'a>,
-        pairs: &[(ExpressionPart<'a>, ExpressionPart<'a>)],
+        pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
     ) -> NodeId {
         let mut deps = ResolvedDeps::new();
         let mut rows = Vec::with_capacity(pairs.len());
-        for &(k, v) in pairs {
-            let key = self.classify_aggregate_part(brand, k, &mut deps);
-            let value = self.classify_aggregate_part(brand, v, &mut deps);
+        for (k, v) in pairs {
+            let key = self.classify_aggregate_part(k, &mut deps);
+            let value = self.classify_aggregate_part(v, &mut deps);
             rows.push(AggRow {
                 key: Some(key),
                 value,
@@ -316,15 +314,14 @@ impl<'step> KoanRuntime<'step> {
     /// a `KObject::Record`, which memoizes the per-field type record at construction.
     pub(in crate::machine::execute) fn schedule_record_literal<'a>(
         &mut self,
-        brand: RegionBrand<'a>,
-        fields: &[(&'a str, ExpressionPart<'a>)],
+        fields: Vec<(String, ExpressionPart<'a>)>,
     ) -> NodeId {
         let mut names: Vec<String> = Vec::with_capacity(fields.len());
         let mut deps = ResolvedDeps::new();
         let mut rows = Vec::with_capacity(fields.len());
-        for &(name, value) in fields {
-            let value = self.classify_aggregate_part(brand, value, &mut deps);
-            names.push(name.to_string());
+        for (name, value) in fields {
+            let value = self.classify_aggregate_part(value, &mut deps);
+            names.push(name);
             rows.push(AggRow { key: None, value });
         }
         self.schedule_aggregate(
@@ -342,12 +339,11 @@ impl<'step> KoanRuntime<'step> {
     /// post-submission against the dep-finish ID.
     fn classify_aggregate_part<'a>(
         &mut self,
-        brand: RegionBrand<'a>,
         part: ExpressionPart<'a>,
         deps: &mut ResolvedDeps,
     ) -> Slot {
-        let part = match stage_eager_part(brand, part) {
-            Ok(dep) => return Slot::owned(deps, self.realize_eager_dep(brand, dep)),
+        let part = match stage_eager_part(part) {
+            Ok(dep) => return Slot::owned(deps, self.realize_eager_dep(dep)),
             Err(part) => part,
         };
         match part {
@@ -356,8 +352,7 @@ impl<'step> KoanRuntime<'step> {
                 // seals it through the checked door) rather than a static cell: a
                 // `KObject::KExpression` is invariant in its region lifetime with no `'static`
                 // rebuild, so `resolve_region_pure` cannot build it at the `yoke` brand below.
-                let wrapped =
-                    WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]);
+                let wrapped = crate::machine::model::KExpression::new(vec![Spanned::bare(part)]);
                 Slot::owned(
                     deps,
                     self.dispatch_in_own_scope(
@@ -368,10 +363,8 @@ impl<'step> KoanRuntime<'step> {
                     ),
                 )
             }
-            ref p @ ExpressionPart::Identifier(_) => {
-                self.resolve_aggregate_bare_name(brand, p, deps)
-            }
-            ref p @ ExpressionPart::Type(_) => self.resolve_aggregate_bare_name(brand, p, deps),
+            ref p @ ExpressionPart::Identifier(_) => self.resolve_aggregate_bare_name(p, deps),
+            ref p @ ExpressionPart::Type(_) => self.resolve_aggregate_bare_name(p, deps),
             other => {
                 // A static literal (keyword / literal): region-pure — every borrow it carries
                 // points into the classify scope's own frame, a string literal's bumped bytes
@@ -395,7 +388,6 @@ impl<'step> KoanRuntime<'step> {
     /// dep-finish's dep-error short-circuit) handles them uniformly.
     fn resolve_aggregate_bare_name<'a>(
         &mut self,
-        brand: RegionBrand<'a>,
         part: &ExpressionPart<'a>,
         deps: &mut ResolvedDeps,
     ) -> Slot {
@@ -418,7 +410,7 @@ impl<'step> KoanRuntime<'step> {
             // lane's error path surfaces them uniformly.
             Ok(BareCarrier::Unbound(_)) | Err(_) => {
                 let expr =
-                    WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(*part))]);
+                    crate::machine::model::KExpression::new(vec![Spanned::bare(part.clone())]);
                 Slot::owned(
                     deps,
                     self.dispatch_in_own_scope(

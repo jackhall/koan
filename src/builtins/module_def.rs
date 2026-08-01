@@ -167,7 +167,6 @@ mod tests {
     use crate::machine::model::KObject;
     use crate::machine::model::Module;
     use crate::machine::model::SigSchema;
-    use crate::machine::program_storage;
     use crate::machine::{run_root_storage, FrameStorageExt};
     use crate::machine::{BindingIndex, KErrorKind};
 
@@ -175,10 +174,9 @@ mod tests {
     /// submit-time placeholder is tagged `Value`.
     #[test]
     fn binder_name_extracts_module_name() {
-        let program = program_storage();
-        let expr = parse_one(&program, "MODULE foo = (LET x = 1)");
+        let expr = parse_one("MODULE foo = (LET x = 1)");
         let name = crate::machine::model::binder::identifier_part_binder_name(&expr);
-        assert_eq!(name, Some("foo"));
+        assert_eq!(name.as_deref(), Some("foo"));
     }
 
     /// A Type-token module name is refused by the second overload, whose only job is the
@@ -186,11 +184,10 @@ mod tests {
     /// type a field.
     #[test]
     fn type_token_module_name_errors_with_the_snake_case_respelling() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
-        let err = test_run.run_one_err(parse_one(&program, "MODULE IntOrd = (LET x = 1)"));
+        let err = test_run.run_one_err(parse_one("MODULE IntOrd = (LET x = 1)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("a module is a value") && msg.contains("`int_ord`")),
@@ -211,12 +208,10 @@ mod tests {
     /// collision so the docs and the implementation cannot silently disagree.
     #[test]
     fn module_member_named_type_collides_with_builtin_type() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         let err = test_run.run_one_err(parse_one(
-            &program,
             "MODULE int_ord = ((LET Type = Number) (LET zero = 0))",
         ));
         assert!(
@@ -231,9 +226,8 @@ mod tests {
 
     #[test]
     fn module_binds_under_name_in_scope() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("MODULE foo = (LET x = 1)");
         assert!(
@@ -248,12 +242,11 @@ mod tests {
 
     #[test]
     fn bare_module_name_surfaces_as_object_value() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("MODULE foo = (LET x = 1)");
         // A module named in expression position reads back on the value channel's Object arm.
-        let bare = test_run.run_one(parse_one(&program, "foo"));
+        let bare = test_run.run_one(parse_one("foo"));
         match bare {
             KObject::Module(module) => assert_eq!(module.path, "foo"),
             other => panic!(
@@ -262,7 +255,7 @@ mod tests {
             ),
         }
         // PRINT returns the rendered string — a bare module renders as its path.
-        let printed = test_run.run_one(parse_one(&program, "PRINT foo"));
+        let printed = test_run.run_one(parse_one("PRINT foo"));
         match printed {
             KObject::KString(s) => assert_eq!(*s, "foo"),
             other => panic!(
@@ -278,11 +271,10 @@ mod tests {
     #[test]
     fn bare_module_names_in_list_resolve_and_memoize_self_sig() {
         use crate::machine::model::Held;
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("MODULE int_ord = (LET compare = 7)");
-        let listed = test_run.run_one(parse_one(&program, "[int_ord, int_ord]"));
+        let listed = test_run.run_one(parse_one("[int_ord, int_ord]"));
         match listed {
             KObject::List(items, elem) => {
                 // Ruling 12: a module's self-sig renders structurally, not by the module name.
@@ -309,9 +301,8 @@ mod tests {
     #[test]
     fn module_in_list_surfaces_as_object_element_memoized_to_self_sig() {
         use crate::machine::model::Held;
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run(
             "SIG Ordered = (VAL compare :Number)\n\
              MODULE int_ord = (LET compare = 7)",
@@ -319,7 +310,7 @@ mod tests {
         // A parenthesized module expression evaluates to the Object-arm module value, so the list
         // element is `Held::Object` memoized as the module's self-sig, which (ruling 12) renders
         // structurally as `SIG (compare: Number)` rather than by the module name.
-        let listed = test_run.run_one(parse_one(&program, "[(int_ord)]"));
+        let listed = test_run.run_one(parse_one("[(int_ord)]"));
         match listed {
             KObject::List(items, elem) => {
                 assert_eq!(
@@ -342,35 +333,28 @@ mod tests {
 
     #[test]
     fn module_member_access_via_attr() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("MODULE foo = (LET x = 1)");
-        let result = test_run.run_one(parse_one(&program, "foo.x"));
+        let result = test_run.run_one(parse_one("foo.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
 
     #[test]
     fn module_with_multiple_statements_in_parens() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("MODULE foo = ((LET x = 1) (LET y = 2))");
-        assert!(
-            matches!(test_run.run_one(parse_one(&program, "foo.x")), KObject::Number(n) if *n == 1.0)
-        );
-        assert!(
-            matches!(test_run.run_one(parse_one(&program, "foo.y")), KObject::Number(n) if *n == 2.0)
-        );
+        assert!(matches!(test_run.run_one(parse_one("foo.x")), KObject::Number(n) if *n == 1.0));
+        assert!(matches!(test_run.run_one(parse_one("foo.y")), KObject::Number(n) if *n == 2.0));
     }
 
     #[test]
     fn module_member_function_via_let_fn() {
         // `LET <name> = (FN ...)` binds under a clean identifier; bare FN lands under
         // its signature key and isn't reachable as `foo.<name>` via ATTR.
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("MODULE foo = (LET double = (FN (DOUBLE x :Number) -> Number = (x)))");
         let foo = lookup_module(scope, "foo", &test_run.types);
@@ -379,11 +363,10 @@ mod tests {
 
     #[test]
     fn module_unknown_member_errors() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("MODULE foo = (LET x = 1)");
-        let err = test_run.run_one_err(parse_one(&program, "foo.bogus"));
+        let err = test_run.run_one_err(parse_one("foo.bogus"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("foo") && msg.contains("`bogus`")),
@@ -393,11 +376,10 @@ mod tests {
 
     #[test]
     fn nested_module_accessible_via_chained_attr() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("MODULE outer =\n  MODULE inner = (LET x = 7)");
-        let result = test_run.run_one(parse_one(&program, "outer.inner.x"));
+        let result = test_run.run_one(parse_one("outer.inner.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 
@@ -405,20 +387,18 @@ mod tests {
     /// reference instead of erroring as `UnboundName`.
     #[test]
     fn module_body_parks_on_outer_placeholder() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         test_run.run("LET y = 7\nMODULE foo = (LET x = y)");
-        let result = test_run.run_one(parse_one(&program, "foo.x"));
+        let result = test_run.run_one(parse_one("foo.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 
     /// A failing body statement must not bind `foo` in the parent scope.
     #[test]
     fn module_body_error_short_circuits_finalize() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("MODULE foo = (LET x = nonexistent_name)");
         assert!(
@@ -432,9 +412,8 @@ mod tests {
     /// binding, and leaves the pre-seeded `&Module` pointer intact.
     #[test]
     fn module_finalize_short_circuits_on_idempotent_state() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         let child = region
             .brand()
@@ -468,9 +447,8 @@ mod tests {
     /// `child_scope: &'a Scope<'a>` and finalize writes under tree borrows.
     #[test]
     fn module_body_dispatch_does_not_dangle() {
-        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&program, &region);
+        let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("LET y = 7\nMODULE foo = ((LET x = y) (LET z = 11))");
         let foo = lookup_module(scope, "foo", &test_run.types);

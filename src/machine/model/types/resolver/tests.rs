@@ -1,13 +1,13 @@
 use super::*;
 use crate::builtins::test_support::{mock_declaration_site, TestRun};
-use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::values::Carried;
 use crate::machine::model::Record;
 use crate::machine::{BindingIndex, DeclarationSite};
 
-fn leaf(n: &str) -> TypeIdentifier<'_> {
-    TypeIdentifier::leaf(n)
+fn leaf(n: &str) -> TypeIdentifier {
+    TypeIdentifier::leaf(n.into())
 }
 
 /// A Type token cannot name a value — the binding maps enforce the token-class partition — so a
@@ -16,9 +16,8 @@ fn leaf(n: &str) -> TypeIdentifier<'_> {
 #[test]
 fn type_token_cannot_bind_value_side() {
     use crate::machine::model::values::KObject;
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&program, &region);
+    let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let error = scope
         .bind_value_direct(
@@ -48,9 +47,8 @@ fn type_token_cannot_bind_value_side() {
 
 #[test]
 fn unbound_leaf_names_unknown_type() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&program, &region);
+    let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let mut el = Elaborator::new(scope);
@@ -68,9 +66,8 @@ fn unbound_leaf_names_unknown_type() {
 /// non-member falls through to ordinary resolution.
 #[test]
 fn recursive_group_member_lowers_to_sibling() {
-    let program = program_storage();
     let region = run_root_storage();
-    let parent_test_run = TestRun::silent(&program, &region);
+    let parent_test_run = TestRun::silent(&region);
     let parent = parent_test_run.scope;
     let window = RecursiveGroupWindow::new(
         vec![("A".into(), KKind::NewType), ("B".into(), KKind::NewType)],
@@ -99,9 +96,8 @@ fn recursive_group_member_lowers_to_sibling() {
 /// member, which is what a variant payload referencing the union's own name means.
 #[test]
 fn window_binder_resolves_to_the_union_of_its_members() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&program, &region);
+    let test_run = TestRun::silent(&region);
     let types = test_run.types.clone();
     let window = RecursiveGroupWindow::new(
         vec![
@@ -122,9 +118,8 @@ fn window_binder_resolves_to_the_union_of_its_members() {
 /// fill seals, and only then does the member's handle install.
 #[test]
 fn block_member_defers_until_the_window_seals() {
-    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&program, &region);
+    let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let window = RecursiveGroupWindow::new(

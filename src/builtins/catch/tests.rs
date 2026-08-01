@@ -4,13 +4,11 @@
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::{KObject, TypeNode};
-use crate::machine::program_storage;
 use crate::machine::run_root_storage;
 
 fn run_program(source: &str) -> Vec<u8> {
-    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
     test_run.run(source);
     let bytes = captured.borrow().clone();
     bytes
@@ -87,11 +85,10 @@ fn catch_inside_tco_position_preserves_frame_chain() {
 /// the *same* sealed member handle so MATCH dispatches them identically.
 #[test]
 fn catch_result_shares_identity_with_constructed_result() {
-    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let caught = test_run.run_one(parse_one(&program, "CATCH (foo)"));
-    let constructed = test_run.run_one(parse_one(&program, "Result (Ok 1)"));
+    let mut test_run = TestRun::silent(&region);
+    let caught = test_run.run_one(parse_one("CATCH (foo)"));
+    let constructed = test_run.run_one(parse_one("Result (Ok 1)"));
     match (caught, constructed) {
         (KObject::Tagged { identity: id1, .. }, KObject::Tagged { identity: id2, .. }) => {
             match test_run.types().node(*id1) {
