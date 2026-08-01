@@ -48,7 +48,7 @@ pub enum ReturnContract {
 pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {
     if body.is_statement_block() {
         body.parts
-            .into_iter()
+            .iter()
             .filter_map(|p| match p.value {
                 ExpressionPart::Expression(e) => Some(*e),
                 _ => None,
@@ -59,8 +59,8 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
     }
 }
 
-/// Borrowing twin of [`split_body_statements`]: returns references to the body's top-level
-/// statements rather than owned clones, so the body AST is never duplicated on the call path. Same
+/// Borrowing twin of [`split_body_statements`]: yields the body's top-level statements as
+/// references into the parts run rather than by value. Same
 /// multi-statement detection. The borrow lifetime is independent of the expression's own `'a`, so a
 /// caller holding the body by value can scan it in place (`GROUP` reads its members off the
 /// unevaluated body block this way).
@@ -71,7 +71,7 @@ pub(crate) fn body_statement_refs<'ast, 'a>(
         body.parts
             .iter()
             .filter_map(|p| match &p.value {
-                ExpressionPart::Expression(e) => Some(e.as_ref()),
+                ExpressionPart::Expression(e) => Some(*e),
                 _ => None,
             })
             .collect()
@@ -102,7 +102,12 @@ mod tests {
     /// as a lone `[Expression(_)]`, this fails.
     #[test]
     fn parser_never_yields_lone_expression_body() {
+        use crate::machine::core::program_storage;
         use crate::parse::parse;
+
+        // The parse products borrow this storage, so it is declared before anything reading them.
+        let program = program_storage();
+        let brand = program.brand();
 
         // Each input captures a body as the trailing `(...)` argument of `FOO`; we extract that
         // body (the inner of the trailing `Expression` part) and assert it is never a lone
@@ -115,13 +120,13 @@ mod tests {
             "FOO (a)",
             "FOO ((a) (b) (c))",
         ] {
-            let body = parse(src)
+            let body = parse(brand, src)
                 .expect("parse")
                 .into_iter()
                 .next()
                 .expect("one statement")
                 .parts
-                .into_iter()
+                .iter()
                 .find_map(|p| match p.value {
                     ExpressionPart::Expression(e) => Some(*e),
                     _ => None,

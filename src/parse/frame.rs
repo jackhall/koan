@@ -6,18 +6,22 @@
 //! frame and the `#(...)` Quote frame additionally carry `sigil_cursor` so the outer
 //! part's span covers the sigil byte plus the body.
 
+use crate::machine::core::RegionBrand;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::KError;
 use crate::source::{self, Span, Spanned};
 
 use super::dict_literal::{BraceContents, DictFrame};
 
+/// An open frame collects its parts in a plain `Vec` and freezes them into a node only at
+/// [`BracketFrame::into_part`], where the run is complete — a node's parts and structural cache are
+/// bumped together and never touched again.
 pub(super) enum BracketFrame<'a> {
     /// `head: Some(_)` flags a `$(...)` sigil; on close such a frame yields the
     /// `(EVAL <body>)` AST shape rather than a bare Expression part, and `sigil_cursor`
     /// (set iff `head` is) anchors the outer span at the sigil.
     Expression {
-        expr: KExpression<'a>,
+        parts: Vec<Spanned<ExpressionPart<'a>>>,
         head: Option<&'static str>,
         span_start: u32,
         sigil_cursor: Option<u32>,
@@ -27,7 +31,7 @@ pub(super) enum BracketFrame<'a> {
     /// keyword is prepended. `span_start` is the `(` cursor (the body's own span) and
     /// `sigil_cursor` the `#`, which the outer part's span starts at.
     Quote {
-        expr: KExpression<'a>,
+        parts: Vec<Spanned<ExpressionPart<'a>>>,
         span_start: u32,
         sigil_cursor: u32,
     },
@@ -43,40 +47,47 @@ pub(super) enum BracketFrame<'a> {
     /// into [`ExpressionPart::SigiledTypeExpr`] — shape recognition is the dispatcher's
     /// job. `span_start` is the cursor of the leading `:`.
     SigiledTypeExpr {
-        expr: KExpression<'a>,
+        parts: Vec<Spanned<ExpressionPart<'a>>>,
         span_start: u32,
     },
     /// Opened by a glued `:{` sigil. Collects a typed field list verbatim and folds into a
     /// first-class [`ExpressionPart::RecordType`] the elaborator turns into a `KType::Record`
     /// directly. `span_start` is the cursor of the leading `:`.
     RecordTypeExpr {
-        expr: KExpression<'a>,
+        parts: Vec<Spanned<ExpressionPart<'a>>>,
         span_start: u32,
     },
 }
 
 impl<'a> BracketFrame<'a> {
-    /// Spans are preserved on Expression and SigiledTypeExpr (whose payload is a
-    /// `Vec<Spanned<…>>`); List and Dict store bare parts so the span is dropped here.
+    /// Spans are preserved on the node-building variants (Expression, Quote, SigiledTypeExpr,
+    /// RecordTypeExpr), whose run is a `Vec<Spanned<…>>`; List and Dict store bare parts so the
+    /// span is dropped here.
     pub(super) fn push(&mut self, part: Spanned<ExpressionPart<'a>>) {
         match self {
-            BracketFrame::Expression { expr, .. } => expr.parts.push(part),
-            BracketFrame::Quote { expr, .. } => expr.parts.push(part),
+            BracketFrame::Expression { parts, .. } => parts.push(part),
+            BracketFrame::Quote { parts, .. } => parts.push(part),
             BracketFrame::List { items, .. } => items.push(part.value),
             BracketFrame::Dict { dict, .. } => dict.push(part.value),
-            BracketFrame::SigiledTypeExpr { expr, .. } => expr.parts.push(part),
-            BracketFrame::RecordTypeExpr { expr, .. } => expr.parts.push(part),
+            BracketFrame::SigiledTypeExpr { parts, .. } => parts.push(part),
+            BracketFrame::RecordTypeExpr { parts, .. } => parts.push(part),
         }
     }
 
-    /// `end` is the cursor just past the closer (exclusive end of the span). The only
-    /// failure path is `DictFrame::finish` for the Dict variant; closer-vs-variant
-    /// pairing is assumed valid (see `matches_closer`).
-    pub(super) fn into_part(self, end: u32) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+    /// `end` is the cursor just past the closer (exclusive end of the span). The collected run is
+    /// complete here, so this is where each frame freezes it into a node through
+    /// [`KExpression::build`] and bumps it into `brand`'s region. The only failure path is
+    /// `DictFrame::finish` for the Dict variant; closer-vs-variant pairing is assumed valid (see
+    /// `matches_closer`).
+    pub(super) fn into_part(
+        self,
+        brand: RegionBrand<'a>,
+        end: u32,
+    ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
         let file = source::current();
         match self {
             BracketFrame::Expression {
-                mut expr,
+                parts,
                 head: None,
                 span_start,
                 ..
@@ -85,18 +96,14 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
-                expr.span = Some(span);
-                expr.file = file;
-                // Parts were pushed incrementally; refresh the structural cache now
-                // that the vector is final.
-                expr.fill_cache();
+                let expr = KExpression::build(brand, parts, Some(span), file);
                 Ok(Spanned::at(
-                    ExpressionPart::Expression(Box::new(expr)),
+                    ExpressionPart::Expression(brand.alloc_value(expr)),
                     span,
                 ))
             }
             BracketFrame::Expression {
-                mut expr,
+                parts,
                 head: Some(head),
                 span_start,
                 sigil_cursor,
@@ -105,9 +112,7 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
-                expr.span = Some(body_span);
-                expr.file = file;
-                expr.fill_cache();
+                let expr = KExpression::build(brand, parts, Some(body_span), file);
                 let sc =
                     sigil_cursor.expect("sigil-headed Expression frame must carry sigil_cursor");
                 let outer_span = Span { start: sc, end };
@@ -116,21 +121,25 @@ impl<'a> BracketFrame<'a> {
                     end: sc + 1,
                 };
                 let wrapped = KExpression::build(
+                    brand,
                     vec![
-                        Spanned::at(ExpressionPart::Keyword(head.to_string()), sigil_span),
-                        Spanned::at(ExpressionPart::Expression(Box::new(expr)), body_span),
+                        Spanned::at(ExpressionPart::Keyword(head), sigil_span),
+                        Spanned::at(
+                            ExpressionPart::Expression(brand.alloc_value(expr)),
+                            body_span,
+                        ),
                     ],
                     Some(outer_span),
                     file,
                 );
                 Ok(Spanned::at(
-                    ExpressionPart::Expression(Box::new(wrapped)),
+                    ExpressionPart::Expression(brand.alloc_value(wrapped)),
                     outer_span,
                 ))
             }
             // `#(...)`: the body keeps the paren span, the captured part covers the sigil too.
             BracketFrame::Quote {
-                mut expr,
+                parts,
                 span_start,
                 sigil_cursor,
             } => {
@@ -138,15 +147,13 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
-                expr.span = Some(body_span);
-                expr.file = file;
-                expr.fill_cache();
+                let expr = KExpression::build(brand, parts, Some(body_span), file);
                 let outer_span = Span {
                     start: sigil_cursor,
                     end,
                 };
                 Ok(Spanned::at(
-                    ExpressionPart::QuotedExpression(Box::new(expr)),
+                    ExpressionPart::QuotedExpression(brand.alloc_value(expr)),
                     outer_span,
                 ))
             }
@@ -155,7 +162,10 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
-                Ok(Spanned::at(ExpressionPart::ListLiteral(items), span))
+                Ok(Spanned::at(
+                    ExpressionPart::ListLiteral(brand.alloc_slice(&items)),
+                    span,
+                ))
             }
             BracketFrame::Dict { dict, span_start } => {
                 let span = Span {
@@ -163,43 +173,37 @@ impl<'a> BracketFrame<'a> {
                     end,
                 };
                 let part = match dict.finish()? {
-                    BraceContents::Dict(pairs) => ExpressionPart::DictLiteral(pairs),
-                    BraceContents::Record(fields) => ExpressionPart::RecordLiteral(fields),
+                    BraceContents::Dict(pairs) => {
+                        ExpressionPart::DictLiteral(brand.alloc_slice(&pairs))
+                    }
+                    BraceContents::Record(fields) => {
+                        ExpressionPart::RecordLiteral(brand.alloc_slice(&fields))
+                    }
                 };
                 Ok(Spanned::at(part, span))
             }
-            BracketFrame::SigiledTypeExpr {
-                mut expr,
-                span_start,
-            } => {
+            BracketFrame::SigiledTypeExpr { parts, span_start } => {
                 let span = Span {
                     start: span_start,
                     end,
                 };
-                expr.span = Some(span);
-                expr.file = file;
-                expr.fill_cache();
+                let expr = KExpression::build(brand, parts, Some(span), file);
                 Ok(Spanned::at(
-                    ExpressionPart::SigiledTypeExpr(Box::new(expr)),
+                    ExpressionPart::SigiledTypeExpr(brand.alloc_value(expr)),
                     span,
                 ))
             }
             // `:{x :Number}` → `RecordType(<field list>)` — a first-class part the
             // elaborator folds straight to `KType::Record`. The inner `KExpression` is the
             // bare `(x :Number, …)` field list; `span_start` is the leading `:`.
-            BracketFrame::RecordTypeExpr {
-                mut expr,
-                span_start,
-            } => {
+            BracketFrame::RecordTypeExpr { parts, span_start } => {
                 let span = Span {
                     start: span_start,
                     end,
                 };
-                expr.span = Some(span);
-                expr.file = file;
-                expr.fill_cache();
+                let expr = KExpression::build(brand, parts, Some(span), file);
                 Ok(Spanned::at(
-                    ExpressionPart::RecordType(Box::new(expr)),
+                    ExpressionPart::RecordType(brand.alloc_value(expr)),
                     span,
                 ))
             }
@@ -224,13 +228,14 @@ impl<'a> BracketFrame<'a> {
 /// A `)` reaching a List/Dict frame means the `[`/`{` was never closed; report it as
 /// an unclosed bracket pointing at the opener rather than a paren mismatch.
 pub(super) fn close_paren_to_part<'a>(
+    brand: RegionBrand<'a>,
     frame: BracketFrame<'a>,
     end: u32,
 ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
     match frame {
-        BracketFrame::Expression { .. } => frame.into_part(end),
-        BracketFrame::Quote { .. } => frame.into_part(end),
-        BracketFrame::SigiledTypeExpr { .. } => frame.into_part(end),
+        BracketFrame::Expression { .. } => frame.into_part(brand, end),
+        BracketFrame::Quote { .. } => frame.into_part(brand, end),
+        BracketFrame::SigiledTypeExpr { .. } => frame.into_part(brand, end),
         BracketFrame::RecordTypeExpr { span_start, .. } => Err(KError::parse(
             "unclosed ':{': this record type was never closed with a matching '}'",
             Some(Span {

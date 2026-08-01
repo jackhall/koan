@@ -5,8 +5,8 @@
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KType;
 use crate::machine::model::Record;
-use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
+use crate::machine::{program_storage, run_root_storage};
 
 use super::capture_program_output;
 
@@ -70,9 +70,10 @@ fn fn_returning_record_accepts_matching_value() {
 /// A record value (`ktype()` carries the field-type record) reports a `KType::Record`.
 #[test]
 fn record_value_reports_record_ktype() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
-    let result = test_run.run_one(parse_one("{x = 1, y = \"a\"}"));
+    let mut test_run = TestRun::silent(&program, &region);
+    let result = test_run.run_one(parse_one(&program, "{x = 1, y = \"a\"}"));
     assert_eq!(
         result.ktype(),
         test_run.types.record(Record::from_pairs(vec![
@@ -88,14 +89,19 @@ fn record_value_reports_record_ktype() {
 /// rather than the shape-only literal path).
 #[test]
 fn record_field_type_mismatch_is_dispatch_failure() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET r = {x = \"s\"}");
     test_run.run("FN (USE r :{x :Number}) -> Str = (\"ok\")");
-    let root = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("USE r"), scope);
+    let root = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one(&program, "USE r"),
+        ),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -114,14 +120,19 @@ fn record_field_type_mismatch_is_dispatch_failure() {
 /// lacks (`:{x :Number, q :Bool}`) — the value can't satisfy the wider promise.
 #[test]
 fn record_missing_field_is_dispatch_failure() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET r = {x = 1}");
     test_run.run("FN (NEED r :{x :Number, q :Bool}) -> Str = (\"ok\")");
-    let root = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("NEED r"), scope);
+    let root = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one(&program, "NEED r"),
+        ),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -142,14 +153,19 @@ fn record_missing_field_is_dispatch_failure() {
 /// `AmbiguousDispatch`.
 #[test]
 fn record_incomparable_overloads_are_ambiguous() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")");
     test_run.run("FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")");
-    let root = test_run
-        .runtime
-        .dispatch_in_scope(parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"), scope);
+    let root = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one(&program, "PICK {x = 1, y = \"a\", z = \"b\"}"),
+        ),
+        scope,
+    );
     test_run
         .runtime
         .execute()

@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use super::*;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{run_root_storage, FrameStorage};
+use crate::machine::core::{run_root_storage, FrameStorage, ProgramStorage};
 
 pub(super) struct SharedBuf(Rc<RefCell<Vec<u8>>>);
 
@@ -33,15 +33,21 @@ impl Write for SharedBuf {
 /// Run `source` and return the root scope so callers can inspect post-run bindings;
 /// PRINT output lands in `captured`.
 pub(super) fn run<'run>(
+    program: &'run ProgramStorage,
     source: &str,
     region: &'run Rc<FrameStorage>,
     captured: Rc<RefCell<Vec<u8>>>,
 ) -> TestRun<'run> {
-    let exprs = parse(source).expect("parse should succeed");
-    let mut test_run = TestRun::new(region, Box::new(SharedBuf(captured)));
+    let mut test_run = TestRun::new(program, region, Box::new(SharedBuf(captured)));
     let root = test_run.scope;
+    // The test parses into the run's own storage and crosses each statement into the scheduler,
+    // exactly as `run_program` does with program storage.
+    let exprs = parse(program.brand(), source).expect("parse should succeed");
     for expr in exprs {
-        test_run.runtime.dispatch_in_scope(expr, root);
+        test_run.runtime.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(root.brand(), expr),
+            root,
+        );
     }
     test_run.runtime.execute().expect("program should run");
     test_run

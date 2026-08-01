@@ -32,7 +32,7 @@ PRINT (LET doubled = 42)
 
 ```text
 error: binder declaration in an eagerly evaluated sub-expression `LET doubled = 42`; a binder must be a statement, a body, or nested in another binder's declaration slot
-  in PRINT <staged> (<bind>)
+  in PRINT <staged> (<bind>) at <input>:1:1
 ```
 
 ### Names are lexical

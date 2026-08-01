@@ -1,4 +1,5 @@
 use super::*;
+use crate::machine::core::{program_storage, RegionBrand};
 use crate::source::Spanned;
 
 // `KType` leaf constants replace the retired enum variants (`KType::NUMBER` etc.); these tests
@@ -14,8 +15,8 @@ fn one_slot<'a>(kt: KType) -> ExpressionSignature<'a> {
     }
 }
 
-fn expr_with_keyword<'a>(kw: &str) -> KExpression<'a> {
-    KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(kw.into()))])
+fn expr_with_keyword<'a>(brand: RegionBrand<'a>, kw: &'a str) -> KExpression<'a> {
+    KExpression::new(brand, vec![Spanned::bare(ExpressionPart::Keyword(kw))])
 }
 
 #[test]
@@ -49,17 +50,21 @@ fn return_type_clone_round_trips_all_arms() {
     let types = TypeRegistry::new();
     let r = ReturnType::Resolved(KType::NUMBER);
     assert_eq!(r.name(&types), r.clone().name(&types));
-    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
+    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
     assert_eq!(d.name(&types), d.clone().name(&types));
-    let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword("FOO")));
+    let program = program_storage();
+    let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword(
+        program.brand().region(),
+        "FOO",
+    )));
     assert_eq!(e.name(&types), e.clone().name(&types));
 }
 
 #[test]
 fn type_name_eq_compares_leaf_names() {
-    let leaf_a = TypeIdentifier::leaf("A".into());
-    let leaf_a2 = TypeIdentifier::leaf("A".into());
-    let leaf_b = TypeIdentifier::leaf("B".into());
+    let leaf_a = TypeIdentifier::leaf("A");
+    let leaf_a2 = TypeIdentifier::leaf("A");
+    let leaf_b = TypeIdentifier::leaf("B");
     assert_eq!(leaf_a, leaf_a2);
     assert_ne!(leaf_a, leaf_b);
 }
@@ -71,15 +76,20 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Keyword("FOO".into())],
     };
-    let empty: KExpression<'_> = KExpression::new(vec![]);
+    let program = program_storage();
+    let brand = program.brand().region();
+    let empty: KExpression<'_> = KExpression::new(brand, vec![]);
     assert!(!sig.matches(&empty, &types));
 
-    let mismatched = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
-        crate::machine::model::ast::KLiteral::Number(1.0),
-    ))]);
+    let mismatched = KExpression::new(
+        brand,
+        vec![Spanned::bare(ExpressionPart::Literal(
+            crate::machine::model::ast::KLiteral::Number(1.0),
+        ))],
+    );
     assert!(!sig.matches(&mismatched, &types));
 
-    let matching = KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword("FOO".into()))]);
+    let matching = KExpression::new(brand, vec![Spanned::bare(ExpressionPart::Keyword("FOO"))]);
     assert!(sig.matches(&matching, &types));
 }
 
@@ -87,15 +97,16 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
 fn return_type_debug_renders_both_arms() {
     let r = ReturnType::Resolved(KType::NUMBER);
     assert!(format!("{:?}", r).contains("Resolved"));
-    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
+    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
     assert!(format!("{:?}", d).contains("Deferred"));
 }
 
 #[test]
 fn deferred_return_debug_renders_both_arms() {
-    let t = DeferredReturn::Type(TypeIdentifier::leaf("er".into()));
+    let t = DeferredReturn::Type(TypeIdentifier::leaf("er"));
     assert!(format!("{:?}", t).contains("Type"));
-    let e = DeferredReturn::Expression(expr_with_keyword("FOO"));
+    let program = program_storage();
+    let e = DeferredReturn::Expression(expr_with_keyword(program.brand().region(), "FOO"));
     assert!(format!("{:?}", e).contains("Expression"));
 }
 
@@ -104,9 +115,13 @@ fn return_type_name_covers_all_arms() {
     let types = TypeRegistry::new();
     let r = ReturnType::Resolved(KType::NUMBER);
     assert_eq!(r.name(&types), KType::NUMBER.name(&types));
-    let t = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
+    let t = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
     assert_eq!(t.name(&types), "er");
-    let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword("FOO")));
+    let program = program_storage();
+    let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword(
+        program.brand().region(),
+        "FOO",
+    )));
     assert_eq!(e.name(&types), "FOO");
 }
 
@@ -126,11 +141,11 @@ fn sig_with<'a>(ret: ReturnType<'a>, slot: KType) -> ExpressionSignature<'a> {
 #[test]
 fn indistinguishable_ignores_return_type() {
     let er = sig_with(
-        ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into()))),
+        ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er"))),
         KType::NUMBER,
     );
     let ar = sig_with(
-        ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Ar".into()))),
+        ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Ar"))),
         KType::NUMBER,
     );
     assert!(er.indistinguishable_from(&ar));
@@ -165,7 +180,7 @@ fn return_type_matches_value_deferred_always_true_resolved_delegates() {
     use crate::machine::model::values::KObject;
     let obj = KObject::Number(42.0);
     // Deferred always matches — per-call check runs elsewhere.
-    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
+    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
     assert!(d.matches_value(&obj, &types));
     assert!(!d.is_resolved());
     let r_num = ReturnType::Resolved(KType::NUMBER);

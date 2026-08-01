@@ -5,25 +5,26 @@
 use std::rc::Rc;
 
 use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
-use crate::machine::core::run_root_storage;
-use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
+use crate::machine::core::{program_storage, run_root_storage};
+use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
 use crate::source::Spanned;
 
-use super::let_expr;
-
-fn lit<'run>(name: &str) -> KExpression<'run> {
-    KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(name.into()))])
-}
+use super::{keyword_expr as lit, let_expr, working_one};
 
 #[test]
 fn top_level_statements_get_root_frames_with_consecutive_indices() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(
         root.id,
-        vec![let_expr("a", 1.0), let_expr("b", 2.0), let_expr("c", 3.0)],
+        vec![
+            let_expr(&program, "a", 1.0),
+            let_expr(&program, "b", 2.0),
+            let_expr(&program, "c", 3.0),
+        ],
         root,
     );
     let chains: Vec<_> = ids
@@ -45,11 +46,16 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
 
 #[test]
 fn sibling_statements_in_inner_block_share_parent_rc() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let ids = runtime.enter_block(root.id, vec![lit("ANY1"), lit("ANY2")], root);
+    let ids = runtime.enter_block(
+        root.id,
+        vec![lit(&program, "ANY1"), lit(&program, "ANY2")],
+        root,
+    );
     let chain_a = runtime.chain_of(ids[0]).unwrap();
     let chain_b = runtime.chain_of(ids[1]).unwrap();
     assert!(chain_a.parent.is_none());
@@ -68,10 +74,11 @@ fn sibling_statements_in_inner_block_share_parent_rc() {
 #[test]
 fn module_body_chain_parent_points_at_module_statement_frame() {
     use crate::machine::model::Module;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
-    let module_expr = parse_one("MODULE foo = (LET x = 1)");
+    let module_expr = working_one(&program, "MODULE foo = (LET x = 1)");
     let ids = test_run
         .runtime
         .enter_block(root.id, vec![module_expr], root);
@@ -95,8 +102,9 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
 /// call depth. Non-tail-recursive Rc allocation would OOM or overflow.
 #[test]
 fn tail_recursive_fn_does_not_balloon_chain() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     test_run.run(
         "UNION Counter = (more :Null done :Null)\n\
          FN (LOOP n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
@@ -113,8 +121,9 @@ fn tail_recursive_fn_does_not_balloon_chain() {
 /// `tail_recursive_fn_does_not_balloon_chain`; this smoke-tests assembly.
 #[test]
 fn fn_body_call_with_spacers_produces_value() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "FN (DBL x :Number) -> Number = (x)\n\
@@ -131,11 +140,12 @@ fn fn_body_call_with_spacers_produces_value() {
 fn cons_head_subdispatch_inherits_parent_chain() {
     // CONS-head `dispatch_in_scope` inherits the active chain of the slot running
     // CONS; pinned indirectly via a multi-statement FN body folded into CONS.
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     use crate::machine::model::KObject;
-    let v = test_run.run_one(parse_one("FOO"));
+    let v = test_run.run_one(parse_one(&program, "FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 2.0));
 }
 
@@ -145,14 +155,18 @@ fn cons_head_subdispatch_inherits_parent_chain() {
 #[test]
 #[should_panic(expected = "every dispatched node has a chain")]
 fn add_with_chain_without_chain_panics() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.runtime.add_with_chain(
         crate::machine::execute::dispatch::decide_tail(
-            KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
-                KLiteral::Number(1.0),
-            ))]),
+            WorkingExpression::new(
+                program.brand().region(),
+                vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Literal(
+                    KLiteral::Number(1.0),
+                )))],
+            ),
             None,
         ),
         scope,

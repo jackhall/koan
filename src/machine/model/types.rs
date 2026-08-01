@@ -42,8 +42,9 @@ pub use signature::{
     DispatchTokenElement, ExpressionSignature, ReturnType, SignatureElement, UntypedElement,
     UntypedKey,
 };
+pub use signature::{owned_untyped_key, StoredElement};
 pub(crate) use type_digest::{empty_schema_digest, TypeDigest};
 pub use typed_field_list::{
     pair_list_names, parse_typed_field_list_via_elaborator, FieldListContext, FieldListOutcome,
-    FieldNameKind, ResultFeed,
+    FieldNameKind, FieldParts, ResultFeed,
 };

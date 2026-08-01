@@ -285,6 +285,10 @@ impl<W: StorageProfile> Region<W> {
     /// (`Weak` members), so hosting it pins nothing — the members' liveness is the holder's
     /// [`PinBundle`], not this table. No `unsafe`: the append-stable guarantee is the map's, not a
     /// hand-audited pointer extension.
+    ///
+    /// The probe key is built in the caller's own frame ([`PinBundle::intern_key`], inline for the
+    /// member counts that dominate) and boxed **only on the miss**, where the map takes ownership of
+    /// it: a hit costs a hash and a compare, not an allocation.
     pub(crate) fn intern_reach(
         &self,
         composed: &PinBundle<W::FrameOwner>,
@@ -297,8 +301,10 @@ impl<W: StorageProfile> Region<W> {
         }
         #[cfg(any(test, feature = "test-hooks"))]
         super::host::note_reach_interned();
-        self.reach_table
-            .insert(key, Box::new(composed.describe(self.host())))
+        self.reach_table.insert(
+            key.into_boxed_slice(),
+            Box::new(composed.describe(self.host())),
+        )
     }
 
     /// Fold `bundle` into the region's union bundle **once per distinct reach**: a no-op when
@@ -590,13 +596,67 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         self.region.bump_text(text)
     }
 
+    /// **Bump a `Copy` slice into this handle's region** and hand back the co-located `&'a [T]` —
+    /// the frame-lifetime run door, sibling of [`Self::bump_text`] and of
+    /// [`BumpPlacement::slice`](super::BumpPlacement::slice). The shape an embedder's structural
+    /// storage takes when a run of elements must live at the handle's own lifetime rather than
+    /// confined to a fold closure: an expression's part list, a cached key.
+    ///
+    /// `T: Copy` carries the same "no destructor to skip" obligation as
+    /// [`BumpPlacement::value`](super::BumpPlacement::value): the bump releases its chunks whole and
+    /// runs no `Drop`. The reach argument is [`Self::bump_text`]'s verbatim — the elements are bytes
+    /// this door merely relocates, and the returned borrow cannot outlive the `&'a Region` the
+    /// handle holds, so there is no residence claim for a call site to get wrong. An element that
+    /// itself borrows another region is gated where every stored value is: the family audits and the
+    /// rank-2 fold brand, none of which this door touches.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// let stored: &[u32] = handle.bump_slice(&[1, 2, 3]);
+    /// assert_eq!(stored, &[1, 2, 3]);
+    /// ```
+    pub fn bump_slice<T: Copy>(self, items: &[T]) -> &'a [T] {
+        self.region.bump_slice(items)
+    }
+
+    /// **Bump one `Copy` value into this handle's region** and hand back the co-located `&'a T` —
+    /// the single-value peer of [`Self::bump_slice`], for a stored node an embedder reaches by
+    /// reference rather than inline. Same `T: Copy` obligation and same borrow argument.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// let stored: &u32 = handle.bump_value(7u32);
+    /// assert_eq!(*stored, 7);
+    /// ```
+    pub fn bump_value<T: Copy>(self, value: T) -> &'a T {
+        self.region.bump_value(value)
+    }
+
     /// Fold an owned [`StepCoverage`] into this handle's region's union bundle, retained for the
     /// region's whole life — the public door onto [`Region::retain_reach`]. An embedder routes a
     /// copy-free adoption or a run-teardown rehome here: the value stays resident in this region, so
     /// its reach (which a non-owning [`ReachDescription`] only names) must be pinned for as long as
     /// the region lives.
-    pub fn retain_reach(self, coverage: StepCoverage<W::FrameOwner>) {
-        self.region.retain_reach(coverage.0)
+    ///
+    /// The **self rule** applies as it does at [`Self::mint_retained`]: this region is stripped from
+    /// the retained bundle, because a region owning a pin on itself is a cycle nothing ever breaks.
+    /// It is what lets a caller hand over a whole coverage — a resting cell's claim, home included —
+    /// without first asking whether that home happens to be this very region.
+    pub fn retain_reach(self, coverage: StepCoverage<W::FrameOwner>)
+    where
+        W::FrameOwner: RegionOwner<Region = Region<W>>,
+    {
+        // The coverage arrives owned, so the strip is in place — no second buffer and no refcount
+        // traffic, where `without_region` would clone the whole bundle to drop one member.
+        let mut bundle = coverage.0;
+        bundle.remove_region(self.region);
+        self.region.retain_reach(bundle)
     }
 
     /// **Mint and retain in one verb** — the embedder-facing reach-derivation door. Freezes

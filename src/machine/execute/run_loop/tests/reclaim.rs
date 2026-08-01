@@ -1,21 +1,26 @@
 //! `free` / node-reclamation invariants.
 
 use crate::builtins::test_support::{resident_carrier, TestRun};
-use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::model::KExpression;
+use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, KObject};
 use crate::scheduler::DepEdge;
 
 #[test]
 fn free_reclaims_owned_subtree() {
     // s0 ─Owned→ s1 ─Owned→ s2 ─Owned→ s3; free(s1) reclaims s1..s3, leaves s0.
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
     let value: &KObject = region.brand().alloc_object(KObject::Number(42.0));
-    let mk_dispatch =
-        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
+    let mk_dispatch = || {
+        crate::machine::execute::dispatch::decide_tail(
+            WorkingExpression::new(program.brand().region(), Vec::new()),
+            None,
+        )
+    };
     let s0 = runtime.add(mk_dispatch(), root);
     let s1 = runtime.add(mk_dispatch(), root);
     let s2 = runtime.add(mk_dispatch(), root);
@@ -67,12 +72,17 @@ fn free_reclaims_owned_subtree() {
 
 #[test]
 fn free_skips_live_slot_and_is_idempotent() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let mk_dispatch =
-        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
+    let mk_dispatch = || {
+        crate::machine::execute::dispatch::decide_tail(
+            WorkingExpression::new(program.brand().region(), Vec::new()),
+            None,
+        )
+    };
     let s = runtime.add(mk_dispatch(), root);
     // Live slot: free must be a no-op.
     runtime.free(s.index());
@@ -98,13 +108,18 @@ fn free_skips_live_slot_and_is_idempotent() {
 fn free_does_not_recurse_through_notify_edges() {
     // Regression canary for the Owned/Notify conflation fixed by `DepEdge`:
     // free(owner) must reclaim only Owned descendants, not parked-on siblings.
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
     let value: &KObject = region.brand().alloc_object(KObject::Number(7.0));
-    let mk_dispatch =
-        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
+    let mk_dispatch = || {
+        crate::machine::execute::dispatch::decide_tail(
+            WorkingExpression::new(program.brand().region(), Vec::new()),
+            None,
+        )
+    };
     let s_owner = runtime.add(mk_dispatch(), root);
     let s_owned = runtime.add(mk_dispatch(), root);
     let s_sibling = runtime.add(mk_dispatch(), root);
@@ -154,17 +169,18 @@ fn freed_slot_does_not_appear_in_other_notify_lists() {
     // Reclamation invariant: after `free(idx)`, no other slot's `notify_list` may
     // reference `idx`. Canary against a future change that frees a slot before its
     // producer drains, leaving a stale edge to misfire onto a reused slot.
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
 
-    let exprs = crate::parse::parse(
+    let exprs = super::working_all(
+        &program,
         "LET x = 1\n\
          LET y = 2\n\
          LET z = (LET a = 3)",
-    )
-    .expect("parse should succeed");
+    );
     for e in exprs {
         runtime.dispatch_in_scope(e, root);
     }

@@ -20,7 +20,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use crate::machine::{block_tail, BlockBody, BlockScope};
     use crate::machine::{KError, KErrorKind};
     let inner = match arg_object(ctx.args, "expr") {
-        Some(KObject::KExpression(e)) => e.clone(),
+        Some(KObject::KExpression(e)) => *e,
         Some(other) => {
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "expr".to_string(),
@@ -36,6 +36,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // and — unlike an arm — no split, so a parenthesized group evaluates as one expression.
     let frame: Rc<CallFrame> = CallFrame::new(ctx.scope);
     block_tail(
+        ctx.scope.brand(),
         FramePlacement::FreshChild { frame },
         BlockScope::None,
         None,
@@ -53,12 +54,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::machine::program_storage;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
 
     fn run_program(source: &str) -> Vec<u8> {
+        let program = program_storage();
         let region = run_root_storage();
-        let (mut test_run, captured) = TestRun::with_buf(&region);
+        let (mut test_run, captured) = TestRun::with_buf(&program, &region);
         test_run.run(source);
         let bytes = captured.borrow().clone();
         bytes
@@ -81,10 +84,11 @@ mod tests {
 
     #[test]
     fn eval_of_non_kexpression_errors_with_type_mismatch() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("LET x = 3");
-        let err = test_run.run_one_err(parse_one("$(x)"));
+        let err = test_run.run_one_err(parse_one(&program, "$(x)"));
         assert!(
             matches!(&err.kind, KErrorKind::TypeMismatch { arg, expected, .. }
                 if arg == "expr" && expected == "KExpression"),
@@ -118,8 +122,9 @@ mod tests {
     /// designed splice-in-place semantics.
     #[test]
     fn eval_spliced_let_is_frame_local() {
+        let program = program_storage();
         let region = run_root_storage();
-        let mut test_run = TestRun::silent(&region);
+        let mut test_run = TestRun::silent(&program, &region);
         test_run.run("$(#(LET x = 5))");
         assert!(
             test_run.scope.lookup("x").is_none(),

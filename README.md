@@ -71,6 +71,8 @@ Entry point: `parse` in [src/parse/expression_tree.rs](src/parse/expression_tree
 
 The output is one [`KExpression`](src/machine/model/ast.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
 
+`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/machine/model/ast/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. See [design/expressions-and-parsing.md](design/expressions-and-parsing.md).
+
 ### dispatch — `KExpression` → `ResolveOutcome` against a `Scope`
 
 A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. [`resolve_dispatch`](src/machine/execute/dispatch/resolve_dispatch.rs) walks the scope chain in a single pass and returns a [`ResolveOutcome`](src/machine/execute/dispatch/resolve_dispatch.rs) — `Resolved` (a unique pick, classified per slot), `Ambiguous(n)` (strict-mode tie), `Deferred` (no match yet but nested subs may unblock one), or `Unmatched` (a real dispatch failure). [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the resolved function binds its arguments, ready to run but not yet executed.
@@ -183,7 +185,10 @@ src/
 └── machine/
     ├── model.rs            re-exports from model::types and model::values
     ├── model/
-    │   ├── ast.rs                 parsed-expression types (KExpression, ExpressionPart, KLiteral, TypeName); classify_dispatch_shape
+    │   ├── ast.rs                 raw parsed AST (KExpression, ExpressionPart, KLiteral, TypeIdentifier) — Copy handles over bumped slices
+    │   ├── ast/
+    │   │   ├── shape.rs           Part / PartClass / FieldSlot + the structural readers both part families share (classify_dispatch_shape, the bucket key, the operator probe)
+    │   │   └── working.rs         WorkingExpression / WorkingPart — the scheduler's own node, the only one that can hold a spliced sub-result
     │   ├── operators.rs           OperatorGroup registry record — chainable-operator precedence/associativity
     │   ├── types.rs
     │   ├── types/

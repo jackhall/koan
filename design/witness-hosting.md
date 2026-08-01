@@ -168,19 +168,20 @@ the source under the composed `Kept` witness that names its producer host. This 
 the residence analogue of the library's description/pins compile-safety line — a
 move-in that cannot name its reach does not typecheck.
 
-A small set of dest-only runtime residence checks remain, each covering a property no
-carrier lifetime captures, and each a **backstop** rather than the enforcement tier:
+One dest-only runtime residence check remains, covering a property no carrier
+lifetime captures, and a **backstop** rather than the enforcement tier:
 
-- **Splice-free gate.** A `KObject::KExpression` moved in as data is vetted by the
-  dest-only [`resident_in_visiting`](../src/machine/model/values/kobject.rs) walk,
-  which rejects a spliced expression carrying a producer reach the empty seal cannot
-  name. Splice-freeness is a runtime data property no carrier lifetime distinguishes.
-  [Drop-free region death](../roadmap/untyped_arena/drop-free-region-death.md) removes
-  this last dest-only walk once expression parts are `Drop`-free.
 - **Primitive reattach guards.** A `KFunction`, `Scope`, or `Module` borrows a single
   region (its captured / parent / child scope); the `ptr::eq` guard on its arena
   move-in checks that region is the destination — the reattach witness for the
   `'_ → 'a` erasure. These are single-region checks, not the composite reaching tier.
+
+A `KObject::KExpression` moved in as data needs no check of its own: it borrows only
+the eternal-tier program storage that parsed it, and the one part kind that could name
+a producer region lives on the scheduler's own node type, which no value can hold
+([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+The [`resident_in_visiting`](../src/machine/model/values/kobject.rs) walk admits one
+structurally.
 
 ## Open work
 

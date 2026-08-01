@@ -1,7 +1,7 @@
 use super::*;
 use crate::builtins::test_support::spliced_part;
 use crate::machine::core::SubstrateDoor;
-use crate::machine::model::ast::ExpressionPart;
+use crate::machine::model::ast::{ExpressionPart, WorkingPart};
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::Carried;
 use crate::machine::model::Record;
@@ -180,7 +180,7 @@ fn record_disjoint_fields_incomparable() {
     assert!(!xz.is_more_specific_than(xy, &types));
 }
 
-/// `accepts_carried` is the classifier `accepts_part`'s `Spliced` arm
+/// `accepts_carried` is the classifier `accepts_working_part`'s `Spliced` arm
 /// delegates to: a resolved value classifies identically whether reached as a spliced part or opened
 /// directly. Also pins the value-shaped arms (object type-tag, type-channel `OfKind`) it owns.
 #[test]
@@ -200,7 +200,7 @@ fn accepts_carried_matches_spliced_delegation() {
         // The delegation equivalence: classifying the spliced cell and opening the value directly agree.
         assert_eq!(
             ty.accepts_carried(carried, &types),
-            ty.accepts_part(&spliced_part(carried), &types)
+            ty.accepts_working_part(&spliced_part(&storage, carried), &types)
         );
     }
     // A numeric value is admitted by `:Number` / `:Any`, refused by `:Str`.
@@ -214,31 +214,24 @@ fn accepts_carried_matches_spliced_delegation() {
     assert!(!KType::of_kind(KKind::ProperType).accepts_carried(Carried::Object(n), &types));
 }
 
-/// A spliced **cell** classifies through `accepts_part` by opening at its own brand and handing the
-/// value to `accepts_carried` (no re-anchoring): a `7.0` value is admitted
+/// A spliced **cell** classifies through `accepts_working_part` by opening at its own brand and
+/// handing the value to `accepts_carried` (no re-anchoring): a `7.0` value is admitted
 /// by `:Number` / `:Any` and refused by `:Str`, matching a direct `accepts_carried`. Built through
 /// the scope's own carrier surface (`resident_value_carrier` + `Sealed::seal`) — the exact
-/// construction a real splice rests on the working expression. Also pins the cell's `is_splice_free`
-/// (a resolved value is not raw AST, so the checked seal's guard rejects it).
+/// construction a real splice rests on the working expression.
 #[test]
 fn spliced_cell_classifies_by_opening() {
     let types = TypeRegistry::new();
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::run_root_storage;
-    use crate::machine::model::ast::KExpression;
     use crate::machine::model::values::Carried;
     use crate::machine::model::values::KObject;
-    use crate::witnessed::Delivered;
 
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
     let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
-    let cell_part = ExpressionPart::Spliced {
-        cell: Delivered::hosted(
-            scope.seal_resident(Carried::Object(obj)),
-            std::rc::Rc::clone(&storage),
-            crate::machine::core::FrameCoverage::empty(),
-        ),
+    let cell_part = WorkingPart::Spliced {
+        cell: scope.seal_resident(Carried::Object(obj)),
     };
 
     for (ty, admits) in [
@@ -247,20 +240,16 @@ fn spliced_cell_classifies_by_opening() {
         (KType::STR, false),
     ] {
         assert_eq!(
-            ty.accepts_part(&cell_part, &types),
+            ty.accepts_working_part(&cell_part, &types),
             admits,
             "cell classification for {ty:?}",
         );
         // Agrees with opening the value directly.
         assert_eq!(
-            ty.accepts_part(&cell_part, &types),
+            ty.accepts_working_part(&cell_part, &types),
             ty.accepts_carried(Carried::Object(obj), &types)
         );
     }
-
-    // A cell is a resolved value, not raw AST — the checked seal's splice-free guard rejects it.
-    let expr = KExpression::new(vec![crate::source::Spanned::bare(cell_part)]);
-    assert!(!expr.is_splice_free());
 }
 
 /// A `{x = 1, y = "a"}` value (carried type `:{x :Number, y :Str}`) admits and matches a
@@ -287,19 +276,19 @@ fn record_value_admission_and_matches() {
     ));
 
     let narrow = record_ty(&types, vec![("x", KType::NUMBER)]);
-    assert!(narrow.accepts_part(&spliced_part(Carried::Object(value)), &types));
+    assert!(narrow.accepts_working_part(&spliced_part(&storage, Carried::Object(value)), &types));
     assert!(narrow.matches_value(value, &types));
 
     let mismatch = record_ty(&types, vec![("x", KType::STR)]);
-    assert!(!mismatch.accepts_part(&spliced_part(Carried::Object(value)), &types));
+    assert!(!mismatch.accepts_working_part(&spliced_part(&storage, Carried::Object(value)), &types));
     assert!(!mismatch.matches_value(value, &types));
 
     let extra = record_ty(&types, vec![("x", KType::NUMBER), ("q", KType::BOOL)]);
-    assert!(!extra.accepts_part(&spliced_part(Carried::Object(value)), &types));
+    assert!(!extra.accepts_working_part(&spliced_part(&storage, Carried::Object(value)), &types));
     assert!(!extra.matches_value(value, &types));
 
     // Unevaluated literal admits shape-only (defer-then-reevaluate on the typed value).
-    assert!(mismatch.accepts_part(&ExpressionPart::RecordLiteral(vec![]), &types));
+    assert!(mismatch.accepts_part(&ExpressionPart::RecordLiteral(&[]), &types));
 }
 
 /// Admission table for `KType::accepts_part`: bare builtin type tokens, newtype / union
@@ -310,10 +299,11 @@ fn record_value_admission_and_matches() {
 #[test]
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let t = KType::of_kind(KKind::AnyType);
@@ -321,16 +311,16 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let kt_str: KType = KType::STR;
     let kt_bool: KType = KType::BOOL;
     let kt_null: KType = KType::NULL;
-    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_number)), &types));
-    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_str)), &types));
-    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_bool)), &types));
-    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_null)), &types));
+    assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(kt_number)), &types));
+    assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(kt_str)), &types));
+    assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(kt_bool)), &types));
+    assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(kt_null)), &types));
     // NewType / union-variant type tokens flow as sealed member handles in the type channel — a
     // `:Type` slot admits them when the spliced cell opens to a `Carried::Type`.
     let newtype_token: KType = newtype_member("Some", KType::NUMBER, &types);
     let struct_token: KType = record_newtype_member("Point", &types);
-    assert!(t.accepts_part(&spliced_part(Carried::Type(newtype_token)), &types));
-    assert!(t.accepts_part(&spliced_part(Carried::Type(struct_token)), &types));
+    assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(newtype_token)), &types));
+    assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(struct_token)), &types));
     let child = region
         .brand()
         .alloc_scope(crate::machine::Scope::child_under_module(
@@ -348,7 +338,10 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         .brand()
         .alloc_object_checked(KObject::Module(module), &types)
         .expect("module was just allocated into region's own region");
-    assert!(!t.accepts_part(&spliced_part(Carried::Object(module_value)), &types));
+    assert!(!t.accepts_working_part(
+        &spliced_part(&region, Carried::Object(module_value)),
+        &types
+    ));
     let sig_scope = region
         .brand()
         .alloc_scope(crate::machine::Scope::child_under_sig(
@@ -357,13 +350,13 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         ));
     let kt_sig: KType = types.signature(SigSchema::project_decl(sig_scope, &types));
     // A signature is a type value: the `:Type` lattice top admits it; the proper tier does not.
-    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
+    assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(kt_sig)), &types));
     assert!(!KType::of_kind(KKind::ProperType)
-        .accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
+        .accepts_working_part(&spliced_part(&region, Carried::Type(kt_sig)), &types));
     let n: &KObject<'_> = region.brand().alloc_object(KObject::Number(7.0));
     let s: &KObject<'_> = region.brand().alloc_object(KObject::KString("hi"));
-    assert!(!t.accepts_part(&spliced_part(Carried::Object(n)), &types));
-    assert!(!t.accepts_part(&spliced_part(Carried::Object(s)), &types));
+    assert!(!t.accepts_working_part(&spliced_part(&region, Carried::Object(n)), &types));
+    assert!(!t.accepts_working_part(&spliced_part(&region, Carried::Object(s)), &types));
 }
 
 /// `:Signature` sits strictly below the `:Type` lattice top: a signature-slotted overload
@@ -395,9 +388,11 @@ fn of_kind_nominal_is_type_channel_only() {
 
     // The NewType *type value* — admitted in the type channel.
     let newtype_tv = newtype_member("Distance", KType::NUMBER, &types);
-    assert!(newtype_ty.accepts_part(&spliced_part(Carried::Type(newtype_tv)), &types));
+    assert!(
+        newtype_ty.accepts_working_part(&spliced_part(&storage, Carried::Type(newtype_tv)), &types)
+    );
     assert!(KType::of_kind(KKind::ProperType)
-        .accepts_part(&spliced_part(Carried::Type(newtype_tv)), &types));
+        .accepts_working_part(&spliced_part(&storage, Carried::Type(newtype_tv)), &types));
 
     // A `TypeConstructor` type value is the wrong family — declined.
     let ctor_tv = RecursiveGroupWindow::seal_singleton(
@@ -409,7 +404,9 @@ fn of_kind_nominal_is_type_channel_only() {
         None,
         &types,
     );
-    assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Type(ctor_tv)), &types));
+    assert!(
+        !newtype_ty.accepts_working_part(&spliced_part(&storage, Carried::Type(ctor_tv)), &types)
+    );
 
     // The runtime `Wrapped` *instance* is never matched by a kind slot.
     let w: &KObject<'_> = door.alloc_object_folded(KObject::wrapped_peel(
@@ -417,7 +414,7 @@ fn of_kind_nominal_is_type_channel_only() {
         &KObject::Number(3.0),
         newtype_tv,
     ));
-    assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Object(w)), &types));
+    assert!(!newtype_ty.accepts_working_part(&spliced_part(&storage, Carried::Object(w)), &types));
     assert!(!newtype_ty.matches_value(w, &types));
 }
 
@@ -664,7 +661,7 @@ use crate::machine::model::types::{DeferredReturn, DeferredReturnSurface, Return
 fn deferred_return_more_specific_than_any() {
     let types = TypeRegistry::new();
     let deferred_ret = types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-        TypeIdentifier::leaf("er".into()),
+        "er".to_string(),
     )));
     let deferred = types.function_type(Record::new(), deferred_ret);
     let any = types.function_type(Record::new(), KType::ANY);
@@ -679,10 +676,10 @@ fn two_functions_differ_only_in_deferred_return_are_distinct() {
     let types = TypeRegistry::new();
     use std::hash::{Hash, Hasher};
     let er_ret = types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-        TypeIdentifier::leaf("er".into()),
+        "er".to_string(),
     )));
     let ar_ret = types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-        TypeIdentifier::leaf("Ar".into()),
+        "Ar".to_string(),
     )));
     let er = types.function_type(Record::new(), er_ret);
     let ar = types.function_type(Record::new(), ar_ret);
@@ -707,20 +704,20 @@ fn two_functions_differ_only_in_deferred_return_are_distinct() {
 fn deferred_return_admission_via_function_compat() {
     let types = TypeRegistry::new();
     let candidate = ExpressionSignature {
-        return_type: ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into()))),
+        return_type: ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er"))),
         elements: vec![],
     };
     let no_params = Record::new();
 
     // Matching shadow → admit.
     let slot_er = types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-        TypeIdentifier::leaf("er".into()),
+        "er".to_string(),
     )));
     assert!(function_compat(&candidate, &no_params, slot_er, &types));
 
     // Differing shadow → reject.
     let slot_ar = types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-        TypeIdentifier::leaf("Ar".into()),
+        "Ar".to_string(),
     )));
     assert!(!function_compat(&candidate, &no_params, slot_ar, &types));
 
@@ -831,12 +828,13 @@ fn union_specificity_ordering() {
 #[test]
 fn module_object_ktype_reports_self_sig() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
     use crate::machine::Scope;
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -890,12 +888,13 @@ fn module_object_ktype_reports_self_sig() {
 #[test]
 fn matches_value_admits_module_object_via_signature_slot() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
     use crate::machine::Scope;
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -940,9 +939,10 @@ fn matches_value_admits_module_object_via_signature_slot() {
 fn specificity_self_sig_refines_declared_and_empty() {
     use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
-    use crate::machine::run_root_storage;
+    use crate::machine::{program_storage, run_root_storage};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -977,9 +977,10 @@ fn specificity_self_sig_refines_declared_and_empty() {
 fn self_sig_type_equals_member_free_declared_sig() {
     use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
-    use crate::machine::run_root_storage;
+    use crate::machine::{program_storage, run_root_storage};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -1007,9 +1008,10 @@ fn self_sig_type_equals_member_free_declared_sig() {
 fn self_sig_type_equals_fully_manifest_declared_sig() {
     use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
-    use crate::machine::run_root_storage;
+    use crate::machine::{program_storage, run_root_storage};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
@@ -1037,9 +1039,10 @@ fn self_sig_type_equals_fully_manifest_declared_sig() {
 fn self_sig_stays_distinct_from_and_refines_abstract_sig() {
     use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
-    use crate::machine::run_root_storage;
+    use crate::machine::{program_storage, run_root_storage};
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 

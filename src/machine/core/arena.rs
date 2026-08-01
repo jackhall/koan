@@ -24,7 +24,7 @@ use crate::machine::model::{
     Carried, CarriedFamily, ContainerSubstrate, DictSubstrate, Held, KObject, ListSubstrate,
     Module, PayloadSubstrate, RecordSubstrate,
 };
-use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
+use crate::machine::model::{KType, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
     Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StepContext,
@@ -36,15 +36,19 @@ mod residence;
 mod step_allocator;
 
 pub(crate) use frame::FrameStorageExt;
-pub use frame::{run_root_storage, CallFrame, FrameCoverage, FrameReach, FrameStorage};
+pub use frame::{
+    program_storage, run_root_storage, CallFrame, FrameCoverage, FrameReach, FrameStorage,
+    ProgramBrand, ProgramStorage,
+};
 pub(crate) use residence::Residence;
 use residence::ResidenceEvidence;
 pub use step_allocator::StepAllocator;
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
 /// [`FamilyArena`] cell per family. The `KType` cell backs per-type identity binding storage
-/// (`Bindings::types`); the `TypeIdentifier` cell backs the type channel's unlowered-name
-/// carrier ([`Carried::UnresolvedType`]).
+/// (`Bindings::types`). A [`TypeIdentifier`](crate::machine::model::TypeIdentifier) needs no cell of
+/// its own: it is a `Copy` borrow of a name already resident in the storage that parsed it, so the
+/// type channel's unlowered-name carrier ([`Carried::UnresolvedType`]) holds it by value.
 pub struct KoanStorageProfile;
 
 impl StorageProfile for KoanStorageProfile {
@@ -59,15 +63,12 @@ impl StorageProfile for KoanStorageProfile {
                     (
                         KType,
                         (
-                            TypeIdentifier,
+                            RecordSubstrate<'static>,
                             (
-                                RecordSubstrate<'static>,
+                                ListSubstrate<'static>,
                                 (
-                                    ListSubstrate<'static>,
-                                    (
-                                        DictSubstrate<'static>,
-                                        (PayloadSubstrate<'static>, (Held<'static>, ())),
-                                    ),
+                                    DictSubstrate<'static>,
+                                    (PayloadSubstrate<'static>, (Held<'static>, ())),
                                 ),
                             ),
                         ),
@@ -149,10 +150,20 @@ impl<'a> RegionBrand<'a> {
         self.0.bump_text(text)
     }
 
-    /// The storage door for a [`TypeIdentifier`] the bind seam left unlowered. Owned surface data —
-    /// no variant borrows region content — so the store is safe and unchecked.
-    pub fn alloc_type_identifier(self, ti: TypeIdentifier) -> &'a TypeIdentifier {
-        self.0.alloc_resident::<TypeIdentifier>(ti)
+    /// The storage door for a run of `Drop`-free items — an expression's parts, a literal's
+    /// elements, a node's stored bucket key. The bump hands back the whole run as one borrow, so
+    /// region death runs no per-item `Drop` and copying the run to another region is a memcpy.
+    ///
+    /// `T: Copy` is the whole gate: a `Copy` item owns no allocation, so anything it points at is
+    /// already resident wherever it was bumped. What the caller must get right is *which* region —
+    /// the same rule [`Self::alloc_text`] states for a string's bytes.
+    pub fn alloc_slice<T: Copy>(self, items: &[T]) -> &'a [T] {
+        self.0.bump_slice(items)
+    }
+
+    /// The single-value peer of [`Self::alloc_slice`], for a node a part arm points at.
+    pub fn alloc_value<T: Copy>(self, value: T) -> &'a T {
+        self.0.bump_value(value)
     }
 
     /// Runtime-checked twin of [`Self::alloc_object`] for an `o` that cannot rebuild owned at
@@ -230,7 +241,7 @@ impl<'a> RegionBrand<'a> {
     /// `value`'s `'static` bound is region-purity, compile-enforced: a value that references
     /// another region cannot satisfy it — it takes the `yoke` / `merge` path, or
     /// [`Self::alloc_object_witnessed_checked`] for a value whose region borrow is only
-    /// runtime-auditable (e.g. raw AST that is splice-free).
+    /// runtime-auditable (e.g. a cell holding raw AST).
     pub(crate) fn alloc_object_witnessed(self, value: KObject<'static>) -> StepCarried<'a> {
         StepCarried::born(self.0.alloc::<KObject<'static>, _>(value, |live| {
             self.seal_resident::<CarriedFamily>(Carried::Object(live))
@@ -238,15 +249,14 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// Runtime-checked twin of [`Self::alloc_object_witnessed`] for a `value` that cannot rebuild at
-    /// `'static` (e.g. a `KObject::KExpression` — `KExpression<'a>` is invariant and raw AST has no
+    /// `'static` (e.g. a `KObject::KExpression` — `KObject<'a>` is invariant and raw AST has no
     /// `'static` rebuild): the `KObject` family audit vets `value` against this brand's own region
     /// before anything is stored, and the value is stored — sealed under the same member-less
-    /// own-region description [`Self::alloc_object_witnessed`] uses — only if it passes. The
-    /// standard `KObject` residence walk gates a `KObject::KExpression` by its
-    /// [`is_splice_free`](crate::machine::model::KExpression::is_splice_free) flag, so a spliced
-    /// expression (a resolved value carrying a producer reach the empty seal cannot name) is
-    /// rejected. Storing nothing on a failed audit; a foreign-region dangle errors loudly instead of
-    /// landing unvetted.
+    /// own-region description [`Self::alloc_object_witnessed`] uses — only if it passes. A
+    /// [`KExpression`](crate::machine::model::KExpression) cell passes the residence walk outright:
+    /// an AST node names no producer region, so pointing at program text pins nothing the empty seal
+    /// would have to name. Storing nothing on a failed audit; a foreign-region dangle errors loudly
+    /// instead of landing unvetted.
     pub(crate) fn alloc_object_witnessed_checked(
         self,
         value: KObject<'_>,
@@ -423,7 +433,7 @@ impl SubstrateDoor<'_, '_> {
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
 // `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
 // Each family is one type generic only in a single lifetime, so its layout is identical for every
-// choice of that lifetime; `KType` and `TypeIdentifier` are lifetime-free, trivially invariant. The
+// choice of that lifetime; `KType` is lifetime-free, trivially invariant. The
 // shared `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its
 // docs).
 reattachable! {
@@ -432,7 +442,6 @@ reattachable! {
     KFunction<'static> => KFunction<'r>,
     Scope<'static> => Scope<'r>,
     Module<'static> => Module<'r>,
-    TypeIdentifier => TypeIdentifier,
     Held<'static> => Held<'r>,
     RecordSubstrate<'static> => RecordSubstrate<'r>,
     ListSubstrate<'static> => ListSubstrate<'r>,
@@ -496,12 +505,6 @@ impl Stored<KoanStorageProfile> for KType {
     }
 }
 
-impl Stored<KoanStorageProfile> for TypeIdentifier {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .0
-    }
-}
-
 /// Generate the [`Stored`] policy for a `ContainerSubstrate<C>` family from its sub-arena cell path.
 /// The three substrate families (record / list / dict) share this: each lands in its own tuple slot
 /// and records its allocation address so [`KoanRegionExt::owns_substrate`] can answer the
@@ -521,10 +524,10 @@ macro_rules! koan_substrate_family {
     };
 }
 
-koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .0);
+koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
 
 /// The cell family every sectioned substrate hands into the alloc door: one [`Held`] per cell, stored
 /// resident so the door receives `&'a Held<'a>` borrows anchored to the container's own region. No
@@ -532,7 +535,7 @@ koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .1 .0)
 /// probed by address.
 impl Stored<KoanStorageProfile> for Held<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .1 .1 .1 .1 .1 .0
+        &s.1 .1 .1 .1 .1 .1 .1 .1 .1 .0
     }
 }
 
@@ -696,7 +699,6 @@ impl KoanRegionExt for KoanRegion {
             + weigh::<Scope<'static>>(self)
             + weigh::<Module<'static>>(self)
             + weigh::<KType>(self)
-            + weigh::<TypeIdentifier>(self)
             + weigh::<RecordSubstrate<'static>>(self)
             + weigh::<ListSubstrate<'static>>(self)
             + weigh::<DictSubstrate<'static>>(self)

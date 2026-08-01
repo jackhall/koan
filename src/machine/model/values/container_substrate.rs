@@ -58,9 +58,10 @@ pub struct ContainerSubstrate<'a, C> {
     /// sectioned alloc door. Both borrow memos are reads on it.
     reach: &'a FrameReach,
     /// Exact cost in bytes of totally rebuilding this container's reachable structure at a
-    /// destination brand. `u64::MAX` (saturated): unpriceable — some transitive cell is a
-    /// `KExpression`, which carries no cost memo of its own. A nested `Record`, `List`, `Dict`,
-    /// `Tagged`, or `Wrapped` contributes its own cost.
+    /// destination brand. Every cell family prices — a nested `Record`, `List`, `Dict`, `Tagged`, or
+    /// `Wrapped` contributes its own memoized cost, and the borrow leaves contribute nothing — so
+    /// this is always a real number and the copy/pin decision is never taken blind. The sums
+    /// saturate rather than wrap, and a saturated cost simply reads as "far too large to copy".
     copy_cost: u64,
 }
 
@@ -130,8 +131,8 @@ impl<'a, C> ContainerSubstrate<'a, C> {
         !self.reach.is_empty()
     }
 
-    /// Exact cost in bytes of totally rebuilding this container at a destination brand, or
-    /// `u64::MAX` when unpriceable — see the field's own doc.
+    /// Exact cost in bytes of totally rebuilding this container at a destination brand — see the
+    /// field's own doc.
     pub fn copy_cost(&self) -> u64 {
         self.copy_cost
     }
@@ -255,21 +256,24 @@ pub(crate) fn held_copy_cost(h: &Held<'_>) -> u64 {
 
 /// The object-level copy-cost rule (the [`Held::Object`] arm of [`held_copy_cost`]): the bytes of
 /// totally rebuilding this object at a destination brand. A scalar costs one flat [`Held`]; a
-/// `KString` adds its byte length; a `KFunction` / `Module` is a borrow leaf that rides the transfer
-/// and rebuilds nothing (**0**); a nested `Record`, `List`, `Dict`, `Tagged`, or `Wrapped`
-/// contributes its own memoized cost (a `Tagged`'s tag bytes stay out — short, the same
-/// negligible approximation a `KString` cell already takes for its own discriminant); a
-/// `KExpression` is unpriceable (`u64::MAX`), carrying no cost memo of its own.
+/// `KString` adds its byte length; a `KFunction`, `Module` or `KExpression` is a borrow leaf that
+/// rides the transfer and rebuilds nothing (**0**); a nested `Record`, `List`, `Dict`, `Tagged`, or
+/// `Wrapped` contributes its own memoized cost (a `Tagged`'s tag bytes stay out — short, the same
+/// negligible approximation a `KString` cell already takes for its own discriminant).
+///
+/// An expression is a borrow leaf for the same reason it needs no reach description: the value holds
+/// the node by value, and the node's parts run, keyword text and structural cache live in the
+/// eternal-tier program storage that parsed them. Copying the cell copies pointers into storage no
+/// relocation releases, so the rebuild is the flat `Held` the enclosing substrate already counts.
 fn object_copy_cost(o: &KObject<'_>) -> u64 {
     match o {
         KObject::Number(_) | KObject::Bool(_) | KObject::Null => held_flat_size(),
         KObject::KString(s) => held_flat_size().saturating_add(s.len() as u64),
-        KObject::KFunction(_) | KObject::Module(_) => 0,
+        KObject::KFunction(_) | KObject::Module(_) | KObject::KExpression(_) => 0,
         KObject::Record(substrate, _) => substrate.copy_cost(),
         KObject::List(substrate, _) => substrate.copy_cost(),
         KObject::Dict(substrate, _) => substrate.copy_cost(),
         KObject::Tagged { value, .. } => value.copy_cost(),
         KObject::Wrapped { inner, .. } => inner.copy_cost(),
-        KObject::KExpression(_) => u64::MAX,
     }
 }

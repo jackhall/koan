@@ -19,7 +19,7 @@ use crate::machine::core::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, KFunction, OpenedFunction};
 use crate::machine::model::Carried;
-use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{Record, SignatureElement};
 use crate::machine::AdoptSeam;
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
@@ -33,7 +33,7 @@ use crate::scheduler::ResolvedDeps;
 pub(super) fn invoke_continue<'step>(
     view: &SchedulerView<'step, '_>,
     picked: OpenedFunction<'step>,
-    working_expr: KExpression<'step>,
+    working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let frame = match &picked.value().body {
         Body::Builtin(_) => FramePlacement::Inherit,
@@ -59,7 +59,7 @@ pub(super) fn invoke_continue<'step>(
 /// re-deposits the established declared-return checker.
 fn invoke_work<'step>(
     picked: OpenedFunction<'step>,
-    working_expr: KExpression<'step>,
+    working_expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = working_expr.summarize();
@@ -82,16 +82,17 @@ fn invoke_work<'step>(
 pub(super) fn invoke<'step>(
     view: &SchedulerView<'step, '_>,
     picked: OpenedFunction<'step>,
-    working_expr: KExpression<'step>,
+    working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     // Per-argument reach carriers, read back off the spliced cells (value and reach as one unit). A
     // literal arg is region-pure and contributes no cell.
-    let arg_carriers = carriers_from_expr(&working_expr);
+    let arg_carriers = carriers_from_expr(view, &working_expr);
     let function = picked.value();
     if let Body::Builtin(f) = &function.body {
         let f = *f;
-        let arg_carriers = map_arg_carriers(function, arg_carriers);
-        let args = match function.bind_args(&working_expr, view.current_scope(), view.types()) {
+        let arg_carriers = map_arg_carriers(function, &arg_carriers);
+        let args = match function.bind_args(working_expr.parts, view.current_scope(), view.types())
+        {
             Ok(args) => args,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -101,11 +102,11 @@ pub(super) fn invoke<'step>(
     // A uniquely-picked call is admitted shape-only by dispatch, so validate each argument against
     // its declared parameter type before the type-trusting `bind_by_name` — a non-satisfying typed
     // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
-    if let Err(e) = function.validate_call_args(&working_expr, view.types()) {
+    if let Err(e) = function.validate_call_args(working_expr.parts, view.types()) {
         return Outcome::Done(Err(e));
     }
 
-    let args = match extract_carried_args(view, &working_expr) {
+    let args = match extract_carried_args(view, &working_expr, &arg_carriers) {
         Some(args) => args,
         // Unreachable by construction (the bind sites resolve value parts to `Spliced`/literal
         // first); surface a diagnostic rather than silently mis-bind if that ever breaks.
@@ -130,7 +131,7 @@ pub(super) fn invoke<'step>(
     // keyed to match `bound`. `extract_carried_args` already folded every delivered arg's reach into
     // this same per-call scope (through `adopt_carried`), so every foreign region an argument borrows
     // into is pinned for the call's life — no separate deposit here.
-    let named_carriers = map_arg_carriers(function, arg_carriers);
+    let named_carriers = map_arg_carriers(function, &arg_carriers);
     let exec_frame = ExecFrame {
         region: frame.clone(),
     };
@@ -161,11 +162,17 @@ pub(super) fn invoke<'step>(
             // `Inherit` — a `FreshTail` here would mint a second cart, discarding the one already
             // holding the bound params — and the block entry carries it so the lowering fans any
             // leading statements into it.
+            // The body crosses into the scheduler here, one working node per statement: each is a
+            // slice copy of the parsed run into the installed cart's own region.
+            let brand = view.current_scope().brand();
             super::super::runtime::run_action(
                 view,
                 Action::tail(
-                    leading.into_iter().map(|e| (*e).clone()).collect(),
-                    tail.clone(),
+                    leading
+                        .into_iter()
+                        .map(|e| WorkingExpression::from_ast(brand, *e))
+                        .collect(),
+                    WorkingExpression::from_ast(brand, *tail),
                     TailContract::Eager(Some(contract)),
                     FramePlacement::Inherit,
                     BlockEntry::FrameScope(frame),
@@ -182,14 +189,17 @@ pub(super) fn invoke<'step>(
             // lowering's finish reads the last result (the resolved type) into a `PerCall` contract
             // before tail-replacing into the body terminal, so the recursion — subsequent calls skip
             // resolution — stays TCO-flat.
-            let mut statements: Vec<KExpression<'step>> =
-                leading.into_iter().map(|e| (*e).clone()).collect();
-            statements.push(type_expr.clone());
+            let brand = view.current_scope().brand();
+            let mut statements: Vec<WorkingExpression<'step>> = leading
+                .into_iter()
+                .map(|e| WorkingExpression::from_ast(brand, *e))
+                .collect();
+            statements.push(WorkingExpression::from_ast(brand, *type_expr));
             super::super::runtime::run_action(
                 view,
                 Action::tail(
                     statements,
-                    tail.clone(),
+                    WorkingExpression::from_ast(brand, *tail),
                     TailContract::FromLastResult {
                         func: picked.reseal(),
                     },
@@ -202,19 +212,24 @@ pub(super) fn invoke<'step>(
     }
 }
 
-/// Borrow each spliced cell back off the working expression as its `(slot, carrier)` pair. A literal
-/// part carries no cell (region-pure, "no entry = no foreign reach"). The cells are borrowed, not
-/// duplicated: the working expression outlives the call, and every reader downstream (the per-call
-/// reach store, a value-embedding builtin's fold) takes a `&Sealed`, so nothing is copied here.
-fn carriers_from_expr<'e, 'step>(
-    working_expr: &'e KExpression<'step>,
-) -> Vec<(usize, &'e DeliveredCarried)> {
+/// Lift each spliced cell off the working expression, **one entry per part**: `Some(envelope)` for a
+/// `Spliced` part, `None` for every other (a literal arg is region-pure — "no entry = no foreign
+/// reach"). Parallel to `working_expr.parts` rather than a sparse `(slot, …)` list, so every reader
+/// below addresses a part and its envelope by the same index with nothing to keep in step.
+///
+/// The cells rest in the region the dispatching step put them in; the lift re-owns each one's reach
+/// under the step's coverage, so every reader downstream (the per-call reach store, a
+/// value-embedding builtin's fold) works off an envelope that survives the call independently of
+/// that region. Once per call, not once per reader.
+fn carriers_from_expr<'step>(
+    view: &SchedulerView<'step, '_>,
+    working_expr: &WorkingExpression<'step>,
+) -> Vec<Option<DeliveredCarried>> {
     working_expr
         .parts
         .iter()
-        .enumerate()
-        .filter_map(|(i, part)| match &part.value {
-            ExpressionPart::Spliced { cell } => Some((i, cell)),
+        .map(|part| match &part.value {
+            WorkingPart::Spliced { cell } => Some(view.lift_spliced(cell)),
             _ => None,
         })
         .collect()
@@ -222,14 +237,17 @@ fn carriers_from_expr<'e, 'step>(
 
 /// Re-key the slot-indexed arg carriers onto their parameter names. A committed call's parts line up
 /// 1:1 with `picked`'s signature elements (`validate_call_args` enforces it), so the element at a
-/// carrier's slot names its parameter. A region-pure arg has no entry, read as "no foreign reach".
+/// carrier's slot names its parameter. A region-pure arg's entry is `None`, read as "no foreign
+/// reach", and contributes no record field.
 fn map_arg_carriers<'e, 'step>(
     picked: &KFunction<'step>,
-    arg_carriers: Vec<(usize, &'e DeliveredCarried)>,
+    arg_carriers: &'e [Option<DeliveredCarried>],
 ) -> Record<&'e DeliveredCarried> {
     let mut record = Record::new();
-    for (slot, carrier) in arg_carriers {
-        if let Some(SignatureElement::Argument(arg)) = picked.signature.elements.get(slot) {
+    for (slot, carrier) in arg_carriers.iter().enumerate() {
+        if let (Some(carrier), Some(SignatureElement::Argument(arg))) =
+            (carrier, picked.signature.elements.get(slot))
+        {
             record.insert(arg.name.clone(), carrier);
         }
     }
@@ -271,48 +289,57 @@ fn run_action_builtin<'step>(
 
 /// Extract the call's resolved value arguments from `working_expr`'s parts, in order: a `Spliced`
 /// part contributes its carried value, a literal resolves into the run region, keyword parts
-/// contribute nothing. Returns `None` if a value part is neither spliced nor a literal — unreachable
-/// by construction (the bind sites resolve value parts first), which the caller surfaces as a
-/// diagnostic.
+/// contribute nothing. `arg_carriers` is `carriers_from_expr`'s part-parallel lift of this same
+/// expression, so a `Spliced` part always pairs with `Some`. Returns `None` for any other value
+/// part, and for the pairing that construction rules out — both unreachable (the bind sites resolve
+/// value parts first; the two lists come from one walk of one expression), which the caller surfaces
+/// as a diagnostic rather than a panic.
 fn extract_carried_args<'step>(
     view: &SchedulerView<'step, '_>,
-    working_expr: &KExpression<'step>,
+    working_expr: &WorkingExpression<'step>,
+    arg_carriers: &[Option<DeliveredCarried>],
 ) -> Option<Vec<Carried<'step>>> {
     let mut args = Vec::new();
-    for part in &working_expr.parts {
-        match &part.value {
-            ExpressionPart::Keyword(_) => {}
+    for (part, lifted) in working_expr.parts.iter().zip(arg_carriers) {
+        match (&part.value, lifted) {
+            (WorkingPart::Ast(ExpressionPart::Keyword(_)), _) => {}
             // Adopt the spliced cell into the call scope — an object by structural copy (the copy's
             // reach folds in; a residence-only producer host is released with the working
             // expression, so a tail call's retiring region does not chain into the fresh frame's
             // arena), a type copy-free with its host pinned. `view.current_scope()` *is* the call
             // scope (the run loop opens each step's scope from the Continue-installed cart), so the
             // fold never lands in the caller's scope.
-            ExpressionPart::Spliced { cell } => args.push(
-                view.current_scope()
-                    .adopt_carried(cell, AdoptSeam::ReHome(view.types())),
-            ),
+            //
+            // The envelope is the one [`carriers_from_expr`] already lifted for this part — the cells
+            // rest in the *dispatching* step's region, whose shell a framed tail hop has retired, so
+            // the lift runs under the step's own coverage and is paid once per call, not once per
+            // reader. The two lists are index-parallel, so the `Some` arm is the only shape a
+            // `Spliced` part can take; a bare `Spliced` falls through to the diagnostic below.
+            (WorkingPart::Spliced { .. }, Some(delivered)) => {
+                args.push(
+                    view.current_scope()
+                        .adopt_carried(delivered, AdoptSeam::ReHome(view.types())),
+                );
+            }
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
             // the args as a `'step` `Carried`. A string literal bumps its bytes here, so the value
             // is region-pure but not `'static` and takes the zero-dep fold door rather than the
             // audited one.
-            ExpressionPart::Literal(lit) => {
+            (WorkingPart::Ast(ExpressionPart::Literal(lit)), _) => {
                 let object = view
                     .current_scope()
                     .fold_resident_object(|brand| lit.to_kobject(*brand));
                 args.push(Carried::Object(object));
             }
-            // A `#(...)` quote's `KObject::KExpression` body is data, but it is invariant in its
-            // region lifetime with no `'static` rebuild and no fold-brand construction, so it keeps
-            // the checked door — whose family audit passes it: a quote body comes from the parser,
-            // which plants no `Spliced` cell, and the scheduler splices only into the parts of an
-            // expression it dispatches, never into quoted data.
-            ExpressionPart::QuotedExpression(_) => {
+            // A `#(...)` quote's `KObject::KExpression` body is data, but the value it rides in is
+            // invariant in its region lifetime with no `'static` rebuild and no fold-brand
+            // construction, so it keeps the checked door.
+            (WorkingPart::Ast(quote @ ExpressionPart::QuotedExpression(_)), _) => {
                 let scope = view.current_scope();
                 let object = scope
                     .brand()
-                    .alloc_object_checked(part.value.resolve(scope.brand()), view.types())
-                    .expect("a resolved quoted expression is splice-free");
+                    .alloc_object_checked(quote.resolve(scope.brand()), view.types())
+                    .expect("a quote body is parsed AST, resident in the storage that parsed it");
                 args.push(Carried::Object(object));
             }
             _ => return None,

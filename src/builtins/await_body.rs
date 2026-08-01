@@ -40,7 +40,7 @@ pub(crate) fn await_body_in_scope<'a>(
     });
     Action::await_deps(
         Deps::from_owned([OwnedDispatch {
-            expr: body,
+            expr: crate::machine::model::WorkingExpression::from_ast(child.brand(), body),
             placement: DepPlacement::InScope(child),
         }]),
         continuation,

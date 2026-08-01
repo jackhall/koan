@@ -1,4 +1,4 @@
-//! Overload resolution for a [`KExpression`] against the lexical scope chain.
+//! Overload resolution for a [`WorkingExpression`] against the lexical scope chain.
 //!
 //! Read-only consumer of the dispatch table. The caller builds a
 //! `bare_outcomes` cache (one [`NameOutcome`] per bare-name part) consulted by
@@ -15,11 +15,11 @@
 use crate::machine::core::{ClassifiedSlots, OpenedFunction};
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 use crate::machine::{DeliveredCarried, NodeId};
 
-use super::is_eager_part;
+use super::is_eager_working_part;
 
 /// Cached outcome of resolving a bare-name part (`Identifier` or leaf `Type`).
 /// Built once per dispatch into a slice paralleling `expr.parts` (`None` for
@@ -93,7 +93,7 @@ impl<'step> Scope<'step> {
     /// `arg.matches(part)`.
     pub fn resolve_dispatch<'e>(
         &self,
-        expr: &KExpression<'e>,
+        expr: &WorkingExpression<'e>,
         chain: Option<&LexicalFrame>,
         bare_outcomes: &[Option<NameOutcome>],
         types: &TypeRegistry,
@@ -166,7 +166,7 @@ enum ScopeDecision<'step> {
 fn decide_scope<'step, 'e>(
     scope: &Scope<'step>,
     lookup: &FunctionLookup,
-    expr: &KExpression<'e>,
+    expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
@@ -220,7 +220,7 @@ fn decide_scope<'step, 'e>(
 /// literal / keyword slot does not admit even relaxed and contributes nothing.
 fn decide_relaxed<'step, 'e>(
     bucket: &OverloadBucket<'_, '_>,
-    expr: &KExpression<'e>,
+    expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
@@ -270,7 +270,7 @@ impl OverloadBucket<'_, '_> {
     /// borrow the walk's own pin and none of them may leave it.
     fn pick_strict<'e>(
         &self,
-        expr: &KExpression<'e>,
+        expr: &WorkingExpression<'e>,
         bare_outcomes: &[Option<NameOutcome>],
         types: &TypeRegistry,
     ) -> PickPass {
@@ -299,7 +299,7 @@ impl OverloadBucket<'_, '_> {
     /// full resolution.
     fn relaxed_parked_producers<'e>(
         &self,
-        expr: &KExpression<'e>,
+        expr: &WorkingExpression<'e>,
         bare_outcomes: &[Option<NameOutcome>],
         types: &TypeRegistry,
     ) -> Vec<NodeId> {
@@ -344,7 +344,7 @@ enum Lean {
 /// [design/typing/elaboration.md § Strict admission rules](../../../../design/typing/elaboration.md#strict-admission-rules).
 fn signature_admits_strict<'e>(
     sig: &ExpressionSignature<'_>,
-    expr: &KExpression<'e>,
+    expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> bool {
@@ -354,7 +354,7 @@ fn signature_admits_strict<'e>(
     let has_lazy_kexpr_slot = has_lazy_kexpr_slot(sig, expr);
     sig.elements
         .iter()
-        .zip(&expr.parts)
+        .zip(expr.parts)
         .enumerate()
         .all(|(i, (el, part))| {
             slot_admits_strict(
@@ -384,7 +384,7 @@ fn signature_admits_strict<'e>(
 /// unbound at the scope rather than re-deriving it.
 fn relaxed_admits<'e>(
     sig: &ExpressionSignature<'_>,
-    expr: &KExpression<'e>,
+    expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> Option<Vec<Lean>> {
@@ -393,7 +393,7 @@ fn relaxed_admits<'e>(
     }
     let has_lazy_kexpr_slot = has_lazy_kexpr_slot(sig, expr);
     let mut leans: Vec<Lean> = Vec::new();
-    for (i, (el, part)) in sig.elements.iter().zip(&expr.parts).enumerate() {
+    for (i, (el, part)) in sig.elements.iter().zip(expr.parts).enumerate() {
         if slot_admits_strict(
             el,
             &part.value,
@@ -408,7 +408,7 @@ fn relaxed_admits<'e>(
         // relaxation assumes satisfiable. An unevaluated eager part in an
         // *argument* slot routes through `eager_indices` post-pick; a keyword
         // element can't be satisfied by an eager part.
-        if is_eager_part(&part.value) && matches!(el, SignatureElement::Argument(_)) {
+        if is_eager_working_part(&part.value) && matches!(el, SignatureElement::Argument(_)) {
             leans.push(Lean::Eager);
             continue;
         }
@@ -427,12 +427,12 @@ fn relaxed_admits<'e>(
 /// `ExpressionPart::Expression` relaxes other non-`KExpression` slots to admit
 /// `Expression` / `SigiledTypeExpr` parts speculatively (they route through
 /// `eager_indices` post-pick). Required by FN overloads.
-fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &KExpression<'_>) -> bool {
+fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &WorkingExpression<'_>) -> bool {
     sig.elements
         .iter()
-        .zip(&expr.parts)
-        .any(|(el, part)| match (el, &part.value) {
-            (SignatureElement::Argument(arg), ExpressionPart::Expression(_)) => {
+        .zip(expr.parts)
+        .any(|(el, part)| match (el, part.value.as_ast()) {
+            (SignatureElement::Argument(arg), Some(ExpressionPart::Expression(_))) => {
                 matches!(arg.ktype, KType::KEXPRESSION)
             }
             _ => false,
@@ -444,16 +444,24 @@ fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &KExpression<'_>) ->
 /// when it rejects.
 fn slot_admits_strict<'e>(
     el: &SignatureElement,
-    part_value: &ExpressionPart<'e>,
+    slot: &WorkingPart<'e>,
     i: usize,
     has_lazy_kexpr_slot: bool,
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> bool {
-    match (el, part_value) {
-        (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
+    match (el, slot.as_ast()) {
+        (SignatureElement::Keyword(s), Some(ExpressionPart::Keyword(t))) => s == t,
         (SignatureElement::Keyword(_), _) => false,
-        (SignatureElement::Argument(arg), part_value) => {
+        // A slot the scheduler filled classifies by its carried value, never by a part shape: a
+        // resolved cell opens at its own brand, and a synthesized node / staging hole names no value
+        // an argument slot can admit.
+        (SignatureElement::Argument(arg), None) => match slot {
+            WorkingPart::Spliced { cell } => arg.ktype.accepts_cell(cell, types),
+            _ => false,
+        },
+        (SignatureElement::Argument(arg), Some(part_value)) => {
+            let part_value = &part_value;
             // Binder declaration slot: the slot owns the name, so admission is shape-only. A
             // `ProperType` slot still admits SigiledTypeExpr / RecordType speculatively (they
             // sub-dispatch to a type-side carrier — the FN record-schema overload's `ProperType`
@@ -519,15 +527,15 @@ fn slot_admits_strict<'e>(
 
 /// True iff `expr` carries any part shape the scheduler's eager loop would
 /// schedule as a sub-Dispatch.
-fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
-    expr.parts.iter().any(|p| is_eager_part(&p.value))
+fn expr_has_eager_part(expr: &WorkingExpression<'_>) -> bool {
+    expr.parts.iter().any(|p| is_eager_working_part(&p.value))
 }
 
 /// Sole producer of the embedded `slots`; disjointness lives in
 /// [`KFunction::classify_for_pick`].
 fn build_resolved<'step, 'e>(
     picked: OpenedFunction<'step>,
-    expr: &KExpression<'e>,
+    expr: &WorkingExpression<'e>,
     types: &TypeRegistry,
 ) -> Resolved<'step> {
     let slots = picked.value().classify_for_pick(expr, types);

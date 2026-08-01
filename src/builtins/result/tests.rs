@@ -1,6 +1,7 @@
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::{KKind, NodeSchema, TypeNode};
 use crate::machine::model::{KObject, KType, TypeRegistry};
+use crate::machine::program_storage;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
@@ -14,8 +15,9 @@ fn assert_member_named(types: &TypeRegistry, identity: KType, expected: &str) {
 
 #[test]
 fn result_registers_type_constructor_with_schema() {
+    let program = program_storage();
     let region = run_root_storage();
-    let test_run = TestRun::silent(&region);
+    let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
 
     // Type-only: `Result`'s `TypeConstructor` member carries both `param_names` and the
@@ -53,9 +55,10 @@ fn result_registers_type_constructor_with_schema() {
 
 #[test]
 fn result_constructs_ok_variant() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
-    let result = test_run.run_one(parse_one("Result (Ok 1)"));
+    let mut test_run = TestRun::silent(&program, &region);
+    let result = test_run.run_one(parse_one(&program, "Result (Ok 1)"));
     match result {
         KObject::Tagged {
             tag,
@@ -72,9 +75,10 @@ fn result_constructs_ok_variant() {
 
 #[test]
 fn result_constructs_error_variant() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
-    let result = test_run.run_one(parse_one("Result (Error \"x\")"));
+    let mut test_run = TestRun::silent(&program, &region);
+    let result = test_run.run_one(parse_one(&program, "Result (Error \"x\")"));
     match result {
         KObject::Tagged {
             tag,
@@ -91,9 +95,10 @@ fn result_constructs_error_variant() {
 
 #[test]
 fn result_rejects_unknown_tag() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
-    let err = test_run.run_one_err(parse_one("Result (Bogus 1)"));
+    let mut test_run = TestRun::silent(&program, &region);
+    let err = test_run.run_one_err(parse_one(&program, "Result (Bogus 1)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`Bogus`")),
         "expected ShapeError mentioning `Bogus`, got {err}",
@@ -103,8 +108,9 @@ fn result_rejects_unknown_tag() {
 /// The carrier flows through MATCH dispatch by tag like any other tagged union.
 #[test]
 fn result_matches_ok_branch() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, buf) = TestRun::with_buf(&region);
+    let (mut test_run, buf) = TestRun::with_buf(&program, &region);
     test_run.run("MATCH (Result (Ok 1)) -> :Str WITH (Ok -> (PRINT it) Error -> (PRINT \"no\"))");
     assert_eq!(buf.borrow().as_slice(), b"1\n");
 }
@@ -113,9 +119,10 @@ fn result_matches_ok_branch() {
 /// non-function value (the carrier), so the union errors before finalizing.
 #[test]
 fn redeclaring_result_errors() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
-    let err = test_run.run_one_err(parse_one("UNION Result = (Ok :Str Err :Str)"));
+    let mut test_run = TestRun::silent(&program, &region);
+    let err = test_run.run_one_err(parse_one(&program, "UNION Result = (Ok :Str Err :Str)"));
     assert!(
         matches!(&err.kind, KErrorKind::Rebind { name } if name == "Result"),
         "expected Rebind on Result, got {err}",

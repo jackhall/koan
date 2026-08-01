@@ -11,7 +11,7 @@
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
-use crate::machine::run_root_storage;
+use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::{region_metrics, reset_region_metrics};
 
 /// A depth-1000 tail-recursive countdown runs on one scheduler slot and in `O(1)` live regions.
@@ -25,8 +25,9 @@ use crate::witnessed::{region_metrics, reset_region_metrics};
 #[test]
 fn tail_recursive_countdown_stays_o1_in_regions() {
     reset_region_metrics();
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
 
     // Enough hops to distinguish O(1) from O(depth) — a non-TCO recursion would leave DEPTH slots
@@ -49,13 +50,17 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
     // high-water mark starts at zero.
     test_run.reset_slots();
 
+    // Parse before the baseline: the parse bumps into program storage, whose own region mint
+    // belongs to no call.
+    let call = parse_one(&program, &format!("COUNTDOWN n{DEPTH}"));
     // Only the setup's own (no-mint) top-level statements have run so far; the run-root mint is
     // the sole contributor to `peak` at this point.
     let baseline = region_metrics().peak;
 
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(parse_one(&format!("COUNTDOWN n{DEPTH}")), scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -103,8 +108,9 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
 #[test]
 fn tail_recursive_record_thread_stays_o1_in_regions() {
     reset_region_metrics();
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
 
     const DEPTH: usize = 20;
@@ -122,11 +128,15 @@ fn tail_recursive_record_thread_stays_o1_in_regions() {
     test_run.run(&source);
     test_run.reset_slots();
 
+    // Parse before the baseline: the parse bumps into program storage, whose own region mint
+    // belongs to no call.
+    let call = parse_one(&program, &format!("THREAD n{DEPTH} {{acc = 0}}"));
     let baseline = region_metrics().peak;
 
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(parse_one(&format!("THREAD n{DEPTH} {{acc = 0}}")), scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -156,13 +166,17 @@ fn tail_recursive_record_thread_stays_o1_in_regions() {
 #[test]
 fn no_mint_categories_add_no_region_mints() {
     reset_region_metrics();
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
 
     // Setup: a module to open a `USING` window on. Whatever this costs (module bodies are not
     // among the four categories under test) is folded into `baseline` below.
     test_run.run("MODULE mo = ((LET hidden = 99))");
+    // Parse the forward's source before the baseline: parsing bumps into program storage, and
+    // that storage's own region mint belongs to none of the four categories.
+    let forward = parse_one(&program, "a");
     let baseline = region_metrics().minted_total;
 
     test_run.run(
@@ -172,7 +186,10 @@ fn no_mint_categories_add_no_region_mints() {
          LET visible = (USING mo SCOPE (hidden))",
     );
     // Bare-name forward: a submission that is just a name, spliced onto its existing producer.
-    let id = test_run.runtime.dispatch_in_scope(parse_one("a"), scope);
+    let id = test_run.runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), forward),
+        scope,
+    );
     test_run
         .runtime
         .execute()
@@ -201,8 +218,9 @@ fn no_mint_categories_add_no_region_mints() {
 /// use-after-frees.
 #[test]
 fn loop_carried_aggregate_survives_tail_hop_adoption() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (DD acc :(LIST OF Any)) -> :(LIST OF Any) = (acc)\n\
          FN (CC acc :(LIST OF Any)) -> :(LIST OF Any) = (DD [(acc)])\n\
@@ -211,7 +229,7 @@ fn loop_carried_aggregate_survives_tail_hop_adoption() {
     );
     // Each hop rewraps the previous hop's own list (`[(acc)]`), so unwrapping the wraps back down
     // must reach the original seed `0` unharmed.
-    let result = test_run.run_one(parse_one("AA [0]"));
+    let result = test_run.run_one(parse_one(&program, "AA [0]"));
     let mut depth = 0;
     let mut current = result;
     loop {

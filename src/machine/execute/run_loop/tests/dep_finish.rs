@@ -2,24 +2,25 @@
 
 use super::super::super::outcome::Outcome;
 use crate::builtins::test_support::{resident_carrier, TestRun};
-use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::model::KExpression;
+use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
 use crate::machine::model::ReturnType;
+use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, KObject};
 
-use super::let_expr;
+use super::{let_expr, working_one};
 
 #[test]
 fn dep_finish_waits_on_deps_then_runs_finish() {
     // Pins that dep-finish waits on every dep before invoking finish and that
     // finish-returned Outcome::Done(Value) lands in the slot's result.
     use crate::machine::execute::TerminalDepFinish;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let dep_a = runtime.dispatch_in_scope(let_expr("ca", 7.0), scope);
-    let dep_b = runtime.dispatch_in_scope(let_expr("cb", 11.0), scope);
+    let dep_a = runtime.dispatch_in_scope(let_expr(&program, "ca", 7.0), scope);
+    let dep_b = runtime.dispatch_in_scope(let_expr(&program, "cb", 11.0), scope);
     let finish: TerminalDepFinish = Box::new(|_sched, terminals| {
         let a = match terminals.owned(0).value {
             Carried::Object(KObject::Number(n)) => *n,
@@ -63,15 +64,20 @@ fn dep_finish_short_circuits_on_dep_error() {
     use crate::machine::{KError, KErrorKind};
     use std::cell::Cell;
     use std::rc::Rc;
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
 
     // Allocate two placeholder Dispatch slots, drain the queue so execute()
     // doesn't revisit them, then overwrite their results directly.
-    let mk_dispatch =
-        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
+    let mk_dispatch = || {
+        crate::machine::execute::dispatch::decide_tail(
+            WorkingExpression::new(program.brand().region(), Vec::new()),
+            None,
+        )
+    };
     let dep_ok = runtime.add(mk_dispatch(), scope);
     let dep_err = runtime.add(mk_dispatch(), scope);
     let store = runtime.scheduler_mut();
@@ -133,18 +139,23 @@ fn retention_hold_foreign_bundle_releases_at_pull_zero() {
     use crate::machine::execute::TerminalDepFinish;
     use std::rc::Rc;
 
+    let program = program_storage();
     let region = run_root_storage();
     // A distinct region the producer's terminal reaches; the hold's foreign bundle will be its sole
     // strong owner once we drop our own handle.
     let foreign = run_root_storage();
     let weak = Rc::downgrade(&foreign);
 
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
 
-    let mk_dispatch =
-        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
+    let mk_dispatch = || {
+        crate::machine::execute::dispatch::decide_tail(
+            WorkingExpression::new(program.brand().region(), Vec::new()),
+            None,
+        )
+    };
     let dep_ok = runtime.add(mk_dispatch(), scope);
     let store = runtime.scheduler_mut();
     store.clear_node(dep_ok);
@@ -200,7 +211,6 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     use crate::builtins::register_builtin;
     use crate::machine::core::{Action, AwaitContinue, BodyCtx};
     use crate::machine::model::Carried;
-    use crate::machine::model::ExpressionPart;
     use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 
     fn body<'run>(_ctx: &BodyCtx<'run, '_>) -> Action<'run> {
@@ -214,8 +224,9 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         Action::await_deps(crate::scheduler::Deps::new(), finish)
     }
 
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     register_builtin(
         scope,
@@ -230,12 +241,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     );
 
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(
-        KExpression::new(vec![crate::source::Spanned::bare(ExpressionPart::Keyword(
-            "DEFERTEST".into(),
-        ))]),
-        scope,
-    );
+    let id = runtime.dispatch_in_scope(super::keyword_expr(&program, "DEFERTEST"), scope);
     runtime.execute().unwrap();
     assert!(
         runtime
@@ -252,14 +258,18 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
 fn tail_call_reuses_node_slot_in_place() {
     // Pins that an `Outcome::Continue` tail rewrites the caller's slot in place rather
     // than spawning a fresh one (verified via runtime.len() == 1 below).
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let exprs = crate::parse::parse("MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))")
-        .expect("parse should succeed");
-    assert_eq!(exprs.len(), 1);
-    let id = runtime.dispatch_in_scope(exprs.into_iter().next().unwrap(), root);
+    let id = runtime.dispatch_in_scope(
+        working_one(
+            &program,
+            "MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))",
+        ),
+        root,
+    );
 
     runtime.execute().unwrap();
 

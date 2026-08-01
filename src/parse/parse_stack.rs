@@ -4,6 +4,7 @@
 //! `close_collection` helpers live here since they bind `ParseStack` and the
 //! token-buffer flush.
 
+use crate::machine::core::RegionBrand;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::KError;
 use crate::parse::tokens::classify_token;
@@ -12,17 +13,27 @@ use crate::source::Spanned;
 use super::dict_literal::DictFrame;
 use super::frame::BracketFrame;
 
+/// The stack carries the region every token string and every parts run is bumped into, so no
+/// parse site reaches for storage of its own. The root run stays a plain `Vec` until
+/// [`ParseStack::finish`] freezes it — a node is built only once its parts are final.
 pub(super) struct ParseStack<'a> {
-    root: KExpression<'a>,
+    brand: RegionBrand<'a>,
+    root: Vec<Spanned<ExpressionPart<'a>>>,
     rest: Vec<BracketFrame<'a>>,
 }
 
 impl<'a> ParseStack<'a> {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(brand: RegionBrand<'a>) -> Self {
         Self {
-            root: KExpression::new(Vec::new()),
+            brand,
+            root: Vec::new(),
             rest: Vec::new(),
         }
+    }
+
+    /// The region every part this stack collects is bumped into.
+    pub(super) fn brand(&self) -> RegionBrand<'a> {
+        self.brand
     }
 
     pub(super) fn push_frame(&mut self, f: BracketFrame<'a>) {
@@ -35,7 +46,7 @@ impl<'a> ParseStack<'a> {
     pub(super) fn push_part(&mut self, part: Spanned<ExpressionPart<'a>>) {
         match self.rest.last_mut() {
             Some(f) => f.push(part),
-            None => self.root.parts.push(part),
+            None => self.root.push(part),
         }
     }
 
@@ -65,7 +76,7 @@ impl<'a> ParseStack<'a> {
                 None,
             ));
         }
-        Ok(self.root)
+        Ok(KExpression::new(self.brand, self.root))
     }
 }
 
@@ -79,7 +90,7 @@ pub(super) fn flush_token<'a>(
         let start = token_start
             .take()
             .expect("token_start must be set whenever buf is non-empty");
-        let part = classify_token(&tok, start)?;
+        let part = classify_token(stack.brand(), &tok, start)?;
         stack.push_part(part);
     } else {
         *token_start = None;
@@ -124,7 +135,8 @@ pub(super) fn close_collection<'a>(
     let frame = stack
         .pop_top()
         .expect("peek_top.matches_closer checked above; flush_token preserves variant");
-    stack.push_part(frame.into_part(end)?);
+    let part = frame.into_part(stack.brand(), end)?;
+    stack.push_part(part);
     Ok(())
 }
 

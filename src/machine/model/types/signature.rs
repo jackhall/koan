@@ -9,7 +9,7 @@
 //! reference a per-call parameter (`-> er`, `-> er.Carrier`) survive FN-definition without
 //! sub-dispatching against the outer scope.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier, WorkingPart};
 
 use super::ktype::KType;
 use super::registry::TypeRegistry;
@@ -18,6 +18,34 @@ use super::registry::TypeRegistry;
 pub enum UntypedElement {
     Keyword(String),
     Slot,
+}
+
+/// The stored form of an [`UntypedElement`]: a keyword's text as a borrow at the node's own
+/// lifetime. An expression's bucket key is a run of these, bumped once at construction, so reading
+/// it costs a slice borrow; the owned [`UntypedKey`] the bucket tables are keyed by is materialized
+/// only where a lookup needs one.
+#[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
+pub enum StoredElement<'a> {
+    Keyword(&'a str),
+    Slot,
+}
+
+impl<'a> StoredElement<'a> {
+    /// The owned element this stands for.
+    pub fn to_owned_element(self) -> UntypedElement {
+        match self {
+            StoredElement::Keyword(s) => UntypedElement::Keyword(s.to_string()),
+            StoredElement::Slot => UntypedElement::Slot,
+        }
+    }
+}
+
+/// The owned [`UntypedKey`] a stored run stands for.
+pub fn owned_untyped_key(stored: &[StoredElement<'_>]) -> UntypedKey {
+    stored
+        .iter()
+        .map(|element| element.to_owned_element())
+        .collect()
 }
 
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
@@ -87,6 +115,7 @@ pub struct ExpressionSignature<'a> {
 ///
 /// `'a` threads only through the `Deferred` arm's captured [`KExpression`] — `Resolved`'s
 /// `KType` is owned and carries no lifetime of its own.
+#[derive(Clone, Copy)]
 pub enum ReturnType<'a> {
     Resolved(KType),
     Deferred(DeferredReturn<'a>),
@@ -100,52 +129,36 @@ pub enum ReturnType<'a> {
 /// - `Expression` — captured `:(…)` / dotted return expression (`er.Carrier`,
 ///   `Set WITH {…}`). Re-runs as a sub-Dispatch under the per-call scope; the resulting
 ///   `Carried::Type`'s inner `KType` is the per-call return type.
+#[derive(Clone, Copy)]
 pub enum DeferredReturn<'a> {
-    Type(TypeIdentifier),
+    Type(TypeIdentifier<'a>),
     Expression(KExpression<'a>),
 }
 
 /// Hashable type-language shadow of a [`DeferredReturn`], stored inside
-/// `KType::DeferredReturn`. The `Expression` carrier holds the canonical `summarize()`
-/// render — NOT the live `KExpression`, which impls neither `Eq` nor `Hash`. Identity is
-/// syntactic — `Type` by name, `Expression` by canonical render — so a synthesized
-/// `KType::DeferredReturn` ret slot compares, hashes, and ranks by surface form.
+/// `KType::DeferredReturn`. Both carriers hold owned surface text: the `Type` carrier the bare
+/// name (a [`TypeIdentifier`] borrows the storage that parsed it, and a `KType` outlives every
+/// region), the `Expression` carrier the canonical `summarize()` render — NOT the live
+/// `KExpression`, which impls neither `Eq` nor `Hash`. Identity is syntactic — `Type` by name,
+/// `Expression` by canonical render — so a synthesized `KType::DeferredReturn` ret slot compares,
+/// hashes, and ranks by surface form.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DeferredReturnSurface {
-    Type(TypeIdentifier),
+    Type(String),
     Expression(String),
 }
 
 impl DeferredReturnSurface {
     pub fn from_deferred(d: &DeferredReturn<'_>) -> Self {
         match d {
-            DeferredReturn::Type(t) => Self::Type(t.clone()),
+            DeferredReturn::Type(t) => Self::Type(t.render()),
             DeferredReturn::Expression(e) => Self::Expression(e.summarize()),
         }
     }
 
     pub fn render(&self) -> String {
         match self {
-            Self::Type(t) => t.render(),
-            Self::Expression(s) => s.clone(),
-        }
-    }
-}
-
-impl<'a> Clone for ReturnType<'a> {
-    fn clone(&self) -> Self {
-        match self {
-            ReturnType::Resolved(kt) => ReturnType::Resolved(*kt),
-            ReturnType::Deferred(d) => ReturnType::Deferred(d.clone()),
-        }
-    }
-}
-
-impl<'a> Clone for DeferredReturn<'a> {
-    fn clone(&self) -> Self {
-        match self {
-            DeferredReturn::Type(t) => DeferredReturn::Type(t.clone()),
-            DeferredReturn::Expression(e) => DeferredReturn::Expression(e.clone()),
+            Self::Type(s) | Self::Expression(s) => s.clone(),
         }
     }
 }
@@ -206,9 +219,9 @@ impl<'a> ExpressionSignature<'a> {
         }
         self.elements
             .iter()
-            .zip(&expr.parts)
+            .zip(expr.parts)
             .all(|(el, part)| match (el, &part.value) {
-                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
+                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s.as_str() == *t,
                 (SignatureElement::Keyword(_), _) => false,
                 (SignatureElement::Argument(arg), part_value) => arg.matches(part_value, types),
             })
@@ -343,6 +356,11 @@ pub struct Argument {
 impl Argument {
     pub fn matches<'e>(&self, part: &ExpressionPart<'e>, types: &TypeRegistry) -> bool {
         self.ktype.accepts_part(part, types)
+    }
+
+    /// The dispatch-path peer of [`Self::matches`], over the scheduler's own part form.
+    pub fn matches_working_part<'e>(&self, part: &WorkingPart<'e>, types: &TypeRegistry) -> bool {
+        self.ktype.accepts_working_part(part, types)
     }
 }
 

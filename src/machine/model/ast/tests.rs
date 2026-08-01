@@ -1,3 +1,4 @@
+use crate::machine::core::{program_storage, RegionBrand};
 use crate::machine::model::ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier,
 };
@@ -7,20 +8,45 @@ use crate::machine::model::values::Held;
 use crate::machine::model::TypeRegistry;
 use crate::source::Spanned;
 
-fn kw(s: &str) -> ExpressionPart<'static> {
-    ExpressionPart::Keyword(s.into())
+fn kw(s: &str) -> ExpressionPart<'_> {
+    ExpressionPart::Keyword(s)
 }
-fn ident(s: &str) -> ExpressionPart<'static> {
-    ExpressionPart::Identifier(s.into())
+fn ident(s: &str) -> ExpressionPart<'_> {
+    ExpressionPart::Identifier(s)
 }
-fn ty(s: &str) -> ExpressionPart<'static> {
-    ExpressionPart::Type(TypeIdentifier::leaf(s.into()))
+fn ty(s: &str) -> ExpressionPart<'_> {
+    ExpressionPart::Type(TypeIdentifier::leaf(s))
 }
-fn expr(parts: Vec<ExpressionPart<'static>>) -> ExpressionPart<'static> {
-    ExpressionPart::expression(parts)
+fn num<'a>(n: f64) -> ExpressionPart<'a> {
+    ExpressionPart::Literal(KLiteral::Number(n))
 }
-fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'static>>> {
+fn parts_of<'a>(items: Vec<ExpressionPart<'a>>) -> Vec<Spanned<ExpressionPart<'a>>> {
     items.into_iter().map(Spanned::bare).collect()
+}
+fn expr<'a>(brand: RegionBrand<'a>, parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
+    ExpressionPart::expression(brand, parts_of(parts))
+}
+fn list<'a>(brand: RegionBrand<'a>, items: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
+    ExpressionPart::ListLiteral(brand.alloc_slice(&items))
+}
+fn dict<'a>(
+    brand: RegionBrand<'a>,
+    pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
+) -> ExpressionPart<'a> {
+    ExpressionPart::DictLiteral(brand.alloc_slice(&pairs))
+}
+fn record<'a>(
+    brand: RegionBrand<'a>,
+    fields: Vec<(&'a str, ExpressionPart<'a>)>,
+) -> ExpressionPart<'a> {
+    ExpressionPart::RecordLiteral(brand.alloc_slice(&fields))
+}
+fn sigil<'a>(brand: RegionBrand<'a>, parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
+    ExpressionPart::SigiledTypeExpr(KExpression::nested(brand, parts_of(parts)))
+}
+/// Freeze a run of parts into a node at `brand` — the door every hand-built AST here goes through.
+fn build<'a>(brand: RegionBrand<'a>, items: Vec<ExpressionPart<'a>>) -> KExpression<'a> {
+    KExpression::new(brand, parts_of(items))
 }
 
 #[test]
@@ -28,7 +54,7 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
     let types = TypeRegistry::new();
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
-    let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".into()));
+    let part = ExpressionPart::Type(TypeIdentifier::leaf("Number"));
     let slot = KType::of_kind(KKind::ProperType);
     // Consume the scope-tied `Held` inside `matches!` so no borrow outlives `storage`.
     assert!(matches!(
@@ -45,7 +71,7 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let types = TypeRegistry::new();
-    let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
+    let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType"));
     let slot = KType::of_kind(KKind::ProperType);
     match part.resolve_for(&slot, scope, &types) {
         Held::UnresolvedType(te) => assert_eq!(te.render(), "MyType"),
@@ -63,7 +89,7 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let types = TypeRegistry::new();
-    let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
+    let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType"));
     let slot = KType::of_kind(KKind::ProperType);
     let held = part.resolve_for(&slot, scope, &types);
     assert_eq!(held.ktype(&types), KType::of_kind(KKind::ProperType));
@@ -76,7 +102,7 @@ fn summarize_atomic_variants() {
     assert_eq!(kw("LET").summarize(), "LET");
     assert_eq!(ident("x").summarize(), "x");
     assert_eq!(
-        ExpressionPart::Type(TypeIdentifier::leaf("Number".into())).summarize(),
+        ExpressionPart::Type(TypeIdentifier::leaf("Number")).summarize(),
         "Number",
     );
 }
@@ -88,7 +114,7 @@ fn summarize_literal_variants() {
         "1.5"
     );
     assert_eq!(
-        ExpressionPart::Literal(KLiteral::String("hi".into())).summarize(),
+        ExpressionPart::Literal(KLiteral::String("hi")).summarize(),
         "hi"
     );
     assert_eq!(
@@ -100,38 +126,43 @@ fn summarize_literal_variants() {
 
 #[test]
 fn summarize_list_and_dict_literals() {
-    let list = ExpressionPart::ListLiteral(vec![
-        ExpressionPart::Literal(KLiteral::Number(1.0)),
-        ExpressionPart::Literal(KLiteral::Number(2.0)),
-    ]);
-    assert_eq!(list.summarize(), "[1 2]");
+    let program = program_storage();
+    let brand = program.brand().region();
+    let items = list(brand, vec![num(1.0), num(2.0)]);
+    assert_eq!(items.summarize(), "[1 2]");
 
-    let dict = ExpressionPart::DictLiteral(vec![(
-        ExpressionPart::Literal(KLiteral::String("k".into())),
-        ExpressionPart::Literal(KLiteral::Number(7.0)),
-    )]);
-    assert_eq!(dict.summarize(), "{k: 7}");
+    let pairs = dict(
+        brand,
+        vec![(ExpressionPart::Literal(KLiteral::String("k")), num(7.0))],
+    );
+    assert_eq!(pairs.summarize(), "{k: 7}");
 }
 
 #[test]
 fn summarize_nested_expression_part_threads_through() {
-    let inner = expr(vec![kw("ADD"), ident("a"), ident("b")]);
+    let program = program_storage();
+    let brand = program.brand().region();
+    let inner = expr(brand, vec![kw("ADD"), ident("a"), ident("b")]);
     assert_eq!(inner.summarize(), "ADD a b");
 }
 
 #[test]
 fn kexpression_summarize_joins_parts_with_spaces() {
-    let e = KExpression::new(parts_of(vec![kw("LET"), ident("x"), ident("=")]));
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(brand, vec![kw("LET"), ident("x"), ident("=")]);
     assert_eq!(e.summarize(), "LET x =");
 }
 
 #[test]
 fn structural_equal_and_ktype_for_kexpression() {
+    let program = program_storage();
+    let brand = program.brand().region();
     let types = TypeRegistry::new();
     use crate::machine::model::values::KObject;
-    let a = KObject::KExpression(KExpression::new(parts_of(vec![kw("LET"), ident("x")])));
-    let b = KObject::KExpression(KExpression::new(parts_of(vec![kw("LET"), ident("x")])));
-    let c = KObject::KExpression(KExpression::new(parts_of(vec![kw("LET"), ident("y")])));
+    let a = KObject::KExpression(build(brand, vec![kw("LET"), ident("x")]));
+    let b = KObject::KExpression(build(brand, vec![kw("LET"), ident("x")]));
+    let c = KObject::KExpression(build(brand, vec![kw("LET"), ident("y")]));
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&c, &types), Ok(false));
     assert_eq!(a.ktype(), KType::KEXPRESSION);
@@ -139,25 +170,26 @@ fn structural_equal_and_ktype_for_kexpression() {
 
 #[test]
 fn binder_name_from_type_part_extracts_or_none() {
-    let with_type = KExpression::new(parts_of(vec![
-        kw("STRUCT"),
-        ExpressionPart::Type(TypeIdentifier::leaf("Point".into())),
-    ]));
-    assert_eq!(with_type.binder_name_from_type_part(), Some("Point".into()));
+    let program = program_storage();
+    let brand = program.brand().region();
+    let with_type = build(brand, vec![kw("STRUCT"), ty("Point")]);
+    assert_eq!(with_type.binder_name_from_type_part(), Some("Point"));
 
-    let with_ident = KExpression::new(parts_of(vec![kw("STRUCT"), ident("Point")]));
+    let with_ident = build(brand, vec![kw("STRUCT"), ident("Point")]);
     assert_eq!(with_ident.binder_name_from_type_part(), None);
 
-    let too_short = KExpression::new(parts_of(vec![kw("STRUCT")]));
+    let too_short = build(brand, vec![kw("STRUCT")]);
     assert_eq!(too_short.binder_name_from_type_part(), None);
 }
 
 #[test]
 fn borrow_inner_expressions_success_and_mismatch() {
-    let all_exprs = KExpression::new(parts_of(vec![
-        expr(vec![ident("a")]),
-        expr(vec![ident("b")]),
-    ]));
+    let program = program_storage();
+    let brand = program.brand().region();
+    let all_exprs = build(
+        brand,
+        vec![expr(brand, vec![ident("a")]), expr(brand, vec![ident("b")])],
+    );
     let borrowed = all_exprs
         .borrow_inner_expressions()
         .expect("all parts are expressions");
@@ -165,51 +197,61 @@ fn borrow_inner_expressions_success_and_mismatch() {
     assert_eq!(borrowed[0].summarize(), "a");
     assert_eq!(borrowed[1].summarize(), "b");
 
-    let mixed = KExpression::new(parts_of(vec![expr(vec![ident("a")]), ident("b")]));
+    let mixed = build(brand, vec![expr(brand, vec![ident("a")]), ident("b")]);
     assert!(mixed.borrow_inner_expressions().is_none());
 }
 
 #[test]
-fn try_take_inner_expressions_split_empty_returns_err() {
-    let e: KExpression<'static> = KExpression::new(vec![]);
-    let err = e
-        .try_take_inner_expressions_split()
-        .expect_err("empty must Err");
+fn try_split_inner_expressions_empty_returns_err() {
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(brand, vec![]);
+    let err = e.try_split_inner_expressions().expect_err("empty must Err");
     assert!(err.parts.is_empty());
 }
 
 #[test]
-fn try_take_inner_expressions_split_first_non_expression_returns_err() {
-    let e = KExpression::new(parts_of(vec![ident("a"), expr(vec![ident("b")])]));
+fn try_split_inner_expressions_first_non_expression_returns_err() {
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(brand, vec![ident("a"), expr(brand, vec![ident("b")])]);
     let err = e
-        .try_take_inner_expressions_split()
+        .try_split_inner_expressions()
         .expect_err("non-expr head must Err");
     assert_eq!(err.summarize(), "a b");
 }
 
 #[test]
-fn try_take_inner_expressions_split_middle_non_expression_returns_err() {
-    let e = KExpression::new(parts_of(vec![
-        expr(vec![ident("a")]),
-        ident("b"),
-        expr(vec![ident("c")]),
-    ]));
+fn try_split_inner_expressions_middle_non_expression_returns_err() {
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(
+        brand,
+        vec![
+            expr(brand, vec![ident("a")]),
+            ident("b"),
+            expr(brand, vec![ident("c")]),
+        ],
+    );
     let err = e
-        .try_take_inner_expressions_split()
+        .try_split_inner_expressions()
         .expect_err("non-expr middle must Err");
     assert_eq!(err.summarize(), "a b c");
 }
 
 #[test]
-fn try_take_inner_expressions_split_all_expressions_returns_ok() {
-    let e = KExpression::new(parts_of(vec![
-        expr(vec![ident("a")]),
-        expr(vec![ident("b")]),
-        expr(vec![ident("c")]),
-    ]));
-    let (preceding, last) = e
-        .try_take_inner_expressions_split()
-        .expect("all-expr is Ok");
+fn try_split_inner_expressions_all_expressions_returns_ok() {
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(
+        brand,
+        vec![
+            expr(brand, vec![ident("a")]),
+            expr(brand, vec![ident("b")]),
+            expr(brand, vec![ident("c")]),
+        ],
+    );
+    let (preceding, last) = e.try_split_inner_expressions().expect("all-expr is Ok");
     assert_eq!(preceding.len(), 2);
     assert_eq!(preceding[0].summarize(), "a");
     assert_eq!(preceding[1].summarize(), "b");
@@ -220,88 +262,90 @@ fn try_take_inner_expressions_split_all_expressions_returns_ok() {
 
 #[test]
 fn operator_chain_three_operand_classifies_and_probes() {
+    let program = program_storage();
+    let brand = program.brand().region();
     // `a + b + c` — Slot Keyword Slot Keyword Slot, ≥2 keyword positions.
-    let e = KExpression::new(parts_of(vec![
-        ident("a"),
-        kw("+"),
-        ident("b"),
-        kw("+"),
-        ident("c"),
-    ]));
+    let e = build(
+        brand,
+        vec![ident("a"), kw("+"), ident("b"), kw("+"), ident("c")],
+    );
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
     assert_eq!(e.operator_probe(), Some("+"));
 }
 
 #[test]
 fn operator_chain_mixed_operators_probe_is_sorted_unique() {
+    let program = program_storage();
+    let brand = program.brand().region();
     // `a + b * c` — two distinct operators; probe is sorted-joined uniques.
-    let e = KExpression::new(parts_of(vec![
-        ident("a"),
-        kw("+"),
-        ident("b"),
-        kw("*"),
-        ident("c"),
-    ]));
+    let e = build(
+        brand,
+        vec![ident("a"), kw("+"), ident("b"), kw("*"), ident("c")],
+    );
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
     assert_eq!(e.operator_probe(), Some("* +"));
 }
 
 #[test]
 fn union_pipe_chain_over_types_is_operator_chain() {
+    let program = program_storage();
+    let brand = program.brand().region();
     // `A | B | C` — type operands, two `|` positions.
-    let e = KExpression::new(parts_of(vec![ty("A"), kw("|"), ty("B"), kw("|"), ty("C")]));
+    let e = build(brand, vec![ty("A"), kw("|"), ty("B"), kw("|"), ty("C")]);
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
     assert_eq!(e.operator_probe(), Some("|"));
 }
 
 #[test]
 fn single_operator_is_keyworded_not_a_chain() {
+    let program = program_storage();
+    let brand = program.brand().region();
     // `a + b` — one keyword position; ordinary binary dispatch, no chain.
-    let e = KExpression::new(parts_of(vec![ident("a"), kw("+"), ident("b")]));
+    let e = build(brand, vec![ident("a"), kw("+"), ident("b")]);
     assert_eq!(e.shape(), DispatchShape::Keyworded);
     assert_eq!(e.operator_probe(), None);
 }
 
 #[test]
 fn keyword_led_shape_is_not_a_chain() {
+    let program = program_storage();
+    let brand = program.brand().region();
     // `LET x = a + b` is keyword-led (first part a keyword), so not the
     // slot-led chain shape even though it carries operator-like tokens.
-    let e = KExpression::new(parts_of(vec![
-        kw("LET"),
-        ident("x"),
-        kw("="),
-        ident("a"),
-        kw("+"),
-    ]));
+    let e = build(
+        brand,
+        vec![kw("LET"), ident("x"), kw("="), ident("a"), kw("+")],
+    );
     assert_eq!(e.shape(), DispatchShape::Keyworded);
     assert_eq!(e.operator_probe(), None);
 }
 
 #[test]
 fn function_value_call_shape_unchanged() {
+    let program = program_storage();
+    let brand = program.brand().region();
     // `f x y` — lowercase identifier head, no keywords.
-    let e = KExpression::new(parts_of(vec![ident("f"), ident("x"), ident("y")]));
+    let e = build(brand, vec![ident("f"), ident("x"), ident("y")]);
     assert_eq!(e.shape(), DispatchShape::FunctionValueCall);
     assert_eq!(e.operator_probe(), None);
 }
 
 #[test]
 fn cached_fields_equal_on_demand_recompute() {
-    let e = KExpression::new(parts_of(vec![
-        ident("a"),
-        kw("+"),
-        ident("b"),
-        kw("-"),
-        ident("c"),
-    ]));
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(
+        brand,
+        vec![ident("a"), kw("+"), ident("b"), kw("-"), ident("c")],
+    );
     // Cache must match a fresh structural recompute.
-    assert_eq!(e.shape(), classify_dispatch_shape(&e));
+    assert_eq!(e.shape(), classify_dispatch_shape(e.parts));
     let recomputed_key: crate::machine::model::types::UntypedKey = e
         .parts
         .iter()
         .map(|p| match &p.value {
             ExpressionPart::Keyword(s) => {
-                crate::machine::model::types::UntypedElement::Keyword(s.clone())
+                crate::machine::model::types::UntypedElement::Keyword((*s).to_string())
             }
             _ => crate::machine::model::types::UntypedElement::Slot,
         })
@@ -309,48 +353,62 @@ fn cached_fields_equal_on_demand_recompute() {
     assert_eq!(e.untyped_key(), recomputed_key);
 }
 
+/// A node is `Copy`, so handing one on copies the whole structural cache with it — no rebuild and
+/// no re-derivation at the destination.
 #[test]
-fn cache_survives_clone() {
-    let e = KExpression::new(parts_of(vec![
-        ident("a"),
-        kw("|"),
-        ident("b"),
-        kw("|"),
-        ident("c"),
-    ]));
-    let c = e.clone();
+fn cache_rides_a_copy() {
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(
+        brand,
+        vec![ident("a"), kw("|"), ident("b"), kw("|"), ident("c")],
+    );
+    let c = e;
     assert_eq!(c.shape(), DispatchShape::OperatorChain);
     assert_eq!(c.operator_probe(), Some("|"));
     assert_eq!(c.untyped_key(), e.untyped_key());
+    assert_eq!(c.stored_key(), e.stored_key());
 }
 
 #[test]
 fn key_and_shape_invariant_across_eager_slot_variants() {
-    // The dispatch-time splice replaces an eager `Slot` part with `Spliced` (also a
-    // `Slot`), so shape / key / probe are invariant under it. Every eager-part
-    // variant contributes `Slot`, so the classification of an `a + <slot> + c` chain
-    // must be identical regardless of which eager variant fills the middle slot.
-    let with_expr = KExpression::new(parts_of(vec![
-        ident("a"),
-        kw("+"),
-        expr(vec![ident("b")]),
-        kw("+"),
-        ident("c"),
-    ]));
-    let with_list = KExpression::new(parts_of(vec![
-        ident("a"),
-        kw("+"),
-        ExpressionPart::ListLiteral(vec![ident("b")]),
-        kw("+"),
-        ident("c"),
-    ]));
-    let with_dict = KExpression::new(parts_of(vec![
-        ident("a"),
-        kw("+"),
-        ExpressionPart::DictLiteral(vec![(ident("k"), ident("v"))]),
-        kw("+"),
-        ident("c"),
-    ]));
+    let program = program_storage();
+    let brand = program.brand().region();
+    // Every eager-part variant contributes `Slot`, so the classification of an
+    // `a + <slot> + c` chain is identical regardless of which eager variant fills
+    // the middle slot — which is what lets the scheduler carry the cache over to
+    // its working node and splice a resolved sub-result into that slot without
+    // reclassifying.
+    let with_expr = build(
+        brand,
+        vec![
+            ident("a"),
+            kw("+"),
+            expr(brand, vec![ident("b")]),
+            kw("+"),
+            ident("c"),
+        ],
+    );
+    let with_list = build(
+        brand,
+        vec![
+            ident("a"),
+            kw("+"),
+            list(brand, vec![ident("b")]),
+            kw("+"),
+            ident("c"),
+        ],
+    );
+    let with_dict = build(
+        brand,
+        vec![
+            ident("a"),
+            kw("+"),
+            dict(brand, vec![(ident("k"), ident("v"))]),
+            kw("+"),
+            ident("c"),
+        ],
+    );
     assert_eq!(with_expr.shape(), DispatchShape::OperatorChain);
     assert_eq!(with_expr.shape(), with_list.shape());
     assert_eq!(with_expr.shape(), with_dict.shape());
@@ -364,15 +422,14 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
     use crate::machine::model::types::{
         Argument, ExpressionSignature, ReturnType, SignatureElement,
     };
+    let program = program_storage();
+    let brand = program.brand().region();
     // `a + b + c` against a `Slot + Slot + Slot` signature: the two
     // `untyped_key`s MUST agree (the invariant at signature.rs:23).
-    let e = KExpression::new(parts_of(vec![
-        ident("a"),
-        kw("+"),
-        ident("b"),
-        kw("+"),
-        ident("c"),
-    ]));
+    let e = build(
+        brand,
+        vec![ident("a"), kw("+"), ident("b"), kw("+"), ident("c")],
+    );
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
@@ -395,26 +452,16 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
     assert_eq!(e.untyped_key(), sig.untyped_key());
 }
 
-fn num(n: f64) -> ExpressionPart<'static> {
-    ExpressionPart::Literal(KLiteral::Number(n))
-}
-fn record(fields: Vec<(&str, ExpressionPart<'static>)>) -> ExpressionPart<'static> {
-    ExpressionPart::RecordLiteral(
-        fields
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect(),
-    )
-}
-fn sigil(parts: Vec<ExpressionPart<'static>>) -> ExpressionPart<'static> {
-    ExpressionPart::SigiledTypeExpr(Box::new(KExpression::new(parts_of(parts))))
-}
-
 /// `(f x) 1` — nested-`Expression` head followed by a non-keyword part.
 /// Classifier routes to `HeadDeferred` so the head is evaluated first.
 #[test]
 fn head_deferred_for_nested_expression_head() {
-    let e = KExpression::new(parts_of(vec![expr(vec![ident("f"), ident("x")]), num(1.0)]));
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(
+        brand,
+        vec![expr(brand, vec![ident("f"), ident("x")]), num(1.0)],
+    );
     assert_eq!(e.shape(), DispatchShape::HeadDeferred);
 }
 
@@ -422,10 +469,15 @@ fn head_deferred_for_nested_expression_head() {
 /// Routes to `TypeHeadDeferred` (the type-shaped head lane).
 #[test]
 fn type_head_deferred_for_sigiled_head() {
-    let e = KExpression::new(parts_of(vec![
-        sigil(vec![ty("MyCarrier")]),
-        record(vec![("x", num(1.0))]),
-    ]));
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(
+        brand,
+        vec![
+            sigil(brand, vec![ty("MyCarrier")]),
+            record(brand, vec![("x", num(1.0))]),
+        ],
+    );
     assert_eq!(e.shape(), DispatchShape::TypeHeadDeferred);
 }
 
@@ -433,14 +485,21 @@ fn type_head_deferred_for_sigiled_head() {
 /// surface, not a head-deferred call (no body to apply the head to).
 #[test]
 fn single_part_nested_expression_stays_literal_pass_through() {
-    let e = KExpression::new(parts_of(vec![expr(vec![ident("inner")])]));
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(brand, vec![expr(brand, vec![ident("inner")])]);
     assert_eq!(e.shape(), DispatchShape::LiteralPassThrough);
 }
 
 /// `Point {x = 1}` — leaf-`Type` head + body. Routes to `TypeCall`.
 #[test]
 fn type_leaf_head_multipart_is_type_call() {
-    let e = KExpression::new(parts_of(vec![ty("Point"), record(vec![("x", num(1.0))])]));
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(
+        brand,
+        vec![ty("Point"), record(brand, vec![("x", num(1.0))])],
+    );
     assert_eq!(e.shape(), DispatchShape::TypeCall);
 }
 
@@ -448,7 +507,12 @@ fn type_leaf_head_multipart_is_type_call() {
 /// `FunctionValueCall`.
 #[test]
 fn identifier_head_multipart_is_function_value_call() {
-    let e = KExpression::new(parts_of(vec![ident("f"), record(vec![("x", num(1.0))])]));
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(
+        brand,
+        vec![ident("f"), record(brand, vec![("x", num(1.0))])],
+    );
     assert_eq!(e.shape(), DispatchShape::FunctionValueCall);
 }
 
@@ -456,28 +520,38 @@ fn identifier_head_multipart_is_function_value_call() {
 /// Heads must resolve to something callable; this is the error shape.
 #[test]
 fn non_callable_literal_head_is_error_shape() {
-    let e = KExpression::new(parts_of(vec![num(99.0), num(1.0)]));
+    let program = program_storage();
+    let brand = program.brand().region();
+    let e = build(brand, vec![num(99.0), num(1.0)]);
     assert_eq!(e.shape(), DispatchShape::NonCallableHead);
 
     // `[1 2 3] x` — list head is equally non-callable.
-    let with_list = KExpression::new(parts_of(vec![
-        ExpressionPart::ListLiteral(vec![num(1.0), num(2.0), num(3.0)]),
-        ident("x"),
-    ]));
+    let with_list = build(
+        brand,
+        vec![list(brand, vec![num(1.0), num(2.0), num(3.0)]), ident("x")],
+    );
     assert_eq!(with_list.shape(), DispatchShape::NonCallableHead);
 }
 
 /// A keyword-free multi-part expression never classifies as `Keyworded` — that
-/// shape is now produced only by the keyword sweep. Covers every callable-head
+/// shape is produced only by the keyword sweep. Covers every callable-head
 /// and non-callable-head surface.
 #[test]
 fn keyworded_only_on_real_keyword() {
-    let cases: Vec<KExpression<'static>> = vec![
-        KExpression::new(parts_of(vec![ty("Point"), record(vec![("x", num(1.0))])])),
-        KExpression::new(parts_of(vec![ident("f"), record(vec![("x", num(1.0))])])),
-        KExpression::new(parts_of(vec![expr(vec![ident("g")]), num(1.0)])),
-        KExpression::new(parts_of(vec![sigil(vec![ty("F")]), num(1.0)])),
-        KExpression::new(parts_of(vec![num(99.0), num(1.0)])),
+    let program = program_storage();
+    let brand = program.brand().region();
+    let cases: Vec<KExpression<'_>> = vec![
+        build(
+            brand,
+            vec![ty("Point"), record(brand, vec![("x", num(1.0))])],
+        ),
+        build(
+            brand,
+            vec![ident("f"), record(brand, vec![("x", num(1.0))])],
+        ),
+        build(brand, vec![expr(brand, vec![ident("g")]), num(1.0)]),
+        build(brand, vec![sigil(brand, vec![ty("F")]), num(1.0)]),
+        build(brand, vec![num(99.0), num(1.0)]),
     ];
     for e in &cases {
         assert_ne!(
@@ -490,20 +564,22 @@ fn keyworded_only_on_real_keyword() {
 
 #[test]
 fn debug_for_expression_part_and_kexpression() {
+    let program = program_storage();
+    let brand = program.brand().region();
     // Exact format isn't load-bearing; just assert non-empty / tagged output.
-    let parts: Vec<ExpressionPart<'static>> = vec![
+    let parts: Vec<ExpressionPart<'_>> = vec![
         kw("LET"),
         ident("x"),
-        ExpressionPart::Type(TypeIdentifier::leaf("Number".into())),
-        ExpressionPart::Literal(KLiteral::Number(1.0)),
-        ExpressionPart::ListLiteral(vec![ident("a")]),
-        ExpressionPart::DictLiteral(vec![(ident("k"), ident("v"))]),
-        expr(vec![ident("z")]),
+        ty("Number"),
+        num(1.0),
+        list(brand, vec![ident("a")]),
+        dict(brand, vec![(ident("k"), ident("v"))]),
+        expr(brand, vec![ident("z")]),
     ];
     for p in &parts {
         let s = format!("{:?}", p);
         assert!(!s.is_empty());
     }
-    let e = KExpression::new(parts.into_iter().map(Spanned::bare).collect());
+    let e = build(brand, parts);
     assert!(format!("{:?}", e).starts_with("KExpression"));
 }

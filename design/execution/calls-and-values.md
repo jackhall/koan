@@ -45,7 +45,7 @@ read the concrete runtime shape directly:
 Indirecting these through a trait, an opaque handle, a generic
 parameter, or a model/runtime split each fail the same way: the
 recursive composite variants (`Tagged.value: Rc<KObject>`,
-`List(&'a ListSubstrate<'a>)`, `ExpressionPart::Future(&'a KObject)`)
+`List(&'a ListSubstrate<'a>)`, `KObject::KExpression(KExpression<'a>)`)
 re-form the union at every nesting level, and the hot consumers
 need the concrete region/scope/path identity that the abstraction
 would have to expose anyway. The cleanest available shape is the
@@ -71,10 +71,12 @@ recursive tree-walker can't get cheaply.
   push the woken consumer onto the run-set. Compared to a recursive
   function call on a `&KExpression`, this is roughly an order of
   magnitude more bookkeeping per node.
-- **Per user-fn call.** The body executor clones each body statement onto
-  its own slot (over the parts vector) so the slot has its own
+- **Per user-fn call.** The body executor copies each body statement onto
+  its own slot as a [`WorkingExpression`](../../src/machine/model/ast/working.rs)
+  so the slot has its own
   working copy for [the splice mechanism](scheduler.md#working-copy-splice).
-  Clone cost is O(body size). It also acquires a per-call frame for the
+  That copy is a bump of the statement's own parts run — O(its part count), each
+  part a pointer copy of parsed AST, never a recursive rebuild. It also acquires a per-call frame for the
   hop — an allocation-light tail hop mints no region at all (the region is
   minted lazily on first allocation), while a hop that genuinely allocates
   mints a fresh `CallFrame` (one `Rc<CallFrame>` plus its six
@@ -108,7 +110,7 @@ recursive tree-walker can't get cheaply.
 ### Vs a tree-walking interpreter
 
 A recursive descent on `&KExpression` would skip the slot table, edge
-bookkeeping, and body clone — probably 5-10× faster on tight numeric
+bookkeeping, and working copy — probably 5-10× faster on tight numeric
 loops. What it can't do cheaply:
 
 - **TCO.** Direct recursion grows the host stack; the koan model

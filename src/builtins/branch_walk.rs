@@ -147,6 +147,7 @@ pub(crate) fn arm_tail<'a>(
         }
     });
     block_tail(
+        root.brand(),
         FramePlacement::FreshChild { frame },
         BlockScope::FrameOwn,
         Some(seed),
@@ -177,20 +178,20 @@ pub(crate) fn find_branch_body_by_tag<'a>(
         let tag_part = &parts[i];
         let arrow_part = &parts[i + 1];
         let body_part = &parts[i + 2];
-        let tag_name = match &tag_part.value {
+        let tag_name = match tag_part.value {
             // Variant tags are capitalized type names (`Some`, `Ok`, `TypeMismatch`).
             ExpressionPart::Type(t) => t.render(),
             // Booleans parse as `KLiteral::Boolean`, not type tokens; accept them so
             // `MATCH` on a `Bool` can spell its arms `true ->` / `false ->`.
             ExpressionPart::Literal(KLiteral::Boolean(b)) => {
-                if *b {
+                if b {
                     "true".to_string()
                 } else {
                     "false".to_string()
                 }
             }
             // `_` is a pure-symbol token classified as `Keyword`, not a type name.
-            ExpressionPart::Keyword(s) if allow_wildcard && s == "_" => s.clone(),
+            ExpressionPart::Keyword(s) if allow_wildcard && s == "_" => s.to_string(),
             other => {
                 return Err(format!(
                     "branch tag must be a capitalized variant tag or boolean literal, got {}",
@@ -198,8 +199,8 @@ pub(crate) fn find_branch_body_by_tag<'a>(
                 ));
             }
         };
-        match &arrow_part.value {
-            ExpressionPart::Keyword(k) if k == "->" => {}
+        match arrow_part.value {
+            ExpressionPart::Keyword("->") => {}
             other => {
                 return Err(format!(
                     "branch separator must be `->`, got {}",
@@ -207,8 +208,8 @@ pub(crate) fn find_branch_body_by_tag<'a>(
                 ));
             }
         }
-        let body_expr = match &body_part.value {
-            ExpressionPart::Expression(e) => (**e).clone(),
+        let body_expr = match body_part.value {
+            ExpressionPart::Expression(e) => *e,
             other => {
                 return Err(format!(
                     "branch body must be a parenthesized expression, got {}",
@@ -252,7 +253,7 @@ enum HeadMode {
 /// resolution (parked or unbound) is not a synchronously-known type.
 fn resolve_head_type<'a>(
     scope: &Scope<'a>,
-    token: &TypeIdentifier,
+    token: &TypeIdentifier<'a>,
     chain: Option<Rc<LexicalFrame>>,
     types: &TypeRegistry,
 ) -> Result<KType, String> {
@@ -328,8 +329,8 @@ pub(crate) fn find_branch_body_by_type<'a>(
         let arrow_part = &parts[i + 1];
         let body_part = &parts[i + 2];
 
-        match &arrow_part.value {
-            ExpressionPart::Keyword(k) if k == "->" => {}
+        match arrow_part.value {
+            ExpressionPart::Keyword("->") => {}
             other => {
                 return Err(format!(
                     "branch separator must be `->`, got {}",
@@ -337,8 +338,8 @@ pub(crate) fn find_branch_body_by_type<'a>(
                 ));
             }
         }
-        let body_expr = match &body_part.value {
-            ExpressionPart::Expression(e) => (**e).clone(),
+        let body_expr = match body_part.value {
+            ExpressionPart::Expression(e) => *e,
             other => {
                 return Err(format!(
                     "branch body must be a parenthesized expression, got {}",
@@ -347,13 +348,13 @@ pub(crate) fn find_branch_body_by_type<'a>(
             }
         };
 
-        match &head_part.value {
+        match head_part.value {
             // Booleans parse as `KLiteral::Boolean`; a head is an exact arm admitting a `Bool`
             // scrutinee of the same value, binding `Null` to `it` (a boolean carries no payload).
             ExpressionPart::Literal(KLiteral::Boolean(b)) => {
-                if matches!(scrutinee, KObject::Bool(sb) if sb == b) {
+                if matches!(scrutinee, KObject::Bool(sb) if *sb == b) {
                     exact_arms.push(ExactArm {
-                        head_label: if *b { "true" } else { "false" }.to_string(),
+                        head_label: if b { "true" } else { "false" }.to_string(),
                         body: body_expr,
                         binds_payload: false,
                     });
@@ -377,7 +378,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
                         }
                     }
                     HeadMode::Scope => {
-                        let kt = resolve_head_type(scope, token, chain.clone(), types)?;
+                        let kt = resolve_head_type(scope, &token, chain.clone(), types)?;
                         typed_arms.push(TypedArm {
                             head_label: label,
                             ktype: kt,

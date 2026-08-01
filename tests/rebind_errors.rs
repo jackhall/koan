@@ -8,16 +8,11 @@ use std::rc::Rc;
 
 use koan::builtins::test_support::{lookup_binding, SharedBuf, TestRun};
 use koan::machine::model::KObject;
-use koan::machine::{run_root_storage, KError, KErrorKind};
-use koan::parse::parse;
+use koan::machine::{program_storage, run_root_storage, KError, KErrorKind};
 
 fn run_collecting_errors(test_run: &mut TestRun<'_>, source: &str) -> Vec<Result<(), KError>> {
     let scope = test_run.scope;
-    let exprs = parse(source).expect("parse should succeed");
-    let mut ids = Vec::new();
-    for e in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(e, scope));
-    }
+    let ids = test_run.dispatch_source_in(scope, source);
     let _ = test_run.runtime.execute();
     // These tests assert only on `Ok`/`Err`, never on the produced value, so discard the carrier —
     // the scheduler re-anchors a read to its own borrow and the value need not escape it.
@@ -30,8 +25,9 @@ fn run_collecting_errors(test_run: &mut TestRun<'_>, source: &str) -> Vec<Result
 /// duplicate is rejected per the decided rule).
 #[test]
 fn same_scope_let_rebind_errors() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let results = run_collecting_errors(&mut test_run, "LET x = 1\nLET x = 2");
     assert!(results[0].is_ok(), "first LET should succeed");
     let err = match &results[1] {
@@ -49,8 +45,9 @@ fn same_scope_let_rebind_errors() {
 /// any subsequent `LET x = ...` (function or otherwise) collides.
 #[test]
 fn let_function_collides_with_let_value() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let results = run_collecting_errors(
         &mut test_run,
         "LET x = 1\n\
@@ -73,8 +70,9 @@ fn let_function_collides_with_let_value() {
 /// from a same-shape overload with different KTypes.
 #[test]
 fn exact_signature_duplicate_errors() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let results = run_collecting_errors(
         &mut test_run,
         "FN (DOUBLE x :Number) -> Number = (x)\n\
@@ -95,8 +93,9 @@ fn exact_signature_duplicate_errors() {
 /// doesn't collide with the outer LET.
 #[test]
 fn cross_scope_shadowing_succeeds() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let results = run_collecting_errors(
         &mut test_run,

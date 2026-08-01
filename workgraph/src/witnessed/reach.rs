@@ -46,6 +46,8 @@
 
 use std::rc::{Rc, Weak};
 
+use smallvec::{smallvec, SmallVec};
+
 use super::{
     ComposeWitness, Reattachable, Region, RegionHandle, RegionOwner, StorageProfile, Witness,
 };
@@ -67,8 +69,8 @@ pub unsafe trait PinsRegion: RegionOwner {
 
     /// Whether this owner's storage outlives every region that could retain it, so an owning pin on
     /// it buys nothing and taking one only risks a cycle. `false` by default — the safe answer, an
-    /// extra pin never dangles. A workload overrides it for its eternal tier (Koan's run-root
-    /// [`RegionHost::is_run_root`](super::RegionHost::is_run_root)).
+    /// extra pin never dangles. A workload overrides it for its eternal tier
+    /// ([`RegionHost::is_eternal`](super::RegionHost::is_eternal)).
     ///
     /// # Safety
     ///
@@ -100,8 +102,28 @@ pub struct ReachDescription<F: PinsRegion> {
     /// The owner of the region this description is hosted in — the value's residence.
     host: Weak<F>,
     /// The regions the value's borrows reach. Home appears here only when the borrows reach it.
-    members: Vec<Weak<F>>,
+    members: ReachSet<Weak<F>>,
 }
+
+/// The storage a reach member set takes, in both the owned ([`PinBundle`]) and the described
+/// ([`ReachDescription`]) form: **inline up to two members, heap past that**.
+///
+/// Two slots is where the shapes are. A reach is empty for a region-pure value and a singleton for a
+/// single-region one — a lifted closure over one source region, a value borrowing its producer
+/// frame, a step's own anchor — and those two shapes dominate every table and every fold. The pair
+/// is the next commonest: a product composed from two operands living in different regions. Past
+/// that a reach is a genuine multi-region antichain and pays for a heap buffer, as it did before.
+///
+/// The inline slots are free at this width: under smallvec's `union` representation (enabled in this
+/// crate's manifest for exactly this reason) `SmallVec<[T; 2]>` measures 24 bytes for a
+/// pointer-sized member — what the `Vec<T>` it replaced measured — so the common cases lose their
+/// allocation without the uncommon ones growing the type. The default enum representation would
+/// spend a discriminant word and cost 32.
+///
+/// This shrinks an allocation *count*; it moves nothing. A description stays heap-owned and
+/// `Drop`-bearing whatever its arity — its members are `Weak`, whose counts must be released at
+/// region death — which is what keeps it out of the region's bump ([`Region::intern_reach`]).
+type ReachSet<T> = SmallVec<[T; 2]>;
 
 impl<F: PinsRegion> ReachDescription<F> {
     /// The description mirror of an antichain of owners — `Weak` members for side-table hosting,
@@ -283,12 +305,13 @@ impl<F: PinsRegion> ReachDescription<F> {
         }
         // Get-or-mint the full antichain's mirror in the region's side table under that region's own
         // owner as host — membership is exact, `dest`'s own region included — then strip the self
-        // member from the owned copy that rides out to the caller (the binding entry, the delivery
-        // envelope, the region's own retention). The intern key comes off `composed`, *before* the
-        // self-rule strip, so it matches the description's membership rather than the bundle's.
+        // member from the antichain in place, and hand that same bundle to the caller (the binding
+        // entry, the delivery envelope, the region's own retention) rather than a filtered copy of
+        // it. The intern key comes off `composed`, *before* the self-rule strip, so it matches the
+        // description's membership rather than the bundle's — which is what orders these two lines.
         let stored = dest.region().intern_reach(&composed);
-        let bundle = composed.without_region(dest.region());
-        (stored, bundle)
+        composed.remove_region(dest.region());
+        (stored, composed)
     }
 }
 
@@ -304,21 +327,21 @@ impl<F: PinsRegion> ReachDescription<F> {
 /// with outer-chain subsumption: a member is dropped when another member's [`PinsRegion::pins_region`]
 /// chain already keeps its region alive, so the bundle stays an antichain of the deepest owners.
 pub struct PinBundle<F: PinsRegion> {
-    members: Vec<Rc<F>>,
+    members: ReachSet<Rc<F>>,
 }
 
 impl<F: PinsRegion> PinBundle<F> {
     /// The empty bundle — a frameless / run-region terminal that needs no held pin.
     pub fn empty() -> Self {
         PinBundle {
-            members: Vec::new(),
+            members: ReachSet::new(),
         }
     }
 
     /// A single region owner — the common case (a scope, a same-region value, a producer frame).
     pub fn singleton(owner: Rc<F>) -> Self {
         PinBundle {
-            members: vec![owner],
+            members: smallvec![owner],
         }
     }
 
@@ -377,14 +400,19 @@ impl<F: PinsRegion> PinBundle<F> {
     /// neither. Exact-region only, by pointer identity: an *ancestor* of `region` stays, since
     /// owning a pin on an outer frame closes no cycle.
     pub fn without_region(&self, region: &F::Region) -> Self {
-        PinBundle {
-            members: self
-                .members
-                .iter()
-                .filter(|m| !std::ptr::eq(m.region() as *const _, region as *const _))
-                .map(Rc::clone)
-                .collect(),
-        }
+        let mut without = self.clone();
+        without.remove_region(region);
+        without
+    }
+
+    /// [`Self::without_region`] applied **in place**, for a caller that already owns the bundle it
+    /// is about to hand on — the composed antichain at a [`ReachDescription::mint`], an operand's
+    /// pins moved out of a consumed envelope. Dropping the self member is a `retain` over storage
+    /// the caller has already paid for, so the self rule costs no second buffer and no refcount
+    /// traffic: the surviving members are moved, never cloned and re-dropped.
+    pub(in crate::witnessed) fn remove_region(&mut self, region: &F::Region) {
+        self.members
+            .retain(|m| !std::ptr::eq(m.region() as *const _, region as *const _));
     }
 
     /// This bundle keeping only the members whose region satisfies `keep` — the **retention
@@ -431,21 +459,28 @@ impl<F: PinsRegion> PinBundle<F> {
     /// [`Region::intern_reach`] keys its side table on, well-defined on two grounds.
     ///
     /// The antichain is unique *as a set*: [`Self::insert`]'s outer-chain subsumption normalizes to
-    /// the deepest owners regardless of fold order, so only the `Vec` order varies and sorting
+    /// the deepest owners regardless of fold order, so only the stored order varies and sorting
     /// removes it. And the addresses are stable for as long as an entry keyed on them lives: the
     /// entry's `Weak` members keep each `Rc<F>` allocation itself alive through the weak count, so
     /// no member address is reused while a description naming it exists.
     ///
     /// The host never enters the key — every description in one table shares that table's region
     /// owner as host.
-    pub(in crate::witnessed) fn intern_key(&self) -> Box<[usize]> {
-        let mut key: Vec<usize> = self
+    ///
+    /// Returned in the same inline-up-to-two storage the members use ([`ReachSet`]), because a key
+    /// is built on **every** mint and kept only by the one that misses. A hot path's reach shape is
+    /// invariant across iterations — reach is a property of the regions involved, not the values —
+    /// so the table's steady state is all hits, and a probe that allocated would allocate and free a
+    /// key per mint to rediscover an entry the table already holds. [`Region::intern_reach`] boxes
+    /// the key at the insert, where the map keeps it.
+    pub(in crate::witnessed) fn intern_key(&self) -> ReachSet<usize> {
+        let mut key: ReachSet<usize> = self
             .members
             .iter()
             .map(|m| Rc::as_ptr(m) as usize)
             .collect();
         key.sort_unstable();
-        key.into_boxed_slice()
+        key
     }
 
     /// The bundle's members — white-box reach introspection, gated behind `test-hooks` for an

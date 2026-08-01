@@ -19,7 +19,7 @@ use super::param_refs::{kexpression_references_any, type_expr_references_any};
 /// `:(…)` / dotted return's inner expression may reference a parameter unbound there.
 pub(crate) enum ReturnTypeRaw<'a> {
     Resolved(KType),
-    TypeExprCarrier(TypeIdentifier),
+    TypeExprCarrier(TypeIdentifier<'a>),
     ExprCarrier(KExpression<'a>),
 }
 
@@ -29,7 +29,7 @@ pub(crate) enum ReturnTypeRaw<'a> {
 pub(crate) enum ReturnTypeState<'a> {
     Done(KType),
     Pending {
-        te: TypeIdentifier,
+        te: TypeIdentifier<'a>,
         producers: Vec<NodeId>,
     },
     Deferred(DeferredReturn<'a>),
@@ -70,11 +70,11 @@ pub(crate) fn extract_type_slot_raw<'a>(
 ) -> Result<ReturnTypeRaw<'a>, KError> {
     use crate::machine::{arg_object, arg_type, arg_unresolved_type};
     if let Some(te) = arg_unresolved_type(args, slot) {
-        Ok(ReturnTypeRaw::TypeExprCarrier(te.clone()))
+        Ok(ReturnTypeRaw::TypeExprCarrier(*te))
     } else if let Some(kt) = arg_type(args, slot) {
         Ok(ReturnTypeRaw::Resolved(kt))
     } else if let Some(KObject::KExpression(e)) = arg_object(args, slot) {
-        Ok(ReturnTypeRaw::ExprCarrier(e.clone()))
+        Ok(ReturnTypeRaw::ExprCarrier(*e))
     } else {
         Err(KError::new(KErrorKind::ShapeError(format!(
             "{label} must be a type expression (e.g. `Number`, `:(LIST OF Str)`)"
@@ -97,7 +97,7 @@ pub(crate) fn classify_return_type<'a>(
     match raw {
         ReturnTypeRaw::Resolved(kt) => Ok(ReturnTypeState::Done(kt)),
         ReturnTypeRaw::TypeExprCarrier(te) => {
-            if type_expr_references_any(&te, param_names) {
+            if type_expr_references_any(te, param_names) {
                 return Ok(ReturnTypeState::Deferred(DeferredReturn::Type(te)));
             }
             // Gated to the FN's lexical position — a return type naming a later type is a
@@ -120,7 +120,7 @@ pub(crate) fn classify_return_type<'a>(
     }
 }
 
-pub(super) fn make_capture<'a>(te: TypeIdentifier) -> ReturnTypeCapture<'a> {
+pub(super) fn make_capture<'a>(te: TypeIdentifier<'_>) -> ReturnTypeCapture<'a> {
     ReturnTypeCapture::Unresolved(te.render())
 }
 
@@ -136,7 +136,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(name) => {
-            let te = TypeIdentifier::leaf(name);
+            let te = TypeIdentifier::leaf(scope.brand().alloc_text(&name));
             resolve_at_wake(scope, "FN return-type slot", |s| {
                 s.resolve_type_identifier(&te, None, types)
             })

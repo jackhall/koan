@@ -4,7 +4,7 @@
 //! immediately, an unbound name errors, and a still-finalizing head placeholder parks via a
 //! [`park_resume`] closure that re-runs the fast lane on resume.
 
-use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, NameLookup, NodeId};
 
 use super::apply_callable::{apply_callable, ResolvedCallable};
@@ -13,14 +13,14 @@ use super::{park_resume, Outcome, ProducerStanding};
 
 pub(super) fn initial<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: KExpression<'step>,
+    expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    let head = match &expr.parts[0].value {
-        ExpressionPart::Identifier(n) => n.clone(),
+    let head = match expr.parts[0].value {
+        WorkingPart::Ast(ExpressionPart::Identifier(n)) => n,
         _ => unreachable!("FunctionValueCall shape implies Identifier head"),
     };
     let chain = ctx.chain_deref();
-    match ctx.current_scope().resolve_value_delivered(&head, chain) {
+    match ctx.current_scope().resolve_value_delivered(head, chain) {
         // The head is **adopted** into the calling scope's region rather than read bare: the adopt
         // mints the callable's reach there and retains it, so the captured foreign environment
         // outlives the application and the re-anchored value is valid at `'step`. Same door the
@@ -32,11 +32,11 @@ pub(super) fn initial<'step>(
         Some(NameLookup::Parked(producer)) => match ctx.producer_standing(producer) {
             ProducerStanding::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
             ProducerStanding::Ready => {
-                Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head))))
+                Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head.to_string()))))
             }
             ProducerStanding::Park => install_head_park(producer, expr),
         },
-        None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head)))),
+        None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head.to_string())))),
     }
 }
 
@@ -48,7 +48,7 @@ pub(super) fn initial<'step>(
 /// (`HeadDeferred`), never here. Anything else is a non-callable `TypeMismatch`.
 fn dispatch_callable_value<'step>(
     ctx: &SchedulerView<'step, '_>,
-    expr: KExpression<'step>,
+    expr: WorkingExpression<'step>,
     delivered: &DeliveredCarried,
 ) -> Outcome<'step> {
     // The head is **adopted** into the calling scope's region as a callable rather than read bare:
@@ -71,7 +71,7 @@ fn dispatch_callable_value<'step>(
 /// Park the whole call on its still-finalizing head `producer` and re-run the fast lane on
 /// resume. The carrier surfaces the original (unspliced) call expression for the drain-end
 /// deadlock summary.
-fn install_head_park<'step>(producer: NodeId, expr: KExpression<'step>) -> Outcome<'step> {
+fn install_head_park<'step>(producer: NodeId, expr: WorkingExpression<'step>) -> Outcome<'step> {
     let carrier = expr.summarize();
     park_resume(
         vec![producer],

@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::core::run_root_storage;
+use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::BindingIndex;
@@ -52,10 +52,11 @@ fn register_pairwise_fixture<'a>(
 /// positionally against the `OP`-declared body.
 #[test]
 fn pairwise_combiner_folds_left() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     register_pairwise_fixture(&mut test_run, "MINUS", FoldDirection::Left);
-    let result = test_run.run_one(parse_one("10 % 4 % 1 % 0"));
+    let result = test_run.run_one(parse_one(&program, "10 % 4 % 1 % 0"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 8.0),
         "a left fold nests ((p1 ⊙ p2) ⊙ p3) = (14 - 5) - 1 = 8; got {}",
@@ -67,10 +68,11 @@ fn pairwise_combiner_folds_left() {
 /// observably distinct through one non-associative combiner.
 #[test]
 fn pairwise_combiner_folds_right() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     register_pairwise_fixture(&mut test_run, "MINUS", FoldDirection::Right);
-    let result = test_run.run_one(parse_one("10 % 4 % 1 % 0"));
+    let result = test_run.run_one(parse_one(&program, "10 % 4 % 1 % 0"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 10.0),
         "a right fold nests (p1 ⊙ (p2 ⊙ p3)) = 14 - (5 - 1) = 10; got {}",
@@ -85,11 +87,12 @@ fn pairwise_combiner_folds_right() {
 /// observable trace of how many times the operand actually ran.
 #[test]
 fn pairwise_combiner_evaluates_a_shared_operand_once() {
+    let program = program_storage();
     let region = run_root_storage();
-    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     register_pairwise_fixture(&mut test_run, "MINUS", FoldDirection::Left);
     test_run.run("FN (LOUD x :Number) -> Number = ((PRINT x) (x))");
-    let result = test_run.run_one(parse_one("1 % (LOUD 2) % 3"));
+    let result = test_run.run_one(parse_one(&program, "1 % (LOUD 2) % 3"));
     assert!(
         matches!(result, KObject::Number(n) if *n == -2.0),
         "the pairs are 1 + 2 = 3 and 2 + 3 = 5, folded through `MINUS` to 3 - 5 = -2; got {}",
@@ -109,11 +112,12 @@ fn pairwise_combiner_evaluates_a_shared_operand_once() {
 /// as an ordinary dispatch failure at the chain, not at registration: group validation is deferred.
 #[test]
 fn pairwise_undeclared_combiner_errors_at_the_use_site() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     register_pairwise_fixture(&mut test_run, "NOWHERE", FoldDirection::Left);
 
-    let error = test_run.run_one_err(parse_one("1 % 2 % 3"));
+    let error = test_run.run_one_err(parse_one(&program, "1 % 2 % 3"));
     let message = error.to_string();
     assert!(
         message.contains("NOWHERE"),
@@ -127,11 +131,12 @@ fn pairwise_undeclared_combiner_errors_at_the_use_site() {
 /// post-eager-subs re-resolve (`keyworded::finish`).
 #[test]
 fn fold_left_run_over_named_operands_resolves_the_trailing_name() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET x = 1\nLET y = 2\nLET z = 4");
     assert!(
-        matches!(test_run.run_one(parse_one("x + y + z")), KObject::Number(n) if *n == 7.0),
+        matches!(test_run.run_one(parse_one(&program, "x + y + z")), KObject::Number(n) if *n == 7.0),
         "every operand of a named run reaches its binding",
     );
 }

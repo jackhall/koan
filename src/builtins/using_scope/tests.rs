@@ -9,33 +9,36 @@ use std::rc::Rc;
 use crate::builtins::test_support::{parse_one, per_call_storage, run_root_bare, TestRun};
 use crate::machine::model::{Carried, KObject};
 use crate::machine::KErrorKind;
-use crate::machine::{run_root_storage, BindingIndex, FrameCoverage, Scope};
+use crate::machine::{program_storage, run_root_storage, BindingIndex, FrameCoverage, Scope};
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = (LET val = 42)");
-    let result = test_run.run_one(parse_one("USING some_module SCOPE (val)"));
+    let result = test_run.run_one(parse_one(&program, "USING some_module SCOPE (val)"));
     assert!(matches!(result, KObject::Number(n) if *n == 42.0));
 }
 
 #[test]
 fn using_surfaces_module_function_for_bare_dispatch() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = (LET dbl = (FN (DBL x :Number) -> Number = (x)))");
-    let result = test_run.run_one(parse_one("USING some_module SCOPE (DBL 21)"));
+    let result = test_run.run_one(parse_one(&program, "USING some_module SCOPE (DBL 21)"));
     assert!(matches!(result, KObject::Number(n) if *n == 21.0));
 }
 
 #[test]
 fn using_block_bind_persists_at_call_site() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = (LET val = 1)");
     test_run.run("USING some_module SCOPE (LET local = 5)");
-    let result = test_run.run_one(parse_one("local"));
+    let result = test_run.run_one(parse_one(&program, "local"));
     assert!(matches!(result, KObject::Number(n) if *n == 5.0));
 }
 
@@ -43,10 +46,11 @@ fn using_block_bind_persists_at_call_site() {
 /// window, the surfaced member would silently shadow the bind.
 #[test]
 fn using_block_bind_colliding_with_member_errors() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = (LET x = 1)");
-    let err = test_run.run_one_err(parse_one("USING some_module SCOPE (LET x = 2)"));
+    let err = test_run.run_one_err(parse_one(&program, "USING some_module SCOPE (LET x = 2)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("collides with a surfaced module member") && msg.contains("`x`")),
@@ -58,13 +62,14 @@ fn using_block_bind_colliding_with_member_errors() {
 /// scope, not the call site — opening the module must not change that.
 #[test]
 fn using_module_function_resolves_its_own_internals() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "MODULE some_module = ((LET secret = 99) \
                        (LET getit = (FN (GETIT) -> Number = (secret))))",
     );
-    let result = test_run.run_one(parse_one("USING some_module SCOPE (GETIT)"));
+    let result = test_run.run_one(parse_one(&program, "USING some_module SCOPE (GETIT)"));
     assert!(matches!(result, KObject::Number(n) if *n == 99.0));
 }
 
@@ -73,10 +78,12 @@ fn using_module_function_resolves_its_own_internals() {
 /// (not the first statement's). Pins block semantics through the transparent window.
 #[test]
 fn using_multi_statement_body_sequences_and_returns_last() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = (LET base = 7)");
     let result = test_run.run_one(parse_one(
+        &program,
         "USING some_module SCOPE ((LET local = base) (PRINT \"mid\") (local))",
     ));
     assert!(
@@ -90,11 +97,12 @@ fn using_multi_statement_body_sequences_and_returns_last() {
 /// call-site binding inside the block.
 #[test]
 fn using_window_shadows_call_site_binding() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET val = 1");
     test_run.run("MODULE some_module = (LET val = 7)");
-    let result = test_run.run_one(parse_one("USING some_module SCOPE (val)"));
+    let result = test_run.run_one(parse_one(&program, "USING some_module SCOPE (val)"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
 
@@ -107,8 +115,9 @@ fn using_window_shadows_call_site_binding() {
 /// against use-after-free.
 #[test]
 fn using_functor_result_closure_escapes_soundly() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "FN (MAKE) -> Module = (MODULE res = (LET val = 7))\n\
          LET inst = (MAKE)",
@@ -118,9 +127,9 @@ fn using_functor_result_closure_escapes_soundly() {
     // USING/functor regions would surface under Miri.
     test_run.run("FN (NOOP) -> Number = (1)");
     for _ in 0..10 {
-        test_run.run_one(parse_one("NOOP"));
+        test_run.run_one(parse_one(&program, "NOOP"));
     }
-    let result = test_run.run_one(parse_one("GETV"));
+    let result = test_run.run_one(parse_one(&program, "GETV"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 7.0),
         "GETV must still read the surfaced module `val` after escape + churn",
@@ -135,15 +144,16 @@ fn using_functor_result_closure_escapes_soundly() {
 /// immediate use-after-free; under Miri this pins the rooting path.
 #[test]
 fn using_temporary_functor_result_is_sound() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (MAKE) -> Module = (MODULE res = (LET val = 9))");
     test_run.run("USING (MAKE) SCOPE (FN (GETW) -> Number = (val))");
     test_run.run("FN (NOOP) -> Number = (1)");
     for _ in 0..10 {
-        test_run.run_one(parse_one("NOOP"));
+        test_run.run_one(parse_one(&program, "NOOP"));
     }
-    let result = test_run.run_one(parse_one("GETW"));
+    let result = test_run.run_one(parse_one(&program, "GETW"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 9.0),
         "GETW must read the rooted temporary module's `val` after escape + churn",
@@ -155,12 +165,19 @@ fn using_temporary_functor_result_is_sound() {
 /// surfaces `DispatchFailed`.
 #[test]
 fn using_on_non_module_fails_dispatch() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET n = 5");
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(parse_one("USING n SCOPE (1)"), scope);
+    let root = runtime.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            parse_one(&program, "USING n SCOPE (1)"),
+        ),
+        scope,
+    );
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");

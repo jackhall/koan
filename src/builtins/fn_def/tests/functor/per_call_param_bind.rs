@@ -4,15 +4,16 @@
 
 use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
 use crate::machine::model::{KObject, TypeNode};
-use crate::machine::run_root_storage;
+use crate::machine::{program_storage, run_root_storage};
 
 /// A held `KModule` from a functor body keeps its child-scope region alive across
 /// subsequent run-root churn. End-to-end mirror of
 /// [`crate::machine::model::values::module::tests::functor_per_call_module_lifts_correctly`].
 #[test]
 fn functor_body_module_dispatch_does_not_dangle() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
@@ -24,7 +25,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
 
     test_run.run("FN (NOOP) -> Number = (1)");
     for _ in 0..20 {
-        test_run.run_one(parse_one("NOOP"));
+        test_run.run_one(parse_one(&program, "NOOP"));
     }
     test_run.run("LET other_set = (MAKESET (int_ord_a))");
 
@@ -42,15 +43,16 @@ fn functor_body_module_dispatch_does_not_dangle() {
 /// `er.Carrier` access to return.
 #[test]
 fn functor_body_dotted_type_member_via_per_call_bind() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
          LET int_ord_view = (int_ord :| Ordered)",
     );
     test_run.run("FN (USE_TYPE er :Ordered) -> Any = (er.Carrier)");
-    let result = test_run.run_one_type(parse_one("USE_TYPE int_ord_view"));
+    let result = test_run.run_one_type(parse_one(&program, "USE_TYPE int_ord_view"));
     // Opaque ascription mints a fresh abstract `Carrier` member; the body must return
     // that identity, not the underlying concrete `Number`.
     match test_run.types.node(result) {
@@ -71,8 +73,9 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
 /// its keyworded form was registered in the dead per-call scope and does not travel with the value.
 #[test]
 fn functor_closure_escape_pins_type_class_bind() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
@@ -85,9 +88,9 @@ fn functor_closure_escape_pins_type_class_bind() {
     test_run.run("LET maker = (MAKE_LOOKUP int_ord_view)");
     // Churn the per-call region's drop discipline before invoking the inner FN.
     for _ in 0..5 {
-        test_run.run_one(parse_one("PRINT 1"));
+        test_run.run_one(parse_one(&program, "PRINT 1"));
     }
-    let result = test_run.run_one_type(parse_one("maker {x = 1}"));
+    let result = test_run.run_one_type(parse_one(&program, "maker {x = 1}"));
     match test_run.types.node(result) {
         TypeNode::AbstractType { name, .. } => {
             assert_eq!(name, "Carrier");
@@ -103,15 +106,16 @@ fn functor_closure_escape_pins_type_class_bind() {
 /// returning the passed-through module without surfacing `UnboundName`.
 #[test]
 fn functor_returning_bare_signature_typed_param_does_not_panic() {
+    let program = program_storage();
     let region = run_root_storage();
-    let mut test_run = TestRun::silent(&region);
+    let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
          LET ord_view = (int_ord :! Ordered)\n\
          FN (MAKESET er :Ordered) -> Ordered = (er)",
     );
-    let result = test_run.run_one(parse_one("MAKESET ord_view"));
+    let result = test_run.run_one(parse_one(&program, "MAKESET ord_view"));
     match result {
         KObject::Module(module) => {
             // Ruling 12: the ascribed signature renders structurally, so the transparent-view
