@@ -276,10 +276,9 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
             .collect();
         let source_refs: Vec<&PinBundle<F>> = sources.iter().collect();
 
-        // Mint and retain BEFORE the value exists: the retention that keeps the operands' regions
-        // alive has to be established before anything depending on them is built.
-        let (description, bundle) = ReachDescription::mint(dest, &source_refs);
-        dest.region().retain_for(description, bundle);
+        // Mint BEFORE the value exists: the mint's own retention keeps the operands' regions alive,
+        // and it has to be established before anything depending on them is built.
+        let description = ReachDescription::mint_resident(dest, &source_refs);
 
         let views: Vec<V::At<'b>> = operands.iter().map(|operand| operand.value()).collect();
         let built = construct(BumpPlacement::mint(dest), &views);

@@ -1009,8 +1009,8 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Rc<F>> {
     /// frame's own region — the lift a freshly-[`yoke`](Self::yoke)d region-pure construction takes
     /// into the carrier world. The yoke brand already proved the value is derived from the frame's
     /// own region, so the minted description's empty members are exact and its host is where the
-    /// value genuinely lives; the mint composes no source, so the bundle it yields is empty and
-    /// nothing needs retaining. What this drops is the *pin*, whose job moves to the caller's
+    /// value genuinely lives; the mint composes no source, so its retention folds an empty bundle.
+    /// What this drops is the *pin*, whose job moves to the caller's
     /// ambient liveness — the active frame during the step, the scheduler's retention hold once the
     /// value finalizes onto a node. Safe: the value stays erased throughout (no reattach); every
     /// later read names its coverage explicitly ([`Sealed::open_with`], the
@@ -1020,11 +1020,10 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Rc<F>> {
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
-        let carrier = {
-            let (reach, _empty) =
-                ReachDescription::mint(RegionHandle::from_owner(&*self.witness), &[]);
-            Carrier::new(reach)
-        };
+        let carrier = Carrier::new(ReachDescription::mint_resident(
+            RegionHandle::from_owner(&*self.witness),
+            &[],
+        ));
         self.rewitness(carrier)
     }
 }

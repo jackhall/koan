@@ -1,6 +1,7 @@
-//! The reach side table's **interning** slate: [`Region::intern_reach`] get-or-mints keyed on the
-//! canonical member set, so one description exists per distinct reach per region and pointer
-//! identity over descriptions is member-set equality within a region. Runs over a library-only
+//! The reach side table's **interning** slate: [`Region::intern_reach_retained`] get-or-mints keyed
+//! on the canonical member set, so one description exists per distinct reach per region, pointer
+//! identity over descriptions is member-set equality within a region, and an entry's existence is
+//! proof the region already retains what it names. Runs over a library-only
 //! profile (`RegionHost` frames, no storage families at all) — no embedder type. Counts are read as
 //! deltas off the thread-local [`RegionMetrics`], which test threads see in isolation, so each test
 //! measures its own mint traffic.
@@ -59,9 +60,7 @@ fn mint_over<'a>(
         .map(|m| PinBundle::singleton(Rc::clone(m)))
         .collect();
     let sources: Vec<&PinBundle<InternFrame>> = bundles.iter().collect();
-    let (description, _bundle) =
-        ReachDescription::mint(RegionHandle::from_owner(&**home), &sources);
-    description
+    ReachDescription::mint_resident(RegionHandle::from_owner(&**home), &sources)
 }
 
 /// A miss allocates: two distinct member sets get two distinct entries.
@@ -150,6 +149,46 @@ fn hit_skips_the_retention_fold() {
     assert_eq!(metrics.reach_interned, 1);
     assert_eq!(metrics.reach_intern_hits, 1);
     assert_eq!(metrics.reach_retention_folds, 1);
+}
+
+/// **A hit is proof the destination already pins.** The threaded door (the composition engine's,
+/// whose product also travels under transit pins of its own) mints first; its transit bundle is
+/// dropped, and a later `mint_retained` over the same members hits that entry and folds nothing.
+/// The member frame's only remaining owner is then the region's union bundle — so if a hit were
+/// *not* proof, dropping every handle here would free the member and every read through the
+/// interned description would dangle.
+#[test]
+fn hit_is_proof_the_region_already_pins() {
+    let home = frame();
+    let a = frame();
+    let weak_a = Rc::downgrade(&a);
+    let handle = RegionHandle::from_owner(&*home);
+
+    let (composed, transit) =
+        ReachDescription::mint_resident_threaded(handle, &[&PinBundle::singleton(Rc::clone(&a))]);
+    drop(transit);
+
+    let (hit, metrics) = reach_delta(|| handle.mint_retained(&[&StepCoverage::of(Rc::clone(&a))]));
+    assert!(std::ptr::eq(composed, hit));
+    assert_eq!(metrics.reach_intern_hits, 1);
+    assert_eq!(metrics.reach_retention_folds, 0);
+
+    drop(a);
+    assert_eq!(
+        home.region().retained_reach_len(),
+        1,
+        "the first mint's own retention is what still pins the member"
+    );
+    assert!(
+        weak_a.upgrade().is_some(),
+        "an intern hit skipped the fold because the region already held the pin"
+    );
+    assert!(hit.pins_region(
+        weak_a
+            .upgrade()
+            .expect("the region's retention keeps the member alive")
+            .region()
+    ));
 }
 
 /// The empty description is a **per-region** interned singleton: every region-pure value in one

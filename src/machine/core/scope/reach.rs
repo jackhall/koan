@@ -47,19 +47,9 @@ impl<'a> Scope<'a> {
             .expect("a live scope reference implies a live region owner")
     }
 
-    /// Retain an owning [`FrameCoverage`] in this scope's own region for the region's life — the
-    /// scope-facing door onto [`RegionHandle::retain_reach`](crate::witnessed::RegionHandle::retain_reach).
-    /// A value **resident** in this scope whose reach is not carried by a binding entry (a USING
-    /// overlay rooting an opened module's region, an adoption whose product carries no entry of its
-    /// own) parks its coverage here so the non-owning description it mirrors stays backed for the
-    /// scope's life.
-    pub(crate) fn retain_reach(&self, coverage: FrameCoverage) {
-        self.brand().handle().retain_reach(coverage);
-    }
-
-    /// Mint `sources` into this scope's own arena and fold the owned bundle the mint hands back into
-    /// the **region's** union bundle — the single reach-derivation door behind every bind, a veneer
-    /// over the library's fused
+    /// Mint `sources` into this scope's own arena, which is the same act that folds the composed
+    /// bundle into the **region's** union bundle — the single reach-derivation door behind every
+    /// bind, a veneer over the library's fused
     /// [`RegionHandle::mint_retained`](crate::witnessed::RegionHandle::mint_retained). Each source is
     /// a caller's owned claim (a delivery envelope's whole coverage, or a release-exact subset of
     /// it), which already names the value's home region as an ordinary member: there is no residence

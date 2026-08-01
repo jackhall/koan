@@ -21,11 +21,12 @@
 //! - The reach-evidence types [`witnessed::ReachDescription`] (non-owning, side-table hosted) and
 //!   [`witnessed::PinBundle`] (owned), generic over the member trait [`witnessed::PinsRegion`] an
 //!   embedder implements for its own frame-owner type. Both are frozen together at a
-//!   [`witnessed::ReachDescription::mint`], and a value's home region rides them as an ordinary
-//!   member — the sole asymmetry is the self rule, which strips `dest`'s own region from the owned
-//!   bundle (a region pinning itself is a cycle) while leaving it in the description. A region's
-//!   side table *interns* descriptions, so within one region a description's address is its member
-//!   set.
+//!   [`witnessed::ReachDescription::mint_resident`], which is also where the destination's retention
+//!   of the composed bundle is established, and a value's home region rides them as an ordinary
+//!   member — the sole asymmetry is the self rule, which strips `dest`'s own region from the
+//!   retained bundle (a region pinning itself is a cycle) while leaving it in the description. A
+//!   region's side table *interns* descriptions, so within one region a description's address is
+//!   its member set — and an entry's existence is proof the region already pins what it names.
 //! - Sub-value reach storage: [`witnessed::Sectioned`], a cell-generic `Copy`, `Drop`-free container
 //!   whose cells are physically partitioned into contiguous runs each naming one interned
 //!   description — mapping and partition both bumped into the region, so a teardown never walks one — built

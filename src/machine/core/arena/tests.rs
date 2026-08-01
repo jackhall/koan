@@ -1470,9 +1470,9 @@ fn mint_leaves_arena_pages_untouched() {
 }
 
 /// Teardown releases a retained bundle's members: the side-table description names its members with
-/// `Weak`, so the owned `FrameCoverage` bundle carries the strong pins. Retaining that bundle in `C`'s
-/// region ([`RegionHandle::retain_reach`]) makes `C` the members' liveness home; dropping `C`'s
-/// storage drops the retained bundle, decrementing each member's refcount. No self-cycle
+/// `Weak`, so the owned bundle the mint retains carries the strong pins. Minting into `C`'s region
+/// ([`RegionHandle::mint_retained`]) makes `C` the members' liveness home; dropping `C`'s storage
+/// drops the retained bundle, decrementing each member's refcount. No self-cycle
 /// (the self rule forbids `C` from holding its own `Rc`), so the extra refs fall away at `C`'s death
 /// — the shape the Miri leak audit exercises. (AC: teardown releasing members at region death.)
 #[test]

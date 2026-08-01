@@ -8,28 +8,29 @@
 //! the container's liveness when resident, the scheduler's frame-retention hold (travelling as the
 //! [`Delivered`](super::Delivered) envelope) when walking — so every re-anchor of the erased reach
 //! reference happens under a named pin. The description a carrier references is never owned by it:
-//! [`ReachDescription::mint`] is the only way one comes to exist, and it always
+//! [`ReachDescription::mint_resident`] is the only way one comes to exist, and it always
 //! lands in the value's home region's own side table, so whatever covers the home region covers the
-//! reference. The description is non-owning (host and members are `Weak`); the owned [`PinBundle`]
-//! that pins the reached regions is held by the value's holder (a binding entry, the delivery
-//! envelope), never by the carrier.
+//! reference. The description is non-owning (host and members are `Weak`); what pins the reached
+//! regions is the retention that mint established in the home region, plus a transit bundle a
+//! delivery envelope carries while the value walks — never the carrier.
 //!
 //! The description carries **both** of the value's region facts, so the carrier needs no side
 //! channel for either: its `host` is where the value lives (residence, read through
 //! [`Opened::with_home_region`]), its members are what the value's borrows reach (read through
 //! [`Opened::reach_covers`]). "Does this value borrow into its own home?" is therefore the ordinary
 //! membership query [`Opened::borrows_home`], not a bit. The one asymmetry is the self rule at the
-//! owned-upgrade boundary — a region never pins itself — which [`ReachDescription::mint`] applies to
-//! the owned bundle alone.
+//! owned-upgrade boundary — a region never pins itself — which
+//! [`ReachDescription::mint_resident`] applies to the bundle it retains, never to the description.
 //!
 //! `Carrier` is deliberately **not** a [`super::Witness`]: a bare [`super::Sealed::open`] under it
 //! does not compile. Reads name their coverage — [`super::Sealed::open_with`] under an external
 //! pin, the envelope's [`Delivered::open`](super::Delivered::open), or the borrow-tied
 //! [`Opened`](super::Opened) state, which is the only state that answers a membership query —
 //! and relocations run through the envelope-bearing mint verbs
-//! ([`Delivered::mint_reach`](super::Delivered::mint_reach),
-//! [`Delivered::transfer_into`](super::Delivered::transfer_into)). [`Self::mint_into`] is the
-//! crate-internal core they route through; it is not part of the public surface.
+//! ([`Delivered::adopt_into`](super::Delivered::adopt_into),
+//! [`Delivered::transfer_into`](super::Delivered::transfer_into)). [`Self::compose_into`] is the
+//! crate-internal composition core the latter routes through; it is not part of the public
+//! surface.
 
 use std::rc::Rc;
 
@@ -149,29 +150,6 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         with_branded_ref::<HostedSetRef<F>, R>(self.reach.as_static(), |set_ref: &&_| f(set_ref))
     }
 
-    /// Mint this carrier's reach into `dest` — the shared core the crate-internal mint verbs route
-    /// through ([`Delivered::mint_reach`](super::Delivered::mint_reach)). Not itself part of the
-    /// public surface. Applies, via [`ReachDescription::mint`]: outer-chain subsumption and the self
-    /// rule on the returned bundle — no caller policy, so the minted description is exact and its
-    /// host is `dest`'s own owner.
-    ///
-    /// `source` is the holder's owned pin bundle — the delivery envelope's pins, a binding entry's
-    /// pins — which names the value's home as an ordinary member alongside everything else it
-    /// reaches. It is threaded in, never recovered from the carrier's description, so the
-    /// composition folds strong `Rc`s. Returns the minted description hosted in `dest` and the owned
-    /// [`PinBundle`] the caller keeps to pin its members.
-    pub(in crate::witnessed) fn mint_into<'d, P>(
-        &self,
-        source: &PinBundle<F>,
-        dest: RegionHandle<'d, P>,
-    ) -> (&'d ReachDescription<F>, PinBundle<F>)
-    where
-        P: StorageProfile<FrameOwner = F> + 'static,
-        F: RegionOwner<Region = Region<P>>,
-    {
-        ReachDescription::mint(dest, &[source])
-    }
-
     /// The relocation composition behind the envelope's
     /// [`transfer_into`](super::Delivered::transfer_into) and the live-carrier reach merges: mint
     /// BOTH operands' exact reach — the destination's (an accumulator's prior folds, threaded as
@@ -185,10 +163,12 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// threaded bundles, and everything it resides in is `dest`, which the mint stamps as the fresh
     /// description's host.
     ///
-    /// Returns the composed carrier paired with the freshly-minted owned bundle: `dest`'s region
-    /// **retains a clone** for the region's life (what keeps the relocated value's reach alive when
-    /// the product is consumed in place — read directly rather than re-enveloped), and the returned
-    /// bundle threads to the next fold step or the terminal seal.
+    /// Returns the composed carrier paired with a freshly-minted owned bundle: the mint itself
+    /// retains the product's reach into `dest`'s region for the region's life (what keeps the
+    /// relocated value's reach alive when the product is consumed in place — read directly rather
+    /// than re-enveloped), and the returned bundle is the transit copy that threads to the next fold
+    /// step or the terminal seal. This is the one site that needs both tiers, and so the only caller
+    /// of [`ReachDescription::mint_resident_threaded`].
     pub(in crate::witnessed) fn compose_into<'b, P>(
         left_bundle: &PinBundle<F>,
         right_bundle: &PinBundle<F>,
@@ -198,8 +178,8 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
-        let (minted, bundle) = ReachDescription::mint(dest, &[left_bundle, right_bundle]);
-        dest.region().retain_for(minted, bundle.clone());
+        let (minted, bundle) =
+            ReachDescription::mint_resident_threaded(dest, &[left_bundle, right_bundle]);
         (Carrier::new(minted), bundle)
     }
 }
@@ -210,7 +190,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
     /// [`Carrier`] cannot use because there is no default carrier to name a residence with. Mints a
     /// description with empty members (the value's borrows reach nothing) whose host is `home`, so
     /// the value records where it lives even though it reaches nowhere. The mint composes no source,
-    /// so the bundle it yields is empty and nothing needs retaining.
+    /// so its retention folds an empty bundle — the degenerate end of the resident mint.
     ///
     /// The obligation it carries is exactly
     /// [`Witnessed::resident`](super::Witnessed::resident)'s: that `value`'s reach is genuinely
@@ -221,10 +201,10 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
-        let carrier = {
-            let (reach, _empty) = ReachDescription::mint(RegionHandle::from_owner(&**home), &[]);
-            Carrier::new(reach)
-        };
+        let carrier = Carrier::new(ReachDescription::mint_resident(
+            RegionHandle::from_owner(&**home),
+            &[],
+        ));
         Witnessed::from_erased(Erased::erase(value), carrier)
     }
 }
@@ -367,7 +347,8 @@ mod tests {
     reattachable! { RefFamily => &'r u32 }
 
     /// Mint a description hosted in `home` naming every frame in `sources` — the resident-bind
-    /// shape, whose returned bundle the caller would hold as its pins.
+    /// shape. The threaded door, so an assertion may inspect the transit bundle alongside the
+    /// description the region now retains.
     fn mint_in<'a>(
         home: &'a Rc<TestFrame>,
         sources: &[&Rc<TestFrame>],
@@ -377,7 +358,7 @@ mod tests {
             .map(|f| PinBundle::singleton(Rc::clone(f)))
             .collect();
         let refs: Vec<&PinBundle<TestFrame>> = bundles.iter().collect();
-        ReachDescription::mint(RegionHandle::from_owner(&**home), &refs)
+        ReachDescription::mint_resident_threaded(RegionHandle::from_owner(&**home), &refs)
     }
 
     /// Seal `carrier` over a borrow of `value` — the caller then opens it under its own pin, which
@@ -544,14 +525,15 @@ mod tests {
             &PinBundle::singleton(Rc::clone(&dest)),
             &PinBundle::singleton(Rc::clone(&foreign)),
         );
-        let (set, bundle) = ReachDescription::mint(handle, &[&source]);
+        let (set, bundle) = ReachDescription::mint_resident_threaded(handle, &[&source]);
         assert!(
             set.pins_region(dest.region()),
             "membership is exact: the description names dest's own region"
         );
         assert!(
             !bundle.members().iter().any(|m| Rc::ptr_eq(m, &dest)),
-            "the self rule strips dest from the owned bundle — a region never pins itself"
+            "the self rule strips dest from the retained and transit bundles — a region never \
+             pins itself"
         );
         assert!(bundle.pins_region(foreign.region()));
     }
@@ -578,7 +560,7 @@ mod tests {
             &PinBundle::singleton(Rc::clone(&dest)),
             &PinBundle::singleton(Rc::clone(&outer)),
         );
-        let (set, bundle) = ReachDescription::mint(handle, &[&source]);
+        let (set, bundle) = ReachDescription::mint_resident_threaded(handle, &[&source]);
         assert!(
             set.pins_region(outer.region()),
             "subsumption keeps dest, whose chain still reports the ancestor pinned"
@@ -595,12 +577,11 @@ mod tests {
         let foreign = root_frame();
         let home = root_frame();
         let dest = root_frame();
-        let (source, reach) = mint_in(&home, &[&foreign]);
-        let c: Carrier<TestFrame> = Carrier::new(source);
+        let (_source, reach) = mint_in(&home, &[&foreign]);
         // The holder's pins are home ∪ reach — the envelope shape, home as an ordinary member.
         let pins = PinBundle::union(&PinBundle::singleton(Rc::clone(&home)), &reach);
         let dest_handle = RegionHandle::from_owner(&*dest);
-        let (set, bundle) = c.mint_into(&pins, dest_handle);
+        let (set, bundle) = ReachDescription::mint_resident_threaded(dest_handle, &[&pins]);
         assert!(set.pins_region(foreign.region()));
         assert!(
             set.pins_region(home.region()),

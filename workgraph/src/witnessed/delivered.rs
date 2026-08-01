@@ -16,7 +16,7 @@
 //! [`Opened::with_home_region`] on an open, or internally by
 //! [`Delivered::coverage_releasing_home`] — and cannot drift from what the value records about
 //! itself. Home riding the pins as an ordinary member is what lets the
-//! envelope-bearing mint verbs — [`Delivered::mint_reach`] and [`Delivered::transfer_into`] — fold a
+//! envelope-bearing mint verbs — [`Delivered::adopt_into`] and [`Delivered::transfer_into`] — fold a
 //! producer frame into a minted destination description with no separate materialization arm: the
 //! home pin is already in the bundle the composition folds. A relocation site chooses nothing about
 //! that bundle: [`Delivered::transfer_into`] *derives* the source claim by running the site's retention
@@ -24,10 +24,10 @@
 //! reaches is a checked property of the bytes rather than a promise made before they existed. See
 //! [design/reach.md § Composition](../../design/reach.md#composition-minting-a-description-and-retaining-its-pins).
 //!
-//! [`Delivered::mint_reach`] is the envelope-bearing mint entry a consumer routes, a thin caller
-//! over the crate-internal [`Carrier::mint_into`](super::Carrier::mint_into) core.
-//! [`Delivered::adopt_into`] fuses that mint with the re-anchor it justifies into one copy-free
-//! adoption verb, so a caller cannot split the pin from the reattach it pins.
+//! [`Delivered::adopt_into`] fuses the mint with the re-anchor it justifies into one copy-free
+//! adoption verb, so a caller cannot split the pin from the reattach it pins — and the mint itself
+//! establishes the destination's retention ([`ReachDescription::mint_resident`]), so there is no
+//! moment at which anyone holds the adopted value's pins loose.
 
 use std::rc::Rc;
 
@@ -269,28 +269,11 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         }
     }
 
-    /// Mint this value's reach into `dest`. The envelope's own pins are the source the composition
-    /// folds, so the value's home rides in as an ordinary member and the self rule alone decides
-    /// whether it survives into the returned bundle. No policy is threaded in: the minted
-    /// description is the value's **exact** reach, hosted in `dest` — which is the product's new
-    /// residence. Returns that description and the owned [`PinBundle`] the binding entry keeps to
-    /// pin its members.
-    pub(crate) fn mint_reach<'d, P>(
-        &self,
-        dest: RegionHandle<'d, P>,
-    ) -> (&'d ReachDescription<F>, PinBundle<F>)
-    where
-        P: StorageProfile<FrameOwner = F> + 'static,
-        F: RegionOwner<Region = Region<P>>,
-    {
-        self.witness().mint_into(self.pins(), dest)
-    }
-
     /// Copy-free adoption: mints this envelope's reach — home included, as an ordinary member —
-    /// into `dest`'s region, **retains** the resulting owned [`PinBundle`] for the region's life,
+    /// into `dest`'s region, which is the same act that **retains** it there for the region's life,
     /// then re-anchors the sealed value at `dest`'s lifetime. Fused so the re-anchor cannot be
     /// reached without the pin that keeps it live: the minted description names the value's
-    /// reach and the retained bundle owns it for the region's life ⊇ `'d`, so every
+    /// reach and the region's retention owns it for the region's life ⊇ `'d`, so every
     /// region the value reaches (its home included) outlives the returned borrow.
     pub fn adopt_into<'d, P>(&self, dest: RegionHandle<'d, P>) -> T::At<'d>
     where
@@ -307,26 +290,25 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
     /// ([`Opened::reseal`], which reproduces exactly [`Self::adopt`]'s seal) when it escapes onward.
     ///
     /// Where [`Sealed::open_at`] takes its `'b` from a borrowed pin, this open takes it from the
-    /// destination region: the mint stores the value's reach into `dest`'s side table and the
-    /// retained bundle owns it for the region's life ⊇ `'d`, so the coverage justifying the open
-    /// outlives every use of it. That is what lets an adopted value ride a step-lifetime type
-    /// position no rank-2 read and no pin borrow can reach.
+    /// destination region: the mint stores the value's reach into `dest`'s side table and retains a
+    /// bundle owning it for the region's life ⊇ `'d`, so the coverage justifying the open outlives
+    /// every use of it. That is what lets an adopted value ride a step-lifetime type position no
+    /// rank-2 read and no pin borrow can reach.
     pub fn open_adopted<'d, P>(&self, dest: RegionHandle<'d, P>) -> Opened<'d, T, Carrier<F>>
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
         T::At<'static>: Copy,
     {
-        let (minted, bundle) = self.mint_reach(dest);
-        // The description is non-owning; the adopted value lives for the region's life, so the
-        // region retains the owning bundle (dropped only at region death) — the liveness the
-        // non-owning description cannot provide, carried by the region's retention list. Skipped
-        // when this region's union already pins the interned description's members.
-        dest.region().retain_for(minted, bundle);
+        // The envelope's own pins are the source the composition folds, so the value's home rides in
+        // as an ordinary member. The description is non-owning and the adopted value lives for the
+        // region's life, so the mint's own retention (dropped only at region death) is what provides
+        // the liveness the description cannot.
+        let minted = ReachDescription::mint_resident(dest, &[self.pins()]);
         let erased: Erased<T> = self.open(Erased::<T>::erase);
         Opened::adopted(
-            // SAFETY: the mint above stored this carrier's reach into `dest`'s side table and the
-            // retained bundle pins every region it names for the region's life ⊇ 'd; the
+            // SAFETY: the mint above stored this carrier's reach into `dest`'s side table and
+            // retained a bundle pinning every region it names for the region's life ⊇ 'd; the
             // re-anchored borrow cannot outlive its pin.
             unsafe { erased.reattach::<'d>() },
             Carrier::new(minted),

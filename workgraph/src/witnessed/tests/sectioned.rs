@@ -64,7 +64,7 @@ fn pinned_input<'r>(
     home: &'r Rc<SectionFrame>,
     member: &Rc<SectionFrame>,
 ) -> CellReach<'r, SectionFrame> {
-    let (reach, _bundle) = ReachDescription::mint(
+    let reach = ReachDescription::mint_resident(
         RegionHandle::from_owner(&**home),
         &[&PinBundle::singleton(Rc::clone(member))],
     );

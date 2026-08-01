@@ -30,7 +30,7 @@
 //! Containers are built through one door, [`Sectioned::build`], which takes a per-cell
 //! `(payload, reach verdict)` and owns everything downstream of it — grouping into runs, interning,
 //! pin folding, and the value-level union. Interning is what makes grouping cheap: within one
-//! region a description's *address* is its member set ([`Region::intern_reach`]), so a run boundary
+//! region a description's *address* is its member set ([`Region::intern_reach_retained`]), so a run boundary
 //! is one pointer compare per cell rather than a set comparison. No `unsafe`.
 
 use std::marker::PhantomData;
@@ -301,18 +301,18 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     /// Per input, the mint source is the verdict read literally: nothing for
     /// [`CellReach::Owned`] (so owned data costs no walk), the stored description's members — plus
     /// its home region under the run-level self rule below — for [`CellReach::Pinned`], the declared
-    /// pins for [`CellReach::Seed`]. Each
-    /// source is minted into `dest` and **retained** there ([`Region::retain_for`]): a sectioned
-    /// container is region-resident, so its liveness home is the region's union bundle, and the
-    /// fold is skipped whenever the mint is an intern hit.
+    /// pins for [`CellReach::Seed`]. Each source is minted into `dest`, which **retains** it there
+    /// ([`ReachDescription::mint_resident`]): a sectioned container is region-resident, so its
+    /// liveness home is the region's union bundle, and an intern hit is proof that fold already
+    /// happened.
     ///
     /// Runs come out of the mints for free — a boundary is where the minted description's address
     /// changes, and within one region that address *is* the member set. The value-level description
     /// is the mint over the union of the per-cell sources.
     ///
-    /// The union accumulates the **pre-mint** source bundles, not the bundles the mints hand back:
-    /// the self rule strips `dest`'s own region from a returned bundle while leaving it in the
-    /// description, so folding the returned bundles would drop home from the value-level
+    /// The union accumulates the **source** bundles as composed here, never a bundle a mint
+    /// retained: the self rule strips `dest`'s own region from what is retained while leaving it in
+    /// the description, so a union built the other way would drop home from the value-level
     /// description exactly when a cell genuinely borrows into `dest`.
     pub fn build<W>(
         dest: RegionHandle<'a, W>,
@@ -349,8 +349,7 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
                 }
                 CellReach::Seed(coverage) => coverage.0,
             };
-            let (description, bundle) = ReachDescription::mint(dest, &[&source]);
-            dest.region().retain_for(description, bundle);
+            let description = ReachDescription::mint_resident(dest, &[&source]);
             union.absorb(source);
 
             // A new run starts wherever the interned description changes. Pointer identity is
@@ -367,8 +366,7 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
             cells.push(payload);
         }
 
-        let (value_level, bundle) = ReachDescription::mint(dest, &[&union]);
-        dest.region().retain_for(value_level, bundle);
+        let value_level = ReachDescription::mint_resident(dest, &[&union]);
 
         // Bump both slices into the region: the container becomes `Copy` region state, so a frame
         // teardown releases it with the chunk instead of walking it.

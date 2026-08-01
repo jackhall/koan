@@ -172,7 +172,7 @@ pub struct RegionMetrics {
     pub peak: usize,
     /// Total number of mints since the last reset (never decremented).
     pub minted_total: usize,
-    /// Reach descriptions allocated — intern **misses** ([`Region::intern_reach`]).
+    /// Reach descriptions allocated — intern **misses** ([`Region::intern_reach_retained`]).
     pub reach_interned: usize,
     /// Intern **hits**: a mint that found its member set already described in the region.
     pub reach_intern_hits: usize,

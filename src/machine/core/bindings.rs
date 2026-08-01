@@ -115,9 +115,9 @@ impl<T> NameLookup<T> {
 /// fusing the bound value with the exact reach description minted for it.
 ///
 /// The entry owns **nothing**: liveness for every region the value reaches lives in the binding
-/// scope's region-owned union bundle
-/// ([`Scope::retain_reach`](crate::machine::core::Scope::retain_reach)), folded in at bind time and
-/// dropped whole at region death. Bindings are bind-once and an entry never dies before its scope,
+/// scope's region-owned union bundle, folded in by the mint that derived the entry's description
+/// ([`Scope::mint_retained`](crate::machine::core::Scope::mint_retained)) and dropped whole at
+/// region death. Bindings are bind-once and an entry never dies before its scope,
 /// so region death and entry death are the same schedule — the entry is `Copy`-cheap to read out
 /// and carries no `Drop`. Fusing value and reach in the seal keeps the write door from ever pairing
 /// a value with a reach derived for a different value.

@@ -1,7 +1,7 @@
 //! Miri slate (tree borrows) for the abstract carrier shapes the witnessed substrate admits —
 //! home riding a delivery envelope's pins as an ordinary member, the copy-versus-pin choice a
 //! relocation site makes through its source-pins claim, envelope duplication, the
-//! [`ReachDescription::mint`] self rule, the three carrier states and the transform verbs between
+//! [`ReachDescription::mint_resident`] self rule, the three carrier states and the transform verbs between
 //! them, the drop to rest that lodges a value's coverage in a region so its cell rides as plain
 //! data, and the [`StepContext::alloc_with`] finish-surface fold. Everything routes production
 //! verbs over a library-only profile ([`ShapeProfile`] /
@@ -88,7 +88,7 @@ fn reach_element(
     // `content` is foreign to `home`, so it survives the mint into `home`'s arena; the returned
     // bundle is the value's owned reach, threaded into the envelope at `seal` (which unions `home`
     // in as an ordinary member) so each holder owns its pins.
-    let (reach, bundle) = ReachDescription::mint(
+    let (reach, bundle) = ReachDescription::mint_resident_threaded(
         RegionHandle::from_owner(&**home),
         &[&PinBundle::singleton(Rc::clone(content))],
     );
@@ -181,7 +181,7 @@ fn copied_transfer_pins_the_producer_when_the_product_still_borrows() {
     // The value borrows into its own birth region, so the mint composes `producer` in as an
     // ordinary member — the shape a substrate value born at a fold door carries.
     let value = store_val(&producer, 5);
-    let (reach, bundle) = ReachDescription::mint(
+    let (reach, bundle) = ReachDescription::mint_resident_threaded(
         RegionHandle::from_owner(&*producer),
         &[&PinBundle::singleton(Rc::clone(&producer))],
     );
@@ -286,7 +286,8 @@ fn mint_keeps_home_in_the_description_but_not_the_bundle() {
         &PinBundle::singleton(Rc::clone(&a)),
         &PinBundle::singleton(Rc::clone(&b)),
     );
-    let (minted, bundle) = ReachDescription::mint(RegionHandle::from_owner(&*a), &[&source]);
+    let (minted, bundle) =
+        ReachDescription::mint_resident_threaded(RegionHandle::from_owner(&*a), &[&source]);
     assert!(
         minted.pins_region(a.region()) && minted.pins_region(b.region()),
         "membership is exact: the description names the destination's own region too"
@@ -323,7 +324,7 @@ fn lift_reowns_description_into_transit_bundle() {
     let host = frame();
     let content = frame();
     let value: &u32 = store_val(&content, 5);
-    let (reach, _bundle) = ReachDescription::mint(
+    let reach = ReachDescription::mint_resident(
         RegionHandle::from_owner(&*host),
         &[&PinBundle::singleton(Rc::clone(&content))],
     );

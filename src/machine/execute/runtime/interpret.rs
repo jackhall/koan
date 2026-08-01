@@ -102,18 +102,17 @@ impl<'run> KoanRuntime<'run> {
                 // The dest rides an empty-set `resident`: the run region outlives everything and is
                 // externally pinned, and yoking the run-root frame here would re-form a reference
                 // cycle into the drained value's witness.
-                if let Ok((witnessed, coverage)) = self.relocate_terminal(
+                // The relocation's own composition mints the rehomed terminal's reach into the run
+                // root region, which is the act that retains it there — so those regions stay alive
+                // past scheduler teardown with nothing folded here. The threaded coverage is the
+                // transit copy, which the Forward-ready path re-seeds the retention hold with.
+                if let Ok((witnessed, _coverage)) = self.relocate_terminal(
                     id,
                     root.seal_resident_delivered(
                         root.resident::<DestHandleFamily>(root.brand().handle()),
                         crate::machine::core::FrameCoverage::empty(),
                     ),
                 ) {
-                    // Fold the rehomed terminal's own owned bundle — threaded back by the
-                    // relocation — into the run root region's union, so those regions stay alive
-                    // past scheduler teardown. The rehomed value is resident for the region's life,
-                    // which is the schedule that retention runs on.
-                    root.retain_reach(coverage);
                     self.sched.rehome_terminal(id, Ok(witnessed));
                 }
             }

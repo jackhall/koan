@@ -70,7 +70,7 @@ fn operand<'b>(
         .map(|m| PinBundle::singleton(Rc::clone(m)))
         .collect();
     let refs: Vec<&PinBundle<BumpFrame>> = bundles.iter().collect();
-    let (reach, _bundle) = ReachDescription::mint(RegionHandle::from_owner(&**home), &refs);
+    let reach = ReachDescription::mint_resident(RegionHandle::from_owner(&**home), &refs);
     Opened::adopted(text, Carrier::new(reach))
 }
 
