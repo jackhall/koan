@@ -88,7 +88,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
         &member_refs,
     ));
 
-    super::module_def::await_module_body(child_scope, name, body_expr, ctx.bind_index(), "GROUP")
+    super::module_def::await_module_body(child_scope, name, body_expr, ctx.bind_index())
 }
 
 /// The group's [`ReductionMode`]: a pairwise overload reads its combiner out of the quoted

@@ -147,11 +147,3 @@ pub(crate) fn product_reaches_region(
         .with_home_region(|home| std::ptr::eq(home, region));
     !is_home || product.is_none_or(|value| retains_home(value, region))
 }
-
-/// [`product_reaches_region`] for a relocation whose product is a top-node
-/// [`deep_clone`](KObject::deep_clone) of the source value — a scalar, a `KFunction` / `Module` /
-/// `KExpression` leaf riding its borrow verbatim. Such a clone borrows exactly what the source
-/// does, so the source *is* the product and the claim answers off the envelope alone.
-pub(crate) fn clone_reaches_region(envelope: &DeliveredCarried, region: &KoanRegion) -> bool {
-    envelope.open(|live| product_reaches_region(envelope, live.as_object(), region))
-}

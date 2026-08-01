@@ -138,16 +138,16 @@ fn retaining_adopt_reach_fold_pins_the_producer_region_after_drop() {
     }
 }
 
-/// `child_module_reach` mints the child scope's **own region alone** into the parent's arena: a
-/// module value's only region borrow is its child scope, and that child region owns the union bundle
-/// covering everything its members reach. So a member whose reach names a region foreign to *both*
-/// the child and the parent (the shape a transparent `:!` ascription's nested member reach has) is
-/// absent from the parent's description yet still pinned — transitively, through the child region's
-/// own union — once every direct handle drops.
+/// `store_module_object` composes the child scope's **own region alone** into the module value's
+/// reach: a module value's only region borrow is its child scope, and that child region owns the
+/// union bundle covering everything its members reach. So a member whose reach names a region
+/// foreign to *both* the child and the parent (the shape a transparent `:!` ascription's nested
+/// member reach has) is absent from the module value's description yet still pinned — transitively,
+/// through the child region's own union — once every direct handle drops.
 #[test]
-fn child_module_reach_names_the_child_region_which_owns_its_members_reaches() {
+fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
     use crate::machine::core::arena::KoanRegion;
-    use crate::machine::model::KObject;
+    use crate::machine::model::{KObject, Module};
 
     // A frame foreign to everything else here — the region a nested member's own reach names.
     let inner_storage = per_call_storage();
@@ -174,15 +174,23 @@ fn child_module_reach_names_the_child_region_which_owns_its_members_reaches() {
         .expect("bind should succeed");
     let source_region_ptr: *const KoanRegion = source_scope.region();
 
+    // The module lives in its own child scope's region, as the `alloc_module` invariant requires.
+    let module = source_scope
+        .brand()
+        .alloc_module(Module::new("m".to_string(), source_scope));
+
     let parent_storage = run_root_storage();
     let parent = run_root_bare(&parent_storage);
-    let child_reach = parent.child_module_reach(source_scope);
+    let stored = parent.store_module_object(module, source_scope);
 
-    let members: Vec<*const KoanRegion> = child_reach
-        .members()
-        .iter()
-        .map(|m| m.region() as *const KoanRegion)
-        .collect();
+    let opened = stored.open_at(&parent_storage);
+    let members: Vec<*const KoanRegion> = opened.with_reach(|reach| {
+        reach
+            .members()
+            .iter()
+            .map(|m| m.region() as *const KoanRegion)
+            .collect()
+    });
     assert_eq!(
         members.as_slice(),
         &[source_region_ptr],
@@ -190,16 +198,16 @@ fn child_module_reach_names_the_child_region_which_owns_its_members_reaches() {
     );
     assert!(
         !members.contains(&inner_region_ptr),
-        "the member's foreign reach rides the child region's own union, not the parent's description",
+        "the member's foreign reach rides the child region's own union, not the module value's description",
     );
 
-    // Drop every other handle: the parent's minted bundle is the sole pin on the child region, and
-    // that region's own union is the sole pin on the member's foreign region.
+    // Drop every other handle: the parent region's retained bundle is the sole pin on the child
+    // region, and that region's own union is the sole pin on the member's foreign region.
     drop(source_storage);
     drop(inner_storage);
     assert!(
         source_weak.upgrade().is_some(),
-        "the parent's minted bundle still pins the child's own region"
+        "the composition's retained bundle still pins the child's own region"
     );
     assert!(
         inner_weak.upgrade().is_some(),

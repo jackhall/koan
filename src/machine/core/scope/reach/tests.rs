@@ -1,15 +1,15 @@
 //! Unit coverage for [`Scope::adopt_for_binding`]'s pin branch and for projection's run-exactness. A bound record whose cost
 //! chooser selects [`RegionEscape::Pin`] — a home-borrowing record crossing out of its producer — rides
-//! the producer region by hold: the projection is pointer-copied (sharing the producer-resident
-//! substrate) and moved in under the binding's `Kept`-minted stored reach, whose named producer
-//! region carries the foreign substrate past the residence audit on its `any_member_region` path.
+//! the producer region by hold: the projection is pointer-copied at the fold brand (sharing the
+//! producer-resident substrate) and the fold's composition keeps every member the envelope named,
+//! the producer's region among them, which is what covers the foreign substrate.
 
 use std::rc::Rc;
 
 use super::*;
 use crate::builtins::test_support::TestRun;
 use crate::machine::model::{
-    ExpressionSignature, Held, Record, RecordSubstrate, ReturnType, SignatureElement,
+    ExpressionSignature, Held, Record, RecordSubstrate, ReturnType, SignatureElement, TypeRegistry,
 };
 use crate::machine::{program_storage, run_root_storage};
 use crate::machine::{Body, CallFrame, KFunction};
@@ -68,10 +68,10 @@ fn substrate_address(value: &KObject<'_>) -> usize {
 }
 
 /// A home-borrowing record delivered out of a producer frame binds by **pin**:
-/// [`Scope::adopt_for_binding`] pointer-copies the projection (sharing the producer's substrate)
-/// and moves it in under the `Kept`-minted reach. The bound value reads its field back correctly
-/// after the producer frame shell drops — the consumer region's union bundle, which the mint folded
-/// the producer's pins into, holds the producer region.
+/// [`Scope::adopt_for_binding`] pointer-copies the projection at the fold brand (sharing the
+/// producer's substrate) under the `Pin` verb's keep-everything retention claim. The bound value
+/// reads its field back correctly after the producer frame shell drops — the consumer region's
+/// union bundle, which the composition folded the producer's pins into, holds the producer region.
 /// (The enclosing module is gated out of the `seam-force-copy` build, which rebuilds instead of
 /// pinning — see the `mod tests` declaration in the parent.)
 #[test]
@@ -112,8 +112,8 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
         Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
 
     let bound_seal = consumer
-        .adopt_for_binding(&dep, |carried| Ok(carried.object()), &types)
-        .expect("a home-borrowing record pins into the binding under Kept-minted evidence");
+        .adopt_for_binding(&dep, |carried| Ok(carried.object()))
+        .expect("a whole-value projection is infallible");
     let opened = bound_seal.open_at(&root);
     let bound = opened.value().object();
 

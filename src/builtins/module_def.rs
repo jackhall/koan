@@ -16,7 +16,7 @@ use crate::machine::BindingIndex;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::{Action, BodyCtx};
-use crate::machine::{NameLookup, Scope, TraceFrame};
+use crate::machine::{NameLookup, Scope};
 
 use super::{arg, kw, sig};
 
@@ -33,14 +33,14 @@ pub fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         .scope
         .brand()
         .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
-    await_module_body(child_scope, name, body_expr, ctx.bind_index(), "MODULE")
+    await_module_body(child_scope, name, body_expr, ctx.bind_index())
 }
 
 /// Dispatch a module body block against an already-minted `child_scope` and bind the resulting
 /// module value in the parent scope — the tail every module-shaped declaration shares. `GROUP`
 /// (`super::group_def`) mints its child through [`Scope::child_under_group`] and pre-registers the
 /// group's operator powerset into it before calling this; `MODULE` mints a plain
-/// [`Scope::child_under_module`]. `surface` labels the trace frame an erroring finalize carries.
+/// [`Scope::child_under_module`].
 ///
 /// Body statements dispatch on the OUTER scheduler (see
 /// [`await_body_in_scope`](super::await_body::await_body_in_scope)), so a body statement
@@ -52,7 +52,6 @@ pub(super) fn await_module_body<'a>(
     name: String,
     body_expr: KExpression<'a>,
     bind_index: BindingIndex,
-    surface: &'static str,
 ) -> Action<'a> {
     use super::await_body::{await_body_in_scope, ChildScopeSeal};
 
@@ -87,27 +86,19 @@ pub(super) fn await_module_body<'a>(
             // Seal the module's self-sig now that `type_members` reflects the body — a plain
             // module carries no SIG, so the raw derivation is the whole signature.
             module.seal_self_sig(SigSchema::raw_self_sig(module), fctx.types);
-            // Fused MODULE-finish seal: the module's stored reach is derived off the child scope
-            // held **directly** here (never by walking the built value) — which names this scope's
-            // own region as a member, because the same-region child's own region owner covers it —
-            // and the Object-arm module value is allocated under it. The returned terminal
-            // witnesses that same value from the same stored reach; the value-side
-            // (`bindings.data`) write rides the outcome.
-            match fctx.scope.seal_module(module, child_scope, fctx.types) {
-                Ok(sealed) => {
-                    let write = WriteOp::Value {
-                        name: name_for_finish,
-                        index: bind_index,
-                        sealed: sealed.duplicate(),
-                    };
-                    let (carrier, pins) = fctx.scope.lift_resident_parts(sealed);
-                    Action::done(Ok(StepCarried::born_pinned(carrier, pins))).with_effect(write)
-                }
-                Err(e) => Action::done(Err(e.with_frame(TraceFrame::bare(
-                    "<module>",
-                    format!("{surface} {name_for_finish} body"),
-                )))),
-            }
+            // Fused MODULE-finish seal: the module reference held **directly** here (never
+            // recovered by walking the built value) is merged into this scope's region, which mints
+            // and retains the child's region as the Object-arm module value's reach — this scope's
+            // own region, for a same-region child. The returned terminal witnesses that same value
+            // from the same composed reach; the value-side (`bindings.data`) write rides the outcome.
+            let sealed = fctx.scope.seal_module(module, child_scope);
+            let write = WriteOp::Value {
+                name: name_for_finish,
+                index: bind_index,
+                sealed: sealed.duplicate(),
+            };
+            let (carrier, pins) = fctx.scope.lift_resident_parts(sealed);
+            Action::done(Ok(StepCarried::born_pinned(carrier, pins))).with_effect(write)
         },
     )
 }
@@ -448,9 +439,7 @@ mod tests {
         // Every mint seals its self-sig (2d eager-seal invariant), so a manually pre-seeded
         // module seals its (empty) interface before it is bound and its `ktype()` is read.
         module.seal_self_sig(SigSchema::raw_self_sig(module), &test_run.types);
-        let sealed = scope
-            .seal_module(module, child, &test_run.types)
-            .expect("seal the module value");
+        let sealed = scope.seal_module(module, child);
         scope
             .bind_value_direct(
                 "foo".into(),

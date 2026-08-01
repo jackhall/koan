@@ -6,7 +6,7 @@
 //! set at the `transfer_into` layer, not here.
 
 use super::*;
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{run_root_bare, TestRun};
 use crate::machine::core::{
     program_storage, run_root_storage, FoldingBrand, FrameCoverage, KoanRegion, KoanRegionExt,
     KoanStorageProfile,
@@ -348,9 +348,9 @@ fn kfunction_borrow_preserved_verbatim() {
     let types = test_run.types.clone();
 
     let kf_ref = alloc_local_kf(&source);
-    let obj: &KObject = source
-        .brand()
-        .alloc_object_checked(KObject::KFunction(kf_ref), &types)
+    let source_scope = run_root_bare(source.storage());
+    let (obj, _reach): (&KObject, _) = source_scope
+        .alloc_object_checked_stored(KObject::KFunction(kf_ref), &types)
         .expect("f was just allocated into region\'s own region");
 
     let owned_cells = crate::machine::core::FrameCoverage::empty();

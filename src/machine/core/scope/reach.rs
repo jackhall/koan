@@ -1,7 +1,11 @@
 //! The reach / carrier derivation cluster on [`Scope`]: minting a value's residence and reach into
 //! this scope's arena as one description, the two resident-carrier verbs over it (region-pure and
-//! reach-carrying), sealing residents into delivery envelopes, and the two adoption doors over one
-//! policy chooser ([`adopt_disposition`]). Split out of the parent `scope` module.
+//! reach-carrying), sealing residents into delivery envelopes, the two adoption doors over one
+//! policy chooser ([`adopt_disposition`]), and the module store folds
+//! ([`Scope::store_module_object`] / [`Scope::store_transparent_view`]). Every door that moves a
+//! value into this region runs through a fold or merge whose composition mints and retains the
+//! product's reach here, so residence is discharged by the fold brand's rank-2 signature rather than
+//! by a runtime walk. Split out of the parent `scope` module.
 
 use std::rc::Rc;
 
@@ -11,11 +15,11 @@ use crate::machine::core::carrier_witness::{OpenedFunction, SealedFunction};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::{
     product_reaches_region, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
-    KoanRegionExt, KoanStorageProfile,
+    KoanRegionExt, KoanStorageProfile, ModuleRefFamily, ScopeRefFamily,
 };
 use crate::machine::model::{
-    copy_object_into, copy_or_pin, Carried, CarriedFamily, KObject, KType, RegionEscape,
-    TypeIdentifier, TypeRegistry,
+    copy_or_pin, relocate_object_into, Carried, CarriedFamily, KObject, KType, Module,
+    RegionEscape, TypeIdentifier,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, KError, SplicedCell};
 use crate::witnessed::{Delivered, Reattachable, RegionHandleFamily, Sealed, Witnessed};
@@ -280,9 +284,8 @@ impl<'a> Scope<'a> {
     /// borrow it carries points into this region — but not `'static`, because a string literal's
     /// bytes are bumped here ([`RegionBrand::alloc_text`](crate::machine::core::RegionBrand::alloc_text)).
     ///
-    /// [`alloc_object_checked`](crate::machine::core::RegionBrand::alloc_object_checked) cannot take
-    /// such a value: the bump keeps no address table, so the residence audit answers `false` for a
-    /// string and the store is refused. The fold brand discharges the same obligation at compile time
+    /// [`Self::alloc_object_checked_stored`]'s walk cannot take such a value: the bump keeps no
+    /// address table, so the residence walk answers `false` for a string and the store is refused. The fold brand discharges the same obligation at compile time
     /// instead — an ambient borrow cannot inhabit `KObject<'b>` — and the product is re-anchored at
     /// `'a` through the library's own fused adopt door. With no deps the fold composes no reach, so
     /// the adoption retains nothing and the value's residence stays exactly this region.
@@ -312,11 +315,7 @@ impl<'a> Scope<'a> {
     ///
     /// Where [`seal_resident`](Self::seal_resident) seals a value already living **in** this
     /// region, adoption is the consumption verb for a carrier produced **elsewhere**.
-    pub(crate) fn adopt_carried(
-        &self,
-        cell: &DeliveredCarried,
-        seam: AdoptSeam<'_>,
-    ) -> Carried<'a> {
+    pub(crate) fn adopt_carried(&self, cell: &DeliveredCarried, seam: AdoptSeam) -> Carried<'a> {
         /// The content copied out of a type-channel envelope: a `Copy` `KType` handle, or an
         /// unlowered surface name whose bytes are re-bumped into this scope's region.
         enum AdoptedType<'t> {
@@ -342,27 +341,21 @@ impl<'a> Scope<'a> {
 
         let disposition = cell.open(|live| adopt_disposition(cell, live.object(), &seam));
         match disposition {
+            // The whole envelope is adopted in place through the library's fused mint-and-retain
+            // door: nothing is copied, so there is nothing to relocate.
             AdoptDisposition::Pin => cell.adopt_into(self.brand().handle()),
-            AdoptDisposition::Rebuild => {
-                // The rebuild lands the value in this scope's own region under the fold brand and its
-                // composition retains the copy's reach here for the region's life; adopting the product
-                // envelope re-anchors it at `'a` through the library's own fused mint-and-retain door,
-                // so no re-box is needed to recover the reference.
-                self.rebuild_delivered_substrate(cell, |carried| Ok(carried.object()))
-                    .expect("a whole-value substrate adoption's copy is infallible")
-                    .adopt_into(self.brand().handle())
-            }
-            AdoptDisposition::CopyNode(types) => {
-                // The fused door mints the copy's release-exact reach and deep-clones the top node under
-                // it in one step, so the copy's residence is audited against a reach derived for that same
-                // value, and folds the owning bundle into this region's union — the deep copy's surviving
-                // interior foreign borrows would otherwise be pinned by nothing.
-                let (object, _reach) = self
-                    .store_object_adopted(cell, |carried| Ok(carried.object()), types)
-                    .expect(
-                        "a deep copy's own residence must be covered by its own reach evidence",
-                    );
-                Carried::Object(object)
+            AdoptDisposition::Relocate => {
+                // The relocation lands the value in this scope's own region under the fold brand and
+                // its composition retains the copy's reach here for the region's life; adopting the
+                // product envelope re-anchors it at `'a` through the library's own fused
+                // mint-and-retain door, so no re-box is needed to recover the reference.
+                self.relocate_delivered(
+                    cell,
+                    |carried| Ok(carried.object()),
+                    RegionEscape::Copy { released: false },
+                )
+                .expect("a whole-value adoption's copy is infallible")
+                .adopt_into(self.brand().handle())
             }
         }
     }
@@ -377,71 +370,69 @@ impl<'a> Scope<'a> {
     /// record in its producer region is affordable here and nowhere else. [`adopt_disposition`]
     /// picks; this door runs the mechanism:
     ///
-    /// - **Rebuild** — the fold door's product is already dest-resident and its composition retained
-    ///   the copy's reach in this region, so the product envelope's cell **is** the binding entry: it
-    ///   seals straight into the table with no re-box.
-    /// - **Pin** — the record stays in its producer region; the projection is pointer-copied
-    ///   ([`KObject::deep_clone`], a pointer copy for a record sharing the producer-region substrate)
-    ///   and moved in under the whole-envelope minted reach
-    ///   ([`Self::store_object_pinned`]), whose explicitly named producer region covers the foreign
-    ///   substrate on the audit's `any_member_region` reach-member path — a record substrate carries
-    ///   no home-naming borrow, so the dest-resident `owns_substrate` check cannot evidence it. The
-    ///   reach is the pin's liveness, and the region's union bundle owns it.
-    /// - **CopyNode** — every projection that needs no destination door deep-clones its top node
-    ///   under the cell's copied-mode reach; the mint runs *before* the copy so the copy's own
-    ///   residence audit sees the evidence.
+    /// Both arms run the same engine ([`Self::relocate_delivered`]), differing only in the verb, and
+    /// both hand back a product envelope that is already dest-resident with its composed reach
+    /// retained in this region — so the product's cell **is** the binding entry: it seals straight
+    /// into the table with no re-box and no move-in audit.
+    ///
+    /// - **Relocate** — the copy verb, which rebuilds a substrate carrier at the destination door
+    ///   and pointer-copies everything else. The composition's retention claim is release-exact, so
+    ///   a plain-data copy lets the producer's region free.
+    /// - **Pin** — the record stays in its producer region and the projection is pointer-copied at
+    ///   the fold brand, its substrate borrow riding verbatim. The composition keeps every member
+    ///   the envelope named, the producer's region among them, which is the pin's liveness — and
+    ///   the region's union bundle owns it for this region's life.
     pub(crate) fn adopt_for_binding<P>(
         &self,
         cell: &DeliveredCarried,
         project: P,
-        types: &TypeRegistry,
     ) -> Result<SealedValue, KError>
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
         let disposition = cell.open(|live| match project(&live) {
-            Ok(object) => adopt_disposition(cell, object, &AdoptSeam::binding(types)),
-            // A projection failure surfaces from the store door below, which runs `project` again
-            // under the same pin and returns its `KError`; the node-copy arm is the one that does.
-            Err(_) => AdoptDisposition::CopyNode(types),
+            Ok(object) => adopt_disposition(cell, object, &AdoptSeam::binding()),
+            // A projection failure surfaces from the engine below, which runs `project` again under
+            // the fold's own pin and smuggles its `KError` back out; either verb does, so the
+            // copying one stands in.
+            Err(_) => AdoptDisposition::Relocate,
         });
 
-        match disposition {
-            AdoptDisposition::Rebuild => {
-                Ok(self.rebuild_delivered_substrate(cell, project)?.into_cell())
-            }
-            AdoptDisposition::Pin => {
-                let (object, reach) = self.store_object_pinned(cell, project, types)?;
-                Ok(self.seal_reaching(Carried::Object(object), reach))
-            }
-            AdoptDisposition::CopyNode(types) => {
-                let (object, reach) = self.store_object_adopted(cell, project, types)?;
-                Ok(self.seal_reaching(Carried::Object(object), reach))
-            }
-        }
+        let verb = match disposition {
+            AdoptDisposition::Relocate => RegionEscape::Copy { released: false },
+            AdoptDisposition::Pin => RegionEscape::Pin,
+        };
+        Ok(self.relocate_delivered(cell, project, verb)?.into_cell())
     }
 
-    /// Rebuild a delivered value's **projection** into this scope's region through the fold door —
-    /// the copy path for a value that needs a destination door
-    /// ([`KObject::needs_destination_door`]) rather than a pointer copy: a region-resident
-    /// substrate, or a bare `KString` whose bump-hosted bytes the copy must re-home. `project`
-    /// selects what to copy; the chooser has already vetted the shape ([`copy_object_into`]
-    /// rebuilds the whole reachable structure). The value relocates under the retention
-    /// predicate's release-exact answer — a
-    /// plain-data rebuild releases the producer (which then frees), a rebuild still borrowing its
-    /// home keeps it.
+    /// Relocate a delivered value's **projection** into this scope's region through the fold door,
+    /// under the escape `verb` the caller's disposition names. `project` selects what to move;
+    /// [`relocate_object_into`] runs the verb — a `Copy` totally rebuilds a substrate carrier at
+    /// the door so its substrate lands here, a `Pin` pointer-copies the top node and lets its
+    /// region-resident substrate borrow ride.
+    ///
+    /// The verb also fixes the retention claim the fold hands its composition:
+    ///
+    /// - **Copy** — release-exact. The predicate runs over the rebuilt value, so a plain-data
+    ///   record drops the producer region (a tail loop's retiring frame does not ride this binding)
+    ///   while a rebuild still borrowing its home keeps it.
+    /// - **Pin** — nothing is released: the value stays where it lived and the producer transfers
+    ///   by hold, so every region the source envelope named is kept. That is what covers the
+    ///   pointer-copied substrate still living in the producer's region.
     ///
     /// The fold's own composition mints the product's exact reach into this scope's arena and
     /// retains the owning bundle here for the region's life, so the witnessed product is already
     /// the finished carrier: it is enveloped under this scope's region owner and handed back. There
-    /// is **no re-box** — the value the caller consumes is the one the fold brand allocated, not a
-    /// deep clone of it re-audited through the checked door.
+    /// is **no re-box** and no runtime residence audit — the value the caller consumes is the one
+    /// the fold brand allocated, and the brand's rank-2 signature is what proves it borrows only
+    /// the fold's declared operands.
     ///
-    /// The private engine under both adopt doors: [`AdoptDisposition::Rebuild`] is exactly this.
-    fn rebuild_delivered_substrate<P>(
+    /// The private engine under both adopt doors: [`AdoptDisposition`] names the verb, this runs it.
+    fn relocate_delivered<P>(
         &self,
         cell: &DeliveredCarried,
         project: P,
+        verb: RegionEscape,
     ) -> Result<DeliveredCarried, KError>
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
@@ -458,21 +449,24 @@ impl<'a> Scope<'a> {
         // `for<'b>` fold closure has no route back to its operand's pins.
         let holder = cell.coverage().clone();
         // The destination is a bare region handle (empty reach), so its operand bundle is empty and
-        // the composition mints exactly the copy's release-exact reach: the retention predicate runs
-        // over the rebuilt value, so a plain-data record drops the producer region and a tail loop's
-        // retiring frame does not ride this binding, while a rebuild that still borrows its home
-        // keeps it. The composition also retains its bundle in this scope's region, which is what
-        // covers the rebuilt value read in place.
+        // the composition mints exactly what the verb's retention claim keeps — release-exact for a
+        // Copy, everything the envelope named for a Pin. The composition also retains its bundle in
+        // this scope's region, which is what covers the relocated value read in place.
         let copied = cell
             .transfer_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 dest,
-                |product, region| product_reaches_region(cell, product.as_object(), region),
+                |product, region| match verb {
+                    RegionEscape::Pin => true,
+                    RegionEscape::Copy { .. } => {
+                        product_reaches_region(cell, product.as_object(), region)
+                    }
+                },
                 |value, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement).with_holder(&holder);
                     match project(&value) {
-                        Ok(record) => {
-                            Carried::Object(door.alloc_object_folded(copy_object_into(record, door)))
-                        }
+                        Ok(record) => Carried::Object(
+                            door.alloc_object_folded(relocate_object_into(record, verb, door)),
+                        ),
                         Err(error) => {
                             projection_error = Some(error);
                             Carried::Object(door.alloc_object_folded(KObject::Null))
@@ -489,24 +483,87 @@ impl<'a> Scope<'a> {
         Ok(copied)
     }
 
-    /// The reach a module value minted in **this** scope claims from its `child` scope — the
-    /// derivation door for the module store paths. The minted description is hosted here (the module
-    /// value's own residence) and names the child's region as a member.
+    /// This scope's own region handle as a destination operand — the envelope every fold door here
+    /// merges into. A bare handle borrows nothing, so its coverage is empty and the composition
+    /// mints exactly the source operands' reach into this region, stamping the product with this
+    /// scope's own residence.
+    fn dest_operand(
+        &self,
+    ) -> Delivered<RegionHandleFamily<KoanStorageProfile>, CarrierWitness, FrameStorage> {
+        self.seal_resident_delivered(
+            self.resident::<RegionHandleFamily<KoanStorageProfile>>(self.brand().handle()),
+            FrameCoverage::empty(),
+        )
+    }
+
+    /// Seal a resident `Module` value into this scope — the Object-arm module bind
+    /// ([`Scope::seal_module`]) and an opaque ascription view. `module` lives in its own `child`
+    /// scope's region (the [`RegionBrand::alloc_module`](crate::machine::core::RegionBrand)
+    /// invariant), so the door envelopes that reference at the child's own home and **merges** it
+    /// into this scope's region: the composition mints the child's region as a member of the
+    /// product's reach and retains it here for this region's life.
     ///
-    /// The claim is the child's **own region owner**, and that is exact: a `KObject::Module`'s only
-    /// region borrow is its child scope, and every member value the module surfaces lives inside
-    /// that child's own bindings. The child's region owns the union bundle for everything those
-    /// members reach ([`Self::mint_retained`]), so pinning the child region transitively pins the
-    /// whole member closure — there is nothing to union in per entry. A co-located module (`MODULE`,
-    /// opaque `:|`) claims a region this scope's own chain already holds; a transparent `:!` view of
-    /// a source module claims that source's (foreign) region. Never recovered by walking the built
-    /// module value.
-    pub(crate) fn child_module_reach(&self, child: &Scope<'a>) -> &'a FrameReach {
-        let child_home: FrameCoverage = match child.region_owner().upgrade() {
-            Some(owner) => FrameCoverage::of(owner),
-            None => FrameCoverage::empty(),
-        };
-        self.mint_retained(&[&child_home])
+    /// That claim is exact. A `KObject::Module`'s only region borrow is its child scope, and every
+    /// member value the module surfaces lives inside that child's own bindings; the child's region
+    /// owns the union bundle for everything those members reach, so naming it pins the whole member
+    /// closure. A co-located module (`MODULE`, opaque `:|`) names a region this scope's chain
+    /// already holds — the library's self rule strips it from the retained bundle.
+    ///
+    /// Infallible, and audit-free: the wrapping `KObject::Module` is built at the fold brand from
+    /// the merge's own operand view, so an ambient-lifetime capture is a compile error at the
+    /// closure's signature rather than a runtime residence walk.
+    pub(crate) fn store_module_object(
+        &self,
+        module: &'a Module<'a>,
+        child: &Scope<'a>,
+    ) -> SealedValue {
+        let source = child.seal_resident_delivered(
+            child.resident::<ModuleRefFamily>(module),
+            FrameCoverage::empty(),
+        );
+        source
+            .merge_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+                self.dest_operand(),
+                |module_view, _handle, placement| {
+                    let door = FoldingBrand::in_fold_closure(placement);
+                    Carried::Object(door.alloc_object_folded(KObject::Module(module_view)))
+                },
+            )
+            .into_cell()
+    }
+
+    /// The transparent-ascription store: a fresh `Module` tagged `name`, re-tagging a *foreign*
+    /// source module's child scope, whose region is not this scope's own. The re-tagged `Module` is
+    /// **built inside the fold** over that child scope as its operand view, so its borrow is the
+    /// merge's own — which is what lets the composition, rather than a runtime walk, evidence the
+    /// foreign region. `seal` installs the view's self-sig on the resident module before it is
+    /// wrapped; it takes the module at the fold's own brand lifetime, so nothing it writes can
+    /// smuggle a borrow out.
+    ///
+    /// Both the `Module` and the `KObject::Module` wrapping it are allocated at the same fold brand
+    /// into this scope's region, and the composed reach names the source child's region — the one
+    /// claim covering both, minted and retained here in one act.
+    pub(crate) fn store_transparent_view(
+        &self,
+        name: String,
+        source_child: &'a Scope<'a>,
+        seal: impl for<'b> FnOnce(&'b Module<'b>),
+    ) -> SealedValue {
+        let source = source_child.seal_resident_delivered(
+            source_child.resident::<ScopeRefFamily>(source_child),
+            FrameCoverage::empty(),
+        );
+        source
+            .merge_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+                self.dest_operand(),
+                |scope_view, _handle, placement| {
+                    let door = FoldingBrand::in_fold_closure(placement);
+                    let module = door.alloc_module_folded(Module::new(name, scope_view));
+                    seal(module);
+                    Carried::Object(door.alloc_object_folded(KObject::Module(module)))
+                },
+            )
+            .into_cell()
     }
 }
 
@@ -516,8 +573,7 @@ impl<'a> Scope<'a> {
 /// [`Retaining`](Self::Retaining) means the adopting scope retains the minted reach in its region's
 /// union bundle, so pinning the value in place is affordable: the dep survives past its resolving
 /// step as its carrier rather than as a relocated copy (a bare-name read, the head-deferred
-/// callable, a spliced argument). It never copies an object, so it needs no [`TypeRegistry`] for a
-/// move-in audit — which is why it carries none.
+/// callable, a spliced argument).
 ///
 /// [`ReHome`](Self::ReHome) means the caller re-homes the value anyway and holds no lasting reach,
 /// so substrate carriers must copy: a tail loop's O(1) region turnover cannot afford pinning the
@@ -528,40 +584,37 @@ impl<'a> Scope<'a> {
 /// [`Binding`](Self::Binding) additionally admits the record cost chooser. It is minted only by
 /// [`Scope::adopt_for_binding`] — [`BindSeam`]'s field is private to this module, so no caller
 /// outside it can select cost-driven record pinning.
-pub(crate) enum AdoptSeam<'t> {
-    ReHome(&'t TypeRegistry),
+pub(crate) enum AdoptSeam {
+    ReHome,
     Retaining,
-    Binding(&'t TypeRegistry, BindSeam),
+    Binding(BindSeam),
 }
 
 /// Admission token for [`AdoptSeam::Binding`]: an empty struct whose field is private to this
 /// module, so the bind-seam variant is unconstructible anywhere else.
 pub(crate) struct BindSeam(());
 
-impl<'t> AdoptSeam<'t> {
-    /// The bind seam over `types` — private to this module by [`BindSeam`]'s own field.
-    fn binding(types: &'t TypeRegistry) -> Self {
-        AdoptSeam::Binding(types, BindSeam(()))
+impl AdoptSeam {
+    /// The bind seam — private to this module by [`BindSeam`]'s own field.
+    fn binding() -> Self {
+        AdoptSeam::Binding(BindSeam(()))
     }
 }
 
 /// How an adopted value is moved in, and with it how its reach evidence is kept. There is no
-/// discard arm: every disposition retains reach — the designer invariant.
-enum AdoptDisposition<'t> {
-    /// The value stays in its producer region; its whole minted reach (home riding as an ordinary
-    /// member) is retained in the adopting scope's region union, so every region the value reaches
-    /// — its own home included — stays alive for that region's life.
+/// discard arm: every disposition retains reach — the designer invariant. Both arms run through
+/// [`Scope::relocate_delivered`], differing in the [`RegionEscape`] verb they name.
+enum AdoptDisposition {
+    /// The value stays in its producer region: the relocation pointer-copies its top node at the
+    /// fold brand and the substrate borrow rides. The verb's retention claim keeps every member the
+    /// source envelope named — home included — so every region the value reaches stays alive for
+    /// the adopting region's life.
     Pin,
-    /// The value is rebuilt into the adopting scope's region through the fold door
-    /// ([`Scope::rebuild_delivered_substrate`]); the composition derives and retains the copy's
-    /// release-exact reach there. The source envelope's hold is released when the caller drops it.
-    Rebuild,
-    /// The projection's top node is deep-cloned into the adopting scope's region under the fused
-    /// mint, which stores the copy's release-exact reach ([`Delivered::coverage_retaining`] — the
-    /// copy's own members, its home among them), never a residence-only host pin. Carries the
-    /// [`TypeRegistry`] the move-in audit needs, so only a seam that supplies one can be answered
-    /// with it.
-    CopyNode(&'t TypeRegistry),
+    /// The value is relocated into the adopting scope's region through the fold door — a substrate
+    /// carrier totally rebuilt there, every other value's top node cloned — and the composition
+    /// derives and retains the copy's release-exact reach. The source envelope's hold is released
+    /// when the caller drops it.
+    Relocate,
 }
 
 /// The single home of the adoption rules. `projected` is what the caller will actually move —
@@ -571,20 +624,18 @@ enum AdoptDisposition<'t> {
 /// - [`AdoptSeam::Retaining`] pins every object, substrate or not. The adopting scope's region union
 ///   holds the minted reach, so the value can stay put; that is what lets a spliced argument or a
 ///   head-deferred callable survive its producing step as its carrier rather than as a copy.
-/// - [`AdoptSeam::ReHome`] copies every object: the top node through the fused mint when it needs no
-///   destination door, the whole structure through the fold door when it does.
-/// - [`AdoptSeam::Binding`] copies such a projection's top node, and routes a top-level record
-///   through the cost chooser; every other value needing a door rebuilds.
+/// - [`AdoptSeam::ReHome`] copies every object.
+/// - [`AdoptSeam::Binding`] copies too, except that a top-level record routes the cost chooser.
 ///
 /// The shape rules behind that table:
 ///
-/// - A **substrate carrier** (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) is region-resident
-///   and cannot cross the checked audit by a `deep_clone`, which would leave the substrate in the
-///   retiring producer, uncovered once the copy's reach releases it. So a copying seam rebuilds it
-///   through the fold door rather than taking the pointer-copy arm. A bare **`KString`** joins it
-///   ([`KObject::needs_destination_door`]): a pointer copy would share bump bytes the producer owns,
-///   and no audit can catch that — the bump keeps no address table — so the copy has to re-bump at
-///   the destination.
+/// - A **substrate carrier** (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) is region-resident,
+///   so a copying seam must rebuild it at the destination door rather than pointer-copy it: a
+///   `deep_clone` would leave the substrate in the retiring producer, uncovered once the copy's
+///   reach releases it. A bare **`KString`** joins it ([`KObject::needs_destination_door`]): a
+///   pointer copy would share bump bytes the producer owns. Both are the `Copy` verb's own rule
+///   ([`relocate_object_into`]), so the chooser names the verb and the relocation applies the shape
+///   rule — there is no separate copy-node disposition.
 /// - Only a top-level **record**, and only at the bind seam, is cost-driven ([`copy_or_pin`]). Every
 ///   other substrate carrier copies unconditionally there: pinning a bound value retains its
 ///   producer region, which a tail loop's O(1) region turnover cannot afford (`it` in a
@@ -593,27 +644,25 @@ enum AdoptDisposition<'t> {
 /// - A record's crossing is priced against the region the delivered value *lives in* — the host its
 ///   own reach description names, read off the carrier under the envelope's pins — not against the
 ///   projection, which may be an interior payload.
-fn adopt_disposition<'t>(
+fn adopt_disposition(
     cell: &DeliveredCarried,
     projected: &KObject<'_>,
-    seam: &AdoptSeam<'t>,
-) -> AdoptDisposition<'t> {
-    let needs_door = projected.needs_destination_door();
+    seam: &AdoptSeam,
+) -> AdoptDisposition {
     match seam {
         AdoptSeam::Retaining => AdoptDisposition::Pin,
-        AdoptSeam::ReHome(types) if !needs_door => AdoptDisposition::CopyNode(types),
-        AdoptSeam::ReHome(_) => AdoptDisposition::Rebuild,
-        AdoptSeam::Binding(types, _) if !needs_door => AdoptDisposition::CopyNode(types),
-        AdoptSeam::Binding(..) => cell
+        AdoptSeam::ReHome => AdoptDisposition::Relocate,
+        AdoptSeam::Binding(_) if !projected.needs_destination_door() => AdoptDisposition::Relocate,
+        AdoptSeam::Binding(_) => cell
             .open_at()
             .with_home_region(|host_region| match projected {
                 KObject::Record(substrate, _) => {
                     match copy_or_pin(substrate, projected, host_region) {
-                        RegionEscape::Copy { .. } => AdoptDisposition::Rebuild,
+                        RegionEscape::Copy { .. } => AdoptDisposition::Relocate,
                         RegionEscape::Pin => AdoptDisposition::Pin,
                     }
                 }
-                _ => AdoptDisposition::Rebuild,
+                _ => AdoptDisposition::Relocate,
             }),
     }
 }

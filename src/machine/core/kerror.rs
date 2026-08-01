@@ -206,8 +206,9 @@ impl KError {
     /// [`Self::to_tagged`] built directly resident in `scope`'s own region and sealed as a
     /// delivered carrier — the shape a caller with no fold already in hand needs: the payload's
     /// `Record` substrate can only be born through a fold door, so this drives a zero-dep one over
-    /// `scope`'s frame rather than routing the record through the checked/audited move-in tier
-    /// `alloc_object_checked` would need. The seed operand is a bare handle into that same region,
+    /// `scope`'s frame rather than routing the record through the checked move-in tier
+    /// [`Scope::alloc_object_checked_stored`] would need. The seed operand is a bare handle into
+    /// that same region,
     /// so [`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place) builds the
     /// value where it already belongs and mints its description there: the region is the value's
     /// host *and* one of its members, since the freshly born substrate borrows into it. A consumer

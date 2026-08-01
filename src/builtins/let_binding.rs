@@ -154,10 +154,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // terminal witnesses the bound value in place — the same reach-aware wrapper a later read
         // uses — while the table write rides the outcome.
         let sealed = match ctx.arg_carrier("value") {
-            Some(carrier) => {
-                ctx.scope
-                    .adopt_for_binding(carrier, |carried| Ok(carried.object()), ctx.types)
-            }
+            Some(carrier) => ctx
+                .scope
+                .adopt_for_binding(carrier, |carried| Ok(carried.object())),
             None => ctx.scope.seal_checked(value.deep_clone(), ctx.types),
         };
         let sealed = match sealed {

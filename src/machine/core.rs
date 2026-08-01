@@ -8,10 +8,10 @@ mod carrier_witness;
 mod kerror;
 pub(crate) mod kfunction;
 mod lexical_frame;
+mod ref_carriers;
 mod run_id;
 mod scope;
 mod scope_id;
-mod scope_ptr;
 
 #[cfg(test)]
 mod tests;
@@ -28,9 +28,7 @@ pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
     NodeHandle, WriteGate,
 };
-pub(crate) use carrier_witness::{
-    clone_reaches_region, product_reaches_region, read_resting, OverloadSeal,
-};
+pub(crate) use carrier_witness::{product_reaches_region, read_resting, OverloadSeal};
 pub use carrier_witness::{
     CarrierWitness, DeliveredCarried, OpenedFunction, SealedFunction, SplicedCell,
 };
@@ -47,8 +45,8 @@ pub(crate) use kfunction::body::{body_statement_refs, split_body_statements, Ret
 pub(crate) use kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction, NodeId};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
+pub use ref_carriers::{ModuleRefFamily, ScopeRefFamily};
 pub use run_id::RunId;
 pub(crate) use scope::AdoptSeam;
 pub use scope::Scope;
 pub use scope_id::ScopeId;
-pub use scope_ptr::ScopeRefFamily;

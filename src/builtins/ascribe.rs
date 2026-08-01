@@ -22,8 +22,8 @@ use super::{arg, kw, sig};
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
 /// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
-/// witnessed [`Action::done(Ok)`](Action::Done) carrier ([`Scope::resident`] seals it under the
-/// child scope's token, derived via [`Scope::child_module_reach`]).
+/// witnessed [`Action::done(Ok)`](Action::Done) carrier ([`Scope::store_module_object`] merges the
+/// resident module reference into that region, composing its reach).
 pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
@@ -130,28 +130,22 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
         return Action::done(Err(e));
     }
 
-    // The view's token is derived from `new_scope` held directly here (co-located, so it names only
-    // what the bulk-installed members reach), stored nowhere — the view is a returned value, not a
-    // named binding — and sealed onto the terminal carrier, witnessing the module in place. The
-    // opaque view's `new_scope` is a same-region child of this frame, so the mint names this scope's
-    // own region as a member: the module genuinely borrows into its home.
-    // The view surfaces as the Object-arm module value (`new_module` lives in `region`'s own
-    // region, so the audit passes on the dest-only check alone); a LET around it binds that value
-    // like any other. The fused door derives the module value's reach from its own `new_scope`, so
-    // value and reach cannot be mispaired, and folds the owning bundle into this region's union.
-    // Lifting that seal upgrades the description's members `Weak → Rc` for the terminal the step
-    // delivers onward.
-    let sealed = crate::try_action!(ctx
-        .scope
-        .store_module_object(new_module, new_scope, ctx.types));
+    // The view surfaces as the Object-arm module value; a LET around it binds that value like any
+    // other. The store door merges the resident module reference — enveloped at `new_scope`'s own
+    // home, held directly here rather than recovered by walking the built value — into this scope's
+    // region, so the composition mints and retains the module's reach. The opaque view's
+    // `new_scope` is a same-region child of this frame, so that reach is this scope's own region:
+    // the module genuinely borrows into its home. Lifting the seal upgrades the description's
+    // members `Weak → Rc` for the terminal the step delivers onward.
+    let sealed = ctx.scope.store_module_object(new_module, new_scope);
     let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
     Action::done(Ok(StepCarried::born_pinned(carrier, pins)))
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
-/// own child scope and returns the retagged view as the Object-arm module value — the terminal is
-/// allocated reaching the token derived via [`Scope::child_module_reach`], which pins the (foreign)
-/// source module's child-scope region the view borrows.
+/// own child scope and returns the retagged view as the Object-arm module value — built at the fold
+/// brand of [`Scope::store_transparent_view`], whose composition pins the (foreign) source module's
+/// child-scope region the view borrows.
 pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
@@ -161,26 +155,21 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types) {
         return Action::done(Err(e));
     }
-    // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
-    // to this frame — so its token folds that source's region and reach, sealed onto the terminal.
-    // Minted *before* the module alloc below: both the
-    // module's own placement (its child scope is this foreign region, not `region`'s own) and the
-    // Object-arm carrier that surfaces it need this one token. Reusing the foreign source's child scope, the view
-    // borrows nothing into this home frame (its interior points at the source region), so the mint
-    // names no home member — a downstream copied-mode mint materializes no home-frame member, and the dying
-    // home frame frees once its retention hold releases.
-    // The re-tagged Module and its Object-arm wrapper both ride one reach derived off the reused
-    // (foreign) source child scope — the fused door allocs the Module reaching that region, seals the
-    // view's self-sig on it (SIG-declared value slots read the source's concrete types after
-    // substitution), then audits the wrapping value against the same reach and fuses, folding the
-    // owning bundle into this region's union. Lifting that seal upgrades the description's members
-    // `Weak → Rc` for the terminal the step delivers onward.
-    let sealed = crate::try_action!(ctx.scope.store_transparent_view(
-        Module::new(format!("{} :! {}", m.path, s_name), m.child_scope()),
+    // A transparent view re-tags the source module's child scope directly (`m.child_scope()`),
+    // foreign to this frame. The store door merges that scope as its source operand, so the
+    // re-tagged Module and its Object-arm wrapper are both built at one fold brand in this scope's
+    // region over that operand view — their borrow of the foreign region is the fold's own, and the
+    // composition mints it as the value's reach and retains it here. The view's self-sig is sealed
+    // inside the fold, on the resident module (SIG-declared value slots read the source's concrete
+    // types after substitution). Reusing the foreign source's child scope, the view borrows nothing
+    // into this home frame, so no home member is named and the dying home frame frees once its
+    // retention hold releases. Lifting the seal upgrades the description's members `Weak → Rc` for
+    // the terminal the step delivers onward.
+    let sealed = ctx.scope.store_transparent_view(
+        format!("{} :! {}", m.path, s_name),
         m.child_scope(),
         |view| seal_view_self_sig(view, &s_schema, ctx.types),
-        ctx.types,
-    ));
+    );
     let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
     Action::done(Ok(StepCarried::born_pinned(carrier, pins)))
 }

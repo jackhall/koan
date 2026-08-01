@@ -429,18 +429,12 @@ impl<'a> KObject<'a> {
         matches!(self, KObject::Number(_) | KObject::Bool(_) | KObject::Null)
     }
 
-    /// True when every region borrow in `self` points into `dest` or is covered by one of `sets` —
-    /// the object delivered tier's coverage predicate, and with `sets` empty the plain
-    /// dest-residence check. Only value-channel borrows are walked: `KFunction`, `Module`,
-    /// `KExpression` splices, and a substrate carrier's (`Record`/`List`/`Dict`/`Tagged`/`Wrapped`)
-    /// substrate address (O(1), never its cells). The `KType` tags (`List`/`Dict`/`Record` memos,
-    /// `Tagged { identity }`, `Wrapped { type_id }`) are not walked — a handle is one `u128` naming
-    /// registry-owned content, so it borrows no region at all. The carriers holding the reach are
-    /// opaque to this layer; core extracts the sets before calling.
-    pub(crate) fn resident_in_delivered(&self, dest: &KoanRegion, sets: &[&FrameReach]) -> bool {
-        self.resident_in_visiting(&Residence::with_reach(dest, sets))
-    }
-
+    /// True when every region borrow in `self` points into the walk's destination region. Only
+    /// value-channel borrows are walked: `KFunction`, `Module`, `KExpression` splices, and a
+    /// substrate carrier's (`Record`/`List`/`Dict`/`Tagged`/`Wrapped`) substrate address (O(1),
+    /// never its cells). The `KType` tags (`List`/`Dict`/`Record` memos, `Tagged { identity }`,
+    /// `Wrapped { type_id }`) are not walked — a handle is one `u128` naming registry-owned content,
+    /// so it borrows no region at all.
     pub(crate) fn resident_in_visiting(&self, residence: &Residence<'_>) -> bool {
         match self {
             KObject::Number(_) | KObject::Bool(_) | KObject::Null => true,
@@ -657,8 +651,7 @@ fn pinned_cell<'a>(
 
 /// The born-borrowing seed's declared pins: coverage of the scope's own region, from the owner the
 /// scope names. An owner that fails to upgrade covers nothing — the storage is already gone, so
-/// there is no region left to pin (the same holder-rule read
-/// [`Scope::child_module_reach`](crate::machine::core::Scope) takes).
+/// there is no region left to pin.
 fn scope_coverage(owner: Weak<FrameStorage>) -> FrameCoverage {
     match owner.upgrade() {
         Some(owner) => FrameCoverage::of(owner),
@@ -839,6 +832,36 @@ pub(crate) fn copy_object_into<'b>(
             inner: alloc_payload(dest, copy_object_into(inner.payload(), dest)),
             type_id: *type_id,
         },
+    }
+}
+
+/// Relocate one value into `dest` under the chosen [`RegionEscape`]: a top-level substrate carrier
+/// (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) under a `Copy` verb is totally rebuilt at the door
+/// ([`copy_object_into`]) so its substrate lands in `dest`,
+/// while under `Pin` it pointer-copies (its region-resident substrate borrow rides, covered by the
+/// Kept-minted producer reach at the enclosing transfer). Every other value keeps the pointer-copy
+/// [`deep_clone`](KObject::deep_clone) — a scalar or a `KFunction` / `Module` leaf, owning or
+/// borrowing verbatim with no nested substrate to relocate. Shared by the execute-side seam hooks
+/// and the core adoption engine
+/// ([`Scope::relocate_delivered`](crate::machine::core::Scope)).
+pub(crate) fn relocate_object_into<'b>(
+    value: &KObject<'b>,
+    verb: RegionEscape,
+    dest: SubstrateDoor<'b, '_>,
+) -> KObject<'b> {
+    match value {
+        KObject::Record(..)
+        | KObject::List(..)
+        | KObject::Dict(..)
+        | KObject::Tagged { .. }
+        | KObject::Wrapped { .. } => match verb {
+            // Pin: pointer-copy the substrate carrier — its region-resident substrate borrow rides,
+            // covered by the Kept-minted producer reach at the enclosing transfer.
+            RegionEscape::Pin => value.deep_clone(),
+            // Copy: total rebuild at the door so the substrate lands in `dest`.
+            RegionEscape::Copy { .. } => copy_object_into(value, dest),
+        },
+        _ => value.deep_clone(),
     }
 }
 

@@ -270,7 +270,7 @@ fn wrapped_deep_clone_shares_inner_substrate_and_type_id() {
     }
 }
 
-// --- KObject::resident_in_delivered ----------------------------------------------
+// --- KObject::resident_in_visiting ----------------------------------------------
 
 /// A `KFunction` allocated into `dest`'s own region is dest-resident.
 #[test]
@@ -298,21 +298,20 @@ fn resident_in_true_for_same_region_kfunction() {
         &test_run.types,
     ));
     let o = KObject::KFunction(f);
-    assert!(o.resident_in_delivered(storage.region(), &[]));
+    assert!(o.resident_in_visiting(&Residence::dest_only(storage.region())));
 }
 
-/// A `KFunction` allocated into a foreign region is not resident in an unrelated `dest`, and
-/// [`KObject::resident_in_delivered`] widens the check to cover it once evidence names that
-/// region.
+/// A `KFunction` allocated into a foreign region is not resident in an unrelated `dest`: the walk
+/// admits only borrows into the destination itself. A value that genuinely reaches elsewhere is
+/// built at a fold brand instead, never presented here.
 #[test]
-fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
+fn resident_in_false_for_foreign_kfunction() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::Body;
     use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
     use crate::machine::model::ast::KExpression;
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
     use crate::machine::KFunction;
-    use std::rc::Rc;
 
     let foreign_program = program_storage();
     let foreign = run_root_storage();
@@ -332,17 +331,7 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     let o = KObject::KFunction(f);
 
     let dest = run_root_storage();
-    assert!(
-        !o.resident_in_delivered(dest.region(), &[]),
-        "sanity: not resident without evidence"
-    );
-
-    // Mint a description naming `foreign`'s region into `dest`'s side table (foreign to `dest`, so
-    // the self rule keeps it in the owned bundle). The mint retains that bundle in `dest`'s region,
-    // which keeps the description's members alive for the assertion.
-    let foreign_bundle = crate::machine::core::FrameCoverage::of(Rc::clone(&foreign));
-    let foreign_reach = dest.brand().handle().mint_retained(&[&foreign_bundle]);
-    assert!(o.resident_in_delivered(dest.region(), &[foreign_reach]));
+    assert!(!o.resident_in_visiting(&Residence::dest_only(dest.region())));
 }
 
 /// A `List` born in `dest`'s region is resident there: its element substrate lives in `dest`, so
@@ -363,5 +352,5 @@ fn resident_in_true_for_owned_list() {
         vec![KObject::Number(1.0), KObject::Number(2.0)],
         &types,
     );
-    assert!(o.resident_in_delivered(dest.region(), &[]));
+    assert!(o.resident_in_visiting(&Residence::dest_only(dest.region())));
 }

@@ -73,10 +73,10 @@ group just to silence the stale-anchor check.
   that no value-family test reproduces. The open routes the fully-safe
   `SealedExtern::open` on a stored `&'static Scope`, whose only `unsafe` (the
   shared `retype`) lives in `witnessed.rs`, so nodes.rs carries none of its own.
-- `src/machine/core/scope_ptr.rs` — every holder stores its captured / defining / parent scope as a
+- `src/machine/core/ref_carriers.rs` — every holder stores its captured / defining / parent scope as a
   plain `&'a Scope<'a>`, re-anchored **with the holder as a whole** by the `Region::alloc` retype in
   `witnessed.rs` (the construction-time reference is built at `'a` by plain coercion for a same-region
-  child, or at the construction door's brand for a per-call frame child), so scope_ptr.rs carries no
+  child, or at the construction door's brand for a per-call frame child), so ref_carriers.rs carries no
   `unsafe` of its own. The group pins the stored scope-pointer re-anchor shape.
 - `src/machine/execute/dispatch/ctx.rs` — the `with_node_scope` read boundary is the
   sole production open of a `YokedChild` carrier; it passes the executing slot's
@@ -397,15 +397,15 @@ moment a `Copied` fold re-pins a producer it copied out of. The only `unsafe` ro
 
 - `aggregate_of_call_results_releases_every_producer_frame`
 
-**`Scope::child_module_reach` seal-time mint** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
-— a module value's only region borrow is its child scope, so the mint names the child's **own
+**`Scope::store_module_object` seal-time composition** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
+— a module value's only region borrow is its child scope, so the merge composes the child's **own
 region** alone; that region owns the deduped union covering everything its members reach. This test
 binds a member into a child scope whose reach names a region foreign to both the child and the
-parent, mints the parent's description, and drops every other handle on both regions — tree borrows
-catches a use-after-free if the child region's union drops a member's reach or the mint's self rule
-fires on the wrong side.
+parent, stores the module value into the parent, and drops every other handle on both regions — tree
+borrows catches a use-after-free if the child region's union drops a member's reach or the
+composition's self rule fires on the wrong side.
 
-- `child_module_reach_names_the_child_region_which_owns_its_members_reaches`
+- `a_stored_module_reaches_the_child_region_which_owns_its_members_reaches`
 
 **`USING … SCOPE` transparent-window aliasing** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
 `ScopeBindings::Borrowed` window reads another scope's `RefCell` maps through a
@@ -480,11 +480,11 @@ dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 
 - `repeated_user_fn_calls_do_not_grow_run_root_per_call`
 
-**Stored scope-pointer re-anchor** ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) — every
+**Stored reference-carrier re-anchor** ([src/machine/core/ref_carriers.rs](../src/machine/core/ref_carriers.rs)) — every
 holder stores a captured / defining / parent scope as a plain `&'a Scope<'a>` (`Module::child_scope`,
 `KFunction::captured`, `Scope::outer` / `root`) and re-anchors it **with
 the holder as a whole** when the holder is read out of its region (the `Region::alloc` retype in
-`witnessed.rs`), so the accessors are bare field reads and scope_ptr.rs carries no `unsafe` of its own.
+`witnessed.rs`), so the accessors are bare field reads and ref_carriers.rs carries no `unsafe` of its own.
 The construction-time reference is built at `'a` by plain coercion (a same-region child) or at the
 construction door's generative brand (a per-call frame child, `build_frame_child_witnessed`) — there is
 no construction-time re-anchor verb. This test pins the re-anchor directly through the `Module` carrier;
@@ -675,9 +675,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-01: 2133s — 50 tests, 0 leaks, 0 UB
 - 2026-08-01: 2105s — 50 tests, 0 leaks, 0 UB
 - 2026-07-31: 2200s — 50 tests, 0 leaks, 0 UB
 - 2026-07-30: 2131s — 48 tests, 0 leaks, 0 UB
 - 2026-07-30: 1827s — 45 tests, 0 leaks, 0 UB
-- 2026-07-30: 1794s — 45 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

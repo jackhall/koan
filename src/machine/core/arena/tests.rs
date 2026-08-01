@@ -120,11 +120,10 @@ fn with_scope_relocates_seed_value_into_brand() {
     let frame: Rc<CallFrame> = CallFrame::new(scope);
     let types = test_run.types.clone();
     frame.with_scope(|child| {
-        // `alloc_object_checked` erases the caller-`'a` input and re-homes it at the frame region,
-        // so no pre-shortening is needed; a deep-cloned `Number` is always resident-in-self.
-        let it_obj = child
-            .brand()
-            .alloc_object_checked(it_value, &types)
+        // `alloc_object_checked_stored` erases the caller-`'a` input and re-homes it at the frame
+        // region, so no pre-shortening is needed; a deep-cloned `Number` is always resident-in-self.
+        let (it_obj, _reach) = child
+            .alloc_object_checked_stored(it_value, &types)
             .expect("a deep-cloned Number is always resident-in-self");
         child
             .bind_resident_for_test(
@@ -703,12 +702,15 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
     // where that scope lives — and wrap it as a `KObject::KFunction` in the same region, so the escaping
     // `&KObject` reaches exactly that region.
     let types = TypeRegistry::new();
-    home.with_scope(|child| {
-        let kf_ref = home.brand().alloc_function(no_op_closure(child));
-        home.brand()
-            .alloc_object_checked(KObject::KFunction(kf_ref), &types)
-            .expect("f was just allocated into region\'s own region")
-    })
+    let kf_ref = home.with_scope(|child| home.brand().alloc_function(no_op_closure(child)));
+    // A bare scope rooted in `home`'s own region, so the checked store lands the wrapper there and
+    // the resulting borrow escapes at `'run` — `CallFrame::with_scope`'s own scope is rank-2 and
+    // cannot.
+    let home_scope = run_root_bare(home.storage());
+    home_scope
+        .alloc_object_checked_stored(KObject::KFunction(kf_ref), &types)
+        .expect("f was just allocated into region\'s own region")
+        .0
 }
 
 /// A no-op `KFunction` capturing `scope` — the closure value the multi-region shapes fold; the body
@@ -763,9 +765,8 @@ fn delivered_reread_closure<'run>(
     let types = TypeRegistry::new();
     let home_scope = run_root_bare(home);
     let kf_ref = home.brand().alloc_function(no_op_closure(home_scope));
-    let obj = home
-        .brand()
-        .alloc_object_checked(KObject::KFunction(kf_ref), &types)
+    let (obj, _reach) = home_scope
+        .alloc_object_checked_stored(KObject::KFunction(kf_ref), &types)
         .expect("closure co-located with its captured scope");
     // The bind-time mint: `home` materializes into the reader's arena as the entry's reach, with
     // the owning bundle folded into the reader region's union. The read then lifts that entry —
@@ -1568,7 +1569,7 @@ fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
             let ptr = *substrate as *const RecordSubstrate<'_>;
             (
                 region.owns_substrate(ptr),
-                super::Residence::with_reach(region, &[]).owns_substrate(substrate),
+                super::Residence::dest_only(region).owns_substrate(substrate),
             )
         }
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
@@ -1587,8 +1588,8 @@ fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
 /// when a record rides inside another substrate carrier (`List`/`Dict`/`Tagged`/`Wrapped`) crossing
 /// the checked tier: a bare top-level record never routes this walk (born resident by
 /// construction through the fold door). This drives a `List` embedding a `Record` through
-/// `Scope::store_value_reaching_for_test` twice — once with evidence naming the record's home region
-/// (must pass, reading the address table, never the record's fields) and once without (must
+/// `Scope::alloc_object_checked_stored` twice — once into the region the record lives in (must
+/// pass, reading the address table, never the record's fields) and once into a foreign region (must
 /// reject) — proving the arm is a genuine O(1) membership check, not an always-true stand-in.
 #[test]
 fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
@@ -1607,19 +1608,15 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
         KObject::list_of_held(door, vec![Held::Object(record)], &types)
     };
 
+    let producer_scope = run_root_bare(&producer);
     let consumer_storage = run_root_storage();
     let consumer_scope = run_root_bare(&consumer_storage);
 
-    // Covered: evidence names `producer`'s region — the nested record's home. Minting `producer`
-    // (foreign to the consumer) into the consumer region yields a hosted description naming it;
-    // `_covering_pins` keeps the member pinned across the `store_value_reaching_for_test` read below.
-    let covering = consumer_storage
-        .brand()
-        .handle()
-        .mint_retained(&[&FrameCoverage::of(Rc::clone(&producer))]);
-    let moved = consumer_scope
-        .store_value_reaching_for_test(list_obj.deep_clone(), covering, &types)
-        .expect("evidence naming the record's home region covers it via owns_substrate membership");
+    // Covered: the destination *is* the region both substrates live in, so the walk's address-table
+    // check answers true for the nested record without ever reading its fields.
+    let (moved, _reach) = producer_scope
+        .alloc_object_checked_stored(list_obj.deep_clone(), &types)
+        .expect("the destination is the region the nested record's substrate lives in");
     match moved {
         KObject::List(items, _) => match items.elements()[0].object() {
             KObject::Record(substrate, _) => match substrate.field("x").map(|h| h.object()) {
@@ -1636,15 +1633,13 @@ fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
         other => panic!("expected a List, got {}", other.ktype().name(&types)),
     }
 
-    // Uncovered: no evidence names the record's home region, and it is foreign to `consumer`'s
-    // own region too — the audit must reject rather than silently accept. A description minted with
-    // no sources is the region-pure evidence: hosted in the consumer's region, naming nothing.
-    let no_evidence = consumer_storage.brand().handle().mint_retained(&[]);
-    let rejected =
-        consumer_scope.store_value_reaching_for_test(list_obj.deep_clone(), no_evidence, &types);
+    // Uncovered: the consumer's region owns neither substrate, so the walk must reject rather than
+    // silently accept. A value that genuinely needs to cross into a foreign region takes a fold
+    // door instead, where the brand proves what this walk can only check.
+    let rejected = consumer_scope.alloc_object_checked_stored(list_obj.deep_clone(), &types);
     assert!(
         rejected.is_err(),
-        "a nested record foreign to dest and evidence must be rejected, not silently accepted"
+        "a nested record foreign to dest must be rejected, not silently accepted"
     );
 }
 

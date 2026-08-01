@@ -79,17 +79,15 @@ impl<'a> Scope<'a> {
         Ok(self.seal_reaching(Carried::Object(obj), reach))
     }
 
-    /// Fused MODULE-finish value **construction**: derive the module's stored reach off its `child`
-    /// scope ([`Self::child_module_reach`]) — never by walking the built value — and allocate the
-    /// Object-arm module value under that evidence, sealed. Membership is derived by the mint, never
-    /// hand-asserted.
+    /// Fused MODULE-finish value **construction**: merge the resident module reference into this
+    /// scope's region ([`Self::store_module_object`]), which mints and retains the child's region as
+    /// the module value's reach. Membership is derived by the composition, never hand-asserted.
     pub(crate) fn seal_module(
         &self,
         module: &'a crate::machine::model::Module<'a>,
         child: &Scope<'a>,
-        types: &TypeRegistry,
-    ) -> Result<SealedValue, KError> {
-        self.store_module_object(module, child, types)
+    ) -> SealedValue {
+        self.store_module_object(module, child)
     }
 
     /// Construction-time value bind: apply a [`WriteOp::Value`] against this scope immediately.
@@ -120,10 +118,9 @@ impl<'a> Scope<'a> {
         cell: &DeliveredCarried,
         index: BindingIndex,
         project: impl for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
-        types: &TypeRegistry,
         gate: &mut WriteGate,
     ) -> Result<SealedValue, KError> {
-        let sealed = self.adopt_for_binding(cell, project, types)?;
+        let sealed = self.adopt_for_binding(cell, project)?;
         // Duplicate the seal: one binds into the entry, the other rides the caller's terminal
         // carrier out of the step. Neither owns pins — the region's union bundle does — so the
         // reach is covered on both the resident and in-transit paths.

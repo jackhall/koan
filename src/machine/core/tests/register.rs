@@ -198,9 +198,8 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
         false,
         &types,
     ));
-    let obj2 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f2), &types)
+    let (obj2, _reach) = scope
+        .alloc_object_checked_stored(KObject::KFunction(f2), &types)
         .expect("f was just allocated into region's own region");
     scope
         .bind_resident_for_test(
@@ -235,13 +234,11 @@ fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
         false,
         &types,
     ));
-    let obj1 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f), &types)
+    let (obj1, _reach1) = scope
+        .alloc_object_checked_stored(KObject::KFunction(f), &types)
         .expect("f was just allocated into region's own region");
-    let obj2 = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f), &types)
+    let (obj2, _reach2) = scope
+        .alloc_object_checked_stored(KObject::KFunction(f), &types)
         .expect("f was just allocated into region's own region");
     scope
         .bind_resident_for_test(
@@ -698,9 +695,8 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
         false,
         &types,
     ));
-    let obj = region
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f), &types)
+    let (obj, _reach) = scope
+        .alloc_object_checked_stored(KObject::KFunction(f), &types)
         .expect("f was just allocated into this region");
     let sealed = scope.seal_resident(Carried::Object(obj));
     scope

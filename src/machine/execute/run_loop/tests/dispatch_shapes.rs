@@ -56,7 +56,7 @@ fn sched_read_carried<'run>(
         .expect("scheduler should succeed");
     // The frameless top-level terminal is read out at the scope lifetime, widening the
     // scheduler's `'node` read (see `test_support::extract_terminal`).
-    crate::builtins::test_support::extract_terminal(&test_run.runtime, scope, &test_run.types, id)
+    crate::builtins::test_support::extract_terminal(&test_run.runtime, scope, id)
 }
 
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`
@@ -68,9 +68,9 @@ fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
             ctx.scope,
             Carried::Object(
                 ctx.scope
-                    .brand()
-                    .alloc_object_checked(obj.deep_clone(), ctx.types)
-                    .expect("a deep-cloned Number is always resident-in-self"),
+                    .alloc_object_checked_stored(obj.deep_clone(), ctx.types)
+                    .expect("a deep-cloned Number is always resident-in-self")
+                    .0,
             ),
         ),
         None => Action::done(Err(crate::machine::KError::new(
@@ -96,9 +96,8 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
         false,
         types,
     ));
-    let obj = scope
-        .brand()
-        .alloc_object_checked(KObject::KFunction(f), types)
+    let (obj, _reach) = scope
+        .alloc_object_checked_stored(KObject::KFunction(f), types)
         .expect("f was just allocated into region\'s own region");
     scope
         .bind_resident_for_test(

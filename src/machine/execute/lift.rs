@@ -1,8 +1,9 @@
-//! The witnessed-transfer copy hooks: the [`copy_carried`] relocate callback, the value-level
-//! [`relocate_object_into`] / cell-level [`copy_held_from_carried`] copies, the value-level escape
+//! The witnessed-transfer copy hooks: the [`copy_carried`] relocate callback, the cell-level
+//! [`copy_held_from_carried`] copy, the value-level escape
 //! seam's [`seam_verb`] chooser, and the retention predicate [`seam_still_borrows`] the chosen verb
 //! implies. The
-//! cost decision itself ([`copy_or_pin`](crate::machine::model::copy_or_pin)), the
+//! cost decision itself ([`copy_or_pin`](crate::machine::model::copy_or_pin)), the per-value
+//! relocation ([`relocate_object_into`](crate::machine::model::relocate_object_into)), the
 //! total-rebuild verb ([`copy_object_into`](crate::machine::model::copy_object_into)), and the
 //! stored release read ([`retains_home`](crate::machine::model::retains_home))
 //! live in the value model, shared with the core binding seams. See
@@ -11,7 +12,7 @@
 use crate::machine::core::SubstrateDoor;
 use crate::machine::core::{product_reaches_region, KoanRegion, KoanStorageProfile};
 use crate::machine::model::{
-    copy_object_into, copy_or_pin, retains_home, Carried, Held, KObject, RegionEscape,
+    copy_or_pin, relocate_object_into, retains_home, Carried, Held, KObject, RegionEscape,
     TypeIdentifier,
 };
 use crate::machine::DeliveredCarried;
@@ -47,35 +48,6 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
         Carried::UnresolvedType(ti) => {
             Carried::UnresolvedType(TypeIdentifier::leaf(dest.alloc_text(ti.as_str())))
         }
-    }
-}
-
-/// Relocate one value into `dest` under the chosen [`RegionEscape`]: a top-level substrate carrier
-/// (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) under a `Copy` verb is totally rebuilt at the door
-/// ([`copy_object_into`](crate::machine::model::copy_object_into)) so its substrate lands in `dest`,
-/// while under `Pin` it pointer-copies (its region-resident substrate borrow rides, covered by the
-/// Kept-minted producer reach at the enclosing transfer). Every other value keeps the pointer-copy
-/// `deep_clone` — a scalar or a `KFunction` / `Module` leaf, owning or borrowing verbatim with no
-/// nested substrate to relocate. Shared by the seam hooks ([`copy_carried`], the return-contract
-/// relocation).
-pub(in crate::machine::execute) fn relocate_object_into<'b>(
-    value: &KObject<'b>,
-    verb: RegionEscape,
-    dest: SubstrateDoor<'b, '_>,
-) -> KObject<'b> {
-    match value {
-        KObject::Record(..)
-        | KObject::List(..)
-        | KObject::Dict(..)
-        | KObject::Tagged { .. }
-        | KObject::Wrapped { .. } => match verb {
-            // Pin: pointer-copy the substrate carrier — its region-resident substrate borrow rides,
-            // covered by the Kept-minted producer reach at the enclosing transfer.
-            RegionEscape::Pin => value.deep_clone(),
-            // Copy: total rebuild at the door so the substrate lands in `dest`.
-            RegionEscape::Copy { .. } => copy_object_into(value, dest),
-        },
-        _ => value.deep_clone(),
     }
 }
 

@@ -112,7 +112,6 @@ where
                             cell,
                             BindingIndex::value(0),
                             |c| Ok(c.object()),
-                            types,
                             gate,
                         )?;
                     }

@@ -140,7 +140,6 @@ pub(crate) fn arm_tail<'a>(
                     &carrier,
                     BindingIndex::value(0),
                     |carried| Ok(carried.object()),
-                    types,
                     gate,
                 );
             }

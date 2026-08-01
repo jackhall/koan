@@ -139,8 +139,8 @@ drop-order argument at all: everything there dies with the region, at once.
 The scope-pointer case — `CallFrame`, `Module`, `Signature`, `KFunction`, and a `Scope`'s
 own lexical parent each holding a pointer to a captured, defining, or parent `Scope` — holds that
 scope **outright** as a plain `&'a Scope<'a>` (a thin pointer, layout-invariant in `'a`), centralized
-through the [`ScopeRefFamily`](../src/machine/core/scope_ptr.rs) reattach family in
-[`scope_ptr.rs`](../src/machine/core/scope_ptr.rs), with no scope-specialized re-anchor helper — the
+through the [`ScopeRefFamily`](../src/machine/core/ref_carriers.rs) reattach family in
+[`ref_carriers.rs`](../src/machine/core/ref_carriers.rs), with no scope-specialized re-anchor helper — the
 embedded pointer re-anchors with the holder's own whole-value retype.
 
 A region-stored holder's embedded scope reference re-anchors to the holder's `'a` as part of the

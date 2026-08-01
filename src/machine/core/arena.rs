@@ -142,10 +142,10 @@ impl<'a> RegionBrand<'a> {
     /// Storing the *value* built around those bytes is gated exactly where it always was.
     /// [`Self::alloc_object`] admits only `'static`, so a region-hosted string cannot reach it;
     /// [`KObject::resident_in_visiting`] answers `false` for a string, so the runtime-audited doors
-    /// ([`Self::alloc_object_checked`], [`Self::alloc_object_witnessed_checked`]) reject one — the
-    /// bump keeps no address table, so no audit could tell which region a `&str` points into. The
-    /// route in is [`FoldingBrand::alloc_object_folded`], where the rank-2 brand proves the string
-    /// was bumped at the destination.
+    /// ([`Scope::alloc_object_checked_stored`], [`Self::alloc_object_witnessed_checked`]) reject
+    /// one — the bump keeps no address table, so no audit could tell which region a `&str` points
+    /// into. The route in is [`FoldingBrand::alloc_object_folded`], where the rank-2 brand proves
+    /// the string was bumped at the destination.
     pub fn alloc_text(self, text: &str) -> &'a str {
         self.0.bump_text(text)
     }
@@ -164,30 +164,6 @@ impl<'a> RegionBrand<'a> {
     /// The single-value peer of [`Self::alloc_slice`], for a node a part arm points at.
     pub fn alloc_value<T: Copy>(self, value: T) -> &'a T {
         self.0.bump_value(value)
-    }
-
-    /// Runtime-checked twin of [`Self::alloc_object`] for an `o` that cannot rebuild owned at
-    /// `'static` (`KObject` has no general `'static` rebuild):
-    /// [`KObject::resident_in_delivered`] audits every region borrow `o` carries, with no reach
-    /// evidence, against this brand's own
-    /// region. A `Wrapped { type_id }` tag needs no walk: the `type_id` is a `Copy` `KType` handle
-    /// that reaches nothing the audit could reject.
-    pub fn alloc_object_checked(
-        self,
-        o: KObject<'_>,
-        types: &TypeRegistry,
-    ) -> Result<&'a KObject<'a>, KError> {
-        // The audit consumes `o`, so its type is read before the call — but rendering that type is
-        // the diagnostic's cost alone, so it stays inside the failure closure.
-        let kt = o.ktype();
-        self.0
-            .alloc_resident_checked::<KObject<'static>>(o, ResidenceEvidence::dest_only())
-            .ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(format!(
-                    "{}: borrows a region other than its seal's destination",
-                    kt.name(types)
-                )))
-            })
     }
 
     /// INVARIANT: a `KFunction` must be allocated into the same `KoanRegion` that owns its
@@ -216,11 +192,12 @@ impl<'a> RegionBrand<'a> {
 
     /// INVARIANT: a `Module` must be allocated into its own child scope's region — every `Module`
     /// borrows the child scope `MODULE` opened for its body, so it can never be `'static`. The one
-    /// legitimate cross-region caller (transparent-ascribe's re-tagged `Module`) takes
-    /// [`Scope::store_transparent_view`] instead. See [`Self::alloc_function`].
+    /// legitimate cross-region caller (transparent-ascribe's re-tagged `Module`) is built at a fold
+    /// brand instead ([`Scope::store_transparent_view`]), where the borrow it re-tags is the fold's
+    /// own operand view. See [`Self::alloc_function`].
     pub fn alloc_module(self, m: Module<'_>) -> &'a Module<'a> {
         self.0
-            .alloc_resident_checked::<Module<'static>>(m, ResidenceEvidence::dest_only())
+            .alloc_resident_checked::<Module<'static>>(m, ())
             .expect("alloc_module: a Module must be allocated into its own child scope's region")
     }
 
@@ -355,6 +332,17 @@ impl<'a> FoldingBrand<'a> {
     /// with no runtime audit at all.
     pub(crate) fn alloc_object_folded(self, o: KObject<'a>) -> &'a KObject<'a> {
         self.placement.alloc_resident_folded::<KObject<'static>>(o)
+    }
+
+    /// Store a [`Module`] built at this fold's own brand — the door the module store folds
+    /// ([`Scope::store_module_object`](crate::machine::core::Scope)) re-tag a view through. Sound by
+    /// the same rank-2 fold-brand argument as [`Self::alloc_object_folded`]: the module is typed at
+    /// the brand lifetime, so its child-scope borrow is the fold's own operand view and an
+    /// ambient-lifetime capture is a compile error at this signature. That discharges the residence
+    /// obligation `alloc_module`'s `ptr::eq` guard states at runtime — a folded module's child scope
+    /// is reached through the fold's operands, whose regions the enclosing composition names.
+    pub(crate) fn alloc_module_folded(self, m: Module<'a>) -> &'a Module<'a> {
+        self.placement.alloc_resident_folded::<Module<'static>>(m)
     }
 
     /// Store a container substrate built at this fold's own brand — the container door, generic over

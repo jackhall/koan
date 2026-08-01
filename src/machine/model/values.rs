@@ -18,7 +18,7 @@ pub(crate) use container_substrate::{
     DictSubstrate, ListSubstrate, PayloadSubstrate, RecordSubstrate,
 };
 pub use kkey::KKey;
-pub(crate) use kobject::{copy_object_into, copy_or_pin, retains_home, RegionEscape};
+pub(crate) use kobject::{copy_or_pin, relocate_object_into, retains_home, RegionEscape};
 pub use kobject::{KObject, ValueEqualityError};
 pub use module::Module;
 pub use named_pairs::NamedPairs;

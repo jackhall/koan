@@ -318,7 +318,7 @@ fn extract_carried_args<'step>(
             (WorkingPart::Spliced { .. }, Some(delivered)) => {
                 args.push(
                     view.current_scope()
-                        .adopt_carried(delivered, AdoptSeam::ReHome(view.types())),
+                        .adopt_carried(delivered, AdoptSeam::ReHome),
                 );
             }
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
@@ -336,9 +336,8 @@ fn extract_carried_args<'step>(
             // construction, so it keeps the checked door.
             (WorkingPart::Ast(quote @ ExpressionPart::QuotedExpression(_)), _) => {
                 let scope = view.current_scope();
-                let object = scope
-                    .brand()
-                    .alloc_object_checked(quote.resolve(scope.brand()), view.types())
+                let (object, _reach) = scope
+                    .alloc_object_checked_stored(quote.resolve(scope.brand()), view.types())
                     .expect("a quote body is parsed AST, resident in the storage that parsed it");
                 args.push(Carried::Object(object));
             }

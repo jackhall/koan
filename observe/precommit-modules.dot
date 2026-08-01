@@ -59,13 +59,13 @@ digraph {
     "koan::machine::core::kfunction::exec" [label="koan::machine::core::kfunction::exec"];
     "koan::machine::core::kfunction::pick" [label="koan::machine::core::kfunction::pick"];
     "koan::machine::core::lexical_frame" [label="koan::machine::core::lexical_frame"];
+    "koan::machine::core::ref_carriers" [label="koan::machine::core::ref_carriers"];
     "koan::machine::core::run_id" [label="koan::machine::core::run_id"];
     "koan::machine::core::scope" [label="koan::machine::core::scope"];
     "koan::machine::core::scope::reach" [label="koan::machine::core::scope::reach"];
     "koan::machine::core::scope::registry" [label="koan::machine::core::scope::registry"];
     "koan::machine::core::scope::resolve" [label="koan::machine::core::scope::resolve"];
     "koan::machine::core::scope_id" [label="koan::machine::core::scope_id"];
-    "koan::machine::core::scope_ptr" [label="koan::machine::core::scope_ptr"];
     "koan::machine::execute" [label="koan::machine::execute"];
     "koan::machine::execute::ambient" [label="koan::machine::execute::ambient"];
     "koan::machine::execute::dispatch" [label="koan::machine::execute::dispatch"];
@@ -188,10 +188,10 @@ digraph {
     "koan::machine::core" -> "koan::machine::core::kerror" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::kfunction" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::lexical_frame" [label="owns", style="solid"];
+    "koan::machine::core" -> "koan::machine::core::ref_carriers" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::run_id" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope_id" [label="owns", style="solid"];
-    "koan::machine::core" -> "koan::machine::core::scope_ptr" [label="owns", style="solid"];
     "koan::machine::core::arena" -> "koan::machine::core::arena::frame" [label="owns", style="solid"];
     "koan::machine::core::arena" -> "koan::machine::core::arena::residence" [label="owns", style="solid"];
     "koan::machine::core::arena" -> "koan::machine::core::arena::step_allocator" [label="owns", style="solid"];
@@ -480,7 +480,6 @@ digraph {
     "koan::machine::core::arena::residence" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::arena::residence" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::arena::residence" -> "koan::machine::core::arena" [label="uses", style="dashed"];
-    "koan::machine::core::arena::residence" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::machine::core::arena::residence" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::arena::step_allocator" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::arena::step_allocator" -> "koan::machine" [label="uses", style="dashed"];
@@ -546,6 +545,9 @@ digraph {
     "koan::machine::core::kfunction::pick" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::pick" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::lexical_frame" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::core::ref_carriers" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::core::ref_carriers" -> "koan::machine::core::scope" [label="uses", style="dashed"];
+    "koan::machine::core::ref_carriers" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::run_id" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
@@ -572,8 +574,6 @@ digraph {
     "koan::machine::core::scope::resolve" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::scope::resolve" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::scope_id" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::core::scope_ptr" -> "koan" [label="uses", style="dashed"];
-    "koan::machine::core::scope_ptr" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];

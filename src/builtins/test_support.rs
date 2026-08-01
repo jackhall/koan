@@ -141,22 +141,19 @@ impl<'a> TestRun<'a> {
 pub(crate) fn extract_terminal<'a>(
     runtime: &KoanRuntime<'a>,
     scope: &'a Scope<'a>,
-    types: &TypeRegistry,
     id: NodeId,
 ) -> Carried<'a> {
-    // The extraction deep-clones the value into `scope`'s region, so the copied-adoption rule
-    // applies: the producer frame materializes into the surviving arena only when the copy's
-    // borrows genuinely reach it (a returned closure / module), never for a residence-only scalar.
-    // The witness and its retained host travel together as the delivery envelope. Minted *before*
-    // the read below so the deep-cloned copy's own residence audit can see it — a returned
-    // closure / module's deep clone preserves the bare borrow into its per-call region.
+    // The extraction copies the value into `scope`'s region, so the copied-adoption rule applies:
+    // the producer frame materializes into the surviving arena only when the copy's borrows
+    // genuinely reach it (a returned closure / module), never for a residence-only scalar. The
+    // witness and its retained host travel together as the delivery envelope.
     let delivered = runtime
         .dep_delivered(id)
         .expect("terminal should be a value, not an error");
-    // Reuse the production copy-then-audit adoption: a top-level record is totally rebuilt into
-    // `scope`'s region through the seam copy verb (never pointer-copied past the checked audit), an
-    // object deep-clones under its own minted reach, a type crosses by handle / clone.
-    scope.adopt_carried(&delivered, crate::machine::AdoptSeam::ReHome(types))
+    // Reuse the production relocation: a top-level record is totally rebuilt into `scope`'s region
+    // through the seam copy verb, every other object's top node is cloned at the fold brand, a type
+    // crosses by handle / clone.
+    scope.adopt_carried(&delivered, crate::machine::AdoptSeam::ReHome)
 }
 
 /// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read it back.
@@ -277,7 +274,7 @@ impl<'a> TestRun<'a> {
             scope,
         );
         self.runtime.execute().expect("scheduler should succeed");
-        extract_terminal(&self.runtime, scope, &self.types, id).object()
+        extract_terminal(&self.runtime, scope, id).object()
     }
 
     /// [`TestRun::run_one_in`] against the bundle's own scope.
@@ -295,7 +292,7 @@ impl<'a> TestRun<'a> {
             scope,
         );
         self.runtime.execute().expect("scheduler should succeed");
-        match extract_terminal(&self.runtime, scope, &self.types, id) {
+        match extract_terminal(&self.runtime, scope, id) {
             Carried::Type(kt) => kt,
             Carried::Object(obj) => panic!(
                 "expected a type result, got value {}",
