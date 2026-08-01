@@ -6,7 +6,8 @@
 //! validation and duplicate-name detection live here; the per-slot interpretation is
 //! supplied by a `parse_slot` closure.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::ast::{FieldSlot, Part};
+use crate::source::Spanned;
 
 /// Which token shapes are accepted as a field/parameter *name* by [`parse_pair_list`].
 ///
@@ -24,13 +25,16 @@ pub enum FieldNameKind {
 
 /// `context` is woven into error messages; `name_kind` selects which token shapes are
 /// valid as a name. Empty `parts` yields an empty `Vec`.
-pub fn parse_pair_list<'a, T>(
-    expr: &KExpression<'a>,
+///
+/// Generic over the part family so a parsed field list and a self-reference-threaded one walk the
+/// same code: both name positions read through [`FieldSlot`], which each family answers in the one
+/// shared vocabulary.
+pub fn parse_pair_list<'a, P: Part<'a>, T>(
+    parts: &'a [Spanned<P>],
     context: &str,
     name_kind: FieldNameKind,
-    mut parse_slot: impl FnMut(&ExpressionPart<'a>, &str) -> Result<T, String>,
+    mut parse_slot: impl FnMut(&P, &str) -> Result<T, String>,
 ) -> Result<Vec<(String, T)>, String> {
-    let parts = expr.parts;
     if !parts.len().is_multiple_of(2) {
         return Err(format!(
             "{context} must be `<name> <slot>` pairs; got {} parts (not a multiple of 2)",
@@ -40,28 +44,27 @@ pub fn parse_pair_list<'a, T>(
     let mut out: Vec<(String, T)> = Vec::with_capacity(parts.len() / 2);
     let mut i = 0;
     while i < parts.len() {
-        let name = match (&parts[i].value, name_kind) {
-            (
-                ExpressionPart::Identifier(s),
-                FieldNameKind::Identifier | FieldNameKind::IdentifierOrType,
-            ) => (*s).to_string(),
+        let name = match (parts[i].value.field_slot(), name_kind) {
+            (FieldSlot::Name(s), FieldNameKind::Identifier | FieldNameKind::IdentifierOrType) => {
+                s.to_string()
+            }
             // Capitalized names (`Ty`, `Er` params; `Some`, `Ok` variant tags) lex as
             // `Type` tokens; admitted under `IdentifierOrType` (FN) and `Type`
             // (UNION tags), never for STRUCT / record fields.
-            (ExpressionPart::Type(t), FieldNameKind::IdentifierOrType | FieldNameKind::Type) => {
+            (FieldSlot::Type(t), FieldNameKind::IdentifierOrType | FieldNameKind::Type) => {
                 t.render()
             }
             // A lowercase tag under the `Type` policy — tags must be capitalized type names.
-            (other, FieldNameKind::Type) => {
+            (_, FieldNameKind::Type) => {
                 return Err(format!(
                     "{context} variant tag must be a capitalized type name, got {}",
-                    other.summarize(),
+                    parts[i].value.summarize(),
                 ));
             }
-            (other, _) => {
+            _ => {
                 return Err(format!(
                     "{context} name must be a bare identifier, got {}",
-                    other.summarize(),
+                    parts[i].value.summarize(),
                 ));
             }
         };
@@ -79,7 +82,7 @@ pub fn parse_pair_list<'a, T>(
 mod tests {
     use super::*;
     use crate::machine::core::{program_storage, RegionBrand};
-    use crate::machine::model::ast::TypeIdentifier;
+    use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
     use crate::source::Spanned;
 
     /// `[name, slot]` parts where the name rides as a `Type` token (e.g. a capitalized
@@ -99,7 +102,7 @@ mod tests {
         let program = program_storage();
         let expr = type_named_pair(program.brand().region());
         let out = parse_pair_list(
-            &expr,
+            expr.parts,
             "FN parameters",
             FieldNameKind::IdentifierOrType,
             |p, _| match p {
@@ -115,9 +118,12 @@ mod tests {
     fn identifier_only_rejects_type_token_name() {
         let program = program_storage();
         let expr = type_named_pair(program.brand().region());
-        let result = parse_pair_list(&expr, "STRUCT schema", FieldNameKind::Identifier, |_, _| {
-            Ok::<_, String>(())
-        });
+        let result = parse_pair_list(
+            expr.parts,
+            "STRUCT schema",
+            FieldNameKind::Identifier,
+            |_, _| Ok::<_, String>(()),
+        );
         assert!(
             matches!(&result, Err(msg) if msg.contains("bare identifier")),
             "Type-token name must be rejected under Identifier-only, got {result:?}",

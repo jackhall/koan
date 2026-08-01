@@ -184,7 +184,7 @@ pub fn slot_admits(arg: &Argument, part: &WorkingPart<'_>, types: &TypeRegistry)
     match part {
         WorkingPart::Ast(ast) => arg.matches(ast, types),
         WorkingPart::Spliced { cell } => arg.ktype.accepts_cell(cell, types),
-        WorkingPart::Expression(_) | WorkingPart::StagedSlot => false,
+        WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => false,
     }
 }
 

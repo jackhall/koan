@@ -6,7 +6,10 @@ use super::ktype::KType;
 use super::recursive_group_window::RecursiveGroupWindow;
 use super::registry::TypeRegistry;
 use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
-use crate::machine::model::ast::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
+use crate::machine::core::read_resting;
+use crate::machine::model::ast::{
+    ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,
+};
 use crate::machine::model::values::Carried;
 use crate::machine::model::Record;
 use crate::machine::{NodeId, Scope};
@@ -94,6 +97,27 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
     }
 }
 
+/// A field list's parts run, from either expression family. A parsed list arrives as
+/// [`Ast`](FieldParts::Ast); one whose co-declared references [`rewrite_threaded_self_refs`] has
+/// already sealed into resolved cells arrives as [`Threaded`](FieldParts::Threaded).
+#[derive(Clone, Copy)]
+pub enum FieldParts<'a> {
+    Ast(&'a [Spanned<ExpressionPart<'a>>]),
+    Threaded(&'a [Spanned<WorkingPart<'a>>]),
+}
+
+impl<'a> FieldParts<'a> {
+    /// The field list a parsed node spells.
+    pub fn of(expr: &KExpression<'a>) -> Self {
+        FieldParts::Ast(expr.parts)
+    }
+
+    /// The field list a threaded node spells.
+    pub fn threaded(expr: &WorkingExpression<'a>) -> Self {
+        FieldParts::Threaded(expr.parts)
+    }
+}
+
 /// Entry point used by STRUCT / UNION / FN. Routes each field type through the
 /// scheduler-aware [`elaborate_type_identifier`], accumulating parking producers and
 /// pending sub-Dispatches across the whole walk so the caller installs one dep-finish for
@@ -105,8 +129,30 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
 /// `Some` on the re-walk (each consumes the next resolved carrier in DFS order). The
 /// re-walk re-descends in the same deterministic order, so positional consumption needs no
 /// slot index and nested field-lists fall out for free.
+///
+/// The two part families walk the same [`walk_field_list`]; this is the door that picks the
+/// instantiation, and the one a nested record recurses back through when it descends into the
+/// other family.
 pub fn parse_typed_field_list_via_elaborator<'a>(
-    expr: &KExpression<'a>,
+    parts: FieldParts<'a>,
+    context: FieldListContext,
+    name_kind: FieldNameKind,
+    elaborator: &mut Elaborator<'_, 'a>,
+    results: Option<&mut ResultFeed<'_, 'a>>,
+    types: &TypeRegistry,
+) -> FieldListOutcome<'a> {
+    match parts {
+        FieldParts::Ast(parts) => {
+            walk_field_list(parts, context, name_kind, elaborator, results, types)
+        }
+        FieldParts::Threaded(parts) => {
+            walk_field_list(parts, context, name_kind, elaborator, results, types)
+        }
+    }
+}
+
+fn walk_field_list<'a, P: Part<'a>>(
+    parts: &'a [Spanned<P>],
     context: FieldListContext,
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
@@ -119,7 +165,7 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
         list: context_list,
         member: context_member,
     } = context;
-    let parsed = parse_pair_list(expr, context_list, name_kind, |part, name| {
+    let parsed = parse_pair_list(parts, context_list, name_kind, |part, name| {
         // Every field types a value, so each field type must be a proper type; a bare
         // constructor of kind `* -> *` standing unapplied is a kind error. Applied to each
         // elaborated field on the way out, so the four arms below share one verdict — the
@@ -133,8 +179,8 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
             Some(message) => Err(message),
             None => Ok(kt),
         };
-        match part {
-            ExpressionPart::Type(t) => match elaborate_type_identifier(elaborator, t, types) {
+        match part.field_slot() {
+            FieldSlot::Type(t) => match elaborate_type_identifier(elaborator, &t, types) {
                 TypeResolution::Done(kt) => checked(kt),
                 TypeResolution::Park(producers) => {
                     parks.extend(producers);
@@ -146,10 +192,65 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                     Err(format!("{msg} in {context_list} for `{}`", name))
                 }
             },
+            // A co-declared sibling `rewrite_threaded_self_refs` already sealed in. The cell rests
+            // in the declarator's scope, which is parked on this very walk, so the handle is read
+            // through the pin-less door: a `KType` is an interned registry handle borrowing nothing.
+            FieldSlot::Resolved(cell) => read_resting(&cell, |carried| match carried {
+                Carried::Type(kt) => checked(kt),
+                other => Err(format!(
+                    "{context_list} type for `{}` resolved to non-type value `{}`",
+                    name,
+                    other.summarize(types),
+                )),
+            }),
+            // A sigil body whose co-declared references are already threaded dispatches as it
+            // stands — the rewrite that produced it did what this arm's `Ast` peer does below.
+            FieldSlot::ThreadedSigil(body) => {
+                match results.as_mut().and_then(|feed| feed.pop()) {
+                    Some(Carried::Type(kt)) => checked(kt),
+                    Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
+                        Err(format!(
+                            "{context_list} type for `{}` resolved to non-type value `{}`",
+                            name,
+                            other.summarize(types),
+                        ))
+                    }
+                    None if results.is_some() => Err(format!(
+                        "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
+                    )),
+                    None => {
+                        sub_dispatches.push(*body);
+                        Ok(KType::ANY)
+                    }
+                }
+            }
+            // A threaded record body elaborates inline exactly as its `Ast` peer does, and for the
+            // same reason: a record type is folded here, never sub-Dispatched as a whole.
+            FieldSlot::ThreadedRecord(body) => {
+                match parse_typed_field_list_via_elaborator(
+                    FieldParts::threaded(body),
+                    FieldListContext::RECORD_TYPE,
+                    FieldNameKind::Identifier,
+                    elaborator,
+                    results.as_deref_mut(),
+                    types,
+                ) {
+                    FieldListOutcome::Done(pairs) => Ok(types.record(Record::from_pairs(pairs))),
+                    FieldListOutcome::Err(msg) => Err(msg),
+                    FieldListOutcome::Pending {
+                        park_producers,
+                        sub_dispatches: inner_subs,
+                    } => {
+                        parks.extend(park_producers);
+                        sub_dispatches.extend(inner_subs);
+                        Ok(KType::ANY)
+                    }
+                }
+            }
             // Sigils sub-Dispatch through the standalone dispatcher, which carries no window
             // context, so co-declared references are pre-resolved to sibling carriers first
             // (see `rewrite_threaded_self_refs`).
-            ExpressionPart::SigiledTypeExpr(boxed) => {
+            FieldSlot::AstSigil(boxed) => {
                 // `:(Tree Leaf)` while `Tree` is the binder under seal: a sibling-variant
                 // reference. It cannot sub-dispatch (parking would deadlock on this very
                 // seal's producer), so it lowers straight to the variant's relative `Sibling`
@@ -205,9 +306,9 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
             // A nested record type `:{…}` elaborates inline through this same walker,
             // sharing the elaborator and `results` feed; its parks / sub-dispatches merge
             // into the outer set. No sub-Dispatch of the record node, no slot bookkeeping.
-            ExpressionPart::RecordType(boxed) => {
+            FieldSlot::AstRecord(boxed) => {
                 match parse_typed_field_list_via_elaborator(
-                    boxed,
+                    FieldParts::of(boxed),
                     FieldListContext::RECORD_TYPE,
                     FieldNameKind::Identifier,
                     elaborator,
@@ -226,10 +327,10 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                     }
                 }
             }
-            other => Err(format!(
+            FieldSlot::Name(_) | FieldSlot::Other => Err(format!(
                 "{context_list} type for `{}` must be a type name token, got {}",
                 name,
-                other.summarize()
+                Part::summarize(part)
             )),
         }
     });
@@ -269,6 +370,9 @@ fn names_threaded_self_ref(inner: &KExpression<'_>, threaded: &HashSet<String>) 
 /// lowers `Tree` to a `Sibling` back-edge instead of parking on its own placeholder and closing a
 /// scheduler-deadlock cycle. Non-threaded names — and, with no open window, every name — are left
 /// for the dispatcher.
+///
+/// Recurses into nested sigils **and nested record types**, which reach their own sub-Dispatches the
+/// same window-less way.
 fn rewrite_threaded_self_refs<'a>(
     inner: &KExpression<'a>,
     threaded: &HashSet<String>,
@@ -312,6 +416,18 @@ fn rewrite_threaded_self_refs<'a>(
                         types,
                     )))
                 }
+                // A nested record type threads its own self-references too, and keeps its
+                // record-type slot class: its body is a field list its handler elaborates, so it
+                // cannot ride the transparent sigil arm above.
+                ExpressionPart::RecordType(body) if names_threaded_self_ref(body, threaded) => {
+                    WorkingPart::RecordType(brand.alloc_value(rewrite_threaded_self_refs(
+                        body,
+                        threaded,
+                        scope,
+                        Some(window),
+                        types,
+                    )))
+                }
                 other => WorkingPart::Ast(*other),
             };
             Spanned {
@@ -331,7 +447,7 @@ pub fn pair_list_names(
     context: &'static str,
     name_kind: FieldNameKind,
 ) -> Result<Vec<String>, String> {
-    parse_pair_list(expr, context, name_kind, |_, _| Ok(())).map(|pairs| {
+    parse_pair_list(expr.parts, context, name_kind, |_, _| Ok(())).map(|pairs| {
         pairs
             .into_iter()
             .map(|(name, ())| name)

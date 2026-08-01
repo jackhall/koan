@@ -250,7 +250,7 @@ The rails the dispatch driver feeds:
   - **Wrap slot.** The arm matches the ladder's three-state
     [`BareCarrier`](../../src/machine/execute/dispatch/bare_name.rs).
     `Sealed(cell)` splices the sealed binding-scope carrier inline as
-    `ExpressionPart::Spliced { cell }` — value and reach as one unit.
+    `WorkingPart::Spliced { cell }` — value and reach as one unit.
     `Parked(p)` cycle-checks
     via [`DepGraph::would_create_cycle`](../../workgraph/src/scheduler/dep_graph.rs)
     and either surfaces `SchedulerDeadlock { sample: "cycle in type alias
@@ -268,7 +268,7 @@ The rails the dispatch driver feeds:
     `Type` parts park here; non-bare-name parts are skipped by
     classification.
   - **Eager-sub slot.** `Expression` parts sub-Dispatch; `SigiledTypeExpr`
-    and `RecordType` parts wrap into a single-part `KExpression` and
+    and `RecordType` parts wrap into a single-part `WorkingExpression` and
     sub-Dispatch (the sub-Dispatch enters `classify_dispatch`'s matching shape arm —
     `SigiledTypeExpr` tail-replaces with the inner dispatch, `RecordType` folds
     to `KType::Record`); `ListLiteral` and `DictLiteral`

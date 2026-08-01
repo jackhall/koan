@@ -457,7 +457,8 @@ impl<'a> KObject<'a> {
             // resolved sub-result lives only on the scheduler's `WorkingExpression`, which no value
             // cell can hold — so pointing at one pins nothing and can dangle nowhere. The
             // `KString` arm's sibling: a borrow no address table can place, settled structurally
-            // rather than by a probe.
+            // rather than by a probe. Which half of that is typed and which is flow-cleared is
+            // [`ProgramBrand`](crate::machine::core::ProgramBrand)'s doc.
             KObject::KExpression(_) => true,
             // O(1) address-membership check on the substrate borrow — never a cell walk. Every
             // substrate carrier answers residence by its own address, whether it is a bare top-level
@@ -927,14 +928,6 @@ pub(crate) fn copy_or_pin<C>(
             }
         }
         SeamPolicy::CostDriven => {}
-    }
-
-    // Unpriceable: keep today's unconditional total copy. Release is still a stored fact — no
-    // home-relative cost memo is available here, but the reach union answers directly.
-    if substrate.copy_cost() == u64::MAX {
-        return RegionEscape::Copy {
-            released: !retains_home(value, host),
-        };
     }
 
     // The substrate's description records the region its storage lives in — which a pin-bind can

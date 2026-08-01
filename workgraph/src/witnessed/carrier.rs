@@ -30,11 +30,6 @@
 //! ([`Delivered::mint_reach`](super::Delivered::mint_reach),
 //! [`Delivered::transfer_into`](super::Delivered::transfer_into)). [`Self::mint_into`] is the
 //! crate-internal core they route through; it is not part of the public surface.
-//!
-//! A carrier is also a *source* a composition can be derived from, not only a witness a value
-//! carries: [`RegionHandle::mint_retained_from_carriers`] mints one description out of several
-//! resting cells' claims. That is the door for a workload whose values carry their reach rather
-//! than travel with it — the composition stays here, so no embedder unions member sets of its own.
 
 use std::rc::Rc;
 
@@ -136,22 +131,6 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         // as `with_reach_impl` does, and the upgrade re-owns the members before it ends.
         let _ = pin;
         self.with_reach_impl(|reach| reach.to_bundle())
-    }
-
-    /// This carrier's **whole claim** as an owned bundle: the region the value lives in (its
-    /// description's host) unioned with every region its borrows reach (the members, upgraded
-    /// `Weak → Rc`), read under `pin`. It is exactly the member set a delivery envelope holds for
-    /// the same value — home as an ordinary member — recovered from the description for a carrier
-    /// **at rest**, whose ownership lives somewhere else (a region's union bundle) rather than in an
-    /// envelope beside it.
-    ///
-    /// `pin` covers the description's hosting arena for the whole call (the holder rule), which is
-    /// what makes the host and member upgrades succeed. Crate-internal: it hands back owned pins,
-    /// the ownership tier an embedder has no vocabulary for — the composition door
-    /// [`RegionHandle::mint_retained_from_carriers`] folds it and keeps it.
-    pub(in crate::witnessed) fn claimed_bundle<Pin: Witness>(&self, pin: &Pin) -> PinBundle<F> {
-        let members = self.upgrade_bundle(pin);
-        PinBundle::union(&PinBundle::singleton(self.home_owner()), &members)
     }
 
     /// The owner of the region this value **lives in**, read off its description's host and upgraded

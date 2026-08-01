@@ -1065,11 +1065,12 @@ mod seam_verb_table {
         }
     }
 
-    /// An **unpriceable** record (holds a `KExpression` cell — unpriceable, but plain data with no
-    /// borrow leaf) copies, and its `released` bit tracks the stored read: no run names the host, so
-    /// the copy frees it.
+    /// A record holding a `KExpression` cell prices like any other plain-data record: the expression
+    /// is a borrow leaf costing nothing, since its parts run lives in the program storage that parsed
+    /// it. So the record copies, and its `released` bit tracks the stored read — no run names the
+    /// host, so the copy frees it.
     #[test]
-    fn seam_verb_unpriceable_plain_data_copies_released() {
+    fn seam_verb_expression_cell_prices_as_a_borrow_leaf_and_copies_released() {
         use crate::machine::model::ast::KExpression;
         let program = program_storage();
         let root = run_root_storage();
@@ -1086,7 +1087,7 @@ mod seam_verb_table {
         assert_eq!(
             copy_or_pin(substrate_of(value), value, home.region()),
             RegionEscape::Copy { released: true },
-            "an unpriceable plain-data record copies and the probe frees the host"
+            "a record holding an expression cell copies and the probe frees the host"
         );
     }
 

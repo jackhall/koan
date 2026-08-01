@@ -3,7 +3,13 @@
 Every `KObject` lives in a [`KoanRegion`](../src/machine/core/arena.rs). Top-level
 work allocates into the **run-root region**; each user-fn call gets its own
 **per-call `KoanRegion`** owned by [`CallFrame`](../src/machine/core/arena.rs),
-freed when the call's slot finalizes. The target storage model for composite
+freed when the call's slot finalizes. Above both sits
+[`program_storage`](../src/machine/core/arena/frame.rs), the region program text and
+its parsed AST are bumped into: created before the run root and dropped after it, at
+the same **eternal** tier (`PinsRegion::needs_no_pin`), so a value pointing at
+program text names no member any pin bundle has to hold. It stays outside the frame
+lifecycle entirely — no `CallFrame` adopts it, no `Scope` names it as `region_owner`,
+and its only capability in use is the bump its `ProgramBrand` hands parse output. The target storage model for composite
 value substrates — region-resident payloads, witnessed-only construction, the
 pin-versus-copy escape policy — is pinned in
 [value-substrates.md](value-substrates.md).
@@ -11,8 +17,10 @@ pin-versus-copy escape policy — is pinned in
 ## Storage shape: a graph of region slots
 
 A `KoanRegion` holds one `typed_arena`-backed sub-arena per stored family — `KObject`,
-`KFunction`, `Scope`, `Module`, `KType`, `TypeIdentifier`, and the four value
-substrates (record, list, dict, payload). Slots have stable
+`KFunction`, `Scope`, `Module`, `KType`, `Held`, and the four value
+substrates (record, list, dict, payload). A family is listed there only if it needs a
+typed slot: a `TypeIdentifier` is a `Copy` borrow of resident name bytes, and an
+expression's parts are a `Copy` bumped slice, so neither takes one. Slots have stable
 heap addresses; the runtime carries cross-references between them rather
 than ownership trees. The structural edges:
 
@@ -518,7 +526,7 @@ Transient-node reclamation runs through `Scheduler::reclaim_deps` from the
 unified node handler `KoanRuntime::run_step`, *after* the finish closure returns
 its `Outcome` but *before* the harness applies it. So
 when a dispatch splice finish has rewritten `working_expr.parts` to
-`ExpressionPart::Spliced`, the freed indices are back on the free-list before
+`WorkingPart::Spliced`, the freed indices are back on the free-list before
 the harness dispatches the bound expression — its `add()` can recycle them
 immediately. `reclaim_deps` clears `dep_edges[idx]` and
 invokes `Scheduler::free` per dep index; the walk follows `DepGraph::owned_children`,

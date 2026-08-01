@@ -470,7 +470,7 @@ impl KType {
             // A slot the scheduler has yet to fill — a node it synthesized and will dispatch, or a
             // staging hole awaiting its sibling's carrier. Neither denotes a value yet, and both
             // become a `Spliced` cell before anything binds, so only an `Any` slot admits one.
-            WorkingPart::Expression(_) | WorkingPart::StagedSlot => {
+            WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => {
                 matches!(types.node(self), TypeNode::Any)
             }
         }

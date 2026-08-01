@@ -13,7 +13,7 @@ types on the variant directly. `KType` is not `Copy`; structural payloads are
 **Surface syntax** is a glued-right `:` sigil opening an S-expression
 type-expression group. The parser treats `:(...)` as a parse-context marker
 anchored to the `:` — a `:(...)` sigil emits one
-[`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../../../src/machine/model/ast.rs)
+[`ExpressionPart::SigiledTypeExpr(&KExpression)`](../../../src/machine/model/ast.rs)
 wrapping the raw inner expression verbatim, with no shape recognition at
 parse time. (The one structurally-recognized sigil is `:{…}`, which emits a
 first-class `ExpressionPart::RecordType` instead — see

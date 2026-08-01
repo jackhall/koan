@@ -23,11 +23,11 @@ use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{DepPlacement, FinishCtx};
 use crate::machine::core::{LexicalFrame, StepAllocator};
 use crate::machine::model::Carried;
+use crate::machine::model::WorkingExpression;
 use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
-    FieldNameKind, ResultFeed,
+    FieldNameKind, FieldParts, ResultFeed,
 };
-use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::model::{KType, Record, TypeRegistry};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::scheduler::Deps;
@@ -65,7 +65,7 @@ pub(crate) type FieldListFinalizeAction<'a> = Box<
 /// a scheduling inconsistency (every producer waited on is terminal by the dep-finish invariant, so a
 /// second park is not a recoverable forward ref) and errors loudly.
 struct FieldListRewalk<'step> {
-    expr: KExpression<'step>,
+    parts: FieldParts<'step>,
     context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
@@ -98,7 +98,7 @@ impl<'step> FieldListRewalk<'step> {
             elaborator = elaborator.with_window(window);
         }
         match parse_typed_field_list_via_elaborator(
-            &self.expr,
+            self.parts,
             self.context,
             self.name_kind,
             &mut elaborator,
@@ -148,7 +148,7 @@ fn compose_field_list<'step>(
 /// `with_*` setters. The three consuming finish methods each assemble the shared
 /// `[park_producers ++ owned_subs]` dep vector once through [`into_parts`](Self::into_parts).
 pub(crate) struct FieldListDeferral<'a> {
-    expr: KExpression<'a>,
+    parts: FieldParts<'a>,
     park_producers: Vec<NodeId>,
     sub_dispatches: Vec<WorkingExpression<'a>>,
     context: FieldListContext,
@@ -160,18 +160,18 @@ pub(crate) struct FieldListDeferral<'a> {
 }
 
 impl<'a> FieldListDeferral<'a> {
-    /// The five fields every deferral names: the parked field-list `expr`, its forward-ref
+    /// The five fields every deferral names: the parked field-list `parts`, its forward-ref
     /// `park_producers`, the sigil `sub_dispatches` (DFS order), and the `context` / `name_kind`
     /// diagnostic and field-name policy. The elaborator-rebuild optionals default empty/absent.
     pub(crate) fn new(
-        expr: KExpression<'a>,
+        parts: FieldParts<'a>,
         park_producers: Vec<NodeId>,
         sub_dispatches: Vec<WorkingExpression<'a>>,
         context: FieldListContext,
         name_kind: FieldNameKind,
     ) -> Self {
         Self {
-            expr,
+            parts,
             park_producers,
             sub_dispatches,
             context,
@@ -217,7 +217,7 @@ impl<'a> FieldListDeferral<'a> {
     /// vector is assembled.
     fn into_parts(self) -> (FieldListRewalk<'a>, Deps<OwnedDispatch<'a>>) {
         let rewalk = FieldListRewalk {
-            expr: self.expr,
+            parts: self.parts,
             context: self.context,
             name_kind: self.name_kind,
             threaded: self.threaded,
@@ -236,8 +236,8 @@ impl<'a> FieldListDeferral<'a> {
     }
 
     /// Finish into the scheduler currency: a [`Outcome::ParkThenContinue`] whose dep-finish re-walks
-    /// `expr` once the parks and owned sub-Dispatches resolve, then composes the pairs through
-    /// `compose`. A pure decide, no write.
+    /// the field list once the parks and owned sub-Dispatches resolve, then composes the pairs
+    /// through `compose`. A pure decide, no write.
     pub(in crate::machine::execute) fn outcome(self, compose: BrandCompose<'a>) -> Outcome<'a> {
         let (rewalk, deps) = self.into_parts();
         let finish: TerminalDepFinish<'a> = Box::new(move |view, terminals| {
@@ -270,8 +270,8 @@ impl<'a> FieldListDeferral<'a> {
     }
 
     /// Finish into the `Action` currency: an [`ActionKind::AwaitDeps`](crate::machine::core::ActionKind)
-    /// whose re-walk of `expr` lifts the `finalize` result — terminal plus binding writes — into the
-    /// step's `Done` outcome.
+    /// whose re-walk of the field list lifts the `finalize` result — terminal plus binding writes —
+    /// into the step's `Done` outcome.
     pub(crate) fn action(
         self,
         finalize: FieldListFinalizeAction<'a>,
@@ -315,12 +315,12 @@ impl<'a> FieldListDeferral<'a> {
 /// through one dep-finish (the field walker's own re-walk handles nested records).
 pub(crate) fn elaborate_record_value<'step, 'view>(
     view: &SchedulerView<'step, 'view>,
-    fields: KExpression<'step>,
+    fields: FieldParts<'step>,
     chain: Option<Rc<LexicalFrame>>,
 ) -> Outcome<'step> {
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
-        &fields,
+        fields,
         FieldListContext::RECORD_TYPE,
         FieldNameKind::Identifier,
         &mut elaborator,

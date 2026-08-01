@@ -32,6 +32,10 @@ no — the test is redundant; **delete it** rather than whitelist. Do not whitel
 group just to silence the stale-anchor check.
 
 <!-- slate-audit-whitelist:start -->
+- `src/machine/model/types/typed_field_list.rs` — the declaration-window sibling-cell group pins a
+  pin-less read (`read_resting`) whose coverage is a *parked* step's region, not the reading step's —
+  an ordering claim no other slate test makes. The real `unsafe` is the `Sealed::open_with` retype in
+  `witnessed.rs`; typed_field_list.rs carries none of its own.
 - `src/machine/core/arena.rs` — arena.rs split into `arena/{frame,step_allocator,residence}`
   child modules. Its remaining groups (CallFrame lifetime erasure, reference-only carrier
   retention, multi-region union, witness-set hosting, `alloc_carried_with`, MATCH-Tagged / TRY-WITH
@@ -340,6 +344,21 @@ regions, binds the list in an outer scope so every producer frame retires, then 
 `parts` on the read. The door is safe code throughout; tree borrows is the only check.
 
 - `let_bound_list_of_call_produced_quotes_survives_every_producer_free`
+
+**Declaration-window sibling cell read from a sub-Dispatch**
+([src/machine/model/types/typed_field_list.rs](../src/machine/model/types/typed_field_list.rs)) —
+`rewrite_threaded_self_refs` seals each co-declared reference in a sigil field's body as a resident
+cell in the *declarator's* scope region and bumps the rewritten body beside it. The field walker
+reading those cells back runs inside the `:(LIST OF …)` sub-Dispatch — a step the declarator merely
+parked on — and reads them through `read_resting`, which names **no pin at all**. So the claim under
+test is entirely about ordering: the parked declarator's region outlives every step its own field
+list spawned. Nothing the reader holds says so, and no other slate test pins a pin-less read whose
+coverage belongs to a *parked* step rather than the reading one. The test declares a self-recursive
+record whose sibling reference sits inside a record type nested in a sub-dispatched sigil — the one
+position that reaches the walker's resolved-cell arm — and runs on to a constructed value, so the
+sealed handle is used rather than merely elaborated.
+
+- `declaration_window_sibling_cell_read_from_a_sub_dispatch_no_uaf`
 
 **Retaining adoption's reach-fold reattach** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
 — `Scope::adopt_carried` at the retaining seam re-anchors a foreign producer's carrier at the
@@ -656,9 +675,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-31: 2200s — 50 tests, 0 leaks, 0 UB
 - 2026-07-30: 2131s — 48 tests, 0 leaks, 0 UB
 - 2026-07-30: 1827s — 45 tests, 0 leaks, 0 UB
 - 2026-07-30: 1794s — 45 tests, 0 leaks, 0 UB
 - 2026-07-29: 1750s — 44 tests, 0 leaks, 0 UB
-- 2026-07-29: 801s — 44 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

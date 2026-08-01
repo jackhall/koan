@@ -185,6 +185,9 @@ pub(in crate::machine::execute) fn is_eager_working_part(part: &WorkingPart<'_>)
         // A node the scheduler synthesized is an operand awaiting its own dispatch, exactly as a
         // parsed `(...)` is — the operator-chain fold's accumulator is the one that reaches here.
         WorkingPart::Expression(_) => true,
+        // A threaded record-type body is the `:{…}` eager shape with its co-declared references
+        // already sealed in — staged the same way, as a one-part sub-Dispatch.
+        WorkingPart::RecordType(_) => true,
         WorkingPart::Ast(ast) => is_eager_part(ast),
         WorkingPart::Spliced { .. } | WorkingPart::StagedSlot => false,
     }
@@ -204,6 +207,13 @@ pub(in crate::machine::execute) fn stage_eager_working_part<'a>(
             expr: *inner,
             placement: DepPlacement::OwnScope,
             // A synthesized operand is a reduction product, never a nested binder.
+            binder_covered: false,
+        }),
+        // Rewrap the whole part, as the AST `:{…}` shape does: the record-type wrapper is the
+        // handler, so the sub-Dispatch must see a one-part `RecordType`-shaped node, not the body.
+        WorkingPart::RecordType(_) => Ok(DepRequest::Dispatch {
+            expr: WorkingExpression::new(brand, vec![Spanned::bare(part)]),
+            placement: DepPlacement::OwnScope,
             binder_covered: false,
         }),
         other => Err(other),

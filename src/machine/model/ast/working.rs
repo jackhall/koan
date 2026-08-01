@@ -18,7 +18,8 @@ use crate::machine::{AdoptSeam, SplicedCell};
 use crate::source::{FileId, Span, Spanned};
 
 use super::shape::{
-    classify_dispatch_shape, operator_probe_for, stored_untyped_key, DispatchShape, Part, PartClass,
+    classify_dispatch_shape, operator_probe_for, stored_untyped_key, DispatchShape, FieldSlot,
+    Part, PartClass,
 };
 use super::{BinderPlan, ExpressionPart, KExpression};
 
@@ -32,6 +33,11 @@ pub enum WorkingPart<'a> {
     /// accumulator does. Distinct from `Ast(ExpressionPart::Expression(_))`, which points at a
     /// parsed sub-node.
     Expression(&'a WorkingExpression<'a>),
+    /// A `:{…}` record-type body whose co-declared references are already threaded. Distinct from
+    /// [`Expression`](WorkingPart::Expression) because a record-type sigil is not transparent: its
+    /// body is a field list its own handler elaborates, never an expression to dispatch, so the slot
+    /// must keep classifying as [`PartClass::RecordType`].
+    RecordType(&'a WorkingExpression<'a>),
     /// A resolved sub-result **at rest**: its producer's sealed carrier — value and reach description
     /// as one unit — and nothing else. `Copy` and `Drop`-free; the pins that keep its backing alive
     /// live one level down, in the region the splice site rested it into
@@ -58,9 +64,26 @@ impl<'a> Part<'a> for WorkingPart<'a> {
         match self {
             WorkingPart::Ast(part) => part.class(),
             WorkingPart::Expression(_) => PartClass::Expression,
+            WorkingPart::RecordType(_) => PartClass::RecordType,
             WorkingPart::Spliced { .. } => PartClass::Spliced,
             WorkingPart::StagedSlot => PartClass::StagedSlot,
         }
+    }
+
+    fn field_slot(&self) -> FieldSlot<'a> {
+        match self {
+            WorkingPart::Ast(part) => part.field_slot(),
+            // A threaded sigil body rides the `Expression` arm: the rewrite drops the transparent
+            // `:(…)` wrapper, since the wrapper's handler does no more than dispatch its body.
+            WorkingPart::Expression(body) => FieldSlot::ThreadedSigil(body),
+            WorkingPart::RecordType(body) => FieldSlot::ThreadedRecord(body),
+            WorkingPart::Spliced { cell } => FieldSlot::Resolved(*cell),
+            WorkingPart::StagedSlot => FieldSlot::Other,
+        }
+    }
+
+    fn summarize(&self) -> String {
+        WorkingPart::summarize(self)
     }
 }
 
@@ -83,6 +106,7 @@ impl<'a> std::fmt::Debug for WorkingPart<'a> {
         match self {
             WorkingPart::Ast(part) => part.fmt(f),
             WorkingPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
+            WorkingPart::RecordType(e) => f.debug_tuple("RecordType").field(e).finish(),
             WorkingPart::Spliced { cell } => {
                 write!(f, "Spliced({})", read_resting(cell, spliced_summary))
             }
@@ -97,6 +121,7 @@ impl<'a> WorkingPart<'a> {
         match self {
             WorkingPart::Ast(part) => part.summarize(),
             WorkingPart::Expression(e) => e.summarize(),
+            WorkingPart::RecordType(e) => format!(":{{{}}}", e.summarize()),
             WorkingPart::Spliced { cell } => read_resting(cell, spliced_summary),
             WorkingPart::StagedSlot => "<staged>".to_string(),
         }
@@ -145,7 +170,7 @@ impl<'a> WorkingPart<'a> {
             // become one — and never needs to: a synthesized node is always on its way to
             // `become_dispatch`, while every raw capture a `:KExpression` slot makes is of parsed
             // AST, which rides the `Ast` arm above.
-            WorkingPart::Expression(_) => unreachable!(
+            WorkingPart::Expression(_) | WorkingPart::RecordType(_) => unreachable!(
                 "a synthesized nested node is dispatched, never captured as a value; \
                  a raw `:KExpression` capture is always of parsed AST"
             ),

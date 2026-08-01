@@ -673,6 +673,73 @@ mod tests {
             .is_none());
     }
 
+    /// A `:{…}` nested inside a *sub-dispatched* sigil — the one field-list position whose body
+    /// leaves this walk entirely. `:(LIST OF …)` sub-Dispatches through the standalone dispatcher,
+    /// which carries no declaration window, so the record body reaches it as a threaded
+    /// [`WorkingPart::RecordType`](crate::machine::model::WorkingPart) whose `Tree` leaf is already
+    /// a sealed sibling cell. Both the inline nested record
+    /// ([`nested_record_field_threads_self_reference`]) and the bare-`Type` sigil field
+    /// ([`record_repr_list_of_self_field_seals_self_handle`]) cover their own halves; this is the
+    /// cell where the two cross.
+    #[test]
+    fn record_nested_in_sub_dispatched_sigil_threads_self_reference() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let scope = test_run.scope;
+        test_run.run("NEWTYPE Tree = :{kids :(LIST OF :{next :Tree})}");
+        let types = test_run.types();
+        let (size, tree_handle, fields) = record_fields(scope, types, "Tree");
+        assert_eq!(
+            size, 1,
+            "a self-recursive type seals into a singleton component"
+        );
+        let kids_ty = fields
+            .iter()
+            .find(|(f, _)| f == "kids")
+            .map(|(_, t)| *t)
+            .expect("kids field present");
+        let element = match types.node(kids_ty) {
+            TypeNode::List { element } => element,
+            _ => panic!("expected `kids` to be a list type, got {kids_ty:?}"),
+        };
+        match types.node(element) {
+            TypeNode::Record { fields: rec } => assert_eq!(
+                rec.get("next").copied(),
+                Some(tree_handle),
+                "the sigil-nested record's `next` threads to the outer member's own handle",
+            ),
+            _ => panic!("expected the list element to be a record type, got {element:?}"),
+        }
+        assert!(scope.bindings().type_placeholder_producer("Tree").is_none());
+    }
+
+    /// Miri slate — the pin-less read of a declaration-window sibling cell from a *different step*
+    /// than the one that rested it. `rewrite_threaded_self_refs` seals each threaded `Tree` leaf as a
+    /// resident cell in the declarator's own scope region and bumps the rewritten record body beside
+    /// it; the field walker that reads them back runs inside the `:(LIST OF …)` sub-Dispatch, a step
+    /// the declarator merely parked on. So the coverage is the parked declarator's, named by nothing
+    /// the reader holds — which is what [`read_resting`](crate::machine::core::read_resting)'s
+    /// `NoPins` asserts. Tree borrows catches a use-after-free if the declarator's region were ever
+    /// freed before its own dep-finish. The whole program runs to a constructed value so the sealed
+    /// handle is used, not merely elaborated.
+    #[test]
+    fn declaration_window_sibling_cell_read_from_a_sub_dispatch_no_uaf() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+        test_run.run(
+            "NEWTYPE Tree = :{kids :(LIST OF :{next :Tree}), n :Number}\n\
+             LET leaf = (Tree {kids = [] , n = 1})\n\
+             PRINT (Tree {kids = [{next = leaf}] , n = 2})",
+        );
+        let bytes = captured.borrow().clone();
+        assert_eq!(
+            String::from_utf8_lossy(&bytes),
+            "Tree({kids = [{next = Tree({kids = [], n = 1})}], n = 2})\n",
+        );
+    }
+
     /// A non-record sigil repr (`= :(LIST OF Number)`) routes through the same
     /// `:SigiledTypeExpr` overload but has no self-reference to thread: it sub-dispatches the
     /// sigil to a resolved `KType` and seals a plain NewType over it. Regression guard for the

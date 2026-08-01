@@ -8,6 +8,7 @@
 //! closure.
 
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
+use crate::machine::model::FieldParts;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
@@ -104,7 +105,10 @@ pub(super) fn record_type<'step>(
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let fields = match expr.parts.first().map(|part| part.value) {
-        Some(WorkingPart::Ast(ExpressionPart::RecordType(fields))) => *fields,
+        Some(WorkingPart::Ast(ExpressionPart::RecordType(fields))) => FieldParts::of(fields),
+        // A body whose co-declared references the declarator already threaded — same field list,
+        // read through the part family that can hold a resolved sibling handle.
+        Some(WorkingPart::RecordType(fields)) => FieldParts::threaded(fields),
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
     let chain = ctx.active_chain();

@@ -805,8 +805,11 @@ digraph {
     "koan::machine::model::ast" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::ast::shape" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::ast::shape" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::ast::shape" -> "koan::machine::model::ast::working" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -915,6 +918,7 @@ digraph {
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::sig_schema" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::signature" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::model::types::typed_field_list" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];

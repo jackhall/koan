@@ -13,7 +13,7 @@ use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
-    FieldNameKind,
+    FieldNameKind, FieldParts,
 };
 use crate::machine::model::{KType, Record};
 use crate::machine::WriteGate;
@@ -140,7 +140,7 @@ fn build_carrier<'a>(
     ));
     let mut elaborator = Elaborator::new(ctx.scope);
     match parse_typed_field_list_via_elaborator(
-        &sig_expr,
+        FieldParts::of(&sig_expr),
         FN_PARAMS_CONTEXT,
         FN_PARAM_NAME_KIND,
         &mut elaborator,
@@ -156,7 +156,7 @@ fn build_carrier<'a>(
             park_producers,
             sub_dispatches,
         } => FieldListDeferral::new(
-            sig_expr,
+            FieldParts::of(&sig_expr),
             park_producers,
             sub_dispatches,
             FN_PARAMS_CONTEXT,

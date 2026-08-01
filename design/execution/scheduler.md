@@ -227,8 +227,12 @@ Nothing in Koan has to be alias-aware.
 
 ## Working-copy splice
 
-The scheduler dispatches each expression by mutating an **owned working
-copy** of it. The keyworded dispatcher extracts every nested sub-expression out of
+The scheduler dispatches each expression through its own
+[`WorkingExpression`](../../src/machine/model/ast/working.rs) — a **working copy**
+whose parts run lives in the dispatching step's region, distinct from the raw AST
+type so that no value can ever hold one
+([expressions-and-parsing.md § Two nodes](../expressions-and-parsing.md#two-nodes-raw-ast-and-the-schedulers-working-copy)).
+The keyworded dispatcher extracts every nested sub-expression out of
 the parent's `parts` (replacing each with a placeholder `StagedSlot`) and
 declares them as the deps of a
 [`ParkThenContinue`](#the-dispatcher--scheduler-boundary) whose continuation
@@ -237,9 +241,11 @@ harness submits each dep as a sub-Dispatch and parks the parent on a
 [`NodeWork`](../../src/machine/execute/nodes.rs) whose `cont` is a dep-finish wrapping
 that *splice finish* (a [`TerminalDepFinish`](../../src/machine/execute/outcome.rs)
 closure). When the deps terminalize, that finish rests each resolved value's
-delivery envelope in the finishing step's own region and writes the resting cell
-back into the working copy:
-`working_expr.parts[part_idx] = ExpressionPart::Spliced { cell }`. The splice
+delivery envelope in the finishing step's own region and freezes a new parts run
+with each staging hole replaced by its resting cell —
+`WorkingPart::Spliced { cell }` — through
+[`WorkingExpression::respliced`](../../src/machine/model/ast/working.rs). Every
+part is `Copy`, so that is a memcpy with the holes patched, not a rebuild. The splice
 lives **entirely inside the finish** — the scheduler resolves deps and hands
 values back exactly as it does for any dep-finish, learning nothing about
 `Spliced` cells. The assembled `Spliced`-laden expression then goes through

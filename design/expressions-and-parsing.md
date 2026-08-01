@@ -79,7 +79,7 @@ unevaluated expression as a value, pass it around, and evaluate it on demand.
 
 ### Structural cache and dispatch shape
 
-Once a node's parts vector is final, [`KExpression`](../src/machine/model/ast.rs)
+As its parts run is frozen, [`KExpression`](../src/machine/model/ast.rs)
 fills a structural cache: the `untyped_key` (the bucket key dispatch matches on),
 the `DispatchShape`, an optional operator probe, and the binder cache —
 `binder_plan` (is this node itself a binder, and the name or bucket it declares)
@@ -89,14 +89,49 @@ scope, per the position rule in
 pure function of expression structure — no scope, no types — so it is computed
 once and read by the dispatch driver on every call of the enclosing function
 rather than re-derived per call. The `binder_installs` aggregate is read once, at
-statement submission, before any splice. The cache is filled at the construction
-chokepoint (`KExpression::build`)
-and refreshed at the two parse-finalization points where parts are pushed
-incrementally (frame finalization in [frame.rs](../src/parse/frame.rs) and the
-redundant-wrapper peel in [expression_tree.rs](../src/parse/expression_tree.rs)).
-It is invariant under the dispatch-time splice that swaps a `StagedSlot` for the
-resolved sub-result's `Spliced` cell — one part for one part, no structural
-change — so the parse-time fill stays valid through execution.
+statement submission, before any splice. The cache is filled at the one
+construction chokepoint, `KExpression::build`, which bumps the parts run and
+derives the cache from the frozen slice in the same call — so a node cannot exist
+with a stale or unfilled cache, and nothing mutates a part run afterwards. The
+parser's incremental sites (frame finalization in
+[frame.rs](../src/parse/frame.rs), the redundant-wrapper peel in
+[expression_tree.rs](../src/parse/expression_tree.rs)) push into a scratch `Vec`
+and freeze through that door once. The cache is invariant under the dispatch-time
+splice that swaps a `StagedSlot` for the resolved sub-result's `Spliced` cell —
+one part for one part, no structural change — so a working node copies it from
+the AST node it derives from rather than re-deriving it.
+
+### Two nodes: raw AST and the scheduler's working copy
+
+The parser's output type and the type the scheduler dispatches are **two concrete
+structs**, and the split is what keeps a resolved sub-result out of the value
+channel:
+
+- [`KExpression`](../src/machine/model/ast.rs) is raw, unevaluated syntax — parser
+  output, an `FN` body, a quote body, a `:KExpression` / `:SigiledTypeExpr` /
+  `:RecordType` slot capture, a MATCH arm body. Its parts run and every string in
+  it borrow the eternal-tier program storage that parsed them, so the node is
+  `Copy`, `Drop`-free and covariant in its lifetime: it flows into shorter-lived
+  code by ordinary subtyping, with no reattach and no witness.
+- [`WorkingExpression`](../src/machine/model/ast/working.rs) is what the scheduler
+  mutates. Its `WorkingPart` either wraps an `ExpressionPart` verbatim
+  (`Ast`, a pointer copy of parsed syntax), points at a node the scheduler itself
+  synthesized (`Expression`, `RecordType`), or is one of the two arms no AST can
+  hold: `StagedSlot`, the hole an eager operand is staged into, and `Spliced`, the
+  resting carrier cell a dep-finish writes back.
+
+`KObject::KExpression` takes a `KExpression`, and there is no conversion from a
+working node to an AST one, so **a value can never carry a producer's reach
+through an expression** — the property the alloc door and the escape seam read as
+a structural fact ([value-substrates.md § Untyped
+arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+
+Crossing runs one way, through `WorkingExpression::from_ast(brand, ast)`: the
+parts run is wrapped as `Ast` parts and the cache copied, which is a slice copy
+rather than a rebuild. Both families answer the shared structural readers —
+shape classification, the bucket key, the operator probe, the field-list slot
+view — through the [`Part`](../src/machine/model/ast/shape.rs) trait, so those
+readers are written once and instantiated for each.
 
 `DispatchShape` partitions expressions into the bare-name and single-part
 fast lanes, the head-position call shapes, `Keyworded`, `OperatorChain`, and the
@@ -199,7 +234,7 @@ other, so it takes the call arm — see
 
 The `:(...)` glued-right sigil opens a *parse-context marker* group. The
 parser collects the inner tokens into a regular `KExpression` and wraps it as
-[`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../src/machine/model/ast.rs)
+[`ExpressionPart::SigiledTypeExpr(&KExpression)`](../src/machine/model/ast.rs)
 — no inner-shape recognition runs at parse time. Shape decisions
 (keyworded `:(LIST OF Number)`, nominal construction `:(MyStruct {x = 1})`,
 etc.) are the dispatcher's responsibility: the

@@ -44,8 +44,8 @@ use elsa::FrozenMap;
 use typed_arena::Arena;
 
 use super::{
-    erase_to_static, with_branded_ref, Carrier, PinBundle, PinsRegion, ReachDescription,
-    Reattachable, RegionOwner, StepCoverage, Witness,
+    erase_to_static, with_branded_ref, PinBundle, PinsRegion, ReachDescription, Reattachable,
+    RegionOwner, StepCoverage,
 };
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
@@ -680,41 +680,6 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         let (description, bundle) = ReachDescription::mint(self, &bundles);
         self.region.retain_for(description, bundle);
         description
-    }
-
-    /// [`Self::mint_retained`] whose sources are **carriers at rest** rather than owned coverages —
-    /// the reach-derivation door for a value composed out of resting cells, whose pins live in a
-    /// region's union bundle instead of in the composer's hands. Each source contributes its whole
-    /// claim: the region its value lives in, plus every region its borrows reach, recovered from its
-    /// description ([`Carrier::claimed_bundle`]) and upgraded `Weak → Rc` under `pin`. The mint then
-    /// applies subsumption and the self rule exactly as it does for owned sources, and the owning
-    /// bundle folds straight into this region's own union — so the composed description and the
-    /// ownership backing it are established together, and the embedder holds neither the members nor
-    /// the union in between.
-    ///
-    /// This is what keeps reach composition inside the library for a workload whose values *carry*
-    /// their reach rather than travel with it. An embedder that unioned member sets itself would be
-    /// reimplementing subsumption and the self rule; here it names its sources and nothing else.
-    ///
-    /// `pin` covers every source description's hosting arena for the whole call — the holder rule,
-    /// discharged the same way [`Sealed::open_with`](super::Sealed::open_with) discharges it for the
-    /// value. A destination frame whose region already retains those sources' coverage (the state
-    /// [`Delivered::rest_in`](super::Delivered::rest_in) leaves behind) is exactly such a pin: it
-    /// keeps this region alive, and this region's union bundle holds an `Rc` on every source's home.
-    pub fn mint_retained_from_carriers<Pin: Witness>(
-        self,
-        sources: &[&Carrier<W::FrameOwner>],
-        pin: &Pin,
-    ) -> &'a ReachDescription<W::FrameOwner>
-    where
-        W::FrameOwner: RegionOwner<Region = Region<W>>,
-    {
-        let claims: Vec<StepCoverage<W::FrameOwner>> = sources
-            .iter()
-            .map(|carrier| StepCoverage(carrier.claimed_bundle(pin)))
-            .collect();
-        let refs: Vec<&StepCoverage<W::FrameOwner>> = claims.iter().collect();
-        self.mint_retained(&refs)
     }
 
     /// Brand-confined allocation — see [`Region::alloc`]'s (crate-private) docs. Move-in: `value`

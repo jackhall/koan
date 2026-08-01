@@ -164,11 +164,10 @@ impl<'run> KoanRuntime<'run> {
     ///
     /// The seam verb is the cost-driven [`seam_verb`] decision: a top-level record pins (rides under
     /// `Kept`, its substrate borrow covered by the producer's minted reach) when the pin is cheaper
-    /// than the rebuild, a leaf borrows home, or the crossing is foreign; a priceable record a small
+    /// than the rebuild, a leaf borrows home, or the crossing is foreign; a record a small
     /// fraction of the host's allocated total is a released copy (the producer frees at retention
-    /// discharge); an unpriceable record copies, claiming release off its stored reach. Every
-    /// non-record value keeps the `Copied` pointer-copy of its top node, claiming release off the
-    /// same stored read.
+    /// discharge). Every non-record value keeps the `Copied` pointer-copy of its top node,
+    /// claiming release off the same stored read.
     ///
     /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as a re-sealed
     /// [`Witnessed`], not at a step brand. The consumer-pull dep slice does not route this — it opens

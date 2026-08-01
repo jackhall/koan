@@ -9,7 +9,11 @@
 
 use crate::machine::core::RegionBrand;
 use crate::machine::model::StoredElement;
+use crate::machine::SplicedCell;
 use crate::source::Spanned;
+
+use super::working::WorkingExpression;
+use super::{KExpression, TypeIdentifier};
 
 /// The structural family a part belongs to — the one axis shape classification, the bucket key, and
 /// the operator probe read. A keyword carries its text because all three readers need it.
@@ -32,11 +36,45 @@ pub enum PartClass<'a> {
     StagedSlot,
 }
 
-/// A part of either expression family, viewed through the one classification the structural readers
-/// need. Implemented by [`ExpressionPart`](super::ExpressionPart) and
-/// [`WorkingPart`](super::WorkingPart).
+/// One `<name> <slot>` position of a field list, viewed through what the field-list elaborator does
+/// with it. The two part families answer in this one vocabulary, so the walker in
+/// [`typed_field_list`](crate::machine::model::types) is written once and reads a parsed field list
+/// and a self-reference-threaded one through the same arms.
+///
+/// The `Ast*` and `Threaded*` pairs are the same syntax at two stages: a `:(…)` or `:{…}` whose
+/// co-declared references are still bare names, and one whose references the sigil-body rewrite has
+/// already sealed into [`Resolved`](FieldSlot::Resolved) cells.
+pub enum FieldSlot<'a> {
+    /// A bare identifier — a field or parameter name.
+    Name(&'a str),
+    /// A type name token: a field's declared type, or a capitalized field / variant name.
+    Type(TypeIdentifier<'a>),
+    /// `:(…)` still holding parsed AST — thread its co-declared references, then sub-dispatch it.
+    AstSigil(&'a KExpression<'a>),
+    /// `:{…}` still holding parsed AST — elaborate its field list inline.
+    AstRecord(&'a KExpression<'a>),
+    /// A sigil body already threaded — sub-dispatch it as it stands.
+    ThreadedSigil(&'a WorkingExpression<'a>),
+    /// A record body already threaded — elaborate its field list inline.
+    ThreadedRecord(&'a WorkingExpression<'a>),
+    /// A resolved carrier the threading wrote in: a co-declared sibling's handle.
+    Resolved(SplicedCell),
+    /// Any other shape, which no field-list position accepts.
+    Other,
+}
+
+/// A part of either expression family, viewed through the classifications the shared readers need:
+/// [`class`](Part::class) for dispatch shape, bucket key and operator probe, and
+/// [`field_slot`](Part::field_slot) for the field-list walk. Implemented by
+/// [`ExpressionPart`](super::ExpressionPart) and [`WorkingPart`](super::WorkingPart).
 pub trait Part<'a>: Copy {
     fn class(&self) -> PartClass<'a>;
+
+    /// This part read as a field-list position. See [`FieldSlot`].
+    fn field_slot(&self) -> FieldSlot<'a>;
+
+    /// Surface rendering, for the field walker's shape diagnostics.
+    fn summarize(&self) -> String;
 }
 
 /// Pure-structural classification of an expression into the no-keyword fast-lane shapes, the

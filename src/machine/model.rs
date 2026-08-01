@@ -28,8 +28,8 @@ pub use binder::{BindKind, BinderBucketFn, BinderNameFn};
 pub(crate) use types::{
     constructor_param_names, declarator_window, elaborate_type_identifier, finalize_nominal_member,
     pair_list_names, parse_typed_field_list_via_elaborator, unsaturated_constructor_message,
-    Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, ResultFeed, SealOutcome,
-    SigSchema, TypeResolution,
+    Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
+    SealOutcome, SigSchema, TypeResolution,
 };
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
 pub(crate) use types::{sig_subtype, substitute_sig_members, TypeDigest};

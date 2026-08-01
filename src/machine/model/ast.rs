@@ -19,7 +19,8 @@ mod shape;
 pub mod working;
 
 pub use shape::{
-    classify_dispatch_shape, operator_probe_for, stored_untyped_key, DispatchShape, Part, PartClass,
+    classify_dispatch_shape, operator_probe_for, stored_untyped_key, DispatchShape, FieldSlot,
+    Part, PartClass,
 };
 pub use working::{WorkingExpression, WorkingPart};
 
@@ -140,6 +141,20 @@ impl<'a> Part<'a> for ExpressionPart<'a> {
             ExpressionPart::Literal(_) => PartClass::Literal,
             ExpressionPart::QuotedExpression(_) => PartClass::QuotedExpression,
         }
+    }
+
+    fn field_slot(&self) -> FieldSlot<'a> {
+        match self {
+            ExpressionPart::Identifier(s) => FieldSlot::Name(s),
+            ExpressionPart::Type(t) => FieldSlot::Type(*t),
+            ExpressionPart::SigiledTypeExpr(body) => FieldSlot::AstSigil(body),
+            ExpressionPart::RecordType(body) => FieldSlot::AstRecord(body),
+            _ => FieldSlot::Other,
+        }
+    }
+
+    fn summarize(&self) -> String {
+        ExpressionPart::summarize(self)
     }
 }
 
