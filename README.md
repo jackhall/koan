@@ -219,7 +219,7 @@ src/
     │   ├── arena/
     │   │   ├── frame.rs           FrameStorage / FrameSet / CallFrame — per-call allocation frame, run-root storage, witnessed child-scope construction door
     │   │   ├── step_allocator.rs  StepAllocator — the step-branded construction doors (alloc_carried / alloc_type_* / alloc_object_scalar)
-    │   │   └── residence.rs       Residence / ResidenceEvidence, the AuditedStored family audits, and the evidence-tier Scope move-in doors
+    │   │   └── residence.rs       Residence / ResidenceEvidence, the AuditedStored family audits, and the dest-only Scope move-in doors
     │   ├── region.rs  Region<W> — generic run-lifetime erase-store substrate (the cycle gate; escape held as an owning EscapeOwner, no unsafe), names no Koan type
     │   ├── bindings.rs    Bindings façade — six-map (data/functions/placeholders/types/pending_overloads/operators) with the firm write_value / write_type / write_operator_group primitives, the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)]); one RefCell over all six maps, nothing else interior-mutable
     │   ├── bindings/
@@ -230,8 +230,8 @@ src/
     │   ├── scope/
     │   │   ├── resolve.rs     name-resolution ladders — value / type / operator-group lookup, walk_chain / resolve_builtin_first, visibility cutoff, builtin-shadow consults
     │   │   ├── registry.rs    write doors — the seal_* construction halves of the value binds, the submission-channel placeholder installs, the write_scope USING resolver, and the *_direct writes for unpublished scopes
-    │   │   └── reach.rs       reach / carrier derivation — resident value / type carriers, envelope sealing, copy-free / copying adoption
-    │   ├── scope_ptr.rs   ScopePtr — the single audited owner of Scope lifetime-erasure for region-stored carriers
+    │   │   └── reach.rs       reach / carrier derivation — resident value / type carriers, envelope sealing, copy-free / copying adoption, and the module store folds
+    │   ├── ref_carriers.rs  ScopeRefFamily / ModuleRefFamily — the Reattachable families a region-stored &Scope / &Module carrier erases through
     │   ├── source.rs      source-span and provenance carrier for errors
     │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types
     │   ├── lexical_frame.rs  LexicalFrame — immutable cactus-chain (scope_id, index, parent) attached to every dispatched node

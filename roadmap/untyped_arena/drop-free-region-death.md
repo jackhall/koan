@@ -32,10 +32,11 @@ persist beside the construction doors that already enforce residence at compile 
 - Region death for those bytes is deallocation only — no per-slot `Drop` glue runs.
 - Families designed to own things — a `FrameSet`'s region holds — remain typed
   and droppy.
-- The dest-only `resident_in_visiting` walk is deleted (the reaching tier is
-  retired in [residence-audit retirement](residence-audit-retirement.md)): no
-  residence walk survives for composite values; residence is compile-enforced by
-  the construction doors alone.
+- The dest-only `resident_in_visiting` walk is deleted — the last runtime
+  residence check over a composite value
+  ([design/witness-hosting.md § Residence enforcement](../../design/witness-hosting.md#residence-enforcement)):
+  no residence walk survives for composite values; residence is compile-enforced
+  by the construction doors alone.
 - [design/memory-model.md](../../design/memory-model.md)'s storage-family and
   move-in-audit prose matches the shipped model, reconciled with
   [design/value-substrates.md](../../design/value-substrates.md).
@@ -53,9 +54,7 @@ persist beside the construction doors that already enforce residence at compile 
 
 ## Dependencies
 
-**Requires:**
-
-- [Residence-audit retirement](residence-audit-retirement.md) — the composite
-  residence tiers this item deletes are dispositioned per-site there first.
+**Requires:** none — the composite residence tiers this item's walk-deletion
+depends on are already retired.
 
 **Unblocks:** none tracked yet.

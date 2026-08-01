@@ -147,8 +147,10 @@ hold any witness state — the pins live one level down, in the library's region
   region's own coverage (`open_at`) and hands out an `Opened<'b>` enveloped by the
   region's union bundle; pins are adopted only when the value genuinely escapes to a
   new holder — a new region.
-- **Module reach** is the union over the child scope's entries, minted once at scope
-  close ([`Scope::child_module_reach`](../src/machine/core/scope.rs)); the parent
+- **Module reach** is the union over the child scope's entries, composed once at scope
+  close by the module store fold
+  ([`Scope::store_module_object`](../src/machine/core/scope/reach.rs)), which merges
+  the resident module reference into the storing scope's region; the parent
   region's union bundle owns the resulting pins. A relocated module therefore names
   every region it reaches on its own witness, read back at the consumer rather than
   reconstructed by walking the built value.
@@ -168,24 +170,35 @@ the source under the composed `Kept` witness that names its producer host. This 
 the residence analogue of the library's description/pins compile-safety line — a
 move-in that cannot name its reach does not typecheck.
 
-One dest-only runtime residence check remains, covering a property no carrier
-lifetime captures, and a **backstop** rather than the enforcement tier:
+Two **dest-only** runtime checks remain, each a backstop rather than an enforcement
+tier. Neither can widen: there is no evidence a caller could hand either one to admit
+a value borrowing a region other than the destination.
 
 - **Primitive reattach guards.** A `KFunction`, `Scope`, or `Module` borrows a single
   region (its captured / parent / child scope); the `ptr::eq` guard on its arena
   move-in checks that region is the destination — the reattach witness for the
-  `'_ → 'a` erasure. These are single-region checks, not the composite reaching tier.
+  `'_ → 'a` erasure. A `Module` re-tagging a *foreign* child scope (a transparent
+  ascription view) has no route through the guard at all: it is built inside the fold
+  that merges that scope in
+  ([`Scope::store_transparent_view`](../src/machine/core/scope/reach.rs)).
+- **The dest-only object walk.**
+  [`KObject::resident_in_visiting`](../src/machine/model/values/kobject.rs) confirms
+  every region pointer a value carries points into the destination, for the one value
+  shape with neither a `'static` rebuild nor a fold-brand construction: raw AST moved
+  in as data. Its two doors are
+  [`Scope::alloc_object_checked_stored`](../src/machine/core/arena/residence.rs) and
+  `RegionBrand::alloc_object_witnessed_checked`.
 
-A `KObject::KExpression` moved in as data needs no check of its own: it borrows only
-the eternal-tier program storage that parsed it, and the one part kind that could name
-a producer region lives on the scheduler's own node type, which no value can hold
+A `KObject::KExpression` moved in that way needs no *coverage* claim of its own: it
+borrows only the eternal-tier program storage that parsed it, and the one part kind
+that could name a producer region lives on the scheduler's own node type, which no
+value can hold
 ([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)).
-The [`resident_in_visiting`](../src/machine/model/values/kobject.rs) walk admits one
-structurally.
+The walk admits one structurally.
 
 ## Open work
 
-- [Residence-audit retirement](../roadmap/untyped_arena/residence-audit-retirement.md)
-  — routes the reaching-tier move-ins through the fold-brand construction door
-  (§ Residence enforcement) and deletes the runtime reaching audit; the backstops
-  there are what remains.
+- [Drop-free region death](../roadmap/untyped_arena/drop-free-region-death.md)
+  — deletes the residual dest-only `resident_in_visiting` walk (§ Residence
+  enforcement) once the expression-part families are `Drop`-free and the families
+  migrate to the untyped bump arena.

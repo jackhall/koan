@@ -835,32 +835,39 @@ pub(crate) fn copy_object_into<'b>(
     }
 }
 
-/// Relocate one value into `dest` under the chosen [`RegionEscape`]: a top-level substrate carrier
-/// (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) under a `Copy` verb is totally rebuilt at the door
-/// ([`copy_object_into`]) so its substrate lands in `dest`,
-/// while under `Pin` it pointer-copies (its region-resident substrate borrow rides, covered by the
-/// Kept-minted producer reach at the enclosing transfer). Every other value keeps the pointer-copy
-/// [`deep_clone`](KObject::deep_clone) — a scalar or a `KFunction` / `Module` leaf, owning or
-/// borrowing verbatim with no nested substrate to relocate. Shared by the execute-side seam hooks
-/// and the core adoption engine
+/// Relocate one value into `dest` under the chosen [`RegionEscape`].
+///
+/// A **`Copy`** verb claims the source region's release, so a value that would otherwise leave
+/// region storage behind is totally rebuilt at the door ([`copy_object_into`]): a substrate carrier
+/// (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`), whose substrate must land in `dest`, and a
+/// bare `KString`, whose bytes must be re-bumped there. [`KObject::needs_destination_door`] is that
+/// question, and it is the whole gate — a string left as a pointer copy would keep borrowing bump
+/// bytes the released region owns, which no audit can catch.
+///
+/// Everything else is a pointer copy ([`deep_clone`](KObject::deep_clone)): a scalar, a `KFunction`
+/// / `Module` leaf riding its borrow verbatim, and — under **`Pin`** — a substrate carrier too,
+/// whose region-resident borrow rides covered by the Kept-minted producer reach at the enclosing
+/// transfer.
+///
+/// Shared by the execute-side seam hooks and the core adoption engine
 /// ([`Scope::relocate_delivered`](crate::machine::core::Scope)).
 pub(crate) fn relocate_object_into<'b>(
     value: &KObject<'b>,
     verb: RegionEscape,
     dest: SubstrateDoor<'b, '_>,
 ) -> KObject<'b> {
-    match value {
-        KObject::Record(..)
-        | KObject::List(..)
-        | KObject::Dict(..)
-        | KObject::Tagged { .. }
-        | KObject::Wrapped { .. } => match verb {
-            // Pin: pointer-copy the substrate carrier — its region-resident substrate borrow rides,
-            // covered by the Kept-minted producer reach at the enclosing transfer.
-            RegionEscape::Pin => value.deep_clone(),
-            // Copy: total rebuild at the door so the substrate lands in `dest`.
-            RegionEscape::Copy { .. } => copy_object_into(value, dest),
-        },
+    match verb {
+        // Copy: a value keeping region storage behind ([`KObject::needs_destination_door`] — a
+        // substrate carrier, or a bare `KString` whose bytes live in the producer's bump) is totally
+        // rebuilt at the door, so nothing it points at stays in a region the copy's own retention
+        // claim then releases. That predicate is the whole gate: keying on the substrate variants
+        // alone would leave a string pointer-copied under a release claim.
+        RegionEscape::Copy { .. } if value.needs_destination_door() => {
+            copy_object_into(value, dest)
+        }
+        // Everything else is a pointer copy: a scalar, a `KFunction` / `Module` leaf riding its
+        // borrow verbatim, or — under Pin — a substrate carrier whose region-resident borrow rides,
+        // covered by the Kept-minted producer reach at the enclosing transfer.
         _ => value.deep_clone(),
     }
 }

@@ -1661,3 +1661,49 @@ fn allocated_total_weights_families_by_size() {
         "three KObject allocations add three KObject widths"
     );
 }
+
+/// A bound **bare string** must not keep borrowing the producer region's bump bytes. A copying
+/// adoption claims that region's release — `retains_home` answers `false` for a `KString`, so the
+/// composition drops the producer from what it retains — and the bump keeps no address table, so no
+/// residence walk could catch a pointer copy that kept pointing there. The copy therefore has to
+/// re-bump at the destination ([`KObject::needs_destination_door`] is the gate
+/// [`relocate_object_into`](crate::machine::model::relocate_object_into) reads).
+///
+/// This binds a producer-resident string into a consumer scope, drops every handle on the producer,
+/// and reads the bytes back: tree borrows reports a use-after-free if the copy pointer-copied the
+/// producer's bump instead of rebuilding at the destination.
+#[test]
+fn a_bound_bare_string_rebumps_at_its_destination() {
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let consumer = test_run.scope;
+
+    let producer: Rc<CallFrame> = CallFrame::new(consumer);
+    let producer_scope = run_root_bare(producer.storage());
+    // The bytes land in `producer`'s bump, so the value genuinely borrows into the region the copy
+    // below claims to release.
+    let text =
+        producer_scope.fold_resident_object(|brand| KObject::KString(brand.alloc_text("koan")));
+    let sealed = producer_scope
+        .seal_reaching(Carried::Object(text), producer_scope.mint_born_here(false))
+        .unseal();
+    let dep: DeliveredCarried =
+        Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+
+    let bound = consumer
+        .adopt_for_binding(&dep, |carried| Ok(carried.object()))
+        .expect("a whole-value projection is infallible");
+
+    // Drop every handle on the producer: the copy released it, so its region frees here.
+    drop(dep);
+    drop(producer);
+
+    match bound.open_at(&root).value().object() {
+        KObject::KString(s) => assert_eq!(
+            *s, "koan",
+            "the bound string reads back after the producer frees"
+        ),
+        other => panic!("expected a KString, got {:?}", other.ktype()),
+    }
+}

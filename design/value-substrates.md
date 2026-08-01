@@ -326,11 +326,12 @@ the retiring host's release exactly when no surviving run description names it
 foreign regions still releases its home.
 
 A **pinned record** shares its producer-resident substrate by a pointer-copy
-(never a partial rebuild). Because a record's substrate borrow carries no borrow
-naming its *own* home region, the bind seam names the producer region
-**explicitly** in the pinned value's reach — rather than leaning on ambient
-coverage the way a closure's captured region does — so the residence audit can
-evidence the shared substrate through a reach-description member. The explicit naming is
+(never a partial rebuild), made at the destination's own fold brand. Because a
+record's substrate borrow carries no borrow naming its *own* home region, the pin
+verb hands the fold a retention claim that keeps **every** region the source
+envelope named — rather than leaning on ambient coverage the way a closure's
+captured region does — so the composition names the producer region as a member of
+the product's reach and retains it here. The explicit naming is
 redundant-but-harmless: the producer region is already ambiently rooted for the
 binding's life.
 
@@ -408,6 +409,5 @@ each an O(1) read of a structural fact, with no walk over the node behind it.
 The [untyped_arena](../roadmap/untyped_arena/README.md) roadmap project carries
 the conversion slate; its `Requires` chain encodes the order:
 
-- [Residence-audit retirement](../roadmap/untyped_arena/residence-audit-retirement.md)
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
 - [Drop-free region death](../roadmap/untyped_arena/drop-free-region-death.md)

@@ -211,9 +211,9 @@ The minted reach rests **fused to its value** in one `Sealed` carrier, so a late
 read hands the carrier back structurally and a value is never separated from the
 reach that proves it. [`Bindings`](../src/machine/core/bindings.rs)' `data` entries
 store that carrier — minted at bind time from the delivered carrier for a value or
-alias, and from the child scope's own region for a module
-([`Scope::child_module_reach`](../src/machine/core/scope.rs)), whose union already
-covers everything its members reach. A value lookup or an `ATTR` member read hands
+alias, and composed from the child scope's own region for a module
+([`Scope::store_module_object`](../src/machine/core/scope/reach.rs)), whose union
+already covers everything its members reach. A value lookup or an `ATTR` member read hands
 out a bit-copy of the seal — the thin description reference beside the value, no
 bundle cloned — and the reader re-anchors it under a pin it already holds
 ([`Scope::lift_resident`](../src/machine/core/scope/reach.rs) for travel,
@@ -262,9 +262,9 @@ boundary.
   user-fn param-bind, and the deferred-return-type elaboration each open the child
   scope at the brand through `CallFrame::with_scope` and **relocate** their
   caller-`'a` value into the opened scope's own region through the substrate
-  ([`Scope::store_object_adopted`](../src/machine/core/arena/residence.rs), which
-  re-homes the value at the frame region under a residence audit against the bind's
-  own reach evidence rather than assuming purity — see
+  ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs), which relocates
+  the value into the frame region at a fold brand, the composition minting and
+  retaining what the copy still reaches rather than assuming purity — see
   [memory-model.md § Move-in residence audits](memory-model.md#move-in-residence-audits)
   — for the `it` / param binds; the deferred return re-homing its elaborated `KType`
   into the captured-scope region) before binding it, so the value lands at the brand

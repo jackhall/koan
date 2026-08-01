@@ -104,8 +104,8 @@ value, the new envelope's bundle for a re-dispatched or read-out one.
 Both channels carry the regions a relocated value reaches on its delivered
 [`Sealed`](../../workgraph/design/witnessed-memory.md#storage-and-access-seal-open-transfer_into) carrier. A **closure /
 future** seals its captured-scope reach at construction; a **module value** names its child scope's
-own region, via
-[`Scope::child_module_reach`](../../src/machine/core/scope.rs), which owns the union covering
+own region, composed by
+[`Scope::store_module_object`](../../src/machine/core/scope/reach.rs), which owns the union covering
 everything its members reach. The embedding or binding site mints that
 carrier's reach — `merge` at an `attr` / `FROM` projection,
 [`Scope::adopt_for_binding`](../../src/machine/core/scope/reach.rs) at a `let` / user-fn arg / `USING`

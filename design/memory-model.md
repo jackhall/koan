@@ -277,9 +277,9 @@ A relocated closure / future / module survives its producer's dying frame becaus
 bare borrow and the *consumer* keeps that borrow's region alive. Both channels carry the regions they
 reach on their [delivered carrier](../workgraph/design/witnessed-memory.md#storage-and-access-seal-open-transfer_into): a
 **closure / future** seals its captured-scope reach at construction, and a **module value** names its
-child scope's own region (via
-[`Scope::child_module_reach`](../src/machine/core/scope.rs)), which owns the union covering everything
-its members reach. The embedding or binding site mints that
+child scope's own region (composed by the module store fold
+[`Scope::store_module_object`](../src/machine/core/scope/reach.rs)), which owns the union covering
+everything its members reach. The embedding or binding site mints that
 carrier's reach into its own arena (`transfer_into` at an `attr` / `FROM` projection,
 [`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs) at a `let` / user-fn arg / `USING`
 bind), and the
@@ -295,9 +295,10 @@ The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params, t
 elaboration) open the child scope at a `for<'b>` brand through
 [`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller value into the
 opened scope's own region through the substrate before binding it — the `it`-bind and param-bind via
-[`Scope::store_object_adopted`](../src/machine/core/arena/residence.rs) (which re-homes the value at the
-frame region under a residence audit against the bind's own reach evidence, rather than assuming
-purity — see [§ Move-in residence audits](#move-in-residence-audits)), the deferred return re-homing
+[`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs) (which relocates the value into the
+frame region at a fold brand, the fold's composition minting and retaining what the copy still
+reaches, rather than assuming purity — see
+[§ Move-in residence audits](#move-in-residence-audits)), the deferred return re-homing
 its elaborated `KType` into the captured-scope region — so the
 seed fabricates no free `&'a`. The store
 side carries no `unsafe` at all: forgetting a scope reference's lifetime for storage routes the safe
@@ -356,52 +357,32 @@ tables therefore store `KType` by value ([`bindings.rs`](../src/machine/core/bin
 reach evidence and no borrow to witness.
 
 A *value* that cannot rebuild at `'static` (`KObject` has no general `'static` rebuild; a module-family
-pointer or an embedded `&Scope` is a live region borrow) takes one of three tiers
-instead. The two runtime-checked tiers route through the library's
+pointer or an embedded `&Scope` is a live region borrow) takes one of two tiers
+instead. The runtime-checked tier routes through the library's
 [`RegionHandle::alloc_resident_checked`](../workgraph/src/witnessed/region.rs), which stores only if
 the family's own [`AuditedStored`](../workgraph/src/witnessed/region.rs) audit returns true — nothing
 lands on a decline. The audit is a **per-family declaration** (an `unsafe impl` the embedder writes
-once per family in [arena.rs](../src/machine/core/arena.rs)), not a caller-supplied closure: a
-permissive audit is not writable in safe code, and each call site passes only typed
-[`ResidenceEvidence`](../src/machine/core/arena.rs), never code. The third tier stores through a
-compile-only capability with no runtime audit at all:
+once per family in [residence.rs](../src/machine/core/arena/residence.rs)), not a caller-supplied
+closure: a permissive audit is not writable in safe code, and each call site passes only typed
+[`ResidenceEvidence`](../src/machine/core/arena/residence.rs), never code. The other tier stores
+through a compile-only capability with no runtime audit at all:
 
-- **checked** (`alloc_object_checked`) —
+- **checked** ([`Scope::alloc_object_checked_stored`](../src/machine/core/arena/residence.rs),
+  [`RegionBrand::alloc_object_witnessed_checked`](../src/machine/core/arena.rs)) —
   [`KObject::resident_in_visiting`](../src/machine/model/values/kobject.rs) walks the value's own structure and
   confirms every region pointer it carries points into the destination region, checking an `Rc`-shared
   payload's members by address rather than rebuilding them. A `Wrapped { type_id }` tag needs no walk: the
   `type_id` is a `Copy` `KType` handle naming a registry-owned node, so it holds no region pointer the
-  audit could reject. Confined to identity-preserving stores: a
-  caller reaches here only to store a value whose identity a `'static` rebuild would break (a
-  module-family pointer, an `Rc`-shared payload).
-- **reaching / delivered** (`Scope::store_object_adopted` / `store_object_pinned` /
-  `store_module_object` / `store_transparent_view`) — widens the dest-only check with the reach the
-  mint just derived for *this* value. The minted description is **exact** — the value's whole reach,
-  home riding as an ordinary member, with no destination-relative narrowing — so the audit reads its
-  answer straight off the description instead of re-applying an ambient-coverage predicate to recover
-  it. A value that legitimately reaches a lexically-ancestral region is covered because that region is
-  a named member, not because the audit knows the reader's chain. Unlike the other tiers these live on
-  `Scope`, not `RegionBrand`: taking the destination from `self` binds evidence and destination region
-  together by construction. They are fused
-  doors — each derives the reach from the one source it takes (a delivered `cell`, a `child`
-  scope) and audits the re-homed value against it in the same call, so the reach is never a free
-  parameter a caller pairs with the value, and the product is a resting
-  [`SealedValue`](../src/machine/core/carrier_witness.rs) fusing value and reach as one unit. A
-  deferred FN's per-call return *type* needs no evidence
-  at all — [`home_return_type`](../src/machine/core/kfunction/exec.rs) clones it into the
-  captured-scope region through the single type door — but the clone still comes back capped at the
-  caller-supplied **contract** lifetime rather than the captured region's own, so a `ret` reference
-  cannot outlive the window the lift boundary consumes it in. That cap is return-contract discipline,
-  independent of residence.
-
-  "Never a free parameter a caller asserts" is structural: there is no constructor that pairs a
-  loose reach with a value. `PinBundle` is crate-private to `workgraph` and owned pins cross the
-  boundary only as an opaque `StepCoverage`, so Koan cannot assemble, widen or narrow a claim at all
-  ([reach.md § The carrier states](../workgraph/design/reach.md#the-carrier-states)); what it holds is
-  whatever a door derived for a specific value. `Residence`
-  ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage predicate both checked tiers
-  compose from.
-- **folded** (`FoldingBrand::alloc_object_folded`) — no runtime audit at all,
+  audit could reject. The check is **dest-only**: a value borrowing any other region has no route
+  through this tier at all, because there is no reach-bearing evidence to widen it with. What remains
+  here is what no fold brand can build — raw AST in a `KObject::KExpression`, which has neither a
+  `'static` rebuild nor a construction door. The door lives on `Scope`, not `RegionBrand`: taking the
+  destination from `self` makes it the region of the scope that mints the value's description, so
+  there is no scope parameter for a caller to mismatch, and the product is a resting
+  [`SealedValue`](../src/machine/core/carrier_witness.rs) fusing value and reach as one unit.
+  `Residence` ([residence.rs](../src/machine/core/arena/residence.rs)) is the coverage predicate the
+  walk composes from.
+- **folded** (`FoldingBrand::alloc_object_folded` / `alloc_module_folded`) — no runtime audit at all,
   sound by signature: the sink takes its input at the brand lifetime (`KObject<'b>` on
   `FoldingBrand<'b>`), and inside a fold combinator's `for<'b>` closure the only inhabitants of that
   lifetime are values derived from the fold's declared operand views, the brand's own allocations, and
@@ -416,6 +397,25 @@ compile-only capability with no runtime audit at all:
   and whose `'b` brand keeps it from escaping the closure, so the capability is reachable only at a
   fresh fold brand. The placement's [`alloc_resident_folded`](../workgraph/src/witnessed.rs) store
   discharges the residence obligation at compile time.
+
+Every move-in that lands a value reaching *another* region takes the folded tier — the binding and
+adoption doors ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs),
+`Scope::adopt_carried`), the module store folds (`Scope::store_module_object`,
+`Scope::store_transparent_view`). Each is a fold or a merge whose composition mints the product's
+exact reach into this scope's arena and retains the owning bundle there for the region's life, so the
+witnessed product is already the finished carrier: the reach is never a free parameter a caller
+pairs with a value. That is structural — there is no constructor that pairs a loose reach with a
+value. `PinBundle` is crate-private to `workgraph` and owned pins cross the boundary only as an
+opaque `StepCoverage`, so Koan cannot assemble, widen or narrow a claim at all
+([reach.md § The carrier states](../workgraph/design/reach.md#the-carrier-states)); what it holds is
+whatever a composition derived for a specific value.
+
+A deferred FN's per-call return *type* needs no residence machinery at all —
+[`home_return_type`](../src/machine/core/kfunction/exec.rs) clones it into the captured-scope region
+through the single type door — but the clone still comes back capped at the caller-supplied
+**contract** lifetime rather than the captured region's own, so a `ret` reference cannot outlive the
+window the lift boundary consumes it in. That cap is return-contract discipline, independent of
+residence.
 
 `KObject::resident_in_visiting` walks every region borrow a value carries. Every structural family (`Scope` / `Module` / `KFunction`) always
 captures a borrow (its parent, its declaring scope), so its bare veneer takes the checked-not-`'static`

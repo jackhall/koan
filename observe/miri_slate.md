@@ -328,8 +328,16 @@ bytes on the `str` compare. A door that shared the producer's pointer is a use-a
 tree borrows. The only `unsafe` routed is the shared `retype` in `witnessed.rs`; the bump itself
 carries none — a `&'a` into a region borrowed for `'a` needs no retype.
 
+The same rule binds a **bare** top-level string, where the door is the adoption seam rather than the
+container's: a copying adoption claims the producer region's release (`retains_home` answers `false`
+for a `KString`), so the relocation has to re-bump at the destination instead of pointer-copying the
+producer's bump. `KObject::needs_destination_door` is the gate
+`relocate_object_into` reads; keying the rebuild on the substrate
+variants alone would leave exactly this shape pointer-copied under a release claim.
+
 - `let_bound_list_of_call_produced_strings_survives_every_producer_free`
 - `let_bound_dict_with_call_produced_string_keys_survives_every_producer_free`
+- `a_bound_bare_string_rebumps_at_its_destination`
 
 **Region-hosted expression at the container door** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
 — the expression peer of the group above, and the one check on the rule that lets
