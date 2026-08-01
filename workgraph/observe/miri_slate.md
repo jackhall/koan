@@ -117,15 +117,16 @@ foreign handle's interior arena write would disable. The only `unsafe` routed is
 - `copied_transfer_releases_the_producer_when_nothing_borrows_it`
 - `duplicate_shares_reach_and_clones_owned_pins`
 
-**`ReachDescription::mint` — the self rule / teardown** ([src/witnessed/reach.rs](../src/witnessed/reach.rs))
+**The mint — the self rule / teardown** ([src/witnessed/reach.rs](../src/witnessed/reach.rs))
 — the one cycle shape storage-side reasoning can't rule out: an owned bundle hosted in region A
-holding `Rc<A>` would be a strong self-cycle A never drops. A mint splits its two outputs on
-exactly this: the **description** keeps every composed member, A included, so membership stays
-exact for a later lift; the **owned bundle** drops any member whose region is A's. The test mints a
-source that includes the destination's own frame, checks the description names it while the bundle
-does not, and walks the teardown (A frees on drop; the foreign member is released with the bundle,
-`Weak`-probed) — the Miri leak audit over this test signs off the split-membership shape at the
-library layer. Embedder twin: koan's `mint_teardown_releases_members`, over `FrameStorage`.
+holding `Rc<A>` would be a strong self-cycle A never drops. A mint splits description from ownership
+on exactly this: the **description** keeps every composed member, A included, so membership stays
+exact for a later lift; the **bundle** A retains — and the transit copy the threaded door hands on —
+drops any member whose region is A's. The test mints a source that includes the destination's own
+frame, checks the description names it while the bundle does not, and walks the teardown (A frees on
+drop; the foreign member is released with the bundle, `Weak`-probed) — the Miri leak audit over this
+test signs off the split-membership shape at the library layer. Embedder twin: koan's
+`mint_teardown_releases_members`, over `FrameStorage`.
 
 - `mint_keeps_home_in_the_description_but_not_the_bundle`
 
@@ -133,8 +134,8 @@ library layer. Embedder twin: koan's `mint_teardown_releases_members`, over `Fra
 ([src/witnessed/region.rs](../src/witnessed/region.rs), fold in
 [src/witnessed/reach.rs](../src/witnessed/reach.rs)) — a value adopted copy-free into a region
 (`Delivered::adopt_into`) leaves only a non-owning description behind, so the region itself owns the
-pins: `Region::retain_reach` folds every retention into **one** `PinBundle` through
-`PinBundle::absorb`, dropped whole at region death. The fold is where liveness can be dropped on the
+pins: the mint's own retention folds into **one** `PinBundle` through `PinBundle::absorb`, dropped
+whole at region death. The fold is where liveness can be dropped on the
 floor, because `insert`'s subsumption deletes a member another member's owner chain already pins — a
 wrong verdict frees a region the adopted value still borrows into (a UAF under tree borrows), a
 missed dedup keeps an `Rc` nothing needs (a leak the exit detector catches). The test adopts the
@@ -146,21 +147,24 @@ back under the region's bundle alone.
 
 **Region side tables — writes through `&self` under live readers**
 ([src/witnessed/region.rs](../src/witnessed/region.rs),
-[src/witnessed/sectioned.rs](../src/witnessed/sectioned.rs)) — `Region::intern_reach` inserts into
-an `elsa::FrozenMap`, and `Region::bump_slice` bumps into a `bumpalo::Bump`, both through a shared
-borrow while every reference a previous call handed out is still live. No `unsafe` of the crate's
+[src/witnessed/sectioned.rs](../src/witnessed/sectioned.rs)) — `Region::intern_reach_retained`
+inserts into an `elsa::FrozenMap`, and `Region::bump_slice` bumps into a `bumpalo::Bump`, both
+through a shared borrow while every reference a previous call handed out is still live. No `unsafe` of the crate's
 own: the append-stable-address guarantees are the map's and the bump's.
 But it is exactly the interior-mutation-under-a-live-shared-borrow shape tree borrows adjudicates,
 and a violation is silent under the ordinary suite — a later insert that invalidated an earlier
 entry's tag would poison every carrier referencing it. The tests interleave mints and reads over one
 region, and the sectioned door does so at scale: one insert per cell, with each run's returned
-reference held across every later cell's insert and read back after the build returns. The
-retention-skip bookkeeping (`Region::retain_for`'s `RefCell<HashSet<usize>>`, borrowed mutably while
-those shared references are live) rides the same tests.
+reference held across every later cell's insert and read back after the build returns. The retention
+fold rides the same `&self` — a miss borrows `retained_reach` mutably while those shared references
+are live — and `hit_is_proof_the_region_already_pins` is the liveness half: it drops every handle on
+a member the region pins only through an earlier mint's retention, so a hit that had skipped a fold
+it still owed would be a use-after-free rather than a missing entry.
 
 - `hit_returns_the_existing_entry`
 - `empty_description_is_a_per_region_singleton`
 - `hit_skips_the_retention_fold`
+- `hit_is_proof_the_region_already_pins`
 - `non_adjacent_runs_share_one_interned_description`
 - `alternating_reach_degrades_to_length_one_runs`
 - `equal_reach_inputs_cost_one_description_and_one_fold`
@@ -174,11 +178,11 @@ connected by transform verbs, never by wrapping. The verbs move *ownership of pi
 holders, so each is a place liveness can be dropped on the floor: `lift` upgrades a sealed
 carrier's description `Weak → Rc` and unions home in (the test drops the description's hosting
 arena and reads the value back — a missed upgrade is a dangling `Weak`, a UAF under tree borrows);
-`adopt` mints into the destination and hands the owned bundle to the adopting holder (the test
-drops the producer and reads under that bundle alone); and the round-trip test walks
-`Delivered → adopt → Sealed → open_at → Opened → reseal → Sealed → lift → Delivered` with every
-intermediate handle dropped before the final read, so only the chain of pins each verb hands the
-next keeps the value's region alive.
+the adoption (`open_adopted`) mints into the destination, which retains the owned bundle there in
+the same act (the test drops the producer and reads back under the destination's own pin alone); and
+the round-trip test walks `Delivered → open_adopted → Opened → reseal → Sealed → open_at → Opened →
+reseal → Sealed → lift → Delivered` with every intermediate handle dropped before the final read, so
+only the chain of pins each verb hands the next keeps the value's region alive.
 
 - `lift_reowns_description_into_transit_bundle`
 - `adopt_settles_resident_value_into_dest`

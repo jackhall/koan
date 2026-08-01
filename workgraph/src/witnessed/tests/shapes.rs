@@ -270,11 +270,11 @@ fn duplicate_shares_reach_and_clones_owned_pins() {
     );
 }
 
-/// **`ReachDescription::mint`'s self rule** — a description hosted in region A *does* name `A`
-/// (membership is exact, so a later lift re-owns it), but the **owned bundle** minted alongside it
-/// does not: a region holding an `Rc` on its own owner is a cycle that frees neither. Dropping the
-/// bundle releases the foreign member; dropping A frees A, proving no self-cycle — the Miri leak
-/// audit over this test signs off the split-membership shape.
+/// **The mint's self rule** — a description hosted in region A *does* name `A` (membership is
+/// exact, so a later lift re-owns it), but the **owned bundle** the mint retains there and hands on
+/// as transit pins does not: a region holding an `Rc` on its own owner is a cycle that frees
+/// neither. Dropping the bundle releases the foreign member; dropping A frees A, proving no
+/// self-cycle — the Miri leak audit over this test signs off the split-membership shape.
 #[test]
 fn mint_keeps_home_in_the_description_but_not_the_bundle() {
     let a = frame();
