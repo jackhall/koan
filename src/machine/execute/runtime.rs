@@ -187,8 +187,9 @@ impl<'run> KoanRuntime<'run> {
         // The destination is a bare region handle (empty reach), so the transfer composes the
         // producer's reach alone. The product envelope's residence is `dest`'s own frame, which the
         // caller re-pins as the terminal's host, so it is released here and what crosses back is the
-        // relocated terminal's foreign reach — threaded to re-seed the retention hold (a
-        // `Forward`-ready finalize) or retain past teardown (a drained root).
+        // relocated terminal's foreign reach — the transit copy that re-seeds the retention hold on
+        // a `Forward`-ready finalize. The destination's own region-lifetime retention rides the
+        // transfer's mint, so a caller that only needs the value to outlive teardown drops it.
         let relocated = delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
             dest,
             seam_still_borrows(&delivered, verb),

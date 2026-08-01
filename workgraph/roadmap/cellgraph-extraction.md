@@ -41,10 +41,9 @@ semantics, and the retention protocol.
 
 ## Dependencies
 
-**Requires:**
-
-- [Mint owns its retention](mint-owns-retention.md) — dropping
-  `retain_reach` from the embedder surface before the carve keeps it final.
+**Requires:** none — the embedder-surface narrowing the carve rides on is
+shipped: reach folding is crate-private and a mint performs its own retention
+([reach.md § The library boundary](../design/reach.md#the-library-boundary)).
 
 **Unblocks:**
 

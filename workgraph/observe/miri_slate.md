@@ -91,8 +91,9 @@ own — the `unsafe` they exercise is this primitive).
 **Envelope mint — one pin bundle, home among its members** ([src/witnessed/delivered.rs](../src/witnessed/delivered.rs),
 core in [src/witnessed/carrier.rs](../src/witnessed/carrier.rs)) — the reference-only `Carrier`
 pins nothing; a value's liveness folds into a destination's minted set only at the
-envelope-bearing verbs (`Delivered::transfer_into` / `mint_reach`, over `Carrier::mint_into` /
-`compose_into`), out of the envelope's single owned `PinBundle` — its **home region is an ordinary
+envelope-bearing verbs (`Delivered::transfer_into` / `open_adopted`, over `Carrier::compose_into` /
+`ReachDescription::mint_resident`), out of the envelope's single owned `PinBundle` — its **home
+region is an ordinary
 member** of that bundle, so there is no separate residence channel and no residence mode. What a
 relocation site chooses is the *source-pins claim*: the envelope's own pins (the product still
 borrows into them) or the empty bundle (a true deep copy, whose producer must be free to die).

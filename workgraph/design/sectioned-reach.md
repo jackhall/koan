@@ -12,9 +12,9 @@ by walking the value.
 ## Interned side table
 
 The region's description side table
-([`Region::intern_reach`](../src/witnessed/region.rs)) is an intern
-table: minting looks up the composed member set and allocates only on a
-miss.
+([`Region::intern_reach_retained`](../src/witnessed/region.rs)) is an
+intern table: minting looks up the composed member set, allocates only on
+a miss, and folds the region's retention on that same miss.
 
 - **Key.** The canonical member set: member owner addresses, sorted.
   Well-defined on two grounds. The antichain is unique *as a set* —
@@ -24,22 +24,22 @@ miss.
   allocation alive through the weak count, so no reuse while the entry
   exists. The host never enters the key: every description in a table
   shares the table's own region owner as host.
-- **Contract unchanged.** [`ReachDescription::mint`] composes the
-  antichain from its sources as before, then interns. Callers still
-  receive `(&'a description, PinBundle)`; on a hit the reference names
-  an existing entry with the same `'a`. Interning dedupes the
-  description object, not any holder's coverage — a caller that keeps
-  its own bundle (a delivery envelope, an embedder's own holder) still
-  composes it.
+- **The mint's contract.** [`ReachDescription::mint_resident`] composes
+  the antichain from its sources, then interns; a caller receives the
+  `&'a description` alone, which on a hit names an existing entry with
+  the same `'a`. Interning dedupes the description object, not any
+  holder's coverage — a value that travels on takes a transit copy of the
+  composed pins ([reach.md § Threading](reach.md#threading-how-pins-reach-each-holder))
+  on top of the destination's own retention.
 - **Region-lifetime retention dedupes fully.** One description and one
-  region-lifetime pin fold per distinct reach per region, ever: a
-  retaining mint whose members the region's union already pins skips the
-  [`Region::retain_reach`](../src/witnessed/region.rs) fold. An intern
-  hit is not by itself the proof that it does — a *non*-retaining mint
-  (the holder keeps its own bundle) interns the entry first, so the
-  region carries the "already pinned" bit beside the table and reads it
-  in `Region::retain_for`. That bit is scaffolding under the current
-  mint contract, not part of the design (§ Open work).
+  region-lifetime pin fold per distinct reach per region, ever, because
+  the two are the *same act*: a miss interns the entry and folds the
+  composed bundle into the region's union
+  ([`Region::retain_reach`](../src/witnessed/region.rs)), a hit returns
+  the entry and folds nothing. Every mint is a resident mint, so an
+  entry exists in a table only because some earlier mint retained an
+  identical member set there — the hit **is** the proof, and the table
+  needs no side record of what the region already pins.
 - **The empty description** (reaches nothing; residence only) is a
   per-region interned singleton shared by every region-pure value and
   every owned-data run.
@@ -191,9 +191,3 @@ at projection, and residence audit walks. A transfer claims the empty
 source bundle exactly when no surviving run names the source region —
 a stored fact, not a probe. The embedder's reach obligation shrinks to
 the per-input verdicts and the born-borrowing seeds.
-
-## Open work
-
-- [Mint owns its retention](../roadmap/mint-owns-retention.md) — deletes
-  the region's "already pinned" bit, so an intern miss *is* the retention
-  and a hit *is* proof the region already pins.

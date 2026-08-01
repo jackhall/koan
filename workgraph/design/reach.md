@@ -198,10 +198,11 @@ live:
   The set has no public accessor: it exists only for the library verbs the envelope
   exposes.
 - **The region union bundle.** A region owns **one** deduped `PinBundle<F>`
-  ([`Region::retain_reach`](../src/witnessed/region.rs)); each bind and each
-  copy-free adoption unions its pins into it, filtered by the eternal rule
-  (§ Composition) and folded **once per distinct reach** — a second retention
-  naming a member set this region already pins is a no-op
+  ([`Region::retain_reach`](../src/witnessed/region.rs)); every mint into the
+  region unions its composed pins into it, filtered by the eternal rule
+  (§ Composition) and folded **once per distinct reach** — the fold rides the
+  description intern, so a member set this region already describes is already
+  pinned and folds nothing
   ([sectioned-reach.md § Interned side table](sectioned-reach.md)).
   Embedder binding entries themselves own nothing. This is the
   liveness of every value resident in the region: one owning pin per distinct
@@ -257,9 +258,13 @@ holder that could violate it.
 
 Every union — a merge of two carriers, a bind fold, a finalize reseal — gets-or-mints
 a **frozen description in the destination region's side table** and retains the
-composed owned pins into the destination's liveness. Both halves dedupe: an already
-described member set yields the existing entry, and a member set the destination
-already pins folds nothing. The mint verbs take the
+composed owned pins into the destination's liveness. **A mint is a retention**: the
+two are one act, so no caller ever receives owned pins to fold by hand, and both
+halves dedupe together — an already described member set yields the existing entry
+and folds nothing, because that entry's own miss already folded an identical bundle
+here. An intern hit is therefore proof the destination already pins what the entry
+names (modulo the two rules below, which the retention applies and the description
+does not). The mint verbs take the
 destination's allocation capability, so a composing site must hold one: inside a
 step, the consumer's region held by the scheduler
 ([guarantee 4](../../design/scheduler-library.md#the-guarantees)); outside one, the
@@ -351,7 +356,9 @@ last-holder drop, never at some later death.
   read that lifts the value onward opens it under the region's coverage and lifts
   internally to a `Delivered` for the verb's span.
 - **Merge / relocation.** The composition verbs return a `Delivered` whose inline
-  set is the composed pins. A step's product carries its `Delivered` across the
+  set is the composed pins — a *transit copy* on top of the retention the same
+  mint established in the destination, so the travelling envelope and the
+  destination's region-lifetime liveness are independent tiers. A step's product carries its `Delivered` across the
   step with its carrier, so the seal at the step boundary supplies pins it holds. A
   product with empty reach carries the empty set, which pins nothing and allocates
   nothing.
@@ -409,9 +416,11 @@ home member does not name its value's residence cannot be built.
   top node in its own producer region, composing to a witness identical to the
   input's); the scheduler's retention (release at pull-count zero); and **every
   owned pin** — the region union bundles, the retention holds, the step coverages.
-  `PinBundle` is crate-private and an envelope's pins have no accessor, so the whole
-  ownership tier is unreachable from outside even though `Delivered` itself is
-  nameable (§ The carrier states).
+  `PinBundle` is crate-private, an envelope's pins have no accessor, and the fold
+  into a region's union bundle is crate-private as well, so the whole ownership tier
+  is unreachable from outside even though `Delivered` itself is nameable (§ The
+  carrier states). A workload's only reach-derivation door is the mint, which
+  performs its own retention.
 - **Workload-supplied:** the region-owner type `F` with its `PinsRegion`
   subsumption hook and its `needs_no_pin` eternal-tier answer, and the retention
   predicate at relocation sites — policy inputs, never pins.

@@ -485,11 +485,11 @@ fn alloc_with_folds_dep_reach_before_result_read() {
 }
 
 /// **`open_adopted` — the adopt that stays open at the destination's own lifetime.** It is
-/// [`Delivered::adopt`] and [`Delivered::adopt_into`] fused: the mint stores the value's reach in
-/// `dest`'s side table and the region retains the owning bundle, so the returned [`Opened`] borrows
-/// at `'d` rather than at a pin borrow — and every handle the value's backing came from can go
-/// before it is read. The open's witness is the adopted one, so [`Opened::reseal`] reproduces
-/// exactly the seal `adopt` would have handed back.
+/// [`Delivered::adopt_into`]'s re-anchor without its consumption of the borrow: the mint stores the
+/// value's reach in `dest`'s side table and retains the owning bundle there in the same act, so the
+/// returned [`Opened`] borrows at `'d` rather than at a pin borrow — and every handle the value's
+/// backing came from can go before it is read. The open's witness is the adopted one, so
+/// [`Opened::reseal`] hands back a resident seal readable under `dest`'s own pin.
 #[test]
 fn open_adopted_reads_at_the_destination_lifetime_after_the_producer_drops() {
     let producer = frame();

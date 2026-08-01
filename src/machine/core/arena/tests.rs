@@ -1316,11 +1316,11 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     // Dropping `producer_storage` here frees the region; Miri confirms 0 leaks (no self-cycle).
 }
 
-// `FrameReach::mint` — the witness-set hosting substrate (design/witness-hosting.md § Composition).
+// `FrameReach::mint` — the witness-set hosting substrate (workgraph/design/reach.md § Composition).
 // Each test below pins one rule of the mint's composition (exact membership, the self rule,
-// outer-chain subsumption, precise reads, teardown release). The mint returns the
-// hosted (`Weak`-membered) description alongside the owned `FrameCoverage` bundle that pins its members;
-// each test keeps that bundle alive across its `members()` read.
+// outer-chain subsumption, precise reads, teardown release). The mint returns the hosted
+// (`Weak`-membered) description alone and retains the owned bundle that pins its members into the
+// destination's own region, so each test reads `members()` under that region's retention.
 
 /// The mint composes its inputs' **exact** member set — two unrelated frames materialized as
 /// disjoint hosts both survive, with no coarsening. (AC: precise members.)
@@ -1348,7 +1348,8 @@ fn mint_composes_exact_members() {
 
 /// The self rule: a source naming the destination's own region stays an **exact member** of the
 /// stored description (membership is exact — home is an ordinary member) but is stripped from the
-/// **owned bundle** that rides out, since a region holding a pin on its own owner is a cycle.
+/// **owned bundle the mint retains there**, since a region holding a pin on its own owner is a
+/// cycle.
 #[test]
 fn mint_self_rule_strips_dest_from_the_bundle_only() {
     let c = run_root_storage();

@@ -212,7 +212,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
 /// The membership and residence queries, on the **in-use** carrier state: an [`Opened`] borrows at
 /// `'b` under the pin that was presented to open it, and that borrow is exactly the coverage
 /// re-anchoring the erased reach reference requires — so these need no `pin` argument, and there is
-/// no way to ask the question without one (design/witness-hosting.md § The carrier states).
+/// no way to ask the question without one (design/reach.md § The carrier states).
 impl<'b, T: Reattachable, F: PinsRegion + 'static> Opened<'b, T, Carrier<F>> {
     /// Whether the value's borrows reach `region` — home included when the borrows genuinely reach
     /// it, which is the question [`Self::borrows_home`] asks against the value's own residence.

@@ -48,7 +48,7 @@ pub trait Workload {
     /// calls only [`Anchor::owner`] — projecting the region owner it retains for delivery-driven
     /// frame retention. It holds an `Rc<Self::Frame>` for a finalized producer until every
     /// destination has pulled the terminal, releasing at pull-count zero
-    /// (design/witness-hosting.md § Retention model).
+    /// (design/reach.md § Retention model).
     type Frame: Anchor;
     /// The per-node continuation: a one-lifetime [`Reattachable`] family the scheduler stores erased
     /// (`Erased<Self::Continuation>`) on the node and hands back once per step; the workload

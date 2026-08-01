@@ -26,7 +26,8 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// [`CarrierWitness`]-witnessed value carrier paired with its retained [`FrameStorage`] owner. The
 /// in-transit form of a value's liveness — from a scheduler pull (or a resident seal) to its
 /// adoption — and the only surface that materializes a producer frame into a minted reach set
-/// (`mint_reach` / `transfer_into`), so koan never holds a bare frame pin at a consumer site. The
+/// (`adopt_into` / `open_adopted` / `transfer_into`), so koan never holds a bare frame pin at a
+/// consumer site. The
 /// envelope's member set pins the value's home region alongside everything else it reaches, and the
 /// residence itself is the host of the description the carrier references — so a site that needs the
 /// home back reads it off the value's own record rather than off a side channel on the envelope, and

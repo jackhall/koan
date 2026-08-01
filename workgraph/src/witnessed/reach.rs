@@ -37,7 +37,7 @@
 //! borrows into its own region, so membership stays exact and residence is answerable without one.
 //!
 //! The description a mint stores and the bundle it retains differ in exactly one member, the **self
-//! rule** (design/witness-hosting.md § Composition): the description keeps every composed member,
+//! rule** (design/reach.md § Composition): the description keeps every composed member,
 //! `dest`'s own region included, so membership is exact; the retained bundle drops any member whose
 //! region *is* `dest`'s, because a region owning a pin on itself is a reference cycle. The asymmetry
 //! is what makes the `Sealed → Delivered` lift correct for a value resting in its own scope's region
@@ -271,7 +271,7 @@ impl<F: PinsRegion> ReachDescription<F> {
     }
 
     /// **The resident mint**: freeze the composed description into `dest`'s side table and establish
-    /// its retention there in the same act (design/witness-hosting.md § Composition). Returns the
+    /// its retention there in the same act (design/reach.md § Composition). Returns the
     /// description alone — the value rests in `dest`, so `dest`'s region owns the pins that keep its
     /// reach alive and no caller ever holds them.
     ///
@@ -432,7 +432,7 @@ impl<F: PinsRegion> PinBundle<F> {
     }
 
     /// This bundle without any member whose region **is** `region` — the self rule
-    /// (design/witness-hosting.md § Composition), applied where a bundle is about to be owned by
+    /// (design/reach.md § Composition), applied where a bundle is about to be owned by
     /// `region` itself: a region holding a pin on its own owner is a reference cycle that frees
     /// neither. Exact-region only, by pointer identity: an *ancestor* of `region` stays, since
     /// owning a pin on an outer frame closes no cycle.
@@ -560,7 +560,7 @@ unsafe impl<F: PinsRegion, B: Reattachable> ComposeWitness<B> for PinBundle<F> {
 
 /// The **embedder-facing** owned-coverage holder: a [`PinBundle`] an embedder may hold, clone,
 /// thread and drop — but not compute with. It is the "step's coverage" of
-/// design/witness-hosting.md § Threading, and the shape every owned pin crosses the library
+/// design/reach.md § Threading, and the shape every owned pin crosses the library
 /// boundary in: a step carries one from the fold that composed it to the seal that consumes it, a
 /// finalize hands one to the retention hold, a region retains one for its life.
 ///
