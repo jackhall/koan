@@ -150,9 +150,10 @@ pub(crate) fn extract_terminal<'a>(
     let delivered = runtime
         .dep_delivered(id)
         .expect("terminal should be a value, not an error");
-    // Reuse the production relocation: a top-level record is totally rebuilt into `scope`'s region
-    // through the seam copy verb, every other object's top node is cloned at the fold brand, a type
-    // crosses by handle / clone.
+    // Reuse the production relocation: a value that would otherwise keep region storage behind — a
+    // substrate carrier, a bare string — is totally rebuilt into `scope`'s region through the seam
+    // copy verb, every other object's top node is cloned at the fold brand, a type crosses by
+    // handle / clone.
     scope.adopt_carried(&delivered, crate::machine::AdoptSeam::ReHome)
 }
 

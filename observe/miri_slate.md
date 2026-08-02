@@ -101,6 +101,15 @@ group just to silence the stale-anchor check.
   not by `run_step`'s `pin` alone — the real `unsafe` it exercises is the shared `retype` in
   `witnessed.rs`, routed through the `Sealed`/`SealedExtern` opens `run_step` and the dep reads
   perform.
+- `src/machine/core/scope/reach.rs` — the reach/carrier derivation cluster is safe code end to end:
+  every store door composes through the library's envelope verbs (`merge_into_placing`,
+  `transfer_into_placing`) and builds its product at a `FoldingBrand`, whose rank-2 signature makes
+  an ambient-lifetime capture a compile error rather than a retype. The `unsafe` those verbs route
+  is the shared retype in `witnessed.rs`. The group pins what no signature can prove — that the
+  composition's **minted reach** names every region the product borrows: a module value's merge must
+  name the child's own region (which owns the deduped union covering its members' reaches), and drop
+  the wrong member or fire the self rule on the wrong side and the child region is released while
+  the stored value still points into it. Tree borrows is the only check on that arithmetic.
 - `src/machine/model/values/kobject.rs` — the container doors are safe code (bumping a `&'a str`
   into a region borrowed for `'a` needs no retype), so the file carries no `unsafe`. The
   region-hosted-string group pins the **re-home rule** those doors implement: a string cell's
@@ -405,7 +414,7 @@ moment a `Copied` fold re-pins a producer it copied out of. The only `unsafe` ro
 
 - `aggregate_of_call_results_releases_every_producer_frame`
 
-**`Scope::store_module_object` seal-time composition** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
+**`Scope::store_module_object` seal-time composition** ([src/machine/core/scope/reach.rs](../src/machine/core/scope/reach.rs))
 — a module value's only region borrow is its child scope, so the merge composes the child's **own
 region** alone; that region owns the deduped union covering everything its members reach. This test
 binds a member into a child scope whose reach names a region foreign to both the child and the
@@ -683,9 +692,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-02: 2156s — 51 tests, 0 leaks, 0 UB
 - 2026-08-01: 2133s — 50 tests, 0 leaks, 0 UB
 - 2026-08-01: 2105s — 50 tests, 0 leaks, 0 UB
 - 2026-07-31: 2200s — 50 tests, 0 leaks, 0 UB
 - 2026-07-30: 2131s — 48 tests, 0 leaks, 0 UB
-- 2026-07-30: 1827s — 45 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

@@ -375,8 +375,10 @@ through a compile-only capability with no runtime audit at all:
   `type_id` is a `Copy` `KType` handle naming a registry-owned node, so it holds no region pointer the
   audit could reject. The check is **dest-only**: a value borrowing any other region has no route
   through this tier at all, because there is no reach-bearing evidence to widen it with. What remains
-  here is what no fold brand can build — raw AST in a `KObject::KExpression`, which has neither a
-  `'static` rebuild nor a construction door. The door lives on `Scope`, not `RegionBrand`: taking the
+  here is the value already born in the destination region and needing only a seal over it — a fresh
+  `KObject::KFunction` wrapper over a function allocated in this scope's own region, a carrier-less
+  read-site value re-sealed there, and raw AST in a `KObject::KExpression`, which has neither a
+  `'static` rebuild nor a construction door of its own. The door lives on `Scope`, not `RegionBrand`: taking the
   destination from `self` makes it the region of the scope that mints the value's description, so
   there is no scope parameter for a caller to mismatch, and the product is a resting
   [`SealedValue`](../src/machine/core/carrier_witness.rs) fusing value and reach as one unit.

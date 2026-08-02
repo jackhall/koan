@@ -375,9 +375,10 @@ impl<'a> Scope<'a> {
     /// retained in this region — so the product's cell **is** the binding entry: it seals straight
     /// into the table with no re-box and no move-in audit.
     ///
-    /// - **Relocate** — the copy verb, which rebuilds a substrate carrier at the destination door
-    ///   and pointer-copies everything else. The composition's retention claim is release-exact, so
-    ///   a plain-data copy lets the producer's region free.
+    /// - **Relocate** — the copy verb, which rebuilds what would otherwise keep region storage
+    ///   behind at the destination door ([`KObject::needs_destination_door`]) and pointer-copies
+    ///   everything else. The composition's retention claim is release-exact, so a plain-data copy
+    ///   lets the producer's region free.
     /// - **Pin** — the record stays in its producer region and the projection is pointer-copied at
     ///   the fold brand, its substrate borrow riding verbatim. The composition keeps every member
     ///   the envelope named, the producer's region among them, which is the pin's liveness — and
@@ -407,9 +408,9 @@ impl<'a> Scope<'a> {
 
     /// Relocate a delivered value's **projection** into this scope's region through the fold door,
     /// under the escape `verb` the caller's disposition names. `project` selects what to move;
-    /// [`relocate_object_into`] runs the verb — a `Copy` totally rebuilds a substrate carrier at
-    /// the door so its substrate lands here, a `Pin` pointer-copies the top node and lets its
-    /// region-resident substrate borrow ride.
+    /// [`relocate_object_into`] runs the verb — a `Copy` totally rebuilds whatever would otherwise
+    /// keep region storage behind ([`KObject::needs_destination_door`]) so it lands here, a `Pin`
+    /// pointer-copies the top node and lets its region-resident substrate borrow ride.
     ///
     /// The verb also fixes the retention claim the fold hands its composition:
     ///
@@ -437,12 +438,9 @@ impl<'a> Scope<'a> {
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
-        // The destination operand is this scope's own region handle, sealed into an envelope under
-        // this scope's own region owner — its residence, which the composition gives the product.
-        let dest = self.seal_resident_delivered(
-            self.resident::<RegionHandleFamily<KoanStorageProfile>>(self.brand().handle()),
-            FrameCoverage::empty(),
-        );
+        // The destination operand is this scope's own region handle, whose residence the composition
+        // gives the product.
+        let dest = self.dest_operand();
         let mut projection_error: Option<KError> = None;
         // The rebuild's cells read their own stored reach at the door; `cell`'s coverage is the
         // holder-rule proof for a cell whose substrate stays foreign, captured here because a
@@ -610,8 +608,9 @@ enum AdoptDisposition {
     /// source envelope named — home included — so every region the value reaches stays alive for
     /// the adopting region's life.
     Pin,
-    /// The value is relocated into the adopting scope's region through the fold door — a substrate
-    /// carrier totally rebuilt there, every other value's top node cloned — and the composition
+    /// The value is relocated into the adopting scope's region through the fold door — whatever
+    /// would otherwise keep region storage behind ([`KObject::needs_destination_door`]) totally
+    /// rebuilt there, every other value's top node cloned — and the composition
     /// derives and retains the copy's release-exact reach. The source envelope's hold is released
     /// when the caller drops it.
     Relocate,

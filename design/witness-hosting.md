@@ -183,11 +183,14 @@ a value borrowing a region other than the destination.
   ([`Scope::store_transparent_view`](../src/machine/core/scope/reach.rs)).
 - **The dest-only object walk.**
   [`KObject::resident_in_visiting`](../src/machine/model/values/kobject.rs) confirms
-  every region pointer a value carries points into the destination, for the one value
-  shape with neither a `'static` rebuild nor a fold-brand construction: raw AST moved
-  in as data. Its two doors are
+  every region pointer a value carries points into the destination, for a value that
+  is *already* there and needs only a seal minted over it — a fresh `KFunction`
+  wrapper, a carrier-less read-site value re-sealed in the reading scope, and raw AST
+  moved in as data, which has neither a `'static` rebuild nor a construction door of
+  its own. Its two doors are
   [`Scope::alloc_object_checked_stored`](../src/machine/core/arena/residence.rs) and
-  `RegionBrand::alloc_object_witnessed_checked`.
+  `RegionBrand::alloc_object_witnessed_checked`, the second of which carries only the
+  AST case.
 
 A `KObject::KExpression` moved in that way needs no *coverage* claim of its own: it
 borrows only the eternal-tier program storage that parsed it, and the one part kind

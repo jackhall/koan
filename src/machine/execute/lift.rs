@@ -20,9 +20,12 @@ use crate::witnessed::RegionHandle;
 
 /// The structural-copy callback a witnessed transfer's fold runs
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered)): copy a [`Carried`] into `dest`'s
-/// region at the fold brand. A top-level substrate carrier (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) is **totally rebuilt**
-/// ([`copy_object_into`](crate::machine::model::copy_object_into)) so its region-resident substrate
-/// lands at `dest`; every other value re-allocates only its top node
+/// region at the fold brand. The per-value verb is
+/// [`relocate_object_into`](crate::machine::model::relocate_object_into): under a `Copy` a value
+/// keeping region storage behind
+/// ([`needs_destination_door`](crate::machine::model::KObject::needs_destination_door) — a substrate
+/// carrier, or a bare `KString` whose bytes live in the source bump) is **totally rebuilt** at
+/// `dest`; every other value re-allocates only its top node
 /// ([`deep_clone`](crate::machine::model::KObject::deep_clone)) — a scalar rebuilt owned, a
 /// `KFunction` / first-class `Module` riding a bare borrow preserved verbatim — kept alive by the
 /// reach set the transfer mints into the destination, so this hook owns only the copy, never a region
@@ -51,11 +54,11 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
     }
 }
 
-/// Own a transferred [`Carried`] into an aggregate cell at `dest`, relocating a top-level substrate
-/// carrier (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) into `dest`'s region ([`relocate_object_into`]) so its substrate is
-/// container-resident — the substrate-aware twin of [`Held::from_carried`], for the literal fold's
-/// per-cell seam. The container cell always rebuilds a substrate carrier (Ruling 4: fresh containers
-/// stay self-contained), never pins.
+/// Own a transferred [`Carried`] into an aggregate cell at `dest`, relocating what keeps region
+/// storage behind — a substrate carrier, or a bare `KString` — into `dest`'s region
+/// ([`relocate_object_into`]) so the cell is container-resident: the substrate-aware twin of
+/// [`Held::from_carried`], for the literal fold's per-cell seam. The container cell always rebuilds
+/// (Ruling 4: fresh containers stay self-contained), never pins.
 pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
     carried: Carried<'b>,
     dest: SubstrateDoor<'b, '_>,

@@ -43,9 +43,11 @@ impl<'a> Scope<'a> {
     /// still records where it lives.
     ///
     /// This is one of the two doors ([`super::RegionBrand::alloc_object_witnessed_checked`] is the
-    /// other) where a runtime walk still stands in for the fold brand's compile-time proof; a value
-    /// with no `'static` rebuild and no fold-brand construction — raw AST in a `KObject::KExpression`
-    /// — has nowhere else to go.
+    /// other) where a runtime walk still stands in for the fold brand's compile-time proof. What
+    /// takes it is a value already born in this region that needs only a seal minted over it — a
+    /// `KObject::KFunction` wrapper over a function this scope just allocated, a carrier-less
+    /// read-site value re-sealed here — and raw AST in a `KObject::KExpression`, which has no
+    /// `'static` rebuild and no construction door of its own.
     pub(crate) fn alloc_object_checked_stored(
         &self,
         value: KObject<'_>,
