@@ -23,12 +23,16 @@ persist beside the construction doors that already enforce residence at compile 
 
 - Every family whose stored (`'static`) form is `Drop`-free lives in the shared
   per-region bump: the remaining value substrates — record, list and dict payloads,
-  tagged/wrapped payload slots — join the strings, expression parts and operator groups
-  already hosted there, and no typed sub-arena holds a `Drop`-free family.
-- A substrate's index metadata is bump-hosted too: a dict's key→index table and a
-  record's field-name table are `Copy` bump-hosted structures (a sorted slice of
-  `(&'a str, usize)` entries for the name-keyed ones), so no substrate owns a heap
-  allocation of its own.
+  tagged/wrapped payload slots — join the strings and expression parts already hosted
+  there (operator groups arrive under
+  [their own item](region-hosted-operator-groups.md)), and no typed sub-arena holds a
+  `Drop`-free family.
+- A substrate's index metadata is bump-hosted too, so no substrate owns a heap
+  allocation of its own: a record's cells are stored sorted by field name with one
+  aligned bump-hosted name slice as the whole index (lookup is binary search, and a
+  record renders name-sorted), and a dict's key→index table is a `hashbrown` table
+  allocated in the region bump through its `allocator-api2` seam, its elements
+  `Copy`-bounded so forgoing the table's `Drop` forgoes deallocation only.
 - Region death for those bytes is deallocation only — no per-slot `Drop` glue runs.
 - Families designed to own things — a `FrameSet`'s region holds — remain typed
   and droppy.
@@ -51,6 +55,19 @@ persist beside the construction doors that already enforce residence at compile 
   figure anyone reads is the region's total live bytes, reported by
   [`Region::bump_bytes`](../../workgraph/src/witnessed/region.rs), which the
   copy-versus-pin decision weighs against a candidate value's own copy size.
+- *Record cell order — decided.* Cells are sorted by field name at construction, so
+  the field-name slice aligned with them is the entire index and the sorted order is
+  canonical; rendering follows it. Declaration order is not preserved anywhere.
+- *Dict index representation — decided.* `hashbrown` over the region bump
+  (`HashMap::new_in` via `allocator-api2`), behind a wrapper whose `Copy` element
+  bounds are the proof that skipping the table's `Drop` leaks nothing. Iteration
+  order stays arbitrary.
+- *Walk replacement — decided.* Shape-split compile-enforced routes: the fresh
+  `KFunction` wrapper stores through a merge fold modeled on
+  [`Scope::store_module_object`](../../src/machine/core/scope/reach.rs), quoted AST
+  through a by-signature expression door, scalars/strings through their existing
+  region-pure paths — and a carrier-less composite argument is a diagnostic error,
+  since the `arg_carriers` contract reserves `None` for region-pure literals.
 
 ## Dependencies
 
