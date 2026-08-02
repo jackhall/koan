@@ -11,7 +11,7 @@
 //!
 //! The captured scope is held as a plain `&'a Scope<'a>` and re-anchored to `'a` together with the
 //! rest of the value when the holder is read out of its region (the substrate retype in
-//! [`Region::alloc`](crate::witnessed::Region)), exactly as
+//! [`Region::alloc_resident`](crate::witnessed::Region)), exactly as
 //! [`KFunction`](crate::machine::core::KFunction) and
 //! [`Scope::outer`](crate::machine::core::Scope) hold theirs — so `child_scope` is a bare field
 //! read with no per-pointer handle and no `unsafe` of its own.

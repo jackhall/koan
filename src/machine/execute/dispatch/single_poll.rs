@@ -8,8 +8,8 @@
 //! closure.
 
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
+use crate::machine::model::Carried;
 use crate::machine::model::FieldParts;
-use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
 
@@ -150,14 +150,14 @@ pub(super) fn literal_pass_through<'step>(
             let (recovered, coverage) = ctx.lift_spliced(&cell).into_parts();
             Outcome::Done(Ok(StepCarried::born_pinned(recovered.unseal(), coverage)))
         }
-        // A quote is its body as data: seal the `KObject::KExpression` into this scope's region
-        // through the **checked** door. The value is invariant in its region lifetime with no
-        // `'static` rebuild, so the family audit stays the way in.
-        WorkingPart::Ast(ExpressionPart::QuotedExpression(body)) => Outcome::Done(
-            ctx.current_scope()
-                .brand()
-                .alloc_object_witnessed_checked(KObject::KExpression(*body), ctx.types()),
-        ),
+        // A quote is its body as data: bump the `KObject::KExpression` into this scope's region
+        // through the door whose signature admits an expression and nothing else. The value is
+        // invariant in its region lifetime with no `'static` rebuild, and the AST it points at names
+        // no producer region, so the carrier seals resident with no member.
+        WorkingPart::Ast(ExpressionPart::QuotedExpression(body)) => Outcome::Done(Ok(ctx
+            .current_scope()
+            .brand()
+            .alloc_expression_witnessed(*body))),
         WorkingPart::Ast(ExpressionPart::Expression(inner)) => become_dispatch(
             ctx,
             WorkingExpression::from_ast(ctx.current_scope().brand(), *inner),

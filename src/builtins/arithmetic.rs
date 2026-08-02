@@ -29,6 +29,7 @@ use crate::machine::{arg_object, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::Scalar;
 
 /// Read a `:Number` operand named `name`, or the canonical missing/mismatch diagnostic.
 fn number_arg(args: &Record<Held<'_>>, name: &str, types: &TypeRegistry) -> Result<f64, KError> {
@@ -77,7 +78,7 @@ pub fn body_add<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Number(left + right))))
+        .alloc_scalar_witnessed(Scalar::Number(left + right))))
 }
 
 pub fn body_sub<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -85,7 +86,7 @@ pub fn body_sub<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Number(left - right))))
+        .alloc_scalar_witnessed(Scalar::Number(left - right))))
 }
 
 pub fn body_mul<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -93,7 +94,7 @@ pub fn body_mul<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Number(left * right))))
+        .alloc_scalar_witnessed(Scalar::Number(left * right))))
 }
 
 /// `Number` has one representation (`f64`; see `KObject::Number`) and the codebase has no
@@ -110,7 +111,7 @@ pub fn body_div<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Number(left / right))))
+        .alloc_scalar_witnessed(Scalar::Number(left / right))))
 }
 
 pub fn body_lt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -118,7 +119,7 @@ pub fn body_lt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Bool(left < right))))
+        .alloc_scalar_witnessed(Scalar::Bool(left < right))))
 }
 
 pub fn body_le<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -126,7 +127,7 @@ pub fn body_le<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Bool(left <= right))))
+        .alloc_scalar_witnessed(Scalar::Bool(left <= right))))
 }
 
 pub fn body_gt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -134,7 +135,7 @@ pub fn body_gt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Bool(left > right))))
+        .alloc_scalar_witnessed(Scalar::Bool(left > right))))
 }
 
 pub fn body_ge<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -142,7 +143,7 @@ pub fn body_ge<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Bool(left >= right))))
+        .alloc_scalar_witnessed(Scalar::Bool(left >= right))))
 }
 
 pub fn body_and<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -150,7 +151,7 @@ pub fn body_and<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Bool(left && right))))
+        .alloc_scalar_witnessed(Scalar::Bool(left && right))))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {

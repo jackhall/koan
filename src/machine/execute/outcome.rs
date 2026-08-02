@@ -327,7 +327,7 @@ mod erased_continuation_tests {
     use super::*;
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::{program_storage, run_root_storage, CallFrame, FrameStorageExt};
-    use crate::machine::model::KObject;
+    use crate::machine::model::{KObject, Scalar};
     use crate::scheduler::{Erased, Scheduler};
     use crate::witnessed::SealedExtern;
     use std::rc::Rc;
@@ -344,7 +344,7 @@ mod erased_continuation_tests {
         let test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         // The captured value lives in the run region — the ancestor the cart's `outer` chain pins.
-        let captured: &KObject = region.brand().alloc_object(KObject::Number(7.0));
+        let captured: &KObject = region.brand().alloc_scalar(Scalar::Number(7.0));
         // The cart `Rc` held live to the end of the test witnesses the open below.
         let cart = Rc::new(CallFrame::new(scope));
 
@@ -384,7 +384,7 @@ mod erased_continuation_tests {
                 assert!(matches!(out, Outcome::Done(Err(_))));
             });
         // Mutate the region through a sibling pointer after the brand to catch a stacked-borrow regression.
-        let _other = region.brand().alloc_object(KObject::Number(8.0));
+        let _other = region.brand().alloc_scalar(Scalar::Number(8.0));
         assert!(matches!(captured, KObject::Number(n) if *n == 7.0));
     }
 }

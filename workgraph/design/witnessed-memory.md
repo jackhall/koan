@@ -78,6 +78,20 @@ it owns. "`Drop`-free" has no expressible bound, so every placement primitive
 carries `T: Copy` instead — the honest approximation, and the bound that keeps a
 sectioned container `Copy` and free at region teardown.
 
+One primitive stores a value that is not itself `Copy`, and it is admitted by
+moving the bound rather than by dropping it.
+[`BumpMap`](../src/witnessed/bump.rs) is a `hashbrown` table for an embedder's
+keyed index — the shape a container reaches for when a sorted slice and a binary
+search will not do — built over the region's bump through `allocator-api2` and then
+placed in that same bump. Its `K: Copy` / `V: Copy` bounds sit on the type's own
+inherent impl, covering construction and every read, and they are what make the
+un-run destructor lossless: with `Copy` elements the table's `Drop` has nothing to
+do *but* free the bucket array, and that array lives in the very chunks region death
+releases. No `unsafe`, no `ManuallyDrop`. The surface is read-only — a table is
+frozen at construction because the value it indexes is, and mutation would have to
+rehash into the bump, stranding the old bucket array as garbage no occupancy figure
+could account for honestly.
+
 The embedder's path in is two doors, split by whether the bumped value has
 operands whose reach the product must carry.
 
@@ -90,18 +104,24 @@ reference and never a `(value, reach)` pair, so reach stays a consequence of
 which carriers were passed in rather than a claim a call site writes. The
 constructor writes through a `BumpPlacement`, minted only inside a door call,
 whose primitives are std shapes only — a `Copy` value, a `Copy` slice, a `str` —
-which is what keeps the library free of any per-workload verb.
+which is what keeps the library free of any per-workload verb. A fold that already
+holds a placement reaches the same tier directly through
+[`FoldedPlacement::bump`](../src/witnessed.rs), the `Drop`-free peer of
+`alloc_resident_folded`: it rests on the identical brand argument and grants no
+more, dropping only the `Stored` requirement and with it the erase/re-anchor round
+trip a bump needs no part of.
 
-[`RegionHandle::bump_text`](../src/witnessed/region.rs) is the bytes-only one,
-for a `Drop`-free byte run wanted at the handle's own frame lifetime rather than
-confined to a fold closure. Bare bytes have no operands and no reach to compose,
-so the fold machinery has nothing to do and no call site can claim anything
-wrongly; what is left is an ordinary borrow, the returned `&'a str` against the
-`&'a Region` the handle holds, which the borrow checker enforces with no audit
-and no `unsafe`. Storing the *value* built around those bytes is gated where it
-always was — `alloc_resident`'s `'static` bound, the family audit on
-`alloc_resident_checked`, or the rank-2 brand on `alloc_resident_folded` — none
-of which this door touches. Occupancy is one whole-region figure,
+[`RegionHandle::bump_text`](../src/witnessed/region.rs) and its siblings
+(`bump_value`, `bump_slice`, `bump_map`) are the handle-level ones, for a
+`Drop`-free value wanted at the handle's own frame lifetime rather than confined to
+a fold closure. They have no operands and no reach to compose, so the fold
+machinery has nothing to do and no call site can claim anything wrongly; what is
+left is an ordinary borrow, the returned `&'a` against the `&'a Region` the handle
+holds, which the borrow checker enforces with no audit and no `unsafe`. Storing a
+value into a *typed* family is gated where it always was — `alloc_resident`'s
+`'static` bound, the family audit on `alloc_resident_checked`, or the rank-2 brand
+on `alloc_resident_folded` — none of which these doors touch. Occupancy is one
+whole-region figure,
 [`Region::bump_bytes`](../src/witnessed/region.rs) — **live bytes**, summed over
 what each allocating call actually stored, not the allocator's reserved chunk
 capacity, which would put a whole chunk's floor under a small region. There is no
@@ -109,7 +129,7 @@ per-family breakdown, because the copy-versus-pin decision reads a region's tota
 against a candidate value's own copy size and never needs one.
 
 The allocation *capability* is a distinct type from the region. The engine's
-`alloc` / `alloc_resident` are `pub(crate)`, so a bare `&Region` has no allocation
+`alloc_resident` is `pub(crate)`, so a bare `&Region` has no allocation
 surface at all; the only public minter is
 [`RegionHandle::from_owner`](../src/witnessed/region.rs), gated on the
 unsafe-to-implement `RegionOwner` contract. An embedder that holds a region owner

@@ -16,7 +16,7 @@ pub use types::{
 };
 pub use types::{owned_untyped_key, StoredElement};
 pub use values::{
-    Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, ValueEqualityError,
+    Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, Scalar, ValueEqualityError,
 };
 
 pub(crate) use ast::{
@@ -34,6 +34,6 @@ pub(crate) use types::{
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
 pub(crate) use types::{sig_subtype, substitute_sig_members, TypeDigest};
 pub(crate) use values::{
-    copy_or_pin, relocate_object_into, retains_home, CarriedFamily, DictSubstrate, ListSubstrate,
-    Module, NamedPairs, PayloadSubstrate, RecordSubstrate, RegionEscape,
+    copy_or_pin, relocate_object_into, retains_home, CarriedFamily, Module, NamedPairs,
+    RegionEscape,
 };

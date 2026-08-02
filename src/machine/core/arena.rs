@@ -13,21 +13,20 @@
 //! [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
-use crate::machine::{CarrierWitness, KError, KErrorKind};
+use crate::machine::CarrierWitness;
 use std::rc::Rc;
 
 use crate::machine::execute::StepCarried;
 
 use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::model::KType;
 use crate::machine::model::{
-    Carried, CarriedFamily, ContainerSubstrate, DictSubstrate, Held, KObject, ListSubstrate,
-    Module, PayloadSubstrate, RecordSubstrate,
+    Carried, CarriedFamily, ContainerSubstrate, Held, KExpression, KObject, Module, Scalar,
 };
-use crate::machine::model::{KType, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StepContext,
+    BumpMap, Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StepContext,
     StorageOf, StorageProfile, Stored, Witnessed,
 };
 
@@ -40,43 +39,25 @@ pub use frame::{
     program_storage, run_root_storage, CallFrame, FrameCoverage, FrameReach, FrameStorage,
     ProgramBrand, ProgramStorage,
 };
-pub(crate) use residence::Residence;
-use residence::ResidenceEvidence;
 pub use step_allocator::StepAllocator;
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
-/// [`FamilyArena`] cell per family. The `KType` cell backs per-type identity binding storage
-/// (`Bindings::types`). A [`TypeIdentifier`](crate::machine::model::TypeIdentifier) needs no cell of
-/// its own: it is a `Copy` borrow of a name already resident in the storage that parsed it, so the
-/// type channel's unlowered-name carrier ([`Carried::UnresolvedType`]) holds it by value.
+/// [`FamilyArena`] cell per family.
+///
+/// **Exactly the three families designed to own things.** A `KFunction` owns its captured binding
+/// table, a `Scope` its bindings, a `Module` its member map — each runs a real `Drop` at region death
+/// and so needs a typed cell that will run it. Every other value family is `Drop`-free by
+/// construction (`Copy`, checked at the bump doors) and lives in the region's bump instead, where
+/// death is chunk deallocation and no per-slot glue runs at all. See
+/// [value-substrates.md § Untyped arenas](../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
+///
+/// A [`TypeIdentifier`](crate::machine::model::TypeIdentifier) and a [`KType`] need no cell either:
+/// both are `Copy` handles — a borrow of a name already resident where it was parsed, and an interned
+/// registry index — so the type channel's carriers hold them by value.
 pub struct KoanStorageProfile;
 
 impl StorageProfile for KoanStorageProfile {
-    type Families = (
-        KObject<'static>,
-        (
-            KFunction<'static>,
-            (
-                Scope<'static>,
-                (
-                    Module<'static>,
-                    (
-                        KType,
-                        (
-                            RecordSubstrate<'static>,
-                            (
-                                ListSubstrate<'static>,
-                                (
-                                    DictSubstrate<'static>,
-                                    (PayloadSubstrate<'static>, (Held<'static>, ())),
-                                ),
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-    );
+    type Families = (KFunction<'static>, (Scope<'static>, (Module<'static>, ())));
 
     /// Reach descriptions live in the region's side table, typed at the per-call frame owner.
     type FrameOwner = FrameStorage;
@@ -95,8 +76,8 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 /// **Frame-lifetime, not a per-alloc `for<'b>` brand.** A structural resident (a binding entry, a
 /// `Module`'s child `&Scope`) must outlive any one brand window, so it needs a real `&'a` — which only
 /// a frame-lifetime handle hands back. The per-alloc `for<'b>` brand is the right tool for *terminals*
-/// (the witnessed surface, where [`Region::alloc`] hands a `for<'b>` brand and returns a `Witnessed`
-/// carrier); this handle is for the co-located plumbing.
+/// (the witnessed surface, where a construction door builds under a `for<'b>` brand and returns a
+/// `Witnessed` carrier); this handle is for the co-located plumbing.
 ///
 /// A bare `&KoanRegion` exposes **no** `alloc_*` — allocation is reachable only through this veneer.
 /// Minting a `KoanRegion` at all is unreachable from Koan too: the library's bare-region constructor
@@ -123,11 +104,23 @@ impl<'a> RegionBrand<'a> {
         self.0
     }
 
-    /// Store an owned, region-pure [`KObject`] into the region (no value holds an owning `Rc` back
-    /// to a region, so the store forms no back-edge). Yields a co-located `&'a` resident. A value
-    /// that borrows another region takes [`Self::alloc_object_witnessed_checked`] instead.
-    pub fn alloc_object(self, o: KObject<'static>) -> &'a KObject<'a> {
-        self.0.alloc_resident::<KObject<'static>>(o)
+    /// Store an owned, region-free leaf into the region (no value holds an owning `Rc` back to a
+    /// region, so the store forms no back-edge). Yields a co-located `&'a` resident.
+    ///
+    /// [`Scalar`] is the gate, and it is the *signature*: a value that borrows any region has no way
+    /// to spell itself as one, so it cannot reach this door and takes a fold or merge whose
+    /// composition names what it borrows instead. The cell lands in the bump, so region death frees it
+    /// with the chunks.
+    pub fn alloc_scalar(self, scalar: Scalar) -> &'a KObject<'a> {
+        self.alloc_value(scalar.into_object())
+    }
+
+    /// [`Self::alloc_scalar`] for a string: copy the bytes into this region ([`Self::alloc_text`]) and
+    /// store the cell around the co-located borrow. A separate door because a string is exactly the
+    /// leaf whose *representation* is region-hosted even though its meaning is owned — so re-homing
+    /// the bytes is the store, and there is nothing for a caller to get wrong between the two.
+    pub fn alloc_string(self, text: &str) -> &'a KObject<'a> {
+        self.alloc_value(KObject::KString(self.alloc_text(text)))
     }
 
     /// **Copy `text` into this brand's region** and hand back the co-located `&'a str` — the door
@@ -139,13 +132,11 @@ impl<'a> RegionBrand<'a> {
     /// value family free of `Drop` glue. The borrow the caller gets back is checked against this
     /// brand's own `'a`, so no audit and no reach vocabulary enter here — bare bytes reach nothing.
     ///
-    /// Storing the *value* built around those bytes is gated exactly where it always was.
-    /// [`Self::alloc_object`] admits only `'static`, so a region-hosted string cannot reach it;
-    /// [`KObject::resident_in_visiting`] answers `false` for a string, so the runtime-audited doors
-    /// ([`Scope::alloc_object_checked_stored`], [`Self::alloc_object_witnessed_checked`]) reject
-    /// one — the bump keeps no address table, so no audit could tell which region a `&str` points
-    /// into. The route in is [`FoldingBrand::alloc_object_folded`], where the rank-2 brand proves
-    /// the string was bumped at the destination.
+    /// Storing the *value* built around those bytes is gated at its own door. [`Self::alloc_string`]
+    /// re-homes them itself, so its product is resident by construction; a string already living in
+    /// another region takes [`FoldingBrand::alloc_object_folded`], where the rank-2 brand proves it was
+    /// bumped at the destination. No address probe could stand in for either, because the bump keeps no
+    /// address table and so cannot say which region a `&str` points into.
     pub fn alloc_text(self, text: &str) -> &'a str {
         self.0.bump_text(text)
     }
@@ -164,6 +155,19 @@ impl<'a> RegionBrand<'a> {
     /// The single-value peer of [`Self::alloc_slice`], for a node a part arm points at.
     pub fn alloc_value<T: Copy>(self, value: T) -> &'a T {
         self.0.bump_value(value)
+    }
+
+    /// The keyed peer of [`Self::alloc_slice`], for an index whose lookup wants a hash table rather
+    /// than a sorted run and a binary search — a [`DictSubstrate`]'s key→index table is the one such
+    /// index. Buckets and header both land in this brand's region bump, so region death frees the
+    /// table without running its `Drop`; the `Copy` bounds on the key and the value are what make
+    /// that lossless, exactly as they are for a slice's items.
+    pub fn alloc_map<K, V>(self, entries: impl IntoIterator<Item = (K, V)>) -> &'a BumpMap<'a, K, V>
+    where
+        K: Copy + Eq + std::hash::Hash,
+        V: Copy,
+    {
+        self.0.bump_map(entries)
     }
 
     /// INVARIANT: a `KFunction` must be allocated into the same `KoanRegion` that owns its
@@ -201,12 +205,11 @@ impl<'a> RegionBrand<'a> {
             .expect("alloc_module: a Module must be allocated into its own child scope's region")
     }
 
-    /// The witnessed-allocation surface for an owned object built fresh inside the brand: born under
-    /// a description hosted in this region with **no members**. The brand-confined
-    /// [`alloc`](Region::alloc) stores `value` and hands the freshly-stored `&'b KObject<'b>` to the
-    /// closure at the brand, which bundles it through [`Self::seal_resident`] — the door that names
-    /// the region-pure obligation, so the active frame is deliberately excluded from the pins.
-    /// The producing frame is folded in only at finalize/close (the scope-reach seal), so a
+    /// The witnessed-allocation surface for an owned leaf built fresh inside the brand — the
+    /// arithmetic and comparison builtins' one store. Born under a description hosted in this region
+    /// with **no members**: [`Self::alloc_scalar`] stores the value and [`Self::seal_resident`] names
+    /// the region-pure obligation, so the active frame is deliberately excluded from the pins. The
+    /// producing frame is folded in only at finalize/close (the scope-reach seal), so a
     /// region-resident value never strong-owns its own frame (the `region → object → frame` cycle that
     /// would keep the frame's `Rc` alive forever and defeat the refcount-driven region free).
     ///
@@ -215,46 +218,40 @@ impl<'a> RegionBrand<'a> {
     /// rank-2 open lifetime — and the borrow checker rejects any use past the step. The active
     /// frame pins the region across the step, and the sole exit to node storage is the seal door in
     /// `step_carried.rs`, where finalize's fold names the producer in the carrier's own reach.
-    /// `value`'s `'static` bound is region-purity, compile-enforced: a value that references
-    /// another region cannot satisfy it — it takes the `yoke` / `merge` path, or
-    /// [`Self::alloc_object_witnessed_checked`] for a value whose region borrow is only
-    /// runtime-auditable (e.g. a cell holding raw AST).
-    pub(crate) fn alloc_object_witnessed(self, value: KObject<'static>) -> StepCarried<'a> {
-        StepCarried::born(self.0.alloc::<KObject<'static>, _>(value, |live| {
-            self.seal_resident::<CarriedFamily>(Carried::Object(live))
-        }))
+    ///
+    /// [`Scalar`] is region-purity as a signature: a value that references another region cannot
+    /// spell itself as one, and takes the `yoke` / `merge` path or
+    /// [`Self::alloc_expression_witnessed`] instead.
+    pub(crate) fn alloc_scalar_witnessed(self, scalar: Scalar) -> StepCarried<'a> {
+        StepCarried::born(
+            self.seal_resident::<CarriedFamily>(Carried::Object(self.alloc_scalar(scalar))),
+        )
     }
 
-    /// Runtime-checked twin of [`Self::alloc_object_witnessed`] for a `value` that cannot rebuild at
-    /// `'static` (e.g. a `KObject::KExpression` — `KObject<'a>` is invariant and raw AST has no
-    /// `'static` rebuild): the `KObject` family audit vets `value` against this brand's own region
-    /// before anything is stored, and the value is stored — sealed under the same member-less
-    /// own-region description [`Self::alloc_object_witnessed`] uses — only if it passes. A
-    /// [`KExpression`](crate::machine::model::KExpression) cell passes the residence walk outright:
-    /// an AST node names no producer region, so pointing at program text pins nothing the empty seal
-    /// would have to name. Storing nothing on a failed audit; a foreign-region dangle errors loudly
-    /// instead of landing unvetted.
-    pub(crate) fn alloc_object_witnessed_checked(
-        self,
-        value: KObject<'_>,
-        types: &TypeRegistry,
-    ) -> Result<StepCarried<'a>, KError> {
-        let name = value.ktype().name(types);
-        self.0
-            .alloc_resident_checked::<KObject<'static>>(value, ResidenceEvidence::dest_only())
-            .map(|live| {
-                StepCarried::born(self.seal_resident::<CarriedFamily>(Carried::Object(live)))
-            })
-            .ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(format!(
-                    "{name}: borrows a region other than its seal's destination"
-                )))
-            })
+    /// The store for a `#(...)` quote's body as data — the shape [`Self::alloc_scalar_witnessed`]
+    /// cannot take, since `KObject<'a>` is invariant and raw AST has no `'static` rebuild. The
+    /// signature is the enforcement: only a [`KExpression`](crate::machine::model::KExpression)
+    /// reaches this door, and an AST node names no producer region, so the cell the door bumps here
+    /// borrows nothing a seal would have to pin.
+    ///
+    /// The cell lands in this brand's own region bump, so its residence is where it was placed,
+    /// and it costs region death nothing — an expression's parts are already bump-hosted runs.
+    pub(crate) fn alloc_expression(self, expression: KExpression<'a>) -> &'a KObject<'a> {
+        self.alloc_value(KObject::KExpression(expression))
+    }
+
+    /// [`Self::alloc_expression`] bundled as the resident carrier — the quote terminal's one call,
+    /// sealed under the same member-less own-region description
+    /// [`Self::alloc_scalar_witnessed`] mints.
+    pub(crate) fn alloc_expression_witnessed(self, expression: KExpression<'a>) -> StepCarried<'a> {
+        StepCarried::born(
+            self.seal_resident::<CarriedFamily>(Carried::Object(self.alloc_expression(expression))),
+        )
     }
 
     /// Bundle a value **already resident in this brand's region** whose borrows reach nothing — the
     /// terminal carrier a name / ATTR read hands back and an FN-def / LET define site seals its
-    /// object with. Unlike [`alloc_object_witnessed`](Self::alloc_object_witnessed) the value is not
+    /// object with. Unlike [`alloc_scalar_witnessed`](Self::alloc_scalar_witnessed) the value is not
     /// stored here; it pre-exists in the region. The description is minted **here**, so no caller
     /// pairs a value with a residence it did not derive: its host is this brand's own region owner
     /// and its members are empty, which is the exact claim for a value that reaches nothing beyond
@@ -330,8 +327,14 @@ impl<'a> FoldingBrand<'a> {
     /// `KObject<'ambient>` cannot coerce to `KObject<'b>`, since `'b` has no outlives relation to any
     /// enclosing lifetime), so the store is discharged at compile time by the placement capability,
     /// with no runtime audit at all.
+    ///
+    /// The cell lands in the destination's bump, through the fold placement's own
+    /// [`bump`](FoldedPlacement::bump) door: a `KObject` is `Copy`, so region death frees the cell as
+    /// a bump chunk and runs no per-slot glue. The placement is what makes this a *residence* door
+    /// rather than the untargeted [`RegionBrand::alloc_value`] — the brand's `'a` is the fold's own,
+    /// so a value resident somewhere else cannot be written here.
     pub(crate) fn alloc_object_folded(self, o: KObject<'a>) -> &'a KObject<'a> {
-        self.placement.alloc_resident_folded::<KObject<'static>>(o)
+        self.placement.bump().value(o)
     }
 
     /// Store a [`Module`] built at this fold's own brand — the door the module store folds
@@ -349,14 +352,14 @@ impl<'a> FoldingBrand<'a> {
     /// the substrate payload family `K` (its `'static` [`Stored`] form). Sound by the same rank-2
     /// fold-brand argument as [`Self::alloc_object_folded`]: `substrate` is typed at the brand
     /// lifetime, so an ambient-lifetime capture is a compile error at this signature, discharging the
-    /// store's residence obligation at compile time. Each `ContainerSubstrate<C>` family lands in its
-    /// own sub-arena slot (its [`Stored`] impl); the four substrate families (record / list / dict /
-    /// payload) share the `koan_substrate_family!` macro that generates that impl from a cell path.
-    pub(crate) fn alloc_substrate_folded<K: Stored<KoanStorageProfile>>(
+    /// store's residence obligation at compile time. A substrate is `Copy` in every arm — its index
+    /// is a bump-hosted name slice or a [`BumpMap`], its cells a [`Sectioned`] run — so it takes the
+    /// same bump door as [`Self::alloc_object_folded`] and costs region death nothing.
+    pub(crate) fn alloc_substrate_folded<C: Copy>(
         self,
-        substrate: K::At<'a>,
-    ) -> &'a K::At<'a> {
-        self.placement.alloc_resident_folded::<K>(substrate)
+        substrate: ContainerSubstrate<'a, C>,
+    ) -> &'a ContainerSubstrate<'a, C> {
+        self.placement.bump().value(substrate)
     }
 
     /// Store one container cell at this fold's own brand, handing back the resident `&'a Held<'a>`
@@ -365,9 +368,10 @@ impl<'a> FoldingBrand<'a> {
     /// fold-brand argument as [`Self::alloc_object_folded`]: the cell is typed at the brand lifetime,
     /// so an ambient-lifetime capture is a compile error at this signature. Residing the cell before
     /// the door runs is what ties it to the same `'a` the container's run descriptions are interned
-    /// at, so one pin covers a projected cell and its reach together.
+    /// at, so one pin covers a projected cell and its reach together. A `Held` is `Copy`, so the cell
+    /// takes the same bump door as [`Self::alloc_object_folded`].
     pub(crate) fn alloc_cell_folded(self, cell: Held<'a>) -> &'a Held<'a> {
-        self.placement.alloc_resident_folded::<Held<'static>>(cell)
+        self.placement.bump().value(cell)
     }
 
     /// This brand as a [`SubstrateDoor`] over `holder` — the coverage the enclosing fold's operand
@@ -425,16 +429,10 @@ impl SubstrateDoor<'_, '_> {
 // shared `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its
 // docs).
 reattachable! {
-    KObject<'static> => KObject<'r>,
-    KType => KType,
     KFunction<'static> => KFunction<'r>,
     Scope<'static> => Scope<'r>,
     Module<'static> => Module<'r>,
     Held<'static> => Held<'r>,
-    RecordSubstrate<'static> => RecordSubstrate<'r>,
-    ListSubstrate<'static> => ListSubstrate<'r>,
-    DictSubstrate<'static> => DictSubstrate<'r>,
-    PayloadSubstrate<'static> => PayloadSubstrate<'r>,
 }
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
@@ -448,82 +446,28 @@ reattachable! {
 pub struct RegionTypeFamily;
 reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, KType));
 
-// Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
-// address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored
-// closure / future / module is a bare borrow into its defining region, kept alive by its carrier's
-// witness set rather than an owned anchor — so no allocation can self-cycle and the engine needs no
-// cycle gate.
-
-impl Stored<KoanStorageProfile> for KObject<'static> {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.0
-    }
-    fn record_local(frame: &KoanRegion, stored: &KObject<'static>) {
-        frame.record_addr(stored as *const _ as usize);
-    }
-}
+// Per-family `Stored` policy: which sub-arena each of the three droppy families lands in. None
+// carries a self-targeting `Rc<FrameStorage>` — a stored closure / module is a bare borrow into its
+// defining region, kept alive by its carrier's witness set rather than an owned anchor — so no
+// allocation can self-cycle and the engine needs no cycle gate. None records an address either:
+// residence is answered by a value's own field (the three `ptr::eq` reattach guards) or by the
+// construction door's brand, never by a side table.
 
 impl Stored<KoanStorageProfile> for KFunction<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .0
-    }
-    fn record_local(frame: &KoanRegion, stored: &KFunction<'static>) {
-        frame.record_addr(stored as *const _ as usize);
+        &s.0
     }
 }
 
 impl Stored<KoanStorageProfile> for Scope<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .0
+        &s.1 .0
     }
 }
 
 impl Stored<KoanStorageProfile> for Module<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .0
-    }
-    fn record_local(frame: &KoanRegion, stored: &Module<'static>) {
-        frame.record_addr(stored as *const _ as usize);
-    }
-}
-
-impl Stored<KoanStorageProfile> for KType {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .0
-    }
-}
-
-/// Generate the [`Stored`] policy for a `ContainerSubstrate<C>` family from its sub-arena cell path.
-/// The three substrate families (record / list / dict) share this: each lands in its own tuple slot
-/// and records its allocation address so [`KoanRegionExt::owns_substrate`] can answer the
-/// home-crossing membership check. The cell path is written explicitly per family (the `Families`
-/// nested-tuple position is not macro-derivable); the repeated impl body — the `record_addr` hook —
-/// is generated once here rather than hand-copied three times.
-macro_rules! koan_substrate_family {
-    ($family:ty, $($cell:tt)+) => {
-        impl Stored<KoanStorageProfile> for $family {
-            fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-                &s $($cell)+
-            }
-            fn record_local(frame: &KoanRegion, stored: &$family) {
-                frame.record_addr(stored as *const _ as usize);
-            }
-        }
-    };
-}
-
-koan_substrate_family!(RecordSubstrate<'static>, .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(ListSubstrate<'static>, .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(DictSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .0);
-koan_substrate_family!(PayloadSubstrate<'static>, .1 .1 .1 .1 .1 .1 .1 .1 .0);
-
-/// The cell family every sectioned substrate hands into the alloc door: one [`Held`] per cell, stored
-/// resident so the door receives `&'a Held<'a>` borrows anchored to the container's own region. No
-/// address hook — a cell is reached only through its container's own sectioned storage, never
-/// probed by address.
-impl Stored<KoanStorageProfile> for Held<'static> {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .1 .1 .1 .1 .0
+        &s.1 .1 .0
     }
 }
 
@@ -577,27 +521,6 @@ pub(crate) trait KoanRegionExt {
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>;
 
-    /// Whether `ptr` was returned by a prior `alloc_object` on this region. `#[allow(dead_code)]`
-    /// because trait methods, unlike inherent ones, are checked per compilation target, and the
-    /// plain `--lib` build (no `cfg(test)`) can't see its only caller.
-    #[allow(dead_code)]
-    fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool;
-
-    /// Whether `ptr` was returned by a prior `alloc_module` on this region — the residence audit's
-    /// check for a `KObject::Module` payload.
-    fn owns_module<'a>(&self, ptr: *const Module<'a>) -> bool;
-
-    /// Whether `ptr` was returned by a prior `alloc_function` on this region — the residence
-    /// audit's check for a `KObject::KFunction` payload.
-    fn owns_function<'a>(&self, ptr: *const KFunction<'a>) -> bool;
-
-    /// Whether `ptr` was returned by a prior `alloc_substrate_folded` on this region —
-    /// [`Residence::owns_substrate`](super::Residence::owns_substrate)'s single-region address
-    /// check, the same shape as [`Self::owns_function`] but with no scope-region shortcut: a
-    /// `ContainerSubstrate<C>` carries no borrow naming its own home region, so the residence walk
-    /// widens this with a per-reach-member check rather than a single `covers_region` call.
-    fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<'_, C>) -> bool;
-
     /// Total bytes allocated in this region: each Koan family's live count weighted by the flat size
     /// of its stored `'static` form, plus the region's **bump occupancy**
     /// ([`Region::bump_bytes`]) — the string bytes a value family slot holds and the library's own
@@ -605,8 +528,8 @@ pub(crate) trait KoanRegionExt {
     /// Prices the host region only, not the
     /// `outer` chain its `Rc<FrameStorage>` also retains (a documented approximation): the cost-copy
     /// seam reads this as the denominator of the payoff ratio, where the host's own footprint is the
-    /// relevant scale. `#[allow(dead_code)]` for the same reason as [`Self::owns_object`]: the plain
-    /// `--lib` build (no `cfg(test)`) can't see its consumer.
+    /// relevant scale. `#[allow(dead_code)]` because trait methods, unlike inherent ones, are checked
+    /// per compilation target, and the plain `--lib` build (no `cfg(test)`) can't see its consumer.
     #[allow(dead_code)]
     fn allocated_total(&self) -> u64;
 }
@@ -649,49 +572,13 @@ impl KoanRegionExt for KoanRegion {
             .into_reference_only::<KoanStorageProfile>()
     }
 
-    fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool {
-        // `KObject` is invariant in `'a`, so the through-`'static` cast is required despite
-        // clippy's complaint.
-        #[allow(clippy::unnecessary_cast)]
-        let target = ptr as *const KObject<'static> as usize;
-        self.owns_addr(target)
-    }
-
-    fn owns_module<'a>(&self, ptr: *const Module<'a>) -> bool {
-        // `Module` is invariant in `'a`, so the through-`'static` cast is required despite
-        // clippy's complaint.
-        #[allow(clippy::unnecessary_cast)]
-        let target = ptr as *const Module<'static> as usize;
-        self.owns_addr(target)
-    }
-
-    fn owns_function<'a>(&self, ptr: *const KFunction<'a>) -> bool {
-        // `KFunction` is invariant in `'a`, so the through-`'static` cast is required despite
-        // clippy's complaint.
-        #[allow(clippy::unnecessary_cast)]
-        let target = ptr as *const KFunction<'static> as usize;
-        self.owns_addr(target)
-    }
-
-    fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<'_, C>) -> bool {
-        let target = ptr as usize;
-        self.owns_addr(target)
-    }
-
     fn allocated_total(&self) -> u64 {
         fn weigh<K: Stored<KoanStorageProfile>>(region: &KoanRegion) -> u64 {
             region.family_len::<K>() as u64 * std::mem::size_of::<K>() as u64
         }
-        weigh::<KObject<'static>>(self)
-            + weigh::<KFunction<'static>>(self)
+        weigh::<KFunction<'static>>(self)
             + weigh::<Scope<'static>>(self)
             + weigh::<Module<'static>>(self)
-            + weigh::<KType>(self)
-            + weigh::<RecordSubstrate<'static>>(self)
-            + weigh::<ListSubstrate<'static>>(self)
-            + weigh::<DictSubstrate<'static>>(self)
-            + weigh::<PayloadSubstrate<'static>>(self)
-            + weigh::<Held<'static>>(self)
             + self.bump_bytes() as u64
     }
 }
@@ -700,24 +587,19 @@ impl KoanRegionExt for KoanRegion {
 /// reason as [`KoanRegionExt`].
 #[cfg(test)]
 pub(crate) trait KoanRegionTestExt {
-    /// Total number of values stored across the counted sub-arenas. Each `alloc_*` writes to
-    /// exactly one sub-arena, so this is the precise allocation count without double-counting.
+    /// Total number of values stored across the three typed sub-arenas. Each typed `alloc_*` writes
+    /// to exactly one of them, so this is the precise count without double-counting. It says nothing
+    /// about the `Drop`-free families: those live in the bump, which counts bytes
+    /// ([`Region::bump_bytes`]) rather than values.
     fn alloc_count(&self) -> usize;
 }
 
 #[cfg(test)]
 impl KoanRegionTestExt for KoanRegion {
     fn alloc_count(&self) -> usize {
-        self.family_len::<KObject<'static>>()
-            + self.family_len::<KFunction<'static>>()
+        self.family_len::<KFunction<'static>>()
             + self.family_len::<Scope<'static>>()
             + self.family_len::<Module<'static>>()
-            + self.family_len::<KType>()
-            + self.family_len::<RecordSubstrate<'static>>()
-            + self.family_len::<ListSubstrate<'static>>()
-            + self.family_len::<DictSubstrate<'static>>()
-            + self.family_len::<PayloadSubstrate<'static>>()
-            + self.family_len::<Held<'static>>()
     }
 }
 

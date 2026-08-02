@@ -81,23 +81,33 @@ pub fn seal_extern<T: Reattachable>(live: T::At<'_>) -> SealedExtern<T> {
     SealedExtern::erase(live)
 }
 
-/// A recorded-reference carrier family: `&'r u32` whose [`Stored::record_local`] records the
-/// *pointee's* address into the region's membership side-table, so [`Region::owns_addr`] can later
-/// answer whether a borrow points into a value resident in this region. The simplest honest shape
-/// for an [`AuditedStored`] audit — [`RegionHandle::alloc_resident_checked`]'s doctests exercise a
-/// passing store (a borrow of a resident value) and a rejecting one (a borrow the region does not
-/// own).
-pub struct RecordedRefFamily;
-// SAFETY: `&'r u32` is one type generic only in `'r`.
-unsafe impl Reattachable for RecordedRefFamily {
-    type At<'r> = &'r u32;
+/// A value that names the region it is resident in, so its residence is a property of the value
+/// rather than of a table kept beside it. This is the shape a production audit takes: the audit is a
+/// pointer comparison against the destination region, and a value carrying the wrong home cannot
+/// pass it.
+#[derive(Clone, Copy)]
+pub struct HomedRef<'r> {
+    /// The region this value lives in — what [`HomedRefFamily`]'s audit compares against.
+    pub home: &'r Region<FixtureProfile>,
+    /// The borrowed payload.
+    pub value: &'r u32,
+}
+
+/// A homed-reference carrier family: [`HomedRef`], the simplest honest shape for an
+/// [`AuditedStored`] audit — [`RegionHandle::alloc_resident_checked`]'s doctests exercise a passing
+/// store (a value naming the destination region) and a rejecting one (a value naming another).
+pub struct HomedRefFamily;
+// SAFETY: `HomedRef<'r>` is one type generic only in `'r`, a pair of thin pointers whose layout is
+// identical for every choice of `'r`.
+unsafe impl Reattachable for HomedRefFamily {
+    type At<'r> = HomedRef<'r>;
 }
 
 /// Profile for the region/handle doctests: the reference family, the witness-set family the fold
-/// verbs mint into, and the recorded-reference family the checked-store doctests audit against.
+/// verbs mint into, and the homed-reference family the checked-store doctests audit against.
 pub struct FixtureProfile;
 impl StorageProfile for FixtureProfile {
-    type Families = (RefFamily, (RecordedRefFamily, ()));
+    type Families = (RefFamily, (HomedRefFamily, ()));
     type FrameOwner = RegionCart;
 }
 impl Stored<FixtureProfile> for RefFamily {
@@ -105,23 +115,19 @@ impl Stored<FixtureProfile> for RefFamily {
         &storage.0
     }
 }
-impl Stored<FixtureProfile> for RecordedRefFamily {
+impl Stored<FixtureProfile> for HomedRefFamily {
     fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
         &storage.1 .0
     }
-    fn record_local(frame: &Region<FixtureProfile>, stored: &&'static u32) {
-        frame.record_addr(*stored as *const u32 as usize);
-    }
 }
 
-// SAFETY: `audit` returns true only when `region` owns the address of the `u32` the incoming
-// reference borrows — i.e. that `u32` was previously stored into (and recorded by) this region, so
-// the borrow is genuinely resident. A permissive audit is not writable here without lying about
-// that residence relation.
-unsafe impl AuditedStored<FixtureProfile> for RecordedRefFamily {
+// SAFETY: `audit` returns true only when the incoming value names `region` itself as its home, so
+// the region borrow it carries is resident by construction. A permissive audit is not writable here
+// without lying about that residence relation.
+unsafe impl AuditedStored<FixtureProfile> for HomedRefFamily {
     type AuditContext<'ctx> = ();
-    fn audit(region: &Region<FixtureProfile>, value: &&u32, _context: ()) -> bool {
-        region.owns_addr(*value as *const u32 as usize)
+    fn audit(region: &Region<FixtureProfile>, value: &HomedRef<'_>, _context: ()) -> bool {
+        std::ptr::eq(value.home, region)
     }
 }
 

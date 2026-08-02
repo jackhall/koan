@@ -26,7 +26,7 @@ use crate::machine::core::bindings::{
 };
 use crate::machine::core::carrier_witness::OverloadSeal;
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
-use crate::machine::model::{Carried, KObject, OperatorGroup, TypeRegistry};
+use crate::machine::model::{Carried, KObject, OperatorGroup};
 use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
@@ -60,23 +60,6 @@ impl<'a> Scope<'a> {
             );
         }
         target
-    }
-
-    /// Fused region-pure / fresh-value **construction**: checked move-in of `value` into this
-    /// scope's own region under the description [`Self::alloc_object_checked_stored`] mints for it,
-    /// sealed. The pure-value twin of [`Self::adopt_for_binding`], the delivered-value construction
-    /// door.
-    pub(crate) fn seal_checked(
-        &self,
-        value: KObject<'_>,
-        types: &TypeRegistry,
-    ) -> Result<SealedValue, KError> {
-        // A checked bind reaches no foreign region — the dest-only audit is what proves it — so the
-        // only member the mint can name is this scope's own, and it names it exactly when the audit
-        // walk saw the value hold a borrow into it. The mint's own bundle is empty either way (the
-        // self rule strips the destination), so nothing folds into the region's union bundle.
-        let (obj, reach) = self.alloc_object_checked_stored(value, types)?;
-        Ok(self.seal_reaching(Carried::Object(obj), reach))
     }
 
     /// Fused MODULE-finish value **construction**: merge the resident module reference into this
@@ -124,21 +107,6 @@ impl<'a> Scope<'a> {
         // Duplicate the seal: one binds into the entry, the other rides the caller's terminal
         // carrier out of the step. Neither owns pins — the region's union bundle does — so the
         // reach is covered on both the resident and in-transit paths.
-        self.bind_value_direct(name, sealed.duplicate(), index, gate)?;
-        Ok(sealed)
-    }
-
-    /// [`Self::seal_checked`] + [`Self::bind_value_direct`] — the construction-door spelling of a
-    /// region-pure value bind.
-    pub(crate) fn bind_checked_direct(
-        &self,
-        name: String,
-        value: KObject<'_>,
-        index: BindingIndex,
-        types: &TypeRegistry,
-        gate: &mut WriteGate,
-    ) -> Result<SealedValue, KError> {
-        let sealed = self.seal_checked(value, types)?;
         self.bind_value_direct(name, sealed.duplicate(), index, gate)?;
         Ok(sealed)
     }

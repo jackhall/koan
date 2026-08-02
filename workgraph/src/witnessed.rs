@@ -49,7 +49,7 @@ mod carrier;
 pub use carrier::{Carrier, HasRegionHandle};
 
 mod bump;
-pub use bump::BumpPlacement;
+pub use bump::{BumpMap, BumpPlacement};
 
 mod sectioned;
 pub use sectioned::{CellInput, CellReach, CellRef, Sectioned};
@@ -295,6 +295,22 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     /// crate-internal [`mint`](Self::mint) make the destination inseparable from that proof.
     pub fn alloc_resident_folded<K: Stored<W>>(self, value: K::At<'b>) -> &'b K::At<'b> {
         self.handle.region().alloc_resident::<K>(value)
+    }
+
+    /// The [`BumpPlacement`] over this fold's destination — the `Drop`-free peer of
+    /// [`alloc_resident_folded`](Self::alloc_resident_folded), for a family whose `Copy` bound already
+    /// says region death owes it no destructor.
+    ///
+    /// It rests on the identical argument, and grants no more: a value written through the returned
+    /// placement is typed at this same brand `'b`, so its only inhabitants are the fold's operand
+    /// views, the brand's own allocations, and owned data — all named by the witness the minting
+    /// engine composed over this region. What it drops relative to the typed door is the
+    /// [`Stored`] requirement and with it the erase/re-anchor round trip, which a bump needs no part
+    /// of. [`fold_and_bump`](Self::fold_and_bump) remains the door for
+    /// the other case — where the *operands'* reach still has to be composed and retained before the
+    /// value depending on them exists.
+    pub fn bump(self) -> BumpPlacement<'b, W> {
+        BumpPlacement::mint(self.handle)
     }
 }
 

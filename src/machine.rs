@@ -12,8 +12,6 @@ pub mod model;
 
 pub(crate) use core::kfunction::Body;
 pub use core::kfunction::{KFunction, NodeId};
-#[cfg(test)]
-pub(crate) use core::KoanRegionTestExt;
 pub(crate) use core::{
     arg_held, arg_object, arg_type, arg_unresolved_type, block_tail, body_statement_refs,
     kerror_ktype, require_bare_type_name, require_identifier_name, require_kexpression,

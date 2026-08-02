@@ -3,13 +3,15 @@ use std::rc::Weak;
 
 use crate::machine::core::KFunction;
 use crate::machine::core::{
-    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, Residence, SubstrateDoor,
+    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
 };
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 use crate::witnessed::{CellInput, CellReach, Sectioned};
 
-use super::container_substrate::{held_copy_cost, HeldCells, ListLayout, PayloadLayout};
+use super::container_substrate::{
+    held_copy_cost, HeldCells, ListLayout, PayloadLayout, RecordLayout,
+};
 use super::{
     ContainerSubstrate, DictSubstrate, Held, KKey, ListSubstrate, Module, PayloadSubstrate,
     RecordSubstrate,
@@ -55,12 +57,19 @@ pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::CostDriven;
 ///
 /// Every composite payload is a region-resident substrate the value borrows (`&'a`), immutable
 /// after construction; a future mutable-list builtin would need a fresh substrate at the mutation
-/// site. `Struct.fields` uses `IndexMap` so iteration matches declaration order.
+/// site.
 ///
 /// A `KFunction` is a bare borrow into its defining region; the regions an escaping
 /// closure reaches are named by its carrier's reach description
 /// ([`FrameReach`](crate::machine::core::FrameReach)) and pinned by the holder's owned
 /// [`FrameCoverage`](crate::machine::core::FrameCoverage) coverage, not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
+///
+/// `Copy` because every arm is a scalar or a region borrow — the value owns no allocation, so it
+/// runs no `Drop` at region death. That is what lets a cell ride the `T: Copy` bump doors
+/// ([`RegionBrand::alloc_value`](crate::machine::core::RegionBrand::alloc_value)), where the bound
+/// is the `Drop`-freedom proof. The derived `Clone` is that same shallow copy; **duplicating** a
+/// value — rebuilding its substrates in a destination region — is [`Self::deep_clone`].
+#[derive(Clone, Copy)]
 pub enum KObject<'a> {
     Number(f64),
     /// String value: a region-hosted `&'a str`, bumped into the region the value lives in
@@ -109,8 +118,8 @@ pub enum KObject<'a> {
     },
     /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is a region
     /// borrow of the record's [`RecordSubstrate`] — the field cells in sectioned storage plus the
-    /// name→index table, the stored reach union and the copy cost (identifier-keyed,
-    /// declaration-ordered, order-blind equality); the
+    /// sorted name slice that indexes them, the stored reach union and the copy cost
+    /// (identifier-keyed, name-ordered, order-blind equality); the
     /// second is the value's own type handle — the interned `Record` over each field's
     /// `ktype()` at fresh construction, re-stamped to a declared record type at an annotated
     /// boundary (mirrors `List` / `Dict`). Construct via [`KObject::record`] /
@@ -146,6 +155,34 @@ pub enum KObject<'a> {
     /// on the value channel.
     Module(&'a Module<'a>),
     Null,
+}
+
+/// A [`KObject`]'s **owned leaf** arms, with no lifetime: `Number`, `Bool`, `Null`. The shape a value
+/// takes when it borrows no region at all — not even for string bytes, which is why `KString` is not
+/// here and takes the region brand's `alloc_string` door instead.
+///
+/// It exists so "region-free" is a *type* rather than a predicate a caller re-checks. The store door
+/// (`RegionBrand::alloc_scalar`) takes one of these, so a value that borrows a region cannot reach
+/// it — where a `KObject<'static>` parameter would say the same thing but leave the door with
+/// unbuildable arms to rebuild, since `KObject` is lifetime-invariant and a `'static` one has no
+/// coercion to the destination's `'a`.
+#[derive(Clone, Copy)]
+pub enum Scalar {
+    Number(f64),
+    Bool(bool),
+    Null,
+}
+
+impl Scalar {
+    /// This leaf as a value at any region's lifetime — the rebuild the store door writes. Total, and
+    /// free of a lifetime retype: each arm is reconstructed from its owned payload.
+    pub fn into_object<'a>(self) -> KObject<'a> {
+        match self {
+            Scalar::Number(n) => KObject::Number(n),
+            Scalar::Bool(b) => KObject::Bool(b),
+            Scalar::Null => KObject::Null,
+        }
+    }
 }
 
 impl<'a> KObject<'a> {
@@ -214,7 +251,7 @@ impl<'a> KObject<'a> {
     /// Fresh `Dict` carrier over [`Held`] value cells — the type-aware path (a dict value may be a
     /// first-class type; keys stay scalar). One pass over `map` computes the memoized key/value type
     /// join (this carrier's own `ktype()`); the value cells are then sectioned through `door` and the
-    /// key→index table frozen into `hashbrown` (last-wins dedup already happened in the transient
+    /// key→index table frozen into the region's bump (last-wins dedup already happened in the transient
     /// input map) — the dict door's sole construction site.
     ///
     /// **Keys carry no reach** ([`KKey`] admits only `String` / `Number` / `Bool`, so a key naming a
@@ -253,7 +290,7 @@ impl<'a> KObject<'a> {
     }
 
     /// Fresh `Record` carrier: memoizes the per-field type record as each field's
-    /// `ktype()`. Field order follows declaration; equality is order-blind per the
+    /// `ktype()`. Field order follows the names, not the literal; equality is order-blind per the
     /// `Record` substrate. `door` is the substrate door the cells are sectioned through — see
     /// [`Self::record_of_held`].
     pub fn record(
@@ -270,9 +307,9 @@ impl<'a> KObject<'a> {
 
     /// Fresh `Record` carrier over [`Held`] field cells — the type-aware path (a field
     /// value may be a first-class type). One pass over `fields` computes the memoized
-    /// field-type join (this carrier's own `ktype()`); the cells are then sectioned through `door` in
-    /// declaration order, with the name→index table as the substrate's layout — the record door's
-    /// sole construction site.
+    /// field-type join (this carrier's own `ktype()`); the cells are then sectioned through `door`
+    /// name-sorted, aligned with the bump-hosted name slice that is the substrate's whole layout —
+    /// the record door's sole construction site.
     pub fn record_of_held(
         door: SubstrateDoor<'a, '_>,
         fields: Record<Held<'a>>,
@@ -415,54 +452,26 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// Whether this is a **shallow scalar** — a fully-owned leaf (`Number`, `Bool`, `Null`) whose
-    /// representation embeds no `&'a` region borrow and no [`Held`] cell. Such a value cannot
-    /// reference any dep the construction fold was handed, so the dep-witness union is pure
-    /// over-retention: the combinator gate ([`alloc_object_scalar`](crate::machine::core::StepAllocator::alloc_object_scalar))
-    /// routes it to the no-fold path so it seals with an empty reach, rebuilding owned at `'static`.
+    /// This value's owned leaf form, or `None` if it is not one — the **shallow scalar** test and the
+    /// rebuild in a single verb, so no caller can pair the predicate with a rebuild that disagrees
+    /// with it.
     ///
-    /// A `KString` is **not** one: its bytes live in a region's bump, so there is no `'static`
-    /// rebuild for that no-fold path to make, and a string producer takes a fold door instead. Every
-    /// other variant borrows (`KFunction`, `Module`) or holds cells that transitively might
+    /// A [`Scalar`] embeds no `&'a` region borrow and no [`Held`] cell, so it cannot reference any dep
+    /// the construction fold was handed and the dep-witness union over it would be pure
+    /// over-retention: the combinator gate
+    /// ([`alloc_object_scalar`](crate::machine::core::StepAllocator::alloc_object_scalar)) routes a
+    /// hit to the no-fold path, where it seals with an empty reach.
+    ///
+    /// A `KString` is **not** one: its bytes live in a region's bump, so a rebuild has to re-bump them
+    /// at its destination and a string producer takes a fold door instead. Every other variant borrows
+    /// (`KFunction`, `Module`) or holds cells that transitively might
     /// (`List`/`Dict`/`Record`/`Tagged`/`Wrapped`/`KExpression`), so it keeps the fold too.
-    pub fn is_shallow_scalar(&self) -> bool {
-        matches!(self, KObject::Number(_) | KObject::Bool(_) | KObject::Null)
-    }
-
-    /// True when every region borrow in `self` points into the walk's destination region. Only
-    /// value-channel borrows are walked: `KFunction`, `Module`, `KExpression` splices, and a
-    /// substrate carrier's (`Record`/`List`/`Dict`/`Tagged`/`Wrapped`) substrate address (O(1),
-    /// never its cells). The `KType` tags (`List`/`Dict`/`Record` memos, `Tagged { identity }`,
-    /// `Wrapped { type_id }`) are not walked — a handle is one `u128` naming registry-owned content,
-    /// so it borrows no region at all.
-    pub(crate) fn resident_in_visiting(&self, residence: &Residence<'_>) -> bool {
-        match self {
-            KObject::Number(_) | KObject::Bool(_) | KObject::Null => true,
-            // A string's bytes live in some region's bump, and the bump keeps no address table — so
-            // no audit can say which. Answering `false` is what keeps that unanswerable question off
-            // every runtime-audited move-in: a bare string never crosses one, and a copying adoption
-            // rebuilds it through the destination's own text door instead
-            // ([`needs_destination_door`](Self::needs_destination_door)).
-            KObject::KString(_) => false,
-            KObject::KFunction(f) => residence.owns_function(f),
-            // An expression is raw AST: its parts run, its keyword text and its structural cache
-            // all live in the program storage that parsed them, which sits at the eternal tier and
-            // outlives every region a holder could have. It names no producer region either — a
-            // resolved sub-result lives only on the scheduler's `WorkingExpression`, which no value
-            // cell can hold — so pointing at one pins nothing and can dangle nowhere. The
-            // `KString` arm's sibling: a borrow no address table can place, settled structurally
-            // rather than by a probe. Which half of that is typed and which is flow-cleared is
-            // [`ProgramBrand`](crate::machine::core::ProgramBrand)'s doc.
-            KObject::KExpression(_) => true,
-            // O(1) address-membership check on the substrate borrow — never a cell walk. Every
-            // substrate carrier answers residence by its own address, whether it is a bare top-level
-            // value (born resident through the fold door) or rides inside another carrier.
-            KObject::List(substrate, _) => residence.owns_substrate(substrate),
-            KObject::Dict(substrate, _) => residence.owns_substrate(substrate),
-            KObject::Record(substrate, _) => residence.owns_substrate(substrate),
-            KObject::Tagged { value, .. } => residence.owns_substrate(value),
-            KObject::Wrapped { inner, .. } => residence.owns_substrate(inner),
-            KObject::Module(m) => residence.owns_module(m),
+    pub fn as_scalar(&self) -> Option<Scalar> {
+        match *self {
+            KObject::Number(n) => Some(Scalar::Number(n)),
+            KObject::Bool(b) => Some(Scalar::Bool(b)),
+            KObject::Null => Some(Scalar::Null),
+            _ => None,
         }
     }
 
@@ -548,11 +557,11 @@ impl<'a> KObject<'a> {
     }
 
     /// Whether `self` is a substrate carrier — a `Record`, `List`, `Dict`, `Tagged`, or `Wrapped`,
-    /// each of which directly borrows a region-resident substrate. Purely structural — unlike
-    /// [`Self::resident_in_visiting`], no residence is checked here. A substrate is always a genuine
-    /// region borrow into its own home (Ruling 5, design/value-substrates.md), which is what makes
-    /// this the shape question the adoption rules turn on: a substrate carrier cannot cross a
-    /// checked move-in by a pointer copy, so a copying seam rebuilds it through the fold door.
+    /// each of which directly borrows a region-resident substrate. Purely structural: no residence
+    /// is read here. A substrate is always a genuine region borrow into its own home (Ruling 5,
+    /// design/value-substrates.md), which is what makes this the shape question the adoption rules
+    /// turn on: a substrate carrier cannot move regions by a pointer copy, so a copying seam
+    /// rebuilds it through the fold door.
     pub(crate) fn embeds_substrate(&self) -> bool {
         matches!(
             self,
@@ -709,30 +718,39 @@ fn rehome_cell_text<'a: 'h, 'h>(door: SubstrateDoor<'a, 'h>) -> impl Fn(Held<'a>
 /// and a cell's index is its position.
 fn alloc_list<'a>(door: SubstrateDoor<'a, '_>, items: Vec<Held<'a>>) -> &'a ListSubstrate<'a> {
     let (cells, reach, copy_cost) = section_cells(door, items);
-    door.alloc_substrate_folded::<ListSubstrate<'static>>(ContainerSubstrate::new(
-        ListLayout, cells, reach, copy_cost,
-    ))
+    door.alloc_substrate_folded(ContainerSubstrate::new(ListLayout, cells, reach, copy_cost))
 }
 
-/// Section a record's field cells in declaration order and store the [`RecordSubstrate`] under the
-/// name→index table that layout implies.
+/// Sort a record's fields by name, section the cells in that order, and store the
+/// [`RecordSubstrate`] under the region-hosted name slice that order makes an index. Sorting
+/// happens **before** sectioning: the run partition is computed over the cell order handed to
+/// [`section_cells`], so a later sort would mispair runs with cells. Names cannot repeat — the
+/// incoming [`Record`] deduplicates last-wins upstream — so the sort is a total order over them and
+/// binary search resolves a field exactly.
 fn alloc_record<'a>(
     door: SubstrateDoor<'a, '_>,
     fields: Record<Held<'a>>,
 ) -> &'a RecordSubstrate<'a> {
-    let mut index: Record<usize> = Record::new();
-    let mut cells: Vec<Held<'a>> = Vec::with_capacity(fields.len());
-    for (name, cell) in fields.into_pairs() {
-        index.insert(name, cells.len());
+    let mut pairs: Vec<(String, Held<'a>)> = fields.into_pairs().collect();
+    pairs.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut names: Vec<&'a str> = Vec::with_capacity(pairs.len());
+    let mut cells: Vec<Held<'a>> = Vec::with_capacity(pairs.len());
+    for (name, cell) in pairs {
+        names.push(door.alloc_text(&name));
         cells.push(cell);
     }
+    let names = door.alloc_slice(&names);
     let (cells, reach, copy_cost) = section_cells(door, cells);
-    door.alloc_substrate_folded::<RecordSubstrate<'static>>(ContainerSubstrate::new(
-        index, cells, reach, copy_cost,
+    door.alloc_substrate_folded(ContainerSubstrate::new(
+        RecordLayout::new(names),
+        cells,
+        reach,
+        copy_cost,
     ))
 }
 
-/// Section a dict's value cells and store the [`DictSubstrate`] under the frozen key→index table.
+/// Section a dict's value cells and store the [`DictSubstrate`] under the region-hosted key→index
+/// table the door bumps beside them.
 /// Cell order follows the input map's iteration order, which is what makes dict entry order
 /// unspecified. Incoming keys may borrow **anywhere** — a producer's region, a caller's staging
 /// buffer — because this is the one site that re-homes them, so no dict door verb has to state a
@@ -741,19 +759,17 @@ fn alloc_dict<'a>(
     door: SubstrateDoor<'a, '_>,
     map: HashMap<KKey<'_>, Held<'a>>,
 ) -> &'a DictSubstrate<'a> {
-    let mut index: hashbrown::HashMap<KKey<'a>, usize> =
-        hashbrown::HashMap::with_capacity(map.len());
+    let mut entries: Vec<(KKey<'a>, usize)> = Vec::with_capacity(map.len());
     let mut cells: Vec<Held<'a>> = Vec::with_capacity(map.len());
     for (key, cell) in map {
         // A string key is re-bumped into the dict's own region as the table freezes, so the key
         // block is home-resident and the dict's run never has to name where a key came from.
-        index.insert(key.rehomed(door), cells.len());
+        entries.push((key.rehomed(door), cells.len()));
         cells.push(cell);
     }
+    let index = door.alloc_map(entries);
     let (cells, reach, copy_cost) = section_cells(door, cells);
-    door.alloc_substrate_folded::<DictSubstrate<'static>>(ContainerSubstrate::new(
-        index, cells, reach, copy_cost,
-    ))
+    door.alloc_substrate_folded(ContainerSubstrate::new(index, cells, reach, copy_cost))
 }
 
 /// Section one owned payload `value` as a [`PayloadSubstrate`]'s single cell through `door` — the
@@ -762,7 +778,7 @@ fn alloc_dict<'a>(
 /// verb's tagged/wrapped arms) funnels through.
 fn alloc_payload<'a>(door: SubstrateDoor<'a, '_>, value: KObject<'a>) -> &'a PayloadSubstrate<'a> {
     let (cells, reach, copy_cost) = section_cells(door, vec![Held::Object(value)]);
-    door.alloc_substrate_folded::<PayloadSubstrate<'static>>(ContainerSubstrate::new(
+    door.alloc_substrate_folded(ContainerSubstrate::new(
         PayloadLayout,
         cells,
         reach,
@@ -960,13 +976,9 @@ pub(crate) fn copy_or_pin<C>(
         SeamPolicy::CostDriven => {}
     }
 
-    // The substrate's description records the region its storage lives in — which a pin-bind can
-    // separate from the residence of a wrapper value sharing the substrate. The bit read below is
-    // home-relative to the *substrate's* home, so it only prices a crossing out of that region.
-    let home_crossing = substrate
-        .reach()
-        .with_home_region(|home| std::ptr::eq(home, host));
-    if !home_crossing {
+    // The bit read below is home-relative to the *substrate's* own home, so it only prices a
+    // crossing out of that region — see [`ContainerSubstrate::homed_in`].
+    if !substrate.homed_in(host) {
         // Foreign crossing: pricing a copy-out at an intermediate host is region evacuation's job.
         return RegionEscape::Pin;
     }

@@ -32,7 +32,11 @@
 //! enclosing fold engine ([`StepContext::alloc_with`](super::StepContext::alloc_with)), which is
 //! where cross-region reach ownership already flows; the door composes *within* the brand.
 
+use std::hash::Hash;
 use std::ptr;
+
+use bumpalo::Bump;
+use hashbrown::{DefaultHashBuilder, HashMap};
 
 use super::{
     Carrier, FoldedPlacement, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable,
@@ -139,6 +143,80 @@ impl<'b, W: StorageProfile> BumpPlacement<'b, W> {
     /// say so.
     pub fn text(self, text: &str) -> &'b str {
         self.handle.region().bump_text(text)
+    }
+}
+
+/// A **key→index table whose buckets live in the region's bump** — the shape an embedder's keyed
+/// container reaches for when a slice and a binary search will not do, minted through
+/// [`RegionHandle::bump_map`].
+///
+/// The map is the one bump-hosted value that is *not* itself `Copy`: a `hashbrown` table owns its
+/// bucket allocation, so it has a `Drop`. That `Drop` is exactly what never runs — the table is
+/// placed in the bump like any other bumped value, and the bump releases its chunks whole. The
+/// `K: Copy` and `V: Copy` bounds are what make forgoing it lossless rather than a leak: with `Copy`
+/// elements the table's destructor has nothing to do *but* free the bucket array, and that array
+/// lives in the very chunks region death releases. Elements owning anything else — a `String` key,
+/// a `Box` value — could not reach this door in the first place.
+///
+/// So the bounds sit where they can be read as the proof: on the type's own inherent impl, covering
+/// construction and every read. There is no `unsafe` and no `ManuallyDrop` sleight of hand; the
+/// table is simply built over a bump-backed allocator and then handed to the bump itself, which is
+/// the same disposition every other bumped value gets.
+///
+/// The surface is **read-only**. A table is frozen at construction because the value it indexes is:
+/// mutation would have to rehash into the bump, stranding the old bucket array as garbage no region
+/// figure could account for honestly. Iteration order is `hashbrown`'s, which is to say arbitrary
+/// and not a promise.
+pub struct BumpMap<'b, K, V> {
+    entries: HashMap<K, V, DefaultHashBuilder, &'b Bump>,
+}
+
+impl<'b, K: Copy + Eq + Hash, V: Copy> BumpMap<'b, K, V> {
+    /// Build the table over `bump` and fill it from `entries` — crate-internal, so
+    /// [`RegionHandle::bump_map`] is the only way in, and every table is therefore both allocated in
+    /// a region's bump and placed there.
+    ///
+    /// Sized to the iterator's lower bound up front so the fill runs without a rehash: a growth
+    /// reallocation would abandon the old bucket array inside the bump as garbage the region's
+    /// live-byte figure would then over-report. Duplicate keys resolve last-wins, as
+    /// [`HashMap::insert`] does.
+    pub(crate) fn build(bump: &'b Bump, entries: impl IntoIterator<Item = (K, V)>) -> Self {
+        let entries = entries.into_iter();
+        let mut table = HashMap::with_capacity_and_hasher_in(
+            entries.size_hint().0,
+            DefaultHashBuilder::default(),
+            bump,
+        );
+        table.extend(entries);
+        BumpMap { entries: table }
+    }
+
+    /// The bucket array's byte footprint, the figure [`RegionHandle::bump_map`] adds to its region's
+    /// occupancy on top of the table header's own `size_of_val`. Read once, after the fill: with the
+    /// capacity reserved up front there is exactly one bucket allocation, so this is the whole of
+    /// what the table put in the bump.
+    pub(crate) fn allocation_size(&self) -> usize {
+        self.entries.allocation_size()
+    }
+
+    /// The value `key` indexes, or `None`.
+    pub fn get(&self, key: &K) -> Option<&V> {
+        self.entries.get(key)
+    }
+
+    /// Every `(key, value)` pair, in arbitrary order.
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.entries.iter()
+    }
+
+    /// How many pairs the table holds.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the table holds no pairs.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 

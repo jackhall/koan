@@ -2,9 +2,9 @@
 //! [`Sectioned`] storage (semantic order, physically partitioned into runs that each name one
 //! interned reach description), a payload-specific index `C` mapping a name / key / position onto a
 //! cell index, the interned union over the runs, and the memoized copy cost.
-//! [`RecordSubstrate`] (`C = Record<usize>`) is the field substrate behind a record value;
+//! [`RecordSubstrate`] (`C = RecordLayout`) is the field substrate behind a record value;
 //! [`ListSubstrate`] (`C = ListLayout`) is the element substrate behind a list value;
-//! [`DictSubstrate`] (`C = hashbrown::HashMap<KKey, usize>`) is the entry substrate behind a dict
+//! [`DictSubstrate`] (`C = &BumpMap<KKey, usize>`) is the entry substrate behind a dict
 //! value; [`PayloadSubstrate`] (`C = PayloadLayout`) is the single-cell payload substrate behind a
 //! `Tagged` or `Wrapped` value.
 //!
@@ -12,11 +12,8 @@
 //! is non-empty", borrows-home is the description's own home-relative query. See
 //! [design/value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach).
 
-use hashbrown::HashMap;
-
 use crate::machine::core::{FrameReach, FrameStorage};
-use crate::machine::model::types::Record;
-use crate::witnessed::{CellRef, Sectioned};
+use crate::witnessed::{BumpMap, CellRef, Sectioned};
 
 use super::{Held, KKey, KObject};
 
@@ -30,13 +27,35 @@ pub type HeldCells<'a> = Sectioned<'a, Held<'static>, FrameStorage>;
 pub type PartedCell<'a> =
     crate::witnessed::Opened<'a, CellRef<Held<'static>>, crate::witnessed::Carrier<FrameStorage>>;
 
+/// The index layout of a [`RecordSubstrate`]: the field names, region-hosted and sorted, one per
+/// cell and positionally aligned with them. Name-sorted order is the whole index — a lookup binary
+/// searches the slice and the hit's position *is* the cell index, so a record needs no table.
+///
+/// `Copy`, and every byte it names is bump-hosted: the slice itself, and each name's own bytes
+/// through [`RegionBrand::alloc_text`](crate::machine::core::RegionBrand::alloc_text). Nothing here
+/// owns an allocation, so a record's index runs no `Drop` at region death.
+#[derive(Clone, Copy)]
+pub struct RecordLayout<'a> {
+    names: &'a [&'a str],
+}
+
+impl<'a> RecordLayout<'a> {
+    /// Wrap the sorted name slice the record door bumped. The caller sorts before it sections, so
+    /// the slice and the cells share one order.
+    pub(crate) fn new(names: &'a [&'a str]) -> Self {
+        RecordLayout { names }
+    }
+}
+
 /// The index layout of a [`ListSubstrate`]: a list is positional, so a cell's index *is* its
 /// position and there is nothing to store. A distinct unit type rather than `()` so the list
-/// substrate family keeps its own arena slot.
+/// substrate family keeps its own index type.
+#[derive(Clone, Copy)]
 pub struct ListLayout;
 
 /// The index layout of a [`PayloadSubstrate`]: exactly one cell, so there is nothing to store. A
 /// distinct unit type for the same reason as [`ListLayout`].
+#[derive(Clone, Copy)]
 pub struct PayloadLayout;
 
 /// A region-resident container: its cells in sectioned storage, the payload-specific index `C` over
@@ -47,6 +66,11 @@ pub struct PayloadLayout;
 /// ([`FoldingBrand::alloc_substrate_folded`](crate::machine::core::FoldingBrand::alloc_substrate_folded)),
 /// which stores the substrate and hands back a co-located borrow — the cells, their runs and the
 /// memos ride together.
+///
+/// `Copy` in every arm — the index is a bump-hosted name slice, a [`BumpMap`] borrow or a marker, the
+/// cells a [`Sectioned`] run pair, the reach an interned borrow — so a substrate owns no allocation
+/// and region death frees its bytes as bump chunks with no `Drop` glue to run.
+#[derive(Clone, Copy)]
 pub struct ContainerSubstrate<'a, C> {
     /// The payload-specific index: field name → cell index, dict key → cell index, or a marker where
     /// the layout is implicit (a list's position, a payload's single cell).
@@ -124,6 +148,17 @@ impl<'a, C> ContainerSubstrate<'a, C> {
         self.reach
     }
 
+    /// Whether this container's storage lives in `region` — **residence, read off the value**. The
+    /// stored description records the region the substrate was built into, so the question is
+    /// answered by the substrate's own field rather than by an address table the region would have to
+    /// keep. The seam's cost decision asks it to tell a home crossing from a foreign one; a pin-bind
+    /// can separate that home from the residence of a wrapper value sharing the substrate, which is
+    /// why the question is asked of the substrate and not of the value around it.
+    pub fn homed_in(&self, region: &crate::machine::core::KoanRegion) -> bool {
+        self.reach
+            .with_home_region(|home| std::ptr::eq(home, region))
+    }
+
     /// Whether any cell reaches a region at all — the union being non-empty. Conservative relative
     /// to [`Self::borrows_home`]: it asks about *any* region, not the home-relative question the
     /// cost decision needs.
@@ -154,32 +189,31 @@ impl<'a, C> ContainerSubstrate<'a, C> {
 }
 
 /// The field substrate a record value borrows — [`ContainerSubstrate`] indexed by field name. Cells
-/// are in declaration order; equality is order-blind (see [`Record`]).
-pub(crate) type RecordSubstrate<'a> = ContainerSubstrate<'a, Record<usize>>;
+/// are name-sorted, matching the [`RecordLayout`] slice they are aligned with, so field order is a
+/// property of the names and never of how the literal was written. Equality is order-blind
+/// regardless.
+pub(crate) type RecordSubstrate<'a> = ContainerSubstrate<'a, RecordLayout<'a>>;
 
 impl<'a> RecordSubstrate<'a> {
     /// The cell named `field`, or `None` when the record has no such field.
     pub fn field(&self, field: &str) -> Option<&'a Held<'a>> {
-        self.index().get(field).and_then(|at| self.cell(*at))
+        self.field_index(field).and_then(|at| self.cell(at))
     }
 
     /// The cell index of `field`, or `None` when the record has no such field — what a projection
-    /// resolves a field name to before parting the cell ([`Self::project`]).
+    /// resolves a field name to before parting the cell ([`Self::project`]). A binary search over
+    /// the sorted names; the position found *is* the cell index.
     pub fn field_index(&self, field: &str) -> Option<usize> {
-        self.index().get(field).copied()
+        self.index().names.binary_search(&field).ok()
     }
 
-    /// The fields in declaration order, as `(name, cell)` pairs.
-    pub fn fields(&self) -> impl Iterator<Item = (&str, &'a Held<'a>)> {
-        let cells = self.cells();
+    /// The fields in name order, as `(name, cell)` pairs.
+    pub fn fields(&self) -> impl Iterator<Item = (&'a str, &'a Held<'a>)> {
         self.index()
+            .names
             .iter()
-            .map(move |(name, at)| (name.as_str(), cells[*at]))
-    }
-
-    /// The field names in declaration order.
-    pub fn field_names(&self) -> impl Iterator<Item = &str> {
-        self.index().keys().map(String::as_str)
+            .copied()
+            .zip(self.cells().iter().copied())
     }
 }
 
@@ -197,11 +231,11 @@ impl<'a> ListSubstrate<'a> {
 /// The entry substrate a dict value borrows — [`ContainerSubstrate`] indexed by the concrete scalar
 /// [`KKey`]. The index is frozen at construction (last-wins dedup happens in the transient
 /// construction map) and never written again; cell order follows the construction map's iteration
-/// order, so entry order is unspecified. The index block is a default-`Global` heap allocation the
-/// substrate owns and drops at region death — a `hashbrown` table so a future region-`Allocator` swap
-/// is a zero-payload-churn change. Every key is `Copy` and its string bytes are region-hosted, so
-/// the table holds no per-key allocation of its own.
-pub(crate) type DictSubstrate<'a> = ContainerSubstrate<'a, HashMap<KKey<'a>, usize>>;
+/// order, so entry order is unspecified. The index block is a [`BumpMap`] hosted in the substrate's
+/// own region bump: `Copy` key and `Copy` value are what let region death reclaim its buckets by
+/// releasing chunks rather than by running a destructor. Every key's string bytes are region-hosted
+/// too, so the table holds no allocation outside the bump.
+pub(crate) type DictSubstrate<'a> = ContainerSubstrate<'a, &'a BumpMap<'a, KKey<'a>, usize>>;
 
 impl<'a> DictSubstrate<'a> {
     /// The cell stored under `key`, or `None` when the dict has no such entry. `key` may borrow
@@ -215,11 +249,6 @@ impl<'a> DictSubstrate<'a> {
     pub fn entries(&self) -> impl Iterator<Item = (&KKey<'a>, &'a Held<'a>)> {
         let cells = self.cells();
         self.index().iter().map(move |(key, at)| (key, cells[*at]))
-    }
-
-    /// The keys, in the same arbitrary order [`Self::entries`] yields.
-    pub fn keys(&self) -> impl Iterator<Item = &KKey<'a>> {
-        self.index().keys()
     }
 }
 

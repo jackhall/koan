@@ -13,7 +13,14 @@ test-hooks = []
 typed-arena = "2"
 stable_deref_trait = "1.2.1"
 elsa = "1"
-bumpalo = "3.20.3"
+# `allocator-api2`: turns on `impl Allocator for &Bump`, the seam a `hashbrown` table is built over
+# so its buckets land in the region's own bump rather than the global heap. See `BumpMap` in
+# src/witnessed/bump.rs.
+bumpalo = { version = "3.20.3", features = ["allocator-api2"] }
+# Hash table for the `BumpMap` index door. Chosen over `std` for that same stable custom-allocator
+# seam (`allocator-api2`, on by default), which `std::collections::HashMap` has no stable equivalent
+# of. Default features also supply the `DefaultHashBuilder` the door names.
+hashbrown = "0.17"
 # `union`: stores the inline slots in a union rather than an enum, so a two-slot reach set
 # measures exactly what the `Vec` it replaced did (24 bytes for a pointer-sized member) instead of
 # carrying a discriminant word. See `ReachSet` in src/witnessed/reach.rs.

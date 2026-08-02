@@ -16,6 +16,7 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::Held;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
+use crate::machine::model::Scalar;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
@@ -41,7 +42,7 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
             Body::Builtin(|ctx| {
                 crate::machine::core::Action::done_resident(
                     ctx.scope,
-                    Carried::Object(ctx.scope.brand().alloc_object(KObject::Null)),
+                    Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
                 )
             }),
             child,
@@ -63,7 +64,7 @@ fn object_top_node_relocates_into_dest() {
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
 
-    let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
+    let obj: &KObject = source.brand().alloc_scalar(Scalar::Number(2.5));
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
         Carried::Object(obj),
@@ -73,7 +74,6 @@ fn object_top_node_relocates_into_dest() {
     );
     match relocated {
         Carried::Object(r) => {
-            assert!(dest.region().owns_object(r), "relocated node lives in dest");
             assert!(
                 !std::ptr::eq(r, obj),
                 "top node is a fresh allocation, not the source"
@@ -123,16 +123,16 @@ fn list_relocation_rebuilds_substrate_into_dest() {
     match relocated {
         Carried::Object(r @ KObject::List(out, _)) => {
             assert!(
-                dest.region().owns_object(r),
-                "relocated list node lives in dest"
+                !std::ptr::eq(r, list),
+                "the top list node is a fresh allocation, not the source"
             );
             assert!(
-                dest.region().owns_substrate(*out),
+                out.homed_in(dest.region()),
                 "the rebuilt element substrate lives in dest"
             );
             assert!(
-                !source.region().owns_substrate(*out),
-                "the source no longer owns the rebuilt substrate"
+                !out.homed_in(source.region()),
+                "the source is not the rebuilt substrate's home"
             );
         }
         Carried::Object(other) => panic!("expected a List, got {:?}", other.ktype()),
@@ -174,16 +174,16 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
     match relocated {
         Carried::Object(r @ KObject::Dict(out, _)) => {
             assert!(
-                dest.region().owns_object(r),
-                "relocated dict node lives in dest"
+                !std::ptr::eq(r, dict),
+                "the top dict node is a fresh allocation, not the source"
             );
             assert!(
-                dest.region().owns_substrate(*out),
+                out.homed_in(dest.region()),
                 "the rebuilt entry substrate lives in dest"
             );
             assert!(
-                !source.region().owns_substrate(*out),
-                "the source no longer owns the rebuilt substrate"
+                !out.homed_in(source.region()),
+                "the source is not the rebuilt substrate's home"
             );
         }
         Carried::Object(other) => panic!("expected a Dict, got {:?}", other.ktype()),
@@ -244,17 +244,17 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
             },
         ) => {
             assert!(
-                dest.region().owns_object(r),
-                "relocated tagged node lives in dest"
+                !std::ptr::eq(r, tagged),
+                "the top tagged node is a fresh allocation, not the source"
             );
             assert_eq!(*tag, "Just");
             assert!(
-                dest.region().owns_substrate(*out),
+                out.homed_in(dest.region()),
                 "the rebuilt payload substrate lives in dest"
             );
             assert!(
-                !source.region().owns_substrate(*out),
-                "the source no longer owns the rebuilt substrate"
+                !out.homed_in(source.region()),
+                "the source is not the rebuilt substrate's home"
             );
             assert!(matches!(out.payload(), KObject::Number(n) if *n == 42.0));
             assert_eq!(
@@ -312,16 +312,16 @@ fn wrapped_relocation_rebuilds_payload_into_dest() {
             },
         ) => {
             assert!(
-                dest.region().owns_object(r),
-                "relocated wrapped node lives in dest"
+                !std::ptr::eq(r, wrapped),
+                "the top wrapped node is a fresh allocation, not the source"
             );
             assert!(
-                dest.region().owns_substrate(*out),
+                out.homed_in(dest.region()),
                 "the rebuilt payload substrate lives in dest"
             );
             assert!(
-                !source.region().owns_substrate(*out),
-                "the source no longer owns the rebuilt substrate"
+                !out.homed_in(source.region()),
+                "the source is not the rebuilt substrate's home"
             );
             assert!(matches!(out.payload(), KObject::Number(n) if *n == 7.0));
             assert_eq!(
@@ -345,13 +345,10 @@ fn kfunction_borrow_preserved_verbatim() {
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
-    let types = test_run.types.clone();
 
     let kf_ref = alloc_local_kf(&source);
     let source_scope = run_root_bare(source.storage());
-    let (obj, _reach): (&KObject, _) = source_scope
-        .alloc_object_checked_stored(KObject::KFunction(kf_ref), &types)
-        .expect("f was just allocated into region\'s own region");
+    let obj: &KObject = source_scope.brand().alloc_value(KObject::KFunction(kf_ref));
 
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
@@ -363,8 +360,8 @@ fn kfunction_borrow_preserved_verbatim() {
     match relocated {
         Carried::Object(r @ KObject::KFunction(f)) => {
             assert!(
-                dest.region().owns_object(r),
-                "the KFunction node relocated into dest"
+                !std::ptr::eq(r, obj),
+                "the top node is a fresh allocation, not the source"
             );
             assert!(
                 std::ptr::eq(*f, kf_ref),
@@ -841,6 +838,197 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
     );
 }
 
+/// A record's **name index** is bump-hosted at the destination, not borrowed back into the producer.
+/// The fields go in unsorted, so the name slice the substrate binary-searches is genuinely reordered
+/// at construction and every name is re-bumped by the relocation into `dest`'s own region. Dropping
+/// the producer frame and *then* looking each field up by name is the no-use-after-free check: a name
+/// slice still pointing into the producer's freed bump reads dead bytes here, which only tree borrows
+/// observes — a normal build compares them back intact and the lookup succeeds.
+#[test]
+fn record_name_index_rehomes_and_reads_back_after_producer_free() {
+    const NAMES: [&str; 4] = ["zeta", "alpha", "middle", "beta"];
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let scope = test_run.scope;
+    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+    let dest_storage = dest_frame.storage_rc();
+
+    let acc = Delivered::seal(
+        KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+            (region.handle(), Vec::with_capacity(1))
+        }),
+        Rc::clone(&dest_storage),
+        FrameCoverage::empty(),
+    );
+
+    let producer: Rc<CallFrame> = CallFrame::new(scope);
+    let born_cells = crate::machine::core::FrameCoverage::empty();
+    let door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(producer.brand().handle()))
+            .with_holder(&born_cells);
+    let fields = Record::from_pairs(
+        NAMES
+            .iter()
+            .enumerate()
+            .map(|(i, name)| ((*name).to_string(), Held::Object(KObject::Number(i as f64))))
+            .collect::<Vec<_>>(),
+    );
+    let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
+    let sealed = producer.with_scope(|child| {
+        child
+            .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
+            .unseal()
+    });
+    let dep: DeliveredCarried =
+        Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let acc_final = dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
+        acc,
+        cell_still_borrows(&dep),
+        |value, (region, mut cells), placement| {
+            cells.push(copy_held_from_carried(
+                value,
+                FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
+            ));
+            (region, cells)
+        },
+    );
+
+    drop(producer);
+
+    let (acc_cell, _coverage) = acc_final.into_parts();
+    let read: Vec<(String, f64)> =
+        acc_cell
+            .unseal()
+            .with_pinned(&dest_storage, |(_region, cells)| match cells[0].object() {
+                KObject::Record(substrate, _) => {
+                    // Read through the index twice over: the name-order walk, and a by-name
+                    // lookup per field — the binary search over the sorted name slice.
+                    let walked: Vec<String> =
+                        substrate.fields().map(|(n, _)| n.to_string()).collect();
+                    let mut sorted = NAMES.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+                    sorted.sort();
+                    assert_eq!(
+                        walked, sorted,
+                        "the relocated record walks its fields in name order — the index is the \
+                         sorted slice, not the order the literal was written"
+                    );
+                    NAMES
+                        .iter()
+                        .map(|name| match substrate.field(name).map(|h| h.object()) {
+                            Some(KObject::Number(n)) => ((*name).to_string(), *n),
+                            _ => panic!("expected field {name}: Number"),
+                        })
+                        .collect()
+                }
+                other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+            });
+    assert_eq!(
+        read,
+        NAMES
+            .iter()
+            .enumerate()
+            .map(|(i, name)| ((*name).to_string(), i as f64))
+            .collect::<Vec<_>>(),
+        "every field reads back by name after the producer frame freed"
+    );
+}
+
+/// A dict's **key index** — the `hashbrown` table hosted in the region bump, keyed by string bytes
+/// the door re-bumped — is rebuilt at the destination by the relocation. The keys were already
+/// re-bumped once into the producer's region at construction, so the relocated table's keys must be
+/// re-bumped *again* rather than shared; looking every key up after the producer frame frees is the
+/// no-use-after-free check. A table or a key slice still pointing into the producer hashes and
+/// compares freed bytes here, which only tree borrows observes.
+#[test]
+fn dict_key_index_rehomes_and_looks_up_after_producer_free() {
+    use crate::machine::model::KKey;
+    use std::collections::HashMap;
+    const KEYS: [&str; 4] = ["zeta", "alpha", "middle", "beta"];
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let scope = test_run.scope;
+    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+    let dest_storage = dest_frame.storage_rc();
+
+    let acc = Delivered::seal(
+        KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+            (region.handle(), Vec::with_capacity(1))
+        }),
+        Rc::clone(&dest_storage),
+        FrameCoverage::empty(),
+    );
+
+    let producer: Rc<CallFrame> = CallFrame::new(scope);
+    let born_cells = crate::machine::core::FrameCoverage::empty();
+    let door =
+        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(producer.brand().handle()))
+            .with_holder(&born_cells);
+    let mut map: HashMap<KKey, Held> = HashMap::new();
+    for (i, key) in KEYS.iter().enumerate() {
+        map.insert(KKey::String(key), Held::Object(KObject::Number(i as f64)));
+    }
+    let obj: &KObject<'_> = door.alloc_object_folded(KObject::dict_of_held(door, map, &types));
+    let sealed = producer.with_scope(|child| {
+        child
+            .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
+            .unseal()
+    });
+    let dep: DeliveredCarried =
+        Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
+    let acc_final = dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
+        acc,
+        cell_still_borrows(&dep),
+        |value, (region, mut cells), placement| {
+            cells.push(copy_held_from_carried(
+                value,
+                FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
+            ));
+            (region, cells)
+        },
+    );
+
+    drop(producer);
+
+    let (acc_cell, _coverage) = acc_final.into_parts();
+    let mut read: Vec<(String, f64)> =
+        acc_cell
+            .unseal()
+            .with_pinned(&dest_storage, |(_region, cells)| match cells[0].object() {
+                KObject::Dict(substrate, _) => {
+                    // Walk the table, then look every key back up through it — the hash and the
+                    // byte-wise compare both read key slices the relocation re-bumped.
+                    let walked = substrate.entries().count();
+                    assert_eq!(walked, KEYS.len(), "the relocated dict keeps every entry");
+                    KEYS.iter()
+                        .map(
+                            |key| match substrate.entry(&KKey::String(key)).map(|h| h.object()) {
+                                Some(KObject::Number(n)) => ((*key).to_string(), *n),
+                                _ => panic!("expected entry {key}: Number"),
+                            },
+                        )
+                        .collect()
+                }
+                other => panic!("expected a Dict, got {}", other.ktype().name(&types)),
+            });
+    read.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut expected: Vec<(String, f64)> = KEYS
+        .iter()
+        .enumerate()
+        .map(|(i, key)| ((*key).to_string(), i as f64))
+        .collect();
+    expected.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        read, expected,
+        "every entry looks up by key after the producer frame freed"
+    );
+}
+
 // Phase-1 substrate cost memos ([`RecordSubstrate::copy_cost`] / [`RecordSubstrate::borrows_home`]):
 // each test drives `record_of_held` through a fold door and reads the memos the same construction
 // pass computed, per the per-cell table in the substrate's doc.
@@ -1043,8 +1231,8 @@ fn substrate_memo_list_cell_is_priceable_and_home_free() {
 mod seam_verb_table {
     use super::*;
 
-    /// Build a record homed in `home`'s region from `fields`, returning the whole `&KObject::Record` (its
-    /// substrate address lives in `home`, so `home.region().owns_substrate` reports a home crossing).
+    /// Build a record homed in `home`'s region from `fields`, returning the whole `&KObject::Record`
+    /// (its substrate's stored reach names `home`, so the chooser reads a home crossing).
     fn build_record<'run>(
         home: &'run Rc<CallFrame>,
         fields: Record<Held<'run>>,
@@ -1058,7 +1246,9 @@ mod seam_verb_table {
     }
 
     /// The chooser's substrate borrow, extracted from a `&KObject::Record`.
-    fn substrate_of<'a>(value: &KObject<'a>) -> &'a crate::machine::model::RecordSubstrate<'a> {
+    fn substrate_of<'a>(
+        value: &KObject<'a>,
+    ) -> &'a crate::machine::model::values::RecordSubstrate<'a> {
         match value {
             KObject::Record(substrate, _) => substrate,
             other => panic!("expected a Record, got {:?}", other.ktype()),
@@ -1128,7 +1318,7 @@ mod seam_verb_table {
 
         // Inflate the host's allocated total so a one-scalar record is far under 1/ALPHA_DIVISOR of it.
         for n in 0..300 {
-            home.brand().alloc_object(KObject::Number(n as f64));
+            home.brand().alloc_scalar(Scalar::Number(n as f64));
         }
 
         let fields =
@@ -1195,8 +1385,8 @@ mod seam_verb_table {
             Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
         let value = build_record(&home, fields, &types);
         assert!(
-            !foreign.region().owns_substrate(substrate_of(value)),
-            "precondition: foreign host does not own the substrate"
+            !substrate_of(value).homed_in(foreign.region()),
+            "precondition: the foreign host is not the substrate's home"
         );
 
         assert_eq!(

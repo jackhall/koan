@@ -60,6 +60,9 @@ name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+dependencies = [
+ "allocator-api2",
+]
 
 [[package]]
 name = "bytemuck"
@@ -188,7 +191,6 @@ name = "koan"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "hashbrown",
  "imbl",
  "indexmap",
  "mimalloc",
@@ -512,6 +514,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "elsa",
+ "hashbrown",
  "smallvec",
  "stable_deref_trait",
  "typed-arena",

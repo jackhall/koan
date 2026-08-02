@@ -3,6 +3,7 @@ use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
 use crate::machine::execute::dispatch::{
     producer_disposition, resolve_name_part, ProducerDisposition,
 };
+use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
 use crate::machine::BindingIndex;
@@ -15,7 +16,7 @@ fn resolve_name_part_identifier_resolved() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let bound = region.brand().alloc_object(KObject::Number(7.0));
+    let bound = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
             "x".to_string(),

@@ -353,7 +353,7 @@ impl<'step> KoanRuntime<'step> {
         match part {
             ExpressionPart::QuotedExpression(_) => {
                 // A quote rides its own one-part sub-dispatch (the `LiteralPassThrough` lane, which
-                // seals it through the checked door) rather than a static cell: a
+                // seals it through the expression door) rather than a static cell: a
                 // `KObject::KExpression` is invariant in its region lifetime with no `'static`
                 // rebuild, so `resolve_region_pure` cannot build it at the `yoke` brand below.
                 let wrapped =

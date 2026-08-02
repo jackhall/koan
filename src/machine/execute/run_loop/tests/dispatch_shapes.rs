@@ -15,6 +15,7 @@ use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
 use crate::machine::model::Held;
+use crate::machine::model::Scalar;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{Carried, KObject, TypeNode, TypeRegistry};
 use crate::machine::model::{KExpression, WorkingExpression};
@@ -68,9 +69,8 @@ fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
             ctx.scope,
             Carried::Object(
                 ctx.scope
-                    .alloc_object_checked_stored(obj.deep_clone(), ctx.types)
-                    .expect("a deep-cloned Number is always resident-in-self")
-                    .0,
+                    .place_pure_value(obj)
+                    .expect("a Number is region-pure"),
             ),
         ),
         None => Action::done(Err(crate::machine::KError::new(
@@ -96,9 +96,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
         false,
         types,
     ));
-    let (obj, _reach) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f), types)
-        .expect("f was just allocated into region\'s own region");
+    let obj = scope.brand().alloc_value(KObject::KFunction(f));
     scope
         .bind_resident_for_test(
             "f".to_string(),
@@ -562,7 +560,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     // errors with `TypeMismatch` (a `Number` head isn't callable) without entering
     // `resolve_dispatch`, so the producer finalizes `Err` and the routing counter stays
     // clean. `f` is then a backward-visible placeholder pointing at it.
-    let producer_target = scope.brand().alloc_object(KObject::Number(42.0));
+    let producer_target = scope.brand().alloc_scalar(Scalar::Number(42.0));
     scope
         .bind_resident_for_test(
             "producer_target".to_string(),

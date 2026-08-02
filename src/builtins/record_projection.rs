@@ -101,23 +101,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             )
         })));
 
-    // Cross the record as the projection's lhs operand. A carrier-less record literal (region-pure)
-    // rebuilds into the read-site region and seals resident — coverage-equivalent to an empty-reach
-    // seal.
+    // Cross the record as the projection's lhs operand. A carrier-less lhs is region-pure by the
+    // `arg_carriers` contract, so it is placed into the read-site region through the shape-split
+    // pure door and enveloped there — coverage-equivalent to an empty-reach seal. No region-pure
+    // shape is a `Record`, so that arm's diagnostic is what a construction bug would surface here.
     let resident;
     let lhs: &crate::machine::DeliveredCarried = match ctx.arg_carrier("record") {
         Some(c) => c,
         None => {
-            resident = match ctx
-                .scope
-                .seal_fresh_object(record_obj.deep_clone(), ctx.types)
-            {
-                // A freshly rebuilt object is region-pure (its reach is this scope's own region), so
-                // it seals under an empty foreign bundle.
-                Ok(witnessed) => ctx.scope.seal_resident_delivered(
-                    witnessed,
-                    crate::machine::core::FrameCoverage::empty(),
-                ),
+            resident = match ctx.scope.deliver_pure_value(record_obj) {
+                Ok(resident) => resident,
                 Err(e) => return Action::done(Err(e)),
             };
             &resident

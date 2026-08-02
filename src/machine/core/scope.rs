@@ -189,7 +189,7 @@ impl<'a> Scope<'a> {
     }
 
     /// The scope's [`RegionBrand`] allocation capability — the handle every alloc site into this
-    /// scope's region routes (`scope.brand().alloc_object(…)`). Inherited unchanged by same-region
+    /// scope's region routes (`scope.brand().alloc_scalar(…)`). Inherited unchanged by same-region
     /// children; minted at region-open for a region-boundary scope.
     pub(crate) fn brand(&self) -> RegionBrand<'a> {
         self.brand

@@ -10,6 +10,7 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 
 use super::{body_no_op, unit_signature};
+use crate::machine::model::Scalar;
 
 // `BindingIndex::BUILTIN` is used throughout because these tests exercise the
 // `Bindings` write rules (rebind, dedupe, placeholder lifecycle) rather than the
@@ -19,8 +20,8 @@ use super::{body_no_op, unit_signature};
 fn bind_value_direct_errors_on_same_scope_rebind() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let v1 = region.brand().alloc_object(KObject::Number(1.0));
-    let v2 = region.brand().alloc_object(KObject::Number(2.0));
+    let v1 = region.brand().alloc_scalar(Scalar::Number(1.0));
+    let v2 = region.brand().alloc_scalar(Scalar::Number(2.0));
     scope
         .bind_resident_for_test(
             "x".to_string(),
@@ -47,7 +48,7 @@ fn bind_value_direct_errors_on_same_scope_rebind() {
 fn bind_value_direct_allows_shadowing_in_child_scope() {
     let region = run_root_storage();
     let outer = run_root_bare(&region);
-    let v1 = region.brand().alloc_object(KObject::Number(1.0));
+    let v1 = region.brand().alloc_scalar(Scalar::Number(1.0));
     outer
         .bind_resident_for_test(
             "x".to_string(),
@@ -57,7 +58,7 @@ fn bind_value_direct_allows_shadowing_in_child_scope() {
         )
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
-    let v2 = region.brand().alloc_object(KObject::Number(2.0));
+    let v2 = region.brand().alloc_scalar(Scalar::Number(2.0));
     inner
         .bind_resident_for_test(
             "x".to_string(),
@@ -74,7 +75,7 @@ fn bind_value_direct_allows_shadowing_in_child_scope() {
 fn close_marks_scope_and_is_idempotent_reads_still_work() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let v = region.brand().alloc_object(KObject::Number(1.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(1.0));
     scope
         .bind_resident_for_test(
             "x".to_string(),
@@ -99,7 +100,7 @@ fn bind_after_close_panics() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope.close();
-    let v = region.brand().alloc_object(KObject::Number(1.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(1.0));
     let _ = scope.bind_resident_for_test(
         "x".to_string(),
         v,
@@ -114,7 +115,7 @@ fn close_is_per_scope_open_child_still_binds() {
     let outer = run_root_bare(&region);
     outer.close();
     let inner = region.brand().alloc_scope(outer.child_for_call());
-    let v = region.brand().alloc_object(KObject::Number(2.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(2.0));
     inner
         .bind_resident_for_test(
             "x".to_string(),
@@ -198,13 +199,10 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
         false,
         &types,
     ));
-    let (obj2, _reach) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f2), &types)
-        .expect("f was just allocated into region's own region");
     scope
-        .bind_resident_for_test(
+        .bind_value_direct(
             "OTHER_NAME".to_string(),
-            obj2,
+            crate::witnessed::Sealed::seal(scope.store_function_object(f2)),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -234,12 +232,8 @@ fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
         false,
         &types,
     ));
-    let (obj1, _reach1) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region's own region");
-    let (obj2, _reach2) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region's own region");
+    let obj1 = scope.brand().alloc_value(KObject::KFunction(f));
+    let obj2 = scope.brand().alloc_value(KObject::KFunction(f));
     scope
         .bind_resident_for_test(
             "FIRST".to_string(),
@@ -322,7 +316,7 @@ fn register_function_coexists_with_same_name_value() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let v = region.brand().alloc_object(KObject::Number(1.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(1.0));
     scope
         .bind_resident_for_test(
             "FOO".to_string(),
@@ -403,7 +397,7 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
     use crate::machine::core::MemberResolution;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let v = region.brand().alloc_object(KObject::Number(1.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(1.0));
     scope
         .bind_resident_for_test(
             "val".to_string(),
@@ -454,7 +448,7 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
 fn resolve_stops_at_first_hit_does_not_descend_outer() {
     let region = run_root_storage();
     let outer = run_root_bare(&region);
-    let v = region.brand().alloc_object(KObject::Number(1.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(1.0));
     outer
         .bind_resident_for_test(
             "x".to_string(),
@@ -499,7 +493,7 @@ fn bind_value_direct_clears_own_placeholder() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let v = region.brand().alloc_object(KObject::Number(42.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(42.0));
     scope
         .bind_resident_for_test(
             "x".to_string(),
@@ -524,7 +518,7 @@ fn visibility_chain_none_sees_every_entry() {
     use std::rc::Rc;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let v = region.brand().alloc_object(KObject::Number(7.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
             "late".to_string(),
@@ -549,7 +543,7 @@ fn visibility_strict_less_than_hides_later_sibling() {
     use std::rc::Rc;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let v = region.brand().alloc_object(KObject::Number(7.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
             "later".to_string(),
@@ -569,7 +563,7 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
     use std::rc::Rc;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let v = region.brand().alloc_object(KObject::Number(7.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
             "earlier".to_string(),
@@ -591,7 +585,7 @@ fn visibility_self_index_hidden_under_strict_less_than() {
     use std::rc::Rc;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let v = region.brand().alloc_object(KObject::Number(7.0));
+    let v = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
             "self_idx".to_string(),
@@ -695,10 +689,7 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
         false,
         &types,
     ));
-    let (obj, _reach) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f), &types)
-        .expect("f was just allocated into this region");
-    let sealed = scope.seal_resident(Carried::Object(obj));
+    let sealed = crate::witnessed::Sealed::seal(scope.store_function_object(f));
     scope
         .bind_value_direct(
             "f".to_string(),

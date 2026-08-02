@@ -147,17 +147,15 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
     // carrier names regions the read-site frame may not pin; cross the lhs carrier as the field
     // read's operand so the projected field outlives every region the lhs reaches. A carrier-less
-    // `s` (region-pure) rebuilds into the read-site region and seals resident —
-    // coverage-equivalent to an empty-reach seal.
+    // `s` is region-pure by the `arg_carriers` contract, so it is placed into the read-site region
+    // through the shape-split pure door and enveloped there — coverage-equivalent to an empty-reach
+    // seal. No region-pure shape is a `Wrapped`, so that arm's diagnostic is what a construction
+    // bug would surface here.
     match ctx.arg_carrier("s") {
         Some(lhs) => route(access_field(&ctx.ctx, &field_name, lhs, ctx.types)),
         None => {
-            let resident = match ctx.scope.seal_fresh_object(target.deep_clone(), ctx.types) {
-                // A region-pure rebuild seals under an empty foreign bundle.
-                Ok(witnessed) => ctx.scope.seal_resident_delivered(
-                    witnessed,
-                    crate::machine::core::FrameCoverage::empty(),
-                ),
+            let resident = match ctx.scope.deliver_pure_value(target) {
+                Ok(resident) => resident,
                 Err(e) => return Action::done(Err(e)),
             };
             route(access_field(&ctx.ctx, &field_name, &resident, ctx.types))

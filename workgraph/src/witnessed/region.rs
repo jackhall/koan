@@ -1,13 +1,10 @@
-//! Generic run-lifetime storage substrate. Holds an address membership side-table and routes its
-//! store-side lifetime-erasure through its module's single audited
-//! [`erase_to_static`](super::erase_to_static) primitive — it names no workload type. A
-//! [`StorageProfile`] injects its storage families via [`Stored`]; the single private
-//! [`store`](Region::store) path erases each value to `'static`, writes it to the family's sub-arena,
-//! and records its address. Two surfaces re-anchor that store: the brand-confined
-//! [`alloc`](Region::alloc) hands the freshly-stored value to a `for<'b>` closure (so it enters
-//! circulation only wrapped by the Witnessed/Sealed abstraction, never as a bare region reference),
-//! and [`alloc_resident`](Region::alloc_resident) re-anchors it to the caller's `'a` as a co-located
-//! `&'a` (content == borrow == `'a`, the tight no-free-lifetime shape). Both are `pub(crate)` — the
+//! Generic run-lifetime storage substrate. Routes its store-side lifetime-erasure through its
+//! module's single audited [`erase_to_static`](super::erase_to_static) primitive — it names no
+//! workload type. A [`StorageProfile`] injects its storage families via [`Stored`]; the single
+//! private [`store`](Region::store) path erases each value to `'static` and writes it to the
+//! family's sub-arena. One surface re-anchors that store:
+//! [`alloc_resident`](Region::alloc_resident) hands it back at the caller's `'a` as a co-located
+//! `&'a` (content == borrow == `'a`, the tight no-free-lifetime shape). It is `pub(crate)` — the
 //! only public allocation surface is [`RegionHandle`], minted from a region owner or handed out at a
 //! `for<'b>` brand by the library's construction combinators — so a bare `&Region` has no allocation
 //! surface at all.
@@ -35,6 +32,7 @@
 //! for how an escaped value's region stays alive.
 
 use std::cell::{Cell, RefCell};
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::rc::Weak;
 
@@ -43,8 +41,8 @@ use elsa::FrozenMap;
 use typed_arena::Arena;
 
 use super::{
-    erase_to_static, with_branded_ref, PinBundle, PinsRegion, ReachDescription, Reattachable,
-    RegionOwner, StepCoverage,
+    erase_to_static, BumpMap, PinBundle, PinsRegion, ReachDescription, Reattachable, RegionOwner,
+    StepCoverage,
 };
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
@@ -117,10 +115,9 @@ pub trait StorageProfile: Sized {
 /// [`Reattachable`] supertrait — the same single-lifetime GAT (`At<'static> == Self`) the scheduler's
 /// erase/reattach discipline routes — so the store-side erasure here and the read-side re-anchor in
 /// the scheduler share one audited primitive instead of each carrying its own transmute. A live value
-/// enters the engine as `At<'a>`. One trait carries every storage-safety answer for a family — which
-/// cell it lands in, whether it would self-cycle, and any post-store side effect — so
-/// [`store`](Region::store) reasons about the gate-erase-store sequence once instead of forking it
-/// per type.
+/// enters the engine as `At<'a>`. The trait carries the family's one storage answer — which cell it
+/// lands in — so [`store`](Region::store) reasons about the erase-store sequence once instead of
+/// forking it per type.
 ///
 /// Not sealed: this is the workload's extension point. Unbypassability comes from elsewhere — the
 /// engine is the only path to the private [`Region::storage`], so an impl can supply policy
@@ -130,23 +127,16 @@ pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
     /// binding chokepoint: every cell has a distinct type, so only the matching tuple path
     /// type-checks — a wrong path is a compile error, not a runtime bug.
     fn cell(storage: &StorageOf<W>) -> &FamilyArena<Self>;
-    /// Post-store hook, run inside the engine on the storing frame. Default no-op; a family overrides
-    /// it to record the stored address for [`Region::owns_addr`] membership queries.
-    fn record_local(_frame: &Region<W>, _stored: &Self::At<'static>) {}
 }
 
 /// Run-lifetime allocation frame. Lives for one program run (or one per-call frame). Sub-arenas
-/// store `K::At<'static>` (phantom); a surface re-anchors the store on the way out — to a `for<'b>`
-/// brand ([`alloc`](Self::alloc)) or the caller's `'a` ([`alloc_resident`](Self::alloc_resident)).
+/// store `K::At<'static>` (phantom); a surface re-anchors the store on the way out, to the caller's
+/// `'a` ([`alloc_resident`](Self::alloc_resident)).
 pub struct Region<W: StorageProfile> {
     /// The library-owned typed cell bundle, derived from the workload's family list. PRIVATE and
     /// never exposed by reference: the only path in is [`store`](Self::store), the sole store
     /// engine, so storage is never reachable by reference.
     storage: StorageOf<W>,
-    /// Stable addresses of values a family opts to record (via [`Stored::record_local`]), backing
-    /// [`owns_addr`](Self::owns_addr). `usize` rather than `*const _` keeps the field
-    /// lifetime-erased and `Send`/`Sync`-neutral.
-    membership: RefCell<Vec<usize>>,
     /// The region's **reach intern table**: the non-owning reach descriptions minted for values
     /// living in this region ([`Region::intern_reach_retained`]), keyed on the canonical member set
     /// so one description exists per distinct reach per region. Separate from the family
@@ -180,9 +170,12 @@ pub struct Region<W: StorageProfile> {
     /// A `Bump` runs **no destructor** for what it holds — it releases its chunks whole. That is the
     /// point: everything allocated here costs nothing at region teardown, which is what keeps a
     /// sectioned container `Copy` and `Drop`-free so a frame drop need not walk one. The `T: Copy`
-    /// bound every bump primitive carries is what statically holds callers to it — a `Copy` type has
-    /// no `Drop` to skip. ("`Drop`-free" itself has no expressible bound; `Copy` is the static
-    /// proxy.)
+    /// bound the value, slice and text primitives carry is what statically holds callers to it — a
+    /// `Copy` type has no `Drop` to skip. ("`Drop`-free" itself has no expressible bound; `Copy` is
+    /// the static proxy.) The one primitive whose stored value is not itself `Copy`,
+    /// [`bump_map`](Self::bump_map), moves the bound onto the table's *elements* and allocates the
+    /// buckets in this same bump, so the destructor it forgoes would have freed only bytes region
+    /// death frees anyway — see [`BumpMap`](super::BumpMap).
     ///
     /// A cycle among bumped entries is harmless: everything here dies with the region, at once.
     /// Occupancy is one figure for the whole bump ([`bump_bytes`](Self::bump_bytes)) — there is no
@@ -242,7 +235,6 @@ impl<W: StorageProfile> Region<W> {
     pub(crate) fn new(host: Weak<W::FrameOwner>) -> Self {
         Self {
             storage: StorageOf::<W>::default(),
-            membership: RefCell::new(Vec::new()),
             reach_table: FrozenMap::new(),
             bump: Bump::new(),
             bumped_bytes: Cell::new(0),
@@ -335,16 +327,43 @@ impl<W: StorageProfile> Region<W> {
         self.note_bumped(self.bump.alloc_str(text))
     }
 
-    /// Add `stored`'s size to the region's live-byte count and hand it straight back — the one
-    /// writer of [`bumped_bytes`](Self::bumped_bytes). Every bump primitive returns through it, so
-    /// counting is a wrapper on the return value rather than a separate step; nothing in the type
-    /// system enforces that, so a new primitive has to be routed the same way. `size_of_val` reads
-    /// the size off the value the bump actually produced (a slice's whole span, a `str`'s byte
-    /// length), never a requested capacity.
+    /// Build a [`BumpMap`] over this region's bump from `entries` and place it there too — the one
+    /// bump primitive whose stored value is not `Copy`, admitted because the `Copy` bound moves onto
+    /// the table's elements and its buckets land in this same bump. [`BumpMap`] carries the argument
+    /// in full.
+    ///
+    /// Both allocations are counted: the bucket array through
+    /// [`BumpMap::allocation_size`](super::BumpMap::allocation_size), the table header through
+    /// [`note_bumped`](Self::note_bumped) like every other bumped value.
+    pub(crate) fn bump_map<'a, K, V>(
+        &'a self,
+        entries: impl IntoIterator<Item = (K, V)>,
+    ) -> &'a BumpMap<'a, K, V>
+    where
+        K: Copy + Eq + Hash,
+        V: Copy,
+    {
+        let map = BumpMap::build(&self.bump, entries);
+        self.note_bumped_amount(map.allocation_size());
+        self.note_bumped(self.bump.alloc(map))
+    }
+
+    /// Add `stored`'s size to the region's live-byte count and hand it straight back — the return
+    /// path every bump primitive takes, so counting is a wrapper on the return value rather than a
+    /// separate step; nothing in the type system enforces that, so a new primitive has to be routed
+    /// the same way. `size_of_val` reads the size off the value the bump actually produced (a
+    /// slice's whole span, a `str`'s byte length), never a requested capacity.
     fn note_bumped<'a, T: ?Sized>(&self, stored: &'a T) -> &'a T {
-        self.bumped_bytes
-            .set(self.bumped_bytes.get() + size_of_val(stored));
+        self.note_bumped_amount(size_of_val(stored));
         stored
+    }
+
+    /// Add `bytes` to the region's live-byte count — the one writer of
+    /// [`bumped_bytes`](Self::bumped_bytes), split out for the allocation a bump primitive makes
+    /// *beside* the value it returns (a [`BumpMap`]'s bucket array, which `size_of_val` on the table
+    /// header does not see).
+    fn note_bumped_amount(&self, bytes: usize) {
+        self.bumped_bytes.set(self.bumped_bytes.get() + bytes);
     }
 
     /// The region's bump occupancy, in **total live bytes**: the sum of the sizes of the values
@@ -390,53 +409,18 @@ impl<W: StorageProfile> Region<W> {
         K::cell(&self.storage).len()
     }
 
-    /// Whether `addr` was recorded by a prior [`Stored::record_local`] on this frame.
-    pub fn owns_addr(&self, addr: usize) -> bool {
-        self.membership.borrow().contains(&addr)
-    }
-
-    /// Record `addr` into the membership side-table. Called by a family's
-    /// [`Stored::record_local`]; the only writer.
-    pub fn record_addr(&self, addr: usize) {
-        self.membership.borrow_mut().push(addr);
-    }
-
-    /// The single store path for any family `K`: erase the live form to `'static`, write it to the
-    /// family's cell, and fire [`Stored::record_local`] on the storing frame. Hands back the
-    /// stored `&K::At<'static>` for a surface to re-anchor. `storage` is private and this is the only
-    /// path that reaches it, so every allocation — branded or bare — routes here.
+    /// The single store path for any family `K`: erase the live form to `'static` and write it to
+    /// the family's cell. Hands back the stored `&K::At<'static>` for a surface to re-anchor.
+    /// `storage` is private and this is the only path that reaches it, so every family allocation
+    /// routes here.
     ///
     /// No cycle gate: a stored value holds no owning `Rc` back to a region (a closure / future /
     /// module is a bare borrow into its defining region, kept alive by its carrier's witness set), so
     /// storing it where requested can never form an allocation back-edge.
     fn store<K: Stored<W>>(&self, value: K::At<'_>) -> &K::At<'static> {
-        let stored = K::cell(&self.storage)
+        K::cell(&self.storage)
             .arena()
-            .alloc(erase_to_static::<K>(value));
-        // The post-store hook fires on the storing frame (this one — `store` writes where called),
-        // so a recorded address tracks its true owner.
-        K::record_local(self, stored);
-        stored
-    }
-
-    /// Brand-confined allocation: store `value`, then hand the freshly-stored carrier to `project`
-    /// behind a **rank-2** (`for<'b>`) brand through [`with_branded_ref`]. Nothing region-lifetime
-    /// escapes — `project`'s `R` cannot name `'b` — so the value enters circulation only as whatever
-    /// carrier `project` builds (a [`Witnessed`](super::Witnessed) bundle, a
-    /// [`SealedExtern`](super::SealedExtern)), wrapped by the Witnessed/Sealed abstraction from birth
-    /// rather than handed out as a bare region reference. The witnessed-allocation surface, reached
-    /// through [`RegionHandle::alloc`] — `pub(crate)` here so a bare `&Region` cannot call it directly.
-    ///
-    /// Sound by the same `for<'b>` quantifier as [`Witnessed::with`](super::Witnessed::with): the
-    /// region pins the pointee for the whole synchronous `project` call and the brand keeps the view
-    /// from outliving it, so this surface carries **no `unsafe`** of its own beyond the substrate's
-    /// single audited retype.
-    pub(crate) fn alloc<K: Stored<W>, R>(
-        &self,
-        value: K::At<'_>,
-        project: impl for<'b> FnOnce(&'b K::At<'b>) -> R,
-    ) -> R {
-        with_branded_ref::<K, R>(self.store::<K>(value), project)
+            .alloc(erase_to_static::<K>(value))
     }
 
     /// The co-located resident allocation: store `value` — its input lifetime forgotten by
@@ -447,8 +431,8 @@ impl<W: StorageProfile> Region<W> {
     /// widen past the pin. The `&'a self` borrow is what makes it sound — the region pins the pointee
     /// for the whole of `'a`, so the re-anchored reference cannot out-claim its backing.
     ///
-    /// Reached through [`RegionHandle::alloc_resident`] — `pub(crate)` here so a bare `&Region`
-    /// exposes neither this nor the brand-confined [`alloc`](Self::alloc).
+    /// Reached through [`RegionHandle::alloc_resident`] — `pub(crate)` here so a bare `&Region` does
+    /// not expose it.
     pub(crate) fn alloc_resident<'a, K: Stored<W>>(&'a self, value: K::At<'_>) -> &'a K::At<'a> {
         let stored: &'a K::At<'static> = self.store::<K>(value);
         // SAFETY: lifetime-only retype of a single-lifetime family (the `Reattachable` contract); a
@@ -631,6 +615,33 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         self.region.bump_value(value)
     }
 
+    /// **Build a keyed index in this handle's region's bump** from `entries` and hand back the
+    /// co-located `&'a BumpMap`— the door an embedder's keyed container reaches for when its lookup
+    /// needs a hash table rather than the sorted slice [`Self::bump_slice`] would host.
+    ///
+    /// Same borrow argument as its sibling primitives: the returned reference cannot outlive the
+    /// `&'a Region` the handle holds, and the table indexes rather than owns, so there is no
+    /// residence claim for a call site to state. The `Copy` obligation moves from the stored value
+    /// to the table's **elements**, which is what makes the table's un-run `Drop` lossless —
+    /// [`BumpMap`](super::BumpMap) carries that argument.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// let index = handle.bump_map([("width", 0usize), ("height", 1usize)]);
+    /// assert_eq!(index.get(&"height"), Some(&1));
+    /// assert_eq!(index.len(), 2);
+    /// ```
+    pub fn bump_map<K, V>(self, entries: impl IntoIterator<Item = (K, V)>) -> &'a BumpMap<'a, K, V>
+    where
+        K: Copy + Eq + Hash,
+        V: Copy,
+    {
+        self.region.bump_map(entries)
+    }
+
     /// Fold an owned [`StepCoverage`] into this handle's region's union bundle, retained for the
     /// region's whole life — the library's own resting-cell fold onto [`Region::retain_reach`],
     /// backing [`Delivered::rest_in`](super::Delivered::rest_in): a value dropped to rest here keeps
@@ -678,18 +689,6 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         ReachDescription::mint_resident(self, &bundles)
     }
 
-    /// Brand-confined allocation — see [`Region::alloc`]'s (crate-private) docs. Move-in: `value`
-    /// must carry no region borrow (`K::At<'static>`) — `project` only views/wraps the
-    /// freshly-stored value, it does not construct it, so a borrowing value would reach the arena
-    /// unvetted.
-    pub fn alloc<K: Stored<W>, R>(
-        self,
-        value: K::At<'static>,
-        project: impl for<'b> FnOnce(&'b K::At<'b>) -> R,
-    ) -> R {
-        self.region.alloc::<K, R>(value, project)
-    }
-
     /// Co-located resident allocation — see [`Region::alloc_resident`]. Move-in: `value` must carry
     /// no region borrow (`K::At<'static>`), so the store-side lifetime erasure never discards a
     /// borrow only the caller could vet. A value that legitimately borrows a region takes
@@ -730,30 +729,31 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     ///
     /// ```
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RecordedRefFamily};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, HomedRef, HomedRefFamily};
     /// use workgraph::witnessed::RegionHandle;
     /// static SEED: u32 = 7;
     /// let cart = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
-    /// // Seed the region so it records `SEED`'s address as resident.
-    /// let _ = handle.alloc_resident::<RecordedRefFamily>(&SEED);
-    /// // A borrow of the now-resident `SEED` passes the family audit.
+    /// // The value names this region as its home, so the family audit accepts it.
+    /// let resident = HomedRef { home: &cart.0, value: &SEED };
     /// let stored = handle
-    ///     .alloc_resident_checked::<RecordedRefFamily>(&SEED, ())
-    ///     .expect("SEED is resident");
-    /// assert_eq!(**stored, 7);
+    ///     .alloc_resident_checked::<HomedRefFamily>(resident, ())
+    ///     .expect("the value is homed here");
+    /// assert_eq!(*stored.value, 7);
     /// ```
     ///
     /// ```
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RecordedRefFamily};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, HomedRef, HomedRefFamily};
     /// use workgraph::witnessed::RegionHandle;
     /// static OTHER: u32 = 9;
     /// let cart = fresh_cart();
+    /// let elsewhere = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
-    /// // `OTHER` was never stored, so the region does not own its address: the audit rejects it.
+    /// // The value names a different region as its home: the audit rejects it.
+    /// let foreign = HomedRef { home: &elsewhere.0, value: &OTHER };
     /// assert!(handle
-    ///     .alloc_resident_checked::<RecordedRefFamily>(&OTHER, ())
+    ///     .alloc_resident_checked::<HomedRefFamily>(foreign, ())
     ///     .is_none());
     /// ```
     pub fn alloc_resident_checked<K: AuditedStored<W>>(

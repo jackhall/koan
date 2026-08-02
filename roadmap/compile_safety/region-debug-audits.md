@@ -33,10 +33,11 @@ bindings.
 - *Cycle handling — open.* (a) Detect and report in debug builds; (b) a
   structural rule making mutual pins unrepresentable. Recommended: (a) now —
   (b) is a separate design if the detector shows cycles arise in practice.
-- *Tightness ground truth — open.* (a) Walk the stored value's borrows via
-  the recorded side-tables; (b) instrument the witness composition to record
-  which operands contributed. Recommended: (b) — the side-tables are
-  deliberately partial.
+- *Tightness ground truth — decided.* Instrument the witness composition to
+  record which operands contributed. The alternative — walking a stored value's
+  borrows against a recorded address table — is not available: a region keeps no
+  address table, and residence is answered by the value's own field or by the
+  door that placed it.
 
 ## Dependencies
 

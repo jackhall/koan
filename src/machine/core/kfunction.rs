@@ -34,7 +34,7 @@ pub struct KFunction<'a> {
     pub body: Body<'a>,
     /// The captured definition scope, held as a plain `&'a Scope<'a>`. The holder re-anchors to `'a`
     /// as a whole when read out of its region (the substrate retype in
-    /// [`Region::alloc`](crate::witnessed::Region)), so the embedded reference re-anchors with it and
+    /// [`Region::alloc_resident`](crate::witnessed::Region)), so the embedded reference re-anchors with it and
     /// [`Self::captured_scope`] is a bare field read. The captured region's owner is read off the
     /// scope itself ([`Scope::region_owner`]); when the closure escapes, the consumer frame retains
     /// that region in its witness set.

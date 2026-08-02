@@ -219,9 +219,9 @@ impl<F: PinsRegion> ReachDescription<F> {
     }
 
     /// Whether any member's own region satisfies `pred` — a generalization of [`Self::pins_region`]
-    /// for a caller with no single named target region to test (e.g. an address-table membership
-    /// check against a raw stored pointer). No member reference escapes: `pred` runs against each
-    /// upgraded member's region internally.
+    /// for a caller with no single named target region to test, only a property each candidate
+    /// region is asked about in turn. No member reference escapes: `pred` runs against each upgraded
+    /// member's region internally.
     pub fn any_member_region(&self, pred: impl Fn(&F::Region) -> bool) -> bool {
         let mut hit = false;
         self.for_each_owner(|owner| {

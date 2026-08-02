@@ -1,10 +1,11 @@
 # Typed expression value channel
 
-**Problem.** Three answers in
-[`KObject`](../../src/machine/model/values/kobject.rs) — `resident_in_visiting`
-admitting a `KExpression` unconditionally, `object_cell_reach` calling its cell
-`Owned`, `retains_home` answering `false` — rest on the claim that no expression
-reaching the value channel borrows a region a holder can outlive.
+**Problem.** Three answers rest on the claim that no expression reaching the value
+channel borrows a region a holder can outlive: `object_cell_reach` calling an
+expression's cell `Owned` and `retains_home` answering `false`, both in
+[`KObject`](../../src/machine/model/values/kobject.rs), and the expression door
+[`RegionBrand::alloc_expression`](../../src/machine/core/arena.rs) sealing its cell
+with no member.
 [`ProgramBrand`](../../src/machine/core/arena/frame.rs) types half of that: the
 parse entry points take it, so parse output's eternal storage tier is checked at
 every call site. The other half is discipline. `fn_def.rs`'s deferred
@@ -22,7 +23,7 @@ about a live value, under-pinning its producer region.
 - Constructing a `KObject::KExpression` requires proof that the node's storage is
   eternal-tier: a value cell over a node built against a per-call brand is a
   compile error, not a discipline violation.
-- `resident_in_visiting`, `object_cell_reach` and `retains_home`'s expression arms
+- `object_cell_reach`, `retains_home` and the expression door's own empty seal
   cite that proof rather than a flow argument, and
   [`ProgramBrand`](../../src/machine/core/arena/frame.rs)'s doc records no
   residual split.

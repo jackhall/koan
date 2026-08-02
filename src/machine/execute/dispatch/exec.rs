@@ -85,8 +85,10 @@ pub(super) fn invoke<'step>(
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     // Per-argument reach carriers, read back off the spliced cells (value and reach as one unit). A
-    // literal arg is region-pure and contributes no cell.
-    let arg_carriers = carriers_from_expr(view, &working_expr);
+    // literal arg is region-pure and contributes no cell — on the user-defined lane below,
+    // `extract_carried_args` fills its slot with the empty-coverage envelope it resolves the literal
+    // into, so every value argument the frame bind sees is delivered.
+    let mut arg_carriers = carriers_from_expr(view, &working_expr);
     let function = picked.value();
     if let Body::Builtin(f) = &function.body {
         let f = *f;
@@ -106,7 +108,7 @@ pub(super) fn invoke<'step>(
         return Outcome::Done(Err(e));
     }
 
-    let args = match extract_carried_args(view, &working_expr, &arg_carriers) {
+    let args = match extract_carried_args(view, &working_expr, &mut arg_carriers) {
         Some(args) => args,
         // Unreachable by construction (the bind sites resolve value parts to `Spliced`/literal
         // first); surface a diagnostic rather than silently mis-bind if that ever breaks.
@@ -237,8 +239,10 @@ fn carriers_from_expr<'step>(
 
 /// Re-key the slot-indexed arg carriers onto their parameter names. A committed call's parts line up
 /// 1:1 with `picked`'s signature elements (`validate_call_args` enforces it), so the element at a
-/// carrier's slot names its parameter. A region-pure arg's entry is `None`, read as "no foreign
-/// reach", and contributes no record field.
+/// carrier's slot names its parameter. A `None` entry is read as "no foreign reach" and contributes
+/// no record field — the shape a region-pure arg takes on the builtin lane, where nothing binds at a
+/// `for<'b>` brand. A user-defined call fills every value slot ([`extract_carried_args`]), so no
+/// entry it re-keys is `None`.
 fn map_arg_carriers<'e, 'step>(
     picked: &KFunction<'step>,
     arg_carriers: &'e [Option<DeliveredCarried>],
@@ -294,14 +298,21 @@ fn run_action_builtin<'step>(
 /// part, and for the pairing that construction rules out — both unreachable (the bind sites resolve
 /// value parts first; the two lists come from one walk of one expression), which the caller surfaces
 /// as a diagnostic rather than a panic.
+///
+/// The two resolving arms **fill their own slot** in `arg_carriers`: the value is placed in the call
+/// scope's region and enveloped there ([`Scope::deliver_resident_object`]), so every value argument
+/// of a user-defined call reaches the frame bind as a delivery envelope. That is what the bind's
+/// `for<'b>` brand admits ([`CallFrame::with_scope`](crate::machine::CallFrame::with_scope)) — a
+/// bare `&'step KObject<'step>` names a lifetime the opened frame scope has no relation to. The
+/// envelope's own coverage is empty, so a literal argument still pins nothing.
 fn extract_carried_args<'step>(
     view: &SchedulerView<'step, '_>,
     working_expr: &WorkingExpression<'step>,
-    arg_carriers: &[Option<DeliveredCarried>],
+    arg_carriers: &mut [Option<DeliveredCarried>],
 ) -> Option<Vec<Carried<'step>>> {
     let mut args = Vec::new();
-    for (part, lifted) in working_expr.parts.iter().zip(arg_carriers) {
-        match (&part.value, lifted) {
+    for (part, lifted) in working_expr.parts.iter().zip(arg_carriers.iter_mut()) {
+        match (&part.value, &*lifted) {
             (WorkingPart::Ast(ExpressionPart::Keyword(_)), _) => {}
             // Adopt the spliced cell into the call scope — an object by structural copy (the copy's
             // reach folds in; a residence-only producer host is released with the working
@@ -323,22 +334,21 @@ fn extract_carried_args<'step>(
             }
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
             // the args as a `'step` `Carried`. A string literal bumps its bytes here, so the value
-            // is region-pure but not `'static` and takes the zero-dep fold door rather than the
-            // audited one.
+            // is region-pure but not `'static` and takes the zero-dep fold door.
             (WorkingPart::Ast(ExpressionPart::Literal(lit)), _) => {
                 let object = view
                     .current_scope()
                     .fold_resident_object(|brand| lit.to_kobject(*brand));
+                *lifted = Some(view.current_scope().deliver_resident_object(object));
                 args.push(Carried::Object(object));
             }
             // A `#(...)` quote's `KObject::KExpression` body is data, but the value it rides in is
             // invariant in its region lifetime with no `'static` rebuild and no fold-brand
-            // construction, so it keeps the checked door.
-            (WorkingPart::Ast(quote @ ExpressionPart::QuotedExpression(_)), _) => {
-                let scope = view.current_scope();
-                let (object, _reach) = scope
-                    .alloc_object_checked_stored(quote.resolve(scope.brand()), view.types())
-                    .expect("a quote body is parsed AST, resident in the storage that parsed it");
+            // construction, so it takes the expression door — whose signature is what proves the
+            // cell reaches nothing outside the region it is bumped into.
+            (WorkingPart::Ast(ExpressionPart::QuotedExpression(body)), _) => {
+                let object = view.current_scope().brand().alloc_expression(**body);
+                *lifted = Some(view.current_scope().deliver_resident_object(object));
                 args.push(Carried::Object(object));
             }
             _ => return None,

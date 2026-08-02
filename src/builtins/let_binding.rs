@@ -148,8 +148,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // Fused mint + copy + seal. A delivered RHS carrier derives the copy's stored reach in copied
         // mode — the deep-clone lands in this scope's own region, so a residence-only host is dropped
         // (`adopted_reach_of`, the same split the parameter and MATCH `it` binds apply) — and copies
-        // the value in under it. A carrier-less region-pure RHS takes the checked tier, its
-        // `(None, bit)` reach derived from the checked audit's own saw-a-region-pointer walk. Either
+        // the value in under it. A carrier-less region-pure RHS is placed through the shape-split
+        // pure door, which seals it resident: the value borrows only this region, so its
+        // description names no member. Either
         // returns the sealed value, from which the
         // terminal witnesses the bound value in place — the same reach-aware wrapper a later read
         // uses — while the table write rides the outcome.
@@ -157,7 +158,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             Some(carrier) => ctx
                 .scope
                 .adopt_for_binding(carrier, |carried| Ok(carried.object())),
-            None => ctx.scope.seal_checked(value.deep_clone(), ctx.types),
+            None => ctx.scope.seal_pure_value(value),
         };
         let sealed = match sealed {
             Ok(sealed) => sealed,

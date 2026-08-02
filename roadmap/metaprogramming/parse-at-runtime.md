@@ -18,9 +18,9 @@ parse.
 The brand is the right gate rather than an obstacle to route around. An
 expression's parts must live somewhere that outlives every holder and joins no
 pin bundle — that is what lets
-[`KObject`](../../src/machine/model/values/kobject.rs) answer
-`resident_in_visiting` unconditionally, call an expression cell's reach `Owned`,
-and answer `retains_home` false, with koan composing no reach description for an
+[`KObject`](../../src/machine/model/values/kobject.rs) call an expression cell's
+reach `Owned` and answer `retains_home` false, and what lets the expression door
+seal its cell with no member, with koan composing no reach description for an
 expression at all. A builtin that reached for its step's own brand instead would
 produce a node borrowing a region its holder outlives; `KExpression` is
 covariant, so nothing in the type system would object. Threading the storage is

@@ -5,6 +5,7 @@
 use super::*;
 use crate::builtins::test_support::{per_call_storage, run_root_bare, TestRun};
 use crate::machine::core::Bindings;
+use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::model::TypeRegistry;
@@ -88,7 +89,7 @@ fn with_scope_opens_child_scope_at_brand() {
     assert_eq!(id, frame.scope_id());
     // In-place bind + lookup, all at the brand `'b` (value allocated via the opened scope's region).
     frame.with_scope(|s| {
-        let v = s.brand().alloc_object(KObject::Number(7.0));
+        let v = s.brand().alloc_scalar(Scalar::Number(7.0));
         s.bind_resident_for_test(
             "k".to_string(),
             v,
@@ -100,36 +101,32 @@ fn with_scope_opens_child_scope_at_brand() {
     });
 }
 
-/// The seed-side re-anchor: a caller-lifetime value relocated into the frame brand region through the
-/// substrate (the erasing `alloc_object`, which forgets the caller lifetime and re-homes the value at
-/// the opened scope's own region), then bound. The MATCH / TRY `it`-bind and the user-fn param-bind
-/// take this shape; pins the relocate-into-the-brand-and-bind aliasing under tree borrows.
+/// The seed-side re-anchor: a caller-lifetime value crossing into the frame brand region as a
+/// delivery envelope, whose bind relocates it there. The MATCH / TRY `it`-bind and the user-fn
+/// param-bind take this shape — a bare caller-`'a` reference cannot cross `with_scope`'s `for<'b>`
+/// signature at all, so the envelope is the whole route. Pins the relocate-into-the-brand-and-bind
+/// aliasing under tree borrows.
 #[test]
 fn with_scope_relocates_seed_value_into_brand() {
-    // The caller value is a deep clone of a value resident in its own, longer-lived region —
-    // mirroring the matched `it` / a bound arg.
+    // The caller value is placed in its own, longer-lived region and enveloped there — mirroring the
+    // matched `it` / a bound arg.
     let caller_storage = run_root_storage();
-    let caller_region = caller_storage.brand();
-    let it_value: KObject<'_> = caller_region
-        .alloc_object(KObject::Number(99.0))
-        .deep_clone();
+    let caller_scope = run_root_bare(&caller_storage);
+    let it_carrier = caller_scope
+        .deliver_pure_value(&KObject::Number(99.0))
+        .expect("a Number is region-pure");
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = test_run.types.clone();
     frame.with_scope(|child| {
-        // `alloc_object_checked_stored` erases the caller-`'a` input and re-homes it at the frame
-        // region, so no pre-shortening is needed; a deep-cloned `Number` is always resident-in-self.
-        let (it_obj, _reach) = child
-            .alloc_object_checked_stored(it_value, &types)
-            .expect("a deep-cloned Number is always resident-in-self");
         child
-            .bind_resident_for_test(
+            .bind_delivered_direct(
                 "it".to_string(),
-                it_obj,
+                &it_carrier,
                 BindingIndex::BUILTIN,
+                |carried| Ok(carried.object()),
                 &mut crate::machine::WriteGate::for_test(),
             )
             .unwrap();
@@ -148,7 +145,7 @@ fn call_frame_scope_survives_subsequent_alloc() {
     let scope = test_run.scope;
     let frame = CallFrame::new(scope);
     frame.with_scope(|s| {
-        let _new = s.brand().alloc_object(KObject::Number(1.0));
+        let _new = s.brand().alloc_scalar(Scalar::Number(1.0));
         assert!(std::ptr::eq(s.region(), frame.region()));
     });
 }
@@ -170,7 +167,7 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
         let child_ref: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
         // Alloc through the reconstructed scope's brand while `inner_region` (the raw-region roundtrip)
         // stays live — the same region under two reconstructed references.
-        let it_obj: &KObject<'_> = child_ref.brand().alloc_object(KObject::Number(42.0));
+        let it_obj: &KObject<'_> = child_ref.brand().alloc_scalar(Scalar::Number(42.0));
         assert!(std::ptr::eq(inner_region, child_ref.region()));
         child_ref
             .bind_resident_for_test(
@@ -274,17 +271,20 @@ fn fresh_tail_hop_over_per_call_captured_scope_pins_it() {
     ));
 }
 
-/// Allocating records the stored address into the `membership` side-table via
-/// `RefCell::borrow_mut` while a prior `&KObject` from the same region is shared-borrowed.
-/// Pins that tree-borrows shape.
+/// A second sub-arena store while a prior `&KFunction` re-anchored off the same region is
+/// shared-borrowed — the arena `store` writes through a `RefCell::borrow_mut` on the family cell
+/// under a live shared borrow of an earlier value. Pins that tree-borrows shape over a *typed*
+/// family: the `Drop`-free families are bump-hosted and never reach this engine.
 #[test]
 fn region_alloc_while_prior_ref_live() {
     let storage = run_root_storage();
+    let scope = run_root_bare(&storage);
     let a = storage.brand();
-    let r1 = a.alloc_object(KObject::Number(1.0));
-    let r2 = a.alloc_object(KObject::Number(2.0));
-    assert!(matches!(r1, KObject::Number(n) if *n == 1.0));
-    assert!(matches!(r2, KObject::Number(n) if *n == 2.0));
+    let f1 = a.alloc_function(no_op_closure(scope));
+    let f2 = a.alloc_function(no_op_closure(scope));
+    assert!(!std::ptr::eq(f1, f2), "two distinct sub-arena residents");
+    assert_eq!(f1.signature.elements.len(), 1);
+    assert_eq!(f2.signature.elements.len(), 1);
 }
 
 /// `KType` is a `Copy` content-digest handle — constructing one is not a region allocation.
@@ -292,10 +292,14 @@ fn region_alloc_while_prior_ref_live() {
 fn ktype_construction_is_not_a_region_allocation() {
     let storage = run_root_storage();
     let a = storage.brand();
-    let baseline = a.region().alloc_count();
+    let baseline = a.region().allocated_total();
     let t: KType = KType::NUMBER;
     assert!(t == KType::NUMBER);
-    assert_eq!(a.region().alloc_count(), baseline);
+    assert_eq!(
+        a.region().allocated_total(),
+        baseline,
+        "a handle names registry-owned content: neither a sub-arena nor the bump grows"
+    );
 }
 
 /// A per-call frame whose parent is the run root holds **no** strong ref back to the run-root
@@ -593,7 +597,7 @@ fn region_union_foreign_pins_release_at_region_death() {
     let dest = run_root_storage();
     {
         let scope = run_root_bare(&dest);
-        let obj = scope.brand().alloc_object(KObject::Number(1.0));
+        let obj = scope.brand().alloc_scalar(Scalar::Number(1.0));
         // The bind-door mint: derive the exact reach into `dest`'s arena and fold the owning bundle
         // into `dest`'s region union. `foreign` is not the dest, so the self rule keeps it.
         let reach = scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
@@ -628,30 +632,6 @@ fn region_union_foreign_pins_release_at_region_death() {
     );
 }
 
-/// The brand-confined [`Region::alloc`] engine hands the freshly-stored value to its closure at a
-/// `for<'b>` brand and lets only the erased carrier escape (an empty-witnessed [`Witnessed`], no
-/// `'b`); a sibling alloc into the same region after the store coexists under tree borrows — the
-/// closure-surface twin of [`region_alloc_while_prior_ref_live`]. The escaped carrier reads back while
-/// its region backing is live.
-#[test]
-fn alloc_engine_brand_coexists_with_sibling_alloc() {
-    let storage = run_root_storage();
-    // `alloc_object_witnessed` routes the engine's brand-confined `alloc`, storing `value` and
-    // letting only the erased carrier escape — `Witnessed::resident` (the empty-witness constructor)
-    // names no `'b`.
-    let carrier: StepCarried = storage.brand().alloc_object_witnessed(KObject::Number(1.0));
-    // A sibling alloc into the same region coexists — the membership-table write and the prior store
-    // do not alias under tree borrows.
-    let sibling = storage.brand().alloc_object(KObject::Number(2.0));
-    // Read the escaped carrier back while `storage` (its backing) is live — the pin the read names.
-    let got = carrier.inspect_pinned(&storage, |c| match *c {
-        Carried::Object(KObject::Number(n)) => *n,
-        _ => panic!("expected a Number object"),
-    });
-    assert_eq!(got, 1.0);
-    assert!(matches!(sibling, KObject::Number(n) if *n == 2.0));
-}
-
 /// The reference-only carrier at the Done boundary: a region-pure carrier pins **nothing**, sound
 /// because the scheduler seeds a retention hold on the producer's *storage* at finalize and every
 /// read opens under it. This pins that shape across the producer shell's drop: seal the carrier
@@ -670,7 +650,7 @@ fn reference_only_carrier_survives_producer_shell_drop_under_retention_hold() {
     let frame: Rc<CallFrame> = CallFrame::new(outer_scope);
 
     // Born reference-only: the active frame is excluded at the alloc site.
-    let carrier: StepCarried = frame.brand().alloc_object_witnessed(KObject::Number(7.0));
+    let carrier: StepCarried = frame.brand().alloc_scalar_witnessed(Scalar::Number(7.0));
 
     // The finalize shape: seal as-is; the retention hold (the producer's storage Rc) rides the
     // delivery envelope, never the carrier.
@@ -701,16 +681,11 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
     // Capture `home`'s child scope (read at the brand), alloc the closure into `home`'s own region —
     // where that scope lives — and wrap it as a `KObject::KFunction` in the same region, so the escaping
     // `&KObject` reaches exactly that region.
-    let types = TypeRegistry::new();
     let kf_ref = home.with_scope(|child| home.brand().alloc_function(no_op_closure(child)));
-    // A bare scope rooted in `home`'s own region, so the checked store lands the wrapper there and
-    // the resulting borrow escapes at `'run` — `CallFrame::with_scope`'s own scope is rank-2 and
-    // cannot.
+    // A bare scope rooted in `home`'s own region, so the wrapper cell lands there and the resulting
+    // borrow escapes at `'run` — `CallFrame::with_scope`'s own scope is rank-2 and cannot.
     let home_scope = run_root_bare(home.storage());
-    home_scope
-        .alloc_object_checked_stored(KObject::KFunction(kf_ref), &types)
-        .expect("f was just allocated into region\'s own region")
-        .0
+    home_scope.brand().alloc_value(KObject::KFunction(kf_ref))
 }
 
 /// A no-op `KFunction` capturing `scope` — the closure value the multi-region shapes fold; the body
@@ -728,7 +703,7 @@ fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
         Body::Builtin(|ctx| {
             Action::done_resident(
                 ctx.scope,
-                Carried::Object(ctx.scope.brand().alloc_object(KObject::Null)),
+                Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
             )
         }),
         captured,
@@ -762,12 +737,9 @@ fn delivered_reread_closure<'run>(
     home: &'run Rc<FrameStorage>,
     reader_scope: &'run Scope<'run>,
 ) -> DeliveredCarried {
-    let types = TypeRegistry::new();
     let home_scope = run_root_bare(home);
     let kf_ref = home.brand().alloc_function(no_op_closure(home_scope));
-    let (obj, _reach) = home_scope
-        .alloc_object_checked_stored(KObject::KFunction(kf_ref), &types)
-        .expect("closure co-located with its captured scope");
+    let obj = home_scope.brand().alloc_value(KObject::KFunction(kf_ref));
     // The bind-time mint: `home` materializes into the reader's arena as the entry's reach, with
     // the owning bundle folded into the reader region's union. The read then lifts that entry —
     // upgrading the description's members `Weak → Rc` — into an envelope hosted by the reader.
@@ -1180,9 +1152,8 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
         ("y".to_string(), Held::Object(KObject::Number(2.0))),
     ]);
     let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
-    // `RecordSubstrate` is invariant in its lifetime, so the comparison casts through `usize` (see
-    // `Residence::owns_substrate`'s identical cast) rather than keeping a lifetime-parameterized raw
-    // pointer type alive across the fold below.
+    // `RecordSubstrate` is invariant in its lifetime, so the comparison casts through `usize`
+    // rather than keeping a lifetime-parameterized raw pointer type alive across the fold below.
     let expected_addr = match obj {
         KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
@@ -1512,12 +1483,12 @@ fn mint_teardown_releases_members() {
     assert_eq!(Rc::strong_count(&b), count_before_b, "C's death releases B");
 }
 
-/// The checked seal's family audit admits a `KObject::KExpression`: an AST node names no producer
-/// region, so a cell pointing at program text pins nothing the empty (own-region-only) witness this
-/// door seals under would have to name. The quote-capture lane
-/// (`dispatch::single_poll::literal_pass_through`) stores every quoted body through this door.
+/// The expression door bumps a `KObject::KExpression` into the brand's own region and seals it
+/// resident: an AST node names no producer region, so a cell pointing at program text pins nothing
+/// the empty (own-region-only) witness this door seals under would have to name. The quote-capture
+/// lane (`dispatch::single_poll::literal_pass_through`) stores every quoted body through this door.
 #[test]
-fn raw_expression_passes_the_checked_object_seal() {
+fn raw_expression_seals_through_the_expression_door() {
     use crate::machine::model::{ExpressionPart, KExpression};
     use crate::source::Spanned;
 
@@ -1525,7 +1496,6 @@ fn raw_expression_passes_the_checked_object_seal() {
     let brand = program.brand().region();
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
-    let types = TypeRegistry::new();
 
     let expression = KExpression::new(
         brand,
@@ -1533,21 +1503,20 @@ fn raw_expression_passes_the_checked_object_seal() {
             brand.alloc_text("x"),
         ))],
     );
-    let result = scope
-        .brand()
-        .alloc_object_witnessed_checked(KObject::KExpression(expression), &types);
-    assert!(
-        result.is_ok(),
-        "raw AST reaches no producer region, so the checked seal admits it"
-    );
+    let carried = scope.brand().alloc_expression_witnessed(expression);
+    let parts = carried.inspect_pinned(&storage, |c| match c.object() {
+        KObject::KExpression(e) => e.parts.len(),
+        _ => panic!("the expression door stores an expression cell"),
+    });
+    assert_eq!(parts, 1, "the stored cell reads back as the quoted body");
 }
 
 /// `KObject::record_of_held` — the record door's read half — stores a fresh `RecordSubstrate`
-/// through `FoldingBrand::alloc_substrate_folded` into its own brand's region. The stored address is
-/// a hit for both the bare `KoanRegionExt::owns_substrate` query and `Residence::owns_substrate`'s
-/// dest-only case, the read halves the door's store makes true.
+/// through `FoldingBrand::alloc_substrate_folded` into its own brand's region. The stored
+/// description names that region as the substrate's home, which is the residence claim the door's
+/// brand makes and every later home-crossing read answers from.
 #[test]
-fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
+fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
     let frame = run_root_storage();
     let types = TypeRegistry::new();
     let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
@@ -1563,83 +1532,13 @@ fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
                 Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
             Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, &types)))
         });
-    let (owns_bare, owns_via_residence) = stored.with_pinned(&frame, |c| match c.object() {
-        KObject::Record(substrate, _) => {
-            let region = frame.region();
-            let ptr = *substrate as *const RecordSubstrate<'_>;
-            (
-                region.owns_substrate(ptr),
-                super::Residence::dest_only(region).owns_substrate(substrate),
-            )
-        }
+    let homed = stored.with_pinned(&frame, |c| match c.object() {
+        KObject::Record(substrate, _) => substrate.homed_in(frame.region()),
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
     });
     assert!(
-        owns_bare,
+        homed,
         "alloc_substrate_folded stores into its own brand's region"
-    );
-    assert!(
-        owns_via_residence,
-        "Residence::owns_substrate's dest-only case hits the same store"
-    );
-}
-
-/// `resident_in_visiting`'s `Record` arm — `residence.owns_substrate(substrate)` — is reached only
-/// when a record rides inside another substrate carrier (`List`/`Dict`/`Tagged`/`Wrapped`) crossing
-/// the checked tier: a bare top-level record never routes this walk (born resident by
-/// construction through the fold door). This drives a `List` embedding a `Record` through
-/// `Scope::alloc_object_checked_stored` twice — once into the region the record lives in (must
-/// pass, reading the address table, never the record's fields) and once into a foreign region (must
-/// reject) — proving the arm is a genuine O(1) membership check, not an always-true stand-in.
-#[test]
-fn record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership() {
-    let producer = run_root_storage();
-    let types = TypeRegistry::new();
-
-    let list_obj: KObject = {
-        let owned_cells = crate::machine::core::FrameCoverage::empty();
-        let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
-            producer.brand().handle(),
-        ))
-        .with_holder(&owned_cells);
-        let fields =
-            Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
-        let record = KObject::record_of_held(door, fields, &types);
-        KObject::list_of_held(door, vec![Held::Object(record)], &types)
-    };
-
-    let producer_scope = run_root_bare(&producer);
-    let consumer_storage = run_root_storage();
-    let consumer_scope = run_root_bare(&consumer_storage);
-
-    // Covered: the destination *is* the region both substrates live in, so the walk's address-table
-    // check answers true for the nested record without ever reading its fields.
-    let (moved, _reach) = producer_scope
-        .alloc_object_checked_stored(list_obj.deep_clone(), &types)
-        .expect("the destination is the region the nested record's substrate lives in");
-    match moved {
-        KObject::List(items, _) => match items.elements()[0].object() {
-            KObject::Record(substrate, _) => match substrate.field("x").map(|h| h.object()) {
-                Some(KObject::Number(n)) => {
-                    assert_eq!(*n, 1.0, "the nested record reads back unchanged")
-                }
-                _ => panic!("expected field x: Number"),
-            },
-            other => panic!(
-                "expected a Record element, got {}",
-                other.ktype().name(&types)
-            ),
-        },
-        other => panic!("expected a List, got {}", other.ktype().name(&types)),
-    }
-
-    // Uncovered: the consumer's region owns neither substrate, so the walk must reject rather than
-    // silently accept. A value that genuinely needs to cross into a foreign region takes a fold
-    // door instead, where the brand proves what this walk can only check.
-    let rejected = consumer_scope.alloc_object_checked_stored(list_obj.deep_clone(), &types);
-    assert!(
-        rejected.is_err(),
-        "a nested record foreign to dest must be rejected, not silently accepted"
     );
 }
 
@@ -1651,7 +1550,7 @@ fn allocated_total_weights_families_by_size() {
     let before = storage.region().allocated_total();
 
     for n in 0..3 {
-        storage.brand().alloc_object(KObject::Number(n as f64));
+        storage.brand().alloc_scalar(Scalar::Number(n as f64));
     }
 
     let after = storage.region().allocated_total();
@@ -1664,8 +1563,8 @@ fn allocated_total_weights_families_by_size() {
 
 /// A bound **bare string** must not keep borrowing the producer region's bump bytes. A copying
 /// adoption claims that region's release — `retains_home` answers `false` for a `KString`, so the
-/// composition drops the producer from what it retains — and the bump keeps no address table, so no
-/// residence walk could catch a pointer copy that kept pointing there. The copy therefore has to
+/// composition drops the producer from what it retains — and the bump keeps no address table, so
+/// nothing downstream could catch a pointer copy that kept pointing there. The copy therefore has to
 /// re-bump at the destination ([`KObject::needs_destination_door`] is the gate
 /// [`relocate_object_into`](crate::machine::model::relocate_object_into) reads).
 ///
@@ -1706,4 +1605,80 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
         ),
         other => panic!("expected a KString, got {:?}", other.ktype()),
     }
+}
+
+/// Region death for the `Drop`-free families is deallocation only. A frame region is filled with
+/// every substrate shape — list, dict, record, and both payload carriers (`Tagged` and `Wrapped`) —
+/// each carrying a string leaf so the bump holds re-homed bytes as well as cells and index metadata,
+/// and then dropped while nothing outside it holds a borrow. No slot in any of those shapes has a
+/// destructor to run, so the whole teardown is the bump's chunk free; Miri's process-exit leak check
+/// is the assertion. A family that quietly reintroduced an owning slot — a `Vec` spine, a `String`
+/// name, an `Rc` — leaks its buffer here, because a bump frees its chunks without visiting them.
+#[test]
+fn region_death_frees_every_drop_free_substrate_shape() {
+    use crate::machine::model::KKey;
+    use std::collections::HashMap;
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let types = test_run.types.clone();
+
+    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let scope = run_root_bare(frame.storage());
+    let owned_cells = FrameCoverage::empty();
+
+    let shapes: Vec<&KObject<'_>> = vec![
+        scope.fold_resident_object(|brand| {
+            let door = brand.with_holder(&owned_cells);
+            KObject::list_of_held(
+                door,
+                vec![
+                    Held::Object(KObject::KString(door.alloc_text("first"))),
+                    Held::Object(KObject::Number(2.0)),
+                ],
+                &types,
+            )
+        }),
+        scope.fold_resident_object(|brand| {
+            let door = brand.with_holder(&owned_cells);
+            let mut map: HashMap<KKey, Held> = HashMap::new();
+            map.insert(
+                KKey::String("key"),
+                Held::Object(KObject::KString(door.alloc_text("value"))),
+            );
+            KObject::dict_of_held(door, map, &types)
+        }),
+        scope.fold_resident_object(|brand| {
+            let door = brand.with_holder(&owned_cells);
+            let fields = Record::from_pairs(vec![(
+                "field".to_string(),
+                Held::Object(KObject::KString(door.alloc_text("payload"))),
+            )]);
+            KObject::record_of_held(door, fields, &types)
+        }),
+        scope.fold_resident_object(|brand| {
+            let door = brand.with_holder(&owned_cells);
+            let inner = KObject::KString(door.alloc_text("tagged"));
+            KObject::tagged(door, "Tag", &inner, KType::NULL)
+        }),
+        scope.fold_resident_object(|brand| {
+            let door = brand.with_holder(&owned_cells);
+            let inner = KObject::KString(door.alloc_text("wrapped"));
+            KObject::wrapped_hold(door, &inner, KType::NULL)
+        }),
+    ];
+    assert_eq!(
+        shapes.len(),
+        5,
+        "every drop-free shape is live in the region"
+    );
+    assert!(
+        frame.region().allocated_total() > 0,
+        "the shapes genuinely occupy the region under test"
+    );
+
+    // Nothing outside the region borrows into it, so this is the whole of region death: the typed
+    // arenas hold none of these families, and the bump frees its chunks without a destructor pass.
+    drop(shapes);
+    drop(frame);
 }

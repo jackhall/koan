@@ -14,7 +14,7 @@ use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::KExpression;
 use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
-use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
+use crate::machine::model::{ExpressionSignature, SignatureElement};
 use crate::machine::Action;
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
@@ -251,10 +251,9 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         types,
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
-    // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just
-    // allocated into `scope`'s own region above, so the checked audit always passes; the paired
-    // description names that region as a member, the audit walk having seen the callable's captured
-    // `&Scope` borrow into it.
+    // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just allocated
+    // into `scope`'s own region above, which is what `store_function_object`'s merge names as the
+    // wrapper's reach — the callable's captured `&Scope` borrows into exactly that region.
     // A keyworded FN's overload registration rides the step outcome: the seal is built here, where
     // the callable is open under its home pin, and the bucket write lands at the run loop's apply.
     let mut writes: Vec<WriteOp> = Vec::new();
@@ -281,10 +280,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // reaches nothing foreign (its captured scope is home or a home-pinned ancestor): its terminal
     // carrier is built with the empty foreign reach `stored` derived, witnessed by that scope's home
     // frame alone. `LET f = (FN ...)` still captures the callable via this carrier.
-    Ok((
-        scope.seal_fresh_object(KObject::KFunction(f), types)?,
-        writes,
-    ))
+    Ok((scope.store_function_object(f), writes))
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed

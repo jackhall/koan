@@ -16,14 +16,12 @@ mod scope_id;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub(crate) use arena::KoanRegionTestExt;
 pub use arena::{
     program_storage, run_root_storage, CallFrame, FoldingBrand, FrameCoverage, FrameReach,
     FrameStorage, KoanRegion, ProgramBrand, ProgramStorage, RegionBrand, RegionTypeFamily,
     StepAllocator, SubstrateDoor,
 };
-pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
+pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile};
 pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
     NodeHandle, WriteGate,

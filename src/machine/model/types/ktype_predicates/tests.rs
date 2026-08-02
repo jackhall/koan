@@ -5,6 +5,7 @@ use crate::machine::model::ast::{ExpressionPart, WorkingPart};
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::Carried;
 use crate::machine::model::Record;
+use crate::machine::model::Scalar;
 
 /// Mint the zero-dep fold door a `Tagged`/`Wrapped` test value needs, over a fresh root region, as
 /// two `let` bindings in the caller's own scope (mirrors the `kobject` test macro). `forge_for_test`
@@ -189,8 +190,8 @@ fn accepts_carried_matches_spliced_delegation() {
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
-    let n: &KObject<'_> = region.alloc_object(KObject::Number(7.0));
-    let s: &KObject<'_> = region.alloc_object(KObject::KString("hi"));
+    let n: &KObject<'_> = region.alloc_scalar(Scalar::Number(7.0));
+    let s: &KObject<'_> = region.alloc_string("hi");
 
     for (ty, carried) in [
         (KType::NUMBER, Carried::Object(n)),
@@ -229,7 +230,7 @@ fn spliced_cell_classifies_by_opening() {
 
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
-    let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
+    let obj: &KObject = scope.brand().alloc_scalar(Scalar::Number(7.0));
     let cell_part = WorkingPart::Spliced {
         cell: scope.seal_resident(Carried::Object(obj)),
     };
@@ -331,12 +332,10 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         .brand()
         .alloc_module(Module::new("IntMod".into(), child));
     // A module value surfaces its principal signature, sealed once at construction — do the same
-    // here so `ktype()` (reached by `alloc_object_checked_stored`) has a filled cell.
+    // here so `ktype()` has a filled cell.
     module.seal_self_sig(SigSchema::raw_self_sig(module), &types);
     // A module is a value: it reaches a slot on the Object channel, and a `:Type` slot refuses it.
-    let (module_value, _reach) = scope
-        .alloc_object_checked_stored(KObject::Module(module), &types)
-        .expect("module was just allocated into region's own region");
+    let module_value = scope.brand().alloc_value(KObject::Module(module));
     assert!(!t.accepts_working_part(
         &spliced_part(&region, Carried::Object(module_value)),
         &types
@@ -352,8 +351,8 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(kt_sig)), &types));
     assert!(!KType::of_kind(KKind::ProperType)
         .accepts_working_part(&spliced_part(&region, Carried::Type(kt_sig)), &types));
-    let n: &KObject<'_> = region.brand().alloc_object(KObject::Number(7.0));
-    let s: &KObject<'_> = region.brand().alloc_object(KObject::KString("hi"));
+    let n: &KObject<'_> = region.brand().alloc_scalar(Scalar::Number(7.0));
+    let s: &KObject<'_> = region.brand().alloc_string("hi");
     assert!(!t.accepts_working_part(&spliced_part(&region, Carried::Object(n)), &types));
     assert!(!t.accepts_working_part(&spliced_part(&region, Carried::Object(s)), &types));
 }
@@ -761,7 +760,7 @@ fn union_admits_member_typed_value() {
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
-    let n: &KObject<'_> = region.alloc_object(KObject::Number(7.0));
+    let n: &KObject<'_> = region.alloc_scalar(Scalar::Number(7.0));
 
     let number_or_str = types.union_of(vec![KType::NUMBER, KType::STR]);
     let str_or_bool = types.union_of(vec![KType::STR, KType::BOOL]);

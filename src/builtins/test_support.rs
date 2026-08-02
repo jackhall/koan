@@ -453,7 +453,7 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
 /// whose bodies return distinct markers so the test can assert which overload won.
 #[cfg(test)]
 pub(crate) fn marker<'a>(scope: &Scope<'a>, label: &'static str) -> &'a KObject<'a> {
-    scope.brand().alloc_object(KObject::KString(label))
+    scope.brand().alloc_string(label)
 }
 
 /// The region-pure carrier a synthetic terminal needs: a description hosted in `scope`'s own region

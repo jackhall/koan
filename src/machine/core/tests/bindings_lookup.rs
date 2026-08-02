@@ -11,12 +11,13 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 
 use super::{body_no_op, unit_signature};
+use crate::machine::model::Scalar;
 
 #[test]
 fn lookup_value_chain_cutoff_none_admits_every_index() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let value = region.brand().alloc_object(KObject::Number(7.0));
+    let value = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
             "late".to_string(),
@@ -35,7 +36,7 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
 fn lookup_value_strict_less_than_hides_later_sibling() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let value = region.brand().alloc_object(KObject::Number(7.0));
+    let value = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
             "later".to_string(),
@@ -51,7 +52,7 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
 fn lookup_value_strict_less_than_admits_earlier_sibling() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let value = region.brand().alloc_object(KObject::Number(7.0));
+    let value = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
             "earlier".to_string(),
