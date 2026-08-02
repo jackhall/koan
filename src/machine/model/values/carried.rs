@@ -95,6 +95,11 @@ impl<'a> Carried<'a> {
 /// Owned by-value cell — the owned dual of the borrowed [`Carried`], holding each arm inline (no `Rc`).
 /// The cell type of a `List` / `Dict` / `Record` and the currency a builtin's bound argument record
 /// (`Record<Held>`) holds.
+///
+/// `Copy` for the same reason [`KObject`] is: every arm is a scalar handle or a region borrow, so a
+/// cell owns no allocation and runs no `Drop` at region death. The bound is what lets a `Held` cell
+/// ride the `T: Copy` bump doors.
+#[derive(Clone, Copy)]
 pub enum Held<'a> {
     Object(KObject<'a>),
     Type(KType),

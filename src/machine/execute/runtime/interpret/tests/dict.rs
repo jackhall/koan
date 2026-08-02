@@ -4,8 +4,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::*;
+use crate::machine::model::values::DictSubstrate;
 use crate::machine::model::KObject;
-use crate::machine::model::{DictSubstrate, Held, KKey};
+use crate::machine::model::{Held, KKey};
 use crate::machine::KErrorKind;
 
 use super::run;

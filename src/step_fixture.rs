@@ -15,6 +15,7 @@
 //! real surface.
 
 use crate::machine::core::FrameStorageExt;
+use crate::machine::model::Scalar;
 use crate::machine::run_root_storage;
 
 pub use crate::machine::core::StepAllocator;
@@ -33,5 +34,5 @@ pub use crate::machine::model::KObject;
 /// lifetime, and the unwrap is unreachable.
 pub fn drive_step(guard: impl for<'b> FnOnce(StepCarried<'b>)) {
     let storage = run_root_storage();
-    guard(storage.brand().alloc_object_witnessed(KObject::Number(1.0)));
+    guard(storage.brand().alloc_scalar_witnessed(Scalar::Number(1.0)));
 }

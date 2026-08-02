@@ -208,7 +208,7 @@ mod tests {
     use super::*;
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
-    use crate::machine::model::KObject;
+    use crate::machine::model::{KObject, Scalar};
     use crate::machine::BindingIndex;
 
     /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a
@@ -241,7 +241,7 @@ mod tests {
         // region through a sibling pointer while the opened scope is still live.
         carrier.open(region.region(), |reattached| {
             assert!(matches!(reattached.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
-            let _other = region.brand().alloc_object(KObject::Number(8.0));
+            let _other = region.brand().alloc_scalar(Scalar::Number(8.0));
             assert!(reattached.lookup("k").is_some());
         });
     }

@@ -13,6 +13,7 @@ use crate::machine::core::{
     program_storage, run_root_storage, CarrierWitness, FrameCoverage, FrameStorage,
 };
 use crate::machine::core::{Action, BodyCtx};
+use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::AdoptSeam;
@@ -32,7 +33,7 @@ fn resident_scalar(
     Weak<FrameStorage>,
 ) {
     let carrier = producer.with_scope(|child| {
-        let obj = child.brand().alloc_object(KObject::Number(7.0));
+        let obj = child.brand().alloc_scalar(Scalar::Number(7.0));
         child
             .seal_reaching(
                 Carried::Object(obj),
@@ -181,7 +182,7 @@ fn probe_body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     FRAME_CENSUS.with(|census| census.borrow_mut().push(ctx.scope.region_owner()));
     Action::done_resident(
         ctx.scope,
-        Carried::Object(ctx.scope.brand().alloc_object(KObject::Number(1.0))),
+        Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Number(1.0))),
     )
 }
 
@@ -398,7 +399,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let producer = CallFrame::new(scope);
 
     let (carrier, birth_addr) = producer.with_scope(|child| {
-        let obj = child.brand().alloc_object(KObject::Number(7.0));
+        let obj = child.brand().alloc_scalar(Scalar::Number(7.0));
         let addr = obj as *const KObject as usize;
         (child.seal_resident(Carried::Object(obj)).unseal(), addr)
     });

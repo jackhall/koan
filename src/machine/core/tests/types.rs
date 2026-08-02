@@ -8,6 +8,7 @@ use crate::builtins::test_support::{mock_declaration_site, per_call_storage, run
 use crate::machine::core::{run_root_storage, FrameCoverage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
+use crate::machine::model::Scalar;
 use crate::machine::AdoptSeam;
 use crate::machine::{BindingIndex, DeclarationSite};
 
@@ -81,7 +82,7 @@ fn retaining_adopt_reanchors_the_same_value_copy_free() {
     let producer = run_root_bare(&storage);
     // A value resident in the producer scope's region, sealed as its own delivery envelope pinned
     // by the frame that owns that region.
-    let obj: &KObject = producer.brand().alloc_object(KObject::Number(42.0));
+    let obj: &KObject = producer.brand().alloc_scalar(Scalar::Number(42.0));
     let cell = Delivered::hosted(
         producer.seal_resident(Carried::Object(obj)),
         std::rc::Rc::clone(&storage),
@@ -161,7 +162,7 @@ fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
     // Bind a member into `source_scope` whose reach names `inner_storage` — mirrors a nested module
     // member reaching into another module's own region. The mint folds the owning bundle into
     // `source_scope`'s region union, so nothing but that region keeps `inner_storage` alive.
-    let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
+    let obj: &KObject = source_scope.brand().alloc_scalar(Scalar::Number(1.0));
     let reach = source_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&inner_storage))]);
     let sealed = source_scope.seal_reaching(Carried::Object(obj), reach);
     source_scope

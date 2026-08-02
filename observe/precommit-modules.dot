@@ -309,6 +309,7 @@ digraph {
     "koan::builtins::fn_def" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::fn_def" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::fn_def" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::fn_def" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::fn_def" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::fn_def" -> "koan::parse" [label="uses", style="dashed"];
     "koan::builtins::fn_def::finalize" -> "koan" [label="uses", style="dashed"];
@@ -469,6 +470,7 @@ digraph {
     "koan::machine::core::arena" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::arena" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan::machine" [label="uses", style="dashed"];
@@ -561,6 +563,7 @@ digraph {
     "koan::machine::core::scope::reach" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::scope::reach" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::core::scope::registry" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::scope::registry" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::scope::registry" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
@@ -783,6 +786,7 @@ digraph {
     "koan::machine::execute::runtime::interpret" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::interpret" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::interpret" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::runtime::interpret" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::interpret" -> "koan::parse" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine" [label="uses", style="dashed"];

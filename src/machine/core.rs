@@ -16,8 +16,6 @@ mod scope_id;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub(crate) use arena::KoanRegionTestExt;
 pub use arena::{
     program_storage, run_root_storage, CallFrame, FoldingBrand, FrameCoverage, FrameReach,
     FrameStorage, KoanRegion, ProgramBrand, ProgramStorage, RegionBrand, RegionTypeFamily,

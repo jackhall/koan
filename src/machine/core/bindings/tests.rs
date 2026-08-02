@@ -8,6 +8,7 @@ use crate::machine::core::{FrameCoverage, FrameReach, FrameStorage};
 use crate::machine::model::values::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
+use crate::machine::model::Scalar;
 use workgraph::scheduler::Sealed;
 
 /// Seal `obj` as resident in `region` under a description naming `foreign` — the shape a bind
@@ -47,7 +48,7 @@ fn data_binding_round_trips_sealed_reach() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings = Bindings::new();
-    let obj: &KObject = region.alloc_object(KObject::Number(1.0));
+    let obj: &KObject = region.alloc_scalar(Scalar::Number(1.0));
     // A synthetic foreign frame the value "reaches" — carried on the seal as its reach.
     let foreign = run_root_storage();
     let (sealed, _) = sealed_reaching(region, obj, &foreign);
@@ -76,7 +77,7 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings = Bindings::new();
-    let obj: &KObject = region.alloc_object(KObject::Number(1.0));
+    let obj: &KObject = region.alloc_scalar(Scalar::Number(1.0));
     let foreign = run_root_storage();
     let (sealed, reach_set) = sealed_reaching(region, obj, &foreign);
     bindings
@@ -314,7 +315,7 @@ fn type_token_may_not_bind_value_side() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings = Bindings::new();
-    let val: &KObject = region.alloc_object(KObject::Number(7.0));
+    let val: &KObject = region.alloc_scalar(Scalar::Number(7.0));
     let error = match bindings.write_value(
         "IntOrd",
         BindingIndex::BUILTIN,

@@ -15,6 +15,7 @@ use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
 use crate::machine::model::Held;
+use crate::machine::model::Scalar;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{Carried, KObject, TypeNode, TypeRegistry};
 use crate::machine::model::{KExpression, WorkingExpression};
@@ -559,7 +560,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     // errors with `TypeMismatch` (a `Number` head isn't callable) without entering
     // `resolve_dispatch`, so the producer finalizes `Err` and the routing counter stays
     // clean. `f` is then a backward-visible placeholder pointing at it.
-    let producer_target = scope.brand().alloc_object(KObject::Number(42.0));
+    let producer_target = scope.brand().alloc_scalar(Scalar::Number(42.0));
     scope
         .bind_resident_for_test(
             "producer_target".to_string(),

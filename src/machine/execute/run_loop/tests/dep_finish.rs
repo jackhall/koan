@@ -8,6 +8,7 @@ use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, KObject};
 
 use super::{let_expr, working_one};
+use crate::machine::model::Scalar;
 
 #[test]
 fn dep_finish_waits_on_deps_then_runs_finish() {
@@ -85,7 +86,7 @@ fn dep_finish_short_circuits_on_dep_error() {
     store.clear_node(dep_err);
     let _ = store.pop_next();
     let _ = store.pop_next();
-    let value = region.brand().alloc_object(KObject::Number(99.0));
+    let value = region.brand().alloc_scalar(Scalar::Number(99.0));
     store.set_result(dep_ok, Ok(Carried::Object(value)), resident_carrier(scope));
     // A synthetic terminal carries no finalize-seeded retention hold; the dep pull requires one.
     // This slot reaches nothing foreign, so its hold's owned bundle is empty.
@@ -160,7 +161,7 @@ fn retention_hold_foreign_bundle_releases_at_pull_zero() {
     let store = runtime.scheduler_mut();
     store.clear_node(dep_ok);
     let _ = store.pop_next();
-    let value = region.brand().alloc_object(KObject::Number(42.0));
+    let value = region.brand().alloc_scalar(Scalar::Number(42.0));
     store.set_result(dep_ok, Ok(Carried::Object(value)), resident_carrier(scope));
     // Seed the hold with a foreign bundle pinning `foreign`, and one outstanding pull.
     store.seed_retention(
@@ -215,10 +216,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
 
     fn body<'run>(_ctx: &BodyCtx<'run, '_>) -> Action<'run> {
         let finish: AwaitContinue<'run> = Box::new(|fctx, _results| {
-            let v = fctx
-                .scope
-                .brand()
-                .alloc_object(KObject::KString("from-combine"));
+            let v = fctx.scope.brand().alloc_string("from-combine");
             Action::done_resident(fctx.scope, Carried::Object(v))
         });
         Action::await_deps(crate::scheduler::Deps::new(), finish)

@@ -394,3 +394,30 @@ fn a_bumped_map_keys_on_its_own_regions_bytes_and_dies_with_it() {
     }
     drop(dest);
 }
+
+/// [`FoldedPlacement::bump`] — the `Copy`-family peer of `alloc_resident_folded` — writes to the
+/// same destination the typed door would, with no [`Stored`] impl and no erase/re-anchor round trip.
+/// A value written through it may hold an `&'b` back into that very region, which is the whole point
+/// of the bump: the typed cells cannot, because their slot type is `K::At<'static>`.
+#[test]
+fn placement_bump_writes_a_self_referential_value_into_its_own_destination() {
+    let dest = frame();
+    let before = dest.region().bump_bytes();
+    let placement = placement(&dest);
+
+    let text: &str = placement.bump().text("koan");
+    // The stored value borrows the bytes bumped a line above — same region, no audit, no erasure.
+    let cell: &&str = placement.bump().value(text);
+
+    assert_eq!(*cell, "koan");
+    assert_eq!(
+        dest.region().bump_bytes() - before,
+        "koan".len() + size_of::<&str>(),
+        "both the bytes and the cell pointing at them land in the destination's bump"
+    );
+    assert_eq!(
+        dest.region().retained_reach_len(),
+        0,
+        "a bare byte write composes no reach and retains nothing"
+    );
+}

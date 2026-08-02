@@ -16,6 +16,7 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::Held;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
+use crate::machine::model::Scalar;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
@@ -41,7 +42,7 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
             Body::Builtin(|ctx| {
                 crate::machine::core::Action::done_resident(
                     ctx.scope,
-                    Carried::Object(ctx.scope.brand().alloc_object(KObject::Null)),
+                    Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
                 )
             }),
             child,
@@ -63,7 +64,7 @@ fn object_top_node_relocates_into_dest() {
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
 
-    let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
+    let obj: &KObject = source.brand().alloc_scalar(Scalar::Number(2.5));
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
         Carried::Object(obj),
@@ -73,7 +74,6 @@ fn object_top_node_relocates_into_dest() {
     );
     match relocated {
         Carried::Object(r) => {
-            assert!(dest.region().owns_object(r), "relocated node lives in dest");
             assert!(
                 !std::ptr::eq(r, obj),
                 "top node is a fresh allocation, not the source"
@@ -123,16 +123,16 @@ fn list_relocation_rebuilds_substrate_into_dest() {
     match relocated {
         Carried::Object(r @ KObject::List(out, _)) => {
             assert!(
-                dest.region().owns_object(r),
-                "relocated list node lives in dest"
+                !std::ptr::eq(r, list),
+                "the top list node is a fresh allocation, not the source"
             );
             assert!(
-                dest.region().owns_substrate(*out),
+                out.homed_in(dest.region()),
                 "the rebuilt element substrate lives in dest"
             );
             assert!(
-                !source.region().owns_substrate(*out),
-                "the source no longer owns the rebuilt substrate"
+                !out.homed_in(source.region()),
+                "the source is not the rebuilt substrate's home"
             );
         }
         Carried::Object(other) => panic!("expected a List, got {:?}", other.ktype()),
@@ -174,16 +174,16 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
     match relocated {
         Carried::Object(r @ KObject::Dict(out, _)) => {
             assert!(
-                dest.region().owns_object(r),
-                "relocated dict node lives in dest"
+                !std::ptr::eq(r, dict),
+                "the top dict node is a fresh allocation, not the source"
             );
             assert!(
-                dest.region().owns_substrate(*out),
+                out.homed_in(dest.region()),
                 "the rebuilt entry substrate lives in dest"
             );
             assert!(
-                !source.region().owns_substrate(*out),
-                "the source no longer owns the rebuilt substrate"
+                !out.homed_in(source.region()),
+                "the source is not the rebuilt substrate's home"
             );
         }
         Carried::Object(other) => panic!("expected a Dict, got {:?}", other.ktype()),
@@ -244,17 +244,17 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
             },
         ) => {
             assert!(
-                dest.region().owns_object(r),
-                "relocated tagged node lives in dest"
+                !std::ptr::eq(r, tagged),
+                "the top tagged node is a fresh allocation, not the source"
             );
             assert_eq!(*tag, "Just");
             assert!(
-                dest.region().owns_substrate(*out),
+                out.homed_in(dest.region()),
                 "the rebuilt payload substrate lives in dest"
             );
             assert!(
-                !source.region().owns_substrate(*out),
-                "the source no longer owns the rebuilt substrate"
+                !out.homed_in(source.region()),
+                "the source is not the rebuilt substrate's home"
             );
             assert!(matches!(out.payload(), KObject::Number(n) if *n == 42.0));
             assert_eq!(
@@ -312,16 +312,16 @@ fn wrapped_relocation_rebuilds_payload_into_dest() {
             },
         ) => {
             assert!(
-                dest.region().owns_object(r),
-                "relocated wrapped node lives in dest"
+                !std::ptr::eq(r, wrapped),
+                "the top wrapped node is a fresh allocation, not the source"
             );
             assert!(
-                dest.region().owns_substrate(*out),
+                out.homed_in(dest.region()),
                 "the rebuilt payload substrate lives in dest"
             );
             assert!(
-                !source.region().owns_substrate(*out),
-                "the source no longer owns the rebuilt substrate"
+                !out.homed_in(source.region()),
+                "the source is not the rebuilt substrate's home"
             );
             assert!(matches!(out.payload(), KObject::Number(n) if *n == 7.0));
             assert_eq!(
@@ -360,8 +360,8 @@ fn kfunction_borrow_preserved_verbatim() {
     match relocated {
         Carried::Object(r @ KObject::KFunction(f)) => {
             assert!(
-                dest.region().owns_object(r),
-                "the KFunction node relocated into dest"
+                !std::ptr::eq(r, obj),
+                "the top node is a fresh allocation, not the source"
             );
             assert!(
                 std::ptr::eq(*f, kf_ref),
@@ -1040,8 +1040,8 @@ fn substrate_memo_list_cell_is_priceable_and_home_free() {
 mod seam_verb_table {
     use super::*;
 
-    /// Build a record homed in `home`'s region from `fields`, returning the whole `&KObject::Record` (its
-    /// substrate address lives in `home`, so `home.region().owns_substrate` reports a home crossing).
+    /// Build a record homed in `home`'s region from `fields`, returning the whole `&KObject::Record`
+    /// (its substrate's stored reach names `home`, so the chooser reads a home crossing).
     fn build_record<'run>(
         home: &'run Rc<CallFrame>,
         fields: Record<Held<'run>>,
@@ -1055,7 +1055,9 @@ mod seam_verb_table {
     }
 
     /// The chooser's substrate borrow, extracted from a `&KObject::Record`.
-    fn substrate_of<'a>(value: &KObject<'a>) -> &'a crate::machine::model::RecordSubstrate<'a> {
+    fn substrate_of<'a>(
+        value: &KObject<'a>,
+    ) -> &'a crate::machine::model::values::RecordSubstrate<'a> {
         match value {
             KObject::Record(substrate, _) => substrate,
             other => panic!("expected a Record, got {:?}", other.ktype()),
@@ -1125,7 +1127,7 @@ mod seam_verb_table {
 
         // Inflate the host's allocated total so a one-scalar record is far under 1/ALPHA_DIVISOR of it.
         for n in 0..300 {
-            home.brand().alloc_object(KObject::Number(n as f64));
+            home.brand().alloc_scalar(Scalar::Number(n as f64));
         }
 
         let fields =
@@ -1192,8 +1194,8 @@ mod seam_verb_table {
             Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
         let value = build_record(&home, fields, &types);
         assert!(
-            !foreign.region().owns_substrate(substrate_of(value)),
-            "precondition: foreign host does not own the substrate"
+            !substrate_of(value).homed_in(foreign.region()),
+            "precondition: the foreign host is not the substrate's home"
         );
 
         assert_eq!(

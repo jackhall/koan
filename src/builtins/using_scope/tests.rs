@@ -7,6 +7,7 @@
 use std::rc::Rc;
 
 use crate::builtins::test_support::{parse_one, per_call_storage, run_root_bare, TestRun};
+use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::KErrorKind;
 use crate::machine::{program_storage, run_root_storage, BindingIndex, FrameCoverage, Scope};
@@ -209,7 +210,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // Bind a value in the module scope whose reach names the foreign frame -- minted for real into
     // the module's own arena via `mint_retained`, the same primitive every bind door uses, which
     // folds the owning bundle into the module region's union.
-    let value_obj = module_scope.brand().alloc_object(KObject::Number(1.0));
+    let value_obj = module_scope.brand().alloc_scalar(Scalar::Number(1.0));
     let reach = module_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign_storage))]);
     let sealed = module_scope.seal_reaching(Carried::Object(value_obj), reach);
     module_scope
@@ -269,7 +270,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
 /// bindings it surfaces live in the **module's** region — the single place residence and the reading
 /// scope diverge. Residence rides the value's own description, not the reading scope, so a record
 /// read through the window reports the module's region as its home. That is what makes the crossing
-/// out of the window a *priceable* home crossing: `copy_or_pin`'s `owns_substrate` disjunct holds
+/// out of the window a *priceable* home crossing: `copy_or_pin`'s home-crossing test holds
 /// and the chooser runs. A host taken from the reading scope would own no substrate here, and the
 /// same crossing would short-circuit to Pin without ever being priced.
 ///

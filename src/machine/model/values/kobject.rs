@@ -157,6 +157,34 @@ pub enum KObject<'a> {
     Null,
 }
 
+/// A [`KObject`]'s **owned leaf** arms, with no lifetime: `Number`, `Bool`, `Null`. The shape a value
+/// takes when it borrows no region at all — not even for string bytes, which is why `KString` is not
+/// here and takes the region brand's `alloc_string` door instead.
+///
+/// It exists so "region-free" is a *type* rather than a predicate a caller re-checks. The store door
+/// (`RegionBrand::alloc_scalar`) takes one of these, so a value that borrows a region cannot reach
+/// it — where a `KObject<'static>` parameter would say the same thing but leave the door with
+/// unbuildable arms to rebuild, since `KObject` is lifetime-invariant and a `'static` one has no
+/// coercion to the destination's `'a`.
+#[derive(Clone, Copy)]
+pub enum Scalar {
+    Number(f64),
+    Bool(bool),
+    Null,
+}
+
+impl Scalar {
+    /// This leaf as a value at any region's lifetime — the rebuild the store door writes. Total, and
+    /// free of a lifetime retype: each arm is reconstructed from its owned payload.
+    pub fn into_object<'a>(self) -> KObject<'a> {
+        match self {
+            Scalar::Number(n) => KObject::Number(n),
+            Scalar::Bool(b) => KObject::Bool(b),
+            Scalar::Null => KObject::Null,
+        }
+    }
+}
+
 impl<'a> KObject<'a> {
     /// Fresh `List` carrier: memoizes the element type as the join (LUB) of contents.
     /// Empty list memoizes `Any` (the join's identity); the empty-container *error*
@@ -424,18 +452,27 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// Whether this is a **shallow scalar** — a fully-owned leaf (`Number`, `Bool`, `Null`) whose
-    /// representation embeds no `&'a` region borrow and no [`Held`] cell. Such a value cannot
-    /// reference any dep the construction fold was handed, so the dep-witness union is pure
-    /// over-retention: the combinator gate ([`alloc_object_scalar`](crate::machine::core::StepAllocator::alloc_object_scalar))
-    /// routes it to the no-fold path so it seals with an empty reach, rebuilding owned at `'static`.
+    /// This value's owned leaf form, or `None` if it is not one — the **shallow scalar** test and the
+    /// rebuild in a single verb, so no caller can pair the predicate with a rebuild that disagrees
+    /// with it.
     ///
-    /// A `KString` is **not** one: its bytes live in a region's bump, so there is no `'static`
-    /// rebuild for that no-fold path to make, and a string producer takes a fold door instead. Every
-    /// other variant borrows (`KFunction`, `Module`) or holds cells that transitively might
+    /// A [`Scalar`] embeds no `&'a` region borrow and no [`Held`] cell, so it cannot reference any dep
+    /// the construction fold was handed and the dep-witness union over it would be pure
+    /// over-retention: the combinator gate
+    /// ([`alloc_object_scalar`](crate::machine::core::StepAllocator::alloc_object_scalar)) routes a
+    /// hit to the no-fold path, where it seals with an empty reach.
+    ///
+    /// A `KString` is **not** one: its bytes live in a region's bump, so a rebuild has to re-bump them
+    /// at its destination and a string producer takes a fold door instead. Every other variant borrows
+    /// (`KFunction`, `Module`) or holds cells that transitively might
     /// (`List`/`Dict`/`Record`/`Tagged`/`Wrapped`/`KExpression`), so it keeps the fold too.
-    pub fn is_shallow_scalar(&self) -> bool {
-        matches!(self, KObject::Number(_) | KObject::Bool(_) | KObject::Null)
+    pub fn as_scalar(&self) -> Option<Scalar> {
+        match *self {
+            KObject::Number(n) => Some(Scalar::Number(n)),
+            KObject::Bool(b) => Some(Scalar::Bool(b)),
+            KObject::Null => Some(Scalar::Null),
+            _ => None,
+        }
     }
 
     /// Runtime type tag — context-free by construction (ruling 4). Every value memoizes its
@@ -681,9 +718,7 @@ fn rehome_cell_text<'a: 'h, 'h>(door: SubstrateDoor<'a, 'h>) -> impl Fn(Held<'a>
 /// and a cell's index is its position.
 fn alloc_list<'a>(door: SubstrateDoor<'a, '_>, items: Vec<Held<'a>>) -> &'a ListSubstrate<'a> {
     let (cells, reach, copy_cost) = section_cells(door, items);
-    door.alloc_substrate_folded::<ListSubstrate<'static>>(ContainerSubstrate::new(
-        ListLayout, cells, reach, copy_cost,
-    ))
+    door.alloc_substrate_folded(ContainerSubstrate::new(ListLayout, cells, reach, copy_cost))
 }
 
 /// Sort a record's fields by name, section the cells in that order, and store the
@@ -706,7 +741,7 @@ fn alloc_record<'a>(
     }
     let names = door.alloc_slice(&names);
     let (cells, reach, copy_cost) = section_cells(door, cells);
-    door.alloc_substrate_folded::<RecordSubstrate<'static>>(ContainerSubstrate::new(
+    door.alloc_substrate_folded(ContainerSubstrate::new(
         RecordLayout::new(names),
         cells,
         reach,
@@ -734,9 +769,7 @@ fn alloc_dict<'a>(
     }
     let index = door.alloc_map(entries);
     let (cells, reach, copy_cost) = section_cells(door, cells);
-    door.alloc_substrate_folded::<DictSubstrate<'static>>(ContainerSubstrate::new(
-        index, cells, reach, copy_cost,
-    ))
+    door.alloc_substrate_folded(ContainerSubstrate::new(index, cells, reach, copy_cost))
 }
 
 /// Section one owned payload `value` as a [`PayloadSubstrate`]'s single cell through `door` — the
@@ -745,7 +778,7 @@ fn alloc_dict<'a>(
 /// verb's tagged/wrapped arms) funnels through.
 fn alloc_payload<'a>(door: SubstrateDoor<'a, '_>, value: KObject<'a>) -> &'a PayloadSubstrate<'a> {
     let (cells, reach, copy_cost) = section_cells(door, vec![Held::Object(value)]);
-    door.alloc_substrate_folded::<PayloadSubstrate<'static>>(ContainerSubstrate::new(
+    door.alloc_substrate_folded(ContainerSubstrate::new(
         PayloadLayout,
         cells,
         reach,
@@ -943,13 +976,9 @@ pub(crate) fn copy_or_pin<C>(
         SeamPolicy::CostDriven => {}
     }
 
-    // The substrate's description records the region its storage lives in — which a pin-bind can
-    // separate from the residence of a wrapper value sharing the substrate. The bit read below is
-    // home-relative to the *substrate's* home, so it only prices a crossing out of that region.
-    let home_crossing = substrate
-        .reach()
-        .with_home_region(|home| std::ptr::eq(home, host));
-    if !home_crossing {
+    // The bit read below is home-relative to the *substrate's* own home, so it only prices a
+    // crossing out of that region — see [`ContainerSubstrate::homed_in`].
+    if !substrate.homed_in(host) {
         // Foreign crossing: pricing a copy-out at an intermediate host is region evacuation's job.
         return RegionEscape::Pin;
     }

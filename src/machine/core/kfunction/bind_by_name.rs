@@ -56,6 +56,7 @@ mod tests {
     use crate::machine::model::KObject;
     use crate::machine::model::KType;
     use crate::machine::model::ReturnType;
+    use crate::machine::model::Scalar;
 
     /// `(DOUBLE x: Number)` — one keyword, one parameter.
     fn double_signature<'a>() -> ExpressionSignature<'a> {
@@ -83,7 +84,7 @@ mod tests {
     fn positional_binds() {
         let storage = run_root_storage();
         let region = storage.brand();
-        let seven = Carried::Object(region.alloc_object(KObject::Number(7.0)));
+        let seven = Carried::Object(region.alloc_scalar(Scalar::Number(7.0)));
 
         let bound = bind_args_by_name(&double_signature(), vec![seven]).expect("positional binds");
         assert_eq!(bound_x(&bound), 7.0);

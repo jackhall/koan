@@ -14,12 +14,13 @@
 //! unchanged (an error is never negated into a `false`).
 
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{Held, KObject, KType, ValueEqualityError};
+use crate::machine::model::{Held, KType, ValueEqualityError};
 use crate::machine::WriteGate;
 use crate::machine::{arg_held, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::Scalar;
 
 /// Render a banned-operand error for operator `op`.
 fn ban_error(op: &str, error: ValueEqualityError) -> KError {
@@ -64,7 +65,7 @@ pub fn body_eq<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Bool(equal))))
+        .alloc_scalar_witnessed(Scalar::Bool(equal))))
 }
 
 pub fn body_ne<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -72,7 +73,7 @@ pub fn body_ne<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done(Ok(ctx
         .scope
         .brand()
-        .alloc_object_witnessed(KObject::Bool(!equal))))
+        .alloc_scalar_witnessed(Scalar::Bool(!equal))))
 }
 
 /// Register `==` / `!=` as binary-only builtins. Deliberately **not** seeded into any operator

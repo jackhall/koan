@@ -4,6 +4,7 @@ use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::values::Carried;
 use crate::machine::model::Record;
+use crate::machine::model::Scalar;
 use crate::machine::{BindingIndex, DeclarationSite};
 
 fn leaf(n: &str) -> TypeIdentifier<'_> {
@@ -15,7 +16,6 @@ fn leaf(n: &str) -> TypeIdentifier<'_> {
 /// consult. The bind that would set up the old "value-language only" layering is itself rejected.
 #[test]
 fn type_token_cannot_bind_value_side() {
-    use crate::machine::model::values::KObject;
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
@@ -24,7 +24,7 @@ fn type_token_cannot_bind_value_side() {
         .bind_value_direct(
             "Gee".into(),
             scope.seal_resident(Carried::Object(
-                region.brand().alloc_object(KObject::Number(7.0)),
+                region.brand().alloc_scalar(Scalar::Number(7.0)),
             )),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),

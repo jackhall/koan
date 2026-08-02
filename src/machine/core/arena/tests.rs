@@ -5,6 +5,7 @@
 use super::*;
 use crate::builtins::test_support::{per_call_storage, run_root_bare, TestRun};
 use crate::machine::core::Bindings;
+use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::model::TypeRegistry;
@@ -88,7 +89,7 @@ fn with_scope_opens_child_scope_at_brand() {
     assert_eq!(id, frame.scope_id());
     // In-place bind + lookup, all at the brand `'b` (value allocated via the opened scope's region).
     frame.with_scope(|s| {
-        let v = s.brand().alloc_object(KObject::Number(7.0));
+        let v = s.brand().alloc_scalar(Scalar::Number(7.0));
         s.bind_resident_for_test(
             "k".to_string(),
             v,
@@ -144,7 +145,7 @@ fn call_frame_scope_survives_subsequent_alloc() {
     let scope = test_run.scope;
     let frame = CallFrame::new(scope);
     frame.with_scope(|s| {
-        let _new = s.brand().alloc_object(KObject::Number(1.0));
+        let _new = s.brand().alloc_scalar(Scalar::Number(1.0));
         assert!(std::ptr::eq(s.region(), frame.region()));
     });
 }
@@ -166,7 +167,7 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
         let child_ref: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
         // Alloc through the reconstructed scope's brand while `inner_region` (the raw-region roundtrip)
         // stays live — the same region under two reconstructed references.
-        let it_obj: &KObject<'_> = child_ref.brand().alloc_object(KObject::Number(42.0));
+        let it_obj: &KObject<'_> = child_ref.brand().alloc_scalar(Scalar::Number(42.0));
         assert!(std::ptr::eq(inner_region, child_ref.region()));
         child_ref
             .bind_resident_for_test(
@@ -270,17 +271,20 @@ fn fresh_tail_hop_over_per_call_captured_scope_pins_it() {
     ));
 }
 
-/// Allocating records the stored address into the `membership` side-table via
-/// `RefCell::borrow_mut` while a prior `&KObject` from the same region is shared-borrowed.
-/// Pins that tree-borrows shape.
+/// A second sub-arena store while a prior `&KFunction` re-anchored off the same region is
+/// shared-borrowed — the arena `store` writes through a `RefCell::borrow_mut` on the family cell
+/// under a live shared borrow of an earlier value. Pins that tree-borrows shape over a *typed*
+/// family: the `Drop`-free families are bump-hosted and never reach this engine.
 #[test]
 fn region_alloc_while_prior_ref_live() {
     let storage = run_root_storage();
+    let scope = run_root_bare(&storage);
     let a = storage.brand();
-    let r1 = a.alloc_object(KObject::Number(1.0));
-    let r2 = a.alloc_object(KObject::Number(2.0));
-    assert!(matches!(r1, KObject::Number(n) if *n == 1.0));
-    assert!(matches!(r2, KObject::Number(n) if *n == 2.0));
+    let f1 = a.alloc_function(no_op_closure(scope));
+    let f2 = a.alloc_function(no_op_closure(scope));
+    assert!(!std::ptr::eq(f1, f2), "two distinct sub-arena residents");
+    assert_eq!(f1.signature.elements.len(), 1);
+    assert_eq!(f2.signature.elements.len(), 1);
 }
 
 /// `KType` is a `Copy` content-digest handle — constructing one is not a region allocation.
@@ -288,10 +292,14 @@ fn region_alloc_while_prior_ref_live() {
 fn ktype_construction_is_not_a_region_allocation() {
     let storage = run_root_storage();
     let a = storage.brand();
-    let baseline = a.region().alloc_count();
+    let baseline = a.region().allocated_total();
     let t: KType = KType::NUMBER;
     assert!(t == KType::NUMBER);
-    assert_eq!(a.region().alloc_count(), baseline);
+    assert_eq!(
+        a.region().allocated_total(),
+        baseline,
+        "a handle names registry-owned content: neither a sub-arena nor the bump grows"
+    );
 }
 
 /// A per-call frame whose parent is the run root holds **no** strong ref back to the run-root
@@ -589,7 +597,7 @@ fn region_union_foreign_pins_release_at_region_death() {
     let dest = run_root_storage();
     {
         let scope = run_root_bare(&dest);
-        let obj = scope.brand().alloc_object(KObject::Number(1.0));
+        let obj = scope.brand().alloc_scalar(Scalar::Number(1.0));
         // The bind-door mint: derive the exact reach into `dest`'s arena and fold the owning bundle
         // into `dest`'s region union. `foreign` is not the dest, so the self rule keeps it.
         let reach = scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
@@ -624,30 +632,6 @@ fn region_union_foreign_pins_release_at_region_death() {
     );
 }
 
-/// The brand-confined [`Region::alloc`] engine hands the freshly-stored value to its closure at a
-/// `for<'b>` brand and lets only the erased carrier escape (an empty-witnessed [`Witnessed`], no
-/// `'b`); a sibling alloc into the same region after the store coexists under tree borrows — the
-/// closure-surface twin of [`region_alloc_while_prior_ref_live`]. The escaped carrier reads back while
-/// its region backing is live.
-#[test]
-fn alloc_engine_brand_coexists_with_sibling_alloc() {
-    let storage = run_root_storage();
-    // `alloc_object_witnessed` routes the engine's brand-confined `alloc`, storing `value` and
-    // letting only the erased carrier escape — `Witnessed::resident` (the empty-witness constructor)
-    // names no `'b`.
-    let carrier: StepCarried = storage.brand().alloc_object_witnessed(KObject::Number(1.0));
-    // A sibling alloc into the same region coexists — the membership-table write and the prior store
-    // do not alias under tree borrows.
-    let sibling = storage.brand().alloc_object(KObject::Number(2.0));
-    // Read the escaped carrier back while `storage` (its backing) is live — the pin the read names.
-    let got = carrier.inspect_pinned(&storage, |c| match *c {
-        Carried::Object(KObject::Number(n)) => *n,
-        _ => panic!("expected a Number object"),
-    });
-    assert_eq!(got, 1.0);
-    assert!(matches!(sibling, KObject::Number(n) if *n == 2.0));
-}
-
 /// The reference-only carrier at the Done boundary: a region-pure carrier pins **nothing**, sound
 /// because the scheduler seeds a retention hold on the producer's *storage* at finalize and every
 /// read opens under it. This pins that shape across the producer shell's drop: seal the carrier
@@ -666,7 +650,7 @@ fn reference_only_carrier_survives_producer_shell_drop_under_retention_hold() {
     let frame: Rc<CallFrame> = CallFrame::new(outer_scope);
 
     // Born reference-only: the active frame is excluded at the alloc site.
-    let carrier: StepCarried = frame.brand().alloc_object_witnessed(KObject::Number(7.0));
+    let carrier: StepCarried = frame.brand().alloc_scalar_witnessed(Scalar::Number(7.0));
 
     // The finalize shape: seal as-is; the retention hold (the producer's storage Rc) rides the
     // delivery envelope, never the carrier.
@@ -719,7 +703,7 @@ fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
         Body::Builtin(|ctx| {
             Action::done_resident(
                 ctx.scope,
-                Carried::Object(ctx.scope.brand().alloc_object(KObject::Null)),
+                Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
             )
         }),
         captured,
@@ -1528,10 +1512,11 @@ fn raw_expression_seals_through_the_expression_door() {
 }
 
 /// `KObject::record_of_held` — the record door's read half — stores a fresh `RecordSubstrate`
-/// through `FoldingBrand::alloc_substrate_folded` into its own brand's region. The stored address is
-/// a hit for the `KoanRegionExt::owns_substrate` query, the read half the door's store makes true.
+/// through `FoldingBrand::alloc_substrate_folded` into its own brand's region. The stored
+/// description names that region as the substrate's home, which is the residence claim the door's
+/// brand makes and every later home-crossing read answers from.
 #[test]
-fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
+fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
     let frame = run_root_storage();
     let types = TypeRegistry::new();
     let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
@@ -1547,14 +1532,12 @@ fn alloc_substrate_folded_stores_and_owns_a_record_substrate() {
                 Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
             Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, &types)))
         });
-    let owns_bare = stored.with_pinned(&frame, |c| match c.object() {
-        KObject::Record(substrate, _) => frame
-            .region()
-            .owns_substrate(*substrate as *const RecordSubstrate<'_>),
+    let homed = stored.with_pinned(&frame, |c| match c.object() {
+        KObject::Record(substrate, _) => substrate.homed_in(frame.region()),
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
     });
     assert!(
-        owns_bare,
+        homed,
         "alloc_substrate_folded stores into its own brand's region"
     );
 }
@@ -1567,7 +1550,7 @@ fn allocated_total_weights_families_by_size() {
     let before = storage.region().allocated_total();
 
     for n in 0..3 {
-        storage.brand().alloc_object(KObject::Number(n as f64));
+        storage.brand().alloc_scalar(Scalar::Number(n as f64));
     }
 
     let after = storage.region().allocated_total();

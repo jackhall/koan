@@ -21,7 +21,7 @@ fn module_child_scope_transmute_does_not_dangle() {
     // mutation under live shared borrows.
     let _other = region
         .brand()
-        .alloc_object(crate::machine::model::values::KObject::Number(1.0));
+        .alloc_scalar(crate::machine::model::Scalar::Number(1.0));
     let recovered2 = module.child_scope();
     assert!(ptr::eq(recovered2, scope));
 }

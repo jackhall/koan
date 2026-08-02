@@ -2,6 +2,7 @@
 
 use crate::builtins::test_support::{resident_carrier, TestRun};
 use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+use crate::machine::model::Scalar;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, KObject};
 use crate::scheduler::DepEdge;
@@ -14,7 +15,7 @@ fn free_reclaims_owned_subtree() {
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let value: &KObject = region.brand().alloc_object(KObject::Number(42.0));
+    let value: &KObject = region.brand().alloc_scalar(Scalar::Number(42.0));
     let mk_dispatch = || {
         crate::machine::execute::dispatch::decide_tail(
             WorkingExpression::new(program.brand().region(), Vec::new()),
@@ -90,7 +91,7 @@ fn free_skips_live_slot_and_is_idempotent() {
     assert_eq!(runtime.scheduler().free_list_len(), 0);
 
     runtime.scheduler_mut().clear_node(s);
-    let value: &KObject = region.brand().alloc_object(KObject::Number(1.0));
+    let value: &KObject = region.brand().alloc_scalar(Scalar::Number(1.0));
     runtime
         .scheduler_mut()
         .set_result(s, Ok(Carried::Object(value)), resident_carrier(root));
@@ -113,7 +114,7 @@ fn free_does_not_recurse_through_notify_edges() {
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let value: &KObject = region.brand().alloc_object(KObject::Number(7.0));
+    let value: &KObject = region.brand().alloc_scalar(Scalar::Number(7.0));
     let mk_dispatch = || {
         crate::machine::execute::dispatch::decide_tail(
             WorkingExpression::new(program.brand().region(), Vec::new()),

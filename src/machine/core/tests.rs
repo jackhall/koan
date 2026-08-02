@@ -6,8 +6,7 @@ mod operator_registry;
 mod register;
 mod types;
 
-use crate::machine::model::KObject;
-use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::{ExpressionSignature, KType, ReturnType, Scalar, SignatureElement};
 
 pub(super) fn unit_signature<'a>() -> ExpressionSignature<'a> {
     ExpressionSignature {
@@ -21,6 +20,6 @@ pub(super) fn body_no_op<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     crate::machine::core::kfunction::action::Action::done_resident(
         ctx.scope,
-        crate::machine::model::Carried::Object(ctx.scope.brand().alloc_object(KObject::Null)),
+        crate::machine::model::Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
     )
 }

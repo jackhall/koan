@@ -1,7 +1,8 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::{program_storage, run_root_storage, KoanRegionTestExt};
+use crate::machine::core::KoanRegionExt;
+use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::region_metrics;
 
 #[test]
@@ -340,18 +341,21 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (ECHO v :Number) -> Number = (v)");
-    let baseline = region.region().alloc_count();
+    // `allocated_total` weighs both halves of the region: the three typed sub-arenas and the bump
+    // the `Drop`-free families live in. A per-call leak into run-root shows up in one or the other,
+    // so the growth bound has to read them together.
+    let baseline = region.region().allocated_total();
     for _ in 0..50 {
         let _ = test_run.run_one(parse_one(&program, "ECHO 7"));
     }
-    let after = region.region().alloc_count();
-    let growth = after - baseline;
-    // Measured at 50 (one `KObject::Number(7)` per call); < 150 catches
-    // any regression that re-introduces a per-call leak into run-root.
+    let growth = region.region().allocated_total() - baseline;
+    // Measured at four `KObject`-sized cells per call; the bound leaves 3x slack, which still
+    // catches any regression that re-introduces a per-call leak into run-root.
+    let budget = 50 * 12 * std::mem::size_of::<crate::machine::model::KObject<'_>>() as u64;
     assert!(
-        growth < 50 * 3,
-        "per-call leak regression: {growth} new run-root allocations across 50 \
-         ECHO calls (expected < 150)",
+        growth < budget,
+        "per-call leak regression: {growth} new run-root bytes across 50 ECHO calls \
+         (expected < {budget})",
     );
 }
 

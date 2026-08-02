@@ -49,11 +49,13 @@ impl<'a> RecordLayout<'a> {
 
 /// The index layout of a [`ListSubstrate`]: a list is positional, so a cell's index *is* its
 /// position and there is nothing to store. A distinct unit type rather than `()` so the list
-/// substrate family keeps its own arena slot.
+/// substrate family keeps its own index type.
+#[derive(Clone, Copy)]
 pub struct ListLayout;
 
 /// The index layout of a [`PayloadSubstrate`]: exactly one cell, so there is nothing to store. A
 /// distinct unit type for the same reason as [`ListLayout`].
+#[derive(Clone, Copy)]
 pub struct PayloadLayout;
 
 /// A region-resident container: its cells in sectioned storage, the payload-specific index `C` over
@@ -64,6 +66,11 @@ pub struct PayloadLayout;
 /// ([`FoldingBrand::alloc_substrate_folded`](crate::machine::core::FoldingBrand::alloc_substrate_folded)),
 /// which stores the substrate and hands back a co-located borrow — the cells, their runs and the
 /// memos ride together.
+///
+/// `Copy` in every arm — the index is a bump-hosted name slice, a [`BumpMap`] borrow or a marker, the
+/// cells a [`Sectioned`] run pair, the reach an interned borrow — so a substrate owns no allocation
+/// and region death frees its bytes as bump chunks with no `Drop` glue to run.
+#[derive(Clone, Copy)]
 pub struct ContainerSubstrate<'a, C> {
     /// The payload-specific index: field name → cell index, dict key → cell index, or a marker where
     /// the layout is implicit (a list's position, a payload's single cell).
@@ -139,6 +146,17 @@ impl<'a, C> ContainerSubstrate<'a, C> {
     /// pinned relocation of this container reads, and what both borrow memos answer from.
     pub fn reach(&self) -> &'a FrameReach {
         self.reach
+    }
+
+    /// Whether this container's storage lives in `region` — **residence, read off the value**. The
+    /// stored description records the region the substrate was built into, so the question is
+    /// answered by the substrate's own field rather than by an address table the region would have to
+    /// keep. The seam's cost decision asks it to tell a home crossing from a foreign one; a pin-bind
+    /// can separate that home from the residence of a wrapper value sharing the substrate, which is
+    /// why the question is asked of the substrate and not of the value around it.
+    pub fn homed_in(&self, region: &crate::machine::core::KoanRegion) -> bool {
+        self.reach
+            .with_home_region(|home| std::ptr::eq(home, region))
     }
 
     /// Whether any cell reaches a region at all — the union being non-empty. Conservative relative

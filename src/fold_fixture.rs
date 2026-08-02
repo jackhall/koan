@@ -18,6 +18,7 @@
 
 use crate::machine::core::FrameStorageExt;
 use crate::machine::execute::drive_step_allocator;
+use crate::machine::model::Scalar;
 use crate::machine::run_root_storage;
 
 pub use crate::machine::core::{FoldingBrand, FrameStorage};
@@ -29,7 +30,7 @@ pub use crate::machine::DeliveredCarried;
 /// object sink. A guard tries to feed this borrow to the tied sink inside a `for<'b>` fold closure.
 pub fn with_ambient_object<R>(f: impl FnOnce(&KObject<'_>) -> R) -> R {
     let storage = run_root_storage();
-    let object = storage.brand().alloc_object(KObject::Number(1.0));
+    let object = storage.brand().alloc_scalar(Scalar::Number(1.0));
     f(object)
 }
 

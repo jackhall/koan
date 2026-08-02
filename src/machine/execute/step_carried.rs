@@ -53,7 +53,7 @@ pub struct StepCarried<'step, T: Reattachable = CarriedFamily> {
 
 impl<'step, T: Reattachable> StepCarried<'step, T> {
     /// Wrap a **no-foreign-reach** carrier into the step brand — the majority of Done sites (literals,
-    /// type carriers, region-pure `alloc_object_witnessed` products, and a value that borrows only its
+    /// type carriers, region-pure `alloc_scalar_witnessed` products, and a value that borrows only its
     /// own home, e.g. a fresh closure capturing its defining scope), whose owned pin bundle is
     /// therefore empty. Unrestricted in-crate: wrapping only
     /// ever *adds* confinement, so any construction site may brand a carrier it holds. `'step` is
@@ -172,14 +172,14 @@ mod tests {
     use super::*;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::KObject;
+    use crate::machine::model::Scalar;
 
     /// The legal shape: born a region-pure carrier, then exit through the sole seal door into a
     /// delivery envelope pinned by its own storage. Mirrors the run loop's `DoneWitnessed` arm.
     #[test]
     fn born_then_seal_at_step_round_trips() {
         let storage = run_root_storage();
-        let step_carried: StepCarried =
-            storage.brand().alloc_object_witnessed(KObject::Number(7.0));
+        let step_carried: StepCarried = storage.brand().alloc_scalar_witnessed(Scalar::Number(7.0));
         let envelope = step_carried.seal_at_step(Rc::clone(&storage));
         let value = envelope.open(|c| match c {
             crate::machine::model::Carried::Object(KObject::Number(n)) => *n,

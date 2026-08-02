@@ -120,7 +120,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-45 tests, grouped by the unsafe site each pins down. Names below are the exact
+49 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 21 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -148,7 +148,8 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 `KObject::record_of_held`) stores the substrate into its own brand's region exactly like
 `alloc_object_folded`, so it carries no `unsafe` of its own beyond the `reattachable!`-generated
 layout-invariance audit in `witnessed.rs`. One test pins the store landing in the brand's own
-region, a hit for the `KoanRegionExt::owns_substrate` address query. A second pins `alloc_carried_with`'s fold-brand
+region — the stored description names that region as the substrate's home, which is what a later
+home-crossing read answers from. A second pins `alloc_carried_with`'s fold-brand
 construction one level up for a `Record` specifically — mirroring
 `object_field_reach_fold_survives_producer_frame_free`'s `KFunction` shape, but for
 `KObject::record_with_type` (FROM's own construction): the narrowed record shares the exact same
@@ -157,27 +158,22 @@ frame, and the fold's reach union is what keeps the producer's region alive once
 handle drops — the shape `record_projection::body`'s `alloc_carried_with(&[lhs], …)` call takes in
 production.
 
-- `alloc_substrate_folded_stores_and_owns_a_record_substrate`
+- `alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand`
 - `record_retype_shares_substrate_across_producer_frame_free`
 
 **`Region` alloc engine under live borrows** ([workgraph/src/witnessed/region.rs](../workgraph/src/witnessed/region.rs)) — the
-single `store` path erases the value to `'static` (the move-through-union `erase_store`), writes it to
-the sub-arena, and records its address into the `membership` `RefCell` via `borrow_mut`; two surfaces
-re-anchor it, both pinned here while a prior `&` from the same region is shared-borrowed. The bare-`&'a`
-`alloc_resident` re-anchors to `'a` through the tight in-module `retype` leaf — content == borrow ==
-`'a`, capped by `&'a self`, region.rs's one `unsafe` (`region_alloc_while_prior_ref_live`). The
-brand-confined `alloc` hands the
-freshly-stored value to a `for<'b>` closure through `with_branded_ref`, letting only the erased carrier
-escape — the closure-surface twin pins the store → record → brand-read → sibling-alloc composition
-(`alloc_engine_brand_coexists_with_sibling_alloc`). Both over the `KoanRegion`
-(= `Region<KoanStorageProfile>`) the engine routes.
+single `store` path erases the value to `'static` (the move-through-union `erase_store`) and writes it
+to the family's sub-arena through a `RefCell::borrow_mut`; `alloc_resident` then re-anchors the stored
+reference to `'a` through the tight in-module `retype` leaf — content == borrow == `'a`, capped by
+`&'a self`, region.rs's one `unsafe`. Pinned here while a prior `&` from the same region is
+shared-borrowed. Over the `KoanRegion` (= `Region<KoanStorageProfile>`), and over a *typed* family
+(`KFunction`) deliberately: the `Drop`-free families are bump-hosted and never reach this engine.
 
 - `region_alloc_while_prior_ref_live`
-- `alloc_engine_brand_coexists_with_sibling_alloc`
 
 **Reference-only carrier — retention-held read across shell drop** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
-— a region-pure object allocated through the brand-confined `alloc_object_witnessed` is born under the
-empty reach, so its carrier pins **nothing**. Sound because reads never go bare: the active frame pins
+— a region-pure object allocated through `alloc_scalar_witnessed` is born under the empty reach, so
+its carrier pins **nothing**. Sound because reads never go bare: the active frame pins
 the region during the producing step, and at finalize the scheduler seeds a retention hold on the
 producer's storage that rides the delivery envelope (`Delivered`) to every consumer. The test pins that
 hold across the producer shell's drop — seal the carrier as-is into its envelope (host = the storage
@@ -431,7 +427,8 @@ arena one hop removed, and through it the read entry's reach set.
 **MATCH on `Tagged` recursion** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — MATCH
 builds its per-call frame and seeds its `it` bind through `CallFrame::with_scope`: the matched value,
 deep-cloned at the caller lifetime, is relocated into the opened child scope's own region through the
-substrate (the erasing `alloc_object`, which forgets the caller lifetime) and bound; the `FrameStorage` ancestor chain keeps the
+substrate (rebuilt at the destination brand, which is where the caller lifetime is dropped) and
+bound; the `FrameStorage` ancestor chain keeps the
 call-site region alive across TCO replace when a user-fn recurses through a `Tagged` parameter via
 MATCH.
 
@@ -477,8 +474,9 @@ tail-calls back through the enclosing user-fn.
 
 **`KFunction::invoke` per-call frame re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 seed bind routed through `CallFrame::with_scope`: the deep-cloned argument record is relocated into the
-opened child scope's own region through the substrate (the erasing `alloc_object`, which forgets the
-caller lifetime) and each parameter bound, while the scope rides the `for<'b>` brand the open confines. Witnessed by the `Rc<CallFrame>`
+opened child scope's own region through the substrate (rebuilt at the destination brand, which is
+where the caller lifetime is dropped) and each parameter bound, while the scope rides the `for<'b>`
+brand the open confines. Witnessed by the `Rc<CallFrame>`
 moved into `BodyResult::Tail`. Exercised by every user-fn invocation: repeated-call reclamation, type-op
 dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 
