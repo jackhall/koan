@@ -27,7 +27,7 @@ use crate::machine::model::{
 use crate::machine::model::{KType, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StepContext,
+    BumpMap, Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StepContext,
     StorageOf, StorageProfile, Stored, Witnessed,
 };
 
@@ -164,6 +164,19 @@ impl<'a> RegionBrand<'a> {
     /// The single-value peer of [`Self::alloc_slice`], for a node a part arm points at.
     pub fn alloc_value<T: Copy>(self, value: T) -> &'a T {
         self.0.bump_value(value)
+    }
+
+    /// The keyed peer of [`Self::alloc_slice`], for an index whose lookup wants a hash table rather
+    /// than a sorted run and a binary search — a [`DictSubstrate`]'s key→index table is the one such
+    /// index. Buckets and header both land in this brand's region bump, so region death frees the
+    /// table without running its `Drop`; the `Copy` bounds on the key and the value are what make
+    /// that lossless, exactly as they are for a slice's items.
+    pub fn alloc_map<K, V>(self, entries: impl IntoIterator<Item = (K, V)>) -> &'a BumpMap<'a, K, V>
+    where
+        K: Copy + Eq + std::hash::Hash,
+        V: Copy,
+    {
+        self.0.bump_map(entries)
     }
 
     /// INVARIANT: a `KFunction` must be allocated into the same `KoanRegion` that owns its

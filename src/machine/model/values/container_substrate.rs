@@ -4,7 +4,7 @@
 //! cell index, the interned union over the runs, and the memoized copy cost.
 //! [`RecordSubstrate`] (`C = RecordLayout`) is the field substrate behind a record value;
 //! [`ListSubstrate`] (`C = ListLayout`) is the element substrate behind a list value;
-//! [`DictSubstrate`] (`C = hashbrown::HashMap<KKey, usize>`) is the entry substrate behind a dict
+//! [`DictSubstrate`] (`C = &BumpMap<KKey, usize>`) is the entry substrate behind a dict
 //! value; [`PayloadSubstrate`] (`C = PayloadLayout`) is the single-cell payload substrate behind a
 //! `Tagged` or `Wrapped` value.
 //!
@@ -12,10 +12,8 @@
 //! is non-empty", borrows-home is the description's own home-relative query. See
 //! [design/value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach).
 
-use hashbrown::HashMap;
-
 use crate::machine::core::{FrameReach, FrameStorage};
-use crate::witnessed::{CellRef, Sectioned};
+use crate::witnessed::{BumpMap, CellRef, Sectioned};
 
 use super::{Held, KKey, KObject};
 
@@ -215,11 +213,11 @@ impl<'a> ListSubstrate<'a> {
 /// The entry substrate a dict value borrows — [`ContainerSubstrate`] indexed by the concrete scalar
 /// [`KKey`]. The index is frozen at construction (last-wins dedup happens in the transient
 /// construction map) and never written again; cell order follows the construction map's iteration
-/// order, so entry order is unspecified. The index block is a default-`Global` heap allocation the
-/// substrate owns and drops at region death — a `hashbrown` table so a future region-`Allocator` swap
-/// is a zero-payload-churn change. Every key is `Copy` and its string bytes are region-hosted, so
-/// the table holds no per-key allocation of its own.
-pub(crate) type DictSubstrate<'a> = ContainerSubstrate<'a, HashMap<KKey<'a>, usize>>;
+/// order, so entry order is unspecified. The index block is a [`BumpMap`] hosted in the substrate's
+/// own region bump: `Copy` key and `Copy` value are what let region death reclaim its buckets by
+/// releasing chunks rather than by running a destructor. Every key's string bytes are region-hosted
+/// too, so the table holds no allocation outside the bump.
+pub(crate) type DictSubstrate<'a> = ContainerSubstrate<'a, &'a BumpMap<'a, KKey<'a>, usize>>;
 
 impl<'a> DictSubstrate<'a> {
     /// The cell stored under `key`, or `None` when the dict has no such entry. `key` may borrow
@@ -233,11 +231,6 @@ impl<'a> DictSubstrate<'a> {
     pub fn entries(&self) -> impl Iterator<Item = (&KKey<'a>, &'a Held<'a>)> {
         let cells = self.cells();
         self.index().iter().map(move |(key, at)| (key, cells[*at]))
-    }
-
-    /// The keys, in the same arbitrary order [`Self::entries`] yields.
-    pub fn keys(&self) -> impl Iterator<Item = &KKey<'a>> {
-        self.index().keys()
     }
 }
 

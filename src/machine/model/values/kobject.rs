@@ -216,7 +216,7 @@ impl<'a> KObject<'a> {
     /// Fresh `Dict` carrier over [`Held`] value cells — the type-aware path (a dict value may be a
     /// first-class type; keys stay scalar). One pass over `map` computes the memoized key/value type
     /// join (this carrier's own `ktype()`); the value cells are then sectioned through `door` and the
-    /// key→index table frozen into `hashbrown` (last-wins dedup already happened in the transient
+    /// key→index table frozen into the region's bump (last-wins dedup already happened in the transient
     /// input map) — the dict door's sole construction site.
     ///
     /// **Keys carry no reach** ([`KKey`] admits only `String` / `Number` / `Bool`, so a key naming a
@@ -744,7 +744,8 @@ fn alloc_record<'a>(
     ))
 }
 
-/// Section a dict's value cells and store the [`DictSubstrate`] under the frozen key→index table.
+/// Section a dict's value cells and store the [`DictSubstrate`] under the region-hosted key→index
+/// table the door bumps beside them.
 /// Cell order follows the input map's iteration order, which is what makes dict entry order
 /// unspecified. Incoming keys may borrow **anywhere** — a producer's region, a caller's staging
 /// buffer — because this is the one site that re-homes them, so no dict door verb has to state a
@@ -753,15 +754,15 @@ fn alloc_dict<'a>(
     door: SubstrateDoor<'a, '_>,
     map: HashMap<KKey<'_>, Held<'a>>,
 ) -> &'a DictSubstrate<'a> {
-    let mut index: hashbrown::HashMap<KKey<'a>, usize> =
-        hashbrown::HashMap::with_capacity(map.len());
+    let mut entries: Vec<(KKey<'a>, usize)> = Vec::with_capacity(map.len());
     let mut cells: Vec<Held<'a>> = Vec::with_capacity(map.len());
     for (key, cell) in map {
         // A string key is re-bumped into the dict's own region as the table freezes, so the key
         // block is home-resident and the dict's run never has to name where a key came from.
-        index.insert(key.rehomed(door), cells.len());
+        entries.push((key.rehomed(door), cells.len()));
         cells.push(cell);
     }
+    let index = door.alloc_map(entries);
     let (cells, reach, copy_cost) = section_cells(door, cells);
     door.alloc_substrate_folded::<DictSubstrate<'static>>(ContainerSubstrate::new(
         index, cells, reach, copy_cost,
