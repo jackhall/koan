@@ -40,7 +40,7 @@ group just to silence the stale-anchor check.
   child modules. Its remaining groups (CallFrame lifetime erasure, reference-only carrier
   retention, multi-region union, witness-set hosting, `alloc_carried_with`, MATCH-Tagged / TRY-WITH
   TCO, per-call frame re-anchor, NodeStore reinstall) pin safe-code frame / carrier / region
-  drop-order and reattach disciplines whose backing `unsafe` is the `Region::alloc` retype in
+  drop-order and reattach disciplines whose backing `unsafe` is the `Region::alloc_resident` retype in
   `witnessed.rs`; the `unsafe impl AuditedStored` audits that gate those stores moved to
   [`arena/residence.rs`](../src/machine/core/arena/residence.rs). arena.rs itself carries no
   `unsafe` of its own.
@@ -48,13 +48,13 @@ group just to silence the stale-anchor check.
   discipline that keeps `Scope`'s `RefCell<…>` invariant intact when a binding
   is added while a `data` borrow is live.
 - `src/machine/core/kfunction.rs` — `KFunction::captured_scope` is a bare field read of the
-  stored `&'a Scope<'a>` (re-anchored with the holder by the `Region::alloc` retype), so
+  stored `&'a Scope<'a>` (re-anchored with the holder by the `Region::alloc_resident` retype), so
   kfunction.rs carries no `unsafe` of its own. The group pins the captured-scope-survives-
   closure-escape and delivered-carrier reach-fold shapes.
 - `src/machine/model/values/module.rs` — the `Module` groups pin a safe `RefCell`
   discipline (interior mutation under a live `&'a Module`) and the MODULE-body
   Combine continuation; the captured-scope re-anchor they reference is the stored `&'a Scope<'a>`
-  re-anchored with the `Module` carrier by the `Region::alloc` retype in `witnessed.rs`, so module.rs
+  re-anchored with the `Module` carrier by the `Region::alloc_resident` retype in `witnessed.rs`, so module.rs
   carries no `unsafe` of its own.
 - `src/machine/execute/outcome.rs` — the `ContinuationFamily` group's test
   (`erased_continuation_open_roundtrip`) pins the **fat-pointer** (`Box<dyn>`)
@@ -74,7 +74,7 @@ group just to silence the stale-anchor check.
   `SealedExtern::open` on a stored `&'static Scope`, whose only `unsafe` (the
   shared `retype`) lives in `witnessed.rs`, so nodes.rs carries none of its own.
 - `src/machine/core/ref_carriers.rs` — every holder stores its captured / defining / parent scope as a
-  plain `&'a Scope<'a>`, re-anchored **with the holder as a whole** by the `Region::alloc` retype in
+  plain `&'a Scope<'a>`, re-anchored **with the holder as a whole** by the `Region::alloc_resident` retype in
   `witnessed.rs` (the construction-time reference is built at `'a` by plain coercion for a same-region
   child, or at the construction door's brand for a per-call frame child), so ref_carriers.rs carries no
   `unsafe` of its own. The group pins the stored scope-pointer re-anchor shape.
@@ -518,12 +518,12 @@ dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 **Stored reference-carrier re-anchor** ([src/machine/core/ref_carriers.rs](../src/machine/core/ref_carriers.rs)) — every
 holder stores a captured / defining / parent scope as a plain `&'a Scope<'a>` (`Module::child_scope`,
 `KFunction::captured`, `Scope::outer` / `root`) and re-anchors it **with
-the holder as a whole** when the holder is read out of its region (the `Region::alloc` retype in
+the holder as a whole** when the holder is read out of its region (the `Region::alloc_resident` retype in
 `witnessed.rs`), so the accessors are bare field reads and ref_carriers.rs carries no `unsafe` of its own.
 The construction-time reference is built at `'a` by plain coercion (a same-region child) or at the
 construction door's generative brand (a per-call frame child, `build_frame_child_witnessed`) — there is
 no construction-time re-anchor verb. This test pins the re-anchor directly through the `Module` carrier;
-`KFunction::captured_scope` routes the identical `Region::alloc` retype
+`KFunction::captured_scope` routes the identical `Region::alloc_resident` retype
 (their equivalents run under plain `cargo test`), and every `Scope::outer()` / `ancestors()` walk reads
 the field end-to-end.
 

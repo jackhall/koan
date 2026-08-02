@@ -3,11 +3,9 @@
 //! [`erase_to_static`](super::erase_to_static) primitive — it names no workload type. A
 //! [`StorageProfile`] injects its storage families via [`Stored`]; the single private
 //! [`store`](Region::store) path erases each value to `'static`, writes it to the family's sub-arena,
-//! and records its address. Two surfaces re-anchor that store: the brand-confined
-//! [`alloc`](Region::alloc) hands the freshly-stored value to a `for<'b>` closure (so it enters
-//! circulation only wrapped by the Witnessed/Sealed abstraction, never as a bare region reference),
-//! and [`alloc_resident`](Region::alloc_resident) re-anchors it to the caller's `'a` as a co-located
-//! `&'a` (content == borrow == `'a`, the tight no-free-lifetime shape). Both are `pub(crate)` — the
+//! and records its address. One surface re-anchors that store:
+//! [`alloc_resident`](Region::alloc_resident) hands it back at the caller's `'a` as a co-located
+//! `&'a` (content == borrow == `'a`, the tight no-free-lifetime shape). It is `pub(crate)` — the
 //! only public allocation surface is [`RegionHandle`], minted from a region owner or handed out at a
 //! `for<'b>` brand by the library's construction combinators — so a bare `&Region` has no allocation
 //! surface at all.
@@ -44,8 +42,8 @@ use elsa::FrozenMap;
 use typed_arena::Arena;
 
 use super::{
-    erase_to_static, with_branded_ref, BumpMap, PinBundle, PinsRegion, ReachDescription,
-    Reattachable, RegionOwner, StepCoverage,
+    erase_to_static, BumpMap, PinBundle, PinsRegion, ReachDescription, Reattachable, RegionOwner,
+    StepCoverage,
 };
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
@@ -137,8 +135,8 @@ pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
 }
 
 /// Run-lifetime allocation frame. Lives for one program run (or one per-call frame). Sub-arenas
-/// store `K::At<'static>` (phantom); a surface re-anchors the store on the way out — to a `for<'b>`
-/// brand ([`alloc`](Self::alloc)) or the caller's `'a` ([`alloc_resident`](Self::alloc_resident)).
+/// store `K::At<'static>` (phantom); a surface re-anchors the store on the way out, to the caller's
+/// `'a` ([`alloc_resident`](Self::alloc_resident)).
 pub struct Region<W: StorageProfile> {
     /// The library-owned typed cell bundle, derived from the workload's family list. PRIVATE and
     /// never exposed by reference: the only path in is [`store`](Self::store), the sole store
@@ -435,7 +433,7 @@ impl<W: StorageProfile> Region<W> {
     /// The single store path for any family `K`: erase the live form to `'static`, write it to the
     /// family's cell, and fire [`Stored::record_local`] on the storing frame. Hands back the
     /// stored `&K::At<'static>` for a surface to re-anchor. `storage` is private and this is the only
-    /// path that reaches it, so every allocation — branded or bare — routes here.
+    /// path that reaches it, so every family allocation routes here.
     ///
     /// No cycle gate: a stored value holds no owning `Rc` back to a region (a closure / future /
     /// module is a bare borrow into its defining region, kept alive by its carrier's witness set), so
@@ -450,26 +448,6 @@ impl<W: StorageProfile> Region<W> {
         stored
     }
 
-    /// Brand-confined allocation: store `value`, then hand the freshly-stored carrier to `project`
-    /// behind a **rank-2** (`for<'b>`) brand through [`with_branded_ref`]. Nothing region-lifetime
-    /// escapes — `project`'s `R` cannot name `'b` — so the value enters circulation only as whatever
-    /// carrier `project` builds (a [`Witnessed`](super::Witnessed) bundle, a
-    /// [`SealedExtern`](super::SealedExtern)), wrapped by the Witnessed/Sealed abstraction from birth
-    /// rather than handed out as a bare region reference. The witnessed-allocation surface, reached
-    /// through [`RegionHandle::alloc`] — `pub(crate)` here so a bare `&Region` cannot call it directly.
-    ///
-    /// Sound by the same `for<'b>` quantifier as [`Witnessed::with`](super::Witnessed::with): the
-    /// region pins the pointee for the whole synchronous `project` call and the brand keeps the view
-    /// from outliving it, so this surface carries **no `unsafe`** of its own beyond the substrate's
-    /// single audited retype.
-    pub(crate) fn alloc<K: Stored<W>, R>(
-        &self,
-        value: K::At<'_>,
-        project: impl for<'b> FnOnce(&'b K::At<'b>) -> R,
-    ) -> R {
-        with_branded_ref::<K, R>(self.store::<K>(value), project)
-    }
-
     /// The co-located resident allocation: store `value` — its input lifetime forgotten by
     /// [`store`](Self::store), so `value` is accepted at **any** lifetime (a caller relocating a
     /// longer-lived value hands it straight in) — then re-anchor the stored reference to the caller's
@@ -478,8 +456,8 @@ impl<W: StorageProfile> Region<W> {
     /// widen past the pin. The `&'a self` borrow is what makes it sound — the region pins the pointee
     /// for the whole of `'a`, so the re-anchored reference cannot out-claim its backing.
     ///
-    /// Reached through [`RegionHandle::alloc_resident`] — `pub(crate)` here so a bare `&Region`
-    /// exposes neither this nor the brand-confined [`alloc`](Self::alloc).
+    /// Reached through [`RegionHandle::alloc_resident`] — `pub(crate)` here so a bare `&Region` does
+    /// not expose it.
     pub(crate) fn alloc_resident<'a, K: Stored<W>>(&'a self, value: K::At<'_>) -> &'a K::At<'a> {
         let stored: &'a K::At<'static> = self.store::<K>(value);
         // SAFETY: lifetime-only retype of a single-lifetime family (the `Reattachable` contract); a
@@ -734,18 +712,6 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     {
         let bundles: Vec<&PinBundle<W::FrameOwner>> = sources.iter().map(|s| &s.0).collect();
         ReachDescription::mint_resident(self, &bundles)
-    }
-
-    /// Brand-confined allocation — see [`Region::alloc`]'s (crate-private) docs. Move-in: `value`
-    /// must carry no region borrow (`K::At<'static>`) — `project` only views/wraps the
-    /// freshly-stored value, it does not construct it, so a borrowing value would reach the arena
-    /// unvetted.
-    pub fn alloc<K: Stored<W>, R>(
-        self,
-        value: K::At<'static>,
-        project: impl for<'b> FnOnce(&'b K::At<'b>) -> R,
-    ) -> R {
-        self.region.alloc::<K, R>(value, project)
     }
 
     /// Co-located resident allocation — see [`Region::alloc_resident`]. Move-in: `value` must carry
