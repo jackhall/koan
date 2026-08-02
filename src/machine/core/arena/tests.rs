@@ -1606,3 +1606,79 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
         other => panic!("expected a KString, got {:?}", other.ktype()),
     }
 }
+
+/// Region death for the `Drop`-free families is deallocation only. A frame region is filled with
+/// every substrate shape — list, dict, record, and both payload carriers (`Tagged` and `Wrapped`) —
+/// each carrying a string leaf so the bump holds re-homed bytes as well as cells and index metadata,
+/// and then dropped while nothing outside it holds a borrow. No slot in any of those shapes has a
+/// destructor to run, so the whole teardown is the bump's chunk free; Miri's process-exit leak check
+/// is the assertion. A family that quietly reintroduced an owning slot — a `Vec` spine, a `String`
+/// name, an `Rc` — leaks its buffer here, because a bump frees its chunks without visiting them.
+#[test]
+fn region_death_frees_every_drop_free_substrate_shape() {
+    use crate::machine::model::KKey;
+    use std::collections::HashMap;
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let types = test_run.types.clone();
+
+    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+    let scope = run_root_bare(frame.storage());
+    let owned_cells = FrameCoverage::empty();
+
+    let shapes: Vec<&KObject<'_>> = vec![
+        scope.fold_resident_object(|brand| {
+            let door = brand.with_holder(&owned_cells);
+            KObject::list_of_held(
+                door,
+                vec![
+                    Held::Object(KObject::KString(door.alloc_text("first"))),
+                    Held::Object(KObject::Number(2.0)),
+                ],
+                &types,
+            )
+        }),
+        scope.fold_resident_object(|brand| {
+            let door = brand.with_holder(&owned_cells);
+            let mut map: HashMap<KKey, Held> = HashMap::new();
+            map.insert(
+                KKey::String("key"),
+                Held::Object(KObject::KString(door.alloc_text("value"))),
+            );
+            KObject::dict_of_held(door, map, &types)
+        }),
+        scope.fold_resident_object(|brand| {
+            let door = brand.with_holder(&owned_cells);
+            let fields = Record::from_pairs(vec![(
+                "field".to_string(),
+                Held::Object(KObject::KString(door.alloc_text("payload"))),
+            )]);
+            KObject::record_of_held(door, fields, &types)
+        }),
+        scope.fold_resident_object(|brand| {
+            let door = brand.with_holder(&owned_cells);
+            let inner = KObject::KString(door.alloc_text("tagged"));
+            KObject::tagged(door, "Tag", &inner, KType::NULL)
+        }),
+        scope.fold_resident_object(|brand| {
+            let door = brand.with_holder(&owned_cells);
+            let inner = KObject::KString(door.alloc_text("wrapped"));
+            KObject::wrapped_hold(door, &inner, KType::NULL)
+        }),
+    ];
+    assert_eq!(
+        shapes.len(),
+        5,
+        "every drop-free shape is live in the region"
+    );
+    assert!(
+        frame.region().allocated_total() > 0,
+        "the shapes genuinely occupy the region under test"
+    );
+
+    // Nothing outside the region borrows into it, so this is the whole of region death: the typed
+    // arenas hold none of these families, and the bump frees its chunks without a destructor pass.
+    drop(shapes);
+    drop(frame);
+}

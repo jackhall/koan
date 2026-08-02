@@ -120,7 +120,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-49 tests, grouped by the unsafe site each pins down. Names below are the exact
+52 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 21 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -344,6 +344,39 @@ regions, binds the list in an outer scope so every producer frame retires, then 
 `parts` on the read. The door is safe code throughout; tree borrows is the only check.
 
 - `let_bound_list_of_call_produced_quotes_survives_every_producer_free`
+
+**Bump-hosted substrate index re-home** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
+— the peer of the group above one level up: not a *cell*, but the substrate's own **index metadata**,
+which is bump-hosted and therefore has to be rebuilt at the destination exactly like the cells it
+indexes. A record's index is the sorted name slice `alloc_record` bumps (the slice and every name's
+bytes); a dict's is the `BumpMap` `alloc_dict` freezes over re-bumped keys. Both are read *before*
+any cell is — a field lookup binary-searches the names and a key lookup hashes and byte-compares the
+stored key — so an index that still pointed into a retiring producer is a use-after-free on the way
+in, and a cell-only re-home would leave exactly that. Each test builds its container in a producer
+frame (a record with unsorted field names, so the slice is genuinely reordered against the literal;
+a dict whose keys were already re-bumped once into the producer, so the relocation must re-bump
+them again rather than share), relocates it into a destination through the container-cell seam,
+drops the producer frame, and only then walks the index and looks every name / key up through it.
+The reach fold cannot rescue either shape: the index is metadata, not a cell, so no run describes
+it, and the bump keeps no address table for an audit to consult. Safe code; the only `unsafe`
+routed is the shared `retype` in `witnessed.rs`.
+
+- `record_name_index_rehomes_and_reads_back_after_producer_free`
+- `dict_key_index_rehomes_and_looks_up_after_producer_free`
+
+**Drop-free region death** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+— the closing claim of the shared per-region bump: every `Drop`-free value family lands there, so
+region death for those bytes is chunk deallocation with **no per-slot destructor pass**. That is a
+leak claim rather than a UB claim, and it is the one shape a bump cannot fail loudly on: a family
+that quietly reintroduced an owning slot — a `Vec` spine, a `String` name, an `Rc` — still writes
+and reads correctly, and the buffer simply never frees, because freeing a chunk does not visit what
+the chunk holds. `Copy` is the static proxy that forbids it at every bump primitive; this test is
+the dynamic check that the proxy is load-bearing in composition. It fills one frame region with all
+five substrate shapes (list, dict, record, `Tagged`, `Wrapped`), each carrying a bumped string leaf
+so the region holds re-homed bytes and index metadata as well as cells, then drops the frame with
+nothing outside borrowing in. Miri's process-exit leak count is the assertion.
+
+- `region_death_frees_every_drop_free_substrate_shape`
 
 **Declaration-window sibling cell read from a sub-Dispatch**
 ([src/machine/model/types/typed_field_list.rs](../src/machine/model/types/typed_field_list.rs)) —
@@ -677,9 +710,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-02: 2225s — 52 tests, 0 leaks, 0 UB
 - 2026-08-02: 2156s — 51 tests, 0 leaks, 0 UB
 - 2026-08-01: 2133s — 50 tests, 0 leaks, 0 UB
 - 2026-08-01: 2105s — 50 tests, 0 leaks, 0 UB
 - 2026-07-31: 2200s — 50 tests, 0 leaks, 0 UB
-- 2026-07-30: 2131s — 48 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

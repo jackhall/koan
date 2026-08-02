@@ -290,7 +290,7 @@ impl<'a> KObject<'a> {
     }
 
     /// Fresh `Record` carrier: memoizes the per-field type record as each field's
-    /// `ktype()`. Field order follows declaration; equality is order-blind per the
+    /// `ktype()`. Field order follows the names, not the literal; equality is order-blind per the
     /// `Record` substrate. `door` is the substrate door the cells are sectioned through — see
     /// [`Self::record_of_held`].
     pub fn record(
@@ -307,9 +307,9 @@ impl<'a> KObject<'a> {
 
     /// Fresh `Record` carrier over [`Held`] field cells — the type-aware path (a field
     /// value may be a first-class type). One pass over `fields` computes the memoized
-    /// field-type join (this carrier's own `ktype()`); the cells are then sectioned through `door` in
-    /// declaration order, with the name→index table as the substrate's layout — the record door's
-    /// sole construction site.
+    /// field-type join (this carrier's own `ktype()`); the cells are then sectioned through `door`
+    /// name-sorted, aligned with the bump-hosted name slice that is the substrate's whole layout —
+    /// the record door's sole construction site.
     pub fn record_of_held(
         door: SubstrateDoor<'a, '_>,
         fields: Record<Held<'a>>,
