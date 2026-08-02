@@ -314,3 +314,83 @@ fn a_stored_value_may_borrow_its_own_region_with_no_residence_audit() {
     );
     assert!(span.with_home_region(|home| ptr::eq(home, dest.region())));
 }
+
+/// The keyed index door: a table built and placed in the region's bump, read back by key. `Copy`
+/// elements are the whole admission criterion — nothing here declares a family, a [`Stored`] impl or
+/// an audit, exactly as for the other primitives.
+#[test]
+fn a_bumped_map_indexes_its_entries() {
+    let dest = frame();
+    let handle = RegionHandle::<BumpProfile>::from_owner(&*dest);
+
+    let index = handle.bump_map([(10u32, 0usize), (20, 1), (30, 2)]);
+
+    assert_eq!(index.len(), 3);
+    assert!(!index.is_empty());
+    assert_eq!(index.get(&20), Some(&1));
+    assert_eq!(index.get(&99), None, "an absent key indexes nothing");
+    let mut pairs: Vec<(u32, usize)> = index.iter().map(|(k, v)| (*k, *v)).collect();
+    pairs.sort_unstable();
+    assert_eq!(
+        pairs,
+        vec![(10, 0), (20, 1), (30, 2)],
+        "iteration covers every pair, in an order the door does not promise"
+    );
+}
+
+/// An empty table is a legitimate index, and it reserves nothing.
+#[test]
+fn an_empty_bumped_map_holds_and_reserves_nothing() {
+    let dest = frame();
+    let handle = RegionHandle::<BumpProfile>::from_owner(&*dest);
+
+    let index = handle.bump_map(Vec::<(u32, usize)>::new());
+
+    assert!(index.is_empty());
+    assert_eq!(index.len(), 0);
+    assert_eq!(index.get(&0), None);
+    assert_eq!(index.allocation_size(), 0, "no entries, no bucket array");
+}
+
+/// Occupancy counts **both** of the table's allocations — the header the bump placed and the bucket
+/// array the table reserved inside that same bump. The second is the one `size_of_val` on the header
+/// cannot see, and the reason the door adds it by hand.
+#[test]
+fn a_bumped_map_costs_its_header_and_its_bucket_array() {
+    let dest = frame();
+    let handle = RegionHandle::<BumpProfile>::from_owner(&*dest);
+    let before = dest.region().bump_bytes();
+
+    let index = handle.bump_map((0..16u32).map(|n| (n, n as usize)));
+
+    assert!(
+        index.allocation_size() > 0,
+        "sixteen entries reserve a bucket array"
+    );
+    assert_eq!(
+        dest.region().bump_bytes() - before,
+        size_of_val(index) + index.allocation_size(),
+        "live bytes, exactly: header plus buckets, and no chunk-capacity rounding"
+    );
+}
+
+/// A table may key on bytes from **its own region**, like every other bumped value — and region
+/// death is chunk release, with the table's own `Drop` never run. Under Miri's leak check that is
+/// the acceptance criterion made observable: the bucket array is bump memory, so forgoing its
+/// deallocation strands nothing.
+#[test]
+fn a_bumped_map_keys_on_its_own_regions_bytes_and_dies_with_it() {
+    let dest = frame();
+    {
+        let handle = RegionHandle::<BumpProfile>::from_owner(&*dest);
+        let names: Vec<&str> = ["alpha", "beta", "gamma"]
+            .into_iter()
+            .map(|name| handle.bump_text(name))
+            .collect();
+        let index = handle.bump_map(names.iter().copied().zip(0usize..));
+
+        assert_eq!(index.get(&"beta"), Some(&1));
+        assert_eq!(index.len(), 3);
+    }
+    drop(dest);
+}

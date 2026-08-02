@@ -35,6 +35,7 @@
 //! for how an escaped value's region stays alive.
 
 use std::cell::{Cell, RefCell};
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::rc::Weak;
 
@@ -43,8 +44,8 @@ use elsa::FrozenMap;
 use typed_arena::Arena;
 
 use super::{
-    erase_to_static, with_branded_ref, PinBundle, PinsRegion, ReachDescription, Reattachable,
-    RegionOwner, StepCoverage,
+    erase_to_static, with_branded_ref, BumpMap, PinBundle, PinsRegion, ReachDescription,
+    Reattachable, RegionOwner, StepCoverage,
 };
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
@@ -180,9 +181,12 @@ pub struct Region<W: StorageProfile> {
     /// A `Bump` runs **no destructor** for what it holds — it releases its chunks whole. That is the
     /// point: everything allocated here costs nothing at region teardown, which is what keeps a
     /// sectioned container `Copy` and `Drop`-free so a frame drop need not walk one. The `T: Copy`
-    /// bound every bump primitive carries is what statically holds callers to it — a `Copy` type has
-    /// no `Drop` to skip. ("`Drop`-free" itself has no expressible bound; `Copy` is the static
-    /// proxy.)
+    /// bound the value, slice and text primitives carry is what statically holds callers to it — a
+    /// `Copy` type has no `Drop` to skip. ("`Drop`-free" itself has no expressible bound; `Copy` is
+    /// the static proxy.) The one primitive whose stored value is not itself `Copy`,
+    /// [`bump_map`](Self::bump_map), moves the bound onto the table's *elements* and allocates the
+    /// buckets in this same bump, so the destructor it forgoes would have freed only bytes region
+    /// death frees anyway — see [`BumpMap`](super::BumpMap).
     ///
     /// A cycle among bumped entries is harmless: everything here dies with the region, at once.
     /// Occupancy is one figure for the whole bump ([`bump_bytes`](Self::bump_bytes)) — there is no
@@ -335,16 +339,43 @@ impl<W: StorageProfile> Region<W> {
         self.note_bumped(self.bump.alloc_str(text))
     }
 
-    /// Add `stored`'s size to the region's live-byte count and hand it straight back — the one
-    /// writer of [`bumped_bytes`](Self::bumped_bytes). Every bump primitive returns through it, so
-    /// counting is a wrapper on the return value rather than a separate step; nothing in the type
-    /// system enforces that, so a new primitive has to be routed the same way. `size_of_val` reads
-    /// the size off the value the bump actually produced (a slice's whole span, a `str`'s byte
-    /// length), never a requested capacity.
+    /// Build a [`BumpMap`] over this region's bump from `entries` and place it there too — the one
+    /// bump primitive whose stored value is not `Copy`, admitted because the `Copy` bound moves onto
+    /// the table's elements and its buckets land in this same bump. [`BumpMap`] carries the argument
+    /// in full.
+    ///
+    /// Both allocations are counted: the bucket array through
+    /// [`BumpMap::allocation_size`](super::BumpMap::allocation_size), the table header through
+    /// [`note_bumped`](Self::note_bumped) like every other bumped value.
+    pub(crate) fn bump_map<'a, K, V>(
+        &'a self,
+        entries: impl IntoIterator<Item = (K, V)>,
+    ) -> &'a BumpMap<'a, K, V>
+    where
+        K: Copy + Eq + Hash,
+        V: Copy,
+    {
+        let map = BumpMap::build(&self.bump, entries);
+        self.note_bumped_amount(map.allocation_size());
+        self.note_bumped(self.bump.alloc(map))
+    }
+
+    /// Add `stored`'s size to the region's live-byte count and hand it straight back — the return
+    /// path every bump primitive takes, so counting is a wrapper on the return value rather than a
+    /// separate step; nothing in the type system enforces that, so a new primitive has to be routed
+    /// the same way. `size_of_val` reads the size off the value the bump actually produced (a
+    /// slice's whole span, a `str`'s byte length), never a requested capacity.
     fn note_bumped<'a, T: ?Sized>(&self, stored: &'a T) -> &'a T {
-        self.bumped_bytes
-            .set(self.bumped_bytes.get() + size_of_val(stored));
+        self.note_bumped_amount(size_of_val(stored));
         stored
+    }
+
+    /// Add `bytes` to the region's live-byte count — the one writer of
+    /// [`bumped_bytes`](Self::bumped_bytes), split out for the allocation a bump primitive makes
+    /// *beside* the value it returns (a [`BumpMap`]'s bucket array, which `size_of_val` on the table
+    /// header does not see).
+    fn note_bumped_amount(&self, bytes: usize) {
+        self.bumped_bytes.set(self.bumped_bytes.get() + bytes);
     }
 
     /// The region's bump occupancy, in **total live bytes**: the sum of the sizes of the values
@@ -629,6 +660,33 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// ```
     pub fn bump_value<T: Copy>(self, value: T) -> &'a T {
         self.region.bump_value(value)
+    }
+
+    /// **Build a keyed index in this handle's region's bump** from `entries` and hand back the
+    /// co-located `&'a BumpMap`— the door an embedder's keyed container reaches for when its lookup
+    /// needs a hash table rather than the sorted slice [`Self::bump_slice`] would host.
+    ///
+    /// Same borrow argument as its sibling primitives: the returned reference cannot outlive the
+    /// `&'a Region` the handle holds, and the table indexes rather than owns, so there is no
+    /// residence claim for a call site to state. The `Copy` obligation moves from the stored value
+    /// to the table's **elements**, which is what makes the table's un-run `Drop` lossless —
+    /// [`BumpMap`](super::BumpMap) carries that argument.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// let index = handle.bump_map([("width", 0usize), ("height", 1usize)]);
+    /// assert_eq!(index.get(&"height"), Some(&1));
+    /// assert_eq!(index.len(), 2);
+    /// ```
+    pub fn bump_map<K, V>(self, entries: impl IntoIterator<Item = (K, V)>) -> &'a BumpMap<'a, K, V>
+    where
+        K: Copy + Eq + Hash,
+        V: Copy,
+    {
+        self.region.bump_map(entries)
     }
 
     /// Fold an owned [`StepCoverage`] into this handle's region's union bundle, retained for the
