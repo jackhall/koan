@@ -9,7 +9,9 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 use crate::witnessed::{CellInput, CellReach, Sectioned};
 
-use super::container_substrate::{held_copy_cost, HeldCells, ListLayout, PayloadLayout};
+use super::container_substrate::{
+    held_copy_cost, HeldCells, ListLayout, PayloadLayout, RecordLayout,
+};
 use super::{
     ContainerSubstrate, DictSubstrate, Held, KKey, ListSubstrate, Module, PayloadSubstrate,
     RecordSubstrate,
@@ -55,7 +57,7 @@ pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::CostDriven;
 ///
 /// Every composite payload is a region-resident substrate the value borrows (`&'a`), immutable
 /// after construction; a future mutable-list builtin would need a fresh substrate at the mutation
-/// site. `Struct.fields` uses `IndexMap` so iteration matches declaration order.
+/// site.
 ///
 /// A `KFunction` is a bare borrow into its defining region; the regions an escaping
 /// closure reaches are named by its carrier's reach description
@@ -109,8 +111,8 @@ pub enum KObject<'a> {
     },
     /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is a region
     /// borrow of the record's [`RecordSubstrate`] — the field cells in sectioned storage plus the
-    /// name→index table, the stored reach union and the copy cost (identifier-keyed,
-    /// declaration-ordered, order-blind equality); the
+    /// sorted name slice that indexes them, the stored reach union and the copy cost
+    /// (identifier-keyed, name-ordered, order-blind equality); the
     /// second is the value's own type handle — the interned `Record` over each field's
     /// `ktype()` at fresh construction, re-stamped to a declared record type at an annotated
     /// boundary (mirrors `List` / `Dict`). Construct via [`KObject::record`] /
@@ -714,21 +716,31 @@ fn alloc_list<'a>(door: SubstrateDoor<'a, '_>, items: Vec<Held<'a>>) -> &'a List
     ))
 }
 
-/// Section a record's field cells in declaration order and store the [`RecordSubstrate`] under the
-/// name→index table that layout implies.
+/// Sort a record's fields by name, section the cells in that order, and store the
+/// [`RecordSubstrate`] under the region-hosted name slice that order makes an index. Sorting
+/// happens **before** sectioning: the run partition is computed over the cell order handed to
+/// [`section_cells`], so a later sort would mispair runs with cells. Names cannot repeat — the
+/// incoming [`Record`] deduplicates last-wins upstream — so the sort is a total order over them and
+/// binary search resolves a field exactly.
 fn alloc_record<'a>(
     door: SubstrateDoor<'a, '_>,
     fields: Record<Held<'a>>,
 ) -> &'a RecordSubstrate<'a> {
-    let mut index: Record<usize> = Record::new();
-    let mut cells: Vec<Held<'a>> = Vec::with_capacity(fields.len());
-    for (name, cell) in fields.into_pairs() {
-        index.insert(name, cells.len());
+    let mut pairs: Vec<(String, Held<'a>)> = fields.into_pairs().collect();
+    pairs.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut names: Vec<&'a str> = Vec::with_capacity(pairs.len());
+    let mut cells: Vec<Held<'a>> = Vec::with_capacity(pairs.len());
+    for (name, cell) in pairs {
+        names.push(door.alloc_text(&name));
         cells.push(cell);
     }
+    let names = door.alloc_slice(&names);
     let (cells, reach, copy_cost) = section_cells(door, cells);
     door.alloc_substrate_folded::<RecordSubstrate<'static>>(ContainerSubstrate::new(
-        index, cells, reach, copy_cost,
+        RecordLayout::new(names),
+        cells,
+        reach,
+        copy_cost,
     ))
 }
 

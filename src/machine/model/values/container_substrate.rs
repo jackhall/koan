@@ -2,7 +2,7 @@
 //! [`Sectioned`] storage (semantic order, physically partitioned into runs that each name one
 //! interned reach description), a payload-specific index `C` mapping a name / key / position onto a
 //! cell index, the interned union over the runs, and the memoized copy cost.
-//! [`RecordSubstrate`] (`C = Record<usize>`) is the field substrate behind a record value;
+//! [`RecordSubstrate`] (`C = RecordLayout`) is the field substrate behind a record value;
 //! [`ListSubstrate`] (`C = ListLayout`) is the element substrate behind a list value;
 //! [`DictSubstrate`] (`C = hashbrown::HashMap<KKey, usize>`) is the entry substrate behind a dict
 //! value; [`PayloadSubstrate`] (`C = PayloadLayout`) is the single-cell payload substrate behind a
@@ -15,7 +15,6 @@
 use hashbrown::HashMap;
 
 use crate::machine::core::{FrameReach, FrameStorage};
-use crate::machine::model::types::Record;
 use crate::witnessed::{CellRef, Sectioned};
 
 use super::{Held, KKey, KObject};
@@ -29,6 +28,26 @@ pub type HeldCells<'a> = Sectioned<'a, Held<'static>, FrameStorage>;
 /// parts.
 pub type PartedCell<'a> =
     crate::witnessed::Opened<'a, CellRef<Held<'static>>, crate::witnessed::Carrier<FrameStorage>>;
+
+/// The index layout of a [`RecordSubstrate`]: the field names, region-hosted and sorted, one per
+/// cell and positionally aligned with them. Name-sorted order is the whole index — a lookup binary
+/// searches the slice and the hit's position *is* the cell index, so a record needs no table.
+///
+/// `Copy`, and every byte it names is bump-hosted: the slice itself, and each name's own bytes
+/// through [`RegionBrand::alloc_text`](crate::machine::core::RegionBrand::alloc_text). Nothing here
+/// owns an allocation, so a record's index runs no `Drop` at region death.
+#[derive(Clone, Copy)]
+pub struct RecordLayout<'a> {
+    names: &'a [&'a str],
+}
+
+impl<'a> RecordLayout<'a> {
+    /// Wrap the sorted name slice the record door bumped. The caller sorts before it sections, so
+    /// the slice and the cells share one order.
+    pub(crate) fn new(names: &'a [&'a str]) -> Self {
+        RecordLayout { names }
+    }
+}
 
 /// The index layout of a [`ListSubstrate`]: a list is positional, so a cell's index *is* its
 /// position and there is nothing to store. A distinct unit type rather than `()` so the list
@@ -154,32 +173,31 @@ impl<'a, C> ContainerSubstrate<'a, C> {
 }
 
 /// The field substrate a record value borrows — [`ContainerSubstrate`] indexed by field name. Cells
-/// are in declaration order; equality is order-blind (see [`Record`]).
-pub(crate) type RecordSubstrate<'a> = ContainerSubstrate<'a, Record<usize>>;
+/// are name-sorted, matching the [`RecordLayout`] slice they are aligned with, so field order is a
+/// property of the names and never of how the literal was written. Equality is order-blind
+/// regardless.
+pub(crate) type RecordSubstrate<'a> = ContainerSubstrate<'a, RecordLayout<'a>>;
 
 impl<'a> RecordSubstrate<'a> {
     /// The cell named `field`, or `None` when the record has no such field.
     pub fn field(&self, field: &str) -> Option<&'a Held<'a>> {
-        self.index().get(field).and_then(|at| self.cell(*at))
+        self.field_index(field).and_then(|at| self.cell(at))
     }
 
     /// The cell index of `field`, or `None` when the record has no such field — what a projection
-    /// resolves a field name to before parting the cell ([`Self::project`]).
+    /// resolves a field name to before parting the cell ([`Self::project`]). A binary search over
+    /// the sorted names; the position found *is* the cell index.
     pub fn field_index(&self, field: &str) -> Option<usize> {
-        self.index().get(field).copied()
+        self.index().names.binary_search(&field).ok()
     }
 
-    /// The fields in declaration order, as `(name, cell)` pairs.
-    pub fn fields(&self) -> impl Iterator<Item = (&str, &'a Held<'a>)> {
-        let cells = self.cells();
+    /// The fields in name order, as `(name, cell)` pairs.
+    pub fn fields(&self) -> impl Iterator<Item = (&'a str, &'a Held<'a>)> {
         self.index()
+            .names
             .iter()
-            .map(move |(name, at)| (name.as_str(), cells[*at]))
-    }
-
-    /// The field names in declaration order.
-    pub fn field_names(&self) -> impl Iterator<Item = &str> {
-        self.index().keys().map(String::as_str)
+            .copied()
+            .zip(self.cells().iter().copied())
     }
 }
 

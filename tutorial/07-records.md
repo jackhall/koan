@@ -26,7 +26,7 @@ PRINT (Point {y = 4, x = 3})
 ```
 
 ```text
-Point({y = 4, x = 3})
+Point({x = 3, y = 4})
 ```
 
 Bare identifiers on the value side resolve through scope like anywhere else, so
@@ -126,7 +126,7 @@ PRINT person
 ```
 
 ```text
-{name = ada, age = 36}
+{age = 36, name = ada}
 ```
 
 One limit to know: `.` reads fields only off a `NEWTYPE` record value. A bare

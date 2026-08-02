@@ -934,7 +934,6 @@ digraph {
     "koan::machine::model::values::carried" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::model::values::container_substrate" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::types" [label="uses", style="dashed"];
