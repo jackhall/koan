@@ -477,7 +477,6 @@ digraph {
     "koan::machine::core::arena::frame" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::arena::residence" -> "koan" [label="uses", style="dashed"];
-    "koan::machine::core::arena::residence" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::arena::residence" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::arena::residence" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::arena::residence" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -940,8 +939,6 @@ digraph {
     "koan::machine::model::values::kkey" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::values::kobject" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan" [label="uses", style="dashed"];
-    "koan::machine::model::values::kobject" -> "koan::builtins::test_support" [label="uses", style="dashed"];
-    "koan::machine::model::values::kobject" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::ast" [label="uses", style="dashed"];

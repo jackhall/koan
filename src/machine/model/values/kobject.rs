@@ -3,7 +3,7 @@ use std::rc::Weak;
 
 use crate::machine::core::KFunction;
 use crate::machine::core::{
-    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, Residence, SubstrateDoor,
+    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
 };
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
@@ -438,43 +438,6 @@ impl<'a> KObject<'a> {
         matches!(self, KObject::Number(_) | KObject::Bool(_) | KObject::Null)
     }
 
-    /// True when every region borrow in `self` points into the walk's destination region. Only
-    /// value-channel borrows are walked: `KFunction`, `Module`, `KExpression` splices, and a
-    /// substrate carrier's (`Record`/`List`/`Dict`/`Tagged`/`Wrapped`) substrate address (O(1),
-    /// never its cells). The `KType` tags (`List`/`Dict`/`Record` memos, `Tagged { identity }`,
-    /// `Wrapped { type_id }`) are not walked — a handle is one `u128` naming registry-owned content,
-    /// so it borrows no region at all.
-    pub(crate) fn resident_in_visiting(&self, residence: &Residence<'_>) -> bool {
-        match self {
-            KObject::Number(_) | KObject::Bool(_) | KObject::Null => true,
-            // A string's bytes live in some region's bump, and the bump keeps no address table — so
-            // no audit can say which. Answering `false` is what keeps that unanswerable question off
-            // every runtime-audited move-in: a bare string never crosses one, and a copying adoption
-            // rebuilds it through the destination's own text door instead
-            // ([`needs_destination_door`](Self::needs_destination_door)).
-            KObject::KString(_) => false,
-            KObject::KFunction(f) => residence.owns_function(f),
-            // An expression is raw AST: its parts run, its keyword text and its structural cache
-            // all live in the program storage that parsed them, which sits at the eternal tier and
-            // outlives every region a holder could have. It names no producer region either — a
-            // resolved sub-result lives only on the scheduler's `WorkingExpression`, which no value
-            // cell can hold — so pointing at one pins nothing and can dangle nowhere. The
-            // `KString` arm's sibling: a borrow no address table can place, settled structurally
-            // rather than by a probe. Which half of that is typed and which is flow-cleared is
-            // [`ProgramBrand`](crate::machine::core::ProgramBrand)'s doc.
-            KObject::KExpression(_) => true,
-            // O(1) address-membership check on the substrate borrow — never a cell walk. Every
-            // substrate carrier answers residence by its own address, whether it is a bare top-level
-            // value (born resident through the fold door) or rides inside another carrier.
-            KObject::List(substrate, _) => residence.owns_substrate(substrate),
-            KObject::Dict(substrate, _) => residence.owns_substrate(substrate),
-            KObject::Record(substrate, _) => residence.owns_substrate(substrate),
-            KObject::Tagged { value, .. } => residence.owns_substrate(value),
-            KObject::Wrapped { inner, .. } => residence.owns_substrate(inner),
-            KObject::Module(m) => residence.owns_module(m),
-        }
-    }
-
     /// Runtime type tag — context-free by construction (ruling 4). Every value memoizes its
     /// full interned type handle where it is built, at a site that holds the registry, so this
     /// only ever copies a stored handle or names a pre-seeded constant. It builds nothing and
@@ -557,11 +520,11 @@ impl<'a> KObject<'a> {
     }
 
     /// Whether `self` is a substrate carrier — a `Record`, `List`, `Dict`, `Tagged`, or `Wrapped`,
-    /// each of which directly borrows a region-resident substrate. Purely structural — unlike
-    /// [`Self::resident_in_visiting`], no residence is checked here. A substrate is always a genuine
-    /// region borrow into its own home (Ruling 5, design/value-substrates.md), which is what makes
-    /// this the shape question the adoption rules turn on: a substrate carrier cannot cross a
-    /// checked move-in by a pointer copy, so a copying seam rebuilds it through the fold door.
+    /// each of which directly borrows a region-resident substrate. Purely structural: no residence
+    /// is read here. A substrate is always a genuine region borrow into its own home (Ruling 5,
+    /// design/value-substrates.md), which is what makes this the shape question the adoption rules
+    /// turn on: a substrate carrier cannot move regions by a pointer copy, so a copying seam
+    /// rebuilds it through the fold door.
     pub(crate) fn embeds_substrate(&self) -> bool {
         matches!(
             self,

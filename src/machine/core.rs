@@ -23,7 +23,7 @@ pub use arena::{
     FrameStorage, KoanRegion, ProgramBrand, ProgramStorage, RegionBrand, RegionTypeFamily,
     StepAllocator, SubstrateDoor,
 };
-pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
+pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile};
 pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
     NodeHandle, WriteGate,

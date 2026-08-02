@@ -294,7 +294,7 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Literal(lit) => lit.to_kobject(brand),
             // A quote's `KObject::KExpression` is invariant in `'a` with no `'static` rebuild, so it
             // cannot be constructed at the caller's `yoke` brand — the classifier routes a quote to
-            // its own sub-dispatch (which seals it through the checked door) before any static cell.
+            // its own sub-dispatch (which seals it through the expression door) before any static cell.
             ExpressionPart::Expression(_)
             | ExpressionPart::SigiledTypeExpr(_)
             | ExpressionPart::RecordType(_)

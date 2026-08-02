@@ -40,7 +40,6 @@ pub use frame::{
     program_storage, run_root_storage, CallFrame, FrameCoverage, FrameReach, FrameStorage,
     ProgramBrand, ProgramStorage,
 };
-pub(crate) use residence::Residence;
 pub use step_allocator::StepAllocator;
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
@@ -123,8 +122,9 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// Store an owned, region-pure [`KObject`] into the region (no value holds an owning `Rc` back
-    /// to a region, so the store forms no back-edge). Yields a co-located `&'a` resident. A value
-    /// that borrows another region takes [`Scope::alloc_object_checked_stored`] instead.
+    /// to a region, so the store forms no back-edge). Yields a co-located `&'a` resident. The
+    /// `'static` bound is the gate: a value that borrows *any* region cannot reach this door, and
+    /// takes a fold or merge whose composition names what it borrows instead.
     pub fn alloc_object(self, o: KObject<'static>) -> &'a KObject<'a> {
         self.0.alloc_resident::<KObject<'static>>(o)
     }
@@ -138,13 +138,11 @@ impl<'a> RegionBrand<'a> {
     /// value family free of `Drop` glue. The borrow the caller gets back is checked against this
     /// brand's own `'a`, so no audit and no reach vocabulary enter here — bare bytes reach nothing.
     ///
-    /// Storing the *value* built around those bytes is gated exactly where it always was.
-    /// [`Self::alloc_object`] admits only `'static`, so a region-hosted string cannot reach it;
-    /// [`KObject::resident_in_visiting`] answers `false` for a string, so the runtime-audited door
-    /// ([`Scope::alloc_object_checked_stored`]) rejects
-    /// one — the bump keeps no address table, so no audit could tell which region a `&str` points
-    /// into. The route in is [`FoldingBrand::alloc_object_folded`], where the rank-2 brand proves
-    /// the string was bumped at the destination.
+    /// Storing the *value* built around those bytes is gated at its own door. [`Self::alloc_object`]
+    /// admits only `'static`, so a region-hosted string cannot reach it — and no address probe could
+    /// stand in, because the bump keeps no address table and so cannot say which region a `&str`
+    /// points into. The route in is [`FoldingBrand::alloc_object_folded`], where the rank-2 brand
+    /// proves the string was bumped at the destination.
     pub fn alloc_text(self, text: &str) -> &'a str {
         self.0.bump_text(text)
     }
@@ -589,19 +587,10 @@ pub(crate) trait KoanRegionExt {
     #[allow(dead_code)]
     fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool;
 
-    /// Whether `ptr` was returned by a prior `alloc_module` on this region — the residence audit's
-    /// check for a `KObject::Module` payload.
-    fn owns_module<'a>(&self, ptr: *const Module<'a>) -> bool;
-
-    /// Whether `ptr` was returned by a prior `alloc_function` on this region — the residence
-    /// audit's check for a `KObject::KFunction` payload.
-    fn owns_function<'a>(&self, ptr: *const KFunction<'a>) -> bool;
-
-    /// Whether `ptr` was returned by a prior `alloc_substrate_folded` on this region —
-    /// [`Residence::owns_substrate`](super::Residence::owns_substrate)'s single-region address
-    /// check, the same shape as [`Self::owns_function`] but with no scope-region shortcut: a
-    /// `ContainerSubstrate<C>` carries no borrow naming its own home region, so the residence walk
-    /// widens this with a per-reach-member check rather than a single `covers_region` call.
+    /// Whether `ptr` was returned by a prior `alloc_substrate_folded` on this region — the
+    /// address-table probe the relocation suites assert a rebuilt substrate's landing region with.
+    /// `#[allow(dead_code)]` for the same reason as [`Self::owns_object`].
+    #[allow(dead_code)]
     fn owns_substrate<C>(&self, ptr: *const ContainerSubstrate<'_, C>) -> bool;
 
     /// Total bytes allocated in this region: each Koan family's live count weighted by the flat size
@@ -660,22 +649,6 @@ impl KoanRegionExt for KoanRegion {
         // clippy's complaint.
         #[allow(clippy::unnecessary_cast)]
         let target = ptr as *const KObject<'static> as usize;
-        self.owns_addr(target)
-    }
-
-    fn owns_module<'a>(&self, ptr: *const Module<'a>) -> bool {
-        // `Module` is invariant in `'a`, so the through-`'static` cast is required despite
-        // clippy's complaint.
-        #[allow(clippy::unnecessary_cast)]
-        let target = ptr as *const Module<'static> as usize;
-        self.owns_addr(target)
-    }
-
-    fn owns_function<'a>(&self, ptr: *const KFunction<'a>) -> bool {
-        // `KFunction` is invariant in `'a`, so the through-`'static` cast is required despite
-        // clippy's complaint.
-        #[allow(clippy::unnecessary_cast)]
-        let target = ptr as *const KFunction<'static> as usize;
         self.owns_addr(target)
     }
 

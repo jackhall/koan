@@ -331,12 +331,10 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         .brand()
         .alloc_module(Module::new("IntMod".into(), child));
     // A module value surfaces its principal signature, sealed once at construction — do the same
-    // here so `ktype()` (reached by `alloc_object_checked_stored`) has a filled cell.
+    // here so `ktype()` has a filled cell.
     module.seal_self_sig(SigSchema::raw_self_sig(module), &types);
     // A module is a value: it reaches a slot on the Object channel, and a `:Type` slot refuses it.
-    let (module_value, _reach) = scope
-        .alloc_object_checked_stored(KObject::Module(module), &types)
-        .expect("module was just allocated into region's own region");
+    let module_value = scope.brand().alloc_value(KObject::Module(module));
     assert!(!t.accepts_working_part(
         &spliced_part(&region, Carried::Object(module_value)),
         &types

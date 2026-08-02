@@ -73,10 +73,11 @@ impl ProgramStorage {
 /// points take this rather than a bare `RegionBrand`, so a parsed AST's storage tier is checked at
 /// every call site rather than held by the discipline of one.
 ///
-/// What this pins is the *parse* door. Three answers in [`KObject`](crate::machine::model::KObject)
-/// — `resident_in_visiting` admitting an expression unconditionally, `object_cell_reach` calling
-/// its cell `Owned`, `retains_home` answering `false` — hold because no expression reaching the
-/// value channel borrows a region a holder can outlive. Parse output satisfies that by this type.
+/// What this pins is the *parse* door. Two answers in [`KObject`](crate::machine::model::KObject)
+/// — `object_cell_reach` calling an expression's cell `Owned`, `retains_home` answering `false` —
+/// hold because no expression reaching the value channel borrows a region a holder can outlive, and
+/// so does the expression door's own claim that the cell it bumps names no producer region
+/// ([`RegionBrand::alloc_expression`]). Parse output satisfies that by this type.
 /// A node the runtime builds mid-dispatch (`fn_def`'s deferred placeholder, `val_decl`'s type
 /// wrapper, `op_def`'s bridge body) takes an ordinary [`RegionBrand`] at its declaring scope, and
 /// satisfies it instead by never reaching the value channel: each is unwrapped or sub-dispatched

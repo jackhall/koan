@@ -345,13 +345,10 @@ fn kfunction_borrow_preserved_verbatim() {
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
-    let types = test_run.types.clone();
 
     let kf_ref = alloc_local_kf(&source);
     let source_scope = run_root_bare(source.storage());
-    let (obj, _reach): (&KObject, _) = source_scope
-        .alloc_object_checked_stored(KObject::KFunction(kf_ref), &types)
-        .expect("f was just allocated into region\'s own region");
+    let obj: &KObject = source_scope.brand().alloc_value(KObject::KFunction(kf_ref));
 
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(

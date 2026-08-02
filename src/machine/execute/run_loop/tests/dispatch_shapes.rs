@@ -68,9 +68,8 @@ fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
             ctx.scope,
             Carried::Object(
                 ctx.scope
-                    .alloc_object_checked_stored(obj.deep_clone(), ctx.types)
-                    .expect("a deep-cloned Number is always resident-in-self")
-                    .0,
+                    .place_pure_value(obj)
+                    .expect("a Number is region-pure"),
             ),
         ),
         None => Action::done(Err(crate::machine::KError::new(
@@ -96,9 +95,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
         false,
         types,
     ));
-    let (obj, _reach) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f), types)
-        .expect("f was just allocated into region\'s own region");
+    let obj = scope.brand().alloc_value(KObject::KFunction(f));
     scope
         .bind_resident_for_test(
             "f".to_string(),

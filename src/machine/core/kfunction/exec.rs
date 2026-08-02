@@ -91,7 +91,8 @@ where
 {
     // Bind each parameter into the frame's own scope through the value/type doors. An object is
     // deep-copied into the frame region under the reach its own delivered arg carrier mints
-    // (`bind_delivered`); a region-pure object argument has no carrier and takes the checked tier. A
+    // (`bind_delivered`) — every value argument arrives with one, a region-pure literal included,
+    // because the frame scope opens at a `for<'b>` brand a bare caller reference cannot cross. A
     // type is owned data, so it crosses by clone and lands in the frame region through the single
     // storage door (`register_type_delivered`), pinning nothing. Built at the frame brand so nothing
     // fabricates a free `&'a`.
@@ -102,29 +103,24 @@ where
         for (name, carried) in args.iter() {
             let carrier = arg_carriers.get(name).copied();
             match *carried {
-                Carried::Object(object) => match carrier {
-                    // The projection is identity — the whole delivered value binds. The copy is a
-                    // deep clone into the frame region, so the carrier's residence-only host is not
-                    // part of its reach (a tail call's retiring frame must not ride this binding).
-                    Some(cell) => {
-                        child.bind_delivered_direct(
-                            name.clone(),
-                            cell,
-                            BindingIndex::value(0),
-                            |c| Ok(c.object()),
-                            gate,
-                        )?;
-                    }
-                    None => {
-                        child.bind_checked_direct(
-                            name.clone(),
-                            object.deep_clone(),
-                            BindingIndex::value(0),
-                            types,
-                            gate,
-                        )?;
-                    }
-                },
+                // The projection is identity — the whole delivered value binds. The copy is a deep
+                // clone into the frame region, so the carrier's residence-only host is not part of
+                // its reach (a tail call's retiring frame must not ride this binding).
+                Carried::Object(_) => {
+                    let cell = carrier.ok_or_else(|| {
+                        KError::new(KErrorKind::ShapeError(format!(
+                            "internal: argument `{name}` reached the frame bind with no delivery \
+                             envelope"
+                        )))
+                    })?;
+                    child.bind_delivered_direct(
+                        name.clone(),
+                        cell,
+                        BindingIndex::value(0),
+                        |c| Ok(c.object()),
+                        gate,
+                    )?;
+                }
                 // Type-denoting params (a `:Signature`-kind slot, a type alias) register a type, not a
                 // value binding. The arg is already a resolved type; the door clones it into the
                 // frame region. A *module* argument is a value and takes the Object arm above.

@@ -24,7 +24,7 @@ use super::{arg, kw, sig};
 /// per-MATCH child scope (so the binding can't leak). No admitting arm → `ShapeError`
 /// naming the scrutinee's runtime type; an F1 ambiguity or malformed shape → `ShapeError`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
-    use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract, ItSource};
+    use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract};
     use crate::machine::{arg_object, require_kexpression, Action};
 
     // Selection needs only a borrow of the scrutinee — it never stores the reference — so no
@@ -58,30 +58,27 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // The scrutinee reaches its `it` binding through the same carrier door TRY's success arm uses:
     // the envelope's retained host pins the producer until the single bind-time copy, and the
     // projection (ruling F3) picks the scrutinee itself or its wrapped payload. A boolean arm over
-    // a `Bool` scrutinee binds `Null` (a boolean carries no payload); a region-pure scrutinee (e.g.
-    // a plain Number) has no carrier, so the copy is region-pure and audited as such in `arm_tail`.
-    let it_source = if !selected.binds_payload
-        && matches!(value, crate::machine::model::KObject::Bool(_))
-    {
-        ItSource::Pure(crate::machine::model::KObject::Null)
-    } else if let Some(carrier) = ctx.arg_carrier("value") {
-        // A variant/tag arm binds the payload, so the envelope narrows to the payload's own parted
-        // cell; a general arm binds the scrutinee whole.
-        ItSource::Carrier(match selected.binds_payload {
-            true => payload_envelope(carrier),
-            false => carrier.duplicate(),
-        })
-    } else if selected.binds_payload {
-        let payload = match value {
-            crate::machine::model::KObject::Tagged { value, .. } => value.payload().deep_clone(),
-            crate::machine::model::KObject::Wrapped { inner, .. } => inner.payload().deep_clone(),
-            other => other.deep_clone(),
+    // a `Bool` scrutinee binds `Null` (a boolean carries no payload). A region-pure scrutinee (e.g.
+    // a plain Number) has no carrier of its own, so it is placed into this scope's region and
+    // enveloped here — the arm binds from one tier either way.
+    let scrutinee =
+        if !selected.binds_payload && matches!(value, crate::machine::model::KObject::Bool(_)) {
+            crate::try_action!(ctx
+                .scope
+                .deliver_pure_value(&crate::machine::model::KObject::Null))
+        } else {
+            match ctx.arg_carrier("value") {
+                Some(carrier) => carrier.duplicate(),
+                None => crate::try_action!(ctx.scope.deliver_pure_value(value)),
+            }
         };
-        ItSource::Pure(payload)
-    } else {
-        ItSource::Pure(value.deep_clone())
+    // A variant/tag arm binds the payload, so the envelope narrows to the payload's own parted
+    // cell; a general arm binds the scrutinee whole.
+    let it_carrier = match selected.binds_payload {
+        true => payload_envelope(&scrutinee),
+        false => scrutinee,
     };
-    arm_tail(ctx.scope, it_source, selected.body, contract, ctx.types)
+    arm_tail(ctx.scope, it_carrier, selected.body, contract, ctx.types)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {

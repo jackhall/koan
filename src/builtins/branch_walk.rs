@@ -56,18 +56,6 @@ pub(crate) fn resolve_arm_contract<'a>(
     Ok(ReturnContract::Arm { ret: ret_kt, kind })
 }
 
-/// How the matched scrutinee reaches the arm's `it` binding.
-pub(crate) enum ItSource<'a> {
-    /// A region-pure owned value — `MATCH`'s region-pure scrutinee (or its payload), and a boolean
-    /// arm's `Null`. No carrier, no foreign reach: the copy's purity is an audit at bind time.
-    Pure(crate::machine::model::KObject<'a>),
-    /// The delivery envelope for exactly what `it` binds — the scrutinee itself, or its payload
-    /// already narrowed by [`payload_envelope`]. Cloned once, directly into the arm frame at bind
-    /// time; the envelope's retained host pins the producer until then and supplies the binding's
-    /// stored reach.
-    Carrier(crate::machine::DeliveredCarried),
-}
-
 /// Narrow `carrier` onto the payload of a `Tagged` / `Wrapped` value (ruling F3's variant/tag arm),
 /// by **parting** the payload cell from its container: the cell comes out bundled with exactly its
 /// own run's stored reach — read off the run, never a subset walk over the container — and
@@ -98,11 +86,19 @@ pub(crate) fn payload_envelope(carrier: &DeliveredCarried) -> DeliveredCarried {
 /// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: the
 /// [`block_tail`](crate::machine::block_tail) configuration for an arm — a fresh per-call frame
 /// (`root`-rooted, chained onto `outer_frame`) whose own scope is the block, seeded with `it` bound
-/// at idx 0 from `it_source`, running the arm body split into leading statements + a tail under
+/// at idx 0 from `it_carrier`, running the arm body split into leading statements + a tail under
 /// `contract`.
+///
+/// `it_carrier` is the delivery envelope for exactly what `it` binds — the scrutinee itself, or its
+/// payload already narrowed by [`payload_envelope`]. An envelope is what the seed's `for<'b>` brand
+/// admits: a bare caller-`'a` value names a lifetime the opened arm scope has no relation to, while
+/// an envelope crosses as a witnessed shortening. A region-pure scrutinee (no carrier of its own)
+/// is enveloped at the read site through
+/// [`Scope::deliver_pure_value`](crate::machine::core::Scope::deliver_pure_value) before it gets
+/// here, so there is one `it` tier rather than two.
 pub(crate) fn arm_tail<'a>(
     root: &'a Scope<'a>,
-    it_source: ItSource<'a>,
+    it_carrier: crate::machine::DeliveredCarried,
     body_expr: KExpression<'a>,
     contract: ReturnContract,
     types: &TypeRegistry,
@@ -111,39 +107,20 @@ pub(crate) fn arm_tail<'a>(
     use crate::machine::{block_tail, BlockBody, BlockScope, BlockSeed};
     use crate::machine::{BindingIndex, CallFrame};
     let frame: Rc<CallFrame> = CallFrame::new(root);
-    // Bind `it` into the frame's own scope: `alloc_object` erases the caller-`'a` input and
-    // re-homes it at the frame region, so no pre-shortening is needed. Either source is a deep copy
-    // living in the arm frame, so the stored reach is the copy's (`adopted_reach_of` — a
-    // residence-only host is not carried; a tail loop's retiring frame must not ride the arm's
-    // binding), and a later read of `it` rebuilds its carrier from it.
-    let seed: BlockSeed<'a> = Box::new(move |child, types: &TypeRegistry, gate| {
-        // Fused mint + copy + bind of `it` at idx 0 in the fresh arm frame. A region-pure value
-        // takes the checked tier (its purity is an audit at the bind brand); a delivered scrutinee
-        // takes the copied-adoption tier — one structural copy made directly into the arm frame's
-        // region inside the envelope's pinned open, the binding storing the copy's derived reach (a
-        // residence-only host is dropped, so a tail loop's retiring frame does not ride the arm's
-        // binding). The projection selects which sub-object of the carried value feeds the copy —
-        // the payload lives inside the carried value, so its reach is a subset of the envelope's.
-        match it_source {
-            ItSource::Pure(value) => {
-                let _ = child.bind_checked_direct(
-                    "it".to_string(),
-                    value,
-                    BindingIndex::value(0),
-                    types,
-                    gate,
-                );
-            }
-            ItSource::Carrier(carrier) => {
-                let _ = child.bind_delivered_direct(
-                    "it".to_string(),
-                    &carrier,
-                    BindingIndex::value(0),
-                    |carried| Ok(carried.object()),
-                    gate,
-                );
-            }
-        }
+    let seed: BlockSeed<'a> = Box::new(move |child, _types: &TypeRegistry, gate| {
+        // Fused copy + bind of `it` at idx 0 in the fresh arm frame: one structural copy made
+        // directly into the arm frame's region inside the envelope's pinned open, the binding
+        // storing the copy's derived reach (a residence-only host is dropped, so a tail loop's
+        // retiring frame does not ride the arm's binding). The projection is identity — the
+        // envelope already names exactly what `it` binds — and a later read of `it` rebuilds its
+        // carrier from the stored reach.
+        let _ = child.bind_delivered_direct(
+            "it".to_string(),
+            &it_carrier,
+            BindingIndex::value(0),
+            |carried| Ok(carried.object()),
+            gate,
+        );
     });
     block_tail(
         root.brand(),

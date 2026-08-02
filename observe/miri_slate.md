@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena/residence.rs: 4
+src/machine/core/arena/residence.rs: 3
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -130,9 +130,10 @@ child-scope `Option<SealedExtern<ScopeRefFamily>>` opened at a `for<'b>` brand v
 (`SealedExtern::open`, the frame's own storage `Rc` as the pin) plus the `Rc<CallFrame>` chain that
 keeps per-call regions pinned across re-borrow. One test pins the open surviving a sibling alloc; one
 pins the `Rc<CallFrame>` chain keeping an outer region alive after its local handle drops; a third pins
-the **seed-side re-anchor** — a caller-lifetime value relocated into the opened scope's own region
-through the substrate (the erasing `alloc_object`, which forgets the caller lifetime and re-homes the
-value at the region) and bound, the shape the MATCH / TRY `it`-bind and the user-fn param-bind take. `CallFrame::adopting` (the scheduler-owned run
+the **seed-side re-anchor** — a caller-lifetime value crossing into the opened scope's own region as
+a delivery envelope, whose bind relocates it there, the shape the MATCH / TRY `it`-bind and the
+user-fn param-bind take. A bare caller reference cannot cross the `for<'b>` signature at all, so the
+envelope is the whole route. `CallFrame::adopting` (the scheduler-owned run
 frame) carries the same `&Scope<'_>` erasure as `new`, over the run scope it adopts rather than a
 freshly-minted child; it is built on the first run-lifetime submission, so every scheduler-driving slate
 test below (`recursive_tagged_match_no_uaf`, `lift_park_minimal_program_for_miri`, …) exercises it
@@ -147,8 +148,7 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 `KObject::record_of_held`) stores the substrate into its own brand's region exactly like
 `alloc_object_folded`, so it carries no `unsafe` of its own beyond the `reattachable!`-generated
 layout-invariance audit in `witnessed.rs`. One test pins the store landing in the brand's own
-region, a hit for both the bare `KoanRegionExt::owns_substrate` address query and
-`Residence::owns_substrate`'s dest-only case. A second pins `alloc_carried_with`'s fold-brand
+region, a hit for the `KoanRegionExt::owns_substrate` address query. A second pins `alloc_carried_with`'s fold-brand
 construction one level up for a `Record` specifically — mirroring
 `object_field_reach_fold_survives_producer_frame_free`'s `KFunction` shape, but for
 `KObject::record_with_type` (FROM's own construction): the narrowed record shares the exact same
@@ -225,9 +225,9 @@ envelope for dep delivery bit-copies the reference-only carrier and clones exact
 retained host) — the reach set itself rides by reference, never re-minted, so a regression shows as
 per-member refcount traffic or a leak. The `unsafe` routed is the shared `retype` in
 `witnessed.rs` plus `Carrier`'s own `with_reach` pinned re-anchor; the anchor file
-[`arena/residence.rs`](../src/machine/core/arena/residence.rs) additionally houses the four
-`unsafe impl AuditedStored` family audits — the soundness markers gating every checked
-cross-region store this seam and its siblings exercise.
+[`arena/residence.rs`](../src/machine/core/arena/residence.rs) additionally houses the three
+`unsafe impl AuditedStored` primitive reattach guards — the soundness markers gating every
+`KFunction` / `Scope` / `Module` store this seam and its siblings exercise.
 
 - `envelope_transfer_folds_an_independent_foreign_value`
 - `pass_through_duplicate_keeps_reach_pointer_and_mints_nothing`
@@ -246,24 +246,11 @@ never drops, a leak at process exit under Miri. The test re-stamps a producer-re
 asserts the carrier still names reach members while the owned bundle is empty, drops every
 intermediate handle, then reads the shared substrate back in its own region — a use-after-free the
 instant re-stamp relocated instead of re-anchoring, a leak the instant the self rule failed. The
-`unsafe` routed is the shared `retype` in `witnessed.rs` plus the four
-`unsafe impl AuditedStored` family audits in [`arena/residence.rs`](../src/machine/core/arena/residence.rs)
+`unsafe` routed is the shared `retype` in `witnessed.rs` plus the three
+`unsafe impl AuditedStored` reattach guards in [`arena/residence.rs`](../src/machine/core/arena/residence.rs)
 this store crosses.
 
 - `restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin`
-
-**Record substrate — checked-tier O(1) membership** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
-— `resident_in_visiting`'s `Record` arm (`residence.owns_substrate(substrate)` in
-[kobject.rs](../src/machine/model/values/kobject.rs)) is reached only when a record rides inside
-another substrate carrier (`List`/`Dict`/`Tagged`/`Wrapped`) crossing the checked tier
-(`Scope::alloc_object_delivered`) — a bare top-level record never routes this walk (born resident
-by construction through the fold door). This test drives a `List` embedding a `Record` through the
-checked tier twice: once with evidence naming the record's home region (must pass, reading the
-address table, never the record's fields — the O(1) membership check), once without (must reject),
-proving the arm is a genuine membership check rather than an always-true stand-in. The `unsafe`
-routed is the same four `unsafe impl AuditedStored` family audits the group above exercises.
-
-- `record_nested_in_list_crosses_checked_tier_via_owns_substrate_membership`
 
 **Witness-set hosting — mint self-cycle / teardown** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — `RegionSet::mint` (mechanism in
@@ -350,12 +337,12 @@ variants alone would leave exactly this shape pointer-copied under a release cla
 
 **Region-hosted expression at the container door** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
 — the expression peer of the group above, and the one check on the rule that lets
-`KObject::KExpression` answer without a reach description at all: `resident_in_visiting` admits an
-expression unconditionally, an expression cell's reach verdict is `Owned`, and `retains_home`
-answers `false`. All three are honest only because the node's `parts` run, its keyword text and its
+`KObject::KExpression` answer without a reach description at all: an expression cell's reach verdict
+is `Owned`, `retains_home` answers `false`, and the expression door
+(`RegionBrand::alloc_expression`) seals its cell with no member. All three are honest only because the node's `parts` run, its keyword text and its
 structural cache live in the eternal-tier program storage that parsed them, which no relocation
 releases. A node whose parts were bumped into the call region its producer ran in would satisfy
-every one of those answers while pointing into a retiring region — and no residence audit can catch
+every one of those answers while pointing into a retiring region — and no address probe could catch
 it, since the bump keeps no address table. The test produces its quotes inside per-call function
 regions, binds the list in an outer scope so every producer frame retires, then walks the stored
 `parts` on the read. The door is safe code throughout; tree borrows is the only check.

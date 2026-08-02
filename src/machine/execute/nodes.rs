@@ -222,13 +222,13 @@ mod tests {
         let region = run_root_storage();
         let test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let types = test_run.types.clone();
         scope
-            .bind_checked_direct(
+            .bind_value_direct(
                 "k".to_string(),
-                KObject::Number(7.0),
+                scope
+                    .seal_pure_value(&KObject::Number(7.0))
+                    .expect("a Number is region-pure"),
                 BindingIndex::BUILTIN,
-                &types,
                 &mut crate::machine::WriteGate::for_test(),
             )
             .unwrap();

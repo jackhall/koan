@@ -198,13 +198,10 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
         false,
         &types,
     ));
-    let (obj2, _reach) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f2), &types)
-        .expect("f was just allocated into region's own region");
     scope
-        .bind_resident_for_test(
+        .bind_value_direct(
             "OTHER_NAME".to_string(),
-            obj2,
+            crate::witnessed::Sealed::seal(scope.store_function_object(f2)),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -234,12 +231,8 @@ fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
         false,
         &types,
     ));
-    let (obj1, _reach1) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region's own region");
-    let (obj2, _reach2) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f), &types)
-        .expect("f was just allocated into region's own region");
+    let obj1 = scope.brand().alloc_value(KObject::KFunction(f));
+    let obj2 = scope.brand().alloc_value(KObject::KFunction(f));
     scope
         .bind_resident_for_test(
             "FIRST".to_string(),
@@ -695,10 +688,7 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
         false,
         &types,
     ));
-    let (obj, _reach) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f), &types)
-        .expect("f was just allocated into this region");
-    let sealed = scope.seal_resident(Carried::Object(obj));
+    let sealed = crate::witnessed::Sealed::seal(scope.store_function_object(f));
     scope
         .bind_value_direct(
             "f".to_string(),
