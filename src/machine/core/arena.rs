@@ -13,18 +13,18 @@
 //! [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
-use crate::machine::{CarrierWitness, KError, KErrorKind};
+use crate::machine::CarrierWitness;
 use std::rc::Rc;
 
 use crate::machine::execute::StepCarried;
 
 use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::model::KType;
 use crate::machine::model::{
-    Carried, CarriedFamily, ContainerSubstrate, DictSubstrate, Held, KObject, ListSubstrate,
-    Module, PayloadSubstrate, RecordSubstrate,
+    Carried, CarriedFamily, ContainerSubstrate, DictSubstrate, Held, KExpression, KObject,
+    ListSubstrate, Module, PayloadSubstrate, RecordSubstrate,
 };
-use crate::machine::model::{KType, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
     BumpMap, Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StepContext,
@@ -41,7 +41,6 @@ pub use frame::{
     ProgramBrand, ProgramStorage,
 };
 pub(crate) use residence::Residence;
-use residence::ResidenceEvidence;
 pub use step_allocator::StepAllocator;
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
@@ -125,7 +124,7 @@ impl<'a> RegionBrand<'a> {
 
     /// Store an owned, region-pure [`KObject`] into the region (no value holds an owning `Rc` back
     /// to a region, so the store forms no back-edge). Yields a co-located `&'a` resident. A value
-    /// that borrows another region takes [`Self::alloc_object_witnessed_checked`] instead.
+    /// that borrows another region takes [`Scope::alloc_object_checked_stored`] instead.
     pub fn alloc_object(self, o: KObject<'static>) -> &'a KObject<'a> {
         self.0.alloc_resident::<KObject<'static>>(o)
     }
@@ -141,8 +140,8 @@ impl<'a> RegionBrand<'a> {
     ///
     /// Storing the *value* built around those bytes is gated exactly where it always was.
     /// [`Self::alloc_object`] admits only `'static`, so a region-hosted string cannot reach it;
-    /// [`KObject::resident_in_visiting`] answers `false` for a string, so the runtime-audited doors
-    /// ([`Scope::alloc_object_checked_stored`], [`Self::alloc_object_witnessed_checked`]) reject
+    /// [`KObject::resident_in_visiting`] answers `false` for a string, so the runtime-audited door
+    /// ([`Scope::alloc_object_checked_stored`]) rejects
     /// one — the bump keeps no address table, so no audit could tell which region a `&str` points
     /// into. The route in is [`FoldingBrand::alloc_object_folded`], where the rank-2 brand proves
     /// the string was bumped at the destination.
@@ -230,39 +229,33 @@ impl<'a> RegionBrand<'a> {
     /// `step_carried.rs`, where finalize's fold names the producer in the carrier's own reach.
     /// `value`'s `'static` bound is region-purity, compile-enforced: a value that references
     /// another region cannot satisfy it — it takes the `yoke` / `merge` path, or
-    /// [`Self::alloc_object_witnessed_checked`] for a value whose region borrow is only
-    /// runtime-auditable (e.g. a cell holding raw AST).
+    /// [`Self::alloc_expression_witnessed`] for a quote body, whose `KObject<'a>` is invariant with
+    /// no `'static` rebuild.
     pub(crate) fn alloc_object_witnessed(self, value: KObject<'static>) -> StepCarried<'a> {
         StepCarried::born(self.0.alloc::<KObject<'static>, _>(value, |live| {
             self.seal_resident::<CarriedFamily>(Carried::Object(live))
         }))
     }
 
-    /// Runtime-checked twin of [`Self::alloc_object_witnessed`] for a `value` that cannot rebuild at
-    /// `'static` (e.g. a `KObject::KExpression` — `KObject<'a>` is invariant and raw AST has no
-    /// `'static` rebuild): the `KObject` family audit vets `value` against this brand's own region
-    /// before anything is stored, and the value is stored — sealed under the same member-less
-    /// own-region description [`Self::alloc_object_witnessed`] uses — only if it passes. A
-    /// [`KExpression`](crate::machine::model::KExpression) cell passes the residence walk outright:
-    /// an AST node names no producer region, so pointing at program text pins nothing the empty seal
-    /// would have to name. Storing nothing on a failed audit; a foreign-region dangle errors loudly
-    /// instead of landing unvetted.
-    pub(crate) fn alloc_object_witnessed_checked(
-        self,
-        value: KObject<'_>,
-        types: &TypeRegistry,
-    ) -> Result<StepCarried<'a>, KError> {
-        let name = value.ktype().name(types);
-        self.0
-            .alloc_resident_checked::<KObject<'static>>(value, ResidenceEvidence::dest_only())
-            .map(|live| {
-                StepCarried::born(self.seal_resident::<CarriedFamily>(Carried::Object(live)))
-            })
-            .ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(format!(
-                    "{name}: borrows a region other than its seal's destination"
-                )))
-            })
+    /// The store for a `#(...)` quote's body as data — the shape [`Self::alloc_object_witnessed`]
+    /// cannot take, since `KObject<'a>` is invariant and raw AST has no `'static` rebuild. The
+    /// signature is the enforcement: only a [`KExpression`](crate::machine::model::KExpression)
+    /// reaches this door, and an AST node names no producer region, so the cell the door bumps here
+    /// borrows nothing a seal would have to pin.
+    ///
+    /// The cell lands in this brand's own region bump, so its residence is where it was placed,
+    /// and it costs region death nothing — an expression's parts are already bump-hosted runs.
+    pub(crate) fn alloc_expression(self, expression: KExpression<'a>) -> &'a KObject<'a> {
+        self.alloc_value(KObject::KExpression(expression))
+    }
+
+    /// [`Self::alloc_expression`] bundled as the resident carrier — the quote terminal's one call,
+    /// sealed under the same member-less own-region description
+    /// [`Self::alloc_object_witnessed`] mints.
+    pub(crate) fn alloc_expression_witnessed(self, expression: KExpression<'a>) -> StepCarried<'a> {
+        StepCarried::born(
+            self.seal_resident::<CarriedFamily>(Carried::Object(self.alloc_expression(expression))),
+        )
     }
 
     /// Bundle a value **already resident in this brand's region** whose borrows reach nothing — the

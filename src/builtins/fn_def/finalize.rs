@@ -14,7 +14,7 @@ use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::KExpression;
 use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
-use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
+use crate::machine::model::{ExpressionSignature, SignatureElement};
 use crate::machine::Action;
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
@@ -281,10 +281,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // reaches nothing foreign (its captured scope is home or a home-pinned ancestor): its terminal
     // carrier is built with the empty foreign reach `stored` derived, witnessed by that scope's home
     // frame alone. `LET f = (FN ...)` still captures the callable via this carrier.
-    Ok((
-        scope.seal_fresh_object(KObject::KFunction(f), types)?,
-        writes,
-    ))
+    Ok((scope.store_function_object(f), writes))
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed

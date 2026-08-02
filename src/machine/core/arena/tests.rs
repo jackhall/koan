@@ -1512,12 +1512,12 @@ fn mint_teardown_releases_members() {
     assert_eq!(Rc::strong_count(&b), count_before_b, "C's death releases B");
 }
 
-/// The checked seal's family audit admits a `KObject::KExpression`: an AST node names no producer
-/// region, so a cell pointing at program text pins nothing the empty (own-region-only) witness this
-/// door seals under would have to name. The quote-capture lane
-/// (`dispatch::single_poll::literal_pass_through`) stores every quoted body through this door.
+/// The expression door bumps a `KObject::KExpression` into the brand's own region and seals it
+/// resident: an AST node names no producer region, so a cell pointing at program text pins nothing
+/// the empty (own-region-only) witness this door seals under would have to name. The quote-capture
+/// lane (`dispatch::single_poll::literal_pass_through`) stores every quoted body through this door.
 #[test]
-fn raw_expression_passes_the_checked_object_seal() {
+fn raw_expression_seals_through_the_expression_door() {
     use crate::machine::model::{ExpressionPart, KExpression};
     use crate::source::Spanned;
 
@@ -1525,7 +1525,6 @@ fn raw_expression_passes_the_checked_object_seal() {
     let brand = program.brand().region();
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
-    let types = TypeRegistry::new();
 
     let expression = KExpression::new(
         brand,
@@ -1533,13 +1532,12 @@ fn raw_expression_passes_the_checked_object_seal() {
             brand.alloc_text("x"),
         ))],
     );
-    let result = scope
-        .brand()
-        .alloc_object_witnessed_checked(KObject::KExpression(expression), &types);
-    assert!(
-        result.is_ok(),
-        "raw AST reaches no producer region, so the checked seal admits it"
-    );
+    let carried = scope.brand().alloc_expression_witnessed(expression);
+    let parts = carried.inspect_pinned(&storage, |c| match c.object() {
+        KObject::KExpression(e) => e.parts.len(),
+        _ => panic!("the expression door stores an expression cell"),
+    });
+    assert_eq!(parts, 1, "the stored cell reads back as the quoted body");
 }
 
 /// `KObject::record_of_held` — the record door's read half — stores a fresh `RecordSubstrate`

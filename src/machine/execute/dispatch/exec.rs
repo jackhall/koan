@@ -333,12 +333,10 @@ fn extract_carried_args<'step>(
             }
             // A `#(...)` quote's `KObject::KExpression` body is data, but the value it rides in is
             // invariant in its region lifetime with no `'static` rebuild and no fold-brand
-            // construction, so it keeps the checked door.
-            (WorkingPart::Ast(quote @ ExpressionPart::QuotedExpression(_)), _) => {
-                let scope = view.current_scope();
-                let (object, _reach) = scope
-                    .alloc_object_checked_stored(quote.resolve(scope.brand()), view.types())
-                    .expect("a quote body is parsed AST, resident in the storage that parsed it");
+            // construction, so it takes the expression door — whose signature is what proves the
+            // cell reaches nothing outside the region it is bumped into.
+            (WorkingPart::Ast(ExpressionPart::QuotedExpression(body)), _) => {
+                let object = view.current_scope().brand().alloc_expression(**body);
                 args.push(Carried::Object(object));
             }
             _ => return None,

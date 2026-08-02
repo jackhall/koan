@@ -35,7 +35,7 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{ExpressionSignature, KKind};
-use crate::machine::model::{Held, KObject, KType, Record};
+use crate::machine::model::{Held, KType, Record};
 use crate::machine::BindingIndex;
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
@@ -507,10 +507,7 @@ fn register_body<'a>(
         seal: OverloadSeal::of_resident(scope, f),
         builtin_shadow_guard: false,
     };
-    Ok((
-        scope.seal_fresh_object(KObject::KFunction(f), types)?,
-        write,
-    ))
+    Ok((scope.store_function_object(f), write))
 }
 
 /// The bridge body `sym [left right]` — a keyword-first call over a two-element list literal, which

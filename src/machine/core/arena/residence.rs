@@ -42,12 +42,9 @@ impl<'a> Scope<'a> {
     /// holds one. Residence is recorded either way, as the description's host: a region-pure scalar
     /// still records where it lives.
     ///
-    /// This is one of the two doors ([`super::RegionBrand::alloc_object_witnessed_checked`] is the
-    /// other) where a runtime walk still stands in for the fold brand's compile-time proof. What
-    /// takes it is a value already born in this region that needs only a seal minted over it — a
-    /// `KObject::KFunction` wrapper over a function this scope just allocated, a carrier-less
-    /// read-site value re-sealed here — and raw AST in a `KObject::KExpression`, which has no
-    /// `'static` rebuild and no construction door of its own.
+    /// This is the last door where a runtime walk stands in for the fold brand's compile-time proof.
+    /// What takes it is a carrier-less read-site value re-sealed here — a shape the `arg_carriers`
+    /// contract says is region-pure, which a shape-split door proves at its signature instead.
     pub(crate) fn alloc_object_checked_stored(
         &self,
         value: KObject<'_>,
@@ -112,7 +109,8 @@ pub(crate) struct Residence<'d> {
 
 impl<'d> Residence<'d> {
     /// The dest-only predicate with no recorder — the plain "does this value borrow only `dest`"
-    /// question.
+    /// question. The store door always records, so this form is the walk's own unit-test probe.
+    #[cfg(test)]
     pub(crate) fn dest_only(dest: &'d KoanRegion) -> Self {
         Residence { dest, seen: None }
     }
@@ -165,20 +163,15 @@ impl<'d> Residence<'d> {
 /// there is no reach-bearing form, because a value reaching a foreign region never reaches this
 /// tier.
 pub struct ResidenceEvidence<'ctx> {
-    seen: Option<&'ctx Cell<bool>>,
+    seen: &'ctx Cell<bool>,
 }
 
 impl<'ctx> ResidenceEvidence<'ctx> {
-    /// Dest-only evidence: the audit vets `value` against the destination region alone.
-    pub(crate) fn dest_only() -> Self {
-        ResidenceEvidence { seen: None }
-    }
-
-    /// [`Self::dest_only`] with a saw-a-region-pointer recorder — the [`Residence::seen`] flag the
-    /// checked-stored sites read after the store to decide whether the destination region enters the
+    /// Dest-only evidence with its saw-a-region-pointer recorder — the [`Residence::seen`] flag the
+    /// checked-stored site reads after the store to decide whether the destination region enters the
     /// value's minted description as a member.
     pub(crate) fn dest_only_seen(seen: &'ctx Cell<bool>) -> Self {
-        ResidenceEvidence { seen: Some(seen) }
+        ResidenceEvidence { seen }
     }
 }
 
@@ -189,11 +182,7 @@ impl<'ctx> ResidenceEvidence<'ctx> {
 unsafe impl AuditedStored<KoanStorageProfile> for KObject<'static> {
     type AuditContext<'ctx> = ResidenceEvidence<'ctx>;
     fn audit(region: &KoanRegion, value: &KObject<'_>, context: ResidenceEvidence<'_>) -> bool {
-        let residence = match context.seen {
-            Some(seen) => Residence::dest_only_seen(region, seen),
-            None => Residence::dest_only(region),
-        };
-        value.resident_in_visiting(&residence)
+        value.resident_in_visiting(&Residence::dest_only_seen(region, context.seen))
     }
 }
 

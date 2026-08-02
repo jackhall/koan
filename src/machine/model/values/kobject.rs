@@ -63,6 +63,13 @@ pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::CostDriven;
 /// closure reaches are named by its carrier's reach description
 /// ([`FrameReach`](crate::machine::core::FrameReach)) and pinned by the holder's owned
 /// [`FrameCoverage`](crate::machine::core::FrameCoverage) coverage, not a per-value anchor. See [per-call-region/lifecycle.md § Carriers](../../../../design/per-call-region/lifecycle.md#carriers).
+///
+/// `Copy` because every arm is a scalar or a region borrow — the value owns no allocation, so it
+/// runs no `Drop` at region death. That is what lets a cell ride the `T: Copy` bump doors
+/// ([`RegionBrand::alloc_value`](crate::machine::core::RegionBrand::alloc_value)), where the bound
+/// is the `Drop`-freedom proof. The derived `Clone` is that same shallow copy; **duplicating** a
+/// value — rebuilding its substrates in a destination region — is [`Self::deep_clone`].
+#[derive(Clone, Copy)]
 pub enum KObject<'a> {
     Number(f64),
     /// String value: a region-hosted `&'a str`, bumped into the region the value lives in
