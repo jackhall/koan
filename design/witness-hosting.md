@@ -137,7 +137,7 @@ hold any witness state — the pins live one level down, in the library's region
   bundle, applying the self rule before insertion. The region carries one pin per
   distinct foreign region, not one bundle per entry. The mint and the value's
   construction are **one fused door**
-  ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs), `seal_checked`,
+  ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs), `seal_pure_value`,
   `seal_module` and siblings), so a scope entry cannot state a reach the value's
   borrows don't back, and the union is written by the library rather than by the
   door's caller. The door's product is a resting `Sealed`; the table write itself is
@@ -170,38 +170,47 @@ the source under the composed `Kept` witness that names its producer host. This 
 the residence analogue of the library's description/pins compile-safety line — a
 move-in that cannot name its reach does not typecheck.
 
-Two **dest-only** runtime checks remain, each a backstop rather than an enforcement
-tier. Neither can widen: there is no evidence a caller could hand either one to admit
-a value borrowing a region other than the destination.
+**No residence walk survives.** Nothing anywhere confirms residence by visiting a
+composite value's contents. The three shapes a fold brand does not cover reach their
+destination through a door whose *signature* is the enforcement instead:
 
-- **Primitive reattach guards.** A `KFunction`, `Scope`, or `Module` borrows a single
-  region (its captured / parent / child scope); the `ptr::eq` guard on its arena
-  move-in checks that region is the destination — the reattach witness for the
-  `'_ → 'a` erasure. A `Module` re-tagging a *foreign* child scope (a transparent
-  ascription view) has no route through the guard at all: it is built inside the fold
-  that merges that scope in
-  ([`Scope::store_transparent_view`](../src/machine/core/scope/reach.rs)).
-- **The dest-only object walk.**
-  [`KObject::resident_in_visiting`](../src/machine/model/values/kobject.rs) confirms
-  every region pointer a value carries points into the destination, for a value that
-  is *already* there and needs only a seal minted over it — a fresh `KFunction`
-  wrapper, a carrier-less read-site value re-sealed in the reading scope, and raw AST
-  moved in as data, which has neither a `'static` rebuild nor a construction door of
-  its own. Its two doors are
-  [`Scope::alloc_object_checked_stored`](../src/machine/core/arena/residence.rs) and
-  `RegionBrand::alloc_object_witnessed_checked`, the second of which carries only the
-  AST case.
+- **A region-free leaf** — `Number` / `Bool` / `Null` — is spelled
+  [`Scalar`](../src/machine/model/values/kobject.rs), a type with no lifetime at all,
+  so a value borrowing any region cannot be written as one and `alloc_scalar` has
+  nothing to check. `alloc_string` is its sibling for the leaf whose bytes are
+  region-hosted: re-homing them into the destination *is* the store.
+- **Raw AST** takes `RegionBrand::alloc_expression`, which admits a
+  [`KExpression`](../src/machine/model/ast.rs) and nothing else. A `KObject::KExpression`
+  needs no *coverage* claim of its own either: it borrows only the eternal-tier program
+  storage that parsed it, and the one part kind that could name a producer region lives
+  on the scheduler's own node type, which no value can hold
+  ([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+- **A fresh `KFunction` wrapper** takes
+  [`Scope::store_function_object`](../src/machine/core/scope/reach.rs), a merge modelled
+  on the module store fold: the composition mints the callable's home region into the
+  product's reach, which is the borrows-home fact the wrapper carries, and the self rule
+  strips it from the retained bundle. The claim is exact — a `KFunction`'s only region
+  borrow is its captured scope, whose own sealed reach set transitively covers everything
+  its bindings reach.
 
-A `KObject::KExpression` moved in that way needs no *coverage* claim of its own: it
-borrows only the eternal-tier program storage that parsed it, and the one part kind
-that could name a producer region lives on the scheduler's own node type, which no
-value can hold
-([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)).
-The walk admits one structurally.
+A carrier-less argument routes those shapes through
+[`Scope::place_pure_value`](../src/machine/core/scope/reach.rs). Every other shape borrows
+a region no such door can name, so it reaches its destination as a delivery envelope
+instead, and arriving at the pure door is a construction bug reported as a diagnostic —
+not a residence verdict a caller could turn into an admission.
 
-## Open work
+One runtime check remains, and it is a **primitive reattach guard** rather than a tier. A
+`KFunction`, `Scope`, or `Module` borrows a single region (its captured / parent / child
+scope); the `ptr::eq` guard on its arena move-in checks that region is the destination —
+the reattach witness for the `'_ → 'a` erasure. It reads one field, never contents, and it
+cannot widen: there is no evidence a caller could hand it to admit a foreign region. A
+`Module` re-tagging a *foreign* child scope (a transparent ascription view) has no route
+through the guard at all: it is built inside the fold that merges that scope in
+([`Scope::store_transparent_view`](../src/machine/core/scope/reach.rs)).
 
-- [Drop-free region death](../roadmap/untyped_arena/drop-free-region-death.md)
-  — deletes the residual dest-only `resident_in_visiting` walk (§ Residence
-  enforcement) once the expression-part families are `Drop`-free and the families
-  migrate to the untyped bump arena.
+Where a seam has to *ask* where a composite lives — the copy-versus-pin decision's
+home-crossing test — it reads the answer off the value:
+[`ContainerSubstrate::homed_in`](../src/machine/model/values/container_substrate.rs)
+compares the substrate's own stored description's host region by pointer. A region keeps no
+address table at all, so there is nothing else to consult; and nothing else is needed,
+because the door that placed the substrate is what made the stored host true.

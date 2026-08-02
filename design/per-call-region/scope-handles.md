@@ -58,10 +58,14 @@ primitives, lifting to the run `'a` only at the `lift_kobject` Done boundary.
 The MATCH / TRY arm seeds and [`run_user_fn`](../../src/machine/core/kfunction/exec.rs)
 bind their `it` / parameters — values whose type carries the caller's `'a`, deep-cloned into the
 frame region — inside [`CallFrame::with_scope`](../../src/machine/core/arena.rs), which opens the
-child scope at a `for<'b>` brand. A seed **relocates** its caller-`'a` value into the opened scope's
-own region through the substrate (the erasing `alloc_object`, which forgets the caller lifetime and
-re-homes the value at the frame region) before binding it, so the value lands at the brand and the
-seed fabricates no free `&'a`. The deferred-return-type elaboration takes the same `with_scope` read
+child scope at a `for<'b>` brand. Each arrives as a **delivery envelope**, which is the whole route:
+a bare caller-`'a` reference names a lifetime the opened scope has no relation to and cannot cross
+the signature at all, while an envelope crosses as the witnessed shortening every other delivered
+value takes. The bind then **relocates** the value into the opened scope's own region — rebuilt at
+the destination brand, which is where the caller lifetime is dropped — so the value lands at the
+brand and the seed fabricates no free `&'a`. A region-pure argument (a literal) is enveloped at the
+call site through [`Scope::deliver_pure_value`](../../src/machine/core/scope/reach.rs) before it
+gets here, so there is one seed tier rather than two. The deferred-return-type elaboration takes the same `with_scope` read
 and re-homes its elaborated `KType` into the captured-scope region inside the open. The whole
 re-anchor carries no `unsafe` of its own — only the substrate's single retype.
 Arm and body statements then dispatch through the framed scheduler write primitives

@@ -239,8 +239,10 @@ fn carriers_from_expr<'step>(
 
 /// Re-key the slot-indexed arg carriers onto their parameter names. A committed call's parts line up
 /// 1:1 with `picked`'s signature elements (`validate_call_args` enforces it), so the element at a
-/// carrier's slot names its parameter. A region-pure arg's entry is `None`, read as "no foreign
-/// reach", and contributes no record field.
+/// carrier's slot names its parameter. A `None` entry is read as "no foreign reach" and contributes
+/// no record field — the shape a region-pure arg takes on the builtin lane, where nothing binds at a
+/// `for<'b>` brand. A user-defined call fills every value slot ([`extract_carried_args`]), so no
+/// entry it re-keys is `None`.
 fn map_arg_carriers<'e, 'step>(
     picked: &KFunction<'step>,
     arg_carriers: &'e [Option<DeliveredCarried>],

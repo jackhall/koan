@@ -3,16 +3,16 @@
 The compile-enforcement path for koan's memory abstraction: every way
 koan-implementation Rust with no `unsafe` block can under-pin a region (dangle)
 or over-pin one (leak / retention) becomes a compile error or a library-run
-check, with the runtime residence audits replaced by brand- and
-type-confinement. The workgraph published surface now carries no closure-gated
-store: every audited move-in runs a per-family `AuditedStored` audit the
-embedder declares once (an `unsafe impl`, so a permissive audit is not writable
-in safe code), and the fold doors ride a compile-only `FoldedPlacement`
-capability with no runtime check at all. The remaining work is the hotspot-map
-holes below — the side-table blind spots, the pin-cycle and reach
-over-approximation audits, and the raw-handle reach still open across
-`src/machine`. Tier vocabulary:
-[memory-model.md § Move-in residence audits](../../design/memory-model.md#move-in-residence-audits).
+check. No residence walk over a composite value survives, and a region keeps no
+address side table for one to consult: a move-in is discharged by the door's
+signature — a region-free leaf type, a fold brand's rank-2 capability, or a merge
+whose composition derives the reach — and the one runtime check left is the
+per-family `AuditedStored` reattach guard the embedder declares once (an
+`unsafe impl`, so a permissive audit is not writable in safe code), a single
+`ptr::eq` against the region the value's own field names. The remaining work is the
+hotspot-map holes below — the pin-cycle and reach over-approximation audits, and
+the raw-handle reach still open across `src/machine`. Tier vocabulary:
+[memory-model.md § Move-in residence](../../design/memory-model.md#move-in-residence).
 
 ## Next items
 
@@ -40,9 +40,9 @@ with a link in the map. Do not implement from these paragraphs directly — they
 name the hole, not the fix.
 
 Several entries assume the tier vocabulary of
-[memory-model.md § Move-in residence audits](../../design/memory-model.md#move-in-residence-audits)
-(the `'static` / checked / evidence / fold-capability move-in tiers); read that
-section first.
+[memory-model.md § Move-in residence](../../design/memory-model.md#move-in-residence)
+(the region-free-leaf doors, the fold capability, and the primitive reattach
+guards); read that section first.
 
 ### Hotspot map
 
@@ -52,16 +52,13 @@ by local discipline rather than by construction.
 
 | Hole | Direction | Loose surface | Call sites riding it |
 |---|---|---|---|
-| Residence side-table blind spots | under-pin | bare-`usize` `owns_addr` + default-no-op `Stored::record_local` ([region.rs](../../workgraph/src/witnessed/region.rs)) | 3 opt-in `record_local` impls in `arena.rs` (`KObject`, `KFunction`, `Module`); `Scope` is un-recorded |
 | [Cross-region pin cycles](region-debug-audits.md) | over-pin | pin bundles holding `Rc<FrameStorage>` members with no cycle detection — the self and eternal rules cut the two known ring shapes by construction, but nothing detects a third (`reach.rs`) | `Region::retain_reach` and every mint door reaching it through `Region::intern_reach_retained` (`Scope::mint_retained`, `Delivered::adopt_into` / `open_adopted`, `Carrier::compose_into`, `Sectioned::build`, `FoldedPlacement::fold_and_bump`) |
 | Reach over-approximation ([fold side](region-debug-audits.md)) | over-pin | every fold audit is one-sided (catches under-pinning only) | every fold sink (`alloc_object_folded`, `arena.rs`); the scalar counter-gates live in `arena.rs` |
-| Side-table growth | retention | `membership` vec + linear-scan `owns_addr` (`region.rs`) | every recorded-family allocation feeds it; every `owns_addr` audit scans it |
 | Raw-handle reach | under-pin | `pub(crate)` `RegionBrand::handle()` hands koan code the raw `RegionHandle`, bypassing the veneer ([arena.rs](../../src/machine/core/arena.rs)) | 11 raw-handle reaches across `src/machine` |
 | Region-purity by fiat | under-pin | the empty-member description the bare-`FN` registration door mints, on a structural claim never audited ([reach.rs](../../src/machine/core/scope/reach.rs)) | 1 production seal (`OverloadSeal` for a bare `FN`) plus test fixtures |
 | Carrier reach co-location | under-pin | [`Carrier`](../../workgraph/src/witnessed/carrier.rs) erases its reach reference, so co-location with the value is backed by the re-anchor pin, not the type | every `Sealed::open_at` / lift reader |
 | [Untyped re-anchor pins](typed-fold-pins.md) | under-pin | the pinned fold verbs take any `Pin: Witness`, unlinked to the operand backing the re-anchor needs ([witnessed.rs](../../workgraph/src/witnessed.rs)) | every koan `map_pinned*` / `merge_pinned*` call site (`catch.rs`, `constructors.rs`, `literal.rs`), incl. the possibly-empty pin in `build_type_operand` |
 | [Expression value channel](expression-value-channel-guard.md) | under-pin | `KObject::KExpression` takes a bare `KExpression`, so only the *parse* door's tier is typed ([`ProgramBrand`](../../src/machine/core/arena/frame.rs)) | 3 runtime-synthesized nodes on per-call brands (`fn_def.rs`, `val_decl.rs`, `op_def.rs`), each kept out of the value channel by flow |
-| Evidence dead states | under-pin | `ResidenceEvidence` is a struct of `Option`s, so the meaningless ambient+seen state is representable and the family audits silently drop `seen` when `ambient` is present ([arena.rs](../../src/machine/core/arena.rs)) | every `alloc_resident_checked` evidence mint in `arena.rs` (none passes both today) |
 
 ### Under-pinning (dangle-capable)
 
@@ -70,26 +67,13 @@ by local discipline rather than by construction.
   raw `RegionHandle`, bypassing every veneer door; eleven reaches exist across
   `src/machine`. Now defanged rather than a live bypass: with the closure-gated
   store deleted, every route the raw handle exposes is vetted — the
-  `'static`-bound `alloc` / `alloc_resident`, the family-audited
-  `alloc_resident_checked` door, and the placement-gated fold door — so the
+  `'static`-bound `alloc_resident`, the family-audited
+  `alloc_resident_checked` door, the `Copy`-bounded bump primitives, and the
+  placement-gated fold door — so the
   handle can no longer store an unvetted region-borrowing value. It is
   `pub(crate)`, not on the published workgraph surface. Candidate: confine
   raw-handle access to `machine::core` so the reach is typed shut rather than
   disciplined.
-
-- **Residence side-table blind spots.** The `owns_addr` table
-  ([workgraph/src/witnessed/region.rs](../../workgraph/src/witnessed/region.rs))
-  is bare-`usize` membership: (a) `KObject::Wrapped { type_id: &KType }` is
-  unauditable because `KType` is deliberately un-recorded, so an object
-  whose only foreign borrow is its type identity passes every runtime
-  audit; (b) a freed region's address reused by another arena can
-  false-pass a stale pointer (no generation/provenance); (c) recording is a
-  per-family opt-in in the `Stored::record_local` impls
-  ([arena.rs](../../src/machine/core/arena.rs)) — a future region-borrowing
-  family that forgets to opt in silently becomes audit-permissive.
-  Candidate: drop `record_local`'s default no-op so every family states its
-  recording choice explicitly, and stamp regions with a generation so a
-  reused address cannot false-pass.
 
 - **Region-purity by fiat.** The bare-`FN` registration door
   ([reach.rs](../../src/machine/core/scope/reach.rs)) seals its callable under a
@@ -97,7 +81,9 @@ by local discipline rather than by construction.
   structural claim that a function allocated into the very scope it captures
   borrows only its home. The claim is never audited; a
   registration that ever embedded a foreign borrow would under-pin. Candidate:
-  derive the empty reach from a residence walk rather than assert it. The type
+  derive the empty reach from the composition that placed the callable, the way
+  [`Scope::store_function_object`](../../src/machine/core/scope/reach.rs) derives
+  the `KObject::KFunction` wrapper's, rather than assert it. The type
   channel no longer participates — a `KType` is a `Copy` handle owning all its
   content, so a type binding carries no reach to mint in the first place.
 
@@ -110,25 +96,6 @@ by local discipline rather than by construction.
   signature — but the residual bound is discipline. Candidate: a witness bound tying
   the carried reach to its re-anchor pin, so co-location is typed rather than
   disciplined.
-
-- **Evidence dead states.** `ResidenceEvidence`
-  ([arena.rs](../../src/machine/core/arena.rs)) mirrors `Residence`'s evidence
-  fields as a struct of `Option`s, so the meaningless ambient+seen combination
-  is representable; the `KObject` family audit's ambient arm silently
-  drops `seen`, and the `Module` audit ignores it entirely. No caller mints
-  both today — discipline, not construction. A future evidence-tier site
-  passing both would silently lose its saw-a-region-pointer recording and
-  mis-derive the stored value's home-borrow bit. Candidate: a three-variant
-  enum (`DestOnly` / `DestOnlySeen` / `ReachingAmbient`) making each family
-  audit a total match with no dead arm.
-
-### Over-pinning (leak / retention)
-
-- **Side-table growth.** The residence `membership` vec records every
-  recorded-family allocation address for the region's life and answers
-  `owns_addr` by linear scan — cost that grows with exactly the audits the
-  move-in item adds. Candidate: a sorted/hashed structure, or per-family
-  tables sized to the sparse families that need them.
 
 ### Surface debt (not fault-capable)
 
@@ -143,3 +110,17 @@ by local discipline rather than by construction.
   demote `FoldToken` to a documented pure brand marker (its `E0582`-witness
   role is load-bearing; its capability story is not), leaving one capability in
   the audit vocabulary.
+
+- **Runtime guard for a structural invariant.** `run_user_fn`
+  ([exec.rs](../../src/machine/core/kfunction/exec.rs)) takes its arguments as a
+  `Record<Carried>` beside a separate `Record<&DeliveredCarried>` of envelopes,
+  so a value argument whose envelope is missing is representable and the bind
+  arm rejects it with an internal diagnostic. Nothing can reach that arm:
+  `extract_carried_args`
+  ([dispatch/exec.rs](../../src/machine/execute/dispatch/exec.rs)) fills every
+  value slot, literals and quotes included, because the frame scope opens at a
+  `for<'b>` brand no bare reference crosses. The debt is that the two records
+  are held parallel rather than paired, so the invariant rests on both walks
+  staying in step. Candidate: carry one record of `Carried` paired with its
+  envelope, which makes the missing-envelope state unrepresentable and deletes
+  the check — a runtime check standing in for a shape the type could hold.

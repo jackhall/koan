@@ -76,8 +76,8 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 /// **Frame-lifetime, not a per-alloc `for<'b>` brand.** A structural resident (a binding entry, a
 /// `Module`'s child `&Scope`) must outlive any one brand window, so it needs a real `&'a` — which only
 /// a frame-lifetime handle hands back. The per-alloc `for<'b>` brand is the right tool for *terminals*
-/// (the witnessed surface, where [`Region::alloc`] hands a `for<'b>` brand and returns a `Witnessed`
-/// carrier); this handle is for the co-located plumbing.
+/// (the witnessed surface, where a construction door builds under a `for<'b>` brand and returns a
+/// `Witnessed` carrier); this handle is for the co-located plumbing.
 ///
 /// A bare `&KoanRegion` exposes **no** `alloc_*` — allocation is reachable only through this veneer.
 /// Minting a `KoanRegion` at all is unreachable from Koan too: the library's bare-region constructor

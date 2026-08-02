@@ -55,10 +55,11 @@ just enough to read the policy.
 Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
 **region-allocated substrate**, borrowed by the value carrier:
 
-- `List(&'a ListSubstrate<'a>, KType)` — the element slice in the arena.
-- `Dict(&'a DictSubstrate<'a>, KType)` — an arena-frozen immutable map (layout
-  free: a sorted-pair slice or a hash table frozen at construction).
-- `Record(&'a RecordSubstrate<'a>, KType)` — the field record in the arena.
+- `List(&'a ListSubstrate<'a>, KType)` — the element slice in the region.
+- `Dict(&'a DictSubstrate<'a>, KType)` — a hash table frozen at construction, its
+  buckets in the region's own bump.
+- `Record(&'a RecordSubstrate<'a>, KType)` — the field cells in the region, stored
+  sorted by field name.
 - `Tagged { value: &'a PayloadSubstrate<'a>, .. }` — the single-cell payload
   substrate in the arena.
 - `Wrapped { inner: &'a PayloadSubstrate<'a>, .. }` — the same one-cell payload
@@ -79,11 +80,26 @@ the cells in workgraph's sectioned storage ([§ Sectioned reach](#sectioned-reac
 a payload-specific index `C` mapping a name / key / position onto a cell index,
 the interned union over the runs, and the memoized copy cost. Reach and cost ride
 the substrate; the type handle rides the value carrier. The per-container names
-above are aliases of that one wrapper, differing only in `C`: `Record<usize>`
-for a record's name→index table, a marker type for a list (position *is* the
-index) and for the single-cell payload a `Tagged` or `Wrapped` value borrows, a
-frozen `HashMap<KKey, usize>` for a dict. Each later conversion instantiates the
-same wrapper over its own index rather than re-deriving a parallel struct.
+above are aliases of that one wrapper, differing only in `C`, and every `C` is
+`Copy` with no allocation of its own:
+
+- **`RecordLayout<'a>`** — a bump-hosted `&'a [&'a str]` of the field names, sorted,
+  one per cell and positionally aligned with them. The slice *is* the whole index: a
+  lookup binary-searches it and the hit's position is the cell index, so a record pays
+  one allocation rather than a table's two. Field order is therefore a property of the
+  names, never of how the literal was written — a record walks and renders name-sorted.
+  Equality was already order-blind, so nothing semantic turns on it.
+- **`&'a BumpMap<'a, KKey<'a>, usize>`** — a dict's key→index table. Key counts are
+  unbounded, so a dict does pay for a hash table; it is a `hashbrown` table whose buckets
+  are allocated in the region's bump through `allocator-api2`, with `Copy` key and `Copy`
+  value ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)). Iteration order
+  stays arbitrary.
+- **`ListLayout` / `PayloadLayout`** — markers, for the two shapes whose index is
+  implicit: a list's position *is* its cell index, and a `Tagged` / `Wrapped` payload has
+  exactly one cell.
+
+Each later conversion instantiates the same wrapper over its own index rather than
+re-deriving a parallel struct.
 
 Three consequences define the regime:
 
@@ -226,8 +242,8 @@ is run-rooted state koan does not keep, and a per-region one is itself
 hashing stay `str` compares, so a key produced in one region matches a key
 produced in another by content.
 
-The bump keeps **no address table**, so nothing can ask which region a `&str`
-points into. One rule follows, and every string path is an instance of it:
+A region keeps **no address table** — not for a bumped value and not for anything
+else — so nothing can ask which region a `&str` points into. One rule follows, and every string path is an instance of it:
 
 > A path that claims a region's **release** re-bumps the bytes at its
 > destination. A path that **pins** shares the pointer verbatim, under the
@@ -235,7 +251,7 @@ points into. One rule follows, and every string path is an instance of it:
 
 Re-bumping is what makes the empty-reach verdict above honest: a string cell
 that named no region while still pointing into a retiring one would dangle with
-no fold able to rescue it, and no residence audit could catch it. So every
+no fold able to rescue it, and nothing downstream able to catch it. So every
 substrate door re-homes a top-node string cell and every string dict key before
 the verdict is read, the tagged door re-homes its discriminant into the same
 region as its payload substrate, and the copy verb re-bumps at the destination —
@@ -243,13 +259,20 @@ which is what keeps the relocation's release-exact answer exact. Pinning paths
 (a retaining adoption, a projection's `deep_clone`) share the pointer, covered
 by the reach that already names the producer region.
 
-Two gates keep a bare string off the paths that cannot honour the rule. A
-string is **not** a shallow scalar, so a string producer takes a fold door
-rather than the no-fold arm that rebuilds owned at `'static` — there is no
-`'static` rebuild to make. And the residence audit answers `false` for a
-string, so no bare string crosses a runtime-audited move-in; a copying adoption
-routes to the same rebuild-through-a-destination-door path a substrate carrier
-takes.
+A substrate's **index** is bump-hosted string bytes too — a record's name slice and
+the names in it, a dict's `BumpMap` over re-bumped keys — so the rule reaches it
+identically, and the stakes are higher there than for a cell. An index is read
+*before* any cell is: a field lookup binary-searches the names, a key lookup hashes
+and byte-compares. And it is metadata, not a cell, so no run describes it and the
+reach fold cannot rescue it. A relocation that re-homed only cells would leave a
+use-after-free on the way in.
+
+The gate is a signature, not a check. A string is **not** a
+[`Scalar`](../src/machine/model/values/kobject.rs) — that type has no lifetime, and a
+string's bytes have a region — so a string producer takes a fold door or
+`RegionBrand::alloc_string`, either of which re-bumps at the destination, and there is
+no door a bare string can reach that would share the pointer instead. A copying adoption
+routes to the same rebuild-through-a-destination-door path a substrate carrier takes.
 
 ## Escape: pin by default
 
@@ -349,15 +372,29 @@ transferring-the-region.
 ## Untyped arenas: the Drop-free end state
 
 A **storage family** is one stored type's sub-arena inside a region. Families
-split by one rule: a family whose stored (`'static`) form is **Drop-free moves
-into a shared untyped bump arena** — untyped meaning the arena tracks only
+split by one rule: a family whose stored (`'static`) form is **Drop-free lives
+in a shared untyped bump arena** — untyped meaning the arena tracks only
 bytes and alignment, with no per-slot type or destructor bookkeeping, which is
 exactly what Drop-freedom licenses. Region death for those bytes is
 deallocation with no per-slot `Drop` glue: free the arena's chunks, done.
-Families whose slots own heap data stay in typed sub-arenas until converted,
-and the families that are *designed* to own things — a `FrameSet`'s region
-holds — remain typed and droppy permanently; "as much storage as possible"
-means the value substrates.
+
+The split is settled, and the typed residue is **three families**: `KFunction`,
+`Scope`, and `Module` — the ones *designed* to own things (a captured binding
+table, a scope's bindings, a module's member map), plus the region's own
+bookkeeping (the interned reach side table, the union pin bundle). Everything
+in the value channel is in the bump: the `KObject` and `Held` cells, all four
+container substrates, their index metadata, the strings, the expression parts.
+
+`Copy` is what holds a family to that: every bump primitive is `T: Copy`-bounded,
+because "`Drop`-free" has no expressible bound and `Copy` is the honest static
+proxy. The one primitive whose stored value is not itself `Copy` — the
+[`BumpMap`](../workgraph/src/witnessed/bump.rs) door a dict's key index takes —
+moves the bound onto the table's *elements* and allocates the buckets in the same
+bump, so the destructor it forgoes would have freed only bytes region death frees
+anyway. A family that reintroduced an owning slot would not fail loudly: it would
+read and write correctly and simply never free, which is why the claim is pinned
+by a Miri leak test rather than by an assertion
+([§ Invariants preserved](#invariants-preserved)).
 
 A scope's binding tables are **not** in that residue. An entry is a
 `BindingIndex` beside a resting `Sealed` carrier, both `Copy` and `Drop`-free:
@@ -402,12 +439,20 @@ each an O(1) read of a structural fact, with no walk over the node behind it.
   answered at construction by the door's brand, never re-derived by a walk.
 - **Verification.** The Miri audit slate ([observe/miri_slate.md](../observe/miri_slate.md))
   remains the sign-off gate: zero UB, zero process-exit leaks across the
-  slate, with the escape seam's copy and pin verbs both exercised.
+  slate, with the escape seam's copy and pin verbs both exercised. Two claims
+  this file makes are pinned there specifically: that a substrate's bump-hosted
+  **index metadata** re-homes across a relocation — read *before* any cell, so a
+  stale index is a use-after-free on the way in, and no run describes it — and
+  that region death for the `Drop`-free families frees every shape, a **leak**
+  claim `Copy` bounds can only approximate statically.
 
 ## Open work
 
-The [untyped_arena](../roadmap/untyped_arena/README.md) roadmap project carries
-the conversion slate; its `Requires` chain encodes the order:
+The [untyped_arena](../roadmap/untyped_arena/README.md) project carries what is
+left:
 
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
-- [Drop-free region death](../roadmap/untyped_arena/drop-free-region-death.md)
+  — pricing copying-the-survivors-out against transferring-the-region, the
+  local decision the cost seam's two numbers already support.
+- [Region-hosted operator groups](../roadmap/untyped_arena/region-hosted-operator-groups.md)
+  — the last binding table storing a refcounted record outside every region.

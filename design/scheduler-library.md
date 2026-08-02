@@ -102,7 +102,7 @@ a concept, not a final identifier.
   wrong binding is a compile error rather than a runtime bug. The allocation
   capability itself is a library type,
   [`RegionHandle`](../workgraph/src/witnessed/region.rs): the engine's
-  `alloc` / `alloc_resident` are `pub(crate)` to `workgraph`, so a bare
+  `alloc_resident` is `pub(crate)` to `workgraph`, so a bare
   `&Region` has no allocation surface at all — the only public minter is
   `RegionHandle::from_owner`, gated on the (unsafe-to-implement) `RegionOwner`
   contract. [arena.rs](../src/machine/core/arena.rs) holds only Koan's

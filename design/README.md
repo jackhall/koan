@@ -59,8 +59,8 @@ Root concerns:
   [workgraph/design/reach.md](../workgraph/design/reach.md).
 - [per-call-region/](per-call-region/README.md) — the
   single owner of the `Rc<CallFrame>` contract: anchor carriers,
-  lift-time anchor decision, the `alloc_object` cycle gate, active-frame
-  propagation, and the `outer_frame` chain for builtin-built frames.
+  lift-time anchor decision, why the allocation engine needs no cycle gate,
+  active-frame propagation, and the `outer_frame` chain for builtin-built frames.
 - [tail-call-optimization.md](tail-call-optimization.md) — the TCO
   design as a whole: constant space through a single node operation
   (reinstall the slot; the library turns over the region) with region

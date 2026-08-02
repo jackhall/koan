@@ -1,9 +1,8 @@
-//! Generic run-lifetime storage substrate. Holds an address membership side-table and routes its
-//! store-side lifetime-erasure through its module's single audited
-//! [`erase_to_static`](super::erase_to_static) primitive — it names no workload type. A
-//! [`StorageProfile`] injects its storage families via [`Stored`]; the single private
-//! [`store`](Region::store) path erases each value to `'static`, writes it to the family's sub-arena,
-//! and records its address. One surface re-anchors that store:
+//! Generic run-lifetime storage substrate. Routes its store-side lifetime-erasure through its
+//! module's single audited [`erase_to_static`](super::erase_to_static) primitive — it names no
+//! workload type. A [`StorageProfile`] injects its storage families via [`Stored`]; the single
+//! private [`store`](Region::store) path erases each value to `'static` and writes it to the
+//! family's sub-arena. One surface re-anchors that store:
 //! [`alloc_resident`](Region::alloc_resident) hands it back at the caller's `'a` as a co-located
 //! `&'a` (content == borrow == `'a`, the tight no-free-lifetime shape). It is `pub(crate)` — the
 //! only public allocation surface is [`RegionHandle`], minted from a region owner or handed out at a
@@ -116,10 +115,9 @@ pub trait StorageProfile: Sized {
 /// [`Reattachable`] supertrait — the same single-lifetime GAT (`At<'static> == Self`) the scheduler's
 /// erase/reattach discipline routes — so the store-side erasure here and the read-side re-anchor in
 /// the scheduler share one audited primitive instead of each carrying its own transmute. A live value
-/// enters the engine as `At<'a>`. One trait carries every storage-safety answer for a family — which
-/// cell it lands in, whether it would self-cycle, and any post-store side effect — so
-/// [`store`](Region::store) reasons about the gate-erase-store sequence once instead of forking it
-/// per type.
+/// enters the engine as `At<'a>`. The trait carries the family's one storage answer — which cell it
+/// lands in — so [`store`](Region::store) reasons about the erase-store sequence once instead of
+/// forking it per type.
 ///
 /// Not sealed: this is the workload's extension point. Unbypassability comes from elsewhere — the
 /// engine is the only path to the private [`Region::storage`], so an impl can supply policy
@@ -129,9 +127,6 @@ pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
     /// binding chokepoint: every cell has a distinct type, so only the matching tuple path
     /// type-checks — a wrong path is a compile error, not a runtime bug.
     fn cell(storage: &StorageOf<W>) -> &FamilyArena<Self>;
-    /// Post-store hook, run inside the engine on the storing frame. Default no-op; a family overrides
-    /// it to record the stored address for [`Region::owns_addr`] membership queries.
-    fn record_local(_frame: &Region<W>, _stored: &Self::At<'static>) {}
 }
 
 /// Run-lifetime allocation frame. Lives for one program run (or one per-call frame). Sub-arenas
@@ -142,10 +137,6 @@ pub struct Region<W: StorageProfile> {
     /// never exposed by reference: the only path in is [`store`](Self::store), the sole store
     /// engine, so storage is never reachable by reference.
     storage: StorageOf<W>,
-    /// Stable addresses of values a family opts to record (via [`Stored::record_local`]), backing
-    /// [`owns_addr`](Self::owns_addr). `usize` rather than `*const _` keeps the field
-    /// lifetime-erased and `Send`/`Sync`-neutral.
-    membership: RefCell<Vec<usize>>,
     /// The region's **reach intern table**: the non-owning reach descriptions minted for values
     /// living in this region ([`Region::intern_reach_retained`]), keyed on the canonical member set
     /// so one description exists per distinct reach per region. Separate from the family
@@ -244,7 +235,6 @@ impl<W: StorageProfile> Region<W> {
     pub(crate) fn new(host: Weak<W::FrameOwner>) -> Self {
         Self {
             storage: StorageOf::<W>::default(),
-            membership: RefCell::new(Vec::new()),
             reach_table: FrozenMap::new(),
             bump: Bump::new(),
             bumped_bytes: Cell::new(0),
@@ -419,33 +409,18 @@ impl<W: StorageProfile> Region<W> {
         K::cell(&self.storage).len()
     }
 
-    /// Whether `addr` was recorded by a prior [`Stored::record_local`] on this frame.
-    pub fn owns_addr(&self, addr: usize) -> bool {
-        self.membership.borrow().contains(&addr)
-    }
-
-    /// Record `addr` into the membership side-table. Called by a family's
-    /// [`Stored::record_local`]; the only writer.
-    pub fn record_addr(&self, addr: usize) {
-        self.membership.borrow_mut().push(addr);
-    }
-
-    /// The single store path for any family `K`: erase the live form to `'static`, write it to the
-    /// family's cell, and fire [`Stored::record_local`] on the storing frame. Hands back the
-    /// stored `&K::At<'static>` for a surface to re-anchor. `storage` is private and this is the only
-    /// path that reaches it, so every family allocation routes here.
+    /// The single store path for any family `K`: erase the live form to `'static` and write it to
+    /// the family's cell. Hands back the stored `&K::At<'static>` for a surface to re-anchor.
+    /// `storage` is private and this is the only path that reaches it, so every family allocation
+    /// routes here.
     ///
     /// No cycle gate: a stored value holds no owning `Rc` back to a region (a closure / future /
     /// module is a bare borrow into its defining region, kept alive by its carrier's witness set), so
     /// storing it where requested can never form an allocation back-edge.
     fn store<K: Stored<W>>(&self, value: K::At<'_>) -> &K::At<'static> {
-        let stored = K::cell(&self.storage)
+        K::cell(&self.storage)
             .arena()
-            .alloc(erase_to_static::<K>(value));
-        // The post-store hook fires on the storing frame (this one — `store` writes where called),
-        // so a recorded address tracks its true owner.
-        K::record_local(self, stored);
-        stored
+            .alloc(erase_to_static::<K>(value))
     }
 
     /// The co-located resident allocation: store `value` — its input lifetime forgotten by
@@ -754,30 +729,31 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     ///
     /// ```
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RecordedRefFamily};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, HomedRef, HomedRefFamily};
     /// use workgraph::witnessed::RegionHandle;
     /// static SEED: u32 = 7;
     /// let cart = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
-    /// // Seed the region so it records `SEED`'s address as resident.
-    /// let _ = handle.alloc_resident::<RecordedRefFamily>(&SEED);
-    /// // A borrow of the now-resident `SEED` passes the family audit.
+    /// // The value names this region as its home, so the family audit accepts it.
+    /// let resident = HomedRef { home: &cart.0, value: &SEED };
     /// let stored = handle
-    ///     .alloc_resident_checked::<RecordedRefFamily>(&SEED, ())
-    ///     .expect("SEED is resident");
-    /// assert_eq!(**stored, 7);
+    ///     .alloc_resident_checked::<HomedRefFamily>(resident, ())
+    ///     .expect("the value is homed here");
+    /// assert_eq!(*stored.value, 7);
     /// ```
     ///
     /// ```
     /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, RecordedRefFamily};
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, HomedRef, HomedRefFamily};
     /// use workgraph::witnessed::RegionHandle;
     /// static OTHER: u32 = 9;
     /// let cart = fresh_cart();
+    /// let elsewhere = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
-    /// // `OTHER` was never stored, so the region does not own its address: the audit rejects it.
+    /// // The value names a different region as its home: the audit rejects it.
+    /// let foreign = HomedRef { home: &elsewhere.0, value: &OTHER };
     /// assert!(handle
-    ///     .alloc_resident_checked::<RecordedRefFamily>(&OTHER, ())
+    ///     .alloc_resident_checked::<HomedRefFamily>(foreign, ())
     ///     .is_none());
     /// ```
     pub fn alloc_resident_checked<K: AuditedStored<W>>(

@@ -45,10 +45,10 @@ cargo fmt --all -- --check
 
 Run these locally before pushing. Clippy is configured per-crate in
 [Cargo.toml](Cargo.toml); per-site `#[allow(...)]` is fine when the lint is
-wrong (e.g., the `clippy::unnecessary_cast` allows in
-[src/runtime/machine/core/arena.rs](src/machine/core/arena.rs) and
-[src/runtime/model/values/module.rs](src/machine/model/values/module.rs) where the
-through-`'static` cast is required by the lifetime-erasure pattern).
+wrong (e.g., the `clippy::large_enum_variant` allows on
+[`NodeScope`](src/machine/execute/nodes.rs), [`Outcome`](src/machine/execute/outcome.rs)
+and [`ScopeKind`](src/machine/core/scope.rs), where the wide arm is the common one and
+boxing it would cost an allocation on the hot path).
 
 ## Modgraph complexity baseline
 

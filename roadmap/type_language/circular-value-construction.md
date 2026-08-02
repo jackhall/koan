@@ -16,12 +16,12 @@ Values are acyclic by construction. A constructor's arguments are already-finish
 values (the constructor path in
 [`constructors.rs`](../../src/machine/execute/dispatch/constructors.rs) materializes a
 [`KObject`](../../src/machine/model/values/kobject.rs) only once its parts are done), so
-a field cannot point back at a value that does not yet exist. And the region cycle gate
-([`obj_anchors_to`](../../src/machine/core/arena.rs), consulted by
-[`Region::alloc`](../../workgraph/src/witnessed/region.rs)) actively redirects any allocation
-whose value would hold an `Rc` back into its own frame to the escape frame —
-specifically to prevent a refcount cycle, which would leak under the refcount-based
-reclamation the memory model assumes. So `NEWTYPE Node = :{next :Node}` types fine, yet
+a field cannot point back at a value that does not yet exist. The storage substrate holds
+that shut from the other side: no stored value owns an `Rc` back to a region — a substrate
+is a borrow and a reach's pins are holder-owned — so the store engine
+([`Region::alloc_resident`](../../workgraph/src/witnessed/region.rs)) needs no cycle gate
+and offers no way to close one, which is what keeps the refcount-based reclamation the
+memory model assumes leak-free. So `NEWTYPE Node = :{next :Node}` types fine, yet
 no `Node` can be built whose `next` is itself, and two nodes cannot reference each
 other.
 

@@ -36,8 +36,8 @@ allocation.
 ## Which verb each construction site takes
 
 **`yoke` — region-pure leaves.** An `alloc` site inverts so its construction runs
-*inside* the closure: a region-pure leaf (`region.alloc_object(…)` over owned or
-region-derived parts) is a `yoke` whose closure is the single allocation.
+*inside* the closure: a region-pure leaf (`region.alloc_scalar(…)` over an owned
+`Number` / `Bool` / `Null`) is a `yoke` whose closure is the single allocation.
 
 A value embedding an AST — a quoted expression, an FN body — also `yoke`s, because
 the embedded AST reaches no region a holder could outlive. Both are `Copy`
@@ -66,11 +66,14 @@ separate facts make that borrow harmless:
 
 So the AST-embedding object is **region-pure**, born under the empty
 (foreign-reach-only) set exactly as any region-pure leaf. The quote-capture site
-still takes the audited door
-([`RegionBrand::alloc_object_witnessed_checked`](../src/machine/core/arena.rs))
-rather than `alloc_object_witnessed`, but for a lifetime reason only: `KObject<'a>`
-is invariant, so a cell holding raw AST has no `'static` rebuild to offer the
-unchecked signature. Its residence walk has nothing left to reject.
+takes its own door
+([`RegionBrand::alloc_expression`](../src/machine/core/arena.rs), witnessed as
+`alloc_expression_witnessed`) rather than the scalar one, for a lifetime reason
+only: `KObject<'a>` is invariant, so a cell holding raw AST has no owned rebuild to
+offer a lifetime-free signature. The door's own signature is the enforcement —
+only a [`KExpression`](../src/machine/model/ast.rs) reaches it, and an AST node
+names no producer region, so the cell it bumps borrows nothing a seal would have to
+pin.
 
 **`merge_pinned` / `transfer_into` — everything that references a pre-existing
 value.** An aggregate folds its *element carriers* (deps arriving witnessed from
@@ -265,7 +268,7 @@ boundary.
   ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs), which relocates
   the value into the frame region at a fold brand, the composition minting and
   retaining what the copy still reaches rather than assuming purity — see
-  [memory-model.md § Move-in residence audits](memory-model.md#move-in-residence-audits)
+  [memory-model.md § Move-in residence](memory-model.md#move-in-residence)
   — for the `it` / param binds; the deferred return re-homing its elaborated `KType`
   into the captured-scope region) before binding it, so the value lands at the brand
   and the seed fabricates no free `&'a`.

@@ -29,6 +29,11 @@ PRINT (Point {y = 4, x = 3})
 Point({x = 3, y = 4})
 ```
 
+Notice the printed order: a record's fields are stored and rendered **sorted by
+field name**, whatever order you wrote them in. Nothing in the language reads
+field position, so this only ever shows up in output — two records with the same
+fields print the same way, and comparing them ignores order either way.
+
 Bare identifiers on the value side resolve through scope like anywhere else, so
 you can build a record from existing names:
 
