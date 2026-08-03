@@ -28,6 +28,10 @@ mod sectioned;
 /// occupancy reader, and a region-self-referential store with no residence audit.
 mod bump;
 
+/// The born-door slate: what [`RegionHandle::alloc_resident_born`] and its crossing-operand sibling
+/// store, over an invariant family that names its own region and a parent in another one.
+mod born;
+
 /// Covariant stand-in: a plain shared reference. `At<'r>` is a `&'r u32`, whose lifetime the borrow
 /// checker can't track across the `'static` store.
 struct RefFamily;

@@ -41,8 +41,8 @@ use elsa::FrozenMap;
 use typed_arena::Arena;
 
 use super::{
-    erase_to_static, BumpMap, PinBundle, PinsRegion, ReachDescription, Reattachable, RegionOwner,
-    StepCoverage,
+    erase_to_static, BumpMap, FoldedPlacement, PinBundle, PinsRegion, ReachDescription,
+    Reattachable, RegionOwner, SealedExtern, StepCoverage, Witness,
 };
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
@@ -762,6 +762,127 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         context: K::AuditContext<'_>,
     ) -> Option<&'a K::At<'a>> {
         K::audit(self.region, &value, context).then(|| self.region.alloc_resident::<K>(value))
+    }
+
+    /// **Build a region-borrowing value at a fresh brand and store it here in one act** — the
+    /// fold-free *born* door, for a family whose every constructor borrows the region it lands in and
+    /// so can never meet [`alloc_resident`](Self::alloc_resident)'s `'static` bound.
+    ///
+    /// `build` runs under a `for<'b>` quantifier and receives a [`FoldedPlacement`] over *this*
+    /// handle's region re-anchored to `'b`. That is the whole residence proof, and it is a compile
+    /// one: `'b` is universally quantified with no outlives relation to any enclosing lifetime, so the
+    /// only `&'b Region<W>` (and hence the only `X<'b>` built over one) a closure body can name is the
+    /// one derived from the placement handed in. A capture of an ambient `&'a Region` does not coerce
+    /// and does not compile. The built value's region pointer is therefore the destination's by
+    /// construction — the same no-outlives argument
+    /// [`FoldedPlacement::alloc_resident_folded`] rests on, with no operands to compose.
+    ///
+    /// Returns the stored value co-located at this handle's own `'a` (**content == borrow == `'a`**),
+    /// so a caller storing the result in a `'a`-lifetimed field needs no re-anchor of its own.
+    ///
+    /// A value that must embed an operand borrowed from *outside* the closure takes
+    /// [`alloc_resident_born_with`](Self::alloc_resident_born_with), which crosses that operand into
+    /// `'b` through the witnessed channel rather than widening this signature.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, HomedRef, HomedRefFamily};
+    /// use workgraph::witnessed::RegionHandle;
+    /// static SEED: u32 = 7;
+    /// let cart = fresh_cart();
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// // The value names the placement's own region as its home, so it is resident by construction.
+    /// let stored: &HomedRef<'_> = handle.alloc_resident_born::<HomedRefFamily>(|placement| {
+    ///     HomedRef { home: placement.handle().region(), value: &SEED }
+    /// });
+    /// assert_eq!(*stored.value, 7);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // The residence proof, negatively: a value whose region pointer derives from an *ambient*
+    /// // (non-brand) region cannot be returned from the closure — `elsewhere`'s `&Region` is at an
+    /// // enclosing lifetime, which has no outlives relation to the universally quantified `'b`.
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, HomedRef, HomedRefFamily};
+    /// use workgraph::witnessed::RegionHandle;
+    /// static SEED: u32 = 7;
+    /// let cart = fresh_cart();
+    /// let elsewhere = fresh_cart();
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// let _ = handle.alloc_resident_born::<HomedRefFamily>(|_placement| {
+    ///     HomedRef { home: &elsewhere.0, value: &SEED }
+    /// });
+    /// ```
+    pub fn alloc_resident_born<K: Stored<W>>(
+        self,
+        build: impl for<'b> FnOnce(FoldedPlacement<'b, W>) -> K::At<'b>,
+    ) -> &'a K::At<'a>
+    where
+        W: 'static,
+    {
+        // The handle is erased and re-anchored rather than captured: inside a `for<'b>` closure a
+        // captured `RegionHandle<'a, W>` cannot coerce to `'b`, and the fresh `'b` is precisely what
+        // makes an ambient capture a compile error. The witness is the region itself — the pointee the
+        // erased handle names — borrowed for the whole of `'a`, so the re-anchor is a shortening.
+        let handle = SealedExtern::<RegionHandleFamily<W>>::erase(self);
+        handle.open(self.region, |handle_b| {
+            let value = build(FoldedPlacement::mint(handle_b));
+            // Stored through `self`'s own `&'a Region`, not `handle_b`'s: the result must come out at
+            // `'a`, and a `&'b K::At<'b>` could not leave the closure at all.
+            self.region.alloc_resident::<K>(value)
+        })
+    }
+
+    /// [`alloc_resident_born`](Self::alloc_resident_born) **with a crossing operand** — the born door
+    /// for a value built *from* a reference the caller already holds, where the surrounding
+    /// construction lives at an enclosing lifetime the closure's `'b` cannot see.
+    ///
+    /// `operand` is re-anchored to the *same* `'b` as the placement, so a value embedding it is well
+    /// typed at the brand even for an invariant family (branding the two at independent `'b`s is what
+    /// invariance rejects; one [`zip`](SealedExtern::zip)ped open unifies them). Everything the
+    /// closure needs at `'b` arrives this way or from the placement — that is what keeps the
+    /// destination-residence proof of the operand-free door intact for every region pointer the value
+    /// derives from the placement.
+    ///
+    /// # The operand's own liveness
+    ///
+    /// What the signature cannot prove is the *operand's*: its pointee may live in another region
+    /// entirely, and the stored value keeps naming it for as long as this handle's region lives.
+    /// `pin` is where the caller discharges that — it is borrowed for `'a`, the destination region's
+    /// own lifetime, so the [`Witness`] contract (holding it keeps the backing live and fixed-address)
+    /// covers the stored reference's whole life rather than merely the call. Passing a pin whose
+    /// liveness does not in fact cover the operand is the same co-location obligation every
+    /// [`Witness`] carries, and the same one [`SealedExtern::open`] states; this door narrows it to a
+    /// duration the type system checks.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, seal_extern, HomedRef, HomedRefFamily, RefFamily};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let source = fresh_cart();
+    /// let cart = fresh_cart();
+    /// // A value resident in another region, which the built value will embed.
+    /// let borrowed: &u32 = RegionHandle::from_owner(&*source).alloc_resident::<RefFamily>(&7);
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// // `source` is held for the whole of the destination's life, so it pins what the operand names.
+    /// let stored = handle.alloc_resident_born_with::<HomedRefFamily, RefFamily, _>(
+    ///     seal_extern::<RefFamily>(borrowed),
+    ///     &source,
+    ///     |placement, operand| HomedRef { home: placement.handle().region(), value: operand },
+    /// );
+    /// assert_eq!(*stored.value, 7);
+    /// ```
+    pub fn alloc_resident_born_with<K: Stored<W>, Op: Reattachable, P: Witness>(
+        self,
+        operand: SealedExtern<Op>,
+        pin: &'a P,
+        build: impl for<'b> FnOnce(FoldedPlacement<'b, W>, Op::At<'b>) -> K::At<'b>,
+    ) -> &'a K::At<'a>
+    where
+        W: 'static,
+    {
+        let handle = SealedExtern::<RegionHandleFamily<W>>::erase(self);
+        handle.zip(operand).open(pin, |(handle_b, operand_b)| {
+            let value = build(FoldedPlacement::mint(handle_b), operand_b);
+            self.region.alloc_resident::<K>(value)
+        })
     }
 }
 
