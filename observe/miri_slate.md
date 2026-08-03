@@ -37,8 +37,8 @@ group just to silence the stale-anchor check.
   an ordering claim no other slate test makes. The real `unsafe` is the `Sealed::open_with` retype in
   `witnessed.rs`; typed_field_list.rs carries none of its own.
 - `src/machine/core/arena.rs` — arena.rs split into `arena/{frame,step_allocator}` child
-  modules. Its groups (CallFrame lifetime erasure, reference-only carrier retention, multi-region
-  union, witness-set hosting, `alloc_carried_with`, MATCH-Tagged / TRY-WITH TCO, per-call frame
+  modules. Its groups (CallFrame lifetime erasure, the record substrate door, MATCH-Tagged /
+  TRY-WITH TCO, per-call frame
   re-anchor, NodeStore reinstall) pin safe-code frame / carrier / region drop-order and reattach
   disciplines whose backing `unsafe` is the `Region::alloc_resident` retype in `witnessed.rs`. Every
   `KFunction` / `Scope` / `Module` store reaching that retype rides a born door
@@ -51,33 +51,31 @@ group just to silence the stale-anchor check.
   stored `&'a Scope<'a>` (re-anchored with the holder by the `Region::alloc_resident` retype), so
   kfunction.rs carries no `unsafe` of its own. The group pins the captured-scope-survives-
   closure-escape and delivered-carrier reach-fold shapes.
-- `src/machine/model/values/module.rs` — the `Module` groups pin a safe `RefCell`
-  discipline (interior mutation under a live `&'a Module`) and the MODULE-body
-  Combine continuation; the captured-scope re-anchor they reference is the stored `&'a Scope<'a>`
-  re-anchored with the `Module` carrier by the `Region::alloc_resident` retype in `witnessed.rs`, so module.rs
-  carries no `unsafe` of its own.
-- `src/machine/execute/outcome.rs` — the `ContinuationFamily` group's test
-  (`erased_continuation_open_roundtrip`) pins the **fat-pointer** (`Box<dyn>`)
-  erase → open → invoke round-trip — a layout shape no thin-carrier test covers.
-  The real `unsafe` is the `Erased::reattach` inside `SealedExtern::open` in
-  `witnessed.rs`; the family's `unsafe impl` is `reattachable!`-generated, so outcome.rs
-  carries none.
 - `workgraph/src/scheduler/node_store.rs` — the slot-read group pins `read_result_with`'s
   `open_with` under the retained frame owner (a safe pinned open; the `unsafe` lives in
   `witnessed.rs`) via an end-to-end tail-chain return-contract-coarsening shape no
   minimal test reproduces. The file's only former `unsafe` was the test-family markers,
   now `reattachable!`-generated.
-- `src/machine/execute/nodes.rs` — `node_scope_yoked_child_erase_open_roundtrip`
-  pins the `NodeScope::YokedChild` erase → open round-trip plus a sibling-pointer
-  region mutation — an `erase_to_static` → `SealedExtern::open` shape through the scope carrier
-  that no value-family test reproduces. The open routes the fully-safe
-  `SealedExtern::open` on a stored `&'static Scope`, whose only `unsafe` (the
-  shared `retype`) lives in `witnessed.rs`, so nodes.rs carries none of its own.
-- `src/machine/core/ref_carriers.rs` — every holder stores its captured / defining / parent scope as a
-  plain `&'a Scope<'a>`, re-anchored **with the holder as a whole** by the `Region::alloc_resident` retype in
-  `witnessed.rs` (the construction-time reference is built at `'a` by plain coercion for a same-region
-  child, or at the construction door's brand for a per-call frame child), so ref_carriers.rs carries no
-  `unsafe` of its own. The group pins the stored scope-pointer re-anchor shape.
+- `src/machine/core/ref_carriers.rs` — pointer-only group: every holder stores its captured /
+  defining / parent scope as a plain `&'a Scope<'a>` re-anchored **with the holder as a whole** by
+  the `Region::alloc_resident` retype in `witnessed.rs`, and the shape is pinned library-side by
+  the workgraph slate's born-door group (invariant holder, foreign-region parent, post-store
+  interior write). No koan test and no `unsafe` of its own.
+- `src/machine/execute/nodes.rs` — pointer-only group: the `NodeScope::YokedChild`
+  erase → open round trip (including a sibling store while the opened reference is live) is pinned
+  library-side (`sealed_extern_open_externally_witnessed`,
+  `an_erased_node_opens_and_survives_a_sibling_store_inside_the_open`); every scheduler-driving
+  slate test exercises the production carrier end-to-end. No `unsafe` of its own.
+- `src/machine/execute/outcome.rs` — pointer-only group: the fat-pointer (`Box<dyn>`)
+  erase → open → invoke round trip is pinned library-side
+  (`sealed_extern_open_invokes_a_fat_pointer_continuation`); the family's `unsafe impl` is
+  `reattachable!`-generated, so outcome.rs carries none, and `run_step` runs the transmute
+  end-to-end every step.
+- `src/machine/model/values/module.rs` — pointer-only groups: the interior-mutation-under-a-live-
+  `&'a Module` shape is pinned library-side (`the_returned_node_accepts_a_write_at_the_callers_lifetime`,
+  `invariant_same_brand_mutation`), the koan `RefCell` round trips run under plain `cargo test`,
+  and the MODULE-body Combine continuation rides the stored scope-pointer re-anchor the born-door
+  group pins. No `unsafe` of its own.
 - `src/machine/execute/dispatch/ctx.rs` — the `with_node_scope` read boundary is the
   sole production open of a `YokedChild` carrier; it passes the executing slot's
   cart `Rc` as the witness to `SealedExtern::open`, a **safe** call, so ctx.rs carries no
@@ -88,12 +86,6 @@ group just to silence the stale-anchor check.
   The group pins the escaping-value **retention** discipline — a surviving closure / module borrow
   kept alive by the consumer frame's `retained` `FrameSet` — which tree borrows catches if it
   regresses.
-- `src/machine/core/carrier_witness.rs` — the reference-only collapse moved every
-  `unsafe impl` off this file onto the library `Carrier<F>` in
-  `workgraph/src/witnessed/carrier.rs` (a separate crate the koan-scoped fingerprint doesn't track);
-  `carrier_witness.rs` is now the `CarrierWitness` / `DeliveredCarried` type aliases. The group's
-  tests still pin real memory-safety shapes — the reference-only carrier under its retention hold
-  and the `compose` mint — just via that library type, not this file's own code.
 - `src/machine/execute/run_loop.rs` — `run_step`'s dep-union `pin` is built entirely through safe
   envelope/`RegionSet` verbs (`Delivered::liveness_frameset`, `FrameSet::union`/`singleton`); the
   file carries no `unsafe` of its own. The group pins the retention redundancy claim — a dep's
@@ -128,10 +120,15 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-53 tests, grouped by the unsafe site each pins down. Names below are the exact
-test identifiers; pass them after `--` in the Miri command. A further 21 tests
+39 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+below are the exact test identifiers; pass them after `--` in the Miri command. A further 44 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
-([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
+([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
+whose failure modes live entirely in the library's verbs (the region alloc engine, the envelope
+transfer / duplication / adoption / re-stamp verbs, the mint's self rule and teardown, the
+`alloc_with` dep fold, the born-door round trips, the `SealedExtern` opens over thin, boxed, and
+fat-pointer carriers) is audited there, over library-only profiles; this slate holds only shapes
+whose discipline lives in koan's own `src/` — its doors, seams, and scheduler-driving programs.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 child-scope `Option<SealedExtern<ScopeRefFamily>>` opened at a `for<'b>` brand via `CallFrame::with_scope`
@@ -163,9 +160,9 @@ parent — the erase-store / re-anchor sequence every `Scope` store now takes.
 layout-invariance audit in `witnessed.rs`. One test pins the store landing in the brand's own
 region — the stored description names that region as the substrate's home, which is what a later
 home-crossing read answers from. A second pins `alloc_carried_with`'s fold-brand
-construction one level up for a `Record` specifically — mirroring
-`object_field_reach_fold_survives_producer_frame_free`'s `KFunction` shape, but for
-`KObject::record_with_type` (FROM's own construction): the narrowed record shares the exact same
+construction one level up for a `Record` specifically — the combinator's by-construction dep fold
+is pinned library-side (`alloc_with_folds_dep_reach_before_result_read` in the workgraph slate);
+what is koan's own here is `KObject::record_with_type` (FROM's own construction): the narrowed record shares the exact same
 substrate pointer (never copies) built from a delivered `record` operand's view in a *different*
 frame, and the fold's reach union is what keeps the producer's region alive once every producer
 handle drops — the shape `record_projection::body`'s `alloc_carried_with(&[lhs], …)` call takes in
@@ -173,132 +170,6 @@ production.
 
 - `alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand`
 - `record_retype_shares_substrate_across_producer_frame_free`
-
-**`Region` alloc engine under live borrows** ([workgraph/src/witnessed/region.rs](../workgraph/src/witnessed/region.rs)) — the
-single `store` path erases the value to `'static` (the move-through-union `erase_store`) and writes it
-to the family's sub-arena through a `RefCell::borrow_mut`; `alloc_resident` then re-anchors the stored
-reference to `'a` through the tight in-module `retype` leaf — content == borrow == `'a`, capped by
-`&'a self`, region.rs's one `unsafe`. Pinned here while a prior `&` from the same region is
-shared-borrowed. Over the `KoanRegion` (= `Region<KoanStorageProfile>`), and over a *typed* family
-(`KFunction`) deliberately: the `Drop`-free families are bump-hosted and never reach this engine.
-
-- `region_alloc_while_prior_ref_live`
-
-**Reference-only carrier — retention-held read across shell drop** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
-— a region-pure object allocated through `alloc_scalar_witnessed` is born under the empty reach, so
-its carrier pins **nothing**. Sound because reads never go bare: the active frame pins
-the region during the producing step, and at finalize the scheduler seeds a retention hold on the
-producer's storage that rides the delivery envelope (`Delivered`) to every consumer. The test pins that
-hold across the producer shell's drop — seal the carrier as-is into its envelope (host = the storage
-`Rc`, the hold's stand-in), then drop the producer shell outright (a `FreshTail` tail hop mints a fresh
-cart and drops the retiring one rather than resetting it in place); the retained storage keeps the
-region (where the value lives) alive, so opening the envelope after the drop reads a live pointee.
-Without the hold the empty carrier would pin nothing and the drop would free the region under the
-stored carrier. The only `unsafe` it routes is the shared `retype` in `witnessed.rs` (through the
-envelope's pinned open).
-
-- `reference_only_carrier_survives_producer_shell_drop_under_retention_hold`
-
-**Multi-region union — envelope folds over independently-dying regions** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
-— these tests hand-build genuinely multi-region carriers — a value reaching several
-*independently-dying* per-call regions — through the delivery verbs only (`Delivered::transfer_into`
-folds each element onto a `yoke_branded` accumulator, minting its regions into the destination arena;
-`map_pinned` under the destination's retained storage builds the final value — never a hand-assembled
-witness), free every producing frame, then read a reached closure's captured scope back: a
-use-after-free under tree borrows the instant the minted set under-counts (a single frame witnessing
-the whole aggregate frees the others' regions). The three shapes split the fold's two liveness
-channels across the design's multi-region cases. The **list** elements ride the LET-bind →
-entry-re-read pipeline (closure whole in its own home region, envelope host = the *reader* frame
-whose arena holds the minted entry reach), so the closure regions arrive as element **reach** the
-fold must union — host materialization alone covers only the readers. The **record** fields and the
-closure-capturing-closures **reach tree** travel producer-hosted (host = the closure's own frame,
-carrier empty), so their regions arrive as **residence** the `Residence::Kept` fold must
-materialize; the reach-tree shape further folds its outer closure at a host that *is* the
-destination frame, minting the aggregate's `borrows_into_home` bit set where the list's and
-record's stay unset. The only `unsafe` routed is the shared `retype` in `witnessed.rs` (through
-`yoke_branded` / `transfer_into` / `map_pinned`).
-
-- `multi_region_list_of_closures_survives_frame_free`
-- `multi_region_closure_capturing_closures_survives_frame_free`
-- `multi_region_record_of_closures_survives_frame_free`
-
-**Envelope transfer — cross-region residence mint and pass-through duplication** ([workgraph/src/witnessed/delivered.rs](../workgraph/src/witnessed/delivered.rs))
-— the delivery-envelope relocation seam
-([workgraph/src/witnessed/delivered.rs](../workgraph/src/witnessed/delivered.rs)): a
-`Residence::Kept` `transfer_into` of a foreign region-resident element mints the envelope's host into
-the destination's arena as an ordinary reach *member* rather than dropping it (the value keeps living
-in the producer's region) — the direct unit-level twin of the `multi_region_*` shapes above, minus the
-aggregate-fold machinery. A use-after-free under tree borrows the instant the transfer drops the
-foreign host instead of materializing it. The duplication twin pins the walking half: duplicating an
-envelope for dep delivery bit-copies the reference-only carrier and clones exactly one `Rc` (the
-retained host) — the reach set itself rides by reference, never re-minted, so a regression shows as
-per-member refcount traffic or a leak. The `unsafe` routed is the shared `retype` in
-`witnessed.rs` plus `Carrier`'s own `with_reach` pinned re-anchor. The `KFunction` / `Scope` /
-`Module` stores this seam and its siblings exercise reach that same retype through the born doors,
-which state their residence obligation in the type rather than in an audit.
-
-- `envelope_transfer_folds_an_independent_foreign_value`
-- `pass_through_duplicate_keeps_reach_pointer_and_mints_nothing`
-
-**Single escape seam — re-stamp in place, the self rule** ([workgraph/src/witnessed/delivered.rs](../workgraph/src/witnessed/delivered.rs))
-— the single-seam escape verb
-([`Delivered::restamp_in_place`](../workgraph/src/witnessed/delivered.rs)): a declared substrate
-return re-tags its top node to the declared type and re-anchors it into the **producer's own
-region** through `transfer_into_placing`, sharing the substrate borrow verbatim
-(the exact `finalize_terminal` `Disposition::Restamp` motion). The distinguishing shape from the
-envelope-transfer group above: the destination *is* the value's own home region, so the mint's self
-rule strips that region from the **owned bundle** — the description still names it as an ordinary
-member, but no `Rc` rides out. A regression that instead kept the self pin would seat an
-`Rc<producer>` in a bundle retained inside the producer's own region: a strong self-cycle the region
-never drops, a leak at process exit under Miri. The test re-stamps a producer-resident record,
-asserts the carrier still names reach members while the owned bundle is empty, drops every
-intermediate handle, then reads the shared substrate back in its own region — a use-after-free the
-instant re-stamp relocated instead of re-anchoring, a leak the instant the self rule failed. The
-`unsafe` routed is the shared `retype` in `witnessed.rs`, which this store crosses through the born
-door's brand-confined placement.
-
-- `restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin`
-
-**Witness-set hosting — mint self-cycle / teardown** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
-— `RegionSet::mint` (mechanism in
-[workgraph/src/witnessed/region_set.rs](../workgraph/src/witnessed/region_set.rs), exercised here
-over Koan's own `FrameStorage`) stores a frozen `FrameSet` into a destination arena through the
-same `alloc_resident` engine the `Region alloc engine` group already pins — its own body has no
-`unsafe` — but it introduces the one **cycle shape storage-side reasoning can't rule out**: a set
-hosted in region A holding `Rc<A>` would be a strong self-cycle A never drops. Home-omission is
-the discipline that forbids it (design/witness-hosting.md § The shape); the drop-order test is the
-leak-audit gate that catches a home-omission regression — under plain `cargo test` the refcount
-assertions alone would only ever *fail loud*, but it is the Miri run over this exact test that
-signs off "0 leaks" for this shape specifically.
-
-- `mint_teardown_releases_members`
-
-**`CarrierWitness` = the reference-only `Carrier<FrameStorage>`** ([src/machine/core/carrier_witness.rs](../src/machine/core/carrier_witness.rs),
-mechanism in [workgraph/src/witnessed/carrier.rs](../workgraph/src/witnessed/carrier.rs)) — the
-library carrier is a `Copy` `{ borrows_host, reach }` description that is deliberately **not** a
-`Witness`: a bare `Sealed::open` under it does not compile, so every read names its coverage — an
-explicit pin (`open_with` / the `*_pinned` verbs) or the delivery envelope's retained host. Its one
-`unsafe impl` (`ComposeWitness<B>`) asserts the pure mint: `compose` mints `left`'s exact reach into
-`right`'s (the destination's) arena via `RegionSet::mint` — never a hand-assembled union — and
-materializes no residence host (`compose` holds none); hosts fold only through the envelope verbs
-(`Delivered::mint_reach` / `transfer_into`), which alone carry the host and the `Residence` mode. The
-multi-region-union tests and the envelope-transfer tests above route entirely through this type. No
-`unsafe` beyond the impl's contract and the pinned `with_reach` re-anchor: the erase/reattach
-otherwise routes the shared `retype` in `witnessed.rs`.
-
-**`alloc_carried_with` finish-surface reach fold** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
-— `KoanStepContextExt::alloc_carried_with` routes a finish's result through the
-library combinator `StepContext::alloc_with`, folding each listed dep's sealed reach into the
-result's witness by construction before the caller's `build` closure ever holds a dep-derived
-borrow. This test seals a closure resident in a producer frame's region — its captured-scope
-borrow is the pointee at stake (the stand-in for a dep terminal's `t.value`/`t.carrier`) — into a
-*different* consumer frame's own carrier via `alloc_carried_with`, the dep's view riding in as a
-`Held` cell rebuilt at the fold brand; it then drops the dep envelope and every producer-frame
-handle and reads the captured scope back — a use-after-free under tree borrows if the fold is
-skipped. The only `unsafe` routed is the shared `retype` in `witnessed.rs` (through `alloc_with`'s
-`yoke`/`merge`).
-
-- `object_field_reach_fold_survives_producer_frame_free`
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
 closure invocation reads `KFunction::captured_scope`, now a bare field read of the stored
@@ -404,18 +275,11 @@ sealed handle is used rather than merely elaborated.
 
 - `declaration_window_sibling_cell_read_from_a_sub_dispatch_no_uaf`
 
-**Retaining adoption's reach-fold reattach** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
-— `Scope::adopt_carried` at the retaining seam re-anchors a foreign producer's carrier at the
-consumer scope's own lifetime, copy-free, pinned by the reach the verb folds into the consumer's own
-region **before** the reattach. This test seals a value witnessed by a producer frame, adopts it into
-a consumer scope in a *different* frame, drops every direct producer handle, then reads the adopted
-value — so the folded reach is the sole pin on the region the re-anchored borrow reads, and tree
-borrows catches a use-after-free if the fold-then-reanchor order or the pin regresses.
-
-- `retaining_adopt_reach_fold_pins_the_producer_region_after_drop`
-
 **Retaining adoption's delivered re-home across retention** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) —
-the same verb consuming a *delivered* envelope: the fold runs first, pinning the producer's residence
+`Scope::adopt_carried` at the retaining seam consuming a *delivered* envelope. The verb's Pin arm is
+a direct call into the library's fused mint-and-retain door (`Delivered::adopt_into`, pinned by the
+workgraph slate's adoption tests); what is koan's own here is the **finalize seeding** the envelope
+rides in on: the fold runs first, pinning the producer's residence
 and the value's foreign reach into the consumer's region before the copy-free reattach fabricates the
 consumer-lifetime borrow. This test finalizes an object at the Done boundary (mirroring production),
 rides the retention hold across the producer shell's drop, adopts into an independent consumer scope,
@@ -533,12 +397,13 @@ the holder as a whole** when the holder is read out of its region (the `Region::
 `witnessed.rs`), so the accessors are bare field reads and ref_carriers.rs carries no `unsafe` of its own.
 The construction-time reference is built at `'a` by plain coercion (a same-region child) or at the
 construction door's generative brand (a per-call frame child, `build_frame_child_witnessed`) — there is
-no construction-time re-anchor verb. This test pins the re-anchor directly through the `Module` carrier;
-`KFunction::captured_scope` routes the identical `Region::alloc_resident` retype
-(their equivalents run under plain `cargo test`), and every `Scope::outer()` / `ancestors()` walk reads
-the field end-to-end.
-
-- `module_child_scope_reads_back_after_the_born_store`
+no construction-time re-anchor verb. The shape is pinned library-side by the workgraph slate's
+born-door group over an invariant holder that embeds a foreign-region parent and takes an
+interior-mutable write after the store (`the_born_with_door_embeds_a_parent_from_another_region`,
+`the_returned_node_accepts_a_write_at_the_callers_lifetime`, and their siblings); koan's
+`Module::child_scope` / `KFunction::captured_scope` behavioral round trips run under plain
+`cargo test`, and every `Scope::outer()` / `ancestors()` walk reads the field end-to-end. No
+separate minimal test here.
 
 **`NodeScope::YokedChild` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
 — a cart-ancestor block scope evicted off a lifetime-free scheduler node (`NodeScope::YokedChild`) is
@@ -546,10 +411,11 @@ stored as a `SealedExtern<ScopeRefFamily>` through the safe `SealedExtern::erase
 (`erase_to_static::<ScopeRefFamily>`) and opened at the read boundary through the `for<'b>`
 `SealedExtern::open` — the brand confined to the read, witnessed by the slot's frame `Rc`, sound because
 the cart's `outer_frame` chain pins the ancestor region. This is the second lifetime-free scope carrier
-(alongside `CallFrame`). This test passes the region as the witness and pins the erase → open round-trip
-directly, plus a sibling-pointer region mutation while the opened scope is live.
-
-- `node_scope_yoked_child_erase_open_roundtrip`
+(alongside `CallFrame`). The erase → open round trip — including a sibling store into the region while
+the opened reference is live — is pinned library-side
+(`sealed_extern_open_externally_witnessed`, `an_erased_node_opens_and_survives_a_sibling_store_inside_the_open`
+in the workgraph slate); every scheduler-driving slate test below exercises the production carrier
+end-to-end. No separate minimal test here.
 
 **`NodeScope::YokedChild` open — workload read boundary** ([src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
 — the `carrier.open(frame, f)` call in the `with_node_scope` helper is the **sole** production
@@ -561,8 +427,8 @@ here. The decide-phase read (`current_scope`, via `SchedulerView`), the Done-bou
 re-dispatch (`KoanRuntime::dispatch_in_own_scope` in
 [src/machine/execute/runtime/submit.rs](../src/machine/execute/runtime/submit.rs), which clones the
 cart `Rc` locally and routes this helper) all funnel through it — none carries an `unsafe` of its own.
-It runs the transmute defined in the group above, so `node_scope_yoked_child_erase_open_roundtrip`
-— and end-to-end every scheduler-driving slate test — pins it. No separate minimal test.
+It runs the same transmute the workgraph slate's `SealedExtern` opens pin, and every
+scheduler-driving slate test exercises it end-to-end. No separate minimal test.
 
 The `retype` primitive (`Erased<T>` / `Witnessed<T, W>`) and the `ReturnContract`
 re-attach it backs at the Done boundary are audited in the `workgraph` crate's own
@@ -583,15 +449,13 @@ the `frameset_*` / `pins_region_walks_outer_chain` unit tests in
 `NodeContinuation` (`Box<dyn FnOnce>`), as an `Erased<ContinuationFamily>` routing the shared `retype`:
 `erase` forgets the captured `'run` for storage on a lifetime-free node, and `SealedExtern::open`
 recovers a step brand `'b` witnessed by the slot's start cart `Rc` (which pins the captures' home —
-the run region or a strict ancestor of the cart). Distinct shape from the contract group above: the
-retype is over a **fat pointer** (data + vtable), not a thin enum, and the carrier is consumed by
-value (a non-`Copy` `Box<dyn FnOnce>`), so it carries its own minimal test. The open call site in
+the run region or a strict ancestor of the cart). The distinguishing layout — the retype over a
+**fat pointer** (data + vtable), consumed by value and invoked inside the brand — is pinned
+library-side (`sealed_extern_open_invokes_a_fat_pointer_continuation` in the workgraph slate). The
+open call site in
 [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs) (`run_step`) runs the same
-transmute end-to-end every step. This test pins the erase → open → invoke round-trip directly via
-`Erased::erase` + `SealedExtern::open`, calling the opened closure so tree borrows checks the capture
-read.
-
-- `erased_continuation_open_roundtrip`
+transmute end-to-end every step, exercised by every scheduler-driving slate test. No separate
+minimal test here.
 
 The run-loop step-tail `SealedExtern::open` (`run_step`, opening the continuation, contract, and
 consumer `dest` region together at one generative brand) and the doctest fixture markers backing the
@@ -603,17 +467,18 @@ route through — [src/machine/execute/run_loop.rs](../src/machine/execute/run_l
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
 mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is
 live — the opaque-ascription shape. (The scope re-anchor itself is the stored scope-pointer group
-above; the carrier stores a `&'a Scope<'a>`.) The minimal mirror below pins the `borrow_mut`-under-live-`&Module`
-shape directly; the end-to-end `opaque_ascription_re_binds_do_not_alias_unsoundly` (which only re-pins the
-already-covered `child_scope` re-attach + survives-churn shapes) runs under plain `cargo test`.
-
-- `module_type_members_refcell_mutation_with_held_module_ref`
+above; the carrier stores a `&'a Scope<'a>`.) The interior-write-through-the-re-anchored-holder
+shape is pinned library-side (`the_returned_node_accepts_a_write_at_the_callers_lifetime` and
+`invariant_same_brand_mutation` in the workgraph slate); the koan `RefCell` round trips
+(`module_type_members_refcell_mutation_with_held_module_ref` and its `slot_type_tags` twin) and the
+end-to-end `opaque_ascription_re_binds_do_not_alias_unsoundly` run under plain `cargo test`. No
+separate minimal test here.
 
 **MODULE body Combine continuation** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — the
 MODULE body schedules a `Combine` whose `finish` closure captures the child
 scope and runs on the outer scheduler's main loop after every body statement
-terminalizes. Runs the same stored scope-pointer re-anchor as
-`module_child_scope_reads_back_after_the_born_store` (the minimal mirror that pins it) with none of its
+terminalizes. Runs the same stored scope-pointer re-anchor the workgraph slate's born-door group
+pins (see the stored reference-carrier group above) with none of its
 own, exercised end-to-end by every scheduler-driving slate test; its `module_body_dispatch_does_not_dangle`
 program runs under plain `cargo test`. No separate minimal test.
 

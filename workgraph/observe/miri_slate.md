@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-40 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+44 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -55,10 +55,12 @@ a `None`-on-unrelated-carts check.
 `SealedExtern::open` is exercised distinctly from the bundled `with` / `read`: a witness-less carrier
 opened against a *separately-held* `Rc` witness (invariant `Cell<&'r u32>` read back after the
 original drops), a **non-`Copy`** `Box<&'r u32>` consumed by the open (the boxed-continuation shape
-`Copy`-bounded `Sealed::open` excludes), and a heterogeneous `zip` of a boxed carrier + a present
-`seal_option` optional + a reference opened together at one brand (plus the `None`-optional arm). The
-escape-can't-compile guards are `compile_fail` doctests on `with` / `map` / `yoke` /
-`SealedExtern::open`.
+`Copy`-bounded `Sealed::open` excludes), a **fat-pointer** `Box<dyn FnOnce>` continuation invoked
+inside the brand (the retype over a two-word data + vtable pointer — the stored-continuation shape,
+with tree borrows checking the capture read through the lifetime-fabricated box), and a
+heterogeneous `zip` of a boxed carrier + a present `seal_option` optional + a reference opened
+together at one brand (plus the `None`-optional arm). The escape-can't-compile guards are
+`compile_fail` doctests on `with` / `map` / `yoke` / `SealedExtern::open`.
 
 An embedder's realisation of the `unsafe trait` impls this primitive routes for — Koan's
 `Witness` / `WitnessRegion` / `PinsRegion` for `FrameStorage`, backing the library's `RegionSet<F>`
@@ -85,6 +87,7 @@ own — the `unsafe` they exercise is this primitive).
 - `merge_pinned_keeps_unrelated_carts_as_a_two_member_set`
 - `sealed_extern_open_externally_witnessed`
 - `sealed_extern_open_consumes_non_copy`
+- `sealed_extern_open_invokes_a_fat_pointer_continuation`
 - `sealed_extern_zip_opens_heterogeneous_at_one_brand`
 - `seal_option_none_opens_to_none`
 
@@ -97,16 +100,23 @@ region is an ordinary
 member** of that bundle, so there is no separate residence channel and no residence mode. What a
 relocation site chooses is the *source-pins claim*: the envelope's own pins (the product still
 borrows into them) or the empty bundle (a true deep copy, whose producer must be free to die).
-Five tests pin the shape over a library-only profile (`RegionHost` frames, `u32` content), each
+Seven tests pin the shape over a library-only profile (`RegionHost` frames, `u32` content), each
 freeing every frame handle a regression would leave the value dangling into before the read: the
 producer composing in from the envelope's pins and surviving the producer handle's drop; the
 chained reach union surviving both content regions' drops (elements homed in the destination
 itself, so the self rule strips the home member and the union alone carries the read — the strict
-form, with no transitive pin to fall back on); the claimed-pins copy that still borrows; the
+form, with no transitive pin to fall back on); the mixed-channel chain (one element
+producer-hosted, one riding a reach set minted into a *reader* region foreign to the destination —
+each fold must materialize the foreign host AND union the element reach, the multi-region aggregate
+shape); the claimed-pins copy that still borrows; the
 empty-claim **release** (the tail-turnover rule — a phantom member is the leak this gates, checked
 by a `Weak` probe, and the exact regression an unconditional home-is-always-a-member fold would
-produce); and pass-through duplication (the reach set rides by reference, one `Rc` clone per
-bundle member, no re-mint). The multi-handle mints here also pin `RegionHost::region`'s init-tag
+produce); pass-through duplication (the reach set rides by reference, one `Rc` clone per
+bundle member, no re-mint); and the single-seam re-stamp (`Delivered::restamp_in_place`, the
+`finalize_terminal` `Disposition::Restamp` motion): the destination *is* the value's own home
+region, so the description keeps home as an ordinary member while the self rule strips it from
+every owned bundle — a kept self pin is a strong self-cycle the region never drops, the leak the
+test's final `Weak` probe gates. The multi-handle mints here also pin `RegionHost::region`'s init-tag
 re-derivation ([src/witnessed/host.rs](../src/witnessed/host.rs)): the minting call re-derives its
 return through a plain `get`, so no caller ever holds the init frame's unique tag — which the next
 foreign handle's interior arena write would disable. The only `unsafe` routed is the shared
@@ -114,9 +124,11 @@ foreign handle's interior arena write would disable. The only `unsafe` routed is
 
 - `transfer_composes_the_source_home_from_its_pins`
 - `transfer_unions_element_reach_across_folds`
+- `transfer_chain_materializes_hosts_and_unions_reach_across_channels`
 - `copied_transfer_pins_the_producer_when_the_product_still_borrows`
 - `copied_transfer_releases_the_producer_when_nothing_borrows_it`
 - `duplicate_shares_reach_and_clones_owned_pins`
+- `restamp_in_place_keeps_home_in_the_description_but_pins_nothing_on_itself`
 
 **The mint — the self rule / teardown** ([src/witnessed/reach.rs](../src/witnessed/reach.rs))
 — the one cycle shape storage-side reasoning can't rule out: an owned bundle hosted in region A
@@ -127,7 +139,8 @@ drops any member whose region is A's. The test mints a source that includes the 
 frame, checks the description names it while the bundle does not, and walks the teardown (A frees on
 drop; the foreign member is released with the bundle, `Weak`-probed) — the Miri leak audit over this
 test signs off the split-membership shape at the library layer. Embedder twin: koan's
-`mint_teardown_releases_members`, over `FrameStorage`.
+`mint_teardown_releases_members` (over `FrameStorage` = `RegionHost`), whose refcount assertions
+fail loud under plain `cargo test` and which stays off the Miri slate.
 
 - `mint_keeps_home_in_the_description_but_not_the_bundle`
 
@@ -197,7 +210,8 @@ drops, and the by-construction fold is the sole pin under the read. The behavior
 (`step_context_alloc_carrier_is_empty`,
 `step_context_alloc_with_mints_dep_homes_and_preserves_dep_order` — membership and dep-order
 assertions) run under plain `cargo test` and stay off the slate. Embedder twin: koan's
-`functor_field_reach_fold_survives_producer_frame_free`.
+`record_retype_shares_substrate_across_producer_frame_free`, which drives the same combinator
+(`alloc_carried_with`) over the `Record` substrate's shared borrow.
 
 - `alloc_with_folds_dep_reach_before_result_read`
 
@@ -228,8 +242,12 @@ reads back after 64 siblings append to the same typed cell (the arena's stable-a
 the returned reference accepts an interior-mutable write at the caller's own `'a` *after* the store;
 a child born in one region embeds a parent resident in another under a pin held for the
 destination's whole life; that child's region dies **first** with the pinned parent outliving it (the
-production drop order, where a leak or a UAF is what a wrong pin duration looks like); and a
-three-region chain reads back through every hop. The negative case is not a runtime rejection at
+production drop order, where a leak or a UAF is what a wrong pin duration looks like); a
+three-region chain reads back through every hop; and a resident node erased to the witness-less
+`SealedExtern` (the lifetime-free slot shape an embedder's scheduler stores) opens at a `for<'b>`
+brand under the frame's own pin with the region growing through the born door *while the opened
+reference is live* — one region under the re-anchored view and a sibling store at once. The
+negative case is not a runtime rejection at
 all — it is the `compile_fail` doctest on `alloc_resident_born`, where a value built over an ambient
 region fails to coerce to `'b`.
 
@@ -239,6 +257,7 @@ region fails to coerce to `'b`.
 - `the_born_with_door_embeds_a_parent_from_another_region`
 - `a_child_region_dies_before_the_parent_it_borrows`
 - `a_chain_of_regions_reads_back_through_every_hop`
+- `an_erased_node_opens_and_survives_a_sibling_store_inside_the_open`
 
 **Doctest fixture markers** ([src/witnessed/doctest_fixture.rs](../src/witnessed/doctest_fixture.rs))
 — the `unsafe impl Reattachable` for `RefFamily` / `InvFamily` and `unsafe impl Witness` /

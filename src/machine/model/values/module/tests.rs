@@ -1,7 +1,9 @@
-//! Miri coverage for the module store: the born door's erase-store / re-anchor round trip
-//! ([`Module::alloc_at_child_scope`]) and `type_members` `RefCell` mutation under a held
-//! `&'a Module<'a>` borrow. Each shape is exercised in isolation so a regression attributes to a
-//! single site. See [`design/memory-model.md`](../../../../../design/memory-model.md).
+//! Behavioral coverage for the module store: the born door's round trip
+//! ([`Module::alloc_at_child_scope`]) and the `RefCell` maps' mutation under a held
+//! `&'a Module<'a>` borrow. The underlying erase-store / re-anchor and
+//! interior-write-through-the-re-anchor UB shapes are pinned library-side in the workgraph slate's
+//! born-door group; these run under plain `cargo test`. See
+//! [`design/memory-model.md`](../../../../../design/memory-model.md).
 use super::*;
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};

@@ -171,6 +171,62 @@ fn transfer_unions_element_reach_across_folds() {
     assert_eq!(pair.with_pinned(&dest, |(a, b)| (**a, **b)), (1, 2));
 }
 
+/// **Both liveness channels in one chained fold** — element A travels producer-hosted (its home
+/// rides the envelope's own pins: the residence channel), element B rides a reach set minted into a
+/// *reader* region foreign to the destination, hosted by that reader (the reach channel — the
+/// LET-bind → entry-re-read shape). Each fold must materialize the foreign host AND union the
+/// element's reach onto the accumulator: host materialization alone covers only the reader, and a
+/// reach-only union drops the producer. All three source regions drop; the destination's minted set
+/// is the sole pin under both reads.
+#[test]
+fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
+    let dest = frame();
+    let producer_a = frame(); // element A's home: the value lives here and rides the pins.
+    let reader_b = frame(); // element B's envelope host + description home.
+    let content_b = frame(); // element B's value lives here; arrives as B's reach member.
+
+    let acc0 = Delivered::seal(
+        StepContext::new(Rc::clone(&dest))
+            .alloc_handle::<ShapeProfile, PairAcc>(|handle| (handle, Vec::new())),
+        Rc::clone(&dest),
+        StepCoverage::empty(),
+    );
+    let element_a: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
+        Witnessed::resident_in::<ShapeProfile>(store_val(&producer_a, 3), &producer_a),
+        Rc::clone(&producer_a),
+        StepCoverage::empty(),
+    );
+    let acc1 = element_a.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
+        acc0,
+        |_product, _region| true,
+        |value, (handle, mut values), _brand| {
+            values.push(value);
+            (handle, values)
+        },
+    );
+    let element_b = reach_element(&reader_b, &content_b, 4);
+    let acc2 = element_b.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
+        acc1,
+        |_product, _region| true,
+        |value, (handle, mut values), _brand| {
+            values.push(value);
+            (handle, values)
+        },
+    );
+    let pair: Witnessed<PairVals, Carrier<ShapeFrame>> = acc2
+        .into_cell()
+        .unseal()
+        .map_pinned(&dest, |(_handle, values), _brand| (values[0], values[1]));
+
+    drop(element_a);
+    drop(element_b);
+    drop(producer_a);
+    drop(reader_b);
+    drop(content_b);
+
+    assert_eq!(pair.with_pinned(&dest, |(a, b)| (**a, **b)), (3, 4));
+}
+
 /// **The copy that still borrows** — the relocated product is a copy whose leaves still point into
 /// the producer's region (the closure-like value), so the site claims the envelope's own pins and
 /// the fold composes the producer in. The producer handle drops; the composed member is the sole
@@ -310,6 +366,52 @@ fn mint_keeps_home_in_the_description_but_not_the_bundle() {
     assert!(
         weak_b.upgrade().is_none(),
         "dropping the pin bundle released the member"
+    );
+}
+
+/// **`restamp_in_place` — the single-seam escape verb's self rule.** The destination *is* the
+/// value's own home region, so the re-stamp re-anchors where the value already resides: the
+/// composed description names home as an ordinary member (membership stays exact), but the self
+/// rule strips it from every owned bundle — the transit pins and the retention the mint folds into
+/// the home region itself. A regression that kept the self pin would seat an `Rc<producer>` inside
+/// the producer's own region: a strong self-cycle the region never drops, the leak this test gates.
+/// Every intermediate handle drops before the read, so the caller's own frame handle is the sole
+/// pin — and the final drop proves the region actually frees.
+#[test]
+fn restamp_in_place_keeps_home_in_the_description_but_pins_nothing_on_itself() {
+    let producer = frame();
+    let weak = Rc::downgrade(&producer);
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
+        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 17), &producer),
+        Rc::clone(&producer),
+        StepCoverage::empty(),
+    );
+
+    let restamped = element.restamp_in_place::<RefValFamily, ShapeProfile>(
+        &producer,
+        // The product IS the source borrow, re-anchored in place — nothing moves.
+        |value, _handle, _placement| value,
+    );
+    assert!(
+        restamped.open_at().has_reach_members(),
+        "membership is exact: the re-stamped value's own home is an ordinary member"
+    );
+
+    let cell: Sealed<RefValFamily, Carrier<ShapeFrame>> = restamped.into_cell();
+    drop(element);
+    assert_eq!(
+        Rc::strong_count(&producer),
+        1,
+        "the self rule left the region retaining nothing on its own owner"
+    );
+
+    let pin = StepCoverage::<ShapeFrame>::of(Rc::clone(&producer));
+    assert_eq!(cell.open_with(&pin, |r| *r), 17);
+    drop(pin);
+    drop(producer);
+    assert!(
+        weak.upgrade().is_none(),
+        "no self-cycle: the producer frees on its last handle"
     );
 }
 

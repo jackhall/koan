@@ -153,6 +153,32 @@ fn the_born_with_door_embeds_a_parent_from_another_region() {
     );
 }
 
+/// A resident node erased to the witness-less [`SealedExtern`] carrier — the lifetime-free slot
+/// shape an embedder's scheduler stores — opens at a `for<'b>` brand under the frame's own pin,
+/// and the region **grows through the born door while the opened reference is live**: one region
+/// under the re-anchored view and a sibling store at once, re-read on both sides of the append.
+#[test]
+fn an_erased_node_opens_and_survives_a_sibling_store_inside_the_open() {
+    let dest = frame();
+    let node = born_root(&dest, "kept");
+
+    let sealed = SealedExtern::<NodeRefFamily>::erase(node);
+    sealed.open(&dest, |reattached: &Node<'_>| {
+        assert_eq!(reattached.label, "kept");
+        RegionHandle::from_owner(&*dest).alloc_resident_born::<NodeFamily>(|placement| Node {
+            home: placement.handle().region(),
+            label: placement.handle().bump_text("sibling"),
+            parent: None,
+            mark: Cell::new(None),
+        });
+        assert_eq!(
+            reattached.label, "kept",
+            "the opened view re-reads across the sibling store"
+        );
+    });
+    assert_eq!(dest.region().family_len::<NodeFamily>(), 2);
+}
+
 /// The destination region dies **first**, with the pinned source outliving it — the drop order the
 /// frame chain guarantees in production. Under Miri's leak check and tree borrows this is the
 /// acceptance criterion made observable: the child's cross-region borrow is never read after its own

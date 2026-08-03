@@ -54,6 +54,12 @@ struct ScopeAndPool<'r> {
 /// [`Sealed::open`]'s `At<'static>: Copy` bound excludes.
 struct BoxFamily;
 
+/// Fat-pointer stand-in: a boxed `dyn FnOnce` continuation over a captured borrow. Unlike
+/// `BoxFamily` (a thin `Box`), the carrier is a **two-word** data + vtable pointer, so the `retype`
+/// runs over a fat pointer — the shape an embedder's stored continuation takes.
+struct DynContinuationFamily;
+type TestContinuation<'r> = Box<dyn FnOnce() -> u32 + 'r>;
+
 // Each stand-in is one type generic only in `'r` with a lifetime-independent layout (a reference, a
 // cell of a reference, a struct of both, a boxed reference); the shared `reattachable!` macro
 // discharges the obligation.
@@ -62,6 +68,7 @@ reattachable! {
     InvFamily => Cell<&'r u32>,
     ScopeFamily => ScopeAndPool<'r>,
     BoxFamily => Box<&'r u32>,
+    DynContinuationFamily => TestContinuation<'r>,
 }
 
 /// Cart stand-in for the witness-with-a-region cases (`yoke` / `merge_pinned`): a backing `Vec` (the
@@ -379,6 +386,26 @@ fn sealed_extern_open_consumes_non_copy() {
     let seen: u32 = sealed.open(&backing, |boxed: Box<&u32>| **boxed);
     assert_eq!(seen, 10);
     let _again: &u32 = &backing[1];
+}
+
+/// `SealedExtern::open` over a **fat-pointer** carrier: a `Box<dyn FnOnce>` continuation capturing a
+/// real borrow is erased to the `'static` store, opened against a separately-held `Rc` witness, and
+/// **invoked inside the brand** — so the retype runs over a two-word data + vtable pointer (the
+/// stored-continuation shape) and tree borrows checks the capture read through the lifetime-fabricated
+/// box. The single-shot call consumes the non-`Copy` carrier by value. Fails on UB, not values.
+#[test]
+fn sealed_extern_open_invokes_a_fat_pointer_continuation() {
+    let backing: Rc<Vec<u32>> = Rc::new(vec![7, 8, 9]);
+    let sealed: SealedExtern<DynContinuationFamily> = {
+        let captured: &u32 = &backing[2];
+        SealedExtern::erase(Box::new(move || *captured) as TestContinuation<'_>)
+    };
+    let got: u32 = sealed.open(&backing, |continuation: TestContinuation<'_>| {
+        continuation()
+    });
+    assert_eq!(got, 9);
+    // Mutate the region through a sibling `Rc` after the open to catch a tree-borrows regression.
+    let _again: &u32 = &backing[0];
 }
 
 /// `SealedExtern::zip` + [`seal_option`]: heterogeneous carriers pinned by the same witness open at a

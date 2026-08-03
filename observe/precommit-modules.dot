@@ -464,7 +464,6 @@ digraph {
     "koan::machine::core::arena" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
-    "koan::machine::core::arena" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -730,17 +729,14 @@ digraph {
     "koan::machine::execute::lift" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan" [label="uses", style="dashed"];
-    "koan::machine::execute::nodes" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
-    "koan::machine::execute::nodes" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::obligation" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::obligation" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::obligation" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan" [label="uses", style="dashed"];
-    "koan::machine::execute::outcome" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute" [label="uses", style="dashed"];

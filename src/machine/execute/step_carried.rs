@@ -141,19 +141,6 @@ impl<'step, T: Reattachable> StepCarried<'step, T> {
     {
         self.inner.with_pinned(pin, read)
     }
-
-    /// Consume the wrapper through the [`Self::seal_at_step`] exit under a `#[cfg(test)]` gate, so a
-    /// `machine::core` door test (outside `super`, where `seal_at_step` is reachable) can drive the
-    /// finalize shape it exercises. Returns the [`Delivered`] envelope, never the lifetime-free
-    /// [`Witnessed`]: sealing only ever *adds* the storage pin, so it cannot leak a reattachable
-    /// carrier.
-    #[cfg(test)]
-    pub(crate) fn seal_for_test(
-        self,
-        host: Rc<FrameStorage>,
-    ) -> Delivered<T, CarrierWitness, FrameStorage> {
-        self.seal_at_step(host)
-    }
 }
 
 /// Hand a step allocator to `guard` at a `for<'b>` rank-2 brand — the step tail's confinement shape.

@@ -96,48 +96,6 @@ fn retaining_adopt_reanchors_the_same_value_copy_free() {
     assert!(std::ptr::eq(adopted.object(), obj));
 }
 
-/// Miri pin shape for a retaining adoption's reattach: a value produced in a **foreign** frame's region,
-/// sealed as its carrier, is adopted into a consumer scope in a different frame. After every direct
-/// producer handle is dropped, the consumer scope's reach-set (folded by `adopt_carried`) is the sole
-/// pin on the producer region the re-anchored borrow reads — so reading it must not dangle.
-#[test]
-fn retaining_adopt_reach_fold_pins_the_producer_region_after_drop() {
-    use crate::machine::core::arena::KoanRegionExt;
-    use crate::machine::core::KoanRegion;
-    use crate::machine::model::{Carried, KObject};
-    use crate::machine::DeliveredCarried;
-    use crate::witnessed::{Delivered, Sealed};
-    use std::rc::Rc;
-
-    // A value in the producer frame's own region, wrapped as a delivery envelope pinned by that
-    // frame — the shape a delivered dep arrives in (host = the retention hold's owner).
-    let producer_frame = per_call_storage();
-    let cell: DeliveredCarried = Delivered::hosted(
-        Sealed::seal(KoanRegion::fold_witnessed(
-            Rc::clone(&producer_frame),
-            |r| Carried::Object(r.alloc_object_folded(KObject::Number(9.0))),
-        )),
-        Rc::clone(&producer_frame),
-        crate::machine::core::FrameCoverage::empty(),
-    );
-
-    // A consumer scope in a *different* frame adopts the carrier — its reach-set folds the producer.
-    let consumer_frame = run_root_storage();
-    let consumer = run_root_bare(&consumer_frame);
-    let adopted: Carried = consumer.adopt_carried(&cell, AdoptSeam::Retaining);
-
-    // Drop every direct producer handle: the consumer scope's reach-set now solely pins the region
-    // the adopted borrow reads into.
-    drop(cell);
-    drop(producer_frame);
-
-    // Read the adopted value after the producer handles are gone — Miri confirms no use-after-free.
-    match adopted {
-        Carried::Object(KObject::Number(n)) => assert_eq!(*n, 9.0),
-        _ => panic!("expected the adopted Number value"),
-    }
-}
-
 /// `store_module_object` composes the child scope's **own region alone** into the module value's
 /// reach: a module value's only region borrow is its child scope, and that child region owns the
 /// union bundle covering everything its members reach. So a member whose reach names a region
