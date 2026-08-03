@@ -124,6 +124,32 @@ entry, so it self-chains — fold-left for a binary operator, unary for a
 A Type-token group name takes the same respelling diagnostic `MODULE`'s
 Type-named overload reports: a group is a module, and a module is a value.
 
+## The registry record lives in the declaring scope's region
+
+An [`OperatorGroup`](../src/machine/model/operators.rs) is koan semantic data, so
+it lives where all of it lives: the declaring scope's region bump, through the one
+allocation door `OperatorGroup::alloc`. The record is `Copy` and `Drop`-free — its
+member set is a sorted, deduped slice of bump-hosted keywords, probed by binary
+search, and a pairwise mode's combiner is a bump-hosted symbol beside it — so
+region death frees it with the chunks and nothing refcounts it.
+
+That one allocation backs the whole powerset: each subset key in the scope's
+`operators` table holds a sealed carrier over the *same* pointee
+([`Bindings`](../src/machine/core/bindings.rs) stores a carrier plus a binding
+index, the entry shape the `data` and `functions` tables take), so sharing is
+address identity and installing `2^n - 1` keys allocates nothing but the probe
+strings. The upsert that admits a re-declaration compares those addresses first
+and the mode-plus-member-set second. A `GROUP` body's own scope names the same
+record as a plain reference at the scope's lifetime, which is what
+`Scope::nearest_group_context` hands a member `OP` — the record is same-region
+with the scope, so the answer cannot outlive the borrow it came from.
+
+A resolved group travels as a delivery envelope lifted at the scope that declared
+it, so a chain reducing under an ancestor's group holds that ancestor's region for
+as long as it reads the record. Nothing else holds it: once the declaring region
+dies, the scope, its table, and the record die together, and the walk resolves
+nothing rather than finding a record kept alive by a stray refcount.
+
 ## The pairwise combiner is an operator, invoked infix
 
 A pairwise run dispatches each adjacent pair through its own member's body and
@@ -141,10 +167,10 @@ inside the group body carries it through `USING` alongside the operator bodies.
 
 Resolution is the ordinary scope walk at the chain's use site, so a combiner that
 is missing, non-callable, or of the wrong arity surfaces as an ordinary error
-*there*, not at declaration. Storing a name rather than a function is also what
-keeps [`OperatorGroup`](../src/machine/model/operators.rs) lifetime-free: the
-record borrows no region, so the registry shares it by plain `Rc` and it needs no
-region allocation door at all.
+*there*, not at declaration. Storing a symbol rather than a resolved function is
+also what keeps [`OperatorGroup`](../src/machine/model/operators.rs) flat: the
+combiner is one more bump-hosted keyword in the record's own region, not a
+reference into whatever region the combiner's body happens to live in.
 
 ## Shadowing is type-gated, not forbidden
 
@@ -158,7 +184,7 @@ behavior wanted:
   to a module's own body. `OP #(+) OVER :(LIST OF Number)` therefore adds list
   addition and leaves arithmetic alone.
 - The **operator registry** is innermost-wins
-  ([`Scope::resolve_operator_group_with_chain`](../src/machine/core/scope.rs)): a
+  ([`Scope::resolve_operator_group_delivered`](../src/machine/core/scope/resolve.rs)): a
   registry hit carries a member set and a mode but no operand types, so it *cannot*
   type-gate. The builtin groups seeded into the root are found last — they are
   chaining defaults a declaring scope may override, which is what lets a scope

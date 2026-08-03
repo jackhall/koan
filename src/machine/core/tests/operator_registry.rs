@@ -356,7 +356,7 @@ fn using_window_surfaces_the_modules_operator_group() {
     assert!(resolved.open(|group| matches!(group.mode(), ReductionMode::FoldRight)));
 }
 
-/// `register_group_under_all_subsets` installs one entry per nonempty subset, all naming the one
+/// `register_group_under_all_subsets_direct` installs one entry per nonempty subset, all naming one
 /// record, so any probe drawn from the member set resolves the same group — by **address**, which
 /// is what one allocation behind the whole powerset buys.
 #[test]

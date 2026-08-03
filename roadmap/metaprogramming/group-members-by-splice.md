@@ -32,12 +32,17 @@ finalizes.
 
 **Directions.**
 
-- *How the record grows — open.* (a) Extend the one shared
-  [`OperatorGroup`](../../src/machine/model/operators.rs) record in place and
-  register the incremental subsets covering the new member at EVAL-finalize;
-  (b) rebuild the record and re-register the full powerset. Recommended: (a) —
-  all existing subsets stay valid, and the record staying lifetime-free means
-  the extension is a plain data update behind the existing registrar door.
+- *How the record grows — open.* The
+  [`OperatorGroup`](../../src/machine/model/operators.rs) record is `Copy`,
+  `Drop`-free data bumped into the declaring scope's region, with an immutable
+  sorted member slice, and the group scope plus every powerset key names that one
+  pointee — so growth is a re-allocation question, not a mutation one. (a) Bump a
+  successor record carrying the extended member set at EVAL-finalize and register
+  the incremental subsets covering the new member against it, leaving the existing
+  subsets pointing at the predecessor; (b) bump the successor and re-register the
+  full powerset, so every key names one record again. Whether the scope's own
+  `&OperatorGroup` payload can be repointed at all, and what the registry upsert's
+  identity arms should say about a predecessor record, are part of this choice.
 
 ## Dependencies
 

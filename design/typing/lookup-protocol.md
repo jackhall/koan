@@ -49,13 +49,14 @@ matching the three lookup kinds:
   for the per-overload admit pass. The innermost scope to reach a terminal
   decision wins (see
   [scheduler.md § In-walk dispatch precedence](scheduler.md#in-walk-dispatch-precedence)).
-- [`Scope::resolve_operator_group_with_chain`](../../src/machine/core/scope.rs)
+- [`Scope::resolve_operator_group_delivered`](../../src/machine/core/scope/resolve.rs)
   — operator-group lookup. Per-ancestor calls
   [`Bindings::lookup_operator_group`](../../src/machine/core/bindings.rs) with
-  the chain's operator probe and returns the first visible hit. The probe is the
+  the chain's operator probe and lifts the first visible hit into a delivery
+  envelope at the scope that declared it. The probe is the
   sorted-joined unique operators of a `Slot (Keyword Slot)+` chain (parse-cached
   on the [`KExpression`](../../src/machine/model/ast.rs)); a module installs the
-  group under every size-≥2 subset of its operators, so any subset used in one
+  group under every nonempty subset of its operators, so any subset used in one
   chain resolves in one visible hit and a cross-group mix simply misses.
 
 [`Scope::resolve`](../../src/machine/core/scope.rs) is the chainless
@@ -67,8 +68,8 @@ threads a chain.
 
 [`Bindings`](../../src/machine/core/bindings.rs) owns the per-scope
 maps — `data` (values), `types` (type-name → `&KType`), `functions`
-(registered overloads), `operators` (operator probe → shared
-[`OperatorGroup`](../../src/machine/model/operators.rs)),
+(registered overloads), `operators` (operator probe → the sealed carrier of a
+region-hosted [`OperatorGroup`](../../src/machine/model/operators.rs)),
 `placeholders` (in-flight name-keyed binders, each tagged with a
 [`BindKind`](../../src/machine/core/bindings.rs) — `Value` or `Type` —
 recording which language the forward reference resolves in),
@@ -153,7 +154,8 @@ clears an in-flight type producer's placeholder (nor the reverse).
 
 [`Bindings::lookup_operator_group`](../../src/machine/core/bindings.rs) is the
 operator-side instance: it consults the `operators` map for the chain's probe
-and returns the visible [`OperatorGroup`](../../src/machine/model/operators.rs),
+and returns a bit-copy of the visible entry's sealed
+[`OperatorGroup`](../../src/machine/model/operators.rs) carrier,
 or `None` so the caller keeps walking. Unlike the value/type/function maps it
 holds no in-flight placeholder arm — operator registration is not a parkable
 producer — so the lookup is a single map read gated by `visible`.
@@ -262,22 +264,27 @@ a `Rebind` at any scope depth — never a shadow, never a merge:
 - A user *FN* overload whose untyped signature key collides with a builtin
   dispatch bucket is rejected rather than joining it —
   [`Scope::register_function`](../../src/machine/core/scope.rs) consults
-  [`Bindings::has_builtin_function`](../../src/machine/core/bindings.rs). A user operator over
-  a builtin probe is rejected the same way via
-  [`Bindings::has_builtin_operator`](../../src/machine/core/bindings.rs). User-vs-user
+  [`Bindings::has_builtin_function`](../../src/machine/core/bindings.rs). An operator's
+  bodies are function overloads, so they meet this same gate. User-vs-user
   overloads and cross-scope shadowing are unaffected — only an `idx == 0` builtin entry gates.
+- The **operator registry** is the one table this rule does not reach: a builtin
+  group is a chaining default, not an unshadowable claim on its symbols, so a scope
+  that registers a probe the builtins already seed wins inside itself
+  ([operators.md § Shadowing is type-gated](../operators.md#shadowing-is-type-gated-not-forbidden)).
 
 Because a builtin can never be shadowed, a builtin entry is authoritative: it is resolved
 root-first, in one hop through the direct reference, before the Layer-1 ancestor walk — the
 constant-time path for the hottest names (operators, `PRINT`, dispatch primitives).
-[`Scope::resolve_type_with_chain`](../../src/machine/core/scope.rs) and
-[`Scope::resolve_operator_group_with_chain`](../../src/machine/core/scope.rs) return a builtin
+[`Scope::resolve_type_with_chain`](../../src/machine/core/scope/resolve.rs) returns a builtin
 hit directly; [`Scope::resolve_dispatch`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 consults the root's builtin bucket first and returns its decision when terminal. Each is gated
 on the `idx == 0` [`has_builtin_*`](../../src/machine/core/bindings.rs) predicate, so a
 non-builtin name finds nothing in the root and falls through to the Layer-1 chain walk with its
 innermost-wins precedence intact — for dispatch, a non-terminal root decision likewise falls
 through unchanged, so the short-circuit never overrides an inner scope.
+[`Scope::resolve_operator_group_delivered`](../../src/machine/core/scope/resolve.rs) takes no
+such consult at all: its walk is innermost-wins all the way, so the root's builtin groups are
+simply found last.
 
 ## Why this is a foundation, not a seam
 

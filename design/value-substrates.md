@@ -396,7 +396,8 @@ read and write correctly and simply never free, which is why the claim is pinned
 by a Miri leak test rather than by an assertion
 ([§ Invariants preserved](#invariants-preserved)).
 
-A scope's binding tables are **not** in that residue. An entry is a
+A scope's binding tables are **not** in that residue. Each carrier-holding table —
+`data`, `functions`, and the operator registry — stores an entry that is a
 `BindingIndex` beside a resting `Sealed` carrier, both `Copy` and `Drop`-free:
 the pins keeping the entry's reach alive live one level down, in the region's own
 union bundle, which drops whole at region death
@@ -454,5 +455,3 @@ left:
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
   — pricing copying-the-survivors-out against transferring-the-region, the
   local decision the cost seam's two numbers already support.
-- [Region-hosted operator groups](../roadmap/untyped_arena/region-hosted-operator-groups.md)
-  — the last binding table storing a refcounted record outside every region.
