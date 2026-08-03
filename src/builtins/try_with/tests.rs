@@ -225,8 +225,8 @@ fn it_resolves_via_scope_for_eval_of_top_level_quoted_reference() {
 
 #[test]
 fn try_inside_tco_position_preserves_frame_chain() {
-    // Mirror of `match_case::recursive_tagged_match_no_uaf`: the catch path
-    // must keep the call-site frame Rc chained on the new frame.
+    // A user-fn recursing through a `Tagged` parameter via MATCH inside TRY:
+    // the catch path must keep the call-site frame Rc chained on the new frame.
     let bytes = run_program(
         "UNION Bit = (One :Null Zero :Null)\n\
          FN (HOP b :Any) -> Any = (TRY (MATCH (b) -> :Str WITH (\

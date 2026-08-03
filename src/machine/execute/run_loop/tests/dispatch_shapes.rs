@@ -474,27 +474,6 @@ fn fast_lane_unbound_returns_error() {
     );
 }
 
-/// A closure returned out of its defining call remains invocable. The escaped
-/// `KObject::KFunction` rides a bare `&KFunction` borrow into the per-call region (where the
-/// inner function's storage and captured scope live); the result carrier's witness set keeps
-/// that region alive past frame drop, so the later invocation does not dangle.
-#[test]
-fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
-    let program = program_storage();
-    let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    test_run.run(
-        "FN (MAKE) -> :(FN () -> Str) = (FN (INNER) -> Str = (\"hi\"))\n\
-         LET f = (MAKE)",
-    );
-    let result = test_run.run_one(parse_one(&program, "f {}"));
-    assert!(
-        matches!(result, KObject::KString(s) if *s == "hi"),
-        "expected KString(\"hi\"), got {}",
-        result.summarize(&test_run.types),
-    );
-}
-
 /// Closure-lifetime variant exercising parameter-binding via the captured scope
 /// after escape.
 #[test]

@@ -82,10 +82,10 @@ group just to silence the stale-anchor check.
   `unsafe`. The group pins that boundary end-to-end (every scheduler-driving slate test); the
   `unsafe` it routes lives in `witnessed.rs`.
 - `src/machine/execute/lift.rs` — `copy_carried` structurally copies at the brand a step open
-  supplies (safe allocs; the former value-relocation `unsafe` was deleted with the per-value anchor).
+  supplies (safe allocs throughout).
   The group pins the escaping-value **retention** discipline — a surviving closure / module borrow
-  kept alive by the consumer frame's `retained` `FrameSet` — which tree borrows catches if it
-  regresses.
+  kept alive by the reach set the witnessed transfer mints into the destination — which tree
+  borrows catches if it regresses.
 - `src/machine/execute/run_loop.rs` — `run_step`'s dep-union `pin` is built entirely through safe
   envelope/`RegionSet` verbs (`Delivered::liveness_frameset`, `FrameSet::union`/`singleton`); the
   file carries no `unsafe` of its own. The group pins the retention redundancy claim — a dep's
@@ -120,7 +120,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-39 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+33 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
 below are the exact test identifiers; pass them after `--` in the Miri command. A further 44 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
@@ -141,7 +141,7 @@ user-fn param-bind take. A bare caller reference cannot cross the `for<'b>` sign
 envelope is the whole route. `CallFrame::adopting` (the scheduler-owned run
 frame) carries the same `&Scope<'_>` erasure as `new`, over the run scope it adopts rather than a
 freshly-minted child; it is built on the first run-lifetime submission, so every scheduler-driving slate
-test below (`recursive_tagged_match_no_uaf`, `lift_park_minimal_program_for_miri`, …) exercises it
+test below (`try_inside_tco_position_preserves_frame_chain`, `lift_park_minimal_program_for_miri`, …) exercises it
 end-to-end — the run scope outlives the frame, so no separate minimal test. A fourth test pins the
 **born door's own round trip** nested inside that open: a grandchild scope built and stored at the
 frame brand (`Scope::alloc_child_under`, routing `RegionHandle::alloc_resident_born_with`) comes back
@@ -157,26 +157,24 @@ parent — the erase-store / re-anchor sequence every `Scope` store now takes.
 — `FoldingBrand::alloc_substrate_folded` (the sole `RecordSubstrate` mint, routed through by
 `KObject::record_of_held`) stores the substrate into its own brand's region exactly like
 `alloc_object_folded`, so it carries no `unsafe` of its own beyond the `reattachable!`-generated
-layout-invariance audit in `witnessed.rs`. One test pins the store landing in the brand's own
-region — the stored description names that region as the substrate's home, which is what a later
-home-crossing read answers from. A second pins `alloc_carried_with`'s fold-brand
-construction one level up for a `Record` specifically — the combinator's by-construction dep fold
-is pinned library-side (`alloc_with_folds_dep_reach_before_result_read` in the workgraph slate);
-what is koan's own here is `KObject::record_with_type` (FROM's own construction): the narrowed record shares the exact same
-substrate pointer (never copies) built from a delivered `record` operand's view in a *different*
-frame, and the fold's reach union is what keeps the producer's region alive once every producer
-handle drops — the shape `record_projection::body`'s `alloc_carried_with(&[lhs], …)` call takes in
-production.
-
-- `alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand`
-- `record_retype_shares_substrate_across_producer_frame_free`
+layout-invariance audit in `witnessed.rs`. The store-lands-in-its-own-brand round trip
+(`alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand`) frees nothing before its read —
+a pure value assert — and runs under plain `cargo test`. The `alloc_carried_with` fold-brand
+construction one level up (`record_retype_shares_substrate_across_producer_frame_free`, FROM's
+`KObject::record_with_type` sharing a delivered `record` operand's substrate pointer across the
+producer frame's free) also runs under plain `cargo test`: the combinator's by-construction dep
+fold is pinned library-side (`alloc_with_folds_dep_reach_before_result_read` in the workgraph
+slate), and the shared-substrate-across-producer-free shape stays pinned here by
+`record_seam_pin_verb_shares_substrate_and_survives_producer_free` below. No separate minimal
+test.
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
 closure invocation reads `KFunction::captured_scope`, now a bare field read of the stored
 `&'a Scope<'a>` (re-anchored with the holder when it is read out of its region). The
-escaped-closure test pins that the pointee outlives the `KFunction` even when the closure is
-invoked after its defining frame has returned.
-The reading-the-captured-value tests further pin the **delivered-carrier reach fold**
+escaped-closure shape — a closure returned out of its defining call and invoked after that frame
+has returned — is pinned by `captured_per_call_value_survives_let_bind_and_call`, whose program
+additionally dereferences a captured per-call value on the invocation.
+The reading-the-captured-value tests pin the **delivered-carrier reach fold**
 that keeps that defining region alive once the object channel is off the relocate seam: a
 `let`-bound closure folds its carrier into the binding scope's reach-set, a user-fn
 closure argument folds into the per-call scope, and a `let`-bound list contributes
@@ -184,7 +182,6 @@ closure argument folds into the per-call scope, and a `let`-bound list contribut
 under-recorded). Each reads a captured *outer* value after its producing frame retires, so
 a lost region dangles under tree borrows.
 
-- `fast_lane_closure_escapes_outer_call_and_remains_invocable`
 - `captured_per_call_value_survives_let_bind_and_call`
 - `closure_argument_stays_live_through_user_fn_call`
 - `let_bound_list_reaching_two_call_regions_keeps_both_live`
@@ -290,18 +287,18 @@ the fold-before-reattach order, the host materialization, or the pin regresses.
 - `retaining_adopt_object_rides_retention_across_producer_shell_drop`
 
 **Dep envelopes held across a step's own open** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
-— `run_step`'s consumer-step `pin` is a plain `FrameSet` folded from each dep envelope's
-[`liveness_frameset`](../workgraph/src/witnessed/delivered.rs) (retained host ∪ reach). The
+— `run_step`'s consumer-step coverage is a plain `FrameCoverage` that absorbs each dep envelope's
+own [`coverage`](../workgraph/src/witnessed/delivered.rs) (retained host ∪ reach). The
 redundancy claim this is sound on: `dep_sources`' own `DepTerminal`s each hold the dep's *duplicated*
 delivery envelope (owning the retention hold's `Rc` directly) across the whole step brand, so a
-producer frame's liveness never rests on `pin` alone. This end-to-end test drives 100 real scheduler
-steps each producing a region-pure scalar result, aggregates all 100 into one list literal — a single
-consumer step opening 100 delivered deps at once, each folded at `Residence::Copied` (the aggregate
-deep-clones its cells, so no producer materializes into the aggregate's reach) — and confirms every
-producer arena is gone while the aggregate still reads correctly: a use-after-free under tree borrows
-the moment the redundancy claim is wrong, and a lifetime leak (the census reads live frames) the
-moment a `Copied` fold re-pins a producer it copied out of. The only `unsafe` routed is the shared
-`retype` in `witnessed.rs`.
+producer frame's liveness never rests on the step coverage alone. This end-to-end test drives 100
+real scheduler steps each producing a region-pure scalar result, aggregates all 100 into one list
+literal — a single consumer step opening 100 delivered deps at once, each cell rebuilt into the
+aggregate's own region (`copy_held_from_carried`, so no producer materializes into the aggregate's
+reach) — and confirms every producer arena is gone while the aggregate still reads correctly: a
+use-after-free under tree borrows the moment the redundancy claim is wrong, and a lifetime leak
+(the census reads live frames) the moment the fold re-pins a producer it copied out of. The only
+`unsafe` routed is the shared `retype` in `witnessed.rs`.
 
 - `aggregate_of_call_results_releases_every_producer_frame`
 
@@ -332,34 +329,25 @@ arena one hop removed, and through it the read entry's reach set.
 - `using_temporary_functor_result_is_sound`
 - `using_window_value_read_reach_survives_under_module_root`
 
-**MATCH on `Tagged` recursion** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — MATCH
-builds its per-call frame and seeds its `it` bind through `CallFrame::with_scope`: the matched value,
-deep-cloned at the caller lifetime, is relocated into the opened child scope's own region through the
-substrate (rebuilt at the destination brand, which is where the caller lifetime is dropped) and
-bound; the `FrameStorage` ancestor chain keeps the
-call-site region alive across TCO replace when a user-fn recurses through a `Tagged` parameter via
-MATCH.
-
-- `recursive_tagged_match_no_uaf`
-
 **Tail-hop argument adoption ordering (Lemma 2)** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
 tail call's loop-carried argument is delivered as its envelope (host = the retiring incarnation's
-frame) and adopted by copy (`Scope::adopt_sealed_copied`, the `Residence::Copied` mint): the copy's
-interior borrows are re-pinned by the adopted-reach mint before the copy's `&'a` is fabricated, while
-a residence-only host (`borrows_host` unset) is left unminted and released with the retiring hold —
-so the retiring region frees strictly after the adoption copy reads it. The test rebuilds an aggregate from the previous hop's own
+frame) and adopted through `Scope::adopt_for_binding`
+([scope/reach.rs](../src/machine/core/scope/reach.rs)), whose copy verb
+(`RegionEscape::Copy` run by `relocate_delivered` through the library's `transfer_into_placing`
+fold) totally rebuilds the value into the adopting scope's own region: the rebuild's interior
+borrows are minted into the adopter's composed reach before the product's `&'a` is fabricated,
+and the release predicate is release-exact over the rebuilt product — a retiring host the product
+no longer borrows is released with the retiring hold, so the retiring region frees strictly after
+the adoption copy reads it. The test rebuilds an aggregate from the previous hop's own
 carried value at every hop, so the spliced carrier genuinely pins the retiring region across the hop;
-tree borrows catches a use-after-free if the free ever reorders before the adoption read. A second
-test drives the record-embedding twin of this same adoption path — `Scope::copy_delivered_record`
-([scope/reach.rs](../src/machine/core/scope/reach.rs))'s `embeds_record` branch, taken instead of the
-plain deep-clone arm whenever the loop-carried argument is (or embeds) a `Record`: each hop threads a
-fresh `{acc = …}` record argument through `THREAD`'s `it`-bind, which the seam copy verb totally
-rebuilds into the callee's per-call region and — because the record borrows nothing — releases
-(`Residence::Released`) the retiring incarnation, so the region count stays depth-independent (`O(1)`)
-rather than chaining one region per hop the way a conservative pin would.
+tree borrows catches a use-after-free if the free ever reorders before the adoption read. The
+record-embedding twin of this same adoption path — each hop threading a fresh `{acc = …}` record
+argument through `THREAD`'s `it`-bind, whose plain-data rebuild releases the retiring incarnation
+so the region count stays depth-independent (`O(1)`) — asserts a loud `region_metrics()` peak
+bound with no Miri-only failure mode, and runs under plain `cargo test`
+(`tail_recursive_record_thread_stays_o1_in_regions`).
 
 - `loop_carried_aggregate_survives_tail_hop_adoption`
-- `tail_recursive_record_thread_stays_o1_in_regions`
 
 **Resting splice cell read across a tail hop** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs)) —
 a spliced sub-result rests as a pin-less `Sealed` cell in the *dispatching* step's own region
@@ -373,10 +361,15 @@ region per hop.
 
 - `a_splicing_tail_loop_holds_no_region_per_iteration`
 
-**TRY-WITH inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — same
-`CallFrame::with_scope` seed relocation + bind as MATCH for the per-branch frame; the
-`FrameStorage.outer` chain keeps the call-site region alive when the branch body
-tail-calls back through the enclosing user-fn.
+**MATCH / TRY-WITH branch frames inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
+MATCH and TRY build their per-branch frame and seed the `it` bind through
+`CallFrame::with_scope`: the matched value, deep-cloned at the caller lifetime, is relocated into
+the opened child scope's own region through the substrate (rebuilt at the destination brand, which
+is where the caller lifetime is dropped) and bound; the `FrameStorage` ancestor chain keeps the
+call-site region alive across TCO replace when a user-fn recurses through a `Tagged` parameter.
+The test drives both doors in one program — a MATCH on a `Tagged` scrutinee nested inside a TRY
+whose `Ok -> it` catch path tail-calls back through the enclosing user-fn — so the branch frame
+chain, the `it`-bind seed relocation, and the framed TCO replace are all exercised together.
 
 - `try_inside_tco_position_preserves_frame_chain`
 
@@ -385,10 +378,12 @@ seed bind routed through `CallFrame::with_scope`: the deep-cloned argument recor
 opened child scope's own region through the substrate (rebuilt at the destination brand, which is
 where the caller lifetime is dropped) and each parameter bound, while the scope rides the `for<'b>`
 brand the open confines. Witnessed by the `Rc<CallFrame>`
-moved into `BodyResult::Tail`. Exercised by every user-fn invocation: repeated-call reclamation, type-op
-dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
-
-- `repeated_user_fn_calls_do_not_grow_run_root_per_call`
+moved into `BodyResult::Tail`. Exercised end-to-end by every user-fn invocation a scheduler-driving
+slate test makes: repeated-call reclamation, type-op dispatch through a functor-call's per-call
+scope, and `MODULE_TYPE_OF` lift-out. The repeated-call growth bound
+(`repeated_user_fn_calls_do_not_grow_run_root_per_call`) is a value assert on region metrics and
+runs under plain `cargo test`; its process-exit leak residue is covered by the aggregate census
+test below. No separate minimal test.
 
 **Stored reference-carrier re-anchor** ([src/machine/core/ref_carriers.rs](../src/machine/core/ref_carriers.rs)) — every
 holder stores a captured / defining / parent scope as a plain `&'a Scope<'a>` (`Module::child_scope`,
@@ -482,7 +477,7 @@ pins (see the stored reference-carrier group above) with none of its
 own, exercised end-to-end by every scheduler-driving slate test; its `module_body_dispatch_does_not_dangle`
 program runs under plain `cargo test`. No separate minimal test.
 
-**`NodeStore::reinstall_with_frame` slot re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
+**`Scheduler::replace` / `NodeStore::reinstall` slot re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
 the Replace arm stores the slot's scope as a payload-less `NodeScope::Yoked` marker re-projected
 from the frame cart (no fabricated `&'a` persists), so the `Rc<CallFrame>` witness in `Node.frame`
 remains the sole liveness root for the re-installed slot's scope.
@@ -508,13 +503,14 @@ contract's scope, re-read after the run drains the root into the run region.
 - `tail_call_stamps_result_against_first_callers_return_contract`
 
 **`Carried` relocation + escaping-value retention** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
-— `relocate_carried` structurally copies a `Carried` into the consumer `dest` region at the brand the
-step `open` supplies (a safe alloc — the former value-relocation `unsafe`/fabrication is **deleted**):
-a substrate carrier is totally rebuilt so its region-resident substrate lands at `dest`, and a
-closure / `KFuture` / `Module` rides a *bare* borrow into its defining region, never copied. That surviving borrow outlives the producer's frame
-only because `reached_frame` recovers the region (via the value's scope `region_owner`) and the
-consumer frame `retain`s it into `FrameStorage.retained` — at the three read-out boundaries (the
-`run_step` relocate, the root drain, and the `extract_terminal` test harness). Safe code; pinned
+— `copy_carried` structurally copies a `Carried` into the consumer `dest` region at the brand the
+step `open` supplies (a safe alloc): under the per-value verb `relocate_object_into`, a value
+keeping region storage behind (`needs_destination_door` — a substrate carrier, or a bare `KString`)
+is totally rebuilt so it lands at `dest`, and a
+closure / `KFuture` / `Module` rides a *bare* borrow into its defining region, never copied. That
+surviving borrow outlives the producer's frame
+only because the witnessed transfer mints the value's reach — the borrowed region among it — into
+the destination's arena, whose composition retains it for the consumer region's life. Safe code; pinned
 because tree borrows catches a regression in the retention discipline that would dangle an escaped
 closure / module past its per-call frame's drop. The closure shape rides the `KFunction`
 captured-scope group above; the tests below pin the **module** shape — a functor-minted module
@@ -530,28 +526,28 @@ points at, which only tree borrows observes — a normal build reads the freed b
 
 **Record escape seam — cost-driven copy vs pin** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
 — two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The
-**container-cell** seam (`copied_seam_mode`, Ruling 4: fresh containers stay self-contained) picks
-the per-cell `Residence` a `Residence::Copied` crossing takes: `Released` when
-`retains_home` ([kobject.rs](../src/machine/model/values/kobject.rs)) reads no surviving
-borrow leaf into the cell's own producer host off the rebuilt cell's stored reach (the record is
-totally rebuilt via `copy_object_into`
-and the producer frees), `Copied` when it does (the producer materializes into the aggregate's reach
-and stays pinned). Two unit tests mirror `dispatch::literal::fold_cells`'s exact aggregate loop
-(`copied_seam_mode` + `transfer_into_placing` + `copy_held_from_carried`) directly for five
-independent producers apiece: one where every record cell is plain data (asserts `Released`, drops
-every producer first, then reads every cell back), one where every record cell embeds a closure
-captured in that same producer (asserts `Copied`, drops every producer first, then reads every
-closure's captured scope back) — a regression in either direction (wrongly releasing a
+**container-cell** seam (`cell_still_borrows`, Ruling 4: fresh containers stay self-contained,
+never a pin) picks each crossing cell's release: the producer frees when the retention predicate
+reads no surviving borrow leaf into the cell's own producer host off the rebuilt cell's stored
+reach (the cell is totally rebuilt via `copy_held_from_carried`), and the producer materializes
+into the aggregate's reach and stays pinned when it does. Two unit tests mirror
+`dispatch::literal::fold_cells`'s exact aggregate loop
+(`cell_still_borrows` + `transfer_into_placing` + `copy_held_from_carried`) directly for five
+independent producers apiece: one where every record cell is plain data (every producer released;
+drops every producer first, then reads every cell back), one where every record cell embeds a
+closure captured in that same producer (every producer pinned; drops every producer first, then
+reads every closure's captured scope back) — a regression in either direction (wrongly releasing a
 still-borrowing record, or wrongly pinning a plain one) either dangles under tree borrows or leaks.
 
 The **value-level** escape seam (`seam_verb` → `copy_or_pin`
 ([kobject.rs](../src/machine/model/values/kobject.rs)), the cost chooser at `relocate_terminal` /
 `single_poll` / `finalize`) picks the whole record's `RegionEscape` in O(1) from its memoized copy cost
-and borrows-home bit: a **released copy** (`Copy { released: true }` → `Residence::Copied` at the
+and borrows-home bit: a **released copy** (`Copy { released: true }`, releasing the producer at the
 finalize aggregate) when a priceable plain record is a small fraction of the host's allocated total,
-and a **pin** (`RegionEscape::Pin` → `Residence::Kept` + `copy_carried`) when a leaf borrows home — the
+and a **pin** (`RegionEscape::Pin` → the envelope's pins claimed whole + `copy_carried`) when a leaf
+borrows home — the
 record's region-resident substrate rides **shared** (a pointer-copy, never rebuilt), covered by the
-Kept-minted producer reach. One end-to-end test drives the released-copy shape through the real
+producer reach the pin mints into the destination. One end-to-end test drives the released-copy shape through the real
 scheduler and parser — a 5-element list literal of user-FN calls each returning a plain-data record
 — corroborating the seam is wired to real per-call producer frames; a minimal-shape twin drives the
 cost-chooser-selected pin for five independent home-borrowing records (asserts `Pin`, drops every
@@ -600,9 +596,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-03: 1512s — 33 tests, 0 leaks, 0 UB
 - 2026-08-03: 2313s — 54 tests, 0 leaks, 0 UB
 - 2026-08-02: 2240s — 53 tests, 0 leaks, 0 UB
 - 2026-08-02: 2225s — 52 tests, 0 leaks, 0 UB
 - 2026-08-02: 2156s — 51 tests, 0 leaks, 0 UB
-- 2026-08-01: 2133s — 50 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

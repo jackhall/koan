@@ -218,21 +218,6 @@ mod tests {
     }
 
     #[test]
-    fn recursive_tagged_match_no_uaf() {
-        // Pins the `FrameStorage.outer` chain — per-call-region/README.md
-        // § MATCH frame lifetime under tail recursion.
-        let bytes = run_program(
-            "UNION Bit = (One :Null Zero :Null)\n\
-             FN (HOP b :Any) -> Any = (MATCH (b) -> :Str WITH (\
-                 One -> (HOP (Bit (Zero null)))\
-                 Zero -> (PRINT \"done\")\
-             ))\n\
-             HOP (Bit (One null))",
-        );
-        assert_eq!(bytes, b"done\n");
-    }
-
-    #[test]
     fn match_on_bool_inexhaustive_errors() {
         let program = program_storage();
         let region = run_root_storage();

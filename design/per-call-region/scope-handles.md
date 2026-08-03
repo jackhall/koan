@@ -94,16 +94,17 @@ mechanics:
 
 ## Verification
 
-- `fast_lane_closure_escapes_outer_call_and_remains_invocable` and
+- `captured_per_call_value_survives_let_bind_and_call` and
   `fast_lane_escaped_closure_with_param_returns_body_value` confirm a
   closure returned from its defining frame remains invocable.
 - `alloc_object_redirects_self_anchored_value_to_escape_arena` locks
   in the cycle gate: a value carrying an `Rc<FrameStorage>` whose
   `region()` is the receiving region allocates into the escape region
   instead, with the per-call region's storage left untouched.
-- `recursive_tagged_match_no_uaf` runs a user-fn that recurses through
-  a `Tagged` parameter via MATCH, exercising the `FrameStorage.outer`
-  chain that keeps the call-site region alive across TCO replace.
+- `try_inside_tco_position_preserves_frame_chain` runs a user-fn that
+  recurses through a `Tagged` parameter via MATCH inside TRY,
+  exercising the `FrameStorage.outer` chain that keeps the call-site
+  region alive across TCO replace.
 - `call_arena_try_reset_for_tail_round_trip` and
   `call_arena_try_reset_for_tail_refuses_when_aliased` pin the
   in-place reset: a unique shell `Rc` resets and re-binds correctly

@@ -27,7 +27,7 @@ nonexistent tests as the verification anchor for a still-live protocol.
   distinct.
 - The tail-region uniqueness / escape invariant is cited by a current test
   (`chained_tail_calls_reuse_frames`, `chained_user_fn_tail_calls_reuse_one_slot`,
-  `match_driven_tail_recursion_completes`, `recursive_tagged_match_no_uaf`, or
+  `match_driven_tail_recursion_completes`, `try_inside_tco_position_preserves_frame_chain`, or
   their successors), described in terms of the current reinstall/region-turnover
   model, not the retired reset mechanism.
 

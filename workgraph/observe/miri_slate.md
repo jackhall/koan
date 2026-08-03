@@ -220,8 +220,8 @@ assertions) run under plain `cargo test` and stay off the slate. Embedder twin: 
 `seal_option` optional operand of the step's `SealedExtern::open`), so it is live at the Done arm
 with no reattach of its own; the `unsafe` lives in `SealedExtern::open` (`Erased::reattach`).
 `erased_roundtrip` / `sealed_extern_zip_opens_heterogeneous_at_one_brand` above pin it end-to-end
-(Koan's `recursive_tagged_match_no_uaf`, in that embedder's own slate, exercises the production
-shape). No separate minimal test here.
+(Koan's `try_inside_tco_position_preserves_frame_chain`, in that embedder's own slate, exercises
+the production shape). No separate minimal test here.
 
 **`SealedExtern::open` — run-loop step-tail open** ([src/witnessed.rs](../src/witnessed.rs))
 — the `unsafe { self.value.reattach() }` inside `SealedExtern::open` runs the transmute defined in the
