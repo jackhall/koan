@@ -856,7 +856,7 @@ fn operator_chain_undeclared_errors_cleanly() {
 /// already seeds into the builtin additive `FoldLeft` group — reduces that scope's runs
 /// right-associated, while the root's default still reduces runs written outside it. This is the
 /// registry's innermost-wins walk end to end
-/// ([`crate::machine::core::Scope::resolve_operator_group_with_chain`]): the builtin groups are
+/// ([`crate::machine::core::Scope::resolve_operator_group_delivered`]): the builtin groups are
 /// found last, so a declaring scope overrides them. The two associations are observably distinct:
 /// `10 - 3 - 2` is `(10 - 3) - 2` = 5 folded left and `10 - (3 - 2)` = 9 folded right.
 ///
@@ -864,9 +864,7 @@ fn operator_chain_undeclared_errors_cleanly() {
 /// reduction, not which body runs.
 #[test]
 fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
-    use crate::machine::model::{OperatorGroup, ReductionMode};
-    use std::collections::HashSet;
-    use std::rc::Rc;
+    use crate::machine::model::{OperatorGroup, OperatorGroupFamily, ReductionMode};
 
     let program = program_storage();
     let region = run_root_storage();
@@ -875,12 +873,11 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let types = test_run.types.clone();
     let inner = scope.brand().alloc_scope(scope.child_for_call());
 
-    let members: HashSet<String> = ["-"].iter().map(|s| s.to_string()).collect();
-    let group = Rc::new(OperatorGroup::new(members, ReductionMode::FoldRight));
+    let record = OperatorGroup::alloc(inner.brand(), &["-"], ReductionMode::FoldRight);
     inner
         .register_operator_group_direct(
             "-".to_string(),
-            group,
+            inner.seal_resident::<OperatorGroupFamily>(record),
             BindingIndex::value(0),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -929,21 +926,18 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
 /// proving the "unary prefix and infix coincide" direction end-to-end.
 #[test]
 fn operator_chain_registered_unary_group_hands_body_the_list() {
-    use crate::machine::model::{OperatorGroup, ReductionMode};
-    use std::collections::HashSet;
-    use std::rc::Rc;
+    use crate::machine::model::{OperatorGroup, OperatorGroupFamily, ReductionMode};
 
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
-    let members: HashSet<String> = ["~"].iter().map(|s| s.to_string()).collect();
-    let group = Rc::new(OperatorGroup::new(members, ReductionMode::Unary));
+    let record = OperatorGroup::alloc(scope.brand(), &["~"], ReductionMode::Unary);
     scope
         .register_operator_group_direct(
             "~".to_string(),
-            group,
+            scope.seal_resident::<OperatorGroupFamily>(record),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )

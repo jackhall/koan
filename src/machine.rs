@@ -21,9 +21,9 @@ pub(crate) use core::{
     ReturnContract, StepAllocator, TailContract,
 };
 pub use core::{
-    program_storage, run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError,
-    KErrorKind, OpenedFunction, ProgramBrand, ProgramStorage, Scope, ScopeId, SealedFunction,
-    SplicedCell, WriteGate,
+    program_storage, run_root_storage, Bindings, DeliveredCarried, DeliveredOperatorGroup,
+    FrameStorage, KError, KErrorKind, OpenedFunction, ProgramBrand, ProgramStorage, Scope, ScopeId,
+    SealedFunction, SealedOperatorGroup, SplicedCell, WriteGate,
 };
 pub(crate) use core::{
     AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, KoanRegion,

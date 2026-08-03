@@ -17,16 +17,14 @@
 //!
 //! Split out of the parent `scope` module.
 
-use std::rc::Rc;
-
 use super::{Scope, ScopeKind};
 use crate::machine::core::bindings::operator_group_ops;
 use crate::machine::core::bindings::{
     BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
 };
-use crate::machine::core::carrier_witness::OverloadSeal;
+use crate::machine::core::carrier_witness::{OverloadSeal, SealedOperatorGroup};
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
-use crate::machine::model::{Carried, KObject, OperatorGroup};
+use crate::machine::model::{Carried, KObject, OperatorGroup, OperatorGroupFamily, ReductionMode};
 use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
@@ -253,7 +251,7 @@ impl<'a> Scope<'a> {
     pub fn register_operator_group_direct(
         &self,
         probe: String,
-        group: Rc<OperatorGroup>,
+        group: SealedOperatorGroup,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
@@ -286,9 +284,14 @@ impl<'a> Scope<'a> {
         Ok(view)
     }
 
-    /// Allocate the `GROUP` binder's child scope and pre-register the member powerset into it, at
-    /// index 0 — the same no-lexical-ordering visibility parameters and `USING` imports take, so a
-    /// run anywhere in the body resolves the group, including above the `OP` declarations naming it.
+    /// Allocate the `GROUP` binder's group record and child scope, and pre-register the member
+    /// powerset into it, at index 0 — the same no-lexical-ordering visibility parameters and `USING`
+    /// imports take, so a run anywhere in the body resolves the group, including above the `OP`
+    /// declarations naming it.
+    ///
+    /// The record is hosted in `outer`'s region, which the child scope shares, so the scope's bare
+    /// `&'a OperatorGroup<'a>` payload and every registry entry's sealed carrier name one pointee
+    /// that dies with that region.
     ///
     /// The child is **born inside this door** and handed back only once the registry seeding has
     /// landed, so no other node can have reached it while it was written. That is what lets the door
@@ -297,16 +300,17 @@ impl<'a> Scope<'a> {
     pub(crate) fn alloc_group_child(
         outer: &'a Scope<'a>,
         name: String,
-        group: Rc<OperatorGroup>,
         members: &[&str],
+        mode: ReductionMode<'_>,
     ) -> Result<&'a Scope<'a>, KError> {
-        let child =
-            outer
-                .brand()
-                .alloc_scope(Scope::child_under_group(outer, name, Rc::clone(&group)));
+        let record = OperatorGroup::alloc(outer.brand(), members, mode);
+        let sealed = outer.seal_resident::<OperatorGroupFamily>(record);
+        let child = outer
+            .brand()
+            .alloc_scope(Scope::child_under_group(outer, name, record));
         child.register_group_under_all_subsets_direct(
             members,
-            &group,
+            &sealed,
             BindingIndex::value(0),
             &mut WriteGate::for_unpublished_scope(),
         )?;
@@ -319,7 +323,7 @@ impl<'a> Scope<'a> {
     pub fn register_group_under_all_subsets_direct(
         &self,
         members: &[&str],
-        group: &Rc<OperatorGroup>,
+        group: &SealedOperatorGroup,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {

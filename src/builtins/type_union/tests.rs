@@ -12,12 +12,12 @@ fn pipe_is_a_unary_operator_group() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let group = scope
-        .resolve_operator_group_with_chain("|", None)
+        .resolve_operator_group_delivered("|", None)
         .expect("`|` must resolve to a registered operator group");
+    let mode = group.open(|group| format!("{:?}", group.mode()));
     assert!(
-        matches!(group.mode(), ReductionMode::Unary),
-        "`|` must reduce as a unary-mode group; got {:?}",
-        group.mode(),
+        group.open(|group| matches!(group.mode(), ReductionMode::Unary)),
+        "`|` must reduce as a unary-mode group; got {mode}",
     );
 }
 

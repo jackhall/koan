@@ -5,7 +5,8 @@ pub(crate) mod types;
 pub(crate) mod values;
 
 pub use operators::{
-    binary_key, probe_key, unary_key, FoldDirection, OperatorGroup, ReductionMode,
+    binary_key, probe_key, unary_key, FoldDirection, OperatorGroup, OperatorGroupFamily,
+    ReductionMode,
 };
 pub use types::TypeRegistry;
 pub use types::{

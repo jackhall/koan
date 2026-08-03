@@ -38,14 +38,12 @@
 
 use crate::machine::model::TypeRegistry;
 use crate::machine::WriteGate;
-use std::collections::HashSet;
-use std::rc::Rc;
 
 use crate::machine::body_statement_refs;
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::model::{FoldDirection, ReductionMode};
 use crate::machine::{require_identifier_name, require_kexpression, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -64,10 +62,10 @@ enum GroupMode {
     Pairwise(FoldDirection),
 }
 
-/// The `GROUP` body: read the mode, scan the unevaluated body block for the members, allocate the
-/// one shared group record, mint the child scope under it with the member powerset pre-registered,
-/// then run the body and bind the module value through the tail `MODULE` uses
-/// ([`super::module_def::await_module_body`]).
+/// The `GROUP` body: read the mode, scan the unevaluated body block for the members, then mint the
+/// child scope through the door that allocates the one shared group record and pre-registers the
+/// member powerset, and finally run the body and bind the module value through the tail `MODULE`
+/// uses ([`super::module_def::await_module_body`]).
 fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
     let name = crate::try_action!(require_identifier_name(
         ctx.args, "name", "GROUP", ctx.types
@@ -76,16 +74,14 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
     let mode = crate::try_action!(reduction_mode(ctx, group_mode));
     let members = crate::try_action!(scan_members(&body_expr, &name));
 
-    let member_set: HashSet<String> = members.iter().cloned().collect();
-    let group = Rc::new(OperatorGroup::new(member_set, mode));
     let member_refs: Vec<&str> = members.iter().map(|s| s.as_str()).collect();
-    // The child scope is allocated and its member powerset registered in one door, so the registry
-    // is live before the scope is anything a node could reach.
+    // The record, the child scope and its member powerset all land in one door, so the registry is
+    // live before the scope is anything a node could reach.
     let child_scope = crate::try_action!(Scope::alloc_group_child(
         ctx.scope,
         name.clone(),
-        Rc::clone(&group),
         &member_refs,
+        mode,
     ));
 
     super::module_def::await_module_body(child_scope, name, body_expr, ctx.bind_index())
@@ -94,16 +90,18 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
 /// The group's [`ReductionMode`]: a pairwise overload reads its combiner out of the quoted
 /// `combiner` slot as a **symbol** (the same extraction an `OP` declaration's `#(<sym>)` takes). The
 /// combiner is checked at neither declaration nor registration — it is a name the chain's use site
-/// resolves, so a missing, non-callable, or wrong-arity combiner is an ordinary error there.
+/// resolves, so a missing, non-callable, or wrong-arity combiner is an ordinary error there. The
+/// symbol borrows the args here and is re-hosted into the group's own region by
+/// [`OperatorGroup::alloc`](crate::machine::model::OperatorGroup::alloc).
 fn reduction_mode<'a>(
     ctx: &BodyCtx<'a, '_>,
     group_mode: GroupMode,
-) -> Result<ReductionMode, KError> {
+) -> Result<ReductionMode<'a>, KError> {
     Ok(match group_mode {
         GroupMode::Fold(FoldDirection::Left) => ReductionMode::FoldLeft,
         GroupMode::Fold(FoldDirection::Right) => ReductionMode::FoldRight,
         GroupMode::Pairwise(direction) => ReductionMode::Pairwise {
-            combiner: symbol_from_slot(ctx.args, "GROUP", "combiner")?.to_string(),
+            combiner: symbol_from_slot(ctx.args, "GROUP", "combiner")?,
             direction,
         },
     })

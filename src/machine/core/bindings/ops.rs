@@ -20,12 +20,10 @@
 //! — need no such discipline and stay direct (`*_direct` on [`Scope`]), under the construction-door
 //! mint of the same gate.
 
-use std::rc::Rc;
-
 use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
-use crate::machine::core::carrier_witness::OverloadSeal;
+use crate::machine::core::carrier_witness::{OverloadSeal, SealedOperatorGroup};
 use crate::machine::core::{KError, KErrorKind, Scope};
-use crate::machine::model::{probe_key, KType, OperatorGroup};
+use crate::machine::model::{probe_key, KType};
 
 /// How a [`WriteOp::Type`] meets an existing `types[name]`: `Insert` is strict insert-if-absent (a
 /// present name is a `Rebind`), `UpsertEqual` admits a re-entry of the *same* declaration — the
@@ -70,10 +68,11 @@ pub(crate) enum WriteOp {
         builtin_shadow_guard: bool,
     },
     /// One operator-registry entry — one op per probe key, so the per-group powerset expansion
-    /// happens where the ops are built and apply stays dumb.
+    /// happens where the ops are built and apply stays dumb. The group rides as its dormant
+    /// carrier, which is `Copy` and lifetime-free, so a `WriteOp` still names no region borrow.
     Group {
         probe: String,
-        group: Rc<OperatorGroup>,
+        group: SealedOperatorGroup,
         index: BindingIndex,
     },
     /// A `VAL` slot into the nearest enclosing SIG decl scope's slot collector. A slot is a schema
@@ -133,10 +132,12 @@ impl WriteOp {
                 probe,
                 group,
                 index,
-            } => scope
-                .write_scope()
-                .bindings()
-                .write_operator_group(probe, group, index, gate),
+            } => {
+                let target = scope.write_scope();
+                target
+                    .bindings()
+                    .write_operator_group(probe, group, index, &target.home(), gate)
+            }
             WriteOp::SigSlot { name, kt } => scope.write_sig_slot(name, kt),
         }
     }
@@ -162,9 +163,12 @@ fn value_write_target<'s, 'a>(scope: &'s Scope<'a>, name: &str) -> Result<&'s Sc
 /// the `GROUP` binder and the `OP` declaration. `members.len()` stays small, so the `2^n - 1`
 /// bitmask walk is cheap; each subset's key is derived through [`probe_key`] rather than
 /// hand-enumerated, so a registration key always agrees with a real chain's probe.
+///
+/// Every op carries a bit-copy of one seal over one region-hosted record, so the whole expansion
+/// allocates nothing but its probe keys.
 pub(crate) fn operator_group_ops(
     members: &[&str],
-    group: &Rc<OperatorGroup>,
+    group: &SealedOperatorGroup,
     index: BindingIndex,
 ) -> Vec<WriteOp> {
     let subset_count = 1usize << members.len();
@@ -178,7 +182,7 @@ pub(crate) fn operator_group_ops(
                 .collect();
             WriteOp::Group {
                 probe: probe_key(&subset),
-                group: Rc::clone(group),
+                group: group.duplicate(),
                 index,
             }
         })

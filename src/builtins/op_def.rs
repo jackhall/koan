@@ -26,13 +26,14 @@
 //! Surface design: [design/operators.md](../../design/operators.md).
 
 use crate::machine::WriteGate;
-use std::rc::Rc;
 
 use crate::machine::core::bindings::{operator_group_ops, WriteOp};
 use crate::machine::core::RegionBrand;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
+use crate::machine::model::{
+    binary_key, unary_key, OperatorGroup, OperatorGroupFamily, ReductionMode,
+};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{ExpressionSignature, KKind};
 use crate::machine::model::{Held, KType, Record};
@@ -192,7 +193,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", "body"));
     let has_result = arg_held(ctx.args, "return_type").is_some();
     let group = ctx.scope.nearest_group_context();
-    crate::try_action!(check_group_context(kind, has_result, group.as_deref(), sym));
+    crate::try_action!(check_group_context(kind, has_result, group, sym));
 
     let operand_raw = crate::try_action!(extract_type_slot_raw(ctx.args, "operand", OPERAND_SLOT));
     let operand_state = crate::try_action!(classify_return_type(
@@ -291,7 +292,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
 fn check_group_context(
     kind: OpKind,
     has_result: bool,
-    group: Option<&OperatorGroup>,
+    group: Option<&OperatorGroup<'_>>,
     sym: &str,
 ) -> Result<(), KError> {
     if kind == OpKind::Unary && group.is_some() {
@@ -359,9 +360,10 @@ impl<'a> OpPlan<'a> {
                 )?;
                 writes.push(overload);
                 if !in_group {
-                    let members = std::iter::once(sym.to_string()).collect();
-                    let group = Rc::new(OperatorGroup::new(members, ReductionMode::FoldLeft));
-                    writes.extend(operator_group_ops(&[sym], &group, bind_index));
+                    let record =
+                        OperatorGroup::alloc(scope.brand(), &[sym], ReductionMode::FoldLeft);
+                    let sealed = scope.seal_resident::<OperatorGroupFamily>(record);
+                    writes.extend(operator_group_ops(&[sym], &sealed, bind_index));
                 }
                 registered
             }
@@ -418,8 +420,8 @@ pub(super) struct OperatorForm<'a> {
 
 /// Register the fixed triple every unary operator consists of: the list-form overload under
 /// [`unary_key`], the binary-form overload under [`binary_key`], and the size-1
-/// [`ReductionMode::Unary`] group entry (key derived through
-/// [`Scope::register_group_under_all_subsets`]). The bodies are the caller's own — `UNARY OP`
+/// [`ReductionMode::Unary`] group entry (key derived through [`operator_group_ops`]). The bodies
+/// are the caller's own — `UNARY OP`
 /// synthesizes koan-AST bodies, the builtin `|` supplies native ones. Returns the list-form
 /// function's object and stored reach: the list body is the operator's primary value.
 ///
@@ -473,10 +475,10 @@ pub(super) fn register_unary_operator<'a>(
         register_body(scope, sym, list_signature, list_body, bind_index, types)?;
     let (_, binary_overload) =
         register_body(scope, sym, binary_signature, binary_body, bind_index, types)?;
-    let members = std::iter::once(sym.to_string()).collect();
-    let group = Rc::new(OperatorGroup::new(members, ReductionMode::Unary));
+    let record = OperatorGroup::alloc(scope.brand(), &[sym], ReductionMode::Unary);
+    let sealed = scope.seal_resident::<OperatorGroupFamily>(record);
     let mut writes = vec![list_overload, binary_overload];
-    writes.extend(operator_group_ops(&[sym], &group, bind_index));
+    writes.extend(operator_group_ops(&[sym], &sealed, bind_index));
     Ok((carrier, writes))
 }
 

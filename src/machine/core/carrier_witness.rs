@@ -4,7 +4,7 @@
 //! [workgraph/design/reach.md § The carrier states](../../../workgraph/design/reach.md#the-carrier-states).
 
 use crate::machine::model::{
-    retains_home, Carried, CarriedFamily, DispatchToken, KObject, UntypedKey,
+    retains_home, Carried, CarriedFamily, DispatchToken, KObject, OperatorGroupFamily, UntypedKey,
 };
 
 use super::arena::{FrameStorage, KoanRegion};
@@ -75,6 +75,20 @@ pub(crate) fn read_resting<R>(
 /// a tail chain: the seal fuses the callable with its reach claim, where a bare `&KFunction` would
 /// state no reach at all.
 pub type SealedFunction = crate::witnessed::Sealed<KFunctionFamily, CarrierWitness>;
+
+/// An operator group's **dormant** carrier: the region-hosted [`OperatorGroup`] record fused to the
+/// reach description minted for it, over the [`OperatorGroupFamily`]. This is what an `operators`
+/// registry entry stores — the same entry shape the `data` and `functions` tables use, so a
+/// [`Bindings`](crate::machine::core::Bindings) table stays lifetime-free. Every powerset key of one
+/// `GROUP` declaration holds a duplicate of the same seal over the same pointee, so sharing is
+/// address identity.
+pub type SealedOperatorGroup = crate::witnessed::Sealed<OperatorGroupFamily, CarrierWitness>;
+
+/// An operator group **in transit**: [`SealedOperatorGroup`] lifted at its declaring scope, so the
+/// envelope's coverage owns the region hosting the record — which is what lets a chain resolve a
+/// group declared in an ancestor scope and read it under pins of its own.
+pub type DeliveredOperatorGroup =
+    crate::witnessed::Delivered<OperatorGroupFamily, CarrierWitness, FrameStorage>;
 
 /// A callable **in use**: re-anchored at a region's own lifetime, paired with the reach witness it
 /// was opened under. Dispatch resolves on one of these and carries it across argument evaluation

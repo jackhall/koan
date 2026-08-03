@@ -3,8 +3,6 @@
 //! builtin-shadow consults. Split out of the parent `scope` module; the `Scope` struct,
 //! its constructors, and small accessors live there.
 
-use std::rc::Rc;
-
 // `AdoptSeam` and `KObject` serve the `#[cfg(test)]` bare-read ladder alone; every other
 // resolution verb hands back a delivery envelope.
 #[cfg(test)]
@@ -14,8 +12,8 @@ use crate::machine::core::bindings::NameLookup;
 use crate::machine::core::LexicalFrame;
 #[cfg(test)]
 use crate::machine::model::KObject;
-use crate::machine::model::{KType, OperatorGroup};
-use crate::machine::DeliveredCarried;
+use crate::machine::model::KType;
+use crate::machine::{DeliveredCarried, DeliveredOperatorGroup};
 
 impl<'a> Scope<'a> {
     /// True iff `name` is a builtin type. The builtins live once in the immutable
@@ -204,8 +202,12 @@ impl<'a> Scope<'a> {
         })
     }
 
-    /// Resolve a chain's operator-group probe against this scope and the `outer` chain:
-    /// per-scope `operators` hits are filtered through [`visible`], so the innermost
+    /// Resolve a chain's operator-group probe against this scope and the `outer` chain, **lifting**
+    /// the hit into a delivery envelope pinned by its declaring scope's region owner — the mirror of
+    /// [`Self::resolve_value_delivered`]. The lift happens at the **hit** scope, so a group declared
+    /// in an ancestor travels with that ancestor's region owned in the envelope's coverage.
+    ///
+    /// Per-scope `operators` hits are filtered through [`visible`], so the innermost
     /// visible registration wins and operator shadowing falls out of the walk. The
     /// builtin groups the run-global root seeds are found last, so they are defaults a
     /// declaring scope may override. Unlike the type and function ladders this walk is
@@ -214,15 +216,16 @@ impl<'a> Scope<'a> {
     /// the root's `+` still wins for `Number` operands through the strict bucket gate,
     /// while a scope that declares `+` over its own operand type reduces its own runs.
     /// `chain = None` is the test/builtin-registration unfiltered mode.
-    pub fn resolve_operator_group_with_chain(
+    pub fn resolve_operator_group_delivered(
         &self,
         probe: &str,
         chain: Option<&LexicalFrame>,
-    ) -> Option<Rc<OperatorGroup>> {
+    ) -> Option<DeliveredOperatorGroup> {
         self.walk_chain(|scope| {
             scope
                 .bindings()
                 .lookup_operator_group(probe, scope.binding_cutoff(chain))
+                .map(|sealed| scope.lift_resident(sealed))
         })
     }
 }

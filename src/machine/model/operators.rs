@@ -1,5 +1,5 @@
 //! Operator-group registry record. A set of chainable operators is declared
-//! together and registered — one shared [`OperatorGroup`], held by `Rc` — under
+//! together and registered — one region-hosted [`OperatorGroup`] — under
 //! every nonempty subset of the group's operators (the per-group powerset,
 //! singletons included, so a same-operator run like `a + b + c`, whose deduped probe
 //! is just `+`, still resolves). A chain's operator probe (the sorted-joined unique
@@ -7,14 +7,15 @@
 //! hashmap hit; a cross-group mix — which nothing registers — simply misses.
 //!
 //! A group's record is its member set plus one [`ReductionMode`] describing how a
-//! recognized run of its operators reduces. The record is **lifetime-free**: a pairwise
-//! group's combiner is an operator *symbol*, not a resolved function, so the chain reducer
-//! synthesizes an infix call the ordinary scope walk resolves at the use site, and the record
-//! borrows no region. That is what lets the registry share it by plain `Rc` rather than through
-//! a region allocation door.
+//! recognized run of its operators reduces. It is koan semantic data, so it lives in the
+//! declaring scope's region bump: [`OperatorGroup::alloc`] is the one door, the members are a
+//! sorted slice of bump-hosted keywords probed by binary search, and the record is `Copy` and
+//! `Drop`-free, so region death frees it with the chunks. One allocation backs every one of a
+//! group's powerset keys — each key holds a sealed carrier over the same pointee — so sharing is
+//! address identity and the install allocates nothing past the probe keys.
 //!
 //! Registry lookup is innermost-wins
-//! ([`Scope::resolve_operator_group_with_chain`](crate::machine::core::Scope::resolve_operator_group_with_chain)):
+//! ([`Scope::resolve_operator_group_delivered`](crate::machine::core::Scope::resolve_operator_group_delivered)):
 //! the builtin comparison / additive / multiplicative groups seeded into the run-global root
 //! by `register_builtin_operator_groups` (`src/builtins/arithmetic.rs`) are found last, so they
 //! are chaining defaults a declaring scope may override — a registry hit carries no operand
@@ -25,7 +26,7 @@
 //! [`probe_key`], and the function-bucket keys [`binary_key`] / [`unary_key`] an operator's
 //! overloads live under.
 
-use std::collections::HashSet;
+use crate::machine::core::RegionBrand;
 
 use super::types::{UntypedElement, UntypedKey};
 
@@ -39,8 +40,8 @@ pub enum FoldDirection {
 }
 
 /// How a recognized run of this group's operators reduces.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReductionMode {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReductionMode<'a> {
     /// The whole operand run is handed to one body as a single list operand.
     Unary,
     /// A binary body folds the run left-associated: `a - b - c` ⇒ `(a - b) - c`.
@@ -54,46 +55,119 @@ pub enum ReductionMode {
         /// group's `AND`, or a member `OP` declared over the pair-result type. The reducer
         /// synthesizes the infix shape `[left, Keyword(combiner), right]`, so the combiner binds
         /// its two inputs positionally, by signature shape, and imposes no parameter-naming
-        /// convention. Holding the symbol rather than a resolved function is what keeps
-        /// [`OperatorGroup`] lifetime-free (no region borrow, no allocation door at all):
-        /// the ordinary scope walk resolves it at the chain's use site, so a combiner that is
-        /// missing, non-callable, or of the wrong arity is an ordinary error there.
-        combiner: String,
+        /// convention. It is a bump-hosted symbol, not a resolved function: the ordinary scope walk
+        /// resolves it at the chain's use site, so a combiner that is missing, non-callable, or of
+        /// the wrong arity is an ordinary error there.
+        combiner: &'a str,
         direction: FoldDirection,
     },
 }
 
 /// A declared set of mutually chainable operators plus the mode a recognized run of
-/// them reduces by. Shared by `Rc`: every powerset key the registering module
-/// installs holds a clone of the same record, so a subset used in one
-/// expression resolves to the same group as any other subset.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperatorGroup {
-    /// The full declared member set (keywords), not the probed subset.
-    members: HashSet<String>,
-    mode: ReductionMode,
+/// them reduces by. `Copy` and `Drop`-free, hosted in the declaring scope's region bump by
+/// [`OperatorGroup::alloc`]: every powerset key the registering module installs holds a sealed
+/// carrier over the *same* pointee, so a subset used in one expression resolves to the same group
+/// as any other subset by address identity, and region death frees the record with the chunks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperatorGroup<'a> {
+    /// The full declared member set (keywords), not the probed subset — sorted in byte order and
+    /// deduped, the invariant [`Self::covers`]' binary search and [`Self::same_declaration`]'s
+    /// slice compare read. Member counts are necessarily tiny (the powerset install is `2^n`), so a
+    /// sorted run beats a hash table at this size and costs the bump no `Drop`.
+    members: &'a [&'a str],
+    mode: ReductionMode<'a>,
 }
 
-impl OperatorGroup {
-    pub fn new(members: HashSet<String>, mode: ReductionMode) -> Self {
-        OperatorGroup { members, mode }
+/// [`Reattachable`](crate::witnessed::Reattachable) family for [`OperatorGroup`] — the carrier
+/// family a group record travels under in the `operators` registry, the operator-table twin of
+/// [`KFunctionFamily`](crate::machine::core::kfunction::KFunctionFamily).
+///
+/// A carried group travels as `&'r OperatorGroup<'r>` — a thin reference whose layout does not
+/// depend on `'r`; `OperatorGroup<'r>` itself is a reference-to-slice beside a `ReductionMode<'r>`
+/// holding at most a `&'r str`, so every choice of `'r` is one type up to the lifetime and the
+/// shared `reattachable!` macro discharges the layout-invariance obligation once.
+pub struct OperatorGroupFamily;
+
+crate::witnessed::reattachable! {
+    OperatorGroupFamily => &'r OperatorGroup<'r>,
+}
+
+impl<'a> OperatorGroup<'a> {
+    /// The single allocation door: copy `members` (sorted and deduped here) and a pairwise `mode`'s
+    /// combiner text into `brand`'s region, then bump the record beside them. The one record every
+    /// powerset key of this declaration shares, so the install is allocation-free past its probe
+    /// keys and the cheap identity arm of the registry upsert is an address compare.
+    pub fn alloc(
+        brand: RegionBrand<'a>,
+        members: &[&str],
+        mode: ReductionMode<'_>,
+    ) -> &'a OperatorGroup<'a> {
+        let mut sorted: Vec<&str> = members.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let hosted: Vec<&'a str> = sorted
+            .iter()
+            .map(|member| brand.alloc_text(member))
+            .collect();
+        let mode = match mode {
+            ReductionMode::Unary => ReductionMode::Unary,
+            ReductionMode::FoldLeft => ReductionMode::FoldLeft,
+            ReductionMode::FoldRight => ReductionMode::FoldRight,
+            ReductionMode::Pairwise {
+                combiner,
+                direction,
+            } => ReductionMode::Pairwise {
+                combiner: brand.alloc_text(combiner),
+                direction,
+            },
+        };
+        brand.alloc_value(OperatorGroup {
+            members: brand.alloc_slice(&hosted),
+            mode,
+        })
     }
 
     /// The mode a recognized run of this group's operators reduces by.
-    pub fn mode(&self) -> &ReductionMode {
-        &self.mode
+    pub fn mode(&self) -> ReductionMode<'a> {
+        self.mode
     }
 
-    /// Every member operator keyword. Order is unspecified (hash-set iteration).
-    pub fn member_operators(&self) -> impl Iterator<Item = &str> {
-        self.members.iter().map(|s| s.as_str())
+    /// Every member operator keyword, in sorted order.
+    pub fn member_operators(&self) -> impl Iterator<Item = &'a str> {
+        self.members.iter().copied()
     }
 
     /// True iff every operator in `probe_operators` is a member of this group — the
     /// admission gate for a chain whose probe hit this group's registry slot. A probe
     /// subset that names a non-member is a cross-group mix that must miss.
     pub fn covers(&self, probe_operators: &[&str]) -> bool {
-        probe_operators.iter().all(|op| self.members.contains(*op))
+        probe_operators
+            .iter()
+            .all(|op| self.members.binary_search(op).is_ok())
+    }
+
+    /// The registry upsert's structural identity rule: same mode and same member set. Two `OP`
+    /// statements over one symbol and distinct operand types are two bucket overloads but one
+    /// declaration, and their records are separate allocations, so identity here is content — read
+    /// **across two lifetimes**, which the derived `PartialEq` (one unified lifetime) cannot state.
+    pub fn same_declaration(&self, other: &OperatorGroup<'_>) -> bool {
+        let same_mode = match (self.mode, other.mode) {
+            (ReductionMode::Unary, ReductionMode::Unary)
+            | (ReductionMode::FoldLeft, ReductionMode::FoldLeft)
+            | (ReductionMode::FoldRight, ReductionMode::FoldRight) => true,
+            (
+                ReductionMode::Pairwise {
+                    combiner,
+                    direction,
+                },
+                ReductionMode::Pairwise {
+                    combiner: other_combiner,
+                    direction: other_direction,
+                },
+            ) => combiner == other_combiner && direction == other_direction,
+            _ => false,
+        };
+        same_mode && self.members == other.members
     }
 }
 

@@ -61,7 +61,7 @@ pub struct Scope<'a> {
     /// Lexical classification, and with it every per-kind payload — the SIG slot collector, a
     /// `GROUP` body's operator record, a `RECURSIVE TYPES` block's open window. Every payload is
     /// reached through the walking accessors below, never off a scope reference directly.
-    pub kind: ScopeKind,
+    pub kind: ScopeKind<'a>,
     /// Set once the scope's defining block / frame finishes: no further bind is legal (rebinds are
     /// already rejected; this also rejects *new* binds). The seal point for its reach-set. `Cell`
     /// because it flips once, late, outside the bind hot path.
@@ -107,7 +107,7 @@ impl ScopeBindings<'_> {
 ///
 /// Neither `Clone` nor `Debug`: `Sig`'s slot collector is a live `RefCell` that must not be
 /// silently duplicated, and nothing prints a kind.
-pub enum ScopeKind {
+pub enum ScopeKind<'a> {
     Root,
     Anonymous,
     /// A SIG decl_scope. `slots` is its VAL slot collector: `VAL <name> :Type` records
@@ -120,13 +120,15 @@ pub enum ScopeKind {
         slots: RefCell<HashMap<String, KType>>,
     },
     /// A MODULE body (also the per-ascription view minted by `:|`). `group` is `Some` for a `GROUP`
-    /// body — a group *is* a module — naming the one shared [`OperatorGroup`] record its member `OP`
-    /// declarations belong to, read through [`Scope::nearest_group_context`]. The record is
-    /// lifetime-free (member set + mode + combiner *name*), so the scope shares it by plain `Rc` —
-    /// the same record its registry entries hold — and holds no region borrow for it.
+    /// body — a group *is* a module — naming the one [`OperatorGroup`] record its member `OP`
+    /// declarations belong to, read through [`Scope::nearest_group_context`]. A bare
+    /// `&'a OperatorGroup<'a>`: the record is same-region with this scope, so it rides the scope's
+    /// own brand like every other `'a` field and the reader's answer cannot outlive its scope borrow
+    /// by construction — no seal, no pin. The registry entries hold that same record as a sealed
+    /// carrier, since a binding table is lifetime-free.
     Module {
         name: String,
-        group: Option<Rc<OperatorGroup>>,
+        group: Option<&'a OperatorGroup<'a>>,
     },
     /// A `RECURSIVE TYPES` block body: transparent to the SIG-body gate like `Anonymous`, and
     /// carrying the open [`RecursiveGroupWindow`] whose members are co-declared and elaborate
@@ -231,7 +233,7 @@ impl<'a> Scope<'a> {
     fn child_inheriting(
         outer: &'a Scope<'a>,
         bindings: ScopeBindings<'a>,
-        kind: ScopeKind,
+        kind: ScopeKind<'a>,
     ) -> Scope<'a> {
         Scope {
             outer: Some(outer),
@@ -311,7 +313,7 @@ impl<'a> Scope<'a> {
     pub fn child_under_group(
         outer: &'a Scope<'a>,
         name: String,
-        group: Rc<OperatorGroup>,
+        group: &'a OperatorGroup<'a>,
     ) -> Scope<'a> {
         Self::child_inheriting(
             outer,
@@ -419,11 +421,14 @@ impl<'a> Scope<'a> {
     /// group, and a heterogeneous `->` is admissible only under a pairwise mode). A group body
     /// *is* a `Module { group: Some }`, so it answers on the nearest opaque scope — a `Sig` or a
     /// plain `Module` (a group-less module nested inside a group body included) answers `None`.
-    pub fn nearest_group_context(&self) -> Option<Rc<OperatorGroup>> {
+    ///
+    /// A bare field read: the payload is already at the scope's own `'a`, so the answer is confined
+    /// to the region hosting the group scope by the borrow checker alone.
+    pub fn nearest_group_context(&self) -> Option<&'a OperatorGroup<'a>> {
         match self.nearest_opaque().map(|s| &s.kind) {
             Some(ScopeKind::Module {
                 group: Some(group), ..
-            }) => Some(Rc::clone(group)),
+            }) => Some(group),
             _ => None,
         }
     }

@@ -26,7 +26,7 @@
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::model::Part;
-use crate::machine::model::{binary_key, unary_key, FoldDirection, ReductionMode};
+use crate::machine::model::{binary_key, unary_key, FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId};
 use crate::scheduler::ResolvedDeps;
@@ -53,28 +53,63 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");
     let chain = ctx.chain_deref();
-    match s.resolve_operator_group_with_chain(probe, chain) {
+    match s.resolve_operator_group_delivered(probe, chain) {
         None => park_on_pending_operators(ctx, s, expr, idx, probe),
-        Some(group) => {
-            // Guard against a registry-build bug: a hit whose probe operators aren't all
-            // members surfaces as a clean cross-group non-match rather than a wrong fold.
+        Some(delivered) => {
+            // Everything the reducers need is read out inside the envelope's one open, so the
+            // record's own borrow never escapes and the envelope's pins drop before the reduce.
             let operators = chain_operators(expr);
-            if !group.covers(&operators) {
-                return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
+            match delivered.open(|group| ChainPlan::of(group, &operators)) {
+                // Guard against a registry-build bug: a hit whose probe operators aren't all
+                // members surfaces as a clean cross-group non-match rather than a wrong fold.
+                None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                     expr: expr.summarize(),
                     reason: cross_group_reason(probe),
-                })));
-            }
-            match group.mode() {
-                ReductionMode::FoldLeft => reduce_fold_left(ctx, expr),
-                ReductionMode::FoldRight => reduce_fold_right(ctx, expr),
-                ReductionMode::Unary => reduce_unary(ctx, expr),
-                ReductionMode::Pairwise {
+                }))),
+                Some(ChainPlan::FoldLeft) => reduce_fold_left(ctx, expr),
+                Some(ChainPlan::FoldRight) => reduce_fold_right(ctx, expr),
+                Some(ChainPlan::Unary) => reduce_unary(ctx, expr),
+                Some(ChainPlan::Pairwise {
                     combiner,
                     direction,
-                } => reduce_pairwise(ctx, expr, combiner.clone(), *direction),
+                }) => reduce_pairwise(ctx, expr, combiner, direction),
             }
         }
+    }
+}
+
+/// What a resolved group tells this arm to do, as owned data — the reduction mode with a pairwise
+/// combiner copied out of the region-hosted record. Read inside the delivery envelope's open, so the
+/// reducers run with nothing borrowed from the declaring region.
+enum ChainPlan {
+    FoldLeft,
+    FoldRight,
+    Unary,
+    Pairwise {
+        combiner: String,
+        direction: FoldDirection,
+    },
+}
+
+impl ChainPlan {
+    /// The plan for a chain naming `operators`, or `None` when the hit group does not cover them
+    /// all — a cross-group mix.
+    fn of(group: &OperatorGroup<'_>, operators: &[&str]) -> Option<ChainPlan> {
+        if !group.covers(operators) {
+            return None;
+        }
+        Some(match group.mode() {
+            ReductionMode::FoldLeft => ChainPlan::FoldLeft,
+            ReductionMode::FoldRight => ChainPlan::FoldRight,
+            ReductionMode::Unary => ChainPlan::Unary,
+            ReductionMode::Pairwise {
+                combiner,
+                direction,
+            } => ChainPlan::Pairwise {
+                combiner: combiner.to_string(),
+                direction,
+            },
+        })
     }
 }
 

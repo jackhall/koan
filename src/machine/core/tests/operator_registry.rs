@@ -1,37 +1,51 @@
 //! Tests for the per-scope operator registry —
 //! [`crate::machine::core::Bindings::lookup_operator_group`] and
-//! [`crate::machine::core::Scope::resolve_operator_group_with_chain`]. The registry
+//! [`crate::machine::core::Scope::resolve_operator_group_delivered`]. The registry
 //! parallels the function/type lookup layers: innermost visible registration wins,
 //! a cross-group or undeclared probe misses. Unlike the type and function layers the walk
 //! is innermost-*all-the-way*: the builtin groups seeded into the run-global root are
 //! found last, so a declaring scope overrides them.
+//!
+//! A registry entry is a sealed carrier over a region-hosted record, so every assertion that reads
+//! a resolved group does so inside the delivery envelope's own open — the record's borrow never
+//! leaves the region that hosts it.
 
-use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::builtins::test_support::{run_root_bare, TestRun};
 use crate::machine::core::{
-    program_storage, run_root_storage, BindingIndex, FrameStorageExt, Scope,
+    program_storage, run_root_storage, BindingIndex, CallFrame, FrameStorageExt, Scope,
+    SealedOperatorGroup,
 };
-use crate::machine::model::{probe_key, OperatorGroup, ReductionMode};
+use crate::machine::model::{probe_key, OperatorGroup, OperatorGroupFamily, ReductionMode};
+use crate::machine::DeliveredOperatorGroup;
 
-/// Arithmetic-shaped group: `+` and `-` fold left.
-fn arithmetic_group() -> OperatorGroup {
-    let members: HashSet<String> = ["+", "-"].iter().map(|s| s.to_string()).collect();
-    OperatorGroup::new(members, ReductionMode::FoldLeft)
+/// The declaration door a fixture takes: host the record in `scope`'s own region and seal it, which
+/// is what every registry entry for this declaration then holds a bit-copy of.
+fn declare<'a>(
+    scope: &'a Scope<'a>,
+    members: &[&str],
+    mode: ReductionMode<'_>,
+) -> SealedOperatorGroup {
+    scope.seal_resident::<OperatorGroupFamily>(OperatorGroup::alloc(scope.brand(), members, mode))
 }
 
-/// Single-member group over `sym`, in the given mode.
-fn singleton_group(sym: &str, mode: ReductionMode) -> OperatorGroup {
-    let members: HashSet<String> = [sym.to_string()].into_iter().collect();
-    OperatorGroup::new(members, mode)
+/// Arithmetic-shaped group: `+` and `-` fold left.
+fn arithmetic_group<'a>(scope: &'a Scope<'a>) -> SealedOperatorGroup {
+    declare(scope, &["+", "-"], ReductionMode::FoldLeft)
+}
+
+/// The address of the record a resolved envelope names — the identity every powerset key of one
+/// declaration shares, read out as a number so nothing borrowed escapes the open.
+fn record_address(delivered: &DeliveredOperatorGroup) -> usize {
+    delivered.open(|group| group as *const OperatorGroup<'_> as usize)
 }
 
 #[test]
 fn register_then_resolve_group_by_probe() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = Rc::new(arithmetic_group());
+    let group = arithmetic_group(scope);
     // A module registers the powerset; `probe_key` is the sorted-joined probe for a
     // chain mixing both operators — byte order sorts `+` before `-`.
     let key = probe_key(&["+", "-"]);
@@ -45,18 +59,20 @@ fn register_then_resolve_group_by_probe() {
         )
         .unwrap();
     let resolved = scope
-        .resolve_operator_group_with_chain(&key, None)
+        .resolve_operator_group_delivered(&key, None)
         .expect("registered probe resolves");
-    assert!(resolved.covers(&["+"]));
-    assert!(resolved.covers(&["-"]));
-    assert_eq!(resolved.mode(), &ReductionMode::FoldLeft);
+    assert!(resolved.open(|group| {
+        group.covers(&["+"])
+            && group.covers(&["-"])
+            && matches!(group.mode(), ReductionMode::FoldLeft)
+    }));
 }
 
 #[test]
 fn undeclared_probe_misses() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = Rc::new(arithmetic_group());
+    let group = arithmetic_group(scope);
     scope
         .register_operator_group_direct(
             "+".to_string(),
@@ -66,19 +82,19 @@ fn undeclared_probe_misses() {
         )
         .unwrap();
     // `*` was never registered.
-    assert!(scope.resolve_operator_group_with_chain("*", None).is_none());
+    assert!(scope.resolve_operator_group_delivered("*", None).is_none());
 }
 
 #[test]
 fn cross_group_probe_misses() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = Rc::new(arithmetic_group());
+    let group = arithmetic_group(scope);
     // Only the within-group subsets are registered.
     scope
         .register_operator_group_direct(
             "+".to_string(),
-            Rc::clone(&group),
+            group.duplicate(),
             BindingIndex::value(1),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -86,7 +102,7 @@ fn cross_group_probe_misses() {
     scope
         .register_operator_group_direct(
             "-".to_string(),
-            Rc::clone(&group),
+            group.duplicate(),
             BindingIndex::value(1),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -102,7 +118,7 @@ fn cross_group_probe_misses() {
     // A chain mixing `+` with an operator from a different (unregistered) group
     // produces the probe "+ |", which nothing registered — a clean miss.
     assert!(scope
-        .resolve_operator_group_with_chain("+ |", None)
+        .resolve_operator_group_delivered("+ |", None)
         .is_none());
 }
 
@@ -112,9 +128,8 @@ fn innermost_scope_shadows_outer() {
     let outer = run_root_bare(&region);
     let inner = region.brand().alloc_scope(outer.child_for_call());
 
-    let outer_group = Rc::new(arithmetic_group());
-    let inner_members: HashSet<String> = ["+"].iter().map(|s| s.to_string()).collect();
-    let inner_group = Rc::new(OperatorGroup::new(inner_members, ReductionMode::FoldRight));
+    let outer_group = arithmetic_group(outer);
+    let inner_group = declare(inner, &["+"], ReductionMode::FoldRight);
 
     outer
         .register_operator_group_direct(
@@ -135,22 +150,22 @@ fn innermost_scope_shadows_outer() {
 
     // The inner registration wins the chain walk.
     let resolved = inner
-        .resolve_operator_group_with_chain("+", None)
+        .resolve_operator_group_delivered("+", None)
         .expect("inner registration resolves");
-    assert_eq!(resolved.mode(), &ReductionMode::FoldRight);
+    assert!(resolved.open(|group| matches!(group.mode(), ReductionMode::FoldRight)));
 
     // From the outer scope, only the outer registration is visible.
     let outer_resolved = outer
-        .resolve_operator_group_with_chain("+", None)
+        .resolve_operator_group_delivered("+", None)
         .expect("outer registration resolves");
-    assert_eq!(outer_resolved.mode(), &ReductionMode::FoldLeft);
+    assert!(outer_resolved.open(|group| matches!(group.mode(), ReductionMode::FoldLeft)));
 }
 
 #[test]
 fn visibility_cutoff_hides_later_sibling_registration() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = Rc::new(arithmetic_group());
+    let group = arithmetic_group(scope);
     scope
         .register_operator_group_direct(
             "+".to_string(),
@@ -173,11 +188,25 @@ fn visibility_cutoff_hides_later_sibling_registration() {
 
 #[test]
 fn covers_gates_subset_membership() {
-    let group = arithmetic_group();
+    let region = run_root_storage();
+    let scope = run_root_bare(&region);
+    let group = OperatorGroup::alloc(scope.brand(), &["+", "-"], ReductionMode::FoldLeft);
     assert!(group.covers(&["+", "-"]));
     assert!(group.covers(&["+"]));
     // `*` is not a member.
     assert!(!group.covers(&["+", "*"]));
+}
+
+/// The member slice is sorted and deduped at the allocation door, whatever order (and however many
+/// repeats) the declaration hands in — the invariant `covers`' binary search reads.
+#[test]
+fn alloc_sorts_and_dedups_the_member_slice() {
+    let region = run_root_storage();
+    let scope = run_root_bare(&region);
+    let group = OperatorGroup::alloc(scope.brand(), &["-", "+", "-"], ReductionMode::FoldLeft);
+    let members: Vec<&str> = group.member_operators().collect();
+    assert_eq!(members, ["+", "-"]);
+    assert!(group.covers(&["-", "+"]));
 }
 
 /// A scope may register a probe the builtins already claim (`+`): the walk is innermost-wins,
@@ -191,7 +220,7 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
     let root = test_run.scope;
     let inner = region.brand().alloc_scope(root.child_for_call());
 
-    let group = Rc::new(singleton_group("+", ReductionMode::FoldRight));
+    let group = declare(inner, &["+"], ReductionMode::FoldRight);
     inner
         .register_operator_group_direct(
             "+".to_string(),
@@ -202,34 +231,37 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
         .expect("a builtin probe is shadowable, not a rebind");
 
     let inside = inner
-        .resolve_operator_group_with_chain("+", None)
+        .resolve_operator_group_delivered("+", None)
         .expect("the inner registration resolves");
-    assert_eq!(inside.mode(), &ReductionMode::FoldRight);
+    assert!(inside.open(|group| matches!(group.mode(), ReductionMode::FoldRight)));
 
     let outside = root
-        .resolve_operator_group_with_chain("+", None)
+        .resolve_operator_group_delivered("+", None)
         .expect("the root's builtin additive group resolves");
-    assert_eq!(outside.mode(), &ReductionMode::FoldLeft);
-    assert!(
-        outside.covers(&["+", "-"]),
-        "outside the declaring scope the builtin additive group stands"
-    );
+    assert!(outside.open(|group| {
+        matches!(group.mode(), ReductionMode::FoldLeft) && group.covers(&["+", "-"])
+    }));
 }
 
-/// Upsert: re-registering a probe with an equal record — a distinct `Rc` carrying the same
-/// mode and member set — is a no-op, so two `OP` statements over one symbol (two bucket overloads,
-/// one registry entry) do not collide.
+/// Upsert: re-registering a probe with an equal record is a no-op — the same address on the cheap
+/// arm, and a **separately allocated** record of equal mode + member set on the structural arm, so
+/// two `OP` statements over one symbol (two bucket overloads, one registry entry) do not collide.
 #[test]
 fn re_registering_an_equal_record_is_a_no_op() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
 
-    let first = Rc::new(singleton_group("+", ReductionMode::FoldLeft));
-    let second = Rc::new(singleton_group("+", ReductionMode::FoldLeft));
+    let first = declare(scope, &["+"], ReductionMode::FoldLeft);
+    let second = declare(scope, &["+"], ReductionMode::FoldLeft);
+    assert_ne!(
+        record_address(&scope.lift_resident(first.duplicate())),
+        record_address(&scope.lift_resident(second.duplicate())),
+        "two declarations allocate two records, so the structural arm is what admits the second",
+    );
     scope
         .register_operator_group_direct(
             "+".to_string(),
-            Rc::clone(&first),
+            first.duplicate(),
             BindingIndex::value(1),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -241,7 +273,7 @@ fn re_registering_an_equal_record_is_a_no_op() {
             BindingIndex::value(2),
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("an `Rc`-identical re-register is idempotent");
+        .expect("an address-identical re-register is idempotent");
     scope
         .register_operator_group_direct(
             "+".to_string(),
@@ -249,7 +281,7 @@ fn re_registering_an_equal_record_is_a_no_op() {
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("an equal mode + member set is the same record");
+        .expect("an equal mode + member set is the same declaration");
 
     // The first registration's index stands, so the entry stays visible where it was declared.
     assert!(scope
@@ -265,8 +297,8 @@ fn re_registering_a_conflicting_mode_errors() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
 
-    let fold = Rc::new(singleton_group("+", ReductionMode::FoldLeft));
-    let unary = Rc::new(singleton_group("+", ReductionMode::Unary));
+    let fold = declare(scope, &["+"], ReductionMode::FoldLeft);
+    let unary = declare(scope, &["+"], ReductionMode::Unary);
     scope
         .register_operator_group_direct(
             "+".to_string(),
@@ -301,7 +333,7 @@ fn using_window_surfaces_the_modules_operator_group() {
     let module = region
         .brand()
         .alloc_scope(Scope::child_under_module(root, "vec_ops".to_string()));
-    let group = Rc::new(singleton_group("+", ReductionMode::FoldRight));
+    let group = declare(module, &["+"], ReductionMode::FoldRight);
     module
         .register_operator_group_direct(
             "+".to_string(),
@@ -312,25 +344,26 @@ fn using_window_surfaces_the_modules_operator_group() {
         .unwrap();
 
     // Outside the module the probe is undeclared.
-    assert!(root.resolve_operator_group_with_chain("+", None).is_none());
+    assert!(root.resolve_operator_group_delivered("+", None).is_none());
 
     // `USING vec_ops SCOPE (…)`: the window borrows the module's façade over the call site.
     let window = region
         .brand()
         .alloc_scope(Scope::child_transparent(root, module.bindings()));
     let resolved = window
-        .resolve_operator_group_with_chain("+", None)
+        .resolve_operator_group_delivered("+", None)
         .expect("the window surfaces the module's registry entry");
-    assert_eq!(resolved.mode(), &ReductionMode::FoldRight);
+    assert!(resolved.open(|group| matches!(group.mode(), ReductionMode::FoldRight)));
 }
 
-/// `register_group_under_all_subsets` installs one entry per nonempty subset, all pointing at the
-/// one record, so any probe drawn from the member set resolves the same group.
+/// `register_group_under_all_subsets` installs one entry per nonempty subset, all naming the one
+/// record, so any probe drawn from the member set resolves the same group — by **address**, which
+/// is what one allocation behind the whole powerset buys.
 #[test]
 fn subset_registration_covers_every_probe_of_the_member_set() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = Rc::new(arithmetic_group());
+    let group = arithmetic_group(scope);
     scope
         .register_group_under_all_subsets_direct(
             &["+", "-"],
@@ -340,15 +373,102 @@ fn subset_registration_covers_every_probe_of_the_member_set() {
         )
         .unwrap();
 
+    let mut addresses = Vec::new();
     for probe in ["+", "-", "+ -"] {
-        assert!(
-            scope
-                .resolve_operator_group_with_chain(probe, None)
-                .is_some(),
-            "the probe `{probe}` must resolve the registered group"
-        );
+        let resolved = scope
+            .resolve_operator_group_delivered(probe, None)
+            .unwrap_or_else(|| panic!("the probe `{probe}` must resolve the registered group"));
+        addresses.push(record_address(&resolved));
     }
+    assert!(
+        addresses.windows(2).all(|pair| pair[0] == pair[1]),
+        "every powerset key names the one record: {addresses:?}",
+    );
     assert_eq!(probe_key(&["-", "+", "-"]), "+ -");
+}
+
+/// Miri slate: the record dies with its declaring **region**, and nothing but a live carrier keeps
+/// it. A group is declared into a per-call frame's own region, resolved one region down, and the
+/// declaring frame's shell is dropped outright — the envelope's coverage (the `Weak → Rc` upgrade
+/// the lift performed at the declaring scope) is the only thing left holding that region, so
+/// reading the record afterwards is a use-after-free the instant the lift under-retains. With the
+/// envelope gone the region frees whole, bump-hosted record included: there is no refcount that
+/// could outlive it, which is what makes a dead scope's group unreachable rather than stale.
+#[test]
+fn resolved_group_survives_the_declaring_frames_shell_drop() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let test_run = TestRun::silent(&program, &region);
+    let root = test_run.scope;
+
+    let declaring: Rc<CallFrame> = CallFrame::new(root);
+    let envelope: DeliveredOperatorGroup = declaring.with_scope(|scope| {
+        let group = declare(scope, &["≺"], ReductionMode::FoldRight);
+        scope
+            .register_operator_group_direct(
+                "≺".to_string(),
+                group,
+                BindingIndex::value(0),
+                &mut crate::machine::WriteGate::for_test(),
+            )
+            .expect("the declaring scope owns the probe");
+        // The reading chain sits one region further down, so the hit is an ancestor's and the lift
+        // happens at the declaring scope.
+        let reader: Rc<CallFrame> = CallFrame::new(scope);
+        reader.with_scope(|chain_scope| {
+            chain_scope
+                .resolve_operator_group_delivered("≺", None)
+                .expect("the declaring frame's registration resolves one region down")
+        })
+    });
+
+    drop(declaring);
+
+    assert!(
+        envelope.open(|group| {
+            group.covers(&["≺"]) && matches!(group.mode(), ReductionMode::FoldRight)
+        }),
+        "the envelope's coverage keeps the declaring region alive across its frame's drop",
+    );
+}
+
+/// The reach a resolved carrier records is the **declaring** scope's region, not the reader's: a
+/// chain in a per-call frame resolves an ancestor's group through an envelope whose host is the
+/// ancestor's region, so the record stays covered for as long as the envelope lives.
+#[test]
+fn resolved_carrier_reaches_the_declaring_ancestors_region() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let test_run = TestRun::silent(&program, &region);
+    let ancestor = test_run.scope;
+
+    let group = declare(ancestor, &["~"], ReductionMode::FoldLeft);
+    ancestor
+        .register_operator_group_direct(
+            "~".to_string(),
+            group,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
+        .unwrap();
+
+    // A per-call frame opens its own region; the group was declared one region up.
+    let frame: Rc<CallFrame> = CallFrame::new(ancestor);
+    frame.with_scope(|inner| {
+        assert!(
+            !std::ptr::eq(inner.region(), ancestor.region()),
+            "the frame child must open its own region for the assertion to say anything",
+        );
+        let resolved = inner
+            .resolve_operator_group_delivered("~", None)
+            .expect("the ancestor's registration resolves from the frame child");
+        assert!(
+            resolved
+                .open_at()
+                .with_home_region(|home| std::ptr::eq(home, ancestor.region())),
+            "the envelope's host is the region that hosts the record",
+        );
+    });
 }
 
 /// The group context an `OP` declaration reads: a `GROUP` body answers with its own record even
@@ -358,25 +478,24 @@ fn subset_registration_covers_every_probe_of_the_member_set() {
 fn nearest_group_context_stops_at_a_plain_module() {
     let region = run_root_storage();
     let root = run_root_bare(&region);
-    let group = Rc::new(arithmetic_group());
+    let group = OperatorGroup::alloc(root.brand(), &["+", "-"], ReductionMode::FoldLeft);
 
     assert!(root.nearest_group_context().is_none());
 
-    let group_scope = region.brand().alloc_scope(Scope::child_under_group(
-        root,
-        "vec_ops".to_string(),
-        Rc::clone(&group),
-    ));
+    let group_scope =
+        region
+            .brand()
+            .alloc_scope(Scope::child_under_group(root, "vec_ops".to_string(), group));
     let in_group = group_scope
         .nearest_group_context()
         .expect("a GROUP body is its own group context");
-    assert!(Rc::ptr_eq(&in_group, &group));
+    assert!(std::ptr::eq(in_group, group));
 
     // An anonymous frame inside the body (a block, a per-call scope) is transparent.
     let block = region.brand().alloc_scope(group_scope.child_for_call());
     assert!(block
         .nearest_group_context()
-        .is_some_and(|g| Rc::ptr_eq(&g, &group)));
+        .is_some_and(|g| std::ptr::eq(g, group)));
 
     // A plain module declared inside the group body is not a group.
     let nested_module = region

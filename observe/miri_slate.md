@@ -116,11 +116,19 @@ group just to silence the stale-anchor check.
   `Owned` reach verdict names no region, so the door must re-bump the bytes at the destination or
   the cell points into a region nothing pins. No residence audit can catch that — the bump keeps no
   address table — which leaves tree borrows as the only check.
+- `src/machine/model/operators.rs` — the `OperatorGroup` record is bump-hosted `Copy` data and its
+  `reattachable!` layout-invariance audit lives once in `witnessed.rs`, so operators.rs carries no
+  `unsafe` of its own. The group pins a shape no other slate test covers: a **`Drop`-free
+  bump-hosted record** reached only through a reference-only carrier stored in a binding table,
+  whose sole liveness is the lift's `Weak → Rc` upgrade at the *declaring* scope. The `KFunction`
+  carrier tests pin a region-checked `alloc_resident` value with an invariant `&'a Scope<'a>` field;
+  the region-pure scalar test pins a value in the reader's own region. Neither exercises a table
+  entry whose pointee lives in an ancestor region with no refcount anywhere in the picture.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
 
-52 tests, grouped by the unsafe site each pins down. Names below are the exact
+53 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 21 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -690,6 +698,20 @@ whitelist entry).
 - `aggregate_of_plain_record_results_releases_every_producer_frame`
 - `record_seam_pin_verb_shares_substrate_and_survives_producer_free`
 
+**Operator-group record — bump-hosted registry entry outliving its declaring frame's shell**
+([src/machine/model/operators.rs](../src/machine/model/operators.rs)) — an `OperatorGroup` is
+`Copy`, `Drop`-free data bumped into the declaring scope's region, and the `operators` table holds
+it as a reference-only `Sealed<OperatorGroupFamily, _>`. Nothing refcounts the record: a registry
+entry owns nothing, so the only thing standing between a resolved group and a use-after-free is the
+`Weak → Rc` upgrade the lift performs **at the declaring scope**, whose coverage rides the delivery
+envelope. The test declares a group into a per-call frame's own region, resolves it one region
+further down (so the hit is an ancestor's), drops the declaring frame's shell outright, and reads
+the record back — a use-after-free under tree borrows the instant the lift retains the reader's
+region instead of the declaring one, and a leak at process exit if the envelope's coverage
+strong-chains the region it lives in.
+
+- `resolved_group_survives_the_declaring_frames_shell_drop`
+
 ## Adding tests to the slate
 
 Add a test to the slate when a new unsafe site lands — a transmute, raw-pointer
@@ -710,9 +732,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-02: 2240s — 53 tests, 0 leaks, 0 UB
 - 2026-08-02: 2225s — 52 tests, 0 leaks, 0 UB
 - 2026-08-02: 2156s — 51 tests, 0 leaks, 0 UB
 - 2026-08-01: 2133s — 50 tests, 0 leaks, 0 UB
 - 2026-08-01: 2105s — 50 tests, 0 leaks, 0 UB
-- 2026-07-31: 2200s — 50 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

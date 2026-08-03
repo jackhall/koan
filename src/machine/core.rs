@@ -28,7 +28,8 @@ pub use bindings::{
 };
 pub(crate) use carrier_witness::{product_reaches_region, read_resting, OverloadSeal};
 pub use carrier_witness::{
-    CarrierWitness, DeliveredCarried, OpenedFunction, SealedFunction, SplicedCell,
+    CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, OpenedFunction, SealedFunction,
+    SealedOperatorGroup, SplicedCell,
 };
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};

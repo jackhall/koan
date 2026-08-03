@@ -14,15 +14,13 @@
 //!
 //! [`register_builtin_operator_groups`] seeds the three builtin operator groups these
 //! bodies serve: comparison (pairwise, combined by `AND`), additive, and multiplicative
-//! (both fold-left). The registry record is member set + mode only — see
+//! (both fold-left). A registry record is member set + mode only — see
 //! [`crate::machine::model::operators`] — so seeding is a separate step from registering
 //! the per-operator bodies above.
 
 use crate::machine::WriteGate;
-use std::collections::HashSet;
-use std::rc::Rc;
 
-use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::model::{FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode};
 use crate::machine::model::{Held, KObject, KType, Record, TypeRegistry};
 use crate::machine::BindingIndex;
 use crate::machine::{arg_object, Action, BodyCtx};
@@ -198,10 +196,10 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 }
 
 /// Seeds the three builtin operator groups: comparison (`< <= > >=`, pairwise, combined by
-/// `AND`), additive (`+ -`, fold-left), and multiplicative (`* /`, fold-left). Each group is
-/// built once and registered — through [`Scope::register_group_under_all_subsets`] — under
-/// every nonempty subset of its member set, so any chain probe drawn from that set resolves to
-/// the same shared record.
+/// `AND`), additive (`+ -`, fold-left), and multiplicative (`* /`, fold-left). Each group's record
+/// is allocated once and registered — through [`Scope::register_group_under_all_subsets_direct`] —
+/// under every nonempty subset of its member set, so any chain probe drawn from that set resolves
+/// to the same record by address.
 ///
 /// These seeds land in the run-global root, which the innermost-wins registry walk reaches last:
 /// they are the defaults a declaring scope may override, not unshadowable claims on the symbols.
@@ -214,53 +212,27 @@ pub fn register_builtin_operator_groups<'a>(
     _types: &TypeRegistry,
     gate: &mut WriteGate,
 ) {
-    let comparison_operators = ["<", "<=", ">", ">="];
-    let comparison_members: HashSet<String> =
-        comparison_operators.iter().map(|s| s.to_string()).collect();
-    let comparison_group = Rc::new(OperatorGroup::new(
-        comparison_members,
-        ReductionMode::Pairwise {
-            combiner: "AND".to_string(),
-            direction: FoldDirection::Left,
-        },
-    ));
-    seed(scope, &comparison_operators, &comparison_group, gate);
-
-    let additive_operators = ["+", "-"];
-    let additive_members: HashSet<String> =
-        additive_operators.iter().map(|s| s.to_string()).collect();
-    let additive_group = Rc::new(OperatorGroup::new(
-        additive_members,
-        ReductionMode::FoldLeft,
-    ));
-    seed(scope, &additive_operators, &additive_group, gate);
-
-    let multiplicative_operators = ["*", "/"];
-    let multiplicative_members: HashSet<String> = multiplicative_operators
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    let multiplicative_group = Rc::new(OperatorGroup::new(
-        multiplicative_members,
-        ReductionMode::FoldLeft,
-    ));
     seed(
         scope,
-        &multiplicative_operators,
-        &multiplicative_group,
+        &["<", "<=", ">", ">="],
+        ReductionMode::Pairwise {
+            combiner: "AND",
+            direction: FoldDirection::Left,
+        },
         gate,
     );
+    seed(scope, &["+", "-"], ReductionMode::FoldLeft, gate);
+    seed(scope, &["*", "/"], ReductionMode::FoldLeft, gate);
 }
 
-/// One builtin seed: the group's powerset keys, at [`BindingIndex::BUILTIN`].
-fn seed<'a>(
-    scope: &'a Scope<'a>,
-    members: &[&str],
-    group: &Rc<OperatorGroup>,
-    gate: &mut WriteGate,
-) {
+/// One builtin seed: the group record in the root's own region, then its powerset keys at
+/// [`BindingIndex::BUILTIN`]. The root's region is the eternal tier, so a builtin group outlives
+/// every per-call region and an inner scope's resolved carrier names an ordinary foreign member.
+fn seed<'a>(scope: &'a Scope<'a>, members: &[&str], mode: ReductionMode<'_>, gate: &mut WriteGate) {
+    let record = OperatorGroup::alloc(scope.brand(), members, mode);
+    let sealed = scope.seal_resident::<OperatorGroupFamily>(record);
     scope
-        .register_group_under_all_subsets_direct(members, group, BindingIndex::BUILTIN, gate)
+        .register_group_under_all_subsets_direct(members, &sealed, BindingIndex::BUILTIN, gate)
         .expect("builtin operator-group seeding must not collide");
 }
 

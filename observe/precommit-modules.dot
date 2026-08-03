@@ -825,6 +825,7 @@ digraph {
     "koan::machine::model::binder" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::parse" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::operators" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::ktraits" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::core" [label="uses", style="dashed"];

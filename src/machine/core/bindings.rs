@@ -36,7 +36,7 @@
 //! mark a genuine builtin for the no-shadow and root-first consults. The operator
 //! registry takes no such consult: its walk is innermost-wins, so the root's builtin
 //! groups are found last and act as defaults (see
-//! [`crate::machine::core::Scope::resolve_operator_group_with_chain`]).
+//! [`crate::machine::core::Scope::resolve_operator_group_delivered`]).
 //!
 //! Production reads use the visibility-aware [`Bindings::lookup_value`] /
 //! [`Bindings::lookup_type`] / [`Bindings::lookup_function`], passing a
@@ -49,9 +49,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::carrier_witness::{OverloadSeal, SealedFunction};
+use crate::machine::core::carrier_witness::{OverloadSeal, SealedFunction, SealedOperatorGroup};
 use crate::machine::core::kfunction::NodeId;
-use crate::machine::core::RunId;
+use crate::machine::core::{FrameStorage, RunId};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DispatchToken;
 use crate::machine::model::OperatorGroup;
@@ -164,6 +164,19 @@ impl FunctionBucketEntry {
             sealed: self.sealed.duplicate(),
         }
     }
+}
+
+/// One operator-registry entry: its lexical [`BindingIndex`] and the dormant
+/// [`SealedOperatorGroup`] carrier of the group record the probe key resolves to.
+///
+/// The same shape [`DataEntry`] takes, and for the same reason: the entry owns nothing. The record
+/// lives in the declaring scope's region bump and the regions its reach names are held by that
+/// region's union bundle, so the entry is `Copy`-cheap to read out, carries no `Drop`, and dies
+/// with the region that hosts what it names — a group whose declaring region has died is
+/// unreachable rather than kept alive by a stray refcount.
+pub(crate) struct OperatorEntry {
+    index: BindingIndex,
+    sealed: SealedOperatorGroup,
 }
 
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature
@@ -293,13 +306,15 @@ struct Tables {
     /// earliest-index visible one. On finalize only that entry is removed;
     /// other siblings remain as wake sources.
     pending_overloads: HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>,
-    /// Per-scope operator registry: a chain's sorted-joined operator probe key →
-    /// the shared [`OperatorGroup`] it resolves to. A module installs one record per
-    /// size-≥2 subset of its declared operators (the per-group powerset), each subset
-    /// key holding an `Rc` clone of the same group, so any subset used in one
-    /// expression resolves in a single hit and a cross-group mix simply misses.
-    /// Walked through the scope chain like every other name (innermost visible wins).
-    operators: HashMap<String, (Rc<OperatorGroup>, BindingIndex)>,
+    /// Per-scope operator registry: a chain's sorted-joined operator probe key → the dormant
+    /// [`SealedOperatorGroup`] carrier of the group it resolves to, beside its lexical
+    /// [`BindingIndex`] ([`OperatorEntry`] — the `data`/`functions` entry shape). A module installs
+    /// one entry per nonempty subset of its declared operators (the per-group powerset), each
+    /// subset key holding a bit-copy of the same seal over the same region-hosted record, so any
+    /// subset used in one expression resolves in a single hit, a cross-group mix simply misses, and
+    /// the whole install allocates nothing past its probe keys. Walked through the scope chain like
+    /// every other name (innermost visible wins).
+    operators: HashMap<String, OperatorEntry>,
 }
 
 /// One scope's bindings: the six maps under a single [`RefCell`], and nothing else.
@@ -471,35 +486,44 @@ impl Bindings {
         &self,
         probe: &str,
         chain_cutoff: Option<usize>,
-    ) -> Option<Rc<OperatorGroup>> {
+    ) -> Option<SealedOperatorGroup> {
         let tables = self.tables.borrow();
-        let (group, idx) = tables.operators.get(probe)?;
-        if Self::visible(*idx, chain_cutoff) {
-            Some(Rc::clone(group))
-        } else {
-            None
-        }
+        let entry = tables.operators.get(probe)?;
+        Self::visible(entry.index, chain_cutoff).then(|| entry.sealed.duplicate())
     }
 
     /// Register `probe → group` in the operator registry. The `OP` / `GROUP` binder
-    /// installs one entry per nonempty subset of the declared operators (all `Rc` clones of
-    /// the same `group`); test fixtures register the subsets they exercise.
+    /// installs one entry per nonempty subset of the declared operators (all bit-copies of the same
+    /// seal over one record); test fixtures register the subsets they exercise.
     ///
-    /// Upsert: an existing entry whose record is the one being registered — the same `Rc`,
-    /// or an equal mode + member set (two `OP` statements over the same symbol and distinct
-    /// operand types are two bucket overloads but one registry entry) — is a silent no-op,
-    /// keeping the first entry's index. A record that disagrees is a chaining-mode
+    /// Upsert: an existing entry whose record is the one being registered — the same address, or an
+    /// equal mode + member set (two `OP` statements over the same symbol and distinct operand types
+    /// are two bucket overloads but one registry entry, and each builds its own record) — is a
+    /// silent no-op, keeping the first entry's index. A record that disagrees is a chaining-mode
     /// conflict on `probe`: the same scope cannot say the symbol both folds and pairs.
+    ///
+    /// Both records are read under `pin`, the write scope's own region owner. That covers them
+    /// because a scope's operator entries are written only by declarations at that scope, whose
+    /// records [`OperatorGroup::alloc`](crate::machine::model::OperatorGroup::alloc) placed in that
+    /// scope's own region — a `USING` window forwards its writes to the call site, which is
+    /// same-region with the window.
     pub(crate) fn write_operator_group(
         &self,
         probe: String,
-        group: Rc<OperatorGroup>,
+        group: SealedOperatorGroup,
         index: BindingIndex,
+        pin: &Rc<FrameStorage>,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
-        if let Some((existing, _)) = tables.operators.get(&probe) {
-            if Rc::ptr_eq(existing, &group) || **existing == *group {
+        if let Some(entry) = tables.operators.get(&probe) {
+            let agrees = entry.sealed.open_with(pin, |current| {
+                group.open_with(pin, |incoming| {
+                    std::ptr::eq::<OperatorGroup<'_>>(current, incoming)
+                        || current.same_declaration(incoming)
+                })
+            });
+            if agrees {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::ShapeError(format!(
@@ -507,7 +531,13 @@ impl Bindings {
                  chaining mode or member set; one scope declares one chaining mode per operator",
             ))));
         }
-        tables.operators.insert(probe, (group, index));
+        tables.operators.insert(
+            probe,
+            OperatorEntry {
+                index,
+                sealed: group,
+            },
+        );
         Ok(())
     }
 

@@ -7,13 +7,10 @@
 //! observable: over `10 % 4 % 1 % 0` the three pairs are `14`, `5`, `1`, which fold left to
 //! `(14 - 5) - 1` = 8 and right to `14 - (5 - 1)` = 10.
 
-use std::collections::HashSet;
-use std::rc::Rc;
-
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
-use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::model::{FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode};
 use crate::machine::BindingIndex;
 
 /// Registers the `%` pairwise group in the given mode, the `%` pair body (a sum), and the `MINUS`
@@ -27,18 +24,18 @@ fn register_pairwise_fixture<'a>(
     direction: FoldDirection,
 ) {
     let scope = test_run.scope;
-    let members: HashSet<String> = ["%"].iter().map(|s| s.to_string()).collect();
-    let group = Rc::new(OperatorGroup::new(
-        members,
+    let record = OperatorGroup::alloc(
+        scope.brand(),
+        &["%"],
         ReductionMode::Pairwise {
-            combiner: combiner.to_string(),
+            combiner,
             direction,
         },
-    ));
+    );
     scope
         .register_operator_group_direct(
             "%".to_string(),
-            group,
+            scope.seal_resident::<OperatorGroupFamily>(record),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
