@@ -864,7 +864,8 @@ fn operator_chain_undeclared_errors_cleanly() {
 /// reduction, not which body runs.
 #[test]
 fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
-    use crate::machine::model::{OperatorGroup, OperatorGroupFamily, ReductionMode};
+    use crate::machine::model::{OperatorGroup, ReductionMode};
+    use crate::machine::GroupSeal;
 
     let program = program_storage();
     let region = run_root_storage();
@@ -877,7 +878,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     inner
         .register_operator_group_direct(
             "-".to_string(),
-            inner.seal_resident::<OperatorGroupFamily>(record),
+            GroupSeal::of_resident(inner, record),
             BindingIndex::value(0),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -926,7 +927,8 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
 /// proving the "unary prefix and infix coincide" direction end-to-end.
 #[test]
 fn operator_chain_registered_unary_group_hands_body_the_list() {
-    use crate::machine::model::{OperatorGroup, OperatorGroupFamily, ReductionMode};
+    use crate::machine::model::{OperatorGroup, ReductionMode};
+    use crate::machine::GroupSeal;
 
     let program = program_storage();
     let region = run_root_storage();
@@ -937,7 +939,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     scope
         .register_operator_group_direct(
             "~".to_string(),
-            scope.seal_resident::<OperatorGroupFamily>(record),
+            GroupSeal::of_resident(scope, record),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )

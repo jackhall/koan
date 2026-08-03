@@ -21,7 +21,7 @@
 //! mint of the same gate.
 
 use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
-use crate::machine::core::carrier_witness::{OverloadSeal, SealedOperatorGroup};
+use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{probe_key, KType};
 
@@ -67,12 +67,14 @@ pub(crate) enum WriteOp {
         policy: TypeWritePolicy,
         builtin_shadow_guard: bool,
     },
-    /// One operator-registry entry — one op per probe key, so the per-group powerset expansion
-    /// happens where the ops are built and apply stays dumb. The group rides as its dormant
-    /// carrier, which is `Copy` and lifetime-free, so a `WriteOp` still names no region borrow.
+    /// One operator-group registration, carrying every probe key it installs under — the per-group
+    /// powerset expansion happens where the op is built ([`powerset_probes`]) and apply stays a
+    /// loop. One op rather than one per key so the declaration's identity data is built once for
+    /// the whole install, not cloned per subset. The group rides as its seal-time bundle, which is
+    /// lifetime-free, so a `WriteOp` still names no region borrow.
     Group {
-        probe: String,
-        group: SealedOperatorGroup,
+        probes: Vec<String>,
+        seal: GroupSeal,
         index: BindingIndex,
     },
     /// A `VAL` slot into the nearest enclosing SIG decl scope's slot collector. A slot is a schema
@@ -129,14 +131,15 @@ impl WriteOp {
                 target.bindings().write_type(&name, kt, site, policy, gate)
             }
             WriteOp::Group {
-                probe,
-                group,
+                probes,
+                seal,
                 index,
             } => {
-                let target = scope.write_scope();
-                target
-                    .bindings()
-                    .write_operator_group(probe, group, index, &target.home(), gate)
+                let bindings = scope.write_scope().bindings();
+                for probe in probes {
+                    bindings.write_operator_group(probe, &seal, index, gate)?;
+                }
+                Ok(())
             }
             WriteOp::SigSlot { name, kt } => scope.write_sig_slot(name, kt),
         }
@@ -158,19 +161,15 @@ fn value_write_target<'s, 'a>(scope: &'s Scope<'a>, name: &str) -> Result<&'s Sc
     Ok(scope.write_scope())
 }
 
-/// One [`WriteOp::Group`] per nonempty subset of `members`, all naming the same `group` — the
-/// powerset-key story [`crate::machine::model::operators`] describes, shared by the builtin seeds,
-/// the `GROUP` binder and the `OP` declaration. `members.len()` stays small, so the `2^n - 1`
-/// bitmask walk is cheap; each subset's key is derived through [`probe_key`] rather than
-/// hand-enumerated, so a registration key always agrees with a real chain's probe.
+/// The probe key of every nonempty subset of `members` — the powerset-key story
+/// [`crate::machine::model::operators`] describes, shared by the builtin seeds, the `GROUP` binder
+/// and the `OP` declaration. `members.len()` stays small, so the `2^n - 1` bitmask walk is cheap;
+/// each subset's key is derived through [`probe_key`] rather than hand-enumerated, so a
+/// registration key always agrees with a real chain's probe.
 ///
-/// Every op carries a bit-copy of one seal over one region-hosted record, so the whole expansion
-/// allocates nothing but its probe keys.
-pub(crate) fn operator_group_ops(
-    members: &[&str],
-    group: &SealedOperatorGroup,
-    index: BindingIndex,
-) -> Vec<WriteOp> {
+/// One region-hosted record backs every key, so past these strings the whole install allocates
+/// nothing.
+pub(crate) fn powerset_probes(members: &[&str]) -> Vec<String> {
     let subset_count = 1usize << members.len();
     (1..subset_count)
         .map(|mask| {
@@ -180,11 +179,7 @@ pub(crate) fn operator_group_ops(
                 .filter(|(bit, _)| mask & (1 << bit) != 0)
                 .map(|(_, op)| *op)
                 .collect();
-            WriteOp::Group {
-                probe: probe_key(&subset),
-                group: group.duplicate(),
-                index,
-            }
+            probe_key(&subset)
         })
         .collect()
 }

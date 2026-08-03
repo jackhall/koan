@@ -44,7 +44,7 @@ impl<'a> Scope<'a> {
     /// scope can run. Stated once here for the whole reach cluster;
     /// [`scope_frame`](crate::machine::core::scope_frame) is the crate-wide twin, which spells the
     /// same invariant out against the step context.
-    pub(crate) fn home(&self) -> Rc<FrameStorage> {
+    fn home(&self) -> Rc<FrameStorage> {
         self.region_owner()
             .upgrade()
             .expect("a live scope reference implies a live region owner")

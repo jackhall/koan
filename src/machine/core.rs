@@ -26,7 +26,7 @@ pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
     NodeHandle, WriteGate,
 };
-pub(crate) use carrier_witness::{product_reaches_region, read_resting, OverloadSeal};
+pub(crate) use carrier_witness::{product_reaches_region, read_resting, GroupSeal, OverloadSeal};
 pub use carrier_witness::{
     CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, OpenedFunction, SealedFunction,
     SealedOperatorGroup, SplicedCell,

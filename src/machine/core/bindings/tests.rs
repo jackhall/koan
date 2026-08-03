@@ -1,6 +1,8 @@
 //! Unit coverage for the `types` map write primitive `write_type`, plus the cross-kind
 //! exclusion that makes the `data`/`types` partition structural (no name in both).
 
+use std::rc::Rc;
+
 use super::*;
 use crate::machine::core::arena::RegionBrand;
 use crate::machine::core::arena::{run_root_storage, FrameStorageExt};

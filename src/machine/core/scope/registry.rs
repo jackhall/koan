@@ -18,13 +18,13 @@
 //! Split out of the parent `scope` module.
 
 use super::{Scope, ScopeKind};
-use crate::machine::core::bindings::operator_group_ops;
+use crate::machine::core::bindings::powerset_probes;
 use crate::machine::core::bindings::{
     BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
 };
-use crate::machine::core::carrier_witness::{OverloadSeal, SealedOperatorGroup};
+use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
-use crate::machine::model::{Carried, KObject, OperatorGroup, OperatorGroupFamily, ReductionMode};
+use crate::machine::model::{Carried, KObject, OperatorGroup, ReductionMode};
 use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
@@ -247,17 +247,21 @@ impl<'a> Scope<'a> {
             .install_pending_overload(bucket, idx, index, gate)
     }
 
-    /// Construction-time single-probe operator-registry write.
-    pub fn register_operator_group_direct(
+    /// Construction-time single-probe operator-registry write. Test affordance: production
+    /// registers a whole declaration at once ([`Self::register_group_under_all_subsets_direct`], or
+    /// a [`WriteOp::Group`] riding an `OP` declaration's step outcome), so a lone probe key is a
+    /// shape only an assertion suite builds.
+    #[cfg(test)]
+    pub(crate) fn register_operator_group_direct(
         &self,
         probe: String,
-        group: SealedOperatorGroup,
+        seal: GroupSeal,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Group {
-            probe,
-            group,
+            probes: vec![probe],
+            seal,
             index,
         }
         .apply(self, gate)
@@ -304,32 +308,35 @@ impl<'a> Scope<'a> {
         mode: ReductionMode<'_>,
     ) -> Result<&'a Scope<'a>, KError> {
         let record = OperatorGroup::alloc(outer.brand(), members, mode);
-        let sealed = outer.seal_resident::<OperatorGroupFamily>(record);
+        let seal = GroupSeal::of_resident(outer, record);
         let child = outer
             .brand()
             .alloc_scope(Scope::child_under_group(outer, name, record));
         child.register_group_under_all_subsets_direct(
             members,
-            &sealed,
+            seal,
             BindingIndex::value(0),
             &mut WriteGate::for_unpublished_scope(),
         )?;
         Ok(child)
     }
 
-    /// Construction-time operator-registry seeding: apply [`operator_group_ops`] immediately. The
-    /// builtin seeds and the `GROUP` binder's pre-dispatch registration into its own freshly minted
-    /// child scope; an `OP` declaration's registry entry rides its step outcome instead.
-    pub fn register_group_under_all_subsets_direct(
+    /// Construction-time operator-registry seeding: apply the whole-powerset [`WriteOp::Group`]
+    /// immediately. The builtin seeds and the `GROUP` binder's pre-dispatch registration into its
+    /// own freshly minted child scope; an `OP` declaration's registry entry rides its step outcome
+    /// instead.
+    pub(crate) fn register_group_under_all_subsets_direct(
         &self,
         members: &[&str],
-        group: &SealedOperatorGroup,
+        seal: GroupSeal,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        for op in operator_group_ops(members, group, index) {
-            op.apply(self, gate)?;
+        WriteOp::Group {
+            probes: powerset_probes(members),
+            seal,
+            index,
         }
-        Ok(())
+        .apply(self, gate)
     }
 }

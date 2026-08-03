@@ -71,8 +71,8 @@ pub enum ReductionMode<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OperatorGroup<'a> {
     /// The full declared member set (keywords), not the probed subset — sorted in byte order and
-    /// deduped, the invariant [`Self::covers`]' binary search and [`Self::same_declaration`]'s
-    /// slice compare read. Member counts are necessarily tiny (the powerset install is `2^n`), so a
+    /// deduped, the invariant [`Self::covers`]' binary search and [`Self::declaration_key`]'s
+    /// rendering read. Member counts are necessarily tiny (the powerset install is `2^n`), so a
     /// sorted run beats a hash table at this size and costs the bump no `Drop`.
     members: &'a [&'a str],
     mode: ReductionMode<'a>,
@@ -146,28 +146,33 @@ impl<'a> OperatorGroup<'a> {
             .all(|op| self.members.binary_search(op).is_ok())
     }
 
-    /// The registry upsert's structural identity rule: same mode and same member set. Two `OP`
-    /// statements over one symbol and distinct operand types are two bucket overloads but one
-    /// declaration, and their records are separate allocations, so identity here is content — read
-    /// **across two lifetimes**, which the derived `PartialEq` (one unified lifetime) cannot state.
-    pub fn same_declaration(&self, other: &OperatorGroup<'_>) -> bool {
-        let same_mode = match (self.mode, other.mode) {
-            (ReductionMode::Unary, ReductionMode::Unary)
-            | (ReductionMode::FoldLeft, ReductionMode::FoldLeft)
-            | (ReductionMode::FoldRight, ReductionMode::FoldRight) => true,
-            (
-                ReductionMode::Pairwise {
-                    combiner,
-                    direction,
-                },
-                ReductionMode::Pairwise {
-                    combiner: other_combiner,
-                    direction: other_direction,
-                },
-            ) => combiner == other_combiner && direction == other_direction,
-            _ => false,
+    /// The stored form of the registry upsert's **structural** identity rule — mode and member set
+    /// rendered into one owned, lifetime-free string. Two `OP` statements over one symbol and
+    /// distinct operand types are two bucket overloads but one declaration, and each allocates its
+    /// own record, so the upsert has to answer identity by content rather than by address.
+    ///
+    /// Rendered here, where the record is open, so the registry write verb compares plain data and
+    /// never opens a carrier ([`OverloadSeal`](crate::machine::OverloadSeal) is the same move for
+    /// the `functions` table). The comparison is exact, not a digest: the member run is already
+    /// sorted and deduped, and the mode segment is fenced off by a control byte no koan source can
+    /// contain, so equal renderings mean equal declarations.
+    pub fn declaration_key(&self) -> String {
+        let mode = match self.mode {
+            ReductionMode::Unary => "unary".to_string(),
+            ReductionMode::FoldLeft => "fold-left".to_string(),
+            ReductionMode::FoldRight => "fold-right".to_string(),
+            ReductionMode::Pairwise {
+                combiner,
+                direction,
+            } => {
+                let direction = match direction {
+                    FoldDirection::Left => "left",
+                    FoldDirection::Right => "right",
+                };
+                format!("pairwise-{direction} {combiner}")
+            }
         };
-        same_mode && self.members == other.members
+        format!("{mode}\u{1}{}", self.members.join(" "))
     }
 }
 

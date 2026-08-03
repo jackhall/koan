@@ -14,24 +14,19 @@ use std::rc::Rc;
 
 use crate::builtins::test_support::{run_root_bare, TestRun};
 use crate::machine::core::{
-    program_storage, run_root_storage, BindingIndex, CallFrame, FrameStorageExt, Scope,
-    SealedOperatorGroup,
+    program_storage, run_root_storage, BindingIndex, CallFrame, FrameStorageExt, GroupSeal, Scope,
 };
-use crate::machine::model::{probe_key, OperatorGroup, OperatorGroupFamily, ReductionMode};
+use crate::machine::model::{probe_key, OperatorGroup, ReductionMode};
 use crate::machine::DeliveredOperatorGroup;
 
 /// The declaration door a fixture takes: host the record in `scope`'s own region and seal it, which
 /// is what every registry entry for this declaration then holds a bit-copy of.
-fn declare<'a>(
-    scope: &'a Scope<'a>,
-    members: &[&str],
-    mode: ReductionMode<'_>,
-) -> SealedOperatorGroup {
-    scope.seal_resident::<OperatorGroupFamily>(OperatorGroup::alloc(scope.brand(), members, mode))
+fn declare<'a>(scope: &'a Scope<'a>, members: &[&str], mode: ReductionMode<'_>) -> GroupSeal {
+    GroupSeal::of_resident(scope, OperatorGroup::alloc(scope.brand(), members, mode))
 }
 
 /// Arithmetic-shaped group: `+` and `-` fold left.
-fn arithmetic_group<'a>(scope: &'a Scope<'a>) -> SealedOperatorGroup {
+fn arithmetic_group<'a>(scope: &'a Scope<'a>) -> GroupSeal {
     declare(scope, &["+", "-"], ReductionMode::FoldLeft)
 }
 
@@ -94,7 +89,7 @@ fn cross_group_probe_misses() {
     scope
         .register_operator_group_direct(
             "+".to_string(),
-            group.duplicate(),
+            group.clone(),
             BindingIndex::value(1),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -102,7 +97,7 @@ fn cross_group_probe_misses() {
     scope
         .register_operator_group_direct(
             "-".to_string(),
-            group.duplicate(),
+            group.clone(),
             BindingIndex::value(1),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -254,14 +249,14 @@ fn re_registering_an_equal_record_is_a_no_op() {
     let first = declare(scope, &["+"], ReductionMode::FoldLeft);
     let second = declare(scope, &["+"], ReductionMode::FoldLeft);
     assert_ne!(
-        record_address(&scope.lift_resident(first.duplicate())),
-        record_address(&scope.lift_resident(second.duplicate())),
+        record_address(&scope.lift_resident(first.sealed.duplicate())),
+        record_address(&scope.lift_resident(second.sealed.duplicate())),
         "two declarations allocate two records, so the structural arm is what admits the second",
     );
     scope
         .register_operator_group_direct(
             "+".to_string(),
-            first.duplicate(),
+            first.clone(),
             BindingIndex::value(1),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -367,7 +362,7 @@ fn subset_registration_covers_every_probe_of_the_member_set() {
     scope
         .register_group_under_all_subsets_direct(
             &["+", "-"],
-            &group,
+            group,
             BindingIndex::value(1),
             &mut crate::machine::WriteGate::for_test(),
         )

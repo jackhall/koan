@@ -4,7 +4,8 @@
 //! [workgraph/design/reach.md § The carrier states](../../../workgraph/design/reach.md#the-carrier-states).
 
 use crate::machine::model::{
-    retains_home, Carried, CarriedFamily, DispatchToken, KObject, OperatorGroupFamily, UntypedKey,
+    retains_home, Carried, CarriedFamily, DispatchToken, KObject, OperatorGroup,
+    OperatorGroupFamily, UntypedKey,
 };
 
 use super::arena::{FrameStorage, KoanRegion};
@@ -129,6 +130,39 @@ impl OverloadSeal {
             key: f.signature.untyped_key(),
             token: f.signature.dispatch_token(),
             summary: f.summarize(),
+        }
+    }
+}
+
+/// Everything an operator-registry registration needs about a group, computed at seal time — the
+/// one moment the record is open — so no write verb ever opens a carrier. `sealed` is what the
+/// `operators` table stores; the rest is plain data with no region lifetime. The operator-table twin
+/// of [`OverloadSeal`].
+///
+/// One of these backs a whole `GROUP` declaration: every powerset key of the install names the same
+/// record, so the write applies this one bundle across all of its probe keys.
+#[derive(Clone)]
+pub(crate) struct GroupSeal {
+    /// The dormant group carrier the registry entry stores.
+    pub sealed: SealedOperatorGroup,
+    /// The record's address — the upsert's **cheap** identity arm. Every powerset key of one
+    /// declaration shares one pointee, so re-registering a key that is already installed compares
+    /// equal here without ever touching the record.
+    pub address: usize,
+    /// `OperatorGroup::declaration_key()` — the stored form of the upsert's **structural** arm, for
+    /// the two-`OP`-statements case where one declaration allocates two records.
+    pub declaration: String,
+}
+
+impl GroupSeal {
+    /// The bundle for a group record **resident in `scope`'s own region** — the `GROUP` binder, the
+    /// `OP` declaration doors, and the builtin seeds, each of which allocates its record from the
+    /// very brand it registers against ([`OperatorGroup::alloc`]).
+    pub(crate) fn of_resident<'a>(scope: &Scope<'a>, group: &'a OperatorGroup<'a>) -> Self {
+        GroupSeal {
+            sealed: scope.seal_resident::<OperatorGroupFamily>(group),
+            address: std::ptr::from_ref(group) as usize,
+            declaration: group.declaration_key(),
         }
     }
 }

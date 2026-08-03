@@ -20,9 +20,10 @@
 
 use crate::machine::WriteGate;
 
-use crate::machine::model::{FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode};
+use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::model::{Held, KObject, KType, Record, TypeRegistry};
 use crate::machine::BindingIndex;
+use crate::machine::GroupSeal;
 use crate::machine::{arg_object, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -230,9 +231,9 @@ pub fn register_builtin_operator_groups<'a>(
 /// every per-call region and an inner scope's resolved carrier names an ordinary foreign member.
 fn seed<'a>(scope: &'a Scope<'a>, members: &[&str], mode: ReductionMode<'_>, gate: &mut WriteGate) {
     let record = OperatorGroup::alloc(scope.brand(), members, mode);
-    let sealed = scope.seal_resident::<OperatorGroupFamily>(record);
+    let seal = GroupSeal::of_resident(scope, record);
     scope
-        .register_group_under_all_subsets_direct(members, &sealed, BindingIndex::BUILTIN, gate)
+        .register_group_under_all_subsets_direct(members, seal, BindingIndex::BUILTIN, gate)
         .expect("builtin operator-group seeding must not collide");
 }
 

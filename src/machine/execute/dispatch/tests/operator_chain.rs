@@ -10,8 +10,9 @@
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
-use crate::machine::model::{FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode};
+use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::BindingIndex;
+use crate::machine::GroupSeal;
 
 /// Registers the `%` pairwise group in the given mode, the `%` pair body (a sum), and the `MINUS`
 /// combiner the pair results fold through — declared with `OP`, the surface that gives a combiner
@@ -35,7 +36,7 @@ fn register_pairwise_fixture<'a>(
     scope
         .register_operator_group_direct(
             "%".to_string(),
-            scope.seal_resident::<OperatorGroupFamily>(record),
+            GroupSeal::of_resident(scope, record),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )

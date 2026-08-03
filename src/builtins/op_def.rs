@@ -27,13 +27,11 @@
 
 use crate::machine::WriteGate;
 
-use crate::machine::core::bindings::{operator_group_ops, WriteOp};
+use crate::machine::core::bindings::{powerset_probes, WriteOp};
 use crate::machine::core::RegionBrand;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{
-    binary_key, unary_key, OperatorGroup, OperatorGroupFamily, ReductionMode,
-};
+use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{ExpressionSignature, KKind};
 use crate::machine::model::{Held, KType, Record};
@@ -84,7 +82,7 @@ enum OpKind {
 
 pub(super) use crate::machine::model::symbol_from_parts;
 use crate::machine::model::symbol_from_quote_body;
-use crate::machine::OverloadSeal;
+use crate::machine::{GroupSeal, OverloadSeal};
 
 /// Body-side symbol read: a quoted slot's raw `KObject::KExpression` is the quote body. Shared with
 /// `GROUP`, whose pairwise `combiner` slot names an operator the same way (`super::group_def`).
@@ -362,8 +360,11 @@ impl<'a> OpPlan<'a> {
                 if !in_group {
                     let record =
                         OperatorGroup::alloc(scope.brand(), &[sym], ReductionMode::FoldLeft);
-                    let sealed = scope.seal_resident::<OperatorGroupFamily>(record);
-                    writes.extend(operator_group_ops(&[sym], &sealed, bind_index));
+                    writes.push(WriteOp::Group {
+                        probes: powerset_probes(&[sym]),
+                        seal: GroupSeal::of_resident(scope, record),
+                        index: bind_index,
+                    });
                 }
                 registered
             }
@@ -420,7 +421,7 @@ pub(super) struct OperatorForm<'a> {
 
 /// Register the fixed triple every unary operator consists of: the list-form overload under
 /// [`unary_key`], the binary-form overload under [`binary_key`], and the size-1
-/// [`ReductionMode::Unary`] group entry (key derived through [`operator_group_ops`]). The bodies
+/// [`ReductionMode::Unary`] group entry (key derived through [`powerset_probes`]). The bodies
 /// are the caller's own — `UNARY OP`
 /// synthesizes koan-AST bodies, the builtin `|` supplies native ones. Returns the list-form
 /// function's object and stored reach: the list body is the operator's primary value.
@@ -476,9 +477,12 @@ pub(super) fn register_unary_operator<'a>(
     let (_, binary_overload) =
         register_body(scope, sym, binary_signature, binary_body, bind_index, types)?;
     let record = OperatorGroup::alloc(scope.brand(), &[sym], ReductionMode::Unary);
-    let sealed = scope.seal_resident::<OperatorGroupFamily>(record);
     let mut writes = vec![list_overload, binary_overload];
-    writes.extend(operator_group_ops(&[sym], &sealed, bind_index));
+    writes.push(WriteOp::Group {
+        probes: powerset_probes(&[sym]),
+        seal: GroupSeal::of_resident(scope, record),
+        index: bind_index,
+    });
     Ok((carrier, writes))
 }
 

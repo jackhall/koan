@@ -47,14 +47,14 @@
 use std::cell::Ref;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
-use crate::machine::core::carrier_witness::{OverloadSeal, SealedFunction, SealedOperatorGroup};
+use crate::machine::core::carrier_witness::{
+    GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
+};
 use crate::machine::core::kfunction::NodeId;
-use crate::machine::core::{FrameStorage, RunId};
+use crate::machine::core::RunId;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DispatchToken;
-use crate::machine::model::OperatorGroup;
 use crate::machine::model::{KType, UntypedKey};
 use crate::machine::CarrierWitness;
 use crate::witnessed::Sealed;
@@ -65,7 +65,7 @@ mod gate;
 mod ops;
 
 pub use gate::WriteGate;
-pub(crate) use ops::{operator_group_ops, TypeWritePolicy, WriteOp};
+pub(crate) use ops::{powerset_probes, TypeWritePolicy, WriteOp};
 
 /// A value binding's dormant carrier: the bound value fused to the exact reach description minted
 /// for it at bind time. The entry owns no pins — the binding scope's **region** owns the one deduped
@@ -166,16 +166,22 @@ impl FunctionBucketEntry {
     }
 }
 
-/// One operator-registry entry: its lexical [`BindingIndex`] and the dormant
-/// [`SealedOperatorGroup`] carrier of the group record the probe key resolves to.
+/// One operator-registry entry: its lexical [`BindingIndex`], the dormant
+/// [`SealedOperatorGroup`] carrier of the group record the probe key resolves to, and the plain
+/// data the upsert decides identity on — all of it computed at seal time
+/// ([`GroupSeal`]), where the record was open, so the write verb opens nothing.
 ///
-/// The same shape [`DataEntry`] takes, and for the same reason: the entry owns nothing. The record
-/// lives in the declaring scope's region bump and the regions its reach names are held by that
-/// region's union bundle, so the entry is `Copy`-cheap to read out, carries no `Drop`, and dies
-/// with the region that hosts what it names — a group whose declaring region has died is
-/// unreachable rather than kept alive by a stray refcount.
+/// The same shape [`DataEntry`] and [`FunctionBucketEntry`] take, and for the same reason: the
+/// entry owns nothing of the record. The record lives in the declaring scope's region bump and the
+/// regions its reach names are held by that region's union bundle, so the entry carries no `Drop`
+/// over it and dies with the region that hosts what it names — a group whose declaring region has
+/// died is unreachable rather than kept alive by a stray refcount.
 pub(crate) struct OperatorEntry {
     index: BindingIndex,
+    /// The registered record's address — the upsert's cheap identity arm.
+    address: usize,
+    /// The registered record's rendered mode + member set — the upsert's structural arm.
+    declaration: String,
     sealed: SealedOperatorGroup,
 }
 
@@ -492,9 +498,9 @@ impl Bindings {
         Self::visible(entry.index, chain_cutoff).then(|| entry.sealed.duplicate())
     }
 
-    /// Register `probe → group` in the operator registry. The `OP` / `GROUP` binder
-    /// installs one entry per nonempty subset of the declared operators (all bit-copies of the same
-    /// seal over one record); test fixtures register the subsets they exercise.
+    /// Register `probe → seal`'s group in the operator registry. The `OP` / `GROUP` binder installs
+    /// one entry per nonempty subset of the declared operators (all bit-copies of the same seal over
+    /// one record); test fixtures register the subsets they exercise.
     ///
     /// Upsert: an existing entry whose record is the one being registered — the same address, or an
     /// equal mode + member set (two `OP` statements over the same symbol and distinct operand types
@@ -502,28 +508,19 @@ impl Bindings {
     /// silent no-op, keeping the first entry's index. A record that disagrees is a chaining-mode
     /// conflict on `probe`: the same scope cannot say the symbol both folds and pairs.
     ///
-    /// Both records are read under `pin`, the write scope's own region owner. That covers them
-    /// because a scope's operator entries are written only by declarations at that scope, whose
-    /// records [`OperatorGroup::alloc`](crate::machine::model::OperatorGroup::alloc) placed in that
-    /// scope's own region — a `USING` window forwards its writes to the call site, which is
-    /// same-region with the window.
+    /// Both identity arms read plain data [`GroupSeal`] computed where the record was open, so this
+    /// verb opens no carrier and needs no pin — the same discipline [`Self::write_overload`]
+    /// follows for the `functions` table.
     pub(crate) fn write_operator_group(
         &self,
         probe: String,
-        group: SealedOperatorGroup,
+        seal: &GroupSeal,
         index: BindingIndex,
-        pin: &Rc<FrameStorage>,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
         if let Some(entry) = tables.operators.get(&probe) {
-            let agrees = entry.sealed.open_with(pin, |current| {
-                group.open_with(pin, |incoming| {
-                    std::ptr::eq::<OperatorGroup<'_>>(current, incoming)
-                        || current.same_declaration(incoming)
-                })
-            });
-            if agrees {
+            if entry.address == seal.address || entry.declaration == seal.declaration {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::ShapeError(format!(
@@ -535,7 +532,9 @@ impl Bindings {
             probe,
             OperatorEntry {
                 index,
-                sealed: group,
+                address: seal.address,
+                declaration: seal.declaration.clone(),
+                sealed: seal.sealed.duplicate(),
             },
         );
         Ok(())
