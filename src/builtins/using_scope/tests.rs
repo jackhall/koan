@@ -322,12 +322,10 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
         "residence is the value's own record: it lives in the module's region, not the call \
          site's, even though the window reads at the call site"
     );
-    // `seam_verb`'s own body, spelled out: price the crossing against the host the carrier names.
+    // The seam verb's own body, spelled out: price the crossing against the host the carrier names.
     let opened = delivered.open_at();
     let verb = opened.with_home_region(|host| match opened.value() {
-        Carried::Object(value @ KObject::Record(substrate, _)) => {
-            copy_or_pin(substrate, value, host)
-        }
+        Carried::Object(KObject::Record(substrate, _)) => copy_or_pin(substrate, host),
         _ => panic!("expected a Record carrier"),
     });
     assert!(

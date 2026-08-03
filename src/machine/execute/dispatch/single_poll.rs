@@ -7,14 +7,14 @@
 //! and re-resolves [`bare_type_leaf`]. Both single_poll parks route through a [`park_resume`]
 //! closure.
 
-use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
+use crate::machine::core::{KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::Carried;
 use crate::machine::model::FieldParts;
 use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
 
-use super::super::lift::{copy_carried, seam_still_borrows, seam_verb};
-use super::super::run_loop::{dest_brand, DestHandleFamily};
+use super::super::lift::relocate_seam;
+use super::super::run_loop::dest_brand;
 use super::super::StepCarried;
 use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
@@ -23,7 +23,6 @@ use super::{
     become_dispatch, forward_to_producer, park_resume, type_channel, Await, DepRequest, Outcome,
     ProducerStanding, TypeChannel,
 };
-use crate::machine::model::CarriedFamily;
 use crate::scheduler::Deps;
 
 /// Surfaces `UnboundName` directly when the name has no binding and
@@ -185,29 +184,14 @@ pub(super) fn literal_pass_through<'step>(
 fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
     let finish: WitnessedDepFinish<'step> = Box::new(|view, deps| {
         // The dest brand is `yoke`d into the frame that owns the consumer scope's region, witnessed by
-        // it — co-located by construction rather than paired with an asserted singleton.
-        let dest = dest_brand(view.dest_frame());
-        let delivered = &deps.owned(0).delivered;
-        let verb = seam_verb(delivered);
-        // The source envelope's coverage is the holder-rule proof the relocation's cells read their
-        // stored reach under — captured before the fold, which cannot reach its operand's pins.
-        let holder = delivered.coverage().clone();
-        // The dest brand is a bare region handle (empty reach); the transfer composes the literal
-        // producer's reach into it and homes the product in the consumer's own frame, which the
-        // step's seal re-pins — so `born_delivered` releases it and the foreign coverage rides on.
-        Ok(StepCarried::born_delivered(
-            delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
-                dest,
-                seam_still_borrows(delivered, verb),
-                |value, _region, placement| {
-                    copy_carried(
-                        value,
-                        verb,
-                        FoldingBrand::in_fold_closure(placement).with_holder(&holder),
-                    )
-                },
-            ),
-        ))
+        // it — co-located by construction rather than paired with an asserted singleton. It is a bare
+        // region handle (empty reach); the seam composes the literal producer's reach into it and
+        // homes the product in the consumer's own frame, which the step's seal re-pins — so
+        // `born_delivered` releases it and the foreign coverage rides on.
+        Ok(StepCarried::born_delivered(relocate_seam(
+            &deps.owned(0).delivered,
+            dest_brand(view.dest_frame()),
+        )))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)
 }

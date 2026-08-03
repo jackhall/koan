@@ -343,10 +343,13 @@ the ratio alone decides. This is why borrows-home is a *separate*, sharper
 question than contains-borrows: contains-borrows asks only whether
 *any* borrow leaf exists into *any* region, and remains the seal/reach
 conservatism input; the copy decision needs the home-relative question, and gets
-an exact answer. Release is a stored fact on either verdict: the copy claims
-the retiring host's release exactly when no surviving run description names it
-([§ Sectioned reach](#sectioned-reach)), so a value whose leaves all point into
-foreign regions still releases its home.
+an exact answer. The verb names only the act; the release itself is claimed by
+the fold's retention predicate reading the **rebuilt product's** stored reach
+([`product_reaches_region`](../src/machine/core/carrier_witness.rs)): the copy
+releases the retiring host exactly when no run description of the product names
+it ([§ Sectioned reach](#sectioned-reach)) — so a value whose leaves all point
+into foreign regions still releases its home, and a verdict that disagreed with
+the act is unrepresentable.
 
 A **pinned record** shares its producer-resident substrate by a pointer-copy
 (never a partial rebuild), made at the destination's own fold brand. Because a

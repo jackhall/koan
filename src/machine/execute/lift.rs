@@ -9,14 +9,15 @@
 //! live in the value model, shared with the core binding seams. See
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
-use crate::machine::core::SubstrateDoor;
+use super::run_loop::DestHandleFamily;
+use crate::machine::core::{FoldingBrand, SubstrateDoor};
 use crate::machine::core::{product_reaches_region, KoanRegion, KoanStorageProfile};
 use crate::machine::model::{
-    copy_or_pin, relocate_object_into, retains_home, Carried, Held, KObject, RegionEscape,
+    copy_or_pin, relocate_object_into, Carried, CarriedFamily, Held, KObject, RegionEscape,
     TypeIdentifier,
 };
-use crate::machine::DeliveredCarried;
-use crate::witnessed::RegionHandle;
+use crate::machine::{CarrierWitness, DeliveredCarried, FrameStorage};
+use crate::witnessed::{Delivered, RegionHandle};
 
 /// The structural-copy callback a witnessed transfer's fold runs
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered)): copy a [`Carried`] into `dest`'s
@@ -64,11 +65,7 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
     dest: SubstrateDoor<'b, '_>,
 ) -> Held<'b> {
     match carried {
-        Carried::Object(o) => Held::Object(relocate_object_into(
-            o,
-            RegionEscape::Copy { released: false },
-            dest,
-        )),
+        Carried::Object(o) => Held::Object(relocate_object_into(o, RegionEscape::Copy, dest)),
         Carried::Type(t) => Held::Type(t),
         // A cell always rebuilds at the door, so the name's bytes are re-bumped with it.
         Carried::UnresolvedType(ti) => {
@@ -79,57 +76,80 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
 
 /// The [`RegionEscape`] for relocating `delivered` across a value-level escape seam. A top-level
 /// substrate carrier (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) routes the cost chooser
-/// ([`copy_or_pin`](crate::machine::model::copy_or_pin)); every other value copies its top node
-/// unconditionally, claiming release off the same stored read the chooser's copying arms use
-/// ([`retains_home`](crate::machine::model::retains_home)).
-///
-/// A **type-channel** carrier builds no object at all, so there is nothing to read a claim off and
-/// it keeps every member — the conservatism a `None` product has always carried.
-pub(in crate::machine::execute) fn seam_verb(delivered: &DeliveredCarried) -> RegionEscape {
+/// ([`copy_or_pin`](crate::machine::model::copy_or_pin)); every other value — and a type-channel
+/// carrier, which builds no object at all — copies its top node unconditionally. The verb names
+/// only the act; what the relocation still reaches is [`seam_still_borrows`]'s question, answered
+/// off the rebuilt product.
+fn seam_verb(delivered: &DeliveredCarried) -> RegionEscape {
     let opened = delivered.open_at();
     match opened.value() {
         // The crossing is priced against the region the value *lives in* — the host its own reach
         // description names, read off the carrier under the envelope's pins.
         Carried::Object(value) => opened.with_home_region(|host| match value {
-            KObject::Record(substrate, _) => copy_or_pin(substrate, value, host),
-            KObject::List(substrate, _) => copy_or_pin(substrate, value, host),
-            KObject::Dict(substrate, _) => copy_or_pin(substrate, value, host),
+            KObject::Record(substrate, _) => copy_or_pin(substrate, host),
+            KObject::List(substrate, _) => copy_or_pin(substrate, host),
+            KObject::Dict(substrate, _) => copy_or_pin(substrate, host),
             KObject::Tagged {
                 value: substrate, ..
-            } => copy_or_pin(substrate, value, host),
+            } => copy_or_pin(substrate, host),
             KObject::Wrapped {
                 inner: substrate, ..
-            } => copy_or_pin(substrate, value, host),
-            _ => RegionEscape::Copy {
-                released: !retains_home(value, host),
-            },
+            } => copy_or_pin(substrate, host),
+            _ => RegionEscape::Copy,
         }),
-        _ => RegionEscape::Copy { released: false },
+        _ => RegionEscape::Copy,
     }
 }
 
 /// The **retention claim** a value-level relocation of `delivered` hands its fold, given the verb
-/// [`seam_verb`] chose (design § Escape). It reads the verb alone — the product is never walked:
+/// [`seam_verb`] chose (design § Escape). The claim is derived from the **product** the fold just
+/// built — the same read the core adoption engine makes
+/// ([`product_reaches_region`]) — so the verdict and the act cannot disagree:
 ///
 /// - **Pin** — the value stays in the region it lived in and the relocation pointer-copies it, so
 ///   nothing is released: the producer transfers by hold.
-/// - **Copy** — the relocation rebuilt the value at the destination, and `released` already states
-///   whether any run of it still names the region it was copied out of. Only that region — the
-///   value's own home — is releasable; every other member is kept, because a foreign member may be
-///   reached transitively through a borrow leaf's own environment.
-pub(in crate::machine::execute) fn seam_still_borrows<'e>(
+/// - **Copy** — the relocation rebuilt the value at the destination, and the rebuilt product's own
+///   stored reach states whether any run of it still names the region it was copied out of. Only
+///   that region — the value's own home — is releasable; every other member is kept, because a
+///   foreign member may be reached transitively through a borrow leaf's own environment.
+fn seam_still_borrows<'e>(
     delivered: &'e DeliveredCarried,
     verb: RegionEscape,
 ) -> impl for<'b> FnMut(&Carried<'b>, &KoanRegion) -> bool + 'e {
-    move |_product, region| match verb {
+    move |product, region| match verb {
         RegionEscape::Pin => true,
-        RegionEscape::Copy { released } => {
-            !released
-                || !delivered
-                    .open_at()
-                    .with_home_region(|home| std::ptr::eq(home, region))
-        }
+        RegionEscape::Copy => product_reaches_region(delivered, product.as_object(), region),
     }
+}
+
+/// Relocate `delivered` across the value-level escape seam into `dest` — the fused seam: choose
+/// the verb ([`seam_verb`]), run the transfer with the product-derived retention claim
+/// ([`seam_still_borrows`]) and the relocate hook ([`copy_carried`]). The one route production
+/// takes across this seam (`relocate_terminal`, the literal park finish), so verb, claim, and act
+/// cannot be re-paired at a call site.
+///
+/// `dest` is the destination operand — a bare region handle sealed into a delivery envelope
+/// ([`dest_brand`](super::run_loop::dest_brand)) — so the transfer composes the producer's reach
+/// alone and homes the product in the destination's own frame.
+pub(in crate::machine::execute) fn relocate_seam(
+    delivered: &DeliveredCarried,
+    dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
+) -> DeliveredCarried {
+    let verb = seam_verb(delivered);
+    // The source envelope's coverage is the holder-rule proof the relocation's cells read their
+    // stored reach under — captured before the fold, which cannot reach its operand's pins.
+    let holder = delivered.coverage().clone();
+    delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
+        dest,
+        seam_still_borrows(delivered, verb),
+        |value, _region, placement| {
+            copy_carried(
+                value,
+                verb,
+                FoldingBrand::in_fold_closure(placement).with_holder(&holder),
+            )
+        },
+    )
 }
 
 /// The **retention claim** a relocation of `delivered` across the container-cell seam hands its

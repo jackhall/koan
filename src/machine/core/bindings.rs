@@ -488,7 +488,7 @@ impl Bindings {
     /// `operators` map: returns the visible group registered under `probe` (the
     /// sorted-joined unique operators of a chain), or `None` at this scope so the
     /// caller keeps walking ancestors.
-    pub fn lookup_operator_group(
+    pub(in crate::machine::core) fn lookup_operator_group(
         &self,
         probe: &str,
         chain_cutoff: Option<usize>,

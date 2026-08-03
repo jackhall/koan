@@ -563,14 +563,22 @@ impl<'a> KObject<'a> {
     /// turn on: a substrate carrier cannot move regions by a pointer copy, so a copying seam
     /// rebuilds it through the fold door.
     pub(crate) fn embeds_substrate(&self) -> bool {
-        matches!(
-            self,
+        // Exhaustive on purpose: a new variant must declare its shape here, because defaulting to
+        // `false` would let a copying seam pointer-copy it under a release claim.
+        match self {
             KObject::Record(..)
-                | KObject::List(..)
-                | KObject::Dict(..)
-                | KObject::Tagged { .. }
-                | KObject::Wrapped { .. }
-        )
+            | KObject::List(..)
+            | KObject::Dict(..)
+            | KObject::Tagged { .. }
+            | KObject::Wrapped { .. } => true,
+            KObject::Number(_)
+            | KObject::KString(_)
+            | KObject::Bool(_)
+            | KObject::Null
+            | KObject::KExpression(_)
+            | KObject::KFunction(_)
+            | KObject::Module(_) => false,
+        }
     }
 
     /// Whether a **copying** adoption of `self` has to rebuild it through a destination door rather
@@ -584,7 +592,22 @@ impl<'a> KObject<'a> {
     /// storage that parsed it, a `KFunction` / `Module` borrow leaf that rides verbatim — copies as
     /// a top node under the fused mint.
     pub(crate) fn needs_destination_door(&self) -> bool {
-        self.embeds_substrate() || matches!(self, KObject::KString(_))
+        // Exhaustive on purpose, like [`Self::embeds_substrate`]: a new variant defaulting into the
+        // pointer-copy arm under a release claim is the dangerous direction.
+        match self {
+            KObject::Record(..)
+            | KObject::List(..)
+            | KObject::Dict(..)
+            | KObject::Tagged { .. }
+            | KObject::Wrapped { .. }
+            | KObject::KString(_) => true,
+            KObject::Number(_)
+            | KObject::Bool(_)
+            | KObject::Null
+            | KObject::KExpression(_)
+            | KObject::KFunction(_)
+            | KObject::Module(_) => false,
+        }
     }
 }
 
@@ -879,9 +902,7 @@ pub(crate) fn relocate_object_into<'b>(
         // rebuilt at the door, so nothing it points at stays in a region the copy's own retention
         // claim then releases. That predicate is the whole gate: keying on the substrate variants
         // alone would leave a string pointer-copied under a release claim.
-        RegionEscape::Copy { .. } if value.needs_destination_door() => {
-            copy_object_into(value, dest)
-        }
+        RegionEscape::Copy if value.needs_destination_door() => copy_object_into(value, dest),
         // Everything else is a pointer copy: a scalar, a `KFunction` / `Module` leaf riding its
         // borrow verbatim, or — under Pin — a substrate carrier whose region-resident borrow rides,
         // covered by the Kept-minted producer reach at the enclosing transfer.
@@ -943,10 +964,13 @@ pub(crate) enum RegionEscape {
     /// Borrow rides, the producer region transfers by hold; the relocate hook pointer-copies the
     /// record (its substrate borrow rides, covered by the reach the transfer mints).
     Pin,
-    /// Total rebuild of the value's reachable structure at the destination brand. `released`: the
-    /// rebuild provably frees the retiring producer region, so the transfer claims the empty
-    /// source bundle.
-    Copy { released: bool },
+    /// Total rebuild of the value's reachable structure at the destination brand. Whether the
+    /// rebuild frees the retiring producer region is not stored here: the fold's retention claim
+    /// derives it from the **product** the rebuild built ([`product_reaches_region`]), so the
+    /// verdict and the act cannot disagree.
+    ///
+    /// [`product_reaches_region`]: crate::machine::core::product_reaches_region
+    Copy,
 }
 
 /// A seam tuning constant: copy a priceable home-crossing record only when its exact rebuild cost
@@ -954,26 +978,20 @@ pub(crate) enum RegionEscape {
 /// observable in language semantics; provisional pending measurement.
 const ALPHA_DIVISOR: u64 = 4;
 
-/// The escape-seam copy-vs-pin decision for a top-level container `value` (whose cell substrate is
+/// The escape-seam copy-vs-pin decision for a top-level container value (whose cell substrate is
 /// `substrate`) crossing out of producer `host`. O(1), every read a stored fact: the home-crossing
 /// test compares the home the substrate's own reach description records against `host` by region
-/// identity, and the release claim on every copying arm is a stored read ([`retains_home`]).
-/// Generic over the substrate's cell payload `C`; only records instantiate it today. See
+/// identity. Generic over the substrate's cell payload `C`; only records instantiate it today. See
 /// design/value-substrates.md § Cost-driven copy.
 pub(crate) fn copy_or_pin<C>(
     substrate: &ContainerSubstrate<'_, C>,
-    value: &KObject<'_>,
     host: &KoanRegion,
 ) -> RegionEscape {
-    // Forced verification builds override the table for top-level records; `released` is a stored
-    // read, so a forced copy is sound at either crossing.
+    // Forced verification builds override the table for top-level records; the retention claim is
+    // derived from the rebuilt product, so a forced copy is sound at either crossing.
     match SEAM_POLICY {
         SeamPolicy::ForcePin => return RegionEscape::Pin,
-        SeamPolicy::ForceCopy => {
-            return RegionEscape::Copy {
-                released: !retains_home(value, host),
-            }
-        }
+        SeamPolicy::ForceCopy => return RegionEscape::Copy,
         SeamPolicy::CostDriven => {}
     }
 
@@ -993,7 +1011,7 @@ pub(crate) fn copy_or_pin<C>(
     // Clear borrows-home bit is exact for a priceable record: no leaf borrows home, so the rebuild
     // frees the host. Copy when the value is a small fraction of what the pin would retain.
     if substrate.copy_cost() < host.allocated_total() / ALPHA_DIVISOR {
-        RegionEscape::Copy { released: true }
+        RegionEscape::Copy
     } else {
         RegionEscape::Pin
     }

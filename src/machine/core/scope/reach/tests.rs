@@ -94,7 +94,7 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
         "precondition: the record's borrows-home bit is set"
     );
     assert_eq!(
-        copy_or_pin(substrate, record, producer.region()),
+        copy_or_pin(substrate, producer.region()),
         RegionEscape::Pin,
         "a home-crossing, borrows-home record must select Pin"
     );

@@ -23,7 +23,7 @@ use crate::machine::core::ReturnContract;
 use crate::machine::core::{
     Action, ActionKind, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
 };
-use crate::machine::core::{FoldingBrand, RegionBrand, ScopeRefFamily};
+use crate::machine::core::{RegionBrand, ScopeRefFamily};
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, Part, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::{
@@ -33,7 +33,7 @@ use crate::witnessed::SealedExtern;
 
 use super::dispatch::{BodyPlacement, DepRequest, SchedulerView, SubmitContext};
 use super::finalize::check_spliced_return;
-use super::lift::{copy_carried, seam_still_borrows, seam_verb};
+use super::lift::relocate_seam;
 use super::nodes::{ChainOp, NodeStep, NodeWork};
 use super::obligation::{with_obligation, ReturnObligation};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
@@ -162,12 +162,12 @@ impl<'run> KoanRuntime<'run> {
     /// destination brand — its backing is the consuming slot's live frame for a `Forward`-ready
     /// pull, or the externally pinned run region a drained root re-homes into.
     ///
-    /// The seam verb is the cost-driven [`seam_verb`] decision: a top-level record pins (rides under
-    /// `Kept`, its substrate borrow covered by the producer's minted reach) when the pin is cheaper
-    /// than the rebuild, a leaf borrows home, or the crossing is foreign; a record a small
-    /// fraction of the host's allocated total is a released copy (the producer frees at retention
-    /// discharge). Every non-record value keeps the `Copied` pointer-copy of its top node,
-    /// claiming release off the same stored read.
+    /// The seam is the fused [`relocate_seam`]: the cost-driven verb decision — a top-level record
+    /// pins (its substrate borrow covered by the producer's minted reach) when the pin is cheaper
+    /// than the rebuild, a leaf borrows home, or the crossing is foreign; every other value
+    /// pointer-copies its top node — with the retention claim derived from the rebuilt product, so
+    /// a plain-data copy frees its producer at retention discharge while a rebuild still borrowing
+    /// home keeps it.
     ///
     /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as a re-sealed
     /// [`Witnessed`], not at a step brand. The consumer-pull dep slice does not route this — it opens
@@ -179,28 +179,13 @@ impl<'run> KoanRuntime<'run> {
         dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
     ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FrameCoverage), KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
-        let verb = seam_verb(&delivered);
-        // The relocation's cells read their own stored reach at the door; the source envelope's
-        // coverage is the holder-rule proof for a cell whose substrate stays foreign, captured here
-        // because a `for<'b>` fold closure has no route back to its operand's pins.
-        let holder = delivered.coverage().clone();
         // The destination is a bare region handle (empty reach), so the transfer composes the
         // producer's reach alone. The product envelope's residence is `dest`'s own frame, which the
         // caller re-pins as the terminal's host, so it is released here and what crosses back is the
         // relocated terminal's foreign reach — the transit copy that re-seeds the retention hold on
         // a `Forward`-ready finalize. The destination's own region-lifetime retention rides the
         // transfer's mint, so a caller that only needs the value to outlive teardown drops it.
-        let relocated = delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
-            dest,
-            seam_still_borrows(&delivered, verb),
-            |value, _region, placement| {
-                copy_carried(
-                    value,
-                    verb,
-                    FoldingBrand::in_fold_closure(placement).with_holder(&holder),
-                )
-            },
-        );
+        let relocated = relocate_seam(&delivered, dest);
         let foreign = relocated.coverage_releasing_home();
         Ok((relocated.into_cell().unseal(), foreign))
     }

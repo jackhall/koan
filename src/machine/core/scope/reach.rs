@@ -413,11 +413,7 @@ impl<'a> Scope<'a> {
                 // its composition retains the copy's reach here for the region's life; adopting the
                 // product envelope re-anchors it at `'a` through the library's own fused
                 // mint-and-retain door, so no re-box is needed to recover the reference.
-                self.relocate_delivered(
-                    cell,
-                    |carried| Ok(carried.object()),
-                    RegionEscape::Copy { released: false },
-                )
+                self.relocate_delivered(cell, |carried| Ok(carried.object()), RegionEscape::Copy)
                 .expect("a whole-value adoption's copy is infallible")
                 .adopt_into(self.brand().handle())
             }
@@ -464,7 +460,7 @@ impl<'a> Scope<'a> {
         });
 
         let verb = match disposition {
-            AdoptDisposition::Relocate => RegionEscape::Copy { released: false },
+            AdoptDisposition::Relocate => RegionEscape::Copy,
             AdoptDisposition::Pin => RegionEscape::Pin,
         };
         Ok(self.relocate_delivered(cell, project, verb)?.into_cell())
@@ -518,7 +514,7 @@ impl<'a> Scope<'a> {
                 dest,
                 |product, region| match verb {
                     RegionEscape::Pin => true,
-                    RegionEscape::Copy { .. } => {
+                    RegionEscape::Copy => {
                         product_reaches_region(cell, product.as_object(), region)
                     }
                 },
@@ -754,12 +750,10 @@ fn adopt_disposition(
         AdoptSeam::Binding(_) => cell
             .open_at()
             .with_home_region(|host_region| match projected {
-                KObject::Record(substrate, _) => {
-                    match copy_or_pin(substrate, projected, host_region) {
-                        RegionEscape::Copy { .. } => AdoptDisposition::Relocate,
-                        RegionEscape::Pin => AdoptDisposition::Pin,
-                    }
-                }
+                KObject::Record(substrate, _) => match copy_or_pin(substrate, host_region) {
+                    RegionEscape::Copy => AdoptDisposition::Relocate,
+                    RegionEscape::Pin => AdoptDisposition::Pin,
+                },
                 _ => AdoptDisposition::Relocate,
             }),
     }
