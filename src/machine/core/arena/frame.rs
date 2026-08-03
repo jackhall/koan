@@ -13,8 +13,7 @@ use crate::machine::core::{Scope, ScopeId, ScopeRefFamily};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::CarrierWitness;
 use crate::witnessed::{
-    Delivered, ReachDescription, RegionHandle, RegionHandleFamily, RegionHost, Sealed,
-    SealedExtern, StepCoverage,
+    Delivered, ReachDescription, RegionHandle, RegionHost, Sealed, SealedExtern, StepCoverage,
 };
 
 /// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
@@ -133,52 +132,42 @@ pub type FrameCoverage = StepCoverage<FrameStorage>;
 /// [`SealedExtern<ScopeRefFamily>`] the [`CallFrame`] holds — the construction door that re-anchors the
 /// longer-lived lexical parent into the fresh region, with no retype outside the witnessed substrate.
 ///
-/// The fresh region's [`RegionHandle`] and the foreign parent (as [`ScopeRefFamily`]) are erased and
-/// [`zip`](SealedExtern::zip)ped, then opened at **one** `for<'b>` brand against `storage` — the fresh
-/// frame's `Rc`, which pins both the region it owns and, via its `outer` chain, the parent. Inside
-/// the brand the real invariant `Scope<'b>` is built coupling the parent at `'b` (its `root`
-/// falling out as `outer.root`), allocated through the brand's [`RegionBrand`], and erased witness-less.
-/// `Scope`'s invariance is honoured by construction — the only retypes are the substrate's audited brand
-/// ([`SealedExtern::open`]) and store ([`RegionHandle::alloc`]) — so the per-call child stops being a
-/// re-anchor audited outside Witnessed/Sealed. Branding the two refs at *independent* `'b`s is what
-/// invariance rejects; one [`zip`](SealedExtern::zip)ped `open` unifies them at a single `'b`.
+/// The child is *born* at the destination: [`RegionHandle::alloc_resident_born_with`] hands the
+/// construction closure a placement over the fresh region at a `for<'b>` brand, with the foreign
+/// parent (as [`ScopeRefFamily`]) re-anchored to that same `'b`. The real invariant `Scope<'b>` is
+/// built coupling the two (its `root` falling out as `outer.root`) and stored in the same act, so
+/// residence is discharged by the brand rather than by a runtime check: an ambient `&Region` cannot
+/// coerce to `'b`, so `child.region()` is the destination's by construction. `Scope`'s invariance is
+/// honoured for free — branding the parent and the region at *independent* `'b`s is what invariance
+/// rejects, and the door unifies them at a single one.
+///
+/// `child.outer` is a genuine cross-region borrow into the lexical parent's (possibly foreign)
+/// region — unlike every other resident move-in in this file, `child` cannot rebuild at `'static`,
+/// and its liveness is not the reach-witness system's business to name. It is guaranteed instead by
+/// `FrameStorage`'s own `outer` `Rc` chain, the pin this call hands the door: a structural invariant
+/// this construction door alone upholds by always chaining `storage`'s `outer` to the same frame that
+/// owns the parent's region. That chain is **derived**, not asserted — [`CallFrame::new`] computes it
+/// from the parent scope's own `region_owner` ([`Scope::parent_frame_pin`]), and root-region parents
+/// chain nothing. A fresh-tail hop's parent is the callee closure's captured scope, so the same chain
+/// keeps that captured (possibly per-call) region alive across the hop that retires the caller.
+///
+/// The child scope lives in `storage`'s own region, so it seals under a description hosted there with
+/// no members — its liveness is the frame storage, paired with it as the envelope host by the
+/// [`CallFrame`] constructor.
 pub(crate) fn build_frame_child_witnessed<'p>(
     outer: &'p Scope<'p>,
     storage: &Rc<FrameStorage>,
 ) -> Sealed<ScopeRefFamily, CarrierWitness> {
-    let handle = SealedExtern::<RegionHandleFamily<KoanStorageProfile>>::erase(
-        RegionHandle::from_owner(&**storage),
-    );
-    let parent = SealedExtern::<ScopeRefFamily>::erase(outer);
+    let handle = RegionHandle::from_owner(&**storage);
     let region_owner = Rc::downgrade(storage);
-    handle.zip(parent).open(storage, |(handle_b, outer_b)| {
-        // `handle_b: RegionHandle<'b, KoanStorageProfile>`, `outer_b: &'b Scope<'b>` — the region
-        // handle and parent unified at the one brand. The child stores both by plain coercion (no
-        // retype of its own). The child scope lives in `storage`'s own region, so it seals under a
-        // description hosted there with no members — its liveness is the frame storage, paired with
-        // it as the envelope host by the `CallFrame` constructor.
-        //
-        // `child.outer` is a genuine cross-region borrow into the lexical parent's (possibly foreign)
-        // region — unlike every other resident move-in in this file, `child` cannot rebuild at
-        // `'static` and its liveness is not the reach-witness system's business to name: it is
-        // guaranteed instead by `FrameStorage`'s own `outer` `Rc` chain (see this fn's doc), a
-        // structural invariant this construction door alone upholds by always chaining `storage`'s
-        // `outer` to the same frame that owns `outer_b`'s region. That chain is **derived**, not
-        // asserted: `CallFrame::new` computes it from the parent scope's own `region_owner`
-        // (`Scope::parent_frame_pin`), and root-region parents chain nothing. A fresh-tail hop's
-        // parent is the callee closure's captured scope, so the same chain keeps that captured
-        // (possibly per-call) region alive across the hop that retires the caller.
-        //
-        // The store runs the real `Scope` family audit — the same live O(1)
-        // `ptr::eq(region, value.region())` as `alloc_scope`. `child` is built over
-        // `RegionBrand(handle_b)`, so `child.region()` is `handle_b`'s own region and the check
-        // holds by construction; the parent-liveness chain above stays typed by `CallFrame::new`.
-        let child = Scope::child_for_frame_witnessed(outer_b, RegionBrand(handle_b), region_owner);
-        let live = handle_b
-            .alloc_resident_checked::<Scope<'static>>(child, ())
-            .expect("frame child is built over this frame's own region");
-        Sealed::seal(RegionBrand(handle_b).seal_resident::<ScopeRefFamily>(live))
-    })
+    let live = handle.alloc_resident_born_with::<Scope<'static>, ScopeRefFamily, _>(
+        SealedExtern::<ScopeRefFamily>::erase(outer),
+        storage,
+        |placement, outer_b| {
+            Scope::child_for_frame_witnessed(outer_b, RegionBrand(placement.handle()), region_owner)
+        },
+    );
+    Sealed::seal(RegionBrand(handle).seal_resident::<ScopeRefFamily>(live))
 }
 
 /// One user-fn call's allocation frame: a thin shell over a refcounted [`FrameStorage`]. `Rc`-pinned
