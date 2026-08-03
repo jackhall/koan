@@ -558,9 +558,9 @@ impl<'a> Scope<'a> {
     }
 
     /// Wrap a resident `KFunction` in its `KObject` carrier — the store every `FN` / `OP`
-    /// registration hands its fresh callable out through. `function` was allocated at this scope's
-    /// own brand ([`RegionBrand::alloc_function`](crate::machine::core::RegionBrand::alloc_function)
-    /// audits that it lives in the region owning its captured scope), so the door envelopes the
+    /// registration hands its fresh callable out through. `function` was born at its captured
+    /// scope's own brand ([`KFunction::alloc_captured`](crate::machine::core::KFunction), whose
+    /// `for<'b>` closure makes living in that scope's region a type fact), so the door envelopes the
     /// reference at this scope's home and **merges** it into the same region: the composition mints
     /// that region into the product's reach, which is the borrows-home fact the wrapper carries.
     /// Source and destination coincide, so the library's self rule strips the region from the
@@ -570,7 +570,7 @@ impl<'a> Scope<'a> {
     /// scope's own sealed reach-set transitively keeps every foreign region its bindings reach
     /// alive, so naming the callable's home region names the whole closure.
     ///
-    /// Infallible, and audit-free: the wrapping `KObject::KFunction` is built at the fold brand from
+    /// Infallible, and check-free: the wrapping `KObject::KFunction` is built at the fold brand from
     /// the merge's own operand view, so an ambient-lifetime capture is a compile error at the
     /// closure's signature.
     pub(crate) fn store_function_object(
@@ -595,8 +595,8 @@ impl<'a> Scope<'a> {
 
     /// Seal a resident `Module` value into this scope — the Object-arm module bind
     /// ([`Scope::seal_module`]) and an opaque ascription view. `module` lives in its own `child`
-    /// scope's region (the [`RegionBrand::alloc_module`](crate::machine::core::RegionBrand)
-    /// invariant), so the door envelopes that reference at the child's own home and **merges** it
+    /// scope's region — [`Module::alloc_at_child_scope`](crate::machine::model::Module) derives the
+    /// destination from that scope — so the door envelopes that reference at the child's own home and **merges** it
     /// into this scope's region: the composition mints the child's region as a member of the
     /// product's reach and retains it here for this region's life.
     ///
@@ -606,7 +606,7 @@ impl<'a> Scope<'a> {
     /// closure. A co-located module (`MODULE`, opaque `:|`) names a region this scope's chain
     /// already holds — the library's self rule strips it from the retained bundle.
     ///
-    /// Infallible, and audit-free: the wrapping `KObject::Module` is built at the fold brand from
+    /// Infallible, and check-free: the wrapping `KObject::Module` is built at the fold brand from
     /// the merge's own operand view, so an ambient-lifetime capture is a compile error at the
     /// closure's signature.
     pub(crate) fn store_module_object(

@@ -71,10 +71,15 @@ details and tuning lives in
 ## Miri audit slate
 
 The audit slate is the load-bearing memory-safety check. It runs every unsafe
-site in the runtime — lifetime-erasure transmutes, raw-pointer round-trips,
-interior mutation under live shared borrows, the cycle gate that prevents
-self-referential `Rc<FrameStorage>` storage — under Miri's tree-borrows mode, with
-zero process-exit leaks and zero UB required for sign-off.
+site the runtime reaches — the lifetime-erasure transmutes in `workgraph`'s
+witnessed substrate, the safe-code disciplines routing them (brand-confined
+construction doors, interior mutation under live shared borrows, region drop
+order), and the cycle gate that prevents self-referential `Rc<FrameStorage>`
+storage — under Miri's tree-borrows mode, with zero process-exit leaks and zero
+UB required for sign-off. `src/` itself carries no `unsafe`, tests included; the
+slate covers the safe koan code that drives the substrate's retypes, and
+`workgraph`'s own slate ([workgraph/observe/miri_slate.md](workgraph/observe/miri_slate.md))
+covers the library in isolation.
 
 The model the slate signs off on is documented in
 [design/memory-model.md](design/memory-model.md#verification).

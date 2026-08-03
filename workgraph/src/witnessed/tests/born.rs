@@ -5,9 +5,9 @@
 //! *different* region — so the erase-store / re-anchor-on-return round trip is exercised under tree
 //! borrows on exactly the aliasing pattern production runs.
 //!
-//! No [`AuditedStored`] impl and no residence audit appears anywhere in this module: the doors
-//! discharge residence at the `for<'b>` brand, and the negative case (a value built over an ambient
-//! region) is a `compile_fail` doctest on the door itself, not a runtime rejection.
+//! No residence check appears anywhere in this module: the doors discharge residence at the
+//! `for<'b>` brand, and the negative case (a value built over an ambient region) is a `compile_fail`
+//! doctest on the door itself, not a runtime rejection.
 
 use std::cell::Cell;
 use std::ptr;

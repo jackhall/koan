@@ -19,7 +19,8 @@
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 
-use crate::machine::core::{Scope, ScopeId};
+use crate::machine::core::{Scope, ScopeId, ScopeRefFamily};
+use crate::witnessed::SealedExtern;
 
 use super::super::types::{
     empty_schema_digest, sig_subtype, KType, Relation, SigSchema, TypeDigest, TypeNode,
@@ -55,7 +56,37 @@ pub struct Module<'a> {
 }
 
 impl<'a> Module<'a> {
-    pub fn new(path: String, child_scope: &'a Scope<'a>) -> Self {
+    /// **Build a module at its child scope's region and store it there** — the co-located door for a
+    /// `Module`, and the reason a stored module never names a region other than the one owning the
+    /// scope `MODULE` opened for its body. Its one sibling is the fold brand named below.
+    ///
+    /// The destination is derived from `child_scope`'s own brand rather than passed alongside it, so
+    /// pairing a module with a foreign region is unrepresentable. The scope crosses into a `for<'b>`
+    /// construction brand
+    /// ([`RegionHandle::alloc_resident_born_with`](crate::witnessed::RegionHandle)) where `new` assembles
+    /// the value and the store happens in the same act — residence discharged by the brand, with no
+    /// runtime check. `path` is owned, so it captures into the closure rather than crossing it.
+    ///
+    /// A module re-tagging a *foreign* child scope has no route here: it is built at a fold brand
+    /// instead ([`Scope::store_transparent_view`](crate::machine::core::Scope)), where the borrow it
+    /// re-tags is the fold's own operand view. The interior-mutable maps (`type_members`,
+    /// `slot_type_tags`) and the self-sig cell are written after this returns, at the caller's `'a`.
+    pub fn alloc_at_child_scope(path: String, child_scope: &'a Scope<'a>) -> &'a Module<'a> {
+        child_scope
+            .brand()
+            .handle()
+            .alloc_resident_born_with::<Module<'static>, ScopeRefFamily, _>(
+                SealedExtern::<ScopeRefFamily>::erase(child_scope),
+                child_scope.region(),
+                move |_placement, child_b| Module::new(path, child_b),
+            )
+    }
+
+    /// Assemble a module value over `child_scope`. Crate-internal and never a store: the two doors
+    /// that place one are [`Self::alloc_at_child_scope`] and the fold brand's
+    /// [`FoldingBrand::alloc_module_folded`](crate::machine::core::FoldingBrand), which is how a
+    /// transparent-ascribe view re-tags a foreign child scope.
+    pub(crate) fn new(path: String, child_scope: &'a Scope<'a>) -> Self {
         Self {
             path,
             child_scope_ref: child_scope,

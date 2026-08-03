@@ -76,9 +76,7 @@ fn recursive_group_member_lowers_to_sibling() {
         vec![("A".into(), KKind::NewType), ("B".into(), KKind::NewType)],
         None,
     );
-    let child = region
-        .brand()
-        .alloc_scope(Scope::child_recursive_group(parent, window));
+    let child = parent.alloc_child_recursive_group(window);
     let types = parent_test_run.types.clone();
     let mut el = Elaborator::new(child);
     match elaborate_type_identifier(&mut el, &leaf("B"), &types) {

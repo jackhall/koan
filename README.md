@@ -218,14 +218,13 @@ src/
     │   ├── arena.rs       KoanRegion (= Region<KoanStorageProfile>), RegionBrand, FoldingBrand, KoanRegionExt — the Koan storage substrate and allocation veneer (children below)
     │   ├── arena/
     │   │   ├── frame.rs           FrameStorage / FrameSet / CallFrame — per-call allocation frame, run-root storage, witnessed child-scope construction door
-    │   │   ├── step_allocator.rs  StepAllocator — the step-branded construction doors (alloc_carried / alloc_type_* / alloc_object_scalar)
-    │   │   └── residence.rs       the three primitive reattach guards — the AuditedStored ptr::eq audits for KFunction / Scope / Module
+    │   │   └── step_allocator.rs  StepAllocator — the step-branded construction doors (alloc_carried / alloc_type_* / alloc_object_scalar)
     │   ├── bindings.rs    Bindings façade — six-map (data/functions/placeholders/types/pending_overloads/operators) with the firm write_value / write_type / write_operator_group primitives, the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)]); one RefCell over all six maps, nothing else interior-mutable
     │   ├── bindings/
     │   │   ├── ops.rs     WriteOp / TypeWritePolicy — a binding-table write as outcome data, and the single apply interpreter the run loop drives
     │   │   └── gate.rs    WriteGate — the zero-sized capability every table write verb requires, minted only inside crate::machine (run loop + unpublished-scope construction door)
     │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors
-    │   ├── scope.rs       Scope — lexical environment: the struct, constructors, and small accessors (children below)
+    │   ├── scope.rs       Scope — lexical environment: the struct, the born-door allocators (alloc_run_root / alloc_child_under / …) with their private constructors, and small accessors (children below)
     │   ├── scope/
     │   │   ├── resolve.rs     name-resolution ladders — value / type / operator-group lookup, walk_chain / resolve_builtin_first, visibility cutoff, builtin-shadow consults
     │   │   ├── registry.rs    write doors — the seal_* construction halves of the value binds, the submission-channel placeholder installs, the write_scope USING resolver, and the *_direct writes for unpublished scopes

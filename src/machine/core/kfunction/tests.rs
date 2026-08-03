@@ -229,8 +229,8 @@ fn function_value_ktype_projects_kfunction() {
             }),
         ],
     };
-    let f = KFunction::new(sig, Body::Builtin(body_any), scope, false, &types);
-    let obj = KObject::KFunction(region.brand().alloc_function(f));
+    let f = KFunction::alloc_captured(scope, sig, Body::Builtin(body_any), false, &types);
+    let obj = KObject::KFunction(f);
     match types.node(obj.ktype()) {
         TypeNode::KFunction { params, ret } => {
             assert_eq!(params.get("x"), Some(&KType::NUMBER));

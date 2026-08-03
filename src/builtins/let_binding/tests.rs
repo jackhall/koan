@@ -248,8 +248,8 @@ fn let_aliases_struct_preserves_type_identity() {
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::program_storage;
+    use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
-    use crate::machine::{run_root_storage, FrameStorageExt};
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -262,11 +262,8 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     // Verify the diagnostic shape directly against a synthetic SIG scope — the
     // outer SIG's error is a combine-propagated shape error and doesn't carry
     // the inner diagnostic text.
-    use crate::machine::Scope;
-    let sig_scope = region.brand().alloc_scope(Scope::child_under_sig(
-        scope,
-        "SyntheticForTest".to_string(),
-    ));
+
+    let sig_scope = scope.alloc_child_under_sig("SyntheticForTest".to_string());
     let err = test_run.run_one_err_in(sig_scope, parse_one(&program, "LET compare = 0"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {

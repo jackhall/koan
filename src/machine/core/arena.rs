@@ -31,7 +31,6 @@ use crate::witnessed::{
 };
 
 mod frame;
-mod residence;
 mod step_allocator;
 
 pub(crate) use frame::FrameStorageExt;
@@ -170,41 +169,6 @@ impl<'a> RegionBrand<'a> {
         self.0.bump_map(entries)
     }
 
-    /// INVARIANT: a `KFunction` must be allocated into the same `KoanRegion` that owns its
-    /// captured scope — otherwise a `KFunction` could reference a region other than the one
-    /// that allocated it, undermining region-based reasoning about `&KFunction` liveness. Every
-    /// `KFunction` constructor captures a borrow (its defining scope), so it can never be
-    /// `'static`; the `ptr::eq` audit is release-enforced (not `debug_assert!`) — today's UB on
-    /// a mis-homed value becomes a loud panic instead.
-    pub fn alloc_function(self, f: KFunction<'_>) -> &'a KFunction<'a> {
-        self.0
-            .alloc_resident_checked::<KFunction<'static>>(f, ())
-            .expect(
-                "alloc_function: a KFunction must be allocated into the same KoanRegion \
-                 that owns its captured scope",
-            )
-    }
-
-    /// INVARIANT: a `Scope` must be allocated into the region it names as its own — every `Scope`
-    /// constructor returns a value borrowing its parent, so it can never be `'static`. See
-    /// [`Self::alloc_function`].
-    pub fn alloc_scope(self, s: Scope<'_>) -> &'a Scope<'a> {
-        self.0
-            .alloc_resident_checked::<Scope<'static>>(s, ())
-            .expect("alloc_scope: a Scope must be allocated into its own region")
-    }
-
-    /// INVARIANT: a `Module` must be allocated into its own child scope's region — every `Module`
-    /// borrows the child scope `MODULE` opened for its body, so it can never be `'static`. The one
-    /// legitimate cross-region caller (transparent-ascribe's re-tagged `Module`) is built at a fold
-    /// brand instead ([`Scope::store_transparent_view`]), where the borrow it re-tags is the fold's
-    /// own operand view. See [`Self::alloc_function`].
-    pub fn alloc_module(self, m: Module<'_>) -> &'a Module<'a> {
-        self.0
-            .alloc_resident_checked::<Module<'static>>(m, ())
-            .expect("alloc_module: a Module must be allocated into its own child scope's region")
-    }
-
     /// The witnessed-allocation surface for an owned leaf built fresh inside the brand — the
     /// arithmetic and comparison builtins' one store. Born under a description hosted in this region
     /// with **no members**: [`Self::alloc_scalar`] stores the value and [`Self::seal_resident`] names
@@ -341,9 +305,11 @@ impl<'a> FoldingBrand<'a> {
     /// ([`Scope::store_module_object`](crate::machine::core::Scope)) re-tag a view through. Sound by
     /// the same rank-2 fold-brand argument as [`Self::alloc_object_folded`]: the module is typed at
     /// the brand lifetime, so its child-scope borrow is the fold's own operand view and an
-    /// ambient-lifetime capture is a compile error at this signature. That discharges the residence
-    /// obligation `alloc_module`'s `ptr::eq` guard states at runtime — a folded module's child scope
-    /// is reached through the fold's operands, whose regions the enclosing composition names.
+    /// ambient-lifetime capture is a compile error at this signature. That discharges the same
+    /// residence obligation the co-located born door
+    /// ([`Module::alloc_at_child_scope`](crate::machine::model::Module)) discharges at its own brand —
+    /// a folded module's child scope is reached through the fold's operands, whose regions the
+    /// enclosing composition names.
     pub(crate) fn alloc_module_folded(self, m: Module<'a>) -> &'a Module<'a> {
         self.placement.alloc_resident_folded::<Module<'static>>(m)
     }
@@ -450,8 +416,8 @@ reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, KType))
 // carries a self-targeting `Rc<FrameStorage>` — a stored closure / module is a bare borrow into its
 // defining region, kept alive by its carrier's witness set rather than an owned anchor — so no
 // allocation can self-cycle and the engine needs no cycle gate. None records an address either:
-// residence is answered by a value's own field (the three `ptr::eq` reattach guards) or by the
-// construction door's brand, never by a side table.
+// residence is answered entirely by the construction door's brand — a born door builds the value at
+// its destination and a fold placement at the fold's — never by a runtime probe or a side table.
 
 impl Stored<KoanStorageProfile> for KFunction<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {

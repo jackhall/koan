@@ -20,7 +20,6 @@ use crate::machine::model::TypeRegistry;
 #[cfg(test)]
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 #[cfg(test)]
-use crate::machine::FrameStorageExt;
 #[cfg(test)]
 use crate::machine::KFunction;
 use crate::machine::KoanRuntime;
@@ -185,11 +184,7 @@ pub(crate) fn per_call_storage() -> Rc<FrameStorage> {
 
 #[cfg(test)]
 pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
-    run_storage.brand().alloc_scope(Scope::run_root(
-        run_storage,
-        None,
-        Box::new(std::io::sink()),
-    ))
+    Scope::alloc_run_root(run_storage, Box::new(std::io::sink()))
 }
 
 /// Parse a source string expected to contain exactly one top-level expression into `program`,

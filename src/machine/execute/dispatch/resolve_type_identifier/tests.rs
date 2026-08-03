@@ -158,15 +158,13 @@ mod bare_leaf_resolution {
     #[test]
     fn mid_window_member_parks_then_resolves() {
         use crate::machine::core::NodeId;
-        use crate::machine::core::Scope;
+
         use crate::machine::model::Record;
 
         let region = run_root_storage();
         let outer = run_root_bare(&region);
         let window = RecursiveGroupWindow::new(vec![("Node".into(), KKind::NewType)], None);
-        let scope = outer
-            .brand()
-            .alloc_scope(Scope::child_recursive_group(outer, window.clone()));
+        let scope = outer.alloc_child_recursive_group(window.clone());
         // Mark the binder in-flight: the type-side placeholder the finalize gate reads, naming the
         // producer node a consumer parks on.
         scope
@@ -226,15 +224,12 @@ mod bare_leaf_resolution {
     #[test]
     fn a_same_named_declaration_in_another_window_does_not_capture() {
         use crate::machine::core::NodeId;
-        use crate::machine::core::Scope;
 
         let region = run_root_storage();
         let root = run_root_bare(&region);
         // An outer scope with an in-flight `Node` belonging to its *own* window.
         let other_window = RecursiveGroupWindow::new(vec![("Node".into(), KKind::NewType)], None);
-        let outer = root
-            .brand()
-            .alloc_scope(Scope::child_recursive_group(root, other_window));
+        let outer = root.alloc_child_recursive_group(other_window);
         outer
             .install_placeholder(
                 "Node".into(),
@@ -248,9 +243,7 @@ mod bare_leaf_resolution {
         // The elaborating scope carries a *different* window that also announces `Node`, with no
         // pending marker of its own.
         let inner_window = RecursiveGroupWindow::new(vec![("Node".into(), KKind::NewType)], None);
-        let inner = outer
-            .brand()
-            .alloc_scope(Scope::child_recursive_group(outer, inner_window));
+        let inner = outer.alloc_child_recursive_group(inner_window);
 
         let types = TypeRegistry::new();
         let leaf = TypeIdentifier::leaf("Node");

@@ -8,6 +8,7 @@
 //! See [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the soundness argument the carriers' pinning supplies.
 
+use super::bindings::Bindings;
 use super::scope::Scope;
 use crate::machine::model::Module;
 use crate::witnessed::reattachable;
@@ -27,4 +28,15 @@ pub struct ScopeRefFamily;
 /// what covers the module's own home.
 pub struct ModuleRefFamily;
 
-reattachable!(ScopeRefFamily => &'r Scope<'r>, ModuleRefFamily => &'r Module<'r>);
+/// `Reattachable` family for a **reference** to a [`Bindings`] table — `&'r Bindings`. The pointee is
+/// lifetime-free, so `'r` names only the borrow; the family exists so a transparent `USING … SCOPE`
+/// window can cross a construction brand alongside its parent scope
+/// ([`Scope::alloc_child_transparent`]), which a bare `&'a Bindings` cannot — an ambient borrow has
+/// no outlives relation to a `for<'b>` brand.
+pub struct BindingsReferenceFamily;
+
+reattachable!(
+    ScopeRefFamily => &'r Scope<'r>,
+    ModuleRefFamily => &'r Module<'r>,
+    BindingsReferenceFamily => &'r Bindings,
+);

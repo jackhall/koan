@@ -111,11 +111,13 @@ Every sub-arena inside [`KoanRegion`](../src/machine/core/arena.rs) stores
 `T<'static>` rather than `T<'a>` — the `'static` is phantom so `KoanRegion`
 itself carries no lifetime parameter. The erase-store engine lives generically in
 the [`Region<W>`](../workgraph/src/witnessed/region.rs) substrate (`KoanRegion`
-is the Koan instantiation `Region<KoanStorageProfile>`). Each of the three named typed
-wrappers (`alloc_function` / `alloc_scope` / `alloc_module`) takes input at the caller's
-`'a` and routes one [`alloc_resident<K: Stored>`](../workgraph/src/witnessed/region.rs)
+is the Koan instantiation `Region<KoanStorageProfile>`). Every store of a typed family routes one
+[`alloc_resident<K: Stored>`](../workgraph/src/witnessed/region.rs)
 engine: the engine erases the value into its `'static` lifetime family (`At<'static>`)
-for storage and re-anchors the returned `&'a` to the input borrow on the way out.
+for storage and re-anchors the returned `&'a` to the input borrow on the way out. The three
+region-borrowing families (`KFunction` / `Scope` / `Module`) reach it only through a *born* door,
+which builds the value at the destination's own `for<'b>` brand and stores it in the same act
+([§ Move-in residence](#move-in-residence)).
 The store-side erasure
 routes the scheduler's single audited `erase_to_static` — the safe direction of the one
 `retype` primitive (described below) — so the region's store-side and the scheduler's
@@ -394,8 +396,10 @@ copy, and content-digest identity is preserved because the handle *is* the ident
 tables therefore store `KType` by value ([`bindings.rs`](../src/machine/core/bindings.rs)), with no
 reach evidence and no borrow to witness.
 
-Everything else — a `KObject` embedding a substrate, a fresh `KFunction` wrapper, a relocated
-container — takes the **folded** tier, the second kind of door:
+Everything else takes one of the two **rank-2 brand** doors — the second kind, where the input is
+taken at a `for<'b>` lifetime no ambient borrow inhabits. A `KObject` embedding a substrate, a fresh
+`KFunction` wrapper and a relocated container ride the *folded* one; a `KFunction`, `Scope` or
+`Module` itself is *born* at its destination:
 
 - **folded** (`FoldingBrand::alloc_object_folded` / `alloc_cell_folded` / `alloc_substrate_folded` /
   `alloc_module_folded`) — no runtime audit at all,
@@ -415,6 +419,20 @@ container — takes the **folded** tier, the second kind of door:
   [`bump`](../workgraph/src/witnessed.rs) door: a `KObject`, a `Held` cell and a
   `ContainerSubstrate` are all `Copy`, so the cell lands in the destination's bump and the brand's
   `'a` — the fold's own — is what discharges the residence obligation at compile time.
+- **born** ([`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its siblings,
+  [`KFunction::alloc_captured`](../src/machine/core/kfunction.rs),
+  [`Module::alloc_at_child_scope`](../src/machine/model/values/module.rs),
+  [`build_frame_child_witnessed`](../src/machine/core/arena.rs)) — the same rank-2 argument for a
+  family whose *every* constructor borrows the region it lands in, so it can never meet
+  `alloc_resident`'s `'static` bound and has no fold to ride. The library door
+  ([`RegionHandle::alloc_resident_born`](../workgraph/src/witnessed/region.rs) /
+  `alloc_resident_born_with`) hands the construction closure a `FoldedPlacement` over the destination
+  at a fresh `for<'b>`; the closure builds and the door stores in one act, returning the resident at
+  the handle's own `'a`. An operand the brand cannot derive — the frame child's foreign lexical
+  parent, a `GROUP` record, a module's binding table — crosses in as a `SealedExtern` re-anchored to
+  the same `'b`, under a witness pin borrowed for the destination region's `'a`, which is what keeps
+  the door a lifetime *shortening*. Every koan door derives its destination handle from the value's
+  own anchoring scope, so a mis-paired store is unstateable.
 
 Every move-in that lands a value reaching *another* region takes the folded tier — the binding and
 adoption doors ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs),
@@ -435,20 +453,28 @@ through the single type door — but the clone still comes back capped at the ca
 window the lift boundary consumes it in. That cap is return-contract discipline, independent of
 residence.
 
-One runtime residence check survives, and it is a **primitive reattach guard** rather than a tier: each
-of the three typed families always captures exactly one region borrow (a `KFunction` its captured
-scope, a `Scope` its own region, a `Module` its child scope), so `alloc_function` / `alloc_scope` /
-`alloc_module` run a release-enforced `ptr::eq` of that one pointer against the destination — the
-reattach witness for the `'_ → 'a` erasure — via the family's own
-[`AuditedStored`](../workgraph/src/witnessed/region.rs) audit rather than a `debug_assert!`. The
-audit is a **per-family declaration** (an `unsafe impl` written once per family in
-[residence.rs](../src/machine/core/arena/residence.rs)), not a caller-supplied closure, so a
-permissive audit is not writable in safe code. It reads the value's own field; it never walks
-contents, and it cannot be widened, because there is no evidence a caller could hand it to admit a
-foreign region. The frame-child door ([`build_frame_child_witnessed`](../src/machine/core/arena.rs))
-routes the same real `Scope` family audit as `alloc_scope`: the child is built over the frame's own
-region, so the `ptr::eq` check holds by construction while the parent-liveness chain stays typed by
-`CallFrame::new`.
+No runtime residence check survives. Each of the three region-borrowing families captures exactly one
+region borrow (a `KFunction` its captured scope, a `Scope` its own region, a `Module` its child
+scope), and each is **born at its destination**: the value is constructed inside a `for<'b>` brand
+over the destination region and stored in the same act, through the library's fold-free born door
+([`RegionHandle::alloc_resident_born`](../workgraph/src/witnessed/region.rs), or
+`alloc_resident_born_with` when the value must embed an operand the brand cannot derive). `'b` is
+universally quantified with no outlives relation to any enclosing lifetime, so the only `&'b Region`
+the closure body can name is the placement's own — an ambient region borrow does not coerce and does
+not compile. That is the same no-outlives argument the folded sinks rest on, applied to a family with
+nothing to fold.
+
+The koan doors ([`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its siblings,
+[`KFunction::alloc_captured`](../src/machine/core/kfunction.rs),
+[`Module::alloc_at_child_scope`](../src/machine/model/values/module.rs)) each derive the destination
+handle from the value's own anchoring scope rather than taking a brand alongside it, so a call site
+cannot state a mis-pairing at all; the value-returning constructors are private, so none of the three
+can exist outside the act that stores it. The frame-child door
+([`build_frame_child_witnessed`](../src/machine/core/arena.rs)) is the one whose operand — the lexical
+parent — genuinely lives in another region: it crosses the brand as a `SealedExtern` re-anchored to
+the same `'b`, pinned by the frame's own `Rc<FrameStorage>`. That pin is borrowed for the destination
+region's `'a`, so the witness contract covers the stored reference's whole life rather than the call,
+and the parent-liveness chain stays typed by `CallFrame::new`.
 
 Where a seam still has to *ask* where a composite lives — the copy-versus-pin decision's
 home-crossing test — it reads the answer off the value:
@@ -522,10 +548,10 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 - `KFunction::captured_scope() -> &'a Scope<'a>` is non-optional.
 - The running scope passes through `KoanRuntime::dispatch_in_scope(expr, scope)`
   directly, so dispatch sites carry their scope explicitly.
-- [`KoanRegion::alloc_function`](../src/machine/core/arena.rs) `debug_assert`s
-  region-identity between the function and its captured scope, catching a
-  misallocated KFunction at the allocation site rather than later as a
-  use-after-free in `lift_kobject`'s fast path.
+- [`KFunction::alloc_captured`](../src/machine/core/kfunction.rs) derives its destination region
+  from the captured scope it is handed, so region-identity between a function and its captured
+  scope is a type fact rather than a checked one — a misallocated `KFunction` is unwritable, not
+  caught late as a use-after-free in `lift_kobject`'s fast path.
 
 ## Performance notes
 

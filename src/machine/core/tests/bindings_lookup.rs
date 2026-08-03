@@ -125,13 +125,13 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = region.brand().alloc_function(KFunction::new(
+    let f = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -179,20 +179,10 @@ fn lookup_function_filters_per_overload_visibility() {
     };
     let key = sig_num.untyped_key();
     debug_assert_eq!(key, sig_str.untyped_key(), "untyped keys must collide");
-    let f_early = region.brand().alloc_function(KFunction::new(
-        sig_num,
-        Body::Builtin(body_no_op),
-        scope,
-        false,
-        &types,
-    ));
-    let f_late = region.brand().alloc_function(KFunction::new(
-        sig_str,
-        Body::Builtin(body_no_op),
-        scope,
-        false,
-        &types,
-    ));
+    let f_early =
+        KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), false, &types);
+    let f_late =
+        KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), false, &types);
     scope
         .register_function_direct(
             "BAR".to_string(),
@@ -253,13 +243,13 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = region.brand().alloc_function(KFunction::new(
+    let f = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -289,13 +279,13 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = region.brand().alloc_function(KFunction::new(
+    let f = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     scope
         .register_function_direct(
             "FOO".to_string(),

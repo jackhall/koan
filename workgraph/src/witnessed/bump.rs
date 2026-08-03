@@ -4,7 +4,7 @@
 //! A value stored here is *not* erased. The bump allocator is lifetime-free, so `'b` enters only at
 //! the allocating call — which is why a bumped value may hold an `&'b` back into the very region it
 //! lives in with no [`erase_to_static`](super::erase_to_static), no
-//! [`AuditedStored`](super::AuditedStored) impl, and no residence audit. The typed
+//! [`Stored`](super::Stored) impl, and no residence check. The typed
 //! [`FamilyArena`](super::FamilyArena) cells cannot do that: their slot type is `K::At<'static>`, so
 //! a region-self-referential value reaching one has to have its borrow erased and vetted back.
 //!
@@ -267,7 +267,7 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     ///             .value()
     ///     });
     /// assert_eq!(built.open(|text| text.to_owned()), "hello");
-    /// // `StrFamily` has no `Stored` impl and no `AuditedStored` impl: the bump needs neither.
+    /// // `StrFamily` has no `Stored` impl at all: the bump needs none.
     /// ```
     ///
     /// ```

@@ -280,9 +280,7 @@ impl<'a> Scope<'a> {
         path: String,
         src: &crate::machine::core::Bindings,
     ) -> Result<&'a Scope<'a>, KError> {
-        let view = outer
-            .brand()
-            .alloc_scope(Scope::child_under_module(outer, path));
+        let view = outer.alloc_child_under_module(path);
         view.bindings()
             .bulk_install_from(src, &mut WriteGate::for_unpublished_scope())?;
         Ok(view)
@@ -309,9 +307,7 @@ impl<'a> Scope<'a> {
     ) -> Result<&'a Scope<'a>, KError> {
         let record = OperatorGroup::alloc(outer.brand(), members, mode);
         let seal = GroupSeal::of_resident(outer, record);
-        let child = outer
-            .brand()
-            .alloc_scope(Scope::child_under_group(outer, name, record));
+        let child = outer.alloc_child_under_group(name, record);
         child.register_group_under_all_subsets_direct(
             members,
             seal,

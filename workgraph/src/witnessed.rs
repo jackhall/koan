@@ -32,8 +32,7 @@ use stable_deref_trait::StableDeref;
 
 mod region;
 pub use region::{
-    AuditedStored, FamilyArena, Region, RegionHandle, RegionHandleFamily, StorageOf,
-    StorageProfile, Stored,
+    FamilyArena, Region, RegionHandle, RegionHandleFamily, StorageOf, StorageProfile, Stored,
 };
 
 mod reach;

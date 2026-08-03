@@ -39,8 +39,8 @@ pub use sig_schema::{
 pub use signature::Specificity;
 pub use signature::{
     is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, DispatchToken,
-    DispatchTokenElement, ExpressionSignature, ReturnType, SignatureElement, UntypedElement,
-    UntypedKey,
+    DispatchTokenElement, ExpressionSignature, ExpressionSignatureFamily, ReturnType,
+    SignatureElement, UntypedElement, UntypedKey,
 };
 pub use signature::{owned_untyped_key, StoredElement};
 pub(crate) use type_digest::{empty_schema_digest, TypeDigest};

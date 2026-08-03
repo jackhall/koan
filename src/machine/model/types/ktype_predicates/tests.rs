@@ -322,15 +322,8 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let struct_token: KType = record_newtype_member("Point", &types);
     assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(newtype_token)), &types));
     assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(struct_token)), &types));
-    let child = region
-        .brand()
-        .alloc_scope(crate::machine::Scope::child_under_module(
-            scope,
-            "IntMod".into(),
-        ));
-    let module = region
-        .brand()
-        .alloc_module(Module::new("IntMod".into(), child));
+    let child = scope.alloc_child_under_module("IntMod".into());
+    let module = Module::alloc_at_child_scope("IntMod".into(), child);
     // A module value surfaces its principal signature, sealed once at construction — do the same
     // here so `ktype()` has a filled cell.
     module.seal_self_sig(SigSchema::raw_self_sig(module), &types);
@@ -340,12 +333,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         &spliced_part(&region, Carried::Object(module_value)),
         &types
     ));
-    let sig_scope = region
-        .brand()
-        .alloc_scope(crate::machine::Scope::child_under_sig(
-            scope,
-            "Ordered".into(),
-        ));
+    let sig_scope = scope.alloc_child_under_sig("Ordered".into());
     let kt_sig: KType = types.signature(SigSchema::project_decl(sig_scope, &types));
     // A signature is a type value: the `:Type` lattice top admits it; the proper tier does not.
     assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(kt_sig)), &types));
@@ -826,22 +814,18 @@ fn union_specificity_ordering() {
 #[test]
 fn module_object_ktype_reports_self_sig() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage};
     use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
-    use crate::machine::Scope;
+
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
-    let child = region
-        .brand()
-        .alloc_scope(Scope::child_under_module(scope, "Mod".into()));
-    let m: &Module = region
-        .brand()
-        .alloc_module(Module::new("Mod".into(), child));
+    let child = scope.alloc_child_under_module("Mod".into());
+    let m: &Module = Module::alloc_at_child_scope("Mod".into(), child);
     m.type_members
         .borrow_mut()
         .insert("Elt".into(), KType::NUMBER);
@@ -854,12 +838,8 @@ fn module_object_ktype_reports_self_sig() {
     assert_eq!(kt, types.signature(SigSchema::raw_self_sig(m)));
 
     // A second module with the identical interface shares the type — content, not mint.
-    let child2 = region
-        .brand()
-        .alloc_scope(Scope::child_under_module(scope, "Mod2".into()));
-    let m2: &Module = region
-        .brand()
-        .alloc_module(Module::new("Mod2".into(), child2));
+    let child2 = scope.alloc_child_under_module("Mod2".into());
+    let m2: &Module = Module::alloc_at_child_scope("Mod2".into(), child2);
     m2.type_members
         .borrow_mut()
         .insert("Elt".into(), KType::NUMBER);
@@ -867,12 +847,8 @@ fn module_object_ktype_reports_self_sig() {
     assert_eq!(kt, KObject::Module(m2).ktype());
 
     // A module whose interface differs by one member is a distinct type.
-    let child3 = region
-        .brand()
-        .alloc_scope(Scope::child_under_module(scope, "Mod3".into()));
-    let m3: &Module = region
-        .brand()
-        .alloc_module(Module::new("Mod3".into(), child3));
+    let child3 = scope.alloc_child_under_module("Mod3".into());
+    let m3: &Module = Module::alloc_at_child_scope("Mod3".into(), child3);
     m3.type_members
         .borrow_mut()
         .insert("Elt".into(), KType::STR);
@@ -886,10 +862,10 @@ fn module_object_ktype_reports_self_sig() {
 #[test]
 fn matches_value_admits_module_object_via_signature_slot() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+    use crate::machine::core::{program_storage, run_root_storage};
     use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
-    use crate::machine::Scope;
+
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
@@ -897,15 +873,11 @@ fn matches_value_admits_module_object_via_signature_slot() {
     let types = test_run.types.clone();
 
     // An empty signature (empty decl scope): every module bare-satisfies it, so the pins gate.
-    let sig_scope = region
-        .brand()
-        .alloc_scope(Scope::child_under_sig(scope, "S".into()));
+    let sig_scope = scope.alloc_child_under_sig("S".into());
     let schema = SigSchema::project_decl(sig_scope, &types);
 
-    let child = region
-        .brand()
-        .alloc_scope(Scope::child_under_module(scope, "M".into()));
-    let m: &Module = region.brand().alloc_module(Module::new("M".into(), child));
+    let child = scope.alloc_child_under_module("M".into());
+    let m: &Module = Module::alloc_at_child_scope("M".into(), child);
     m.type_members
         .borrow_mut()
         .insert("Type".into(), KType::NUMBER);

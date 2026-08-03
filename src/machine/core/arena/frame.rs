@@ -364,4 +364,32 @@ impl CallFrame {
     pub fn storage_rc(&self) -> Rc<FrameStorage> {
         Rc::clone(self.storage())
     }
+
+    /// Build a [`KFunction`] capturing **this frame's own child scope**, born into this frame's own
+    /// region, and hand it back at the frame borrow's lifetime.
+    ///
+    /// Test-only. Production functions take [`KFunction::alloc_captured`], which derives the
+    /// destination from a scope the caller holds directly; the Miri shapes need the same value at the
+    /// *frame's* lifetime, where the child scope is reachable only through the frame's sealed carrier
+    /// ([`Self::scope_sealed`]) and [`Self::with_scope`]'s rank-2 brand deliberately lets nothing
+    /// escape. Both the destination handle and the captured scope come off `frame`, so there is still
+    /// no pairing for a call site to get wrong; `frame` is the pin, and holding it keeps the storage
+    /// that owns the region alive for the returned borrow's whole life.
+    #[cfg(test)]
+    pub(crate) fn alloc_capturing_scope<'f>(
+        frame: &'f Rc<CallFrame>,
+        signature: crate::machine::model::ExpressionSignature<'f>,
+        body: crate::machine::core::Body<'f>,
+        types: &TypeRegistry,
+    ) -> &'f crate::machine::core::KFunction<'f> {
+        crate::machine::core::KFunction::alloc_captured_sealed(
+            frame.brand(),
+            frame.scope_sealed(),
+            frame,
+            signature,
+            body,
+            false,
+            types,
+        )
+    }
 }

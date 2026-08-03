@@ -1,8 +1,7 @@
 //! The bump-door slate: what [`FoldedPlacement::fold_and_bump`] composes, what it retains, and what
 //! it costs in bytes — over a library-only profile with an **empty family list**, which is the
-//! acceptance criterion made observable. Nothing here declares a [`Stored`] impl, an
-//! [`AuditedStored`] impl or a residence audit, yet a value holding an `&'b` back into its own
-//! region stores fine.
+//! acceptance criterion made observable. Nothing here declares a [`Stored`] impl or any residence
+//! check, yet a value holding an `&'b` back into its own region stores fine.
 //!
 //! Reach counts are read as deltas off the thread-local [`RegionMetrics`], scoped so a test's setup
 //! mints land outside its measured window (mirroring the sectioned slate).
@@ -288,9 +287,8 @@ fn the_product_reseals_and_reopens_with_its_pairing_intact() {
 }
 
 /// **The acceptance criterion, made observable.** A value stored through the door holds an `&'b`
-/// into the very region it lives in. There is no [`AuditedStored`] impl anywhere in this module and
-/// [`BumpProfile`] declares no family at all, so no residence audit ran — the bump needs none,
-/// because it erases nothing.
+/// into the very region it lives in. [`BumpProfile`] declares no family at all, so no residence
+/// check ran — the bump needs none, because it erases nothing.
 #[test]
 fn a_stored_value_may_borrow_its_own_region_with_no_residence_audit() {
     let dest = frame();

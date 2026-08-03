@@ -588,8 +588,8 @@ fn let_bound_dict_with_call_produced_string_keys_survives_every_producer_free() 
 /// verdict is `Owned`, naming no region, and that verdict is honest only because the node's `parts`
 /// run, its keyword text and its cache all live in the eternal-tier program storage that parsed
 /// them. A cell that pointed into the call region its producer ran in would name no region while
-/// pointing into a retiring one — the shape no reach fold rescues and no residence audit catches,
-/// since the bump keeps no address table. Both quotes are produced inside per-call function regions
+/// pointing into a retiring one — the shape no reach fold rescues and no address probe could catch
+/// either, since the bump keeps no address table. Both quotes are produced inside per-call function regions
 /// and the list is bound in an outer scope, so every producer frame retires before the read walks
 /// the stored `parts`.
 #[test]

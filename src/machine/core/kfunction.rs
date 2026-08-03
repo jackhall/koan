@@ -5,10 +5,14 @@
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::source::Spanned;
 
+use crate::machine::core::ref_carriers::ScopeRefFamily;
 use crate::machine::core::{KError, KErrorKind, RegionBrand, Scope};
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode, TypeRegistry};
-use crate::machine::model::{ExpressionSignature, Record, SignatureElement};
+use crate::machine::model::{
+    ExpressionSignature, ExpressionSignatureFamily, Record, SignatureElement,
+};
 use crate::machine::model::{Held, NamedPairs};
+use crate::witnessed::{And, SealedExtern};
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
 /// `machine::execute::runtime::run_action`.
@@ -21,7 +25,7 @@ pub mod pick;
 
 pub use crate::scheduler::NodeId;
 pub use action::ActionFn;
-pub use body::Body;
+pub use body::{Body, BodyFamily};
 use pick::slot_admits;
 pub use pick::ClassifiedSlots;
 
@@ -80,7 +84,77 @@ crate::witnessed::reattachable! {
 }
 
 impl<'a> KFunction<'a> {
-    pub fn new(
+    /// **Build a function at its captured scope's region and store it there** — the sole door for a
+    /// `KFunction`, and the reason the value never exists outside the region that owns its capture.
+    ///
+    /// The destination is derived from `captured`'s own brand rather than passed alongside it, so
+    /// pairing a function with a region other than its captured scope's is unrepresentable. The
+    /// signature, the body and the scope all cross into a single `for<'b>` construction brand
+    /// ([`RegionHandle::alloc_resident_born_with`](crate::witnessed::RegionHandle)), where the private
+    /// `new` assembles them and the store happens in the same act — residence discharged by the
+    /// brand, with no runtime check.
+    ///
+    /// `types` and `binder` carry no region borrow, so they are read straight from the enclosing
+    /// frame inside the closure; `types` is consulted during construction and never stored.
+    pub fn alloc_captured(
+        captured: &'a Scope<'a>,
+        signature: ExpressionSignature<'a>,
+        body: Body<'a>,
+        binder: bool,
+        types: &TypeRegistry,
+    ) -> &'a KFunction<'a> {
+        Self::alloc_captured_sealed(
+            captured.brand(),
+            SealedExtern::<ScopeRefFamily>::erase(captured),
+            captured.region(),
+            signature,
+            body,
+            binder,
+            types,
+        )
+    }
+
+    /// [`Self::alloc_captured`] over a captured scope that arrives **sealed**, with the destination
+    /// brand and the pin named separately — the shape a holder takes when the scope is reachable only
+    /// through a carrier ([`CallFrame::scope_sealed`](crate::machine::CallFrame::scope_sealed)) rather
+    /// than as a live borrow.
+    ///
+    /// Crate-internal, and [`Self::alloc_captured`] is the only production route through it: there,
+    /// all three arguments are read off the one scope, so no pairing is stateable. A caller reaching
+    /// this directly owes what the signature no longer says — `brand`'s region must be the one
+    /// `captured`'s scope lives in, and `pin` must keep that region alive for the whole of `'a`.
+    pub(crate) fn alloc_captured_sealed(
+        brand: RegionBrand<'a>,
+        captured: SealedExtern<ScopeRefFamily>,
+        pin: &'a impl crate::witnessed::Witness,
+        signature: ExpressionSignature<'a>,
+        body: Body<'a>,
+        binder: bool,
+        types: &TypeRegistry,
+    ) -> &'a KFunction<'a> {
+        let operands = captured.zip(
+            SealedExtern::<ExpressionSignatureFamily>::erase(signature).zip(SealedExtern::<
+                BodyFamily,
+            >::erase(
+                body
+            )),
+        );
+        brand
+            .handle()
+            .alloc_resident_born_with::<
+                KFunction<'static>,
+                And<ScopeRefFamily, And<ExpressionSignatureFamily, BodyFamily>>,
+                _,
+            >(
+                operands,
+                pin,
+                |_placement, (captured_b, (signature_b, body_b))| {
+                    KFunction::new(signature_b, body_b, captured_b, binder, types)
+                },
+            )
+    }
+
+    fn new(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,

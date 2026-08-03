@@ -114,10 +114,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let members = crate::try_action!(discover_members(&body_expr));
 
     let window = RecursiveGroupWindow::new(members.clone(), None);
-    let child = ctx
-        .scope
-        .brand()
-        .alloc_scope(Scope::child_recursive_group(ctx.scope, Rc::clone(&window)));
+    let child = ctx.scope.alloc_child_recursive_group(Rc::clone(&window));
 
     let site = ctx.declaration_site();
     await_body_in_scope(child, body_expr, ChildScopeSeal::LeaveOpen, move |fctx| {

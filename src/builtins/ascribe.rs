@@ -31,7 +31,6 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     let (s_schema, s_digest) = signature_schema(s, ctx.types);
     let s_name = s.name(ctx.types);
 
-    let region = ctx.scope.brand();
     // Allocate the view scope and replay the source module's members into it in one door: the
     // scope is unreachable until the replay has landed, which is what lets the write happen at
     // construction time rather than riding a step outcome.
@@ -50,7 +49,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // A member folded into the set rides the escaping view-module value sealed in.
     new_scope.close();
 
-    let new_module: &'a Module<'a> = region.alloc_module(Module::new(m.path.clone(), new_scope));
+    let new_module: &'a Module<'a> = Module::alloc_at_child_scope(m.path.clone(), new_scope);
     // Per-slot kind: a SIG-declared higher-kinded slot (`TYPE (Elem AS Wrap)`) mints a fresh
     // `TypeConstructor` family over the slot's declared parameter names rather than the default
     // `AbstractType` arm, preserving the higher-kinded shape across the ascription barrier.

@@ -77,7 +77,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // Both arms fold a delivery envelope into `home` claiming the envelope's own pins — the watched
         // carrier for `Ok`, `to_tagged`'s freshly-born envelope (its record substrate can only be
         // built through a fold door, so it is sealed as a delivered carrier rather than routed
-        // through the checked/audited move-in tier) for `Err` — so the two arms share one shape.
+        // through the born-door move-in) for `Err` — so the two arms share one shape.
         let tagged_envelope;
         let carrier = match &result {
             Ok(carrier) => carrier,

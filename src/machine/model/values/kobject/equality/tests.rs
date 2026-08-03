@@ -425,13 +425,13 @@ fn a_function<'a>(
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: Vec::new(),
     };
-    let f = storage.brand().alloc_function(KFunction::new(
+    let f = KFunction::alloc_captured(
+        scope,
         sig,
         Body::UserDefined(KExpression::new(storage.brand(), Vec::new())),
-        scope,
         false,
         types,
-    ));
+    );
     KObject::KFunction(f)
 }
 

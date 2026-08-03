@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use crate::builtins::test_support::{run_root_bare, TestRun};
 use crate::machine::core::{
-    program_storage, run_root_storage, BindingIndex, CallFrame, FrameStorageExt, GroupSeal, Scope,
+    program_storage, run_root_storage, BindingIndex, CallFrame, GroupSeal, Scope,
 };
 use crate::machine::model::{probe_key, OperatorGroup, ReductionMode};
 use crate::machine::DeliveredOperatorGroup;
@@ -121,7 +121,7 @@ fn cross_group_probe_misses() {
 fn innermost_scope_shadows_outer() {
     let region = run_root_storage();
     let outer = run_root_bare(&region);
-    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let inner = outer.alloc_child_under();
 
     let outer_group = arithmetic_group(outer);
     let inner_group = declare(inner, &["+"], ReductionMode::FoldRight);
@@ -213,7 +213,7 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
-    let inner = region.brand().alloc_scope(root.child_for_call());
+    let inner = root.alloc_child_under();
 
     let group = declare(inner, &["+"], ReductionMode::FoldRight);
     inner
@@ -325,9 +325,7 @@ fn using_window_surfaces_the_modules_operator_group() {
     let region = run_root_storage();
     let root = run_root_bare(&region);
 
-    let module = region
-        .brand()
-        .alloc_scope(Scope::child_under_module(root, "vec_ops".to_string()));
+    let module = root.alloc_child_under_module("vec_ops".to_string());
     let group = declare(module, &["+"], ReductionMode::FoldRight);
     module
         .register_operator_group_direct(
@@ -342,9 +340,7 @@ fn using_window_surfaces_the_modules_operator_group() {
     assert!(root.resolve_operator_group_delivered("+", None).is_none());
 
     // `USING vec_ops SCOPE (…)`: the window borrows the module's façade over the call site.
-    let window = region
-        .brand()
-        .alloc_scope(Scope::child_transparent(root, module.bindings()));
+    let window = root.alloc_child_transparent(module.bindings());
     let resolved = window
         .resolve_operator_group_delivered("+", None)
         .expect("the window surfaces the module's registry entry");
@@ -477,30 +473,23 @@ fn nearest_group_context_stops_at_a_plain_module() {
 
     assert!(root.nearest_group_context().is_none());
 
-    let group_scope =
-        region
-            .brand()
-            .alloc_scope(Scope::child_under_group(root, "vec_ops".to_string(), group));
+    let group_scope = root.alloc_child_under_group("vec_ops".to_string(), group);
     let in_group = group_scope
         .nearest_group_context()
         .expect("a GROUP body is its own group context");
     assert!(std::ptr::eq(in_group, group));
 
     // An anonymous frame inside the body (a block, a per-call scope) is transparent.
-    let block = region.brand().alloc_scope(group_scope.child_for_call());
+    let block = group_scope.alloc_child_under();
     assert!(block
         .nearest_group_context()
         .is_some_and(|g| std::ptr::eq(g, group)));
 
     // A plain module declared inside the group body is not a group.
-    let nested_module = region
-        .brand()
-        .alloc_scope(Scope::child_under_module(group_scope, "inner".to_string()));
+    let nested_module = group_scope.alloc_child_under_module("inner".to_string());
     assert!(nested_module.nearest_group_context().is_none());
 
     // Nor is a module that never carried a group.
-    let plain_module = region
-        .brand()
-        .alloc_scope(Scope::child_under_module(root, "plain".to_string()));
+    let plain_module = root.alloc_child_under_module("plain".to_string());
     assert!(plain_module.nearest_group_context().is_none());
 }

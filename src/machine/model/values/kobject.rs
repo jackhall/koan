@@ -620,8 +620,9 @@ fn object_cell_reach<'a>(
         KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => {
             CellReach::Owned
         }
-        // A `KFunction` is allocated into the very region that owns its captured scope — release-
-        // enforced at `RegionBrand::alloc_function` — so naming that scope names its residence too.
+        // A `KFunction` is born into the very region that owns its captured scope — the
+        // destination is derived from that scope at `KFunction::alloc_captured`, so it cannot be
+        // otherwise — and naming that scope therefore names its residence too.
         KObject::KFunction(f) => CellReach::Seed(scope_coverage(f.captured_scope().region_owner())),
         // A `Module` carries no such invariant: a transparent-ascription view re-tags a foreign
         // module into the viewing scope's own region, so its residence and its child scope's region

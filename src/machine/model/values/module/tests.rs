@@ -1,20 +1,20 @@
-//! Miri coverage for the unsafe sites: `*const Scope<'static>` lifetime-erasure
-//! transmutes and `type_members` `RefCell` mutation under a held `&'a Module<'a>`
-//! borrow. Each shape is exercised in isolation so a regression attributes to a
+//! Miri coverage for the module store: the born door's erase-store / re-anchor round trip
+//! ([`Module::alloc_at_child_scope`]) and `type_members` `RefCell` mutation under a held
+//! `&'a Module<'a>` borrow. Each shape is exercised in isolation so a regression attributes to a
 //! single site. See [`design/memory-model.md`](../../../../../design/memory-model.md).
 use super::*;
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
 use std::ptr;
+/// The child-scope borrow a module carries reads back co-located after the door's round trip, and
+/// keeps reading back once a sibling allocation has appended to the same region.
 #[test]
-fn module_child_scope_transmute_does_not_dangle() {
+fn module_child_scope_reads_back_after_the_born_store() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let module = region
-        .brand()
-        .alloc_module(Module::new("Test".into(), scope));
+    let module = Module::alloc_at_child_scope("Test".into(), scope);
     let recovered = module.child_scope();
     assert!(ptr::eq(recovered, scope));
     // Re-borrow after a sibling alloc — tree borrows is sensitive to interleaved
@@ -36,7 +36,7 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = &test_run.types;
-    let module = region.brand().alloc_module(Module::new("M".into(), scope));
+    let module = Module::alloc_at_child_scope("M".into(), scope);
     let scope_id = module.scope_id();
     {
         let mut tm = module.type_members.borrow_mut();
@@ -76,7 +76,7 @@ fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = &test_run.types;
-    let module = region.brand().alloc_module(Module::new("M".into(), scope));
+    let module = Module::alloc_at_child_scope("M".into(), scope);
     let scope_id = module.scope_id();
     {
         let mut tags = module.slot_type_tags.borrow_mut();
@@ -114,9 +114,7 @@ fn bare_module_self_sig_is_empty_after_raw_seal() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = &test_run.types;
-    let module = region
-        .brand()
-        .alloc_module(Module::new("Bare".into(), scope));
+    let module = Module::alloc_at_child_scope("Bare".into(), scope);
     module.seal_self_sig(SigSchema::raw_self_sig(module), types);
     let sig = module.self_sig(types);
     assert!(sig.abstract_members.is_empty());

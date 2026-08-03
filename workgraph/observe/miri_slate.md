@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-33 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+40 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -215,6 +215,30 @@ shape). No separate minimal test here.
 contract, and consumer-`dest` region together through this one call at a single generative `for<'b>`
 brand its start cart pins. The `sealed_extern_*` minimal tests above pin it directly; an embedder's
 own scheduler-driving tests exercise it end-to-end. No separate minimal test here.
+
+**The born doors — build-at-destination store, cross-region operand** ([src/witnessed/region.rs](../src/witnessed/region.rs))
+— `RegionHandle::alloc_resident_born` and `alloc_resident_born_with` fuse construction and store at a
+`for<'b>` brand, so the `unsafe` they route is the shared `retype` (through `erase_to_static` on the
+store side and `SealedExtern::open` on the operand's re-anchor) with none of their own. The slate
+family ([tests/born.rs](../src/witnessed/tests/born.rs)) is deliberately **invariant** in its region
+lifetime — a node naming its own region, an optional parent in *another* region, and a
+`Cell<Option<&'r str>>` — because a covariant stand-in would type-check under a weaker re-anchor and
+prove nothing. The shapes: the stored value's region pointer is the destination's; an earlier store
+reads back after 64 siblings append to the same typed cell (the arena's stable-address guarantee);
+the returned reference accepts an interior-mutable write at the caller's own `'a` *after* the store;
+a child born in one region embeds a parent resident in another under a pin held for the
+destination's whole life; that child's region dies **first** with the pinned parent outliving it (the
+production drop order, where a leak or a UAF is what a wrong pin duration looks like); and a
+three-region chain reads back through every hop. The negative case is not a runtime rejection at
+all — it is the `compile_fail` doctest on `alloc_resident_born`, where a value built over an ambient
+region fails to coerce to `'b`.
+
+- `the_born_door_stores_a_value_naming_its_own_region`
+- `an_earlier_node_reads_back_after_its_siblings_are_stored`
+- `the_returned_node_accepts_a_write_at_the_callers_lifetime`
+- `the_born_with_door_embeds_a_parent_from_another_region`
+- `a_child_region_dies_before_the_parent_it_borrows`
+- `a_chain_of_regions_reads_back_through_every_hop`
 
 **Doctest fixture markers** ([src/witnessed/doctest_fixture.rs](../src/witnessed/doctest_fixture.rs))
 — the `unsafe impl Reattachable` for `RefFamily` / `InvFamily` and `unsafe impl Witness` /

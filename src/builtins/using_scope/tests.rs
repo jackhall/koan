@@ -10,7 +10,7 @@ use crate::builtins::test_support::{parse_one, per_call_storage, run_root_bare, 
 use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage, BindingIndex, FrameCoverage, Scope};
+use crate::machine::{program_storage, run_root_storage, BindingIndex, FrameCoverage};
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
@@ -112,7 +112,7 @@ fn using_window_shadows_call_site_binding() {
 /// returning a closure that reads a surfaced member must keep both the
 /// closure's transparent scope and the module's region alive past the block.
 /// Run-root churn after the escape exercises drop discipline; under Miri this
-/// pins the `Scope::child_transparent` / `alloc_scope` transmute sites
+/// pins the `Scope::alloc_child_transparent` born-door store
 /// against use-after-free.
 #[test]
 fn using_functor_result_closure_escapes_soundly() {
@@ -224,12 +224,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
 
     let call_site_storage = run_root_storage();
     let call_site_scope = run_root_bare(&call_site_storage);
-    let window = call_site_scope
-        .brand()
-        .alloc_scope(Scope::child_transparent(
-            call_site_scope,
-            module_scope.bindings(),
-        ));
+    let window = call_site_scope.alloc_child_transparent(module_scope.bindings());
 
     // Mirror `USING`'s own overlay fold (`builtins/using_scope.rs`): mint the opened module's own
     // carrier into the window's (call-site) arena at overlay construction, before any read through
@@ -310,12 +305,7 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
     // module's — the one place residence and the reading scope genuinely diverge.
     let call_site_storage = run_root_storage();
     let call_site_scope = run_root_bare(&call_site_storage);
-    let window = call_site_scope
-        .brand()
-        .alloc_scope(Scope::child_transparent(
-            call_site_scope,
-            module_scope.bindings(),
-        ));
+    let window = call_site_scope.alloc_child_transparent(module_scope.bindings());
     // `USING`'s own overlay fold, which roots the module's arena under the call-site region.
     let _window_reach = window.mint_retained(&[&FrameCoverage::of(Rc::clone(&module_storage))]);
 

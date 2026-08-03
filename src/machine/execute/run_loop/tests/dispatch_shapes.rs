@@ -89,13 +89,13 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
             ktype: KType::NUMBER,
         })],
     };
-    let f = scope.brand().alloc_function(KFunction::new(
+    let f = KFunction::alloc_captured(
+        scope,
         sig,
         crate::machine::core::Body::Builtin(body_identity),
-        scope,
         false,
         types,
-    ));
+    );
     let obj = scope.brand().alloc_value(KObject::KFunction(f));
     scope
         .bind_resident_for_test(
@@ -872,7 +872,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
-    let inner = scope.brand().alloc_scope(scope.child_for_call());
+    let inner = scope.alloc_child_under();
 
     let record = OperatorGroup::alloc(inner.brand(), &["-"], ReductionMode::FoldRight);
     inner

@@ -128,7 +128,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         &TypeRegistry::new(),
         &mut crate::machine::WriteGate::for_test(),
     );
-    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let inner = outer.alloc_child_under();
     register_builtin(
         inner,
         "NA",
@@ -369,7 +369,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         &mut crate::machine::WriteGate::for_test(),
     );
 
-    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let inner = outer.alloc_child_under();
     let expr = working(
         region.brand(),
         vec![
@@ -411,7 +411,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let inner = outer.alloc_child_under();
     register_builtin(
         inner,
         "inner_plus",
@@ -461,7 +461,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         &types,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let inner = outer.alloc_child_under();
     // Inner `:Number` overload: the unbound bare name rejects its shape, so the
     // inner scope's only contribution is a dead lean (must not terminate).
     register_builtin(
@@ -514,13 +514,8 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let pick_num_fn = region.brand().alloc_function(KFunction::new(
-        pick_num,
-        Body::Builtin(body_a),
-        scope,
-        false,
-        &types,
-    ));
+    let pick_num_fn =
+        KFunction::alloc_captured(scope, pick_num, Body::Builtin(body_a), false, &types);
     scope
         .register_function_direct(
             "pick_num".to_string(),
@@ -572,13 +567,13 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let sibling = region.brand().alloc_function(KFunction::new(
+    let sibling = KFunction::alloc_captured(
+        scope,
         pick_str,
         Body::Builtin(super::body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     scope
         .register_function_direct(
             "pick_str".to_string(),

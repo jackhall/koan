@@ -21,24 +21,20 @@ use crate::witnessed::FoldedPlacement;
 /// borrow leaf pointing at `home`, the shape a closure capturing its own defining frame takes.
 fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KFunction<'run> {
     let types = TypeRegistry::new();
-    home.with_scope(|child| {
-        let inner = KFunction::new(
-            ExpressionSignature {
-                return_type: ReturnType::Resolved(KType::NULL),
-                elements: vec![SignatureElement::Keyword("__INNER__".into())],
-            },
-            Body::Builtin(|ctx| {
-                crate::machine::core::Action::done_resident(
-                    ctx.scope,
-                    Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
-                )
-            }),
-            child,
-            false,
-            &types,
-        );
-        home.brand().alloc_function(inner)
-    })
+    CallFrame::alloc_capturing_scope(
+        home,
+        ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::NULL),
+            elements: vec![SignatureElement::Keyword("__INNER__".into())],
+        },
+        Body::Builtin(|ctx| {
+            crate::machine::core::Action::done_resident(
+                ctx.scope,
+                Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
+            )
+        }),
+        &types,
+    )
 }
 
 /// A record `{v = <value>, f = <home closure>}` built through `home`'s own door: its substrate is

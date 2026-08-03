@@ -32,7 +32,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let branches_expr = crate::try_action!(require_kexpression(ctx.args, "TRY", "branches"));
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local and reads still
     // chain out to the call-site scope.
-    let body_scope: &'a Scope<'a> = ctx.scope.brand().alloc_scope(Scope::child_under(ctx.scope));
+    let body_scope: &'a Scope<'a> = ctx.scope.alloc_child_under();
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // On success `it` is the watched value, adopted from its sealed carrier at bind time. On
         // error `it` is the per-variant payload unwrapped from `KError::to_tagged` — that `Tagged`

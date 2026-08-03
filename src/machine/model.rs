@@ -11,9 +11,9 @@ pub use operators::{
 pub use types::TypeRegistry;
 pub use types::{
     is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, DispatchToken,
-    DispatchTokenElement, ExpressionSignature, KKind, KType, NodeSchema, Parseable, PendingMember,
-    Record, RecursiveGroupWindow, RelativeSchema, ReturnType, SealedGroup, SignatureElement,
-    TypeNode, UntypedElement, UntypedKey,
+    DispatchTokenElement, ExpressionSignature, ExpressionSignatureFamily, KKind, KType, NodeSchema,
+    Parseable, PendingMember, Record, RecursiveGroupWindow, RelativeSchema, ReturnType,
+    SealedGroup, SignatureElement, TypeNode, UntypedElement, UntypedKey,
 };
 pub use types::{owned_untyped_key, StoredElement};
 pub use values::{

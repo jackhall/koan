@@ -40,6 +40,40 @@ owned-data type whose `'a` is phantom, re-anchored invariantly by a zero-size
 `PhantomData` marker, is layout-invariant and therefore reattachable exactly as a
 genuinely borrowing family is.
 
+### Two doors into a typed cell
+
+A `FamilyArena` cell stores `K::At<'static>`, so *what* a store may admit is the whole
+question of residence: a region borrow the erasure discards is one only the store's
+signature can vet.
+
+[`RegionHandle::alloc_resident`](../src/witnessed/region.rs) is the **move-in** door. Its
+bound is `K::At<'static>` — the value carries no region borrow at all, so there is nothing
+to vet and nothing a call site could claim wrongly.
+
+[`RegionHandle::alloc_resident_born`](../src/witnessed/region.rs) is the **born** door, for
+a family whose every constructor borrows the region it lands in and so can never meet that
+bound. It takes a `for<'b>` construction closure and hands it a `FoldedPlacement` over this
+handle's own region re-anchored to `'b`, then stores what the closure returns and gives back
+the resident at the handle's `'a`. The proof is the quantifier: `'b` has no outlives relation
+to any enclosing lifetime, so the only `&'b Region<W>` — and hence the only `X<'b>` built over
+one — the closure body can name is the placement's. A captured ambient `&'a Region` does not
+coerce and does not compile, which makes the built value's region pointer the destination's by
+construction. It is the same no-outlives argument
+[`FoldedPlacement::alloc_resident_folded`](../src/witnessed/bump.rs) rests on, for a value
+with no fold to ride.
+
+`alloc_resident_born_with` is the born door for a value that must embed an operand borrowed
+from *outside* the closure. The operand arrives as a `SealedExtern` and is re-anchored to the
+*same* `'b` as the placement — one `zip`ped `open`, because branding the two independently is
+exactly what an invariant family rejects. What the signature still cannot prove is the
+operand's own liveness: its pointee may live in another region, and the stored value keeps
+naming it for as long as the destination region lives. The `pin` argument is where a caller
+discharges that, and it is borrowed for `'a` — the destination region's own lifetime — so the
+`Witness` contract covers the stored reference's whole life rather than merely the call. That
+keeps the door a lifetime *shortening*; the residual co-location obligation (does this pin in
+fact cover this operand?) is the one every `Witness` already carries, narrowed in duration
+rather than added to.
+
 ## The bump allocator
 
 `Region<P>` is the erase-store engine: a set of typed sub-arenas parameterized by
@@ -66,10 +100,10 @@ which reach it through one door. Two properties define the tier.
 
 **It routes no erasure.** The allocator's own type carries no lifetime, so `'a`
 enters only at the allocating call. A bumped value may therefore hold an `&'a`
-back into the very region it lives in, with no `erase_to_static`, no
-`AuditedStored` impl and no residence audit — the thing a `FamilyArena` cell
+back into the very region it lives in, with no `erase_to_static`, no `Stored`
+impl and no residence check — the thing a `FamilyArena` cell
 cannot do, because its `K::At<'static>` slot type forces a region-self-referential
-value's borrow through erasure and back through a vetted reattach. Cycles among
+value's borrow through erasure and back through a brand-confined reattach. Cycles among
 bumped entries are harmless: everything there dies with the region, at once.
 
 **`Copy` is the static proxy for "no destructor to skip".** A bump releases its
@@ -118,9 +152,10 @@ a fold closure. They have no operands and no reach to compose, so the fold
 machinery has nothing to do and no call site can claim anything wrongly; what is
 left is an ordinary borrow, the returned `&'a` against the `&'a Region` the handle
 holds, which the borrow checker enforces with no audit and no `unsafe`. Storing a
-value into a *typed* family is gated where it always was — `alloc_resident`'s
-`'static` bound, the family audit on `alloc_resident_checked`, or the rank-2 brand
-on `alloc_resident_folded` — none of which these doors touch. Occupancy is one
+value into a *typed* family is gated at its own door — `alloc_resident`'s
+`'static` bound for a value that borrows no region, or one of the two rank-2 brands
+(`alloc_resident_born` / `alloc_resident_born_with` for a value built where it lands,
+`alloc_resident_folded` for one built at a fold) — none of which these doors touch. Occupancy is one
 whole-region figure,
 [`Region::bump_bytes`](../src/witnessed/region.rs) — **live bytes**, summed over
 what each allocating call actually stored, not the allocator's reserved chunk

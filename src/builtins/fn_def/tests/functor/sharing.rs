@@ -2,7 +2,7 @@
 
 use crate::builtins::test_support::{lookup_fn, lookup_module, parse_one, spliced_part, TestRun};
 use crate::machine::model::Carried;
-use crate::machine::{program_storage, run_root_storage, FrameStorageExt};
+use crate::machine::{program_storage, run_root_storage};
 
 /// Pinned-slot admissibility: a `Signature` slot with `{Elem = Number}` folded in admits a
 /// module iff its self-sig satisfies the folded schema — the pin is a manifest member, so
@@ -19,12 +19,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let types = test_run.types.clone();
     // An empty signature: every module bare-satisfies it, so the pins alone gate. Declared
     // directly rather than through `SIG`, which has no empty-body surface form.
-    let sig_scope = region
-        .brand()
-        .alloc_scope(crate::machine::Scope::child_under_sig(
-            scope,
-            "Ordered".into(),
-        ));
+    let sig_scope = scope.alloc_child_under_sig("Ordered".into());
     let schema = SigSchema::project_decl(sig_scope, &types);
 
     // `no_elem_pin` binds no `Elem` member, so the `{Elem = Number}` pin finds nothing to agree

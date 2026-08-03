@@ -17,8 +17,8 @@ pub(crate) use core::{
     kerror_ktype, require_bare_type_name, require_identifier_name, require_kexpression,
     require_ktype, split_body_statements, Action, ActionFn, AwaitContinue, BlockBody, BlockEntry,
     BlockScope, BlockSeed, BodyCtx, CatchContinue, DepPlacement, DepRequest, DepTerminal,
-    FinishCtx, FoldingBrand, FramePlacement, FrameStorageExt, GroupSeal, OverloadSeal,
-    OwnedDispatch, ReturnContract, StepAllocator, TailContract,
+    FinishCtx, FoldingBrand, FramePlacement, GroupSeal, OverloadSeal, OwnedDispatch,
+    ReturnContract, StepAllocator, TailContract,
 };
 pub use core::{
     program_storage, run_root_storage, Bindings, DeliveredCarried, DeliveredOperatorGroup,

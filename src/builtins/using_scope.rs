@@ -4,7 +4,7 @@
 //! `m` is eager (a resolved module value), `body` is lazy
 //! (a [`KType::KEXPRESSION`] type) so it evaluates in the opened scope.
 //!
-//! The block runs in a transparent scope ([`Scope::child_transparent`])
+//! The block runs in a transparent scope ([`Scope::alloc_child_transparent`])
 //! allocated in the **call-site region** — not a per-call frame — so forwarded
 //! binds and functions defined in the block stay live after the block ends.
 //! A bind colliding with a surfaced member is rejected in
@@ -64,10 +64,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     };
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
     let module_bindings = module.child_scope().bindings();
-    let overlay: &'a Scope<'a> = ctx
-        .scope
-        .brand()
-        .alloc_scope(Scope::child_transparent(ctx.scope, module_bindings));
+    let overlay: &'a Scope<'a> = ctx.scope.alloc_child_transparent(module_bindings);
     // Fold the eager `m` carrier's reach onto the overlay so the opened module's per-call region stays
     // alive for the window's life (see the module-level soundness note). The minted description is
     // non-owning, so the mint **retains** its owning bundle in the overlay's region union for that

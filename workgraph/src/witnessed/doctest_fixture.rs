@@ -8,8 +8,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::{
-    AuditedStored, FamilyArena, PinBundle, PinsRegion, Reattachable, Region, RegionOwner,
-    SealedExtern, StorageOf, StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
+    FamilyArena, PinBundle, PinsRegion, Reattachable, Region, RegionOwner, SealedExtern, StorageOf,
+    StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
 };
 
 /// A shared-reference carrier family: `&'r u32`.
@@ -20,9 +20,9 @@ unsafe impl Reattachable for RefFamily {
 }
 
 /// A text carrier family: `&'r str` — the shape a bump-stored string takes. It has **no**
-/// [`Stored`] impl and no [`AuditedStored`] impl on purpose: the bump door
-/// ([`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)) needs neither, which
-/// is what its doctests demonstrate.
+/// [`Stored`] impl on purpose: the bump door
+/// ([`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)) needs none, which is
+/// what its doctests demonstrate.
 pub struct StrFamily;
 // SAFETY: `&'r str` is one type generic only in `'r` (a fat pointer, layout-invariant).
 unsafe impl Reattachable for StrFamily {
@@ -81,21 +81,20 @@ pub fn seal_extern<T: Reattachable>(live: T::At<'_>) -> SealedExtern<T> {
     SealedExtern::erase(live)
 }
 
-/// A value that names the region it is resident in, so its residence is a property of the value
-/// rather than of a table kept beside it. This is the shape a production audit takes: the audit is a
-/// pointer comparison against the destination region, and a value carrying the wrong home cannot
-/// pass it.
+/// A value that names the region it is resident in, so its residence is legible in the value rather
+/// than in a table kept beside it. The born doors' doctests build one at the brand and read its
+/// `home` back, which is what makes "the value's region pointer is the destination's" observable.
 #[derive(Clone, Copy)]
 pub struct HomedRef<'r> {
-    /// The region this value lives in — what [`HomedRefFamily`]'s audit compares against.
+    /// The region this value lives in — read back to show it is the destination the door built at.
     pub home: &'r Region<FixtureProfile>,
     /// The borrowed payload.
     pub value: &'r u32,
 }
 
-/// A homed-reference carrier family: [`HomedRef`], the simplest honest shape for an
-/// [`AuditedStored`] audit — [`RegionHandle::alloc_resident_checked`]'s doctests exercise a passing
-/// store (a value naming the destination region) and a rejecting one (a value naming another).
+/// A homed-reference carrier family: [`HomedRef`], the simplest shape whose residence is readable
+/// off the stored value — [`RegionHandle::alloc_resident_born`](super::RegionHandle)'s doctests build one at the brand
+/// and its `compile_fail` twin tries to build one over an ambient region instead.
 pub struct HomedRefFamily;
 // SAFETY: `HomedRef<'r>` is one type generic only in `'r`, a pair of thin pointers whose layout is
 // identical for every choice of `'r`.
@@ -118,16 +117,6 @@ impl Stored<FixtureProfile> for RefFamily {
 impl Stored<FixtureProfile> for HomedRefFamily {
     fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
         &storage.1 .0
-    }
-}
-
-// SAFETY: `audit` returns true only when the incoming value names `region` itself as its home, so
-// the region borrow it carries is resident by construction. A permissive audit is not writable here
-// without lying about that residence relation.
-unsafe impl AuditedStored<FixtureProfile> for HomedRefFamily {
-    type AuditContext<'ctx> = ();
-    fn audit(region: &Region<FixtureProfile>, value: &HomedRef<'_>, _context: ()) -> bool {
-        std::ptr::eq(value.home, region)
     }
 }
 

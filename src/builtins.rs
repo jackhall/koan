@@ -1,7 +1,7 @@
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
-use crate::machine::{BindingIndex, FrameStorageExt, Scope, WriteGate};
+use crate::machine::{BindingIndex, Scope, WriteGate};
 use crate::machine::{Body, KFunction};
 
 pub(crate) mod arithmetic;
@@ -79,14 +79,8 @@ pub(crate) fn register_builtin_full<'a>(
     types: &TypeRegistry,
     gate: &mut WriteGate,
 ) {
-    let region = scope.brand();
-    let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
-        signature,
-        Body::Builtin(body),
-        scope,
-        binder,
-        types,
-    ));
+    let f: &'a KFunction<'a> =
+        KFunction::alloc_captured(scope, signature, Body::Builtin(body), binder, types);
     let _ = scope.register_function_direct(name.into(), f, BindingIndex::BUILTIN, gate);
 }
 
@@ -116,14 +110,8 @@ pub(crate) fn register_overload_at<'a>(
     types: &TypeRegistry,
     gate: &mut WriteGate,
 ) {
-    let region = scope.brand();
-    let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
-        signature,
-        Body::Builtin(body),
-        scope,
-        false,
-        types,
-    ));
+    let f: &'a KFunction<'a> =
+        KFunction::alloc_captured(scope, signature, Body::Builtin(body), false, types);
     scope
         .register_function_direct(name.into(), f, index, gate)
         .expect("register_overload_at: user-index overload should not collide with a builtin");
@@ -138,10 +126,8 @@ pub fn unseeded_scopes<'a>(
     run_storage: &'a std::rc::Rc<crate::machine::FrameStorage>,
     out: Box<dyn std::io::Write + 'a>,
 ) -> (&'a Scope<'a>, &'a Scope<'a>) {
-    let root = run_storage
-        .brand()
-        .alloc_scope(Scope::run_root(run_storage, None, out));
-    let child = run_storage.brand().alloc_scope(Scope::run_child(root));
+    let root = Scope::alloc_run_root(run_storage, out);
+    let child = root.alloc_run_child();
     (root, child)
 }
 

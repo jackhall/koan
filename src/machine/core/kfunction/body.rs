@@ -89,6 +89,15 @@ pub enum Body<'a> {
     Builtin(super::action::ActionFn),
 }
 
+/// [`Reattachable`](crate::witnessed::Reattachable) family for a [`Body`] — the operand form it
+/// takes when a function is born at its captured scope's construction brand
+/// ([`KFunction::alloc_captured`](super::KFunction::alloc_captured)). Layout-invariant in `'r`: the
+/// `UserDefined` arm holds a `KExpression<'r>` and the `Builtin` arm a lifetime-free `fn` pointer, so
+/// every choice of `'r` is one type up to the lifetime.
+pub struct BodyFamily;
+
+crate::witnessed::reattachable!(BodyFamily => Body<'r>);
+
 #[cfg(test)]
 mod tests {
     use super::*;

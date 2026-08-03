@@ -199,14 +199,30 @@ a region no such door can name, so it reaches its destination as a delivery enve
 instead, and arriving at the pure door is a construction bug reported as a diagnostic —
 not a residence verdict a caller could turn into an admission.
 
-One runtime check remains, and it is a **primitive reattach guard** rather than a tier. A
-`KFunction`, `Scope`, or `Module` borrows a single region (its captured / parent / child
-scope); the `ptr::eq` guard on its arena move-in checks that region is the destination —
-the reattach witness for the `'_ → 'a` erasure. It reads one field, never contents, and it
-cannot widen: there is no evidence a caller could hand it to admit a foreign region. A
-`Module` re-tagging a *foreign* child scope (a transparent ascription view) has no route
-through the guard at all: it is built inside the fold that merges that scope in
+**No runtime residence check survives either.** A `KFunction`, `Scope`, or `Module` borrows a
+single region (its captured / parent / child scope), and each is *born at its destination*: the
+value is constructed and stored in one act inside a `for<'b>` brand over the destination region
+([`RegionHandle::alloc_resident_born`](../workgraph/src/witnessed/region.rs) and its
+crossing-operand sibling `alloc_resident_born_with`), so the region pointer it carries is the
+destination's by construction. The koan doors —
+[`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its siblings,
+[`KFunction::alloc_captured`](../src/machine/core/kfunction.rs),
+[`Module::alloc_at_child_scope`](../src/machine/model/values/module.rs) — each derive the
+destination handle from the value's own anchoring scope rather than taking a brand alongside it,
+so pairing a value with a foreign region is not stateable at a call site. The value-returning
+constructors are private, so none of the three can exist outside the act that stores it. A
+`Module` re-tagging a *foreign* child scope (a transparent ascription view) takes the fold brand
+instead, inside the fold that merges that scope in
 ([`Scope::store_transparent_view`](../src/machine/core/scope/reach.rs)).
+
+An operand the born closure has to embed but cannot derive from the brand — the per-call frame
+child's lexical parent, which lives in another region — crosses through the witnessed channel as a
+`SealedExtern` re-anchored to the same `'b`, under a [`Witness`](../workgraph/design/witnessed-memory.md)
+pin borrowed for the *destination region's* own lifetime. That is what keeps the door a
+lifetime-shortening rather than a lengthening: the pin's contract covers the stored reference's
+whole life, not merely the call. Co-location of that pin with the operand stays a caller
+obligation, the same one `SealedExtern::open` already carries; the door narrows its duration
+rather than adding an obligation class.
 
 Where a seam has to *ask* where a composite lives — the copy-versus-pin decision's
 home-crossing test — it reads the answer off the value:

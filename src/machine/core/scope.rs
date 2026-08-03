@@ -5,10 +5,13 @@ use std::rc::{Rc, Weak};
 
 use crate::machine::model::KType;
 use crate::machine::model::OperatorGroup;
+use crate::machine::model::OperatorGroupFamily;
 use crate::machine::model::RecursiveGroupWindow;
+use crate::witnessed::{And, Reattachable, RegionHandle, SealedExtern};
 
-use super::arena::{FrameStorage, FrameStorageExt, KoanRegion, RegionBrand};
+use super::arena::{FrameStorage, KoanRegion, RegionBrand};
 use super::bindings::Bindings;
+use super::ref_carriers::{BindingsReferenceFamily, ScopeRefFamily};
 use super::scope_id::ScopeId;
 
 mod reach;
@@ -143,19 +146,19 @@ pub enum ScopeKind<'a> {
 }
 
 impl<'a> Scope<'a> {
-    pub fn run_root(
-        storage: &'a Rc<FrameStorage>,
-        outer: Option<&'a Scope<'a>>,
-        out: Box<dyn Write + 'a>,
-    ) -> Self {
+    /// The run-global root, built at the brand its own region hands the born door. `out` is installed
+    /// after the store rather than passed in: a `Box<dyn Write + 'a>` names the caller's lifetime,
+    /// which cannot coerce to the door's `'b` — and nothing reads the writer between the store and
+    /// the install, since the root is unpublished until this returns.
+    fn run_root(brand: RegionBrand<'a>, region_owner: Weak<FrameStorage>) -> Self {
         Self {
-            outer,
+            outer: None,
             root: None,
             bindings: ScopeBindings::Owned(Bindings::new()),
-            out: RefCell::new(Some(out)),
-            // Region borrow and owning `Weak` both derive from the one run `storage` handle.
-            brand: storage.brand(),
-            region_owner: Rc::downgrade(storage),
+            out: RefCell::new(None),
+            // Region borrow and owning `Weak` both derive from the one run storage.
+            brand,
+            region_owner,
             id: ScopeId::next(),
             kind: ScopeKind::Root,
             closed: Cell::new(false),
@@ -208,16 +211,12 @@ impl<'a> Scope<'a> {
         self.closed.get()
     }
 
-    pub fn child_for_call(&'a self) -> Scope<'a> {
-        Self::child_under(self)
-    }
-
     /// The mutable run scope: the direct child of the immutable run-global root. Unlike the
     /// generic [`Self::child_under`] — which copies the parent's *own* `root` handle — this stamps
     /// `root` to `run_root` itself, because the run-global root carries no `root` of its own
     /// (`root: None` marks "I am the root"). The only caller is `unseeded_scopes`, which holds the
     /// root as a genuine `&'a`.
-    pub fn run_child(run_root: &'a Scope<'a>) -> Scope<'a> {
+    fn run_child(run_root: &'a Scope<'a>) -> Scope<'a> {
         let mut child = Self::child_under(run_root);
         child.root = Some(run_root);
         child
@@ -250,7 +249,7 @@ impl<'a> Scope<'a> {
 
     /// `outer` is the lexical parent — for FN bodies the captured definition scope,
     /// not the call site.
-    pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
+    fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
@@ -285,7 +284,7 @@ impl<'a> Scope<'a> {
     }
 
     /// `child_under`, stamped as a SIG decl_scope with an empty VAL slot collector.
-    pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+    fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
@@ -298,7 +297,7 @@ impl<'a> Scope<'a> {
 
     /// `child_under`, stamped as a MODULE body (also used for the per-ascription view
     /// minted by `:|`).
-    pub fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+    fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
@@ -310,7 +309,7 @@ impl<'a> Scope<'a> {
     /// a `GROUP` body. The kind stays `Module` (a group *is* a module: it binds a module value
     /// and `USING` opens it), and the group record is what
     /// [`Self::nearest_group_context`] hands back to the `OP` declarations inside.
-    pub fn child_under_group(
+    fn child_under_group(
         outer: &'a Scope<'a>,
         name: String,
         group: &'a OperatorGroup<'a>,
@@ -330,10 +329,7 @@ impl<'a> Scope<'a> {
     /// scope, so the elaborator finds the window (a member name lowers to its sibling handle).
     /// `outer` is the lexical parent; the sealed members are mirrored up into it at the block's
     /// dep-finish, which is also the window's seal barrier.
-    pub fn child_recursive_group(
-        outer: &'a Scope<'a>,
-        window: Rc<RecursiveGroupWindow>,
-    ) -> Scope<'a> {
+    fn child_recursive_group(outer: &'a Scope<'a>, window: Rc<RecursiveGroupWindow>) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
@@ -361,11 +357,131 @@ impl<'a> Scope<'a> {
     /// `module_bindings`. Reads consult the window first then walk `outer`; writes
     /// forward to `outer`. `region` is `outer.region` so block-body allocations outlive
     /// the block (forwarded binds are sound).
-    pub fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings) -> Scope<'a> {
+    fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Borrowed(module_bindings),
             ScopeKind::Anonymous,
+        )
+    }
+
+    /// The **born-door skeleton for a same-region child**: build `outer`'s child inside a `for<'b>`
+    /// brand over the region `outer` itself lives in, and store it in the same act
+    /// ([`RegionHandle::alloc_resident_born_with`]). The destination is derived from `outer`'s own
+    /// brand rather than passed alongside it, so pairing a scope with a foreign region is
+    /// unrepresentable — which is what discharges residence here.
+    ///
+    /// `outer` crosses into the closure as the door's operand, so the child couples to it at the
+    /// brand's own `'b` and `Scope`'s invariance is honoured by construction. Everything the
+    /// constructors inherit — the region brand, the region owner, the `root` handle — comes off that
+    /// branded parent, so the child's region pointer is the destination's. The pin is `outer`'s
+    /// region, held for the whole of `'a`: a same-region operand needs no other liveness.
+    fn alloc_child(
+        outer: &'a Scope<'a>,
+        build: impl for<'b> FnOnce(&'b Scope<'b>) -> Scope<'b>,
+    ) -> &'a Scope<'a> {
+        outer
+            .brand()
+            .handle()
+            .alloc_resident_born_with::<Scope<'static>, ScopeRefFamily, _>(
+                SealedExtern::<ScopeRefFamily>::erase(outer),
+                outer.region(),
+                |_placement, outer_b| build(outer_b),
+            )
+    }
+
+    /// [`Self::alloc_child`] for a constructor taking a **second** borrowed operand — a `GROUP`
+    /// record, a module's binding table. It zips onto the parent so both re-anchor at one `'b`;
+    /// branding them independently is exactly what invariance rejects.
+    fn alloc_child_with<Op: Reattachable>(
+        outer: &'a Scope<'a>,
+        operand: SealedExtern<Op>,
+        build: impl for<'b> FnOnce(&'b Scope<'b>, Op::At<'b>) -> Scope<'b>,
+    ) -> &'a Scope<'a> {
+        outer
+            .brand()
+            .handle()
+            .alloc_resident_born_with::<Scope<'static>, And<ScopeRefFamily, Op>, _>(
+                SealedExtern::<ScopeRefFamily>::erase(outer).zip(operand),
+                outer.region(),
+                |_placement, (outer_b, operand_b)| build(outer_b, operand_b),
+            )
+    }
+
+    /// Allocate the **run-global root** into `storage`'s region and hand back the resident scope. The
+    /// one scope with no parent to cross, so it takes the operand-free born door; `out` is installed
+    /// after the store (see [`Self::run_root`]).
+    pub fn alloc_run_root(
+        storage: &'a Rc<FrameStorage>,
+        out: Box<dyn Write + 'a>,
+    ) -> &'a Scope<'a> {
+        let region_owner = Rc::downgrade(storage);
+        let root = RegionHandle::from_owner(&**storage).alloc_resident_born::<Scope<'static>>(
+            |placement| Scope::run_root(RegionBrand(placement.handle()), region_owner),
+        );
+        *root.out.borrow_mut() = Some(out);
+        root
+    }
+
+    /// Allocate the mutable run scope — the direct child of the run-global root — into the root's own
+    /// region. Unlike [`Self::alloc_child_under`] this stamps `root` to `run_root` itself, because
+    /// the run-global root carries no `root` of its own.
+    pub fn alloc_run_child(&'a self) -> &'a Scope<'a> {
+        Self::alloc_child(self, |root_b| Scope::run_child(root_b))
+    }
+
+    /// Allocate an anonymous same-region child of `self` — the plain block / body scope.
+    pub fn alloc_child_under(&'a self) -> &'a Scope<'a> {
+        Self::alloc_child(self, |outer_b| Scope::child_under(outer_b))
+    }
+
+    /// Allocate a same-region child stamped as a SIG decl_scope with an empty VAL slot collector.
+    pub fn alloc_child_under_sig(&'a self, name: String) -> &'a Scope<'a> {
+        Self::alloc_child(self, move |outer_b| Scope::child_under_sig(outer_b, name))
+    }
+
+    /// Allocate a same-region child stamped as a MODULE body (also the per-ascription view `:|`
+    /// mints).
+    pub fn alloc_child_under_module(&'a self, name: String) -> &'a Scope<'a> {
+        Self::alloc_child(self, move |outer_b| {
+            Scope::child_under_module(outer_b, name)
+        })
+    }
+
+    /// Allocate a `GROUP` body: a MODULE-kinded child carrying the [`OperatorGroup`] record its `OP`
+    /// declarations belong to. The record is same-region with the scope, so it crosses the brand as
+    /// the door's second operand.
+    pub fn alloc_child_under_group(
+        &'a self,
+        name: String,
+        group: &'a OperatorGroup<'a>,
+    ) -> &'a Scope<'a> {
+        Self::alloc_child_with(
+            self,
+            SealedExtern::<OperatorGroupFamily>::erase(group),
+            move |outer_b, group_b| Scope::child_under_group(outer_b, name, group_b),
+        )
+    }
+
+    /// Allocate a `RECURSIVE TYPES` block body carrying the open [`RecursiveGroupWindow`]. The window
+    /// is heap-owned and lifetime-free, so it captures into the closure rather than crossing it.
+    pub fn alloc_child_recursive_group(
+        &'a self,
+        window: Rc<RecursiveGroupWindow>,
+    ) -> &'a Scope<'a> {
+        Self::alloc_child(self, move |outer_b| {
+            Scope::child_recursive_group(outer_b, window)
+        })
+    }
+
+    /// Allocate a transparent `USING … SCOPE` child whose bindings are a read-only window onto
+    /// `module_bindings`. The table lives in the opened module's own region, so it crosses the brand
+    /// as the door's second operand; the `USING` builtin is what keeps that region alive.
+    pub fn alloc_child_transparent(&'a self, module_bindings: &'a Bindings) -> &'a Scope<'a> {
+        Self::alloc_child_with(
+            self,
+            SealedExtern::<BindingsReferenceFamily>::erase(module_bindings),
+            |outer_b, bindings_b| Scope::child_transparent(outer_b, bindings_b),
         )
     }
 

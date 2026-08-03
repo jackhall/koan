@@ -12,7 +12,7 @@
 //! Beside the typed cells a region holds a **bump** ([`bump`](Region::bump)), the storage home for
 //! any `Drop`-free value family that names the region's own lifetime. It routes no erasure at all —
 //! the allocator is lifetime-free, so `'a` enters only at the allocating call — which is what lets
-//! a bumped value hold an `&'a` back into its own region with no `AuditedStored` residence audit.
+//! a bumped value hold an `&'a` back into its own region with no residence check at all.
 //! The library bumps its own container metadata there ([`bump_slice`](Region::bump_slice) and its
 //! siblings, all crate-private); an embedder reaches it only through the public bump door
 //! ([`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)), which composes the
@@ -490,18 +490,6 @@ unsafe impl<W: StorageProfile> super::Witness for Region<W> {}
 /// ```
 ///
 /// ```compile_fail
-/// // The closure-gated move-in is gone: storage of a region-borrowing value is gated by the
-/// // family's own declared audit, never by caller code.
-/// use std::rc::Rc;
-/// use workgraph::witnessed::doctest_fixture::{fresh_cart, RefFamily};
-/// use workgraph::witnessed::RegionHandle;
-/// let cart = fresh_cart();
-/// let handle = RegionHandle::from_owner(&*cart);
-/// let local = 7u32;
-/// let _ = handle.alloc_resident_audited::<RefFamily>(&local, |_, _| true);
-/// ```
-///
-/// ```compile_fail
 /// // Folding reach into a region by hand is off the embedder surface: `retain_reach` is
 /// // crate-private, so every retention an embedder can reach rides a mint that performs it.
 /// use std::rc::Rc;
@@ -556,10 +544,10 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// that machinery to do and nothing a call site could claim wrongly. What is left is an ordinary
     /// borrow: the returned `&'a str` cannot outlive the `&'a Region` this handle holds, which the
     /// borrow checker enforces with no audit and no `unsafe`. A value built *around* those bytes is
-    /// gated where it always was — [`alloc_resident`](Self::alloc_resident)'s `'static` bound, the
-    /// family audit on [`alloc_resident_checked`](Self::alloc_resident_checked), or the rank-2 brand
-    /// on [`FoldedPlacement::alloc_resident_folded`](super::FoldedPlacement::alloc_resident_folded)
-    /// — none of which this door touches.
+    /// gated at its own door — [`alloc_resident`](Self::alloc_resident)'s `'static` bound, or one of
+    /// the two rank-2 brands ([`alloc_resident_born`](Self::alloc_resident_born),
+    /// [`FoldedPlacement::alloc_resident_folded`](super::FoldedPlacement::alloc_resident_folded)) —
+    /// none of which this door touches.
     ///
     /// ```
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
@@ -691,8 +679,8 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
 
     /// Co-located resident allocation — see [`Region::alloc_resident`]. Move-in: `value` must carry
     /// no region borrow (`K::At<'static>`), so the store-side lifetime erasure never discards a
-    /// borrow only the caller could vet. A value that legitimately borrows a region takes
-    /// [`Self::alloc_resident_checked`] instead.
+    /// borrow only the caller could vet. A value that legitimately borrows a region is built where
+    /// it lands instead, through [`Self::alloc_resident_born`] or its crossing-operand sibling.
     ///
     /// ```
     /// use std::rc::Rc;
@@ -718,50 +706,6 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// ```
     pub fn alloc_resident<K: Stored<W>>(self, value: K::At<'static>) -> &'a K::At<'a> {
         self.region.alloc_resident::<K>(value)
-    }
-
-    /// Resident move-in vetted by family `K`'s own declared [`AuditedStored`] audit rather than a
-    /// call-site closure: `value` is stored only when `K::audit` — the embedder's residence
-    /// verifier for the family — accepts it against this handle's region and the typed `context`.
-    /// Where [`Self::alloc_resident`] admits only `'static` values, this admits a value that
-    /// legitimately borrows a region, with the family (an `unsafe impl`, not forgeable call-site
-    /// code) declaring the vetting.
-    ///
-    /// ```
-    /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, HomedRef, HomedRefFamily};
-    /// use workgraph::witnessed::RegionHandle;
-    /// static SEED: u32 = 7;
-    /// let cart = fresh_cart();
-    /// let handle = RegionHandle::from_owner(&*cart);
-    /// // The value names this region as its home, so the family audit accepts it.
-    /// let resident = HomedRef { home: &cart.0, value: &SEED };
-    /// let stored = handle
-    ///     .alloc_resident_checked::<HomedRefFamily>(resident, ())
-    ///     .expect("the value is homed here");
-    /// assert_eq!(*stored.value, 7);
-    /// ```
-    ///
-    /// ```
-    /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, HomedRef, HomedRefFamily};
-    /// use workgraph::witnessed::RegionHandle;
-    /// static OTHER: u32 = 9;
-    /// let cart = fresh_cart();
-    /// let elsewhere = fresh_cart();
-    /// let handle = RegionHandle::from_owner(&*cart);
-    /// // The value names a different region as its home: the audit rejects it.
-    /// let foreign = HomedRef { home: &elsewhere.0, value: &OTHER };
-    /// assert!(handle
-    ///     .alloc_resident_checked::<HomedRefFamily>(foreign, ())
-    ///     .is_none());
-    /// ```
-    pub fn alloc_resident_checked<K: AuditedStored<W>>(
-        self,
-        value: K::At<'_>,
-        context: K::AuditContext<'_>,
-    ) -> Option<&'a K::At<'a>> {
-        K::audit(self.region, &value, context).then(|| self.region.alloc_resident::<K>(value))
     }
 
     /// **Build a region-borrowing value at a fresh brand and store it here in one act** — the
@@ -884,34 +828,6 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
             self.region.alloc_resident::<K>(value)
         })
     }
-}
-
-/// A per-family residence audit an embedder declares once, consumed by
-/// [`RegionHandle::alloc_resident_checked`] to gate a region-borrowing move-in. Where
-/// [`RegionHandle::alloc_resident`] admits only `'static` values and the crate-private
-/// brand-confined doors build in place, this is the door for a value the embedder can vet only at
-/// runtime — but the audit is a **family declaration**, not a forgeable call-site closure, so a
-/// permissive audit is not writable in safe code. Each call site passes typed `context`
-/// (residence evidence), never code.
-///
-/// # Safety
-///
-/// An implementor's [`audit`](Self::audit) must return `true` only when every region borrow the
-/// stored `value` carries is resident in `region` or covered by `context`'s evidence — the same
-/// obligation the caller of [`Region::alloc_resident`] otherwise discharges by construction. A
-/// lying audit (one that returns `true` for a value borrowing a region that `region` neither owns
-/// nor `context` covers) re-admits an unvetted lifetime-lengthening move-in, exactly the dangle the
-/// `'static` bound on [`RegionHandle::alloc_resident`] rules out. `unsafe` to implement for that
-/// reason, following the [`RegionOwner`] / [`Reattachable`] precedent — the impl is an audited
-/// soundness declaration.
-pub unsafe trait AuditedStored<W: StorageProfile>: Stored<W> {
-    /// The typed evidence a call site passes — never code. `()` for a family whose audit is a
-    /// self-contained residence check; a richer context (reach evidence naming what the value is
-    /// allowed to borrow) for a family whose audit widens against the destination's coverage.
-    type AuditContext<'ctx>;
-    /// Vet `value` for residence in `region` under `context`. Returns `true` only when the store is
-    /// sound per the trait's safety contract.
-    fn audit(region: &Region<W>, value: &Self::At<'_>, context: Self::AuditContext<'_>) -> bool;
 }
 
 /// [`Reattachable`] family for a [`RegionHandle`] — a thin pointer, layout independent of `'r` — so an

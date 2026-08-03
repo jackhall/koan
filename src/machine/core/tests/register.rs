@@ -1,6 +1,6 @@
 //! `register` arm of `machine::core` tests.
 
-use super::super::{BindingIndex, DeclarationSite, NameLookup, Scope};
+use super::super::{BindingIndex, DeclarationSite, NameLookup};
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::{run_root_storage, FrameStorageExt};
@@ -57,7 +57,7 @@ fn bind_value_direct_allows_shadowing_in_child_scope() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let inner = outer.alloc_child_under();
     let v2 = region.brand().alloc_scalar(Scalar::Number(2.0));
     inner
         .bind_resident_for_test(
@@ -114,7 +114,7 @@ fn close_is_per_scope_open_child_still_binds() {
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     outer.close();
-    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let inner = outer.alloc_child_under();
     let v = region.brand().alloc_scalar(Scalar::Number(2.0));
     inner
         .bind_resident_for_test(
@@ -133,13 +133,13 @@ fn register_function_dedupes_exact_signature() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f1 = region.brand().alloc_function(KFunction::new(
+    let f1 = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -148,13 +148,13 @@ fn register_function_dedupes_exact_signature() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let f2 = region.brand().alloc_function(KFunction::new(
+    let f2 = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     let err = scope
         .register_function_direct(
             "FOO".to_string(),
@@ -177,13 +177,13 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f1 = region.brand().alloc_function(KFunction::new(
+    let f1 = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -192,13 +192,13 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let f2 = region.brand().alloc_function(KFunction::new(
+    let f2 = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     scope
         .bind_value_direct(
             "OTHER_NAME".to_string(),
@@ -225,13 +225,13 @@ fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = region.brand().alloc_function(KFunction::new(
+    let f = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     let obj1 = scope.brand().alloc_value(KObject::KFunction(f));
     let obj2 = scope.brand().alloc_value(KObject::KFunction(f));
     scope
@@ -277,20 +277,8 @@ fn register_function_allows_overload_with_different_arg_types() {
             }),
         ],
     };
-    let f1 = region.brand().alloc_function(KFunction::new(
-        sig_num,
-        Body::Builtin(body_no_op),
-        scope,
-        false,
-        &types,
-    ));
-    let f2 = region.brand().alloc_function(KFunction::new(
-        sig_str,
-        Body::Builtin(body_no_op),
-        scope,
-        false,
-        &types,
-    ));
+    let f1 = KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), false, &types);
+    let f2 = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), false, &types);
     scope
         .register_function_direct(
             "BAR".to_string(),
@@ -325,13 +313,13 @@ fn register_function_coexists_with_same_name_value() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let f = region.brand().alloc_function(KFunction::new(
+    let f = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -364,13 +352,13 @@ fn register_function_coexists_with_same_name_type() {
         DeclarationSite::BUILTIN,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let f = region.brand().alloc_function(KFunction::new(
+    let f = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     scope
         .register_function_direct(
             "Foo".to_string(),
@@ -457,7 +445,7 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let inner = outer.alloc_child_under();
     inner
         .install_placeholder(
             "x".to_string(),
@@ -654,9 +642,7 @@ fn visibility_type_side_gate_mirrors_value_side() {
 fn sig_scope_bindings_reject_value_token_type_write() {
     let region = run_root_storage();
     let outer = run_root_bare(&region);
-    let sig_scope = region
-        .brand()
-        .alloc_scope(Scope::child_under_sig(outer, "S".to_string()));
+    let sig_scope = outer.alloc_child_under_sig("S".to_string());
     let kt: KType = KType::NUMBER;
     let error = match sig_scope.bindings().write_type(
         "compare",
@@ -682,13 +668,13 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = region.brand().alloc_function(KFunction::new(
+    let f = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     let sealed = crate::witnessed::Sealed::seal(scope.store_function_object(f));
     scope
         .bind_value_direct(
@@ -720,13 +706,13 @@ fn bare_fn_registration_seals_the_empty_reach() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = region.brand().alloc_function(KFunction::new(
+    let f = KFunction::alloc_captured(
+        scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        scope,
         false,
         &types,
-    ));
+    );
     scope
         .register_function_direct(
             "FOO".to_string(),

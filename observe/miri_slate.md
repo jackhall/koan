@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena/residence.rs: 3
+
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -36,14 +36,14 @@ group just to silence the stale-anchor check.
   pin-less read (`read_resting`) whose coverage is a *parked* step's region, not the reading step's —
   an ordering claim no other slate test makes. The real `unsafe` is the `Sealed::open_with` retype in
   `witnessed.rs`; typed_field_list.rs carries none of its own.
-- `src/machine/core/arena.rs` — arena.rs split into `arena/{frame,step_allocator,residence}`
-  child modules. Its remaining groups (CallFrame lifetime erasure, reference-only carrier
-  retention, multi-region union, witness-set hosting, `alloc_carried_with`, MATCH-Tagged / TRY-WITH
-  TCO, per-call frame re-anchor, NodeStore reinstall) pin safe-code frame / carrier / region
-  drop-order and reattach disciplines whose backing `unsafe` is the `Region::alloc_resident` retype in
-  `witnessed.rs`; the `unsafe impl AuditedStored` audits that gate those stores moved to
-  [`arena/residence.rs`](../src/machine/core/arena/residence.rs). arena.rs itself carries no
-  `unsafe` of its own.
+- `src/machine/core/arena.rs` — arena.rs split into `arena/{frame,step_allocator}` child
+  modules. Its groups (CallFrame lifetime erasure, reference-only carrier retention, multi-region
+  union, witness-set hosting, `alloc_carried_with`, MATCH-Tagged / TRY-WITH TCO, per-call frame
+  re-anchor, NodeStore reinstall) pin safe-code frame / carrier / region drop-order and reattach
+  disciplines whose backing `unsafe` is the `Region::alloc_resident` retype in `witnessed.rs`. Every
+  `KFunction` / `Scope` / `Module` store reaching that retype rides a born door
+  (`RegionHandle::alloc_resident_born_with`), whose `for<'b>` brand discharges residence at compile
+  time — so koan-side `src/` carries no `unsafe` of its own at all.
 - `src/machine/core/scope.rs` — `Scope::add` re-entry pins the queue-and-drain
   discipline that keeps `Scope`'s `RefCell<…>` invariant intact when a binding
   is added while a `data` borrow is live.
@@ -145,11 +145,16 @@ envelope is the whole route. `CallFrame::adopting` (the scheduler-owned run
 frame) carries the same `&Scope<'_>` erasure as `new`, over the run scope it adopts rather than a
 freshly-minted child; it is built on the first run-lifetime submission, so every scheduler-driving slate
 test below (`recursive_tagged_match_no_uaf`, `lift_park_minimal_program_for_miri`, …) exercises it
-end-to-end — the run scope outlives the frame, so no separate minimal test.
+end-to-end — the run scope outlives the frame, so no separate minimal test. A fourth test pins the
+**born door's own round trip** nested inside that open: a grandchild scope built and stored at the
+frame brand (`Scope::alloc_child_under`, routing `RegionHandle::alloc_resident_born_with`) comes back
+co-located, stays readable while its own brand appends to the same region, and still names its
+parent — the erase-store / re-anchor sequence every `Scope` store now takes.
 
 - `call_frame_scope_survives_subsequent_alloc`
 - `call_frame_chained_outer_frame_walkable`
 - `with_scope_relocates_seed_value_into_brand`
+- `born_child_scope_survives_subsequent_alloc_in_its_own_region`
 
 **Record substrate door — construction, O(1) ownership, fold-shared retype** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — `FoldingBrand::alloc_substrate_folded` (the sole `RecordSubstrate` mint, routed through by
@@ -217,7 +222,7 @@ record's stay unset. The only `unsafe` routed is the shared `retype` in `witness
 - `multi_region_closure_capturing_closures_survives_frame_free`
 - `multi_region_record_of_closures_survives_frame_free`
 
-**Envelope transfer — cross-region residence mint and pass-through duplication** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
+**Envelope transfer — cross-region residence mint and pass-through duplication** ([workgraph/src/witnessed/delivered.rs](../workgraph/src/witnessed/delivered.rs))
 — the delivery-envelope relocation seam
 ([workgraph/src/witnessed/delivered.rs](../workgraph/src/witnessed/delivered.rs)): a
 `Residence::Kept` `transfer_into` of a foreign region-resident element mints the envelope's host into
@@ -228,15 +233,14 @@ foreign host instead of materializing it. The duplication twin pins the walking 
 envelope for dep delivery bit-copies the reference-only carrier and clones exactly one `Rc` (the
 retained host) — the reach set itself rides by reference, never re-minted, so a regression shows as
 per-member refcount traffic or a leak. The `unsafe` routed is the shared `retype` in
-`witnessed.rs` plus `Carrier`'s own `with_reach` pinned re-anchor; the anchor file
-[`arena/residence.rs`](../src/machine/core/arena/residence.rs) additionally houses the three
-`unsafe impl AuditedStored` primitive reattach guards — the soundness markers gating every
-`KFunction` / `Scope` / `Module` store this seam and its siblings exercise.
+`witnessed.rs` plus `Carrier`'s own `with_reach` pinned re-anchor. The `KFunction` / `Scope` /
+`Module` stores this seam and its siblings exercise reach that same retype through the born doors,
+which state their residence obligation in the type rather than in an audit.
 
 - `envelope_transfer_folds_an_independent_foreign_value`
 - `pass_through_duplicate_keeps_reach_pointer_and_mints_nothing`
 
-**Single escape seam — re-stamp in place, the self rule** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
+**Single escape seam — re-stamp in place, the self rule** ([workgraph/src/witnessed/delivered.rs](../workgraph/src/witnessed/delivered.rs))
 — the single-seam escape verb
 ([`Delivered::restamp_in_place`](../workgraph/src/witnessed/delivered.rs)): a declared substrate
 return re-tags its top node to the declared type and re-anchors it into the **producer's own
@@ -250,9 +254,8 @@ never drops, a leak at process exit under Miri. The test re-stamps a producer-re
 asserts the carrier still names reach members while the owned bundle is empty, drops every
 intermediate handle, then reads the shared substrate back in its own region — a use-after-free the
 instant re-stamp relocated instead of re-anchoring, a leak the instant the self rule failed. The
-`unsafe` routed is the shared `retype` in `witnessed.rs` plus the three
-`unsafe impl AuditedStored` reattach guards in [`arena/residence.rs`](../src/machine/core/arena/residence.rs)
-this store crosses.
+`unsafe` routed is the shared `retype` in `witnessed.rs`, which this store crosses through the born
+door's brand-confined placement.
 
 - `restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin`
 
@@ -535,7 +538,7 @@ no construction-time re-anchor verb. This test pins the re-anchor directly throu
 (their equivalents run under plain `cargo test`), and every `Scope::outer()` / `ancestors()` walk reads
 the field end-to-end.
 
-- `module_child_scope_transmute_does_not_dangle`
+- `module_child_scope_reads_back_after_the_born_store`
 
 **`NodeScope::YokedChild` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
 — a cart-ancestor block scope evicted off a lifetime-free scheduler node (`NodeScope::YokedChild`) is
@@ -610,7 +613,7 @@ already-covered `child_scope` re-attach + survives-churn shapes) runs under plai
 MODULE body schedules a `Combine` whose `finish` closure captures the child
 scope and runs on the outer scheduler's main loop after every body statement
 terminalizes. Runs the same stored scope-pointer re-anchor as
-`module_child_scope_transmute_does_not_dangle` (the minimal mirror that pins it) with none of its
+`module_child_scope_reads_back_after_the_born_store` (the minimal mirror that pins it) with none of its
 own, exercised end-to-end by every scheduler-driving slate test; its `module_body_dispatch_does_not_dangle`
 program runs under plain `cargo test`. No separate minimal test.
 
@@ -732,9 +735,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-03: 2313s — 54 tests, 0 leaks, 0 UB
 - 2026-08-02: 2240s — 53 tests, 0 leaks, 0 UB
 - 2026-08-02: 2225s — 52 tests, 0 leaks, 0 UB
 - 2026-08-02: 2156s — 51 tests, 0 leaks, 0 UB
 - 2026-08-01: 2133s — 50 tests, 0 leaks, 0 UB
-- 2026-08-01: 2105s — 50 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

@@ -27,30 +27,26 @@ use std::rc::Rc;
 /// borrow-preservation tests. The body is never run.
 fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFunction<'run> {
     use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
-    use crate::machine::{Body, KFunction};
+    use crate::machine::Body;
     // Capture the home frame's child scope (read at the brand), build the function there, and alloc it
     // into `home`'s region — where the captured scope genuinely lives — inside the open, so the re-homed
     // `&KFunction` escapes at `home`'s lifetime without a fixed-lifetime reattach. Mirrors a closure
     // capturing its defining scope in its own region.
     let types = crate::machine::model::TypeRegistry::new();
-    home.with_scope(|child| {
-        let kf = KFunction::new(
-            ExpressionSignature {
-                return_type: ReturnType::Resolved(KType::NULL),
-                elements: vec![SignatureElement::Keyword("__INNER__".into())],
-            },
-            Body::Builtin(|ctx| {
-                crate::machine::core::Action::done_resident(
-                    ctx.scope,
-                    Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
-                )
-            }),
-            child,
-            false,
-            &types,
-        );
-        home.brand().alloc_function(kf)
-    })
+    CallFrame::alloc_capturing_scope(
+        home,
+        ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::NULL),
+            elements: vec![SignatureElement::Keyword("__INNER__".into())],
+        },
+        Body::Builtin(|ctx| {
+            crate::machine::core::Action::done_resident(
+                ctx.scope,
+                Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
+            )
+        }),
+        &types,
+    )
 }
 
 /// The top node of a relocated `Carried::Object` is a fresh allocation owned by `dest`, not the

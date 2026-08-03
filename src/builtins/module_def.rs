@@ -29,18 +29,15 @@ pub fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         ctx.args, "name", "MODULE", ctx.types
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
-    let child_scope = ctx
-        .scope
-        .brand()
-        .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
+    let child_scope = ctx.scope.alloc_child_under_module(name.clone());
     await_module_body(child_scope, name, body_expr, ctx.bind_index())
 }
 
 /// Dispatch a module body block against an already-minted `child_scope` and bind the resulting
 /// module value in the parent scope — the tail every module-shaped declaration shares. `GROUP`
-/// (`super::group_def`) mints its child through [`Scope::child_under_group`] and pre-registers the
-/// group's operator powerset into it before calling this; `MODULE` mints a plain
-/// [`Scope::child_under_module`].
+/// (`super::group_def`) mints its child through [`Scope::alloc_child_under_group`] and pre-registers
+/// the group's operator powerset into it before calling this; `MODULE` mints a plain
+/// [`Scope::alloc_child_under_module`].
 ///
 /// Body statements dispatch on the OUTER scheduler (see
 /// [`await_body_in_scope`](super::await_body::await_body_in_scope)), so a body statement
@@ -69,10 +66,8 @@ pub(super) fn await_module_body<'a>(
                 let (carrier, pins) = fctx.scope.lift_resident_parts(sealed);
                 return Action::done(Ok(StepCarried::born_pinned(carrier, pins)));
             }
-            let module: &'a Module<'a> = fctx
-                .scope
-                .brand()
-                .alloc_module(Module::new(name_for_finish.clone(), child_scope));
+            let module: &'a Module<'a> =
+                Module::alloc_at_child_scope(name_for_finish.clone(), child_scope);
             // Mirror the module's type members into `type_members`. The cross-kind exclusion keeps
             // `data` and `types` disjoint by name, so this is an exact mirror of `iter_types` (no
             // value-member name can also be a type name to filter out). A nested `MODULE` is a
@@ -159,7 +154,7 @@ mod tests {
     use crate::machine::model::Module;
     use crate::machine::model::SigSchema;
     use crate::machine::program_storage;
-    use crate::machine::{run_root_storage, FrameStorageExt};
+    use crate::machine::run_root_storage;
     use crate::machine::{BindingIndex, KErrorKind};
 
     /// The binder name comes off the `Identifier` name part — a module binds value-side, so the
@@ -427,15 +422,8 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let child = region
-            .brand()
-            .alloc_scope(crate::machine::Scope::child_under_module(
-                scope,
-                "foo".into(),
-            ));
-        let module: &Module<'_> = region
-            .brand()
-            .alloc_module(Module::new("foo".into(), child));
+        let child = scope.alloc_child_under_module("foo".into());
+        let module: &Module<'_> = Module::alloc_at_child_scope("foo".into(), child);
         // Every mint seals its self-sig (2d eager-seal invariant), so a manually pre-seeded
         // module seals its (empty) interface before it is bound and its `ktype()` is read.
         module.seal_self_sig(SigSchema::raw_self_sig(module), &test_run.types);

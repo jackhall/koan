@@ -3,9 +3,8 @@
 
 use std::rc::Rc;
 
-use super::super::Scope;
 use crate::builtins::test_support::{mock_declaration_site, per_call_storage, run_root_bare};
-use crate::machine::core::{run_root_storage, FrameCoverage, FrameStorageExt};
+use crate::machine::core::{run_root_storage, FrameCoverage};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
 use crate::machine::model::Scalar;
@@ -39,7 +38,7 @@ fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
         DeclarationSite::BUILTIN,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let child = region.brand().alloc_scope(Scope::child_under(root));
+    let child = root.alloc_child_under();
     assert!(matches!(child.resolve_type("Foo"), Some(kt) if kt == KType::NUMBER));
     assert!(
         child.resolve_type("Nope").is_none(),
@@ -59,7 +58,7 @@ fn resolve_type_inner_scope_shadows_outer() {
         mock_declaration_site(1, 1),
         &mut crate::machine::WriteGate::for_test(),
     );
-    let child = region.brand().alloc_scope(Scope::child_under(root));
+    let child = root.alloc_child_under();
     let _ = child.register_type_direct(
         "Foo".into(),
         KType::STR,
@@ -90,7 +89,7 @@ fn retaining_adopt_reanchors_the_same_value_copy_free() {
     );
 
     // A separate (open) consumer scope adopts the carrier.
-    let consumer = producer.brand().alloc_scope(Scope::child_under(producer));
+    let consumer = producer.alloc_child_under();
     let adopted: Carried = consumer.adopt_carried(&cell, AdoptSeam::Retaining);
 
     // Copy-free: the adopted borrow points at the very same object, not a relocated clone.
@@ -175,10 +174,9 @@ fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
         .expect("bind should succeed");
     let source_region_ptr: *const KoanRegion = source_scope.region();
 
-    // The module lives in its own child scope's region, as the `alloc_module` invariant requires.
-    let module = source_scope
-        .brand()
-        .alloc_module(Module::new("m".to_string(), source_scope));
+    // The module lives in its own child scope's region — `alloc_at_child_scope` derives the
+    // destination from that scope, so it can live nowhere else.
+    let module = Module::alloc_at_child_scope("m".to_string(), source_scope);
 
     let parent_storage = run_root_storage();
     let parent = run_root_bare(&parent_storage);

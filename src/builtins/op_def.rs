@@ -494,7 +494,7 @@ pub(super) fn register_unary_operator<'a>(
 /// types reach the module's body. Ordinary user `FN`s keep the guard.
 ///
 /// The `KFunction` is allocated into `scope`'s own region, so the checked seal always passes and the
-/// paired description names that region as a member, the audit walk having seen the callable's
+/// paired description names that region as a member, the composition having seen the callable's
 /// captured `&Scope` borrow into it. Bare-`FN` style: the overload lands in `functions` only, never in `data`.
 fn register_body<'a>(
     scope: &'a Scope<'a>,
@@ -504,9 +504,7 @@ fn register_body<'a>(
     bind_index: BindingIndex,
     types: &TypeRegistry,
 ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, WriteOp), KError> {
-    let f: &'a KFunction<'a> = scope
-        .brand()
-        .alloc_function(KFunction::new(signature, body, scope, false, types));
+    let f: &'a KFunction<'a> = KFunction::alloc_captured(scope, signature, body, false, types);
     let write = WriteOp::Overload {
         name: sym.to_string(),
         index: bind_index,

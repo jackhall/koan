@@ -4,8 +4,8 @@
 
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
+use crate::machine::core::BindingIndex;
 use crate::machine::core::{Action, BodyCtx};
-use crate::machine::core::{BindingIndex, FrameStorageExt};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
@@ -76,7 +76,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         &mut crate::machine::WriteGate::for_test(),
     );
 
-    let inner = region.brand().alloc_scope(outer.child_for_call());
+    let inner = outer.alloc_child_under();
     let inner_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![

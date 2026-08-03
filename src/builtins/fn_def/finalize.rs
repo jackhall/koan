@@ -242,14 +242,8 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         elements,
     };
 
-    let region = scope.brand();
-    let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
-        user_sig,
-        Body::UserDefined(body_expr),
-        scope,
-        false,
-        types,
-    ));
+    let f: &'a KFunction<'a> =
+        KFunction::alloc_captured(scope, user_sig, Body::UserDefined(body_expr), false, types);
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just allocated
     // into `scope`'s own region above, which is what `store_function_object`'s merge names as the

@@ -150,26 +150,25 @@ fn call_frame_scope_survives_subsequent_alloc() {
     });
 }
 
-/// Raw-pointer roundtrip inside the brand: lifetime-anchor an extracted `*const KoanRegion` and
-/// `*const Scope<'_>` from the opened child scope, then mutate via the scope's brand while the
-/// reconstructed region reference stays live.
+/// The born door's own erase-store / re-anchor round trip, nested inside an open: a grandchild
+/// scope allocated through [`Scope::alloc_child_under`] at the frame brand comes back co-located,
+/// and stays readable while its own brand mutates the same region underneath it. The store the door
+/// routes is the substrate's, so the shape is exercised end to end with no hand-written pointer
+/// arithmetic anywhere — the re-anchor is the library's single audited retype.
 #[test]
-fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
+fn born_child_scope_survives_subsequent_alloc_in_its_own_region() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
     frame.with_scope(|child| {
-        let region_ptr: *const KoanRegion = child.region();
-        let scope_ptr: *const Scope<'_> = child;
-        let inner_region: &KoanRegion = unsafe { &*(region_ptr as *const _) };
-        let child_ref: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
-        // Alloc through the reconstructed scope's brand while `inner_region` (the raw-region roundtrip)
-        // stays live — the same region under two reconstructed references.
-        let it_obj: &KObject<'_> = child_ref.brand().alloc_scalar(Scalar::Number(42.0));
-        assert!(std::ptr::eq(inner_region, child_ref.region()));
-        child_ref
+        let grandchild = child.alloc_child_under();
+        assert!(std::ptr::eq(grandchild.region(), child.region()));
+        // Alloc into the region through the freshly stored scope's own brand while the parent
+        // reference stays live — one region under two co-located references.
+        let it_obj: &KObject<'_> = grandchild.brand().alloc_scalar(Scalar::Number(42.0));
+        grandchild
             .bind_resident_for_test(
                 "it".to_string(),
                 it_obj,
@@ -177,7 +176,12 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
                 &mut crate::machine::WriteGate::for_test(),
             )
             .unwrap();
-        assert!(matches!(child_ref.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
+        assert!(matches!(grandchild.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
+        // The parent re-reads correctly after its child's store appended to the same family cell.
+        assert!(std::ptr::eq(
+            grandchild.outer().expect("the born child names its parent"),
+            child
+        ));
     });
 }
 
@@ -279,9 +283,8 @@ fn fresh_tail_hop_over_per_call_captured_scope_pins_it() {
 fn region_alloc_while_prior_ref_live() {
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
-    let a = storage.brand();
-    let f1 = a.alloc_function(no_op_closure(scope));
-    let f2 = a.alloc_function(no_op_closure(scope));
+    let f1 = alloc_no_op_closure(scope);
+    let f2 = alloc_no_op_closure(scope);
     assert!(!std::ptr::eq(f1, f2), "two distinct sub-arena residents");
     assert_eq!(f1.signature.elements.len(), 1);
     assert_eq!(f2.signature.elements.len(), 1);
@@ -681,21 +684,25 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
     // Capture `home`'s child scope (read at the brand), alloc the closure into `home`'s own region —
     // where that scope lives — and wrap it as a `KObject::KFunction` in the same region, so the escaping
     // `&KObject` reaches exactly that region.
-    let kf_ref = home.with_scope(|child| home.brand().alloc_function(no_op_closure(child)));
+    let types = TypeRegistry::new();
+    let (signature, body) = no_op_parts();
+    let kf_ref = CallFrame::alloc_capturing_scope(home, signature, body, &types);
     // A bare scope rooted in `home`'s own region, so the wrapper cell lands there and the resulting
     // borrow escapes at `'run` — `CallFrame::with_scope`'s own scope is rank-2 and cannot.
     let home_scope = run_root_bare(home.storage());
     home_scope.brand().alloc_value(KObject::KFunction(kf_ref))
 }
 
-/// A no-op `KFunction` capturing `scope` — the closure value the multi-region shapes fold; the body
-/// is never run.
-fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
+/// The signature and body every no-op closure below is built from — the closure value the
+/// multi-region shapes fold; the body is never run.
+fn no_op_parts<'x>() -> (
+    crate::machine::model::ExpressionSignature<'x>,
+    crate::machine::Body<'x>,
+) {
     use crate::machine::core::kfunction::action::Action;
     use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
     use crate::machine::Body;
-    let types = TypeRegistry::new();
-    KFunction::new(
+    (
         ExpressionSignature {
             return_type: ReturnType::Resolved(KType::NULL),
             elements: vec![SignatureElement::Keyword("__INNER__".into())],
@@ -706,10 +713,14 @@ fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
                 Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
             )
         }),
-        captured,
-        false,
-        &types,
     )
+}
+
+/// A no-op `KFunction` born into `captured`'s own region.
+fn alloc_no_op_closure<'x>(captured: &'x Scope<'x>) -> &'x KFunction<'x> {
+    let types = TypeRegistry::new();
+    let (signature, body) = no_op_parts();
+    KFunction::alloc_captured(captured, signature, body, false, &types)
 }
 
 /// A closure carrier in its delivery envelope — the value reference-only (region-pure in its home
@@ -727,7 +738,7 @@ fn delivered_closure(home: &Rc<CallFrame>) -> DeliveredCarried {
 }
 
 /// A closure element as the LET-bind → entry-re-read pipeline delivers it: the closure lives whole in
-/// `home` (its captured scope co-located, `alloc_function`'s invariant), and a *reader* scope in a
+/// `home` (its captured scope co-located, as `KFunction::alloc_captured` makes structural), and a *reader* scope in a
 /// different region binds it — `mint_retained` mints `home` into the reader's arena as the entry's
 /// reach, the entry's seal rides that reach, and the read lifts it into an envelope hosted by the
 /// reader's frame. The closure's captured scope is thus foreign to both the element's host and any
@@ -738,7 +749,7 @@ fn delivered_reread_closure<'run>(
     reader_scope: &'run Scope<'run>,
 ) -> DeliveredCarried {
     let home_scope = run_root_bare(home);
-    let kf_ref = home.brand().alloc_function(no_op_closure(home_scope));
+    let kf_ref = alloc_no_op_closure(home_scope);
     let obj = home_scope.brand().alloc_value(KObject::KFunction(kf_ref));
     // The bind-time mint: `home` materializes into the reader's arena as the entry's reach, with
     // the owning bundle folded into the reader region's union. The read then lifts that entry —

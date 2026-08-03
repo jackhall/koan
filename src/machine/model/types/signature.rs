@@ -107,6 +107,15 @@ pub struct ExpressionSignature<'a> {
     pub elements: Vec<SignatureElement>,
 }
 
+/// [`Reattachable`](crate::witnessed::Reattachable) family for an [`ExpressionSignature`] — the
+/// operand form it takes when a function is born at its captured scope's construction brand
+/// ([`KFunction::alloc_captured`](crate::machine::core::KFunction::alloc_captured)). Layout-invariant
+/// in `'r`: `elements` is owned data and `return_type`'s only `'r` is the `Deferred` arm's captured
+/// expression reference, so every choice of `'r` is one type up to the lifetime.
+pub struct ExpressionSignatureFamily;
+
+crate::witnessed::reattachable!(ExpressionSignatureFamily => ExpressionSignature<'r>);
+
 /// Carrier for an FN's declared return type. The surface admits parameter-name references
 /// in return-type position (`FN (LIFT er: Ordered) -> er = ...`); `Deferred` holds the
 /// captured surface form for per-call re-elaboration against the per-call scope where the
