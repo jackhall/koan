@@ -394,12 +394,20 @@ impl SubstrateDoor<'_, '_> {
 // choice of that lifetime; `KType` is lifetime-free, trivially invariant. The
 // shared `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its
 // docs).
+//
+// The three arena-stored families own heap contents (a closure's captures, a scope's bindings, a
+// module's table), so they take the `droppable` arm: it emits no `DropFree`, which is exactly the
+// claim that keeps them off the Copy tier's glue-free dormant slot. They never rest in a carrier —
+// the region arena is their owner and runs their drop — so the arm costs them nothing.
 reattachable! {
+    droppable
     KFunction<'static> => KFunction<'r>,
     Scope<'static> => Scope<'r>,
     Module<'static> => Module<'r>,
-    Held<'static> => Held<'r>,
 }
+// `Held` is a `Copy` cell handle with no drop glue, so it stays on the default arm and remains
+// eligible for the Copy tier — which the aggregate folds' bumped cell slices depend on.
+reattachable!(Held<'static> => Held<'r>);
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
 /// type-channel identity (a `SetMember` / declared type) that must cross the build brand. A
