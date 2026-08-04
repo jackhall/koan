@@ -154,7 +154,11 @@ fn born_child_scope_survives_subsequent_alloc_in_its_own_region() {
 }
 
 /// Two-deep chain: dropping the local `outer` handle leaves only `inner`'s `FrameStorage.outer`
-/// keeping the outer region alive while we read through `inner`'s child scope's `outer`.
+/// keeping the outer region alive while we read through `inner`'s child scope's `outer`. The
+/// UB-shaped twin — a crossing store pinned by the destination's own host, read back after every
+/// direct handle on the operand drops — is
+/// `the_born_with_door_accepts_the_childs_own_host_as_the_pin` in the workgraph slate; this one
+/// pins the same chain over koan's `CallFrame` and runs under plain `cargo test`.
 #[test]
 fn call_frame_chained_outer_frame_walkable() {
     let program = program_storage();

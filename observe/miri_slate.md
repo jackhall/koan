@@ -108,19 +108,11 @@ group just to silence the stale-anchor check.
   `Owned` reach verdict names no region, so the door must re-bump the bytes at the destination or
   the cell points into a region nothing pins. No residence audit can catch that — the bump keeps no
   address table — which leaves tree borrows as the only check.
-- `src/machine/model/operators.rs` — the `OperatorGroup` record is bump-hosted `Copy` data and its
-  `reattachable!` layout-invariance audit lives once in `witnessed.rs`, so operators.rs carries no
-  `unsafe` of its own. The group pins a shape no other slate test covers: a **`Drop`-free
-  bump-hosted record** reached only through a reference-only carrier stored in a binding table,
-  whose sole liveness is the lift's `Weak → Rc` upgrade at the *declaring* scope. The `KFunction`
-  carrier tests pin a region-checked `alloc_resident` value with an invariant `&'a Scope<'a>` field;
-  the region-pure scalar test pins a value in the reader's own region. Neither exercises a table
-  entry whose pointee lives in an ancestor region with no refcount anywhere in the picture.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
 
-27 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+25 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
 below are the exact test identifiers; pass them after `--` in the Miri command. A further 44 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
@@ -132,9 +124,12 @@ whose discipline lives in koan's own `src/` — its doors, seams, and scheduler-
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 child-scope `Option<SealedExtern<ScopeRefFamily>>` opened at a `for<'b>` brand via `CallFrame::with_scope`
-(`SealedExtern::open`, the frame's own storage `Rc` as the pin) plus the `Rc<CallFrame>` chain that
-keeps per-call regions pinned across re-borrow. One test pins
-pins the `Rc<CallFrame>` chain keeping an outer region alive after its local handle drops; a second pins
+(`SealedExtern::open`, the frame's own storage `Rc` as the pin). The `Rc<CallFrame>` chain that keeps
+per-call regions pinned across re-borrow is pinned library-side
+(`the_born_with_door_accepts_the_childs_own_host_as_the_pin`, which stores a crossing operand under
+the *destination's* own host and reads the embedded parent back after every direct handle on it
+drops); `call_frame_chained_outer_frame_walkable` mirrors that shape over koan's `CallFrame` and
+runs under plain `cargo test`. One test here pins
 the **seed-side re-anchor** — a caller-lifetime value crossing into the opened scope's own region as
 a delivery envelope, whose bind relocates it there, the shape the MATCH / TRY `it`-bind and the
 user-fn param-bind take. A bare caller reference cannot cross the `for<'b>` signature at all, so the
@@ -142,7 +137,7 @@ envelope is the whole route. `CallFrame::adopting` (the scheduler-owned run
 frame) carries the same `&Scope<'_>` erasure as `new`, over the run scope it adopts rather than a
 freshly-minted child; it is built on the first run-lifetime submission, so every scheduler-driving slate
 test below (`try_inside_tco_position_preserves_frame_chain`, `park_and_replay_minimal_program_for_miri`, …) exercises it
-end-to-end — the run scope outlives the frame, so no separate minimal test. A third test pins the
+end-to-end — the run scope outlives the frame, so no separate minimal test. A second test pins the
 **born door's own round trip** nested inside that open: a grandchild scope built and stored at the
 frame brand (`Scope::alloc_child_under`, routing `RegionHandle::alloc_resident_born_with`) comes back
 co-located, stays readable while its own brand appends to the same region, and still names its
@@ -151,7 +146,6 @@ sibling-alloc claim in the same run: the opened child's re-borrow still names th
 while a sibling pointer allocates into it, so `with_scope`'s `&Scope` and `brand().alloc(…)` are
 pinned coexisting there rather than by a test of their own.
 
-- `call_frame_chained_outer_frame_walkable`
 - `with_scope_relocates_seed_value_into_brand`
 - `born_child_scope_survives_subsequent_alloc_in_its_own_region`
 
@@ -583,20 +577,6 @@ whitelist entry).
 - `closure_embedding_record_cells_select_copied_and_pin_every_producer`
 - `record_seam_pin_verb_shares_substrate_and_survives_producer_free`
 
-**Operator-group record — bump-hosted registry entry outliving its declaring frame's shell**
-([src/machine/model/operators.rs](../src/machine/model/operators.rs)) — an `OperatorGroup` is
-`Copy`, `Drop`-free data bumped into the declaring scope's region, and the `operators` table holds
-it as a reference-only `Sealed<OperatorGroupFamily, _>`. Nothing refcounts the record: a registry
-entry owns nothing, so the only thing standing between a resolved group and a use-after-free is the
-`Weak → Rc` upgrade the lift performs **at the declaring scope**, whose coverage rides the delivery
-envelope. The test declares a group into a per-call frame's own region, resolves it one region
-further down (so the hit is an ancestor's), drops the declaring frame's shell outright, and reads
-the record back — a use-after-free under tree borrows the instant the lift retains the reader's
-region instead of the declaring one, and a leak at process exit if the envelope's coverage
-strong-chains the region it lives in.
-
-- `resolved_group_survives_the_declaring_frames_shell_drop`
-
 ## Adding tests to the slate
 
 Add a test to the slate when a new unsafe site lands — a transmute, raw-pointer
@@ -617,9 +597,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-04: 971s — 25 tests, 0 leaks, 0 UB
 - 2026-08-03: 1028s — 27 tests, 0 leaks, 0 UB
 - 2026-08-03: 1474s — 32 tests, 0 leaks, 0 UB
 - 2026-08-03: 1512s — 33 tests, 0 leaks, 0 UB
 - 2026-08-03: 2313s — 54 tests, 0 leaks, 0 UB
-- 2026-08-02: 2240s — 53 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

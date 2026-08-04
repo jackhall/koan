@@ -451,6 +451,173 @@ fn lift_reowns_description_into_transit_bundle() {
     drop(content);
 }
 
+/// **The lift of a bump-hosted `Copy` pointee with an empty member set** — the degenerate reach,
+/// where home is the whole of a value's liveness. The content is bumped straight into the region
+/// rather than stored in a family arena, and nothing refcounts it: a `Drop`-free `Copy` record
+/// reached only through a reference-only carrier. So the `Weak → Rc` upgrade the lift performs at
+/// the hosting region is the single thing standing between the envelope and a use-after-free once
+/// the declaring handle drops — and the union that upgrade produces is the sole pin the envelope
+/// can hand on. A lift that retained the wrong region dangles at the read; one that strong-chained
+/// the region it lives in leaks at process exit. Embedder twin: koan's declared operator-group
+/// registry entry.
+#[test]
+fn lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle() {
+    let declaring = frame();
+    let alive = Rc::downgrade(&declaring);
+    let handle = RegionHandle::from_owner(&*declaring);
+    let value: &u32 = handle.bump_value(37u32);
+    // No sources: the value reaches nothing beyond the region hosting it.
+    let reach = handle.mint_retained(&[]);
+    let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
+        Erased::erase(value),
+        Carrier::new(reach),
+    ));
+
+    let delivered = Delivered::lift(sealed, Rc::clone(&declaring));
+    assert!(
+        !delivered.open_at().has_reach_members(),
+        "the description names no member — home is the whole reach"
+    );
+    assert!(
+        delivered.pins().pins_region(declaring.region()),
+        "so the lift's union of home in is the envelope's only pin"
+    );
+
+    drop(declaring);
+    assert!(
+        alive.upgrade().is_some(),
+        "the envelope's own bundle keeps the hosting region alive across the handle's drop"
+    );
+    assert_eq!(delivered.open(|r| *r), 37);
+
+    // Split the envelope before releasing it: a resting cell is plain `Copy` data, so the pins are
+    // the whole of its ownership and dropping them alone is what frees the region — along with the
+    // hosted description the cell references.
+    let (_cell, pins) = delivered.into_parts();
+    drop(pins);
+    assert!(
+        alive.upgrade().is_none(),
+        "and the region frees whole once the envelope's pins go — no refcount outlives it"
+    );
+}
+
+/// **A region's union pins what its own members reach** — the two-level chain. A member resting in
+/// `child` carries a reach naming `foreign`, and the mint that froze that reach folded `foreign`'s
+/// owning bundle into `child`'s union. A second value's description, minted a region up, names
+/// `child` **alone** — `foreign` is absent from it, because a value whose only region borrow is
+/// `child` reaches no further by its own description. Drop both direct handles and the chain is the
+/// whole story: `parent`'s union pins `child`, `child`'s union pins `foreign`. A fold that dropped
+/// the wrong member frees a region still pointed into; one that named `foreign` in the outer
+/// description would over-claim membership the value does not have. Embedder twin: koan's stored
+/// module value, whose description names its child scope's region and nothing else.
+#[test]
+fn a_regions_union_pins_what_its_own_members_reach() {
+    let foreign = frame();
+    let foreign_alive = Rc::downgrade(&foreign);
+    let child = frame();
+    let child_alive = Rc::downgrade(&child);
+
+    // The member: its reach is minted into `child`'s arena, which is the act that folds `foreign`
+    // into `child`'s union.
+    let child_handle = RegionHandle::from_owner(&*child);
+    let _member_reach = child_handle.mint_retained(&[&StepCoverage::of(Rc::clone(&foreign))]);
+    let value: &u32 = child_handle.alloc_resident::<ValFamily>(5);
+
+    // The outer value, hosted a region up, describing `child` and nothing else.
+    let parent = frame();
+    let reach =
+        RegionHandle::from_owner(&*parent).mint_retained(&[&StepCoverage::of(Rc::clone(&child))]);
+    let stored: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
+        Erased::erase(value),
+        Carrier::new(reach),
+    ));
+
+    drop(child);
+    drop(foreign);
+    let child_owner = child_alive
+        .upgrade()
+        .expect("the outer description's retained bundle pins the child region");
+    let foreign_owner = foreign_alive
+        .upgrade()
+        .expect("the child region's own union pins the member's foreign region");
+
+    let pins = StepCoverage::of(Rc::clone(&parent));
+    let opened = stored.open_at(&pins);
+    assert!(
+        opened.reach_covers(child_owner.region()),
+        "the description names the child region"
+    );
+    assert!(
+        !opened.reach_covers(foreign_owner.region()),
+        "and not the foreign region, which rides the child's union instead"
+    );
+    assert_eq!(*opened.value(), 5);
+
+    drop(child_owner);
+    drop(foreign_owner);
+    drop(pins);
+    drop(parent);
+    assert!(child_alive.upgrade().is_none());
+    assert!(
+        foreign_alive.upgrade().is_none(),
+        "the whole chain releases from the root down"
+    );
+}
+
+/// **`Delivered::lift` under a transitive root** — the contract relaxation the lift's `home`
+/// parameter states: `home` must *cover* the description's hosting arena, not host it. Here the
+/// description lives in `module`'s arena and `window` merely retains `module` in its own union, so
+/// the upgrade reads a `&ReachDescription` through a region pinned two links away. Every direct
+/// handle on both the hosting arena and the region its description names drops **before** the lift
+/// runs, which makes a missing root a use-after-free at the upgrade rather than at the read.
+/// Embedder twin: koan's `USING` window, whose overlay fold roots the module region into the call
+/// site's arena before any read through the window.
+#[test]
+fn lift_reads_a_description_hosted_under_a_transitive_root() {
+    let foreign = frame();
+    let foreign_alive = Rc::downgrade(&foreign);
+    let module = frame();
+    let module_alive = Rc::downgrade(&module);
+
+    // The value rests in `module`'s region under a description hosted in that same arena, naming
+    // `foreign` — whose owning bundle the mint folds into `module`'s union.
+    let module_handle = RegionHandle::from_owner(&*module);
+    let value: &u32 = module_handle.alloc_resident::<ValFamily>(19);
+    let reach = module_handle.mint_retained(&[&StepCoverage::of(Rc::clone(&foreign))]);
+    let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
+        Erased::erase(value),
+        Carrier::new(reach),
+    ));
+
+    // The reading window roots the hosting arena transitively — the only thing that makes its own
+    // handle a legitimate cover for an arena it does not host.
+    let window = frame();
+    RegionHandle::from_owner(&*window).retain_reach(StepCoverage::of(Rc::clone(&module)));
+
+    drop(module);
+    drop(foreign);
+    assert!(
+        module_alive.upgrade().is_some(),
+        "the window's union roots the description's hosting arena"
+    );
+
+    let delivered = Delivered::lift(sealed, Rc::clone(&window));
+    let foreign_owner = foreign_alive
+        .upgrade()
+        .expect("the hosting arena, rooted transitively, still owns what its description names");
+    assert!(
+        delivered.open_at().reach_covers(foreign_owner.region()),
+        "the lifted bundle carries the description's member across every handle drop"
+    );
+    assert_eq!(delivered.open(|r| *r), 19);
+
+    drop(foreign_owner);
+    drop(delivered);
+    drop(window);
+    assert!(module_alive.upgrade().is_none());
+    assert!(foreign_alive.upgrade().is_none());
+}
+
 /// **`Delivered::open_adopted`** — the adoption mints the value's reach into `dest` and retains the
 /// owned bundle there in the same act, so the resealed carrier rests resident with its liveness
 /// carried by `dest`'s region. A value living in its producer is adopted into `dest`; after the

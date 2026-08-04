@@ -378,13 +378,18 @@ fn subset_registration_covers_every_probe_of_the_member_set() {
     assert_eq!(probe_key(&["-", "+", "-"]), "+ -");
 }
 
-/// Miri slate: the record dies with its declaring **region**, and nothing but a live carrier keeps
-/// it. A group is declared into a per-call frame's own region, resolved one region down, and the
-/// declaring frame's shell is dropped outright — the envelope's coverage (the `Weak → Rc` upgrade
-/// the lift performed at the declaring scope) is the only thing left holding that region, so
-/// reading the record afterwards is a use-after-free the instant the lift under-retains. With the
-/// envelope gone the region frees whole, bump-hosted record included: there is no refcount that
-/// could outlive it, which is what makes a dead scope's group unreachable rather than stale.
+/// The record dies with its declaring **region**, and nothing but a live carrier keeps it. A group
+/// is declared into a per-call frame's own region, resolved one region down, and the declaring
+/// frame's shell is dropped outright — the envelope's coverage (the `Weak → Rc` upgrade the lift
+/// performed at the declaring scope) is the only thing left holding that region, so reading the
+/// record afterwards depends on the lift retaining the declaring region rather than the reader's.
+/// With the envelope gone the region frees whole, bump-hosted record included: there is no refcount
+/// that could outlive it, which is what makes a dead scope's group unreachable rather than stale.
+///
+/// The memory shape — a bump-hosted `Copy` pointee with an empty member set, whose whole liveness
+/// is the lift's upgrade at its hosting region — is pinned under Miri by the workgraph slate's
+/// `lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle`; this test drives it
+/// through koan's registry under plain `cargo test`.
 #[test]
 fn resolved_group_survives_the_declaring_frames_shell_drop() {
     let program = program_storage();

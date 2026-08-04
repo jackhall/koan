@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-44 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+48 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -198,9 +198,28 @@ the round-trip test walks `Delivered → open_adopted → Opened → reseal → 
 reseal → Sealed → lift → Delivered` with every intermediate handle dropped before the final read, so
 only the chain of pins each verb hands the next keeps the value's region alive.
 
+Three further shapes pin what the lift's `home` parameter and a region's union bundle are each
+answerable for. The **degenerate reach** — a bump-hosted `Copy` pointee with an *empty* member set —
+is the case where home is the whole of a value's liveness: nothing refcounts a `Drop`-free record
+bumped into a region and reached through a reference-only carrier, so the lift's `Weak → Rc` upgrade
+at the hosting region is all that stands between the envelope and a UAF once the declaring handle
+goes (embedder twin: koan's declared operator-group registry entry, demoted to plain `cargo test`).
+The **union chain** pins the other direction: a member resting in one region carries a reach naming a
+foreign region, and the mint that froze it folded that region's owner into the member's region union
+— so a second description, minted a region up, names the member's region *alone* and the foreign one
+is reached transitively, through a union rather than a description (embedder twin: koan's stored
+module value). And the **transitive root** is the lift's contract relaxation stated outright: `home`
+must *cover* the description's hosting arena, not host it, so a lift whose home merely retains that
+arena in its own union reads a hosted `&ReachDescription` two links away — every direct handle on
+both the arena and what it names dropped before the lift runs (embedder twin: koan's `USING` window
+overlay fold).
+
 - `lift_reowns_description_into_transit_bundle`
 - `adopt_settles_resident_value_into_dest`
 - `transform_verb_round_trip_preserves_liveness`
+- `lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle`
+- `a_regions_union_pins_what_its_own_members_reach`
+- `lift_reads_a_description_hosted_under_a_transitive_root`
 
 **`StepContext::alloc_with` — finish-surface fold** ([src/witnessed/step_ctx.rs](../src/witnessed/step_ctx.rs))
 — guarantee 5 made structural: every listed dep's envelope folds into the result's carrier by
@@ -241,7 +260,11 @@ prove nothing. The shapes: the stored value's region pointer is the destination'
 reads back after 64 siblings append to the same typed cell (the arena's stable-address guarantee);
 the returned reference accepts an interior-mutable write at the caller's own `'a` *after* the store;
 a child born in one region embeds a parent resident in another under a pin held for the
-destination's whole life; that child's region dies **first** with the pinned parent outliving it (the
+destination's whole life; the same crossing store pinned by the **destination's own host** instead,
+whose `outer` link to the parent is the whole of the operand's liveness once the caller's direct
+handle on it drops (the frame chain as a pin — an embedder keeps only the innermost `Rc` and every
+ancestor region rides the links; koan's `call_frame_chained_outer_frame_walkable` mirrors it over
+`CallFrame` under plain `cargo test`); that child's region dies **first** with the pinned parent outliving it (the
 production drop order, where a leak or a UAF is what a wrong pin duration looks like); a
 three-region chain reads back through every hop; and a resident node erased to the witness-less
 `SealedExtern` (the lifetime-free slot shape an embedder's scheduler stores) opens at a `for<'b>`
@@ -255,6 +278,7 @@ region fails to coerce to `'b`.
 - `an_earlier_node_reads_back_after_its_siblings_are_stored`
 - `the_returned_node_accepts_a_write_at_the_callers_lifetime`
 - `the_born_with_door_embeds_a_parent_from_another_region`
+- `the_born_with_door_accepts_the_childs_own_host_as_the_pin`
 - `a_child_region_dies_before_the_parent_it_borrows`
 - `a_chain_of_regions_reads_back_through_every_hop`
 - `an_erased_node_opens_and_survives_a_sibling_store_inside_the_open`

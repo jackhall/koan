@@ -153,6 +153,57 @@ fn the_born_with_door_embeds_a_parent_from_another_region() {
     );
 }
 
+/// The crossing-operand door pinned by the **destination's own host** rather than the source's: the
+/// child host names the parent as its `outer`, so holding the child holds the parent's region too,
+/// and the caller's own handle on the parent can go the moment the store returns. This is the frame
+/// chain as a pin — the shape a per-call frame takes, where the only `Rc` an embedder keeps is the
+/// innermost one and every ancestor region rides its `outer` links. A regression that dropped the
+/// chain leaves the embedded parent dangling the instant the local handle goes, which is the read
+/// below.
+#[test]
+fn the_born_with_door_accepts_the_childs_own_host_as_the_pin() {
+    let parent_frame = frame();
+    let parent_alive = Rc::downgrade(&parent_frame);
+    let child_frame: Rc<BornFrame> = RegionHost::fresh(Some(Rc::clone(&parent_frame)));
+
+    let child = {
+        let parent: &Node<'_> = born_root(&parent_frame, "parent");
+        RegionHandle::from_owner(&*child_frame)
+            .alloc_resident_born_with::<NodeFamily, NodeRefFamily, _>(
+                SealedExtern::<NodeRefFamily>::erase(parent),
+                // The pin is the destination's own host — it covers the operand only through the
+                // `outer` chain, which is exactly the claim under test.
+                &child_frame,
+                |placement, parent_at_brand| Node {
+                    home: placement.handle().region(),
+                    label: placement.handle().bump_text("child"),
+                    parent: Some(parent_at_brand),
+                    mark: Cell::new(None),
+                },
+            )
+    };
+
+    // Every direct handle on the parent goes; the child's `outer` link is the sole pin left.
+    drop(parent_frame);
+    assert!(
+        parent_alive.upgrade().is_some(),
+        "the child host's `outer` link keeps the parent region alive on its own"
+    );
+
+    let seen = child.parent.expect("the parent crossed the brand");
+    assert_eq!(seen.label, "parent");
+    assert!(
+        !ptr::eq(seen.home, child_frame.region()),
+        "the embedded parent still names the region it actually lives in"
+    );
+
+    drop(child_frame);
+    assert!(
+        parent_alive.upgrade().is_none(),
+        "and the chain releases it when the child goes — no cycle either way"
+    );
+}
+
 /// A resident node erased to the witness-less [`SealedExtern`] carrier — the lifetime-free slot
 /// shape an embedder's scheduler stores — opens at a `for<'b>` brand under the frame's own pin,
 /// and the region **grows through the born door while the opened reference is live**: one region
