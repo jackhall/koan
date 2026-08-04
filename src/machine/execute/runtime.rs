@@ -360,13 +360,14 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 let contract = match contract {
                     TailContract::Eager(contract) => contract,
                     // The return-type expression is the last leading statement (all owned), so its
-                    // resolved value is the last owned terminal, read live at the step brand. The
-                    // per-call type is re-homed into the captured-scope region — a strict ancestor the
-                    // cart keeps live — like the `Type` form's `PerCall.ret`.
+                    // resolved value is the last owned terminal, read under that envelope's own pins.
+                    // The per-call type is re-homed into the captured-scope region — a strict ancestor
+                    // the cart keeps live — like the `Type` form's `PerCall.ret`.
                     TailContract::FromLastResult { func } => {
                         let owned = terminals.owned_slice();
                         let terminal = owned[owned.len() - 1];
-                        let kt = match terminal.value {
+                        let opened = terminal.delivered.open_at();
+                        let kt = match opened.value() {
                             Carried::Type(t) => t,
                             Carried::Object(other) => {
                                 return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(

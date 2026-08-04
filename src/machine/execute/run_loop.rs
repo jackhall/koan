@@ -12,17 +12,14 @@ use std::rc::Rc;
 use crate::machine::core::bindings::{WriteGate, WriteOp};
 use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
-use crate::machine::model::CarriedFamily;
 use crate::machine::{
     CarrierWitness, FrameCoverage, KError, KErrorKind, KoanRegion, NodeHandle, NodeId,
 };
-use crate::witnessed::{
-    erase_to_static, reattachable, Delivered, RegionHandleFamily, SealedExtern,
-};
+use crate::witnessed::{Delivered, RegionHandleFamily};
 
 use super::dispatch::SchedulerView;
 use super::finalize::{finalize_error, NodeFinalize};
-use super::nodes::{ChainOp, NodePayload, NodeScope, NodeStep, NodeWork};
+use super::nodes::{ChainOp, NodePayload, NodeScope, NodeStep, StoredWork};
 use super::outcome::{DepTerminal, Outcome};
 use super::runtime::{KoanRuntime, KoanWorkload};
 use crate::scheduler::Anchor;
@@ -52,21 +49,6 @@ pub(in crate::machine::execute) fn dest_brand(
         KoanRegion::yoke_branded::<DestHandleFamily, _>(Rc::clone(&dest_frame), |b| b.handle());
     Delivered::seal(handle, dest_frame, FrameCoverage::empty())
 }
-
-/// `Reattachable` family for the step's **dep slice** — the producer terminals read out, erased, and
-/// zipped into the step `open` so they arrive at the brand `'b` alongside the continuation. In-band
-/// opening is the only sound route to the unbounded `'b`: a value opened here rides the audited
-/// [`Erased::reattach`](crate::witnessed) the open already owns, where a witness-*borrow*-bounded
-/// reattach would cap the produced lifetime at the borrow. The held step witness keeps the sources
-/// alive across the open; the brand confines the values to it. Each cell is a
-/// [`DepTerminal`](super::outcome::DepTerminal) — resolved value plus its `reach` set — so the reach
-/// rides the slice to the construction site without a parallel channel.
-/// Layout-invariant: a `Vec<Result<DepTerminal<'r>, KError>>` is a `Vec` of cells whose representation
-/// never depends on `'r` (`FrameReach` / `KError` are lifetime-free), so the `reattachable!` macro
-/// discharges the obligation.
-pub(in crate::machine::execute) struct DepResultsFamily;
-
-reattachable!(DepResultsFamily => Vec<Result<DepTerminal<'r>, KError>>);
 
 impl<'run> KoanRuntime<'run> {
     /// On `Done` with a frame, the return `Value` references the per-call region that's
@@ -101,19 +83,22 @@ impl<'run> KoanRuntime<'run> {
     /// bracketed by [`KoanRuntime::with_slot_step`] inside the `open`, so no exit path — return or
     /// unwind — leaves it installed.
     ///
-    /// The step tail runs inside one rank-2 `for<'b>` brand standing in for the step lifetime:
-    /// [`SealedExtern::open`] opens the continuation, active scope, and dep slice together at `'b`,
-    /// witnessed by `combined` (the held cart `Rc` unioned with the dep `pin`), which the bracket keeps
-    /// live across the run. The consumer `dest` region is the opened scope's own
-    /// region. The closure's result cannot name `'b`, so the `Outcome<'b>` and the finalized
-    /// `Carried<'b>` are erased into the slot store *before* return: a value born at `'b` never has to
-    /// launder to `'run` to cross the bracket exit, and nothing branded escapes. The step's cart clone
-    /// is confined to this call and dropped at return; a `FreshTail` placement for the next iteration
-    /// mints an entirely fresh cart, so nothing aliases across the boundary.
+    /// The step tail runs inside one rank-2 `for<'b>` brand standing in for the step lifetime: the
+    /// owned tier's one open verb ([`SealedPinned::open`](crate::witnessed::SealedPinned::open))
+    /// opens the sealed continuation and the active scope operand together at `'b`, witnessed by the
+    /// seal's own bundled anchor pin plus `combined` (the held cart `Rc` unioned with every region
+    /// the step's deps reach), which the bracket keeps live across the run. Dep terminals ride the
+    /// step as plain lifetime-free delivery envelopes, not through this open. The consumer `dest`
+    /// region is the opened scope's own region. The closure's result cannot name `'b`, so the
+    /// `Outcome<'b>` and the finalized `Carried<'b>` are erased into the slot store *before* return:
+    /// a value born at `'b` never has to launder to `'run` to cross the bracket exit, and nothing
+    /// branded escapes. The step's cart clone is confined to this call and dropped at return; a
+    /// `FreshTail` placement for the next iteration mints an entirely fresh cart, so nothing aliases
+    /// across the boundary.
     fn run_step(
         &mut self,
         id: NodeId,
-        work: NodeWork<KoanWorkload>,
+        work: StoredWork<KoanWorkload>,
         anchor: Rc<super::nodes::SlotFrame>,
         handoff: Option<Rc<super::nodes::SlotFrame>>,
     ) {
@@ -129,7 +114,7 @@ impl<'run> KoanRuntime<'run> {
         let cart = Rc::clone(&anchor.cart);
         let node_scope = anchor.payload.scope;
         let prev_chain_carrier = anchor.payload.chain.clone();
-        let (deps, erased_continuation, _carrier) = work.into_run_parts();
+        let (deps, sealed_continuation, _carrier) = work.into_run_parts();
         // The step's open witness: a step-confined cart clone, dropped at return. The tail open
         // re-anchors the step's carriers to the brand `'b` this witness pins, and owns that reattach.
         let continuation_witness = Rc::clone(&cart);
@@ -140,20 +125,20 @@ impl<'run> KoanRuntime<'run> {
         // `dest` runs inside a construction fold's witnessed transfer, not here — the catch channel
         // duplicates the watched carrier instead of copying.
         let owned_indices: Vec<usize> = deps.owned().iter().map(|d| d.index()).collect();
-        // Read each producer terminal out (borrow-bounded) into the dep slice — value plus its `reach`.
-        // The slice erases into one carrier opened in-band at `'b` (see `DepResultsFamily`).
-        let dep_sources: Vec<Result<DepTerminal<'static>, KError>> = deps
+        // Read each producer terminal out into the dep slice. A `DepTerminal` is exactly the
+        // producer's delivery envelope — value, reach, and the retained producer-frame pins as one
+        // lifetime-free unit — so the slice is plain step-local data: it rides no carrier and enters
+        // the step open through no channel of its own. A reader opens an envelope under its own pins
+        // (`Delivered::open_at`) at the borrow of the guard it binds, which is why no dep value ever
+        // has to reach the shared step brand.
+        let dep_sources: Vec<Result<DepTerminal, KError>> = deps
             .all_ids()
             .map(|d| {
-                // The producer's own carrier bundled with its retained producer-frame owner as one
-                // delivery envelope (duplicated so a construction finish folds the dep witnessed),
-                // plus the live value erased out of it. One slot read; an errored slot
-                // short-circuits here. `Delivered::open` reads under the retained frame owner
-                // (`None` == frameless / run-region, externally pinned) rather than the carrier's own
-                // witness, so it stays sound once the carrier collapses to reach-only.
+                // The producer's own carrier bundled with its retained producer-frame owner
+                // (duplicated so a construction finish folds the dep witnessed). One slot read; an
+                // errored slot short-circuits here.
                 let delivered = self.sched.dep_delivered(d).map_err(|e| e.clone())?;
-                let value = delivered.open(|live| erase_to_static::<CarriedFamily>(live));
-                Ok(DepTerminal { value, delivered })
+                Ok(DepTerminal { delivered })
             })
             .collect();
         // The step's open witness — the **step's coverage**: the anchor's projected region owner
@@ -179,20 +164,19 @@ impl<'run> KoanRuntime<'run> {
         if let Some(retiring) = &handoff {
             combined.absorb(FrameCoverage::of(Rc::clone(retiring.owner())));
         }
-        // Open the three externally-witnessed carriers — continuation, active scope, dep slice —
-        // together at one rank-2 `for<'b>` brand witnessed by `combined` (see the doc comment for why
-        // nothing branded escapes).
-        let continuation = SealedExtern::seal(erased_continuation);
         // The active scope as a carrier, per node-scope shape: `Yoked` takes the start cart's own
         // child-scope carrier; `YokedChild` reuses the carrier it already holds. `combined` pins both.
         let scope_carrier = match node_scope {
             NodeScope::Yoked => continuation_witness.scope_sealed(),
             NodeScope::YokedChild(carrier) => carrier,
         };
-        let dep_carrier = SealedExtern::<DepResultsFamily>::erase(dep_sources);
-        continuation.zip(scope_carrier).zip(dep_carrier).open(
+        // Open the owned-tier continuation beside the active-scope operand at one rank-2 `for<'b>`
+        // brand: the seal carries its own anchor pin, and `combined` witnesses the operand (see the
+        // doc comment for why nothing branded escapes).
+        sealed_continuation.open(
+            scope_carrier,
             &combined,
-            |((continuation, scope), dep_sources)| {
+            |continuation: super::outcome::NodeContinuation<'_>, scope| {
                 // `scope` is now live at `'b` and the `dest` region is its own region; deps arrive
                 // un-relocated. A `ForwardReady` relocation below builds its destination carrier
                 // from this same scope's brand.

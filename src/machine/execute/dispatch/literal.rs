@@ -57,7 +57,7 @@ impl Slot {
 /// residence host onto the accumulator's carrier). The dep arm hands back a
 /// [`duplicate`](crate::witnessed::Delivered::duplicate) of the terminal's envelope, never a fresh
 /// bundle pairing the read-out value with a separately-read reach.
-fn cell_carrier(slot: Slot, terminals: DepResults<'_, &DepTerminal<'_>>) -> DeliveredCarried {
+fn cell_carrier(slot: Slot, terminals: DepResults<'_, &DepTerminal>) -> DeliveredCarried {
     match slot {
         Slot::Static(delivered) => delivered,
         Slot::Park(i) => terminals.park(i).delivered.duplicate(),
@@ -122,7 +122,7 @@ fn fold_cells(
 /// `Bool`, so the two together leave a borrow-carrying key unrepresentable downstream of here.
 fn scalar_key(
     slot: &Slot,
-    terminals: DepResults<'_, &DepTerminal<'_>>,
+    terminals: DepResults<'_, &DepTerminal>,
     types: &TypeRegistry,
 ) -> Result<PendingKey, String> {
     let envelope = match slot {

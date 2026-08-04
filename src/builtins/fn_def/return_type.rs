@@ -130,7 +130,7 @@ pub(super) fn make_capture<'a>(te: TypeIdentifier<'_>) -> ReturnTypeCapture<'a> 
 pub(super) fn resolve_capture_at_finish<'a>(
     capture: ReturnTypeCapture<'a>,
     scope: &Scope<'a>,
-    results: DepResults<'_, &DepTerminal<'a>>,
+    results: DepResults<'_, &DepTerminal>,
     types: &TypeRegistry,
 ) -> Result<ReturnType<'a>, KError> {
     match capture {

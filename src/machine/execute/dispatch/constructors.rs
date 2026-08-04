@@ -382,7 +382,7 @@ pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: KType) -> S
 fn finish_witnessed<'step>(
     view: &SchedulerView<'step, '_>,
     kind: &CtorKind,
-    terminals: DepResults<'_, &DepTerminal<'step>>,
+    terminals: DepResults<'_, &DepTerminal>,
 ) -> Result<DeliveredCarried, KError> {
     // A constructor parks on its value subs only (all owned, no park producers), so its results are
     // exactly the owned suffix — read them as one slice.
@@ -390,8 +390,12 @@ fn finish_witnessed<'step>(
     match kind {
         CtorKind::NewType { identity } => {
             debug_assert_eq!(terminals.len(), 1);
-            let collapse =
-                check_newtype_repr(*identity, terminals[0].value.object(), view.types())?;
+            // The repr check reads the payload under the terminal envelope's own pins; only the
+            // `collapse` verdict escapes the guard's borrow.
+            let collapse = {
+                let opened = terminals[0].delivered.open_at();
+                check_newtype_repr(*identity, opened.value().object(), view.types())?
+            };
             let home = build_type_operand(view.dest_frame(), *identity);
             // The wrap keeps the value verbatim, so a payload substrate that stays foreign rides as
             // the payload cell's own stored run; the term's coverage is the holder-rule proof for
@@ -425,13 +429,17 @@ fn finish_witnessed<'step>(
             // of the carriers, no probe `KObject::Record` built — see
             // `check_record_newtype_repr`'s doc), then fold the field carriers into the witnessed
             // record and wrap it.
+            // Each field value is read under its own envelope's pins; the guards stay bound across
+            // the probe build, and the deep clone is owned data that outlives them.
+            let opened: Vec<_> = terminals.iter().map(|t| t.delivered.open_at()).collect();
             let probe = Record::from_pairs(
                 field_names
                     .iter()
                     .cloned()
-                    .zip(terminals.iter().map(|t| t.value.object().deep_clone())),
+                    .zip(opened.iter().map(|o| o.value().object().deep_clone())),
             );
             check_record_newtype_repr(*identity, &probe, view.types())?;
+            drop(opened);
             // The fold accumulator is yoked into the dest frame's own region up front (mirroring
             // `dispatch::literal`'s `AggBuildFamily`), so each field's `transfer_into` composes by
             // minting that field's reach into the accumulator's own arena rather than by plain union.
@@ -505,17 +513,22 @@ fn finish_witnessed<'step>(
                     schema.keys().cloned().collect::<Vec<_>>().join(", ")
                 )))
             })?;
-            if !expected.matches_value(terminals[0].value.object(), view.types()) {
-                return Err(KError::new(KErrorKind::TypeMismatch {
-                    arg: "value".to_string(),
-                    expected: expected.name(view.types()).to_string(),
-                    got: terminals[0]
-                        .value
-                        .object()
-                        .ktype()
-                        .name(view.types())
-                        .to_string(),
-                }));
+            // The schema check reads the payload under the terminal envelope's own pins; only the
+            // verdict (and, on mismatch, an owned rendered name) escapes the guard's borrow.
+            {
+                let opened = terminals[0].delivered.open_at();
+                if !expected.matches_value(opened.value().object(), view.types()) {
+                    return Err(KError::new(KErrorKind::TypeMismatch {
+                        arg: "value".to_string(),
+                        expected: expected.name(view.types()).to_string(),
+                        got: opened
+                            .value()
+                            .object()
+                            .ktype()
+                            .name(view.types())
+                            .to_string(),
+                    }));
+                }
             }
             // The member handle crosses the brand as a `Copy` operand so the built `Tagged`
             // names its identity at the brand. The handle borrows no region — it is one `u128`

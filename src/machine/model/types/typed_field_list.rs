@@ -133,12 +133,12 @@ impl<'a> FieldParts<'a> {
 /// The two part families walk the same [`walk_field_list`]; this is the door that picks the
 /// instantiation, and the one a nested record recurses back through when it descends into the
 /// other family.
-pub fn parse_typed_field_list_via_elaborator<'a>(
+pub fn parse_typed_field_list_via_elaborator<'a, 'f>(
     parts: FieldParts<'a>,
     context: FieldListContext,
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
-    results: Option<&mut ResultFeed<'_, 'a>>,
+    results: Option<&mut ResultFeed<'_, 'f>>,
     types: &TypeRegistry,
 ) -> FieldListOutcome<'a> {
     match parts {
@@ -151,12 +151,12 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
     }
 }
 
-fn walk_field_list<'a, P: Part<'a>>(
+fn walk_field_list<'a, 'f, P: Part<'a>>(
     parts: &'a [Spanned<P>],
     context: FieldListContext,
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
-    mut results: Option<&mut ResultFeed<'_, 'a>>,
+    mut results: Option<&mut ResultFeed<'_, 'f>>,
     types: &TypeRegistry,
 ) -> FieldListOutcome<'a> {
     let mut parks: Vec<NodeId> = Vec::new();

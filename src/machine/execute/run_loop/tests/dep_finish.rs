@@ -23,7 +23,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     let dep_a = runtime.dispatch_in_scope(let_expr(&program, "ca", 7.0), scope);
     let dep_b = runtime.dispatch_in_scope(let_expr(&program, "cb", 11.0), scope);
     let finish: TerminalDepFinish = Box::new(|_sched, terminals| {
-        let a = match terminals.owned(0).value {
+        let a = match terminals.owned(0).delivered.open_at().value() {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return Outcome::Done(Err(crate::machine::KError::new(
@@ -31,7 +31,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
                 )))
             }
         };
-        let b = match terminals.owned(1).value {
+        let b = match terminals.owned(1).delivered.open_at().value() {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return Outcome::Done(Err(crate::machine::KError::new(
@@ -180,11 +180,16 @@ fn retention_hold_foreign_bundle_releases_at_pull_zero() {
     // A finish that reads (pulls) the dep once — the delivered terminal clones the hold's
     // (owner, foreign) out, and discharging that pull brings the count to zero and drops the hold.
     let finish: TerminalDepFinish = Box::new(move |_sched, terminals| {
-        let v = match terminals.owned(0).value {
-            Carried::Object(object) => object,
+        // Read the pulled number under the dep envelope's own pins and re-anchor it in the
+        // consumer's own region — the consumer-pull shape, with nothing from the producer's region
+        // escaping the open guard.
+        let n = match terminals.owned(0).delivered.open_at().value() {
+            Carried::Object(KObject::Number(n)) => *n,
             _ => unreachable!("dep_ok delivered a Number object"),
         };
-        Outcome::done_resident(_sched.current_scope(), Carried::Object(v))
+        let scope = _sched.current_scope();
+        let allocated = scope.fold_resident_object(|brand| *brand.alloc_scalar(Scalar::Number(n)));
+        Outcome::done_resident(scope, Carried::Object(allocated))
     });
     let mut deps = crate::scheduler::ResolvedDeps::new();
     deps.own(dep_ok);
