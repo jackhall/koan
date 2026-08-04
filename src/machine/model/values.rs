@@ -11,6 +11,7 @@ mod kkey;
 mod kobject;
 mod module;
 mod named_pairs;
+mod rehomed;
 
 pub use carried::{Carried, CarriedFamily, Held};
 pub use container_substrate::{ContainerSubstrate, PartedCell};

@@ -63,12 +63,8 @@ impl<'a> Scope<'a> {
     /// Fused MODULE-finish value **construction**: merge the resident module reference into this
     /// scope's region ([`Self::store_module_object`]), which mints and retains the child's region as
     /// the module value's reach. Membership is derived by the composition, never hand-asserted.
-    pub(crate) fn seal_module(
-        &self,
-        module: &'a crate::machine::model::Module<'a>,
-        child: &Scope<'a>,
-    ) -> SealedValue {
-        self.store_module_object(module, child)
+    pub(crate) fn seal_module(&self, module: &'a crate::machine::model::Module<'a>) -> SealedValue {
+        self.store_module_object(module)
     }
 
     /// Construction-time value bind: apply a [`WriteOp::Value`] against this scope immediately.

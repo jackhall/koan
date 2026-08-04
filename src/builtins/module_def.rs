@@ -86,7 +86,7 @@ pub(super) fn await_module_body<'a>(
             // and retains the child's region as the Object-arm module value's reach — this scope's
             // own region, for a same-region child. The returned terminal witnesses that same value
             // from the same composed reach; the value-side (`bindings.data`) write rides the outcome.
-            let sealed = fctx.scope.seal_module(module, child_scope);
+            let sealed = fctx.scope.seal_module(module);
             let write = WriteOp::Value {
                 name: name_for_finish,
                 index: bind_index,
@@ -427,7 +427,7 @@ mod tests {
         // Every mint seals its self-sig (2d eager-seal invariant), so a manually pre-seeded
         // module seals its (empty) interface before it is bound and its `ktype()` is read.
         module.seal_self_sig(SigSchema::raw_self_sig(module), &test_run.types);
-        let sealed = scope.seal_module(module, child);
+        let sealed = scope.seal_module(module);
         scope
             .bind_value_direct(
                 "foo".into(),

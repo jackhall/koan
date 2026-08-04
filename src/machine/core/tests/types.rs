@@ -102,6 +102,11 @@ fn retaining_adopt_reanchors_the_same_value_copy_free() {
 /// foreign to *both* the child and the parent (the shape a transparent `:!` ascription's nested
 /// member reach has) is absent from the module value's description yet still pinned — transitively,
 /// through the child region's own union — once every direct handle drops.
+///
+/// Plain `cargo test`: the door derives the child scope off the module value itself, and the two-level
+/// union chain it asserts is library mechanics pinned under Miri by workgraph's
+/// `a_regions_union_pins_what_its_own_members_reach`. What stays here is the embedder-side value
+/// assert that the composed description names the child region and nothing else.
 #[test]
 fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
     use crate::machine::core::arena::KoanRegion;
@@ -138,7 +143,7 @@ fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
 
     let parent_storage = run_root_storage();
     let parent = run_root_bare(&parent_storage);
-    let stored = parent.store_module_object(module, source_scope);
+    let stored = parent.store_module_object(module);
 
     let opened = stored.open_at(&parent_storage);
     let members: Vec<*const KoanRegion> = opened.with_reach(|reach| {

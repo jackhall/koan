@@ -590,11 +590,14 @@ impl<'a> Scope<'a> {
     }
 
     /// Seal a resident `Module` value into this scope — the Object-arm module bind
-    /// ([`Scope::seal_module`]) and an opaque ascription view. `module` lives in its own `child`
+    /// ([`Scope::seal_module`]) and an opaque ascription view. `module` lives in its own child
     /// scope's region — [`Module::alloc_at_child_scope`](crate::machine::model::Module) derives the
-    /// destination from that scope — so the door envelopes that reference at the child's own home and **merges** it
-    /// into this scope's region: the composition mints the child's region as a member of the
-    /// product's reach and retains it here for this region's life.
+    /// destination from that scope, and the module carries it
+    /// ([`Module::child_scope`](crate::machine::model::Module::child_scope)), so the door reads the
+    /// home off the value rather than taking it as a parameter a caller could mismatch. It
+    /// envelopes that reference at the child's own home and **merges** it into this scope's region:
+    /// the composition mints the child's region as a member of the product's reach and retains it
+    /// here for this region's life.
     ///
     /// That claim is exact. A `KObject::Module`'s only region borrow is its child scope, and every
     /// member value the module surfaces lives inside that child's own bindings; the child's region
@@ -605,11 +608,8 @@ impl<'a> Scope<'a> {
     /// Infallible, and check-free: the wrapping `KObject::Module` is built at the fold brand from
     /// the merge's own operand view, so an ambient-lifetime capture is a compile error at the
     /// closure's signature.
-    pub(crate) fn store_module_object(
-        &self,
-        module: &'a Module<'a>,
-        child: &Scope<'a>,
-    ) -> SealedValue {
+    pub(crate) fn store_module_object(&self, module: &'a Module<'a>) -> SealedValue {
+        let child = module.child_scope();
         let source = child.seal_resident_delivered(
             child.resident::<ModuleRefFamily>(module),
             FrameCoverage::empty(),

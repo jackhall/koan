@@ -136,7 +136,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // `new_scope` is a same-region child of this frame, so that reach is this scope's own region:
     // the module genuinely borrows into its home. Lifting the seal upgrades the description's
     // members `Weak → Rc` for the terminal the step delivers onward.
-    let sealed = ctx.scope.store_module_object(new_module, new_scope);
+    let sealed = ctx.scope.store_module_object(new_module);
     let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
     Action::done(Ok(StepCarried::born_pinned(carrier, pins)))
 }

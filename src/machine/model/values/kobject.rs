@@ -12,6 +12,7 @@ use crate::witnessed::{CellInput, CellReach, Sectioned};
 use super::container_substrate::{
     held_copy_cost, HeldCells, ListLayout, PayloadLayout, RecordLayout,
 };
+use super::rehomed::Rehomed;
 use super::{
     ContainerSubstrate, DictSubstrate, Held, KKey, ListSubstrate, Module, PayloadSubstrate,
     RecordSubstrate,
@@ -616,8 +617,10 @@ impl<'a> KObject<'a> {
 /// per cell, never a walk over the cell's contents:
 ///
 /// - **Owned data** — a scalar, a type-channel cell, a quoted expression — lands in an
-///   empty-reach run, as does a `KString`, whose bytes [`section_cells`] re-bumped into this
-///   door's own region before the verdict is read.
+///   empty-reach run, as does a `KString`, whose bytes the [`Rehomed`] mint re-bumped into this
+///   door's own region. That is why this reads a token rather than a bare `Held`: the `Owned`
+///   verdict is exact only after the re-home, and taking the token makes running it first a
+///   signature obligation instead of an ordering comment.
 /// - A **substrate carrier** hands in its own nested substrate's stored union, which is exact by
 ///   construction. The run-level self rule at the door
 ///   ([`Sectioned::build`](crate::witnessed::Sectioned::build)) drops that substrate's home when it
@@ -626,8 +629,8 @@ impl<'a> KObject<'a> {
 ///   memo answering the question it exists for: does a borrow *leaf* point home.
 /// - A `KFunction` / `Module` is a **born-borrowing seed** naming the scope it captures: the `FN`
 ///   door naming a closure's captured scope, the module door naming its child scope.
-fn cell_reach<'a>(cell: &Held<'a>, door: SubstrateDoor<'a, '_>) -> CellReach<'a, FrameStorage> {
-    match cell {
+fn cell_reach<'a>(cell: &Rehomed<'a>, door: SubstrateDoor<'a, '_>) -> CellReach<'a, FrameStorage> {
+    match cell.cell() {
         Held::Type(_) | Held::UnresolvedType(_) => CellReach::Owned,
         Held::Object(o) => object_cell_reach(o, door),
     }
@@ -693,12 +696,15 @@ fn scope_coverage(owner: Weak<FrameStorage>) -> FrameCoverage {
     }
 }
 
-/// Section `cells` through `door`: re-home each top-node string ([`rehome_cell_text`]), store the
+/// Section `cells` through `door`: re-home each top-node string ([`Rehomed::mint`]), store the
 /// cell resident (so the door receives a `&'a Held<'a>` anchored to the container's own region, and
 /// one pin covers a projected cell and its reach together), pair it with the verdict [`cell_reach`]
 /// reads off its stored facts, and hand the whole batch to the alloc door. Returns the sectioned
 /// storage, the value-level union the door mints, and the copy-cost fold — the shared body of every
 /// container door.
+///
+/// The re-home/verdict ordering is carried by the [`Rehomed`] token rather than by this function's
+/// statement order: `cell_reach` takes one, and only the mint produces one.
 fn section_cells<'a>(
     door: SubstrateDoor<'a, '_>,
     cells: &[Held<'a>],
@@ -709,35 +715,19 @@ fn section_cells<'a>(
     let inputs: Vec<CellInput<'a, 'a, Held<'static>, FrameStorage>> = cells
         .iter()
         .copied()
-        .map(rehome_cell_text(door))
+        .map(|cell| Rehomed::mint(door, cell))
         .map(|cell| {
             // The verdict is read before the cell moves into storage: it names the cell's *stored*
             // reach, whose `&'a` lifetime is the region's, not this borrow's.
             let reach = cell_reach(&cell, door);
             CellInput {
-                payload: door.alloc_cell_folded(cell),
+                payload: door.alloc_cell_folded(cell.into_cell()),
                 reach,
             }
         })
         .collect();
     let (cells, union) = Sectioned::build(door.handle(), inputs);
     (cells, union, copy_cost)
-}
-
-/// Re-bump a cell's **own** string bytes into `door`'s region, so a stored top-node string cell is
-/// home-resident and its `Owned` reach verdict is exact. The cost is one memcpy per string per
-/// container construction — what the `String::clone` in a cell's `deep_clone` cost at these same
-/// sites before strings moved into the region.
-///
-/// Top-node only, and that is the whole rule: a **nested substrate** cell's own strings are already
-/// home-resident in that substrate's region, which its stored reach union names, so the pinned-cell
-/// verdict covers them and re-walking would be a deep copy this door does not do. A `Tagged`'s tag
-/// rides its own substrate's region for the same reason ([`KObject::tagged`] re-bumped it there).
-fn rehome_cell_text<'a: 'h, 'h>(door: SubstrateDoor<'a, 'h>) -> impl Fn(Held<'a>) -> Held<'a> + 'h {
-    move |cell| match cell {
-        Held::Object(KObject::KString(s)) => Held::Object(KObject::KString(door.alloc_text(s))),
-        other => other,
-    }
 }
 
 /// Section a list's elements and store the [`ListSubstrate`] — positional, so the layout is implicit

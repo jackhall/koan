@@ -98,10 +98,10 @@ group just to silence the stale-anchor check.
   `transfer_into_placing`) and builds its product at a `FoldingBrand`, whose rank-2 signature makes
   an ambient-lifetime capture a compile error rather than a retype. The `unsafe` those verbs route
   is the shared retype in `witnessed.rs`. The group pins what no signature can prove — that the
-  composition's **minted reach** names every region the product borrows: a module value's merge must
-  name the child's own region (which owns the deduped union covering its members' reaches), and drop
-  the wrong member or fire the self rule on the wrong side and the child region is released while
-  the stored value still points into it. Tree borrows is the only check on that arithmetic.
+  composition's **minted reach** names every region the product borrows, and that the release
+  predicate over the rebuilt product is release-exact: adopt a loop-carried argument and free the
+  retiring host one step early and the spliced carrier reads a dead region. Tree borrows is the only
+  check on that arithmetic.
 - `src/machine/model/values/kobject.rs` — the container doors are safe code (bumping a `&'a str`
   into a region borrowed for `'a` needs no retype), so the file carries no `unsafe`. The
   region-hosted-string group pins the **re-home rule** those doors implement: a string cell's
@@ -309,16 +309,6 @@ buy the audit nothing past the fifth. The only `unsafe` routed is the shared `re
 `witnessed.rs`.
 
 - `aggregate_of_mixed_call_results_releases_every_producer_frame`
-
-**`Scope::store_module_object` seal-time composition** ([src/machine/core/scope/reach.rs](../src/machine/core/scope/reach.rs))
-— a module value's only region borrow is its child scope, so the merge composes the child's **own
-region** alone; that region owns the deduped union covering everything its members reach. This test
-binds a member into a child scope whose reach names a region foreign to both the child and the
-parent, stores the module value into the parent, and drops every other handle on both regions — tree
-borrows catches a use-after-free if the child region's union drops a member's reach or the
-composition's self rule fires on the wrong side.
-
-- `a_stored_module_reaches_the_child_region_which_owns_its_members_reaches`
 
 **`USING … SCOPE` transparent-window aliasing** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
 `ScopeBindings::Borrowed` window reads another scope's `RefCell` maps through a
@@ -603,9 +593,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-04: 1047s — 24 tests, 0 leaks, 0 UB
 - 2026-08-04: 1014s — 25 tests, 0 leaks, 0 UB
 - 2026-08-04: 971s — 25 tests, 0 leaks, 0 UB
 - 2026-08-03: 1028s — 27 tests, 0 leaks, 0 UB
 - 2026-08-03: 1474s — 32 tests, 0 leaks, 0 UB
-- 2026-08-03: 1512s — 33 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
