@@ -21,7 +21,7 @@ use crate::machine::model::{
     RegionEscape, TypeIdentifier,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, KError, SplicedCell};
-use crate::witnessed::{Delivered, Reattachable, RegionHandleFamily, Sealed, Witnessed};
+use crate::witnessed::{Delivered, DropFree, Reattachable, RegionHandleFamily, Sealed, Witnessed};
 
 // The sole test here pins the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy`
 // build rebuilds the record instead, so the module cannot hold there. The equivalence battery proves
@@ -119,7 +119,7 @@ impl<'a> Scope<'a> {
     /// operands. Its carrier pins nothing either — the reached regions are owned by this region's
     /// union bundle — so an entry read is a pointer copy, and a read that leaves the container
     /// re-owns the reach by lifting into a [`DeliveredCarried`] envelope ([`Self::lift_resident`]).
-    pub(crate) fn resident<T: Reattachable>(
+    pub(crate) fn resident<T: Reattachable + DropFree>(
         &self,
         value: T::At<'_>,
     ) -> Witnessed<T, CarrierWitness> {
@@ -128,7 +128,7 @@ impl<'a> Scope<'a> {
 
     /// [`Self::resident`], sealed into its dormant binding form — the door a dispatch-bucket
     /// registration writes through.
-    pub(crate) fn seal_resident<T: Reattachable>(
+    pub(crate) fn seal_resident<T: Reattachable + DropFree>(
         &self,
         value: T::At<'_>,
     ) -> Sealed<T, CarrierWitness> {
@@ -151,7 +151,7 @@ impl<'a> Scope<'a> {
     /// carrier exists — so holding the call-site frame roots the module's arena one hop removed, and
     /// through it the description's pointee.
     #[cfg(test)]
-    pub(crate) fn seal_reaching<T: Reattachable>(
+    pub(crate) fn seal_reaching<T: Reattachable + DropFree>(
         &self,
         value: T::At<'_>,
         reach: &'a FrameReach,
@@ -238,7 +238,7 @@ impl<'a> Scope<'a> {
     /// description's members `Weak → Rc` under that pin, so the value's whole reach travels owned
     /// and the envelope survives its source frame's death. `self` must be the **binding** scope —
     /// the region the value lives in, whose arena hosts the description the upgrade reads.
-    pub(crate) fn lift_resident<T: Reattachable>(
+    pub(crate) fn lift_resident<T: Reattachable + DropFree>(
         &self,
         sealed: Sealed<T, CarrierWitness>,
     ) -> Delivered<T, CarrierWitness, FrameStorage> {
@@ -269,7 +269,7 @@ impl<'a> Scope<'a> {
     /// does: a relocation's dest is a bare region handle living in this scope's own region, and the
     /// composition verbs take their destination as an envelope, so it is sealed here rather than
     /// paired with an asserted host at the call site.
-    pub(crate) fn seal_resident_delivered<T: Reattachable>(
+    pub(crate) fn seal_resident_delivered<T: Reattachable + DropFree>(
         &self,
         witnessed: Witnessed<T, CarrierWitness>,
         coverage: FrameCoverage,

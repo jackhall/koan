@@ -7,7 +7,7 @@ use crate::machine::model::KType;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::OperatorGroupFamily;
 use crate::machine::model::RecursiveGroupWindow;
-use crate::witnessed::{And, Reattachable, RegionHandle, SealedExtern};
+use crate::witnessed::{And, DropFree, Reattachable, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
 use super::bindings::Bindings;
@@ -393,7 +393,7 @@ impl<'a> Scope<'a> {
     /// [`Self::alloc_child`] for a constructor taking a **second** borrowed operand — a `GROUP`
     /// record, a module's binding table. It zips onto the parent so both re-anchor at one `'b`;
     /// branding them independently is exactly what invariance rejects.
-    fn alloc_child_with<Op: Reattachable>(
+    fn alloc_child_with<Op: Reattachable + DropFree>(
         outer: &'a Scope<'a>,
         operand: SealedExtern<Op>,
         build: impl for<'b> FnOnce(&'b Scope<'b>, Op::At<'b>) -> Scope<'b>,

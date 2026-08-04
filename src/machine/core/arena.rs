@@ -26,8 +26,8 @@ use crate::machine::model::{
 };
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    BumpMap, Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, StepContext,
-    StorageOf, StorageProfile, Stored, Witnessed,
+    BumpMap, DropFree, Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle,
+    StepContext, StorageOf, StorageProfile, Stored, Witnessed,
 };
 
 mod frame;
@@ -225,7 +225,7 @@ impl<'a> RegionBrand<'a> {
     /// A value that *does* reach somewhere takes [`Self::seal_reaching`] with the description
     /// [`Scope::mint_retained`](crate::machine::core::Scope) derived for it. The brand is the
     /// capability marker: only a handle into the region the value lives in may seal it resident.
-    pub(crate) fn seal_resident<T: Reattachable>(
+    pub(crate) fn seal_resident<T: Reattachable + DropFree>(
         self,
         value: T::At<'_>,
     ) -> Witnessed<T, CarrierWitness> {
@@ -239,7 +239,7 @@ impl<'a> RegionBrand<'a> {
     /// ([`Scope::mint_retained`](crate::machine::core::Scope)). The description carries the value's
     /// residence as its host, so the pairing this takes is one record, not two — there is no
     /// separate residence for a caller to get wrong.
-    pub(crate) fn seal_reaching<T: Reattachable>(
+    pub(crate) fn seal_reaching<T: Reattachable + DropFree>(
         self,
         value: T::At<'_>,
         reach: &'a FrameReach,
@@ -488,7 +488,7 @@ pub(crate) trait KoanRegionExt {
     /// region. The yoke hands a `&'b KoanRegion`; wrapping it as the brand is sound for the same reason
     /// the yoke is — the `for<'b>` quantifier admits only region-derived/owned references, so
     /// co-location holds by construction and nothing branded escapes the closure.
-    fn yoke_branded<T: Reattachable, F>(
+    fn yoke_branded<T: Reattachable + DropFree, F>(
         owner: Rc<FrameStorage>,
         build: F,
     ) -> Witnessed<T, CarrierWitness>
@@ -526,7 +526,7 @@ impl KoanRegionExt for KoanRegion {
             .unseal()
     }
 
-    fn yoke_branded<T: Reattachable, F>(
+    fn yoke_branded<T: Reattachable + DropFree, F>(
         owner: Rc<FrameStorage>,
         build: F,
     ) -> Witnessed<T, CarrierWitness>

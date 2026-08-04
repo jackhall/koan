@@ -34,7 +34,7 @@ use crate::scheduler::ResolvedDeps;
 /// under the [`dep_error_frame`] label, else hands the resolved values to a value-only `finish`.
 /// Test-only; the run path routes the witnessed [`awaiting_witnessed`].
 #[cfg(test)]
-fn awaiting(deps: ResolvedDeps, finish: TerminalDepFinish<'_>) -> NodeWork<KoanWorkload> {
+fn awaiting(deps: ResolvedDeps, finish: TerminalDepFinish<'_>) -> NodeWork<'_, KoanWorkload> {
     NodeWork::new(deps, short_circuit(Some(dep_error_frame()), finish), None)
 }
 
@@ -43,7 +43,7 @@ fn awaiting(deps: ResolvedDeps, finish: TerminalDepFinish<'_>) -> NodeWork<KoanW
 fn awaiting_witnessed(
     deps: ResolvedDeps,
     finish: WitnessedDepFinish<'_>,
-) -> NodeWork<KoanWorkload> {
+) -> NodeWork<'_, KoanWorkload> {
     NodeWork::new(
         deps,
         short_circuit(Some(dep_error_frame()), seal_witnessed(finish)),
