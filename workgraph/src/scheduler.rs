@@ -51,7 +51,7 @@ pub use deps::{Deps, ResolvedDeps};
 // type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
 pub use deps::DepResults;
 pub use node_id::NodeId;
-pub use workload::{Anchor, Live, OwnerOf, SealedTerminal, Terminal, Workload};
+pub use workload::{Anchor, DeliveredTerminal, Live, OwnerOf, SealedTerminal, Terminal, Workload};
 
 /// Re-exported for the driver's white-box reclaim tests (the only cross-module user of the edge
 /// kind); production driver code never names it. Widened to `test-hooks` so the embedder's own
@@ -231,13 +231,19 @@ impl<W: Workload> Scheduler<W> {
     /// of any per-call source it still reaches), dropping the pinned producer frame. The drain
     /// boundary uses this for consumer-less roots. Resolves a bare-name alias so the real producer's
     /// frame — not the alias slot — is released.
-    pub fn rehome_terminal(&mut self, id: NodeId, output: Result<Terminal<W>, W::Error>) {
+    ///
+    /// Takes the same [`DeliveredTerminal`] currency [`finalize`](Self::finalize) does, and for the
+    /// same reason: the relocation's product carries its own reach. The envelope's coverage is
+    /// *dropped* here rather than re-seeded — the value moved into a region that outlives the
+    /// scheduler, so the transit pins have nothing left to keep alive.
+    pub fn rehome_terminal(&mut self, id: NodeId, output: Result<DeliveredTerminal<W>, W::Error>) {
         let target = self.resolve_alias(id);
         // The re-homed terminal has no per-call producer frame to retain — its value moved into a
         // surviving region — so any hold seeded at its finalize is released here (its count is zero
         // by construction: a consumer-less root has no parked destination).
         self.deps.drop_retain(target.index());
-        self.store.rehome_terminal(target, output);
+        self.store
+            .rehome_terminal(target, output.map(Delivered::into_cell));
     }
 
     /// True iff `producer` is forward-reachable from `consumer`

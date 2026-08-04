@@ -104,16 +104,17 @@ impl<'run> KoanRuntime<'run> {
                 // cycle into the drained value's witness.
                 // The relocation's own composition mints the rehomed terminal's reach into the run
                 // root region, which is the act that retains it there — so those regions stay alive
-                // past scheduler teardown with nothing folded here. The threaded coverage is the
-                // transit copy, which the Forward-ready path re-seeds the retention hold with.
-                if let Ok((witnessed, _coverage)) = self.relocate_terminal(
+                // past scheduler teardown with nothing folded here. The product envelope's coverage
+                // is the transit copy, dropped by `rehome_terminal`: what the run region now holds
+                // is the mint, not these pins.
+                if let Ok(delivered) = self.relocate_terminal(
                     id,
                     root.seal_resident_delivered(
                         root.resident::<DestHandleFamily>(root.brand().handle()),
                         crate::machine::core::FrameCoverage::empty(),
                     ),
                 ) {
-                    self.sched.rehome_terminal(id, Ok(witnessed));
+                    self.sched.rehome_terminal(id, Ok(delivered));
                 }
             }
         }

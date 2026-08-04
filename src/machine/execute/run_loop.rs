@@ -254,23 +254,21 @@ impl<'run> KoanRuntime<'run> {
                         // re-stamps an obligation-coarsened value into the obligation's home region
                         // through the received envelope.
                         let envelope = carrier.seal_at_step(Rc::clone(anchor.owner()));
-                        // `finalize_terminal` surfaces the terminal's owned foreign bundle alongside
-                        // the sealed carrier; the scheduler seeds the retention hold with it, so no
-                        // pull re-derives the reach.
+                        // `finalize_terminal` hands the envelope on whole; the scheduler seeds the
+                        // retention hold from its coverage, so no pull re-derives the reach and no
+                        // call site here names one.
                         match self.finalize_terminal(
                             envelope,
                             anchor.owner(),
                             frame.and(post.obligation.as_ref()),
                         ) {
-                            Ok((witnessed, foreign)) => {
-                                self.sched.finalize(idx, Ok(witnessed), foreign);
-                            }
+                            Ok(delivered) => self.sched.finalize(idx, Ok(delivered)),
                             Err(error) => {
                                 scope.clear_placeholders_for_producer(
                                     id,
                                     &mut WriteGate::for_run_loop(),
                                 );
-                                self.sched.finalize(idx, Err(error), FrameCoverage::empty());
+                                self.sched.finalize(idx, Err(error));
                             }
                         }
                     }
@@ -279,10 +277,9 @@ impl<'run> KoanRuntime<'run> {
                         // obligation still labels it with the callee's trace frame.
                         let error = finalize_error(error, frame.and(post.obligation.as_ref()));
                         scope.clear_placeholders_for_producer(id, &mut WriteGate::for_run_loop());
-                        // A terminal error carries no value and no witness, so its retention hold's
-                        // foreign bundle is empty; the producer frame still retains until its
-                        // (short-circuiting) destinations pull.
-                        self.sched.finalize(idx, Err(error), FrameCoverage::empty());
+                        // A terminal error carries no value and so reaches nothing; the producer
+                        // frame still retains until its (short-circuiting) destinations pull.
+                        self.sched.finalize(idx, Err(error));
                     }
                     NodeStep::ForwardReady(producer) => {
                         // Relocate `producer`'s terminal into this slot's region via merge-transfer;
@@ -298,18 +295,16 @@ impl<'run> KoanRuntime<'run> {
                                 FrameCoverage::empty(),
                             ),
                         };
-                        // The relocation threads back the relocated terminal's owned foreign bundle;
-                        // seed the retention hold with it so no pull re-derives the reach.
+                        // The relocation's product envelope crosses back whole; the retention hold
+                        // seeds from its own coverage, so no pull re-derives the reach.
                         match self.relocate_terminal(producer, dest) {
-                            Ok((witnessed, foreign)) => {
-                                self.sched.finalize(idx, Ok(witnessed), foreign);
-                            }
+                            Ok(delivered) => self.sched.finalize(idx, Ok(delivered)),
                             Err(error) => {
                                 scope.clear_placeholders_for_producer(
                                     id,
                                     &mut WriteGate::for_run_loop(),
                                 );
-                                self.sched.finalize(idx, Err(error), FrameCoverage::empty());
+                                self.sched.finalize(idx, Err(error));
                             }
                         }
                     }

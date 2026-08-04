@@ -173,8 +173,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             index: bind_index,
             sealed: sealed.duplicate(),
         };
-        let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
-        Action::done(Ok(StepCarried::born_pinned(carrier, pins))).with_effect(write)
+        Action::done(Ok(StepCarried::born_delivered(
+            ctx.scope.lift_resident(sealed),
+        )))
+        .with_effect(write)
     }
 }
 

@@ -67,7 +67,7 @@ impl<'step, T: Reattachable + DropFree> StepCarried<'step, T> {
     /// whose mint composes no source and so yields a description with no members at all, or from the
     /// checked-alloc door, whose only possible member is the birth region itself. Neither can name a
     /// foreign region, so neither has owned pins to thread. A producer whose value *does* reach
-    /// elsewhere takes [`Self::born_pinned`] or [`Self::born_delivered`], which carry the bundle.
+    /// elsewhere takes [`Self::born_delivered`], which carries the bundle.
     /// (Re-checking it here is not available anyway: the membership queries live on the opened
     /// carrier, and this door holds no pin to open one under.)
     pub(crate) fn born(inner: Witnessed<T, CarrierWitness>) -> Self {
@@ -78,30 +78,22 @@ impl<'step, T: Reattachable + DropFree> StepCarried<'step, T> {
         }
     }
 
-    /// Wrap a **reach-carrying** carrier into the step brand, threading its owned
-    /// [`FrameCoverage`] — a resident binding read (the entry's coverage) or a splice (the source
-    /// envelope's whole coverage, its producer's own region among them), where the carrier and its
-    /// pins arrive separately rather than inside an envelope [`Self::born_delivered`] could consume
-    /// whole. The coverage rides the step and [`Self::seal_at_step`] consumes it into the delivery
-    /// envelope, so the terminal's reach is owned end-to-end rather than re-derived.
-    pub(crate) fn born_pinned(inner: Witnessed<T, CarrierWitness>, pins: FrameCoverage) -> Self {
-        StepCarried {
-            inner,
-            pins,
-            step: PhantomData,
-        }
-    }
-
-    /// Wrap the **product of a composition into the step's own destination region**: a fold, a
-    /// relocation, a merge. The product envelope's residence *is* that destination, which
-    /// [`Self::seal_at_step`] pins again as the terminal's host, so it is released here
-    /// ([`Delivered::coverage_releasing_home`]) and what rides the step is the product's foreign
-    /// coverage alone — the same set the composition's self rule already stripped from the bundle it
-    /// composed.
+    /// Wrap a **reach-carrying** carrier into the step brand by consuming its whole delivery
+    /// envelope — a lifted binding (the value's home region among the members), a splice recovered
+    /// from its producer's envelope, or the product of a composition into the step's own destination
+    /// region (a fold, a relocation, a merge). The envelope is the only source: the carrier and the
+    /// coverage cannot arrive from different values, and a caller cannot drop the pins and brand the
+    /// carrier alone. [`Self::seal_at_step`] hands the coverage back into the delivery envelope, so
+    /// the terminal's reach is owned end-to-end rather than re-derived.
+    ///
+    /// The coverage travels whole, residence included. Where residence *is* the step's own
+    /// destination region, [`Self::seal_at_step`] re-pins it as the terminal's host and the union
+    /// collapses the duplicate; where it is some outer region the value was lifted out of (a binding
+    /// scope), it is a genuine member and stripping it would drop the only pin naming it.
     pub(crate) fn born_delivered(envelope: Delivered<T, CarrierWitness, FrameStorage>) -> Self {
-        let pins = envelope.coverage_releasing_home();
+        let (cell, pins) = envelope.into_parts();
         StepCarried {
-            inner: envelope.into_cell().unseal(),
+            inner: cell.unseal(),
             pins,
             step: PhantomData,
         }

@@ -270,18 +270,6 @@ impl<'a> Scope<'a> {
         Delivered::lift(sealed, self.home())
     }
 
-    /// The step-terminal form of [`Self::lift_resident`]: the live carrier paired with the owned
-    /// bundle the lift upgraded, for a producer handing its bound value out of the step
-    /// (`StepCarried::born_pinned`). The pins ride the step so the terminal's reach is owned
-    /// end-to-end rather than re-derived at the seal.
-    pub(crate) fn lift_resident_parts(
-        &self,
-        sealed: SealedValue,
-    ) -> (Witnessed<CarriedFamily, CarrierWitness>, FrameCoverage) {
-        let (cell, coverage) = self.lift_resident(sealed).into_parts();
-        (cell.unseal(), coverage)
-    }
-
     /// Seal a resident carrier — a value already living in this scope's own region — into a
     /// [`DeliveredCarried`] envelope pinned by this scope's own region owner. The resident twin of
     /// the scheduler's [`dep_delivered`](crate::scheduler::Scheduler::dep_delivered): the pin is the

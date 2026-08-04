@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::{DropFree, Reattachable};
-use crate::witnessed::{Carrier, PinsRegion, Sealed, Witnessed};
+use crate::witnessed::{Carrier, Delivered, PinsRegion, Sealed, Witnessed};
 
 /// The live (caller-lifetime) form of the inter-node value for a workload `W`, re-anchored from the
 /// scheduler's `Witnessed<W::Value, _>` slot at the borrow under which the producer frame stays
@@ -31,6 +31,16 @@ pub type Terminal<W> = Witnessed<<W as Workload>::Value, Carrier<OwnerOf<W>>>;
 /// A finalized terminal in its dormant [`Sealed`] form — what a result slot stores and a
 /// consumer pull duplicates, read back under the retention hold ([`Sealed::open_with`]).
 pub type SealedTerminal<W> = Sealed<<W as Workload>::Value, Carrier<OwnerOf<W>>>;
+
+/// A terminal **in transit**: the carrier bundled with the owned coverage pinning every region it
+/// reaches, its own residence among them. This is the currency of both terminal doors — the value
+/// the workload's finalize hook returns ([`Scheduler::finalize`](super::Scheduler::finalize),
+/// [`Scheduler::rehome_terminal`](super::Scheduler::rehome_terminal)) and the one a consumer pulls
+/// ([`Scheduler::dep_delivered`](super::Scheduler::dep_delivered)). Value and reach travel as one
+/// value derived from one envelope, so neither door can be handed a coverage belonging to some
+/// other terminal, and the retention hold's foreign bundle is derived here rather than beside the
+/// call.
+pub type DeliveredTerminal<W> = Delivered<<W as Workload>::Value, Carrier<OwnerOf<W>>, OwnerOf<W>>;
 
 /// The Koan-agnostic interface the generic DAG scheduler is parameterized over: the workload types
 /// it stores opaquely and never inspects. The Koan instantiation is `machine::execute::KoanWorkload`.

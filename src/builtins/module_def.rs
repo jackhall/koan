@@ -63,8 +63,9 @@ pub(super) fn await_module_body<'a>(
             if let Some(NameLookup::Bound(sealed)) =
                 fctx.scope.bindings().lookup_value(&name_for_finish, None)
             {
-                let (carrier, pins) = fctx.scope.lift_resident_parts(sealed);
-                return Action::done(Ok(StepCarried::born_pinned(carrier, pins)));
+                return Action::done(Ok(StepCarried::born_delivered(
+                    fctx.scope.lift_resident(sealed),
+                )));
             }
             let module: &'a Module<'a> =
                 Module::alloc_at_child_scope(name_for_finish.clone(), child_scope);
@@ -92,8 +93,10 @@ pub(super) fn await_module_body<'a>(
                 index: bind_index,
                 sealed: sealed.duplicate(),
             };
-            let (carrier, pins) = fctx.scope.lift_resident_parts(sealed);
-            Action::done(Ok(StepCarried::born_pinned(carrier, pins))).with_effect(write)
+            Action::done(Ok(StepCarried::born_delivered(
+                fctx.scope.lift_resident(sealed),
+            )))
+            .with_effect(write)
         },
     )
 }

@@ -27,7 +27,7 @@ use crate::machine::core::{RegionBrand, ScopeRefFamily};
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, Part, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::{
-    CallFrame, CarrierWitness, FrameCoverage, FrameStorage, KError, KErrorKind, NodeId, RunId,
+    CallFrame, CarrierWitness, DeliveredCarried, FrameStorage, KError, KErrorKind, NodeId, RunId,
 };
 use crate::witnessed::SealedExtern;
 
@@ -44,7 +44,7 @@ use super::{
 };
 use crate::machine::model::CarriedFamily;
 use crate::scheduler::{Deps, ResolvedDeps, Scheduler, Workload};
-use crate::witnessed::{Delivered, Witnessed};
+use crate::witnessed::Delivered;
 
 mod interpret;
 mod submit;
@@ -169,25 +169,24 @@ impl<'run> KoanRuntime<'run> {
     /// a plain-data copy frees its producer at retention discharge while a rebuild still borrowing
     /// home keeps it.
     ///
-    /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as a re-sealed
-    /// [`Witnessed`], not at a step brand. The consumer-pull dep slice does not route this — it opens
-    /// in-band at the step brand in [`run_step`](Self::run_step), where the continuation needs the
-    /// values live at `'b`.
+    /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as the
+    /// relocation's own product envelope, not at a step brand. The consumer-pull dep slice does not
+    /// route this — it opens in-band at the step brand in [`run_step`](Self::run_step), where the
+    /// continuation needs the values live at `'b`.
     pub(in crate::machine::execute) fn relocate_terminal(
         &self,
         producer: NodeId,
         dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
-    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, FrameCoverage), KError> {
+    ) -> Result<DeliveredCarried, KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
         // The destination is a bare region handle (empty reach), so the transfer composes the
-        // producer's reach alone. The product envelope's residence is `dest`'s own frame, which the
-        // caller re-pins as the terminal's host, so it is released here and what crosses back is the
-        // relocated terminal's foreign reach — the transit copy that re-seeds the retention hold on
-        // a `Forward`-ready finalize. The destination's own region-lifetime retention rides the
-        // transfer's mint, so a caller that only needs the value to outlive teardown drops it.
-        let relocated = relocate_seam(&delivered, dest);
-        let foreign = relocated.coverage_releasing_home();
-        Ok((relocated.into_cell().unseal(), foreign))
+        // producer's reach alone. The product envelope is what crosses back whole — its residence is
+        // `dest`'s own frame and its members are the relocated terminal's reach, so whichever
+        // terminal door consumes it (`finalize`'s retention hold, `rehome_terminal`'s drop) reads
+        // the claim off the value it is storing. The destination's own region-lifetime retention
+        // rides the transfer's mint, so a caller that only needs the value to outlive teardown drops
+        // the envelope.
+        Ok(relocate_seam(&delivered, dest))
     }
 
     pub fn len(&self) -> usize {

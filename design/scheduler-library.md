@@ -73,9 +73,10 @@ a concept, not a final identifier.
   frame owner plus the value's foreign pins. The carrier itself is
   **reference-only** (pins nothing); the envelope's bundle is what keeps its
   reach alive in flight, and the only verb that materializes a residence host
-  into a minted pair. A consumer receives one through `dep_delivered`;
-  bind-seam copies ride it too, so a bare frame pin never escapes the
-  scheduler.
+  into a minted pair. A consumer receives one through `dep_delivered` and a
+  producer hands one back at `finalize` / `rehome_terminal`, so the envelope is
+  the terminal currency in both directions; bind-seam copies ride it too, so a
+  bare frame pin never escapes the scheduler.
 - **Finish** — the continuation a consumer runs once its deps resolve.
 - **Workload** — the embedder-facing trait: the cell contract
   ([cellgraph.md](../workgraph/design/cellgraph.md) — the continuation family, the memory anchor

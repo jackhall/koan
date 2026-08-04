@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use crate::witnessed::StepCoverage;
 
-use super::workload::OwnerOf;
-use super::{Anchor, NodeId, Scheduler, Terminal, Workload};
+use super::workload::DeliveredTerminal;
+use super::{Anchor, NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
     /// Invariant: every consumer drained here is parked with a non-zero counter;
@@ -15,23 +15,28 @@ impl<W: Workload> Scheduler<W> {
     /// producer drains.
     ///
     /// Wakes must all land before any queue push: a later wake re-reading the
-    /// slot must observe the prior transition. The terminal arrives already bundled with its witness
-    /// set (the producer frame ∪ the regions it reaches), built by the workload's finalize hook.
+    /// slot must observe the prior transition. The terminal arrives as a
+    /// [`DeliveredTerminal`] — the carrier bundled with the owned coverage the workload's finalize
+    /// hook composed — so its reach is the reach of the value being stored, not a set paired with it
+    /// at the call.
     ///
     /// Seeds the slot's **frame-retention hold** unconditionally by projecting the region owner from
-    /// the slot's own anchor and pairing it with `foreign` — the terminal's owned foreign pin bundle,
-    /// threaded from the workload's finalize hook (empty for an error or a frameless / run-region
-    /// terminal). The region and every reached region stay retained until every destination — the
-    /// consumers parked here at finalize, plus any late parker — has pulled, released at pull-count
-    /// zero.
-    pub fn finalize(
-        &mut self,
-        idx: usize,
-        output: Result<Terminal<W>, W::Error>,
-        foreign: StepCoverage<OwnerOf<W>>,
-    ) {
+    /// the slot's own anchor and pairing it with the terminal's own foreign bundle, derived here by
+    /// releasing the envelope's residence ([`Delivered::coverage_releasing_home`](crate::witnessed::Delivered::coverage_releasing_home)):
+    /// the hold owns that region as its `owner` field, so re-listing it would be a second `Rc` on the
+    /// very frame the hold's release frees. An error carries no value and so reaches nothing. The
+    /// region and every reached region stay retained until every destination — the consumers parked
+    /// here at finalize, plus any late parker — has pulled, released at pull-count zero.
+    pub fn finalize(&mut self, idx: usize, output: Result<DeliveredTerminal<W>, W::Error>) {
         let id = NodeId(idx);
-        self.store.finalize(id, output);
+        let (sealed, foreign) = match output {
+            Ok(envelope) => {
+                let foreign = envelope.coverage_releasing_home();
+                (Ok(envelope.into_cell()), foreign)
+            }
+            Err(error) => (Err(error), StepCoverage::empty()),
+        };
+        self.store.finalize(id, sealed);
         let drained = self.deps.drain_notify(idx);
         // The consumers parked on this producer at finalize are its known destinations; a late parker
         // (wiring after this point) bumps the count through the ready-branch increment. Project the

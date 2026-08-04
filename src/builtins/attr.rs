@@ -392,8 +392,9 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
             }
             // A value member read reaches into the module's region; the lift upgrades the member's
             // exact reach into the owned pins that ride the step.
-            let (carrier, pins) = module_scope.lift_resident_parts(sealed);
-            Ok(StepCarried::born_pinned(carrier, pins))
+            Ok(StepCarried::born_delivered(
+                module_scope.lift_resident(sealed),
+            ))
         }
         Some(MemberResolution::Type { kt }) => {
             Ok(StepCarried::born(module_scope.resident(Carried::Type(kt))))

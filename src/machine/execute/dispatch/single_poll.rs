@@ -37,8 +37,7 @@ pub(super) fn bare_identifier<'step, 'b>(
         // scope's own region owner — so the read names the value's reach by construction rather
         // than reconstructing it from the value.
         Some(NameLookup::Bound(delivered)) => {
-            let (cell, pins) = delivered.into_parts();
-            Outcome::Done(Ok(StepCarried::born_pinned(cell.unseal(), pins)))
+            Outcome::Done(Ok(StepCarried::born_delivered(delivered)))
         }
         Some(NameLookup::Parked(producer)) => forward_to_producer(producer),
         None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name.to_string())))),
@@ -146,8 +145,7 @@ pub(super) fn literal_pass_through<'step>(
             // Lift the resting cell back into its producer's own delivery envelope under the step's
             // coverage: the whole claim — the producer's own region among its members — is re-owned
             // there, so the recovered carrier's reach is threaded, not re-derived.
-            let (recovered, coverage) = ctx.lift_spliced(&cell).into_parts();
-            Outcome::Done(Ok(StepCarried::born_pinned(recovered.unseal(), coverage)))
+            Outcome::Done(Ok(StepCarried::born_delivered(ctx.lift_spliced(&cell))))
         }
         // A quote is its body as data: bump the `KObject::KExpression` into this scope's region
         // through the door whose signature admits an expression and nothing else. The value is

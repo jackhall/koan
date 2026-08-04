@@ -108,7 +108,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-21 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+20 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
 below are the exact test identifiers; pass them after `--` in the Miri command. A further 52 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
@@ -254,20 +254,6 @@ so the region holds re-homed bytes and index metadata as well as cells, then dro
 nothing outside borrowing in. Miri's process-exit leak count is the assertion.
 
 - `region_death_frees_every_drop_free_substrate_shape`
-
-**Retaining adoption's delivered re-home across retention** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) —
-`Scope::adopt_carried` at the retaining seam consuming a *delivered* envelope. The verb's Pin arm is
-a direct call into the library's fused mint-and-retain door (`Delivered::adopt_into`, pinned by the
-workgraph slate's adoption tests); what is koan's own here is the **finalize seeding** the envelope
-rides in on: the fold runs first, pinning the producer's residence
-and the value's foreign reach into the consumer's region before the copy-free reattach fabricates the
-consumer-lifetime borrow. This test finalizes an object at the Done boundary (mirroring production),
-rides the retention hold across the producer shell's drop, adopts into an independent consumer scope,
-then drops the hold and every other source handle before reading — the consumer's folded set is the
-sole owner at the read, pinning the hold-to-fold handoff. Tree borrows catches a use-after-free if
-the fold-before-reattach order, the host materialization, or the pin regresses.
-
-- `retaining_adopt_object_rides_retention_across_producer_shell_drop`
 
 **Dep envelopes held across a step's own open** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
 — `run_step`'s consumer-step coverage is a plain `FrameCoverage` that absorbs each dep envelope's
@@ -557,9 +543,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-04: 845s — 20 tests, 0 leaks, 0 UB
 - 2026-08-04: 931s — 21 tests, 0 leaks, 0 UB
 - 2026-08-04: 962s — 22 tests, 0 leaks, 0 UB
 - 2026-08-04: 1047s — 24 tests, 0 leaks, 0 UB
 - 2026-08-04: 1014s — 25 tests, 0 leaks, 0 UB
-- 2026-08-04: 971s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

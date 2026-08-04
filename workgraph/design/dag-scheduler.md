@@ -168,17 +168,27 @@ A terminal is `Result`-shaped: a sealed carrier, or the workload's error. The
 `Result` split is the DAG layer's alone — the cell substrate has no notion of a
 cell being finished forever, so it has no error type either.
 
-Delivery is envelope-only. A dep whose value must outlive the resolving step
-travels as its [`Delivered`](../src/witnessed/delivered.rs) envelope — the sealed
-carrier paired with the producer's retained region owner and the value's foreign
-pins — so the value stays in its producer's region and the consumer adopts it at
-its own step brand. No dep crosses to a continuation as a bare pin or a
-pre-relocated value, including on the error-catch channel.
+Delivery is envelope-only, in **both** directions. A dep whose value must outlive
+the resolving step travels as its [`Delivered`](../src/witnessed/delivered.rs)
+envelope — the sealed carrier paired with the producer's retained region owner and
+the value's foreign pins — so the value stays in its producer's region and the
+consumer adopts it at its own step brand. No dep crosses to a continuation as a
+bare pin or a pre-relocated value, including on the error-catch channel. The
+producer side is the same currency: `finalize` and `rehome_terminal` take the
+workload's finished terminal as a `DeliveredTerminal` envelope, never a carrier
+plus a separately-passed reach. A terminal's value and the regions it reaches are
+therefore one value throughout — no signature in the terminal path can be handed a
+coverage belonging to some other terminal, and none can be handed a value with its
+coverage dropped.
 
 Retention is delivery-driven and reach-independent: the scheduler holds a
 producer's `{ owner, reach, pulls }` hold until every destination of its terminals
 has pulled, then releases both halves. Release is a function of deliveries only —
 never of any value's reach ([reach.md § Retention model](reach.md#retention-model)).
+The hold's `reach` half is derived inside `finalize` from the terminal envelope's
+own coverage with its residence released — the hold owns that region as its `owner`
+field, so re-listing it there would be a second `Rc` on the very frame the hold's
+release frees, and a tail loop's retiring region would never turn over.
 
 **Error short-circuit** is built into the same walk: a continuation never sees an
 errored dep. The first errored dep short-circuits the resolve, and the consumer's

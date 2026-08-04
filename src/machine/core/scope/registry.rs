@@ -88,7 +88,7 @@ impl<'a> Scope<'a> {
 
     /// [`Self::adopt_for_binding`] + [`Self::bind_value_direct`] — the construction-door spelling
     /// of a delivered value bind. Returns a duplicate of the entry's own [`SealedValue`], from
-    /// which the caller lifts its terminal carrier ([`Self::lift_resident_parts`]).
+    /// which the caller lifts its terminal envelope ([`Self::lift_resident`]).
     pub(crate) fn bind_delivered_direct(
         &self,
         name: String,

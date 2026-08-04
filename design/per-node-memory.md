@@ -141,9 +141,11 @@ A node's own value terminal is witnessed the same way — a region-pure result (
 spliced value, a builtin's synchronous result) through `resident`, a dep-reaching
 result by folding its delivered dep carriers — so
 [`NodeStep::DoneWitnessed`](../src/machine/execute/nodes.rs) is the sole value
-terminal and [`finalize_terminal`](../src/machine/execute/finalize.rs) folds the
-producing frame into that carrier's own reach at close. An error carries no value
-and finalizes bare. The type / region construction operands are computed carriers
+terminal. `seal_at_step` pairs it with the producing frame into a delivery
+envelope, and [`finalize_terminal`](../src/machine/execute/finalize.rs) hands that
+envelope on whole — value and coverage stay one value all the way to
+`Scheduler::finalize`, which derives the retention hold's reach from it. An error
+carries no value and finalizes bare. The type / region construction operands are computed carriers
 too — the newtype / tagged-union / `CATCH` build `merge_pinned`s a delivered
 type-identity carrier under the binding's stored reach
 ([`build_type_operand`](../src/machine/execute/dispatch/constructors.rs)). A

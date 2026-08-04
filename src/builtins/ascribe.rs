@@ -137,8 +137,9 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // the module genuinely borrows into its home. Lifting the seal upgrades the description's
     // members `Weak → Rc` for the terminal the step delivers onward.
     let sealed = ctx.scope.store_module_object(new_module);
-    let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
-    Action::done(Ok(StepCarried::born_pinned(carrier, pins)))
+    Action::done(Ok(StepCarried::born_delivered(
+        ctx.scope.lift_resident(sealed),
+    )))
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
@@ -169,8 +170,9 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
         m.child_scope(),
         |view| seal_view_self_sig(view, &s_schema, ctx.types),
     );
-    let (carrier, pins) = ctx.scope.lift_resident_parts(sealed);
-    Action::done(Ok(StepCarried::born_pinned(carrier, pins)))
+    Action::done(Ok(StepCarried::born_delivered(
+        ctx.scope.lift_resident(sealed),
+    )))
 }
 
 /// Seal an ascription view's self-sig. The raw derivation captures the view's members; each

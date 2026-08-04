@@ -16,14 +16,13 @@ use std::rc::Rc;
 
 use super::nodes::StoredWork;
 use super::workload::OwnerOf;
-use super::{Live, NodeId, SealedTerminal, Terminal, Workload};
-use crate::witnessed::Sealed;
+use super::{Live, NodeId, SealedTerminal, Workload};
 // `Erased` / `Carrier` / `Witnessed` re-anchor a test-only result through `set_result`; the
 // production store path takes a pre-built `Witnessed`, so these imports are test-scoped.
 #[cfg(any(test, feature = "test-hooks"))]
 use super::Erased;
 #[cfg(any(test, feature = "test-hooks"))]
-use crate::witnessed::{Carrier, Witnessed};
+use crate::witnessed::{Carrier, Sealed, Witnessed};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -153,23 +152,28 @@ impl<W: Workload> NodeStore<W> {
     /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
     /// boundary uses this to re-home a consumer-less root into a surviving region (`output` already
     /// lifted there), releasing the per-call frame the producer kept it in.
-    pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<Terminal<W>, W::Error>) {
+    pub(super) fn rehome_terminal(
+        &mut self,
+        id: NodeId,
+        output: Result<SealedTerminal<W>, W::Error>,
+    ) {
         debug_assert!(
             matches!(self.slots[id], SlotState::Done(..)),
             "rehome_terminal expects a finalized slot",
         );
-        // The terminal arrives already relocated and re-sealed under its surviving-source witness set
-        // (the run region drops out of the union), so just store the seal.
-        self.slots[id] = SlotState::Done(output.map(Sealed::seal));
+        // The terminal arrives already relocated and sealed under its surviving-source witness set
+        // (the run region drops out of the union), so just store it.
+        self.slots[id] = SlotState::Done(output);
     }
 
     /// Callers must pair this with the dep-graph notify-walk so consumers wake atomically with the
-    /// write. The terminal arrives already bundled with its witness set (built by the workload's
-    /// finalize hook: the producer frame ∪ every region the value reaches; the empty set for a
-    /// frameless / run-region terminal), so this just seals it for dormant storage. On `Err` the
+    /// write. The terminal arrives already dormant — the cell of the delivery envelope
+    /// [`Scheduler::finalize`](super::Scheduler::finalize) split, carrying the witness set the
+    /// workload's finalize hook composed (the producer frame ∪ every region the value reaches; the
+    /// empty set for a frameless / run-region terminal) — so this just stores it. On `Err` the
     /// erased error owns its data and carries no witness.
-    pub(super) fn finalize(&mut self, id: NodeId, output: Result<Terminal<W>, W::Error>) {
-        self.slots[id] = SlotState::Done(output.map(Sealed::seal));
+    pub(super) fn finalize(&mut self, id: NodeId, output: Result<SealedTerminal<W>, W::Error>) {
+        self.slots[id] = SlotState::Done(output);
     }
 
     /// Duplicate the finalized terminal's sealed carrier — value + witness set — leaving the slot's

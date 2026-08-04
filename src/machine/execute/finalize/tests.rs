@@ -65,13 +65,12 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
          liveness is retention's"
     );
 
-    let (sealed, sealed_pins) = test_run
+    // The retention seed: the producer's storage rides the envelope out of the boundary, exactly as
+    // the run loop hands it to the scheduler at finalize.
+    let envelope = test_run
         .runtime
         .finalize_terminal(delivered, &producer.storage_rc(), None)
         .expect("no declared return, no error");
-    // The retention seed: the producer's storage rides the envelope, exactly as the run loop hands
-    // it to the scheduler at finalize.
-    let envelope = Delivered::seal(sealed, producer.storage_rc(), sealed_pins);
 
     drop(producer);
     assert!(
@@ -145,11 +144,10 @@ fn home_borrowing_value_keeps_its_home_membership_and_rides_retention() {
         "home is an ordinary member of the value's own description"
     );
 
-    let (sealed, sealed_pins) = test_run
+    let envelope = test_run
         .runtime
         .finalize_terminal(delivered, &producer.storage_rc(), None)
         .expect("no declared return, no error");
-    let envelope = Delivered::seal(sealed, producer.storage_rc(), sealed_pins);
     assert!(
         envelope.open_at().borrows_home(),
         "the membership survives the Done boundary verbatim"
@@ -348,10 +346,15 @@ fn aggregate_of_mixed_call_results_releases_every_producer_frame() {
     );
 }
 
-/// `Scope::adopt_carried` at the retaining seam, on a delivered object: the value rides its retention hold (the envelope's
-/// host) across the producer shell's drop, and the copy-free adoption materializes that host into
-/// the consumer's arena — so after the envelope itself drops, the consumer's minted set is the
-/// sole owner of the producer's storage and the adopted read stays live.
+/// `Scope::adopt_carried` at the retaining seam, on a delivered object: the value rides its retention
+/// hold (the envelope's host) across the producer shell's drop, and the copy-free adoption
+/// materializes that host into the consumer's arena — so after the envelope itself drops, the
+/// consumer's minted set is the sole owner of the producer's storage and the adopted read stays live.
+///
+/// The envelope the adoption consumes is the one `finalize_terminal` returns, unsplit: value and
+/// coverage travel as one delivery envelope from the Done boundary to the seam, so the ordering the
+/// adoption depends on is the library verb's (`Delivered::adopt_into`) and not a pairing this call
+/// site assembles.
 #[test]
 fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
     let program = program_storage();
@@ -361,7 +364,7 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, false);
-    let (sealed, sealed_pins) = test_run
+    let cell = test_run
         .runtime
         .finalize_terminal(
             Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
@@ -369,7 +372,6 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
             None,
         )
         .expect("no declared return, no error");
-    let cell = Delivered::seal(sealed, producer.storage_rc(), sealed_pins);
 
     drop(producer);
     assert!(
@@ -419,25 +421,21 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let storage = producer.storage_rc();
     let count_before = Rc::strong_count(&storage);
 
-    let (sealed, sealed_pins) = test_run
-        .runtime
-        .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
-            &producer.storage_rc(),
-            None,
-        )
-        .expect("no declared return, no error");
-    assert_eq!(
-        Rc::strong_count(&storage),
-        count_before,
-        "the Done boundary itself pays no refcount"
-    );
-
-    let envelope = Delivered::seal(sealed, producer.storage_rc(), sealed_pins);
+    let delivered = Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty());
     assert_eq!(
         Rc::strong_count(&storage),
         count_before + 1,
         "the delivery pays exactly one frame-level bump — the retention hold"
+    );
+
+    let envelope = test_run
+        .runtime
+        .finalize_terminal(delivered, &producer.storage_rc(), None)
+        .expect("no declared return, no error");
+    assert_eq!(
+        Rc::strong_count(&storage),
+        count_before + 1,
+        "the Done boundary itself pays no refcount — the envelope passes straight through"
     );
 
     drop(producer);
