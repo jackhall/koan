@@ -18,7 +18,10 @@ Node state lives in [`NodeStore`](../src/scheduler/node_store.rs), which owns a
 single `slots` vector of `SlotState` enums plus a `free_list: Vec<NodeId>` of
 recyclable indices. One enum encodes the whole per-slot lifecycle:
 
-- `PreRun(NodeWork)` — an un-run node's work.
+- `PreRun(StoredWork)` — an un-run node's work in its resting form: the embedder
+  builds a live `NodeWork<'a, W>`, and the install path seals its continuation
+  against the slot's anchor (§ [witnessed-memory.md](witnessed-memory.md)) before
+  it lands here.
 - `Running` — work moved out for its step.
 - `Done(Result)` — the terminal: a sealed carrier, or the workload's error.
 - `Aliased(NodeId)` — spliced out to its producer (§ Alias splice).

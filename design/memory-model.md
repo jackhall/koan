@@ -214,8 +214,7 @@ two opaque GAT projections share a size), guarded by a `const` size assert that 
 `T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach`, the
 externally-witnessed `SealedExtern::open`, the `Witnessed` accessors, and the region's
 store-side `erase_to_static` all route it. The carrier families live beside their own
-types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
-node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
+types as declarative `unsafe impl Reattachable` instantiations — `CarriedFamily` /
 `ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
 (`Workload::Continuation`), `DestHandleFamily` for the consumer region the run-loop step opens its
 tail against, and `ScopeRefFamily` so the frame / node `&Scope` carriers and the
@@ -271,20 +270,24 @@ branded escapes into the result. The driver exposes two accessors over it:
 what it needs, and the borrow-free `result_error` reports a slot's success or failure without reading
 the value at all — the [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) a decide sees exposes
 only the probe, since a resolved value rides the scope channel rather than a slot read. Neither lets a
-re-anchored reference ride the `&self` borrow up-stack. The continuation and contract carriers — stored `Erased` on the
-lifetime-free node — re-anchor through the run-loop step's **consuming, externally-witnessed**
-`Sealed::open`: [`run_step`](../src/machine/execute/run_loop.rs) zips the continuation, the contract,
-and the consumer region and opens them at one rank-2 `for<'b>` brand standing in for the step
-lifetime, witnessed by the held start cart `Rc` and the step's owned pins (the contract is pin-free
-`Copy` registry-handle data), so the whole tail nests inside the brand and carries no loose witness-borrow reattach. The
+re-anchored reference ride the `&self` borrow up-stack. The continuation — droppable, so it rests on
+the substrate's **owned tier** as a `SealedPinned` sealed against the slot's anchor `Rc` at the
+scheduler's install door — re-anchors through the run-loop step's single consuming open:
+[`run_step`](../src/machine/execute/run_loop.rs) opens it beside the active-scope operand at one
+rank-2 `for<'b>` brand standing in for the step lifetime, witnessed by the seal's own bundled anchor
+pin plus the step's owned pins, so the whole tail nests inside the brand and carries no loose
+witness-borrow reattach. The
 consumer-pull lift and the `Outcome::Forward` ready pull re-anchor their reads at a *node* lifetime,
-not a fabricated `'run`: each dep terminal is read out borrow-bounded, erased into one
-`DepResultsFamily` slice carrier, and opened **in-band** at `'b` alongside the continuation. Inside
-that brand [`copy_carried`](../src/machine/execute/lift.rs) copies each dep into the consumer
-`dest` region with a plain `'b → 'b` structural alloc — the composite spine sharing its `Rc` payloads,
+not a fabricated `'run`: each dep terminal is a lifetime-free
+[`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope riding the step as plain data, and a
+reader opens it under the envelope's own pins (`Delivered::open_at`) at the borrow of the guard it
+binds — so a dep value reaches no shared step brand and no in-band dep carrier exists. A dep that
+must *land* in the consumer's region crosses the envelope's own transfer fold, whose brand is where
+[`copy_carried`](../src/machine/execute/lift.rs) copies it into the consumer `dest` region with a
+plain `'b → 'b` structural alloc — the composite spine sharing its `Rc` payloads,
 a closure / future / module riding its bare `&'b` borrow into the source region — and the
-`Outcome::Forward` pull lands in that same region at the brand, so every dep value is born at `'b`
-with no reattach of its own beyond the one step `open`. There is **no value-path `unsafe`** left: the
+`Outcome::Forward` pull lands in that same region at the step brand, so every dep value is born at a
+brand its own carrier supplied, never through a free reattach. There is **no value-path `unsafe`** left: the
 relocation allocs at the destination region's own lifetime, so the lift hook is a safe
 `deep_clone` through the destination's own fold door. The relocation seam
 [`Delivered::transfer_into`](../workgraph/src/witnessed/delivered.rs) wraps this as a mint — the

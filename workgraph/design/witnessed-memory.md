@@ -319,9 +319,23 @@ out of itself.
 `SealedPinned` ships a **single** consuming open verb, which re-anchors the
 pinned value *and* a zipped `SealedExtern` operand at one brand under a
 caller-supplied operand pin — the step-open shape, where an embedder's
-continuation opens beside its scope and dep operands and an invariant family
-rejects separately-branded opens. There is no operand-free open: a caller with
-nothing to zip passes a trivial operand, which keeps the surface to one verb.
+continuation opens beside its scope operand and an invariant family rejects
+separately-branded opens. There is no operand-free open: a caller with nothing
+to zip passes a trivial operand, which keeps the surface to one verb.
+
+The scheduler's node slot is the tier's production instance. `Workload::Continuation`
+is `Reattachable` alone — no `DropFree` — because the slot rests it as
+`SealedPinned<W::Continuation, Rc<W::Frame>>`
+([nodes.rs](../src/scheduler/nodes.rs)): a one-shot boxed closure owning its
+captures. An embedder hands an install path a `NodeWork<'a, W>` holding the
+continuation **live** at its own lifetime, and the scheduler's single private
+erase door seals it against that install path's *effective* anchor `Rc`, storing
+the result as the scheduler-internal `StoredWork<W>`. Because the anchor
+transitively holds the storage chain the continuation reads, the bundled pin is
+the same liveness the step open was already bounded by — now carried rather than
+supplied externally, so a parked slot torn down unopened runs the continuation's
+glue while the memory that glue touches is still pinned. No embedder call site
+ever pairs a continuation with a pin by hand.
 
 ## Three witness forms
 
@@ -396,13 +410,3 @@ access is infallible and every allocation is brand-confined. Outside a step, an
 embedder allocates through a held [`RegionHandle`](../src/witnessed/region.rs) —
 the `yoke` / `merge_pinned` surface above — with the same guarantees and no
 scheduler involvement.
-
-## Open work
-
-- The scheduler's node slot rests its continuation in the Copy tier
-  (`Erased<W::Continuation>`, and a `DropFree` bound on `Workload::Continuation`
-  with it), so a droppable continuation — the one-shot boxed closure the slot
-  exists for — cannot rest there. Retyping that slot to `SealedPinned`, with the
-  pin co-located from the node's anchor, rides with the embedder's adoption of
-  the tier split:
-  [roadmap/compile_safety/continuation-owned-slot.md](../../roadmap/compile_safety/continuation-owned-slot.md).

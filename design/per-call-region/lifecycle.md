@@ -79,9 +79,10 @@ relocates it across each dep edge — never the producer.
 Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none
 of these transitions can be a coercion — each cross-frame move is a genuine
 `NodeLift` copy (or the held-Rc re-exposure at storage). The consumer-pull dep relocation runs
-*in-band* at the run-loop step brand: each dep terminal is read out borrow-bounded, erased into one
-slice carrier, opened alongside the continuation, and copied into the consumer `dest` region by
-[`copy_carried`](../../src/machine/execute/lift.rs) with a plain `'b → 'b` structural alloc — the
+inside the dep envelope's own transfer fold: each dep terminal *is* a lifetime-free delivery
+envelope riding the step as plain data, and the transfer's brand is where
+[`copy_carried`](../../src/machine/execute/lift.rs) copies it into the consumer `dest` region with a
+plain `'b → 'b` structural alloc — the
 spine sharing its `Rc` payloads, a closure / future / module riding its bare borrow. The
 storage-bound drain / forward path wraps the same copy as
 [`relocate_terminal`](../../src/machine/execute/runtime.rs) over `Sealed::transfer_into`. There is no

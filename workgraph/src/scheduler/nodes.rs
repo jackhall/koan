@@ -46,8 +46,8 @@ impl<'a, W: Workload> NodeWork<'a, W> {
 
 /// A node's work in its resting form: the same fields, with the continuation sealed on the owned
 /// tier against the slot's anchor `Rc`. The anchor transitively holds the storage chain the
-/// continuation reads, so the seal's bundled pin is the same liveness the step open is bounded by —
-/// now carried by the carrier instead of supplied externally at each open.
+/// continuation reads, so the seal's bundled pin is the liveness the step open is bounded by —
+/// carried by the seal itself rather than supplied externally at each open.
 ///
 /// The fields are scheduler-internal: an embedder receives one from
 /// [`take_for_run`](super::Scheduler::take_for_run) and decomposes it only through

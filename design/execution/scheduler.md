@@ -29,8 +29,8 @@ and names no AST.
 
 - A **dep-finish** `cont` (built by `short_circuit`) waits on a fixed set of dep
   slots, short-circuits on the first errored dep, and otherwise hands the
-  resolved dep terminals (un-relocated: each terminal's step-brand value plus its
-  own reach carrier) to a single
+  resolved dep terminals (un-relocated: each terminal *is* the producer's
+  lifetime-free delivery envelope, read under its own pins) to a single
   [`TerminalDepFinish`](../../src/machine/execute/outcome.rs) closure — the one
   delivery currency. A value-reading finish writes that shape directly; a value
   that must outlive the resolving step travels as its delivery envelope, adopted at
