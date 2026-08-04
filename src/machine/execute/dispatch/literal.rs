@@ -25,12 +25,18 @@ use super::SubmitContext;
 use super::{resolve_bare_carrier, BareCarrier};
 use crate::scheduler::{DepResults, ResolvedDeps};
 
-/// Build-time accumulator family for an aggregate fold: the destination region plus the partial cell
-/// vector. Each cell carrier is `transfer_into`-folded in — relocating the value and unioning its
+/// Build-time accumulator family for an aggregate fold: the destination region plus the cells folded
+/// in so far. Each cell carrier is `transfer_into`-folded in — relocating the value and unioning its
 /// reach onto the accumulator's witness — then the final `map` allocates the aggregate from the
-/// region. Layout-invariant in `'r`: a thin region pointer and a `Vec` of layout-invariant cells.
+/// region. Layout-invariant in `'r`: a thin region pointer and a slice of layout-invariant cells.
+///
+/// The cells ride a **region-bumped slice** rather than an owned `Vec`, which is what keeps the
+/// accumulator on the Copy tier: it rests between fold steps (each `transfer_into` seals it), and
+/// that tier's dormant slot is glue-free, so an owned buffer resting there would be dropped by
+/// nobody. Each step re-bumps the accumulated cells plus the new one — the same shape
+/// `StepContext::alloc_with`'s own dep-view fold takes, and for the same reason.
 struct AggBuildFamily;
-reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
+reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held<'r>]));
 
 /// One cell of a list / dict / record literal. A `Static` cell is wrapped into a delivery envelope
 /// **at its source** (when the literal is classified), so the layout is lifetime-free and every cell
@@ -76,16 +82,15 @@ fn cell_carrier(slot: Slot, terminals: DepResults<'_, &DepTerminal>) -> Delivere
 fn fold_cells(
     view: &SchedulerView<'_, '_>,
     cells: impl Iterator<Item = DeliveredCarried>,
-    capacity: usize,
 ) -> Delivered<AggBuildFamily, CarrierWitness, FrameStorage> {
     let dest_frame = view.dest_frame();
     // The accumulator crosses as an envelope homed in the aggregate's own destination frame, so each
     // cell's transfer composes into it directly and the accumulated coverage rides the envelope
-    // rather than being threaded beside it. A bare handle plus an empty `Vec` reaches nothing, so
+    // rather than being threaded beside it. A bare handle plus an empty slice reaches nothing, so
     // the seed's coverage is empty.
     let acc0 = Delivered::seal(
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
-            (region.handle(), Vec::with_capacity(capacity))
+            (region.handle(), &[][..])
         }),
         dest_frame,
         FrameCoverage::empty(),
@@ -101,12 +106,18 @@ fn fold_cells(
             // the cell the fold just pushed — the exact answer for what this relocation left
             // pointing back at its source.
             cell_still_borrows(&cell),
-            |value, (region, mut cells), placement| {
-                cells.push(copy_held_from_carried(
+            |value, (region, cells), placement| {
+                let cell = copy_held_from_carried(
                     value,
                     FoldingBrand::in_fold_closure(placement).with_holder(&holder),
-                ));
-                (region, cells)
+                );
+                // Re-bump the accumulated cells plus this one into the destination region: the
+                // relocations each fold performs interleave with the accumulator's own allocations,
+                // so extending the previous slice in place is not available.
+                let mut grown = Vec::with_capacity(cells.len() + 1);
+                grown.extend_from_slice(cells);
+                grown.push(cell);
+                (region, placement.bump().slice(&grown))
             },
         )
     })
@@ -194,7 +205,7 @@ type AggAssemble = Box<
     dyn for<'r, 'h> FnOnce(
         SubstrateDoor<'r, 'h>,
         Vec<PendingKey>,
-        Vec<Held<'r>>,
+        &'r [Held<'r>],
         &TypeRegistry,
     ) -> KObject<'r>,
 >;
@@ -227,7 +238,7 @@ impl<'step> KoanRuntime<'step> {
                 }
                 cells.push(cell_carrier(row.value, terminals));
             }
-            let acc = fold_cells(view, cells.into_iter(), n);
+            let acc = fold_cells(view, cells.into_iter());
             // The accumulated envelope's coverage carries every region the folded `Held` views point
             // into, and its home is the destination frame the folds minted into. Merging it into a
             // bare handle on that same region assembles the aggregate at a fold door and mints its
@@ -304,7 +315,7 @@ impl<'step> KoanRuntime<'step> {
                 let map: HashMap<KKey, Held<'_>> = keys
                     .iter()
                     .map(PendingKey::as_key)
-                    .zip(value_helds)
+                    .zip(value_helds.iter().copied())
                     .collect();
                 KObject::dict_of_held(door, map, types)
             }),
@@ -331,7 +342,8 @@ impl<'step> KoanRuntime<'step> {
             deps,
             rows,
             Box::new(move |door, _keys, value_helds, types| {
-                let record: Record<Held<'_>> = names.into_iter().zip(value_helds).collect();
+                let record: Record<Held<'_>> =
+                    names.into_iter().zip(value_helds.iter().copied()).collect();
                 KObject::record_of_held(door, record, types)
             }),
         )

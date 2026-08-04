@@ -69,10 +69,16 @@ pub(in crate::machine::execute) enum CtorKind {
 /// gathered from the value deps, each `transfer_into`-folded so the accumulator's witness composes
 /// by minting into that region (the [`HasRegionHandle`](crate::witnessed::HasRegionHandle) seam).
 /// The final `merge` with [`RegionTypeFamily`] builds the `Record` and wraps it with the identity.
-/// Layout-invariant: a thin region pointer and a `Vec` of layout-invariant `(String, KObject)` cells
-/// — the same shape as [`dispatch::literal`](super::literal)'s `AggBuildFamily`.
+/// Layout-invariant: a thin region pointer and a slice of layout-invariant field values — the same
+/// shape as [`dispatch::literal`](super::literal)'s `AggBuildFamily`, and re-bumped per fold step for
+/// the same reason: the accumulator rests on the Copy tier between steps, whose dormant slot runs no
+/// drop glue, so an owned buffer could not live there.
+///
+/// Only the *values* ride the carrier. The field **names** are owned data with no region lifetime,
+/// so they stay beside the fold and pair back with the accumulated values at the final merge — one
+/// less thing the carrier has to be honest about.
 struct RecordFieldsFamily;
-reattachable!(RecordFieldsFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<(String, KObject<'r>)>));
+reattachable!(RecordFieldsFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [KObject<'r>]));
 
 /// Validate a tagged-union call site's args shape: exactly two parts, the first a
 /// `Type`-token tag (tags are capitalized variant types). The value part rides through
@@ -446,33 +452,34 @@ fn finish_witnessed<'step>(
             let dest_frame = view.dest_frame();
             // The accumulator crosses as an envelope homed in the dest frame, so each field's
             // `transfer_into` composes into it directly — the accumulated coverage rides the
-            // envelope rather than being threaded beside it. A bare handle plus an empty `Vec`
+            // envelope rather than being threaded beside it. A bare handle plus an empty slice
             // reaches nothing, so the seed's coverage is empty.
             let acc0 = Delivered::seal(
                 KoanRegion::yoke_branded::<RecordFieldsFamily, _>(
                     Rc::clone(&dest_frame),
-                    |region| (region.handle(), Vec::with_capacity(field_names.len())),
+                    |region| (region.handle(), &[][..]),
                 ),
                 Rc::clone(&dest_frame),
                 FrameCoverage::empty(),
             );
-            let fields = terminals
-                .iter()
-                .zip(field_names)
-                .fold(acc0, |acc, (term, name)| {
-                    let name = name.clone();
-                    term.delivered
-                        .transfer_into::<RecordFieldsFamily, RecordFieldsFamily, _>(
-                            acc,
-                            // Each field cell is a pointer copy of the term's value, so it
-                            // borrows everything the term did.
-                            |_product, _region| true,
-                            move |value, (region, mut fields), _brand| {
-                                fields.push((name, value.object().deep_clone()));
-                                (region, fields)
-                            },
-                        )
-                });
+            let fields = terminals.iter().fold(acc0, |acc, term| {
+                term.delivered
+                    .transfer_into_placing::<RecordFieldsFamily, RecordFieldsFamily, _>(
+                        acc,
+                        // Each field cell is a pointer copy of the term's value, so it
+                        // borrows everything the term did.
+                        |_product, _region| true,
+                        |value, (region, fields), placement| {
+                            // Re-bump the fields gathered so far plus this one: the accumulator
+                            // rests on the Copy tier between steps, so it holds a region slice
+                            // rather than a buffer nothing would free.
+                            let mut grown = Vec::with_capacity(fields.len() + 1);
+                            grown.extend_from_slice(fields);
+                            grown.push(value.object().deep_clone());
+                            (region, placement.bump().slice(&grown))
+                        },
+                    )
+            });
             let home = build_type_operand(Rc::clone(&dest_frame), *identity);
             let types = view.types();
             // Each accumulated field cell is a pointer copy of its term's value, so a field
@@ -487,7 +494,15 @@ fn finish_witnessed<'step>(
                     |(_region, fields), (_identity_region, identity_ty), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         let door = region.with_holder(&holder);
-                        let record = KObject::record(door, Record::from_pairs(fields), types);
+                        // The names never rode the carrier — they pair back with the accumulated
+                        // values here, in the fold order the terminals were visited in.
+                        let record = KObject::record(
+                            door,
+                            Record::from_pairs(
+                                field_names.iter().cloned().zip(fields.iter().copied()),
+                            ),
+                            types,
+                        );
                         Carried::Object(region.alloc_object_folded(KObject::wrapped_hold(
                             door,
                             &record,

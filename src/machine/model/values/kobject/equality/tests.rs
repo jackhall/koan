@@ -125,9 +125,9 @@ fn list_comparability_gate_is_intransitive() {
 fn list_of_types_compares_by_digest() {
     let types = TypeRegistry::new();
     container_door!(_storage, door);
-    let a = KObject::list_of_held(door, vec![Held::Type(KType::NUMBER)], &types);
-    let b = KObject::list_of_held(door, vec![Held::Type(KType::NUMBER)], &types);
-    let c = KObject::list_of_held(door, vec![Held::Type(KType::STR)], &types);
+    let a = KObject::list_of_held(door, &[Held::Type(KType::NUMBER)], &types);
+    let b = KObject::list_of_held(door, &[Held::Type(KType::NUMBER)], &types);
+    let c = KObject::list_of_held(door, &[Held::Type(KType::STR)], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     // Different element type parameters (a `Type OF Number` vs `Type OF Str` list) close the gate.
     assert_eq!(a.value_equal(&c, &types), Ok(false));
@@ -465,14 +465,14 @@ fn function_operand_is_error_at_any_position() {
     };
     let list_f = KObject::list_of_held(
         door,
-        vec![Held::Object(
+        &[Held::Object(
             a_function(&storage2, second_run.scope, &second_run.types).deep_clone(),
         )],
         &types,
     );
     let list_g = KObject::list_of_held(
         door,
-        vec![Held::Object(
+        &[Held::Object(
             a_function(&storage2, second_run.scope, &second_run.types).deep_clone(),
         )],
         &types,
@@ -502,7 +502,7 @@ fn length_mismatch_short_circuits_before_banned_cell() {
     };
     let list_f = KObject::list_of_held(
         door,
-        vec![Held::Object(
+        &[Held::Object(
             a_function(&storage, test_run.scope, &types).deep_clone(),
         )],
         &types,

@@ -774,7 +774,7 @@ fn union_honors_memoized_list_element_type() {
             .with_holder(&owned_cells);
     let list_value: &KObject<'_> = door.alloc_object_folded(KObject::list_of_held(
         door,
-        vec![Held::Object(KObject::Number(1.0))],
+        &[Held::Object(KObject::Number(1.0))],
         &types,
     ));
 

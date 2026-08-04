@@ -164,7 +164,7 @@ pub(in crate::machine::execute) fn relocate_seam(
 /// longer borrows, while a still-borrowing carrier keeps its pins.
 pub(in crate::machine::execute) fn cell_still_borrows(
     delivered: &DeliveredCarried,
-) -> impl for<'b> FnMut(&(RegionHandle<'b, KoanStorageProfile>, Vec<Held<'b>>), &KoanRegion) -> bool + '_
+) -> impl for<'b> FnMut(&(RegionHandle<'b, KoanStorageProfile>, &'b [Held<'b>]), &KoanRegion) -> bool + '_
 {
     move |product, region| {
         let cell = product.1.last().and_then(|held| match held {
