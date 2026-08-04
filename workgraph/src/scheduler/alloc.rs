@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::dep_graph::work_owned_edges;
-use super::nodes::NodeWork;
+use super::nodes::{seal_work, NodeWork};
 use super::{NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
@@ -11,8 +11,14 @@ impl<W: Workload> Scheduler<W> {
     /// back but calls only [`Anchor::owner`](super::Anchor::owner). `framed` is whether the workload
     /// had an active frame (`false` selects the fresh-top-level queue for a dep-free / park-free slot,
     /// matching the in-flight-vs-fresh split). This allocator never names a workload type — it only
-    /// wires the slot's deps and installs its anchor.
-    pub fn alloc_node(&mut self, work: NodeWork<W>, anchor: Rc<W::Frame>, framed: bool) -> NodeId {
+    /// wires the slot's deps and installs its anchor. The work arrives with its continuation live;
+    /// this is one of the erase doors that seals it against `anchor`.
+    pub fn alloc_node(
+        &mut self,
+        work: NodeWork<'_, W>,
+        anchor: Rc<W::Frame>,
+        framed: bool,
+    ) -> NodeId {
         let owned_edges = work_owned_edges(&work);
         let no_owned = owned_edges.is_empty();
         let pending_owned: Vec<NodeId> = owned_edges
@@ -28,7 +34,7 @@ impl<W: Workload> Scheduler<W> {
             .filter(|p| !self.is_result_ready(*p))
             .collect();
         let no_park = work.deps.parks().is_empty();
-        let id = self.store.alloc_slot(work);
+        let id = self.store.alloc_slot(seal_work(work, &anchor));
         self.deps.install_for_slot(id, owned_edges, &pending_owned);
         self.deps.install_anchor(id.index(), anchor);
         for p in &pending_park {

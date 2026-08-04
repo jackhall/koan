@@ -43,10 +43,12 @@ Separately, `StepContext::alloc_with` hands its build closure a region-bumped
 
 **Acceptance criteria.**
 
-- koan compiles with the continuation slot on `SealedPinned`: the erase door
-  takes the cart pin co-located, and the once-per-step open — the zipped verb,
-  with the scope / dep operands riding the `SealedExtern` side — consumes the
-  value before the pins drop.
+- koan compiles with the continuation slot on `SealedPinned`: the erase is
+  co-located with the anchor pin at the scheduler's install seam, and the
+  once-per-step open — the owned-tier verb, with the scope operand riding the
+  `SealedExtern` side — consumes the value before the pins drop. Dep results
+  cross the step as lifetime-free delivery envelopes read per-envelope
+  (`Delivered::open_at`), riding no carrier.
 - Every other carrier family meets `DropFree`; `ContinuationFamily` is the
   only carrier family declared through the `droppable` arm.
 - Arena-`Stored`-only droppy families are declared through the `droppable`
@@ -58,14 +60,19 @@ Separately, `StepContext::alloc_with` hands its build closure a region-bumped
 
 - *Continuation migration — decided.* The family is declared through the
   `droppable` arm, the resting slot retyped to `SealedPinned`, and the pin
-  co-located at the erase door from the node's cart `Rc` — the same liveness
-  witness the open is bounded by today, now bundled instead of external.
-- *Vec-carrying families — decided.* DropFree-ification over owned-tier
-  adoption: each family's crossing form is restructured to a `DropFree` shape
-  — a region-bumped slice where the elements are `Copy`, or a borrow of a
-  value the caller keeps live across the open — so the family keeps riding the
-  untouched `Witnessed` / `Delivered` fold machinery. The per-family shape is
-  chosen at this item's planning.
+  co-located at the scheduler's install seam from the node's anchor `Rc` — the
+  same liveness witness the open is bounded by today, now bundled instead of
+  external. `NodeWork` carries the continuation live until install, so no
+  koan call site can mispair a pin.
+- *Vec-carrying families — decided, shapes chosen at planning (see
+  `scratch/continuation-owned-slot-plan.md`).*
+  DropFree-ification over owned-tier adoption: `DepTerminal` goes
+  lifetime-free (values read per-envelope; `DepResultsFamily` deleted); the
+  signature's lifetime-free `elements` move-capture into the born closure with
+  only the `Copy` `ReturnType` crossing as an operand
+  (`ExpressionSignatureFamily` deleted); the fold accumulators become
+  re-bumped `Copy` slices on the `fold_dep_view` precedent, record field names
+  leaving the carrier.
 
 ## Dependencies
 

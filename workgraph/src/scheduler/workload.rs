@@ -50,9 +50,11 @@ pub trait Workload {
     /// destination has pulled the terminal, releasing at pull-count zero
     /// (design/reach.md § Retention model).
     type Frame: Anchor;
-    /// The per-node continuation: a one-lifetime [`Reattachable`] family the scheduler stores erased
-    /// (`Erased<Self::Continuation>`) on the node and hands back once per step; the workload
-    /// re-anchors it, witnessed by the node's anchor `Rc`, then runs it once. Never inspected. Not
-    /// `Copy` — a one-shot boxed closure consumed by value.
-    type Continuation: Reattachable + DropFree;
+    /// The per-node continuation: a one-lifetime [`Reattachable`] family the scheduler rests on the
+    /// owned tier (`SealedPinned<Self::Continuation, Rc<Self::Frame>>`), sealed against the node's
+    /// anchor at install and handed back once per step for the workload to open and run. Never
+    /// inspected. Not `Copy` — a one-shot boxed closure consumed by value — and not `DropFree`
+    /// either: the owned tier keeps the value's drop glue, so a continuation owning heap contents
+    /// (a boxed closure) rests soundly and drops soundly if its slot is never opened.
+    type Continuation: Reattachable;
 }

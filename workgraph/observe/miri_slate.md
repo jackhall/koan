@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-50 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+52 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -237,6 +237,22 @@ value as the last holder of its pointee's region, so it exercises the retag shap
 order at once.
 
 - `sealed_pinned_drop_runs_value_glue_before_pins`
+
+**The scheduler's continuation slot — the owned tier in production shape**
+([src/scheduler/nodes.rs](../src/scheduler/nodes.rs)) — a node's continuation rests as
+`SealedPinned<W::Continuation, Rc<W::Frame>>`, sealed against the slot's anchor at the one install
+door (`seal_work`, reached from `alloc_node` / `replace`) and opened once per step. The minimal
+tier tests above pin the seal in isolation; these two drive it through the real `Scheduler`, where
+the pin is an anchor `Rc` the scheduler *also* holds a second copy of on the dep row. A parked slot
+torn down unopened must run its continuation's glue while the seal's own pin still holds the
+region the continuation borrows into — `Scheduler`'s field order drops the dep row's anchor first,
+so the seal's bundled pin is what remains. The round trip walks install → ready-queue pop →
+`take_for_run` → `into_run_parts` → open → invoke, with every direct handle on the region dropped
+before the open. The `unsafe` routed is the shared `retype` (through `SealedPinned::erase` / `open`)
+with none of the scheduler's own.
+
+- `parked_continuation_drops_under_its_own_pin`
+- `parked_continuation_opens_and_runs_after_its_handles_drop`
 
 **`StepContext::alloc_with` — finish-surface fold** ([src/witnessed/step_ctx.rs](../src/witnessed/step_ctx.rs))
 — guarantee 5 made structural: every listed dep's envelope folds into the result's carrier by

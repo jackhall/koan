@@ -22,7 +22,7 @@ use std::rc::Rc;
 
 use dep_graph::DepGraph;
 use node_store::NodeStore;
-use nodes::NodeWork;
+use nodes::{seal_work, NodeWork, StoredWork};
 use work_queues::WorkQueues;
 
 mod alloc;
@@ -35,6 +35,11 @@ pub mod nodes;
 mod splice;
 mod work_queues;
 mod workload;
+
+/// The Miri slate for the owned-tier continuation slot: a parked droppable continuation dropped
+/// unopened under the seal's own pin, and the park → wake → open → run round trip.
+#[cfg(test)]
+mod tests;
 
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
@@ -89,7 +94,7 @@ impl<W: Workload> Scheduler<W> {
     pub fn take_for_run(
         &mut self,
         id: NodeId,
-    ) -> (NodeWork<W>, Rc<W::Frame>, Option<Rc<W::Frame>>) {
+    ) -> (StoredWork<W>, Rc<W::Frame>, Option<Rc<W::Frame>>) {
         (
             self.store.take_for_run(id),
             self.deps.anchor_clone(id.index()),
@@ -102,7 +107,14 @@ impl<W: Workload> Scheduler<W> {
     /// at a framed tail replace (`None` for a frameless `Inherit` replace, which turns over no
     /// region); swapping it in parks the displaced anchor as the TCO handoff so the retiring region
     /// is released only after the reinstalled incarnation adopts the carried arguments.
-    pub fn replace(&mut self, id: NodeId, work: NodeWork<W>, anchor: Option<Rc<W::Frame>>) {
+    pub fn replace(&mut self, id: NodeId, work: NodeWork<'_, W>, anchor: Option<Rc<W::Frame>>) {
+        // Seal the incoming continuation against the incarnation's *effective* anchor — the new one
+        // at a framed replace, the row's current one at a frameless `Inherit` replace — so the
+        // resting continuation is pinned by the anchor whose region it will read.
+        let stored = match &anchor {
+            Some(new) => seal_work(work, new),
+            None => seal_work(work, &self.deps.anchor_clone(id.index())),
+        };
         // On a framed replace, swap the row's anchor for the new incarnation's and park the displaced
         // one as the reinstalled slot's TCO handoff hold; the run loop holds it across the reinstalled
         // incarnation's first step, so the retiring region is released only after the carried
@@ -115,7 +127,7 @@ impl<W: Workload> Scheduler<W> {
             }
             None => self.deps.set_handoff(id.index(), None),
         }
-        self.store.reinstall(id, work);
+        self.store.reinstall(id, stored);
         // Replace return sites install their own edges (or clear the slot's dep edges for tail
         // rewrites), so the pending count is authoritative here.
         if self.deps.pending_count(id.index()) == 0 {
