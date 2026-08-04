@@ -120,7 +120,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-32 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+27 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
 below are the exact test identifiers; pass them after `--` in the Miri command. A further 44 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
@@ -133,22 +133,24 @@ whose discipline lives in koan's own `src/` — its doors, seams, and scheduler-
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 child-scope `Option<SealedExtern<ScopeRefFamily>>` opened at a `for<'b>` brand via `CallFrame::with_scope`
 (`SealedExtern::open`, the frame's own storage `Rc` as the pin) plus the `Rc<CallFrame>` chain that
-keeps per-call regions pinned across re-borrow. One test pins the open surviving a sibling alloc; one
-pins the `Rc<CallFrame>` chain keeping an outer region alive after its local handle drops; a third pins
+keeps per-call regions pinned across re-borrow. One test pins
+pins the `Rc<CallFrame>` chain keeping an outer region alive after its local handle drops; a second pins
 the **seed-side re-anchor** — a caller-lifetime value crossing into the opened scope's own region as
 a delivery envelope, whose bind relocates it there, the shape the MATCH / TRY `it`-bind and the
 user-fn param-bind take. A bare caller reference cannot cross the `for<'b>` signature at all, so the
 envelope is the whole route. `CallFrame::adopting` (the scheduler-owned run
 frame) carries the same `&Scope<'_>` erasure as `new`, over the run scope it adopts rather than a
 freshly-minted child; it is built on the first run-lifetime submission, so every scheduler-driving slate
-test below (`try_inside_tco_position_preserves_frame_chain`, `lift_park_minimal_program_for_miri`, …) exercises it
-end-to-end — the run scope outlives the frame, so no separate minimal test. A fourth test pins the
+test below (`try_inside_tco_position_preserves_frame_chain`, `park_and_replay_minimal_program_for_miri`, …) exercises it
+end-to-end — the run scope outlives the frame, so no separate minimal test. A third test pins the
 **born door's own round trip** nested inside that open: a grandchild scope built and stored at the
 frame brand (`Scope::alloc_child_under`, routing `RegionHandle::alloc_resident_born_with`) comes back
 co-located, stays readable while its own brand appends to the same region, and still names its
-parent — the erase-store / re-anchor sequence every `Scope` store now takes.
+parent — the erase-store / re-anchor sequence every `Scope` store now takes. It carries the
+sibling-alloc claim in the same run: the opened child's re-borrow still names the frame's region
+while a sibling pointer allocates into it, so `with_scope`'s `&Scope` and `brand().alloc(…)` are
+pinned coexisting there rather than by a test of their own.
 
-- `call_frame_scope_survives_subsequent_alloc`
 - `call_frame_chained_outer_frame_walkable`
 - `with_scope_relocates_seed_value_into_brand`
 - `born_child_scope_survives_subsequent_alloc_in_its_own_region`
@@ -176,15 +178,15 @@ has returned — is pinned by `captured_per_call_value_survives_let_bind_and_cal
 additionally dereferences a captured per-call value on the invocation.
 The reading-the-captured-value tests pin the **delivered-carrier reach fold**
 that keeps that defining region alive once the object channel is off the relocate seam: a
-`let`-bound closure folds its carrier into the binding scope's reach-set, a user-fn
-closure argument folds into the per-call scope, and a `let`-bound list contributes
-*every* region a multi-region value reaches (the case the single-frame seam fold
-under-recorded). Each reads a captured *outer* value after its producing frame retires, so
-a lost region dangles under tree borrows.
+`let`-bound closure folds its carrier into the binding scope's reach-set, and a user-fn
+closure argument folds into the per-call scope. Each reads a captured *outer* value after its
+producing frame retires, so a lost region dangles under tree borrows. The multi-region case — a
+`let`-bound list contributing *every* region a multi-region value reaches, which the single-frame
+seam fold under-recorded — rides the mixed-cell list in the string re-home group below, where the
+same fold answers the opposite way for its string cells.
 
 - `captured_per_call_value_survives_let_bind_and_call`
 - `closure_argument_stays_live_through_user_fn_call`
-- `let_bound_list_reaching_two_call_regions_keeps_both_live`
 
 **Region-hosted string re-home at the substrate door** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
 — a `KObject::KString` carries a `&'a str` bumped into the region the value lives in, and a string
@@ -199,6 +201,13 @@ bytes on the `str` compare. A door that shared the producer's pointer is a use-a
 tree borrows. The only `unsafe` routed is the shared `retype` in `witnessed.rs`; the bump itself
 carries none — a `&'a` into a region borrowed for `'a` needs no retype.
 
+The list test's cells **interleave** strings with closures from distinct per-call regions, putting one
+bind fold under both reach rules at once: a string cell's verdict names no region and is honest only
+because of the re-home, while a closure cell rides a bare borrow into its defining region and is honest
+only because the fold contributes *every* region a multi-region value reaches — the case the
+single-frame seam fold under-recorded. Share the producer's string bump and the byte read dangles; drop
+a closure's region and the captured read dangles.
+
 The same rule binds a **bare** top-level string, where the door is the adoption seam rather than the
 container's: a copying adoption claims the producer region's release (`retains_home` answers `false`
 for a `KString`), so the relocation has to re-bump at the destination instead of pointer-copying the
@@ -206,7 +215,7 @@ producer's bump. `KObject::needs_destination_door` is the gate
 `relocate_object_into` reads; keying the rebuild on the substrate
 variants alone would leave exactly this shape pointer-copied under a release claim.
 
-- `let_bound_list_of_call_produced_strings_survives_every_producer_free`
+- `let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_free`
 - `let_bound_dict_with_call_produced_string_keys_survives_every_producer_free`
 - `a_bound_bare_string_rebumps_at_its_destination`
 
@@ -231,17 +240,16 @@ indexes. A record's index is the sorted name slice `alloc_record` bumps (the sli
 bytes); a dict's is the `BumpMap` `alloc_dict` freezes over re-bumped keys. Both are read *before*
 any cell is — a field lookup binary-searches the names and a key lookup hashes and byte-compares the
 stored key — so an index that still pointed into a retiring producer is a use-after-free on the way
-in, and a cell-only re-home would leave exactly that. Each test builds its container in a producer
-frame (a record with unsorted field names, so the slice is genuinely reordered against the literal;
-a dict whose keys were already re-bumped once into the producer, so the relocation must re-bump
-them again rather than share), relocates it into a destination through the container-cell seam,
-drops the producer frame, and only then walks the index and looks every name / key up through it.
-The reach fold cannot rescue either shape: the index is metadata, not a cell, so no run describes
-it, and the bump keeps no address table for an audit to consult. Safe code; the only `unsafe`
-routed is the shared `retype` in `witnessed.rs`.
+in, and a cell-only re-home would leave exactly that. The test builds both in one producer frame — a
+record with unsorted field names, so the slice is genuinely reordered against the literal, holding a
+dict whose keys were already re-bumped once into the producer, so the relocation must re-bump them
+again rather than share — relocates the pair into a destination through the container-cell seam in a
+single transfer, drops the producer frame, and only then walks the outer index and reaches the inner
+one through it, looking every name and key up. The reach fold cannot rescue either shape: the index
+is metadata, not a cell, so no run describes it, and the bump keeps no address table for an audit to
+consult. Safe code; the only `unsafe` routed is the shared `retype` in `witnessed.rs`.
 
-- `record_name_index_rehomes_and_reads_back_after_producer_free`
-- `dict_key_index_rehomes_and_looks_up_after_producer_free`
+- `substrate_indexes_rehome_and_read_back_after_producer_free`
 
 **Drop-free region death** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — the closing claim of the shared per-region bump: every `Drop`-free value family lands there, so
@@ -291,16 +299,22 @@ the fold-before-reattach order, the host materialization, or the pin regresses.
 own [`coverage`](../workgraph/src/witnessed/delivered.rs) (retained host ∪ reach). The
 redundancy claim this is sound on: `dep_sources`' own `DepTerminal`s each hold the dep's *duplicated*
 delivery envelope (owning the retention hold's `Rc` directly) across the whole step brand, so a
-producer frame's liveness never rests on the step coverage alone. This end-to-end test drives 100
-real scheduler steps each producing a region-pure scalar result, aggregates all 100 into one list
-literal — a single consumer step opening 100 delivered deps at once, each cell rebuilt into the
+producer frame's liveness never rests on the step coverage alone. This end-to-end test drives five
+real scheduler steps each producing into its own per-call frame, aggregates all five into one list
+literal — a single consumer step opening five delivered deps at once, each cell rebuilt into the
 aggregate's own region (`copy_held_from_carried`, so no producer materializes into the aggregate's
 reach) — and confirms every producer arena is gone while the aggregate still reads correctly: a
 use-after-free under tree borrows the moment the redundancy claim is wrong, and a lifetime leak
-(the census reads live frames) the moment the fold re-pins a producer it copied out of. The only
-`unsafe` routed is the shared `retype` in `witnessed.rs`.
+(the census reads live frames) the moment the fold re-pins a producer it copied out of. Its cells
+**mix** the two escape verdicts the seam selects between — a region-pure scalar and a plain-data
+record totally rebuilt by `copy_object_into` (escape with copy: no field borrows anything, so no run
+of the rebuilt record names its producer) — so one run pins both against the same consumer open. The
+width measurement that drove 100 identical producers is a value assert on the census and runs under
+plain `cargo test` (`aggregate_of_call_results_releases_every_producer_frame`); identical producers
+buy the audit nothing past the fifth. The only `unsafe` routed is the shared `retype` in
+`witnessed.rs`.
 
-- `aggregate_of_call_results_releases_every_producer_frame`
+- `aggregate_of_mixed_call_results_releases_every_producer_frame`
 
 **`Scope::store_module_object` seal-time composition** ([src/machine/core/scope/reach.rs](../src/machine/core/scope/reach.rs))
 — a module value's only region borrow is its child scope, so the merge composes the child's **own
@@ -355,11 +369,13 @@ a spliced sub-result rests as a pin-less `Sealed` cell in the *dispatching* step
 running against a freshly minted cart whose ancestor chain does not reach the retiring one. What spans
 the hop is the run loop's TCO handoff hold, absorbed into the step's coverage and named as the pin for
 `SchedulerView::lift_spliced`'s `Sealed::open_at` + `Opened::lift_out`. Tree borrows catches a
-use-after-free if that ordering ever breaks; the test also asserts the retention is *per-iteration* —
-the peak live-region count is flat in the loop's depth, where pins chained forward would grow it one
-region per hop.
+use-after-free if that ordering ever breaks, and one hop is the whole shape — the slate test runs a
+depth-1 loop and reads its result back. That the retention is also *per-iteration* — the peak
+live-region count flat in the loop's depth, where pins chained forward would grow it one region per
+hop — is a loud `region_metrics()` comparison across depths 3 and 11 with no Miri-only failure mode,
+and runs under plain `cargo test` (`a_splicing_tail_loop_holds_no_region_per_iteration`).
 
-- `a_splicing_tail_loop_holds_no_region_per_iteration`
+- `a_spliced_cell_survives_its_tail_hop`
 
 **MATCH / TRY-WITH branch frames inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
 MATCH and TRY build their per-branch frame and seed the `it` bind through
@@ -483,10 +499,12 @@ from the frame cart (no fabricated `&'a` persists), so the `Rc<CallFrame>` witne
 remains the sole liveness root for the re-installed slot's scope.
 Exercised by the dispatch-time parking shapes that reinstall through this entry
 point (and transitively by user-fn TCO; that path is covered by the MATCH-on-
-`Tagged` recursion test above).
+`Tagged` recursion test above). One batch-submitted program drives both: `LET y = z`
+forward-splices a bare name whose producer has not run yet, and `LET out = (DOUBLE y)` parks a FN
+call on that same binding and replays it on the wake — the parked slot's scope must stay valid across
+both the wake and the re-dispatch.
 
-- `lift_park_minimal_program_for_miri`
-- `replay_park_minimal_program_for_miri`
+- `park_and_replay_minimal_program_for_miri`
 
 **`Carried` slot read + dep re-anchor — pinned `open_with`** ([workgraph/src/scheduler/node_store.rs](../workgraph/src/scheduler/node_store.rs))
 — the scheduler stores a finalized terminal as a `Witnessed<W::Value, Carrier<W::Frame>>` — the
@@ -540,7 +558,8 @@ plain-data twin (`plain_record_cells_select_released_and_survive_every_producer_
 producer released) runs under plain `cargo test`: the retention verdict is derived from the rebuilt
 cell's own stored reach, so a release verdict that disagrees with what the rebuild left behind is
 unrepresentable, its rebuilt plain-data cells hold no borrow leaf that could dangle, and the
-release direction stays Miri-audited end-to-end by the aggregate census test below.
+release direction stays Miri-audited end-to-end by the mixed aggregate census test above, whose
+record cells ride this same `fold_cells` seam through the real scheduler and parser.
 
 The **value-level** escape seam (the fused `relocate_seam`: the `copy_or_pin` cost chooser
 ([kobject.rs](../src/machine/model/values/kobject.rs)) at `relocate_terminal` and the literal park
@@ -550,9 +569,9 @@ the rebuilt product releasing the producer) when a priceable plain record is a s
 the host's allocated total, and a **pin** (the envelope's pins claimed whole) when a leaf
 borrows home — the
 record's region-resident substrate rides **shared** (a pointer-copy, never rebuilt), covered by the
-producer reach the pin mints into the destination. One end-to-end test drives the released-copy shape through the real
-scheduler and parser — a 5-element list literal of user-FN calls each returning a plain-data record
-— corroborating the seam is wired to real per-call producer frames; a minimal-shape twin drives the
+producer reach the pin mints into the destination. The released-copy shape runs end-to-end through
+the real scheduler and parser in the mixed aggregate census above, whose record cells corroborate the
+seam is wired to real per-call producer frames; the minimal-shape twin here drives the
 cost-chooser-selected pin for five independent home-borrowing records through `relocate_seam`
 itself (asserts `Pin`, drops every producer, then reads each closure's captured scope back through
 the shared substrate), so a
@@ -562,7 +581,6 @@ shared `retype` in `witnessed.rs`; `lift.rs` carries none of its own (see the fi
 whitelist entry).
 
 - `closure_embedding_record_cells_select_copied_and_pin_every_producer`
-- `aggregate_of_plain_record_results_releases_every_producer_frame`
 - `record_seam_pin_verb_shares_substrate_and_survives_producer_free`
 
 **Operator-group record — bump-hosted registry entry outliving its declaring frame's shell**
@@ -599,9 +617,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-03: 1028s — 27 tests, 0 leaks, 0 UB
 - 2026-08-03: 1474s — 32 tests, 0 leaks, 0 UB
 - 2026-08-03: 1512s — 33 tests, 0 leaks, 0 UB
 - 2026-08-03: 2313s — 54 tests, 0 leaks, 0 UB
 - 2026-08-02: 2240s — 53 tests, 0 leaks, 0 UB
-- 2026-08-02: 2225s — 52 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

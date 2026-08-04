@@ -414,8 +414,8 @@ impl<'a> Scope<'a> {
                 // product envelope re-anchors it at `'a` through the library's own fused
                 // mint-and-retain door, so no re-box is needed to recover the reference.
                 self.relocate_delivered(cell, |carried| Ok(carried.object()), RegionEscape::Copy)
-                .expect("a whole-value adoption's copy is infallible")
-                .adopt_into(self.brand().handle())
+                    .expect("a whole-value adoption's copy is infallible")
+                    .adopt_into(self.brand().handle())
             }
         }
     }

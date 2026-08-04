@@ -8,7 +8,8 @@
 //! run root), and the call's result makes the run root retain the per-call owner — a two-region ring
 //! that only the eternal rule (`PinBundle::without_eternal`) cuts.
 
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{parse_one, TestRun};
+use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::{region_metrics, reset_region_metrics};
 
@@ -159,6 +160,27 @@ fn splicing_countdown(depth: usize) -> String {
     source
 }
 
+/// **A spliced cell outlives the hop that consumed it.** One hop is the whole no-use-after-free
+/// shape: the sub-result rests as a pin-less `Sealed` cell in the dispatching step's own region, and
+/// the step that adopts it is a *later incarnation of the same slot*, running against a freshly
+/// minted cart whose ancestor chain does not reach the retiring one — so the only thing spanning the
+/// hop is the run loop's TCO handoff hold, absorbed into the step's coverage and named as the pin
+/// for `SchedulerView::lift_spliced`'s `Sealed::open_at` + `Opened::lift_out`. Reading the result
+/// back is the check; tree borrows catches a use-after-free if that ordering ever breaks.
+#[test]
+fn a_spliced_cell_survives_its_tail_hop() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(&splicing_countdown(1));
+    let result = test_run.run_one(parse_one(&program, "out"));
+    assert!(
+        matches!(result, KObject::KString(s) if *s == "done"),
+        "the spliced tail hop's result reads back intact, got {:?}",
+        result.ktype()
+    );
+}
+
 /// **Splice retention is per-iteration, not cumulative.** A spliced cell's pins live in the region
 /// the splice site rested them into, released when that region dies — so a tail loop's producer
 /// regions turn over with their consuming iteration instead of chaining forward. The observable is
@@ -166,7 +188,9 @@ fn splicing_countdown(depth: usize) -> String {
 /// would grow one region per hop.
 ///
 /// The depths bracket the per-hop cost either way: the `LET n<i>` prelude is straight-line
-/// construction, so any growth between them is the loop's own.
+/// construction, so any growth between them is the loop's own. It is a loud metric assert with no
+/// Miri-only failure mode, so it runs under plain `cargo test`; the hop's use-after-free shape is
+/// the one-hop slate twin above.
 #[test]
 fn a_splicing_tail_loop_holds_no_region_per_iteration() {
     let (shallow_peak, shallow_live) = peak_and_live_after(&splicing_countdown(3));

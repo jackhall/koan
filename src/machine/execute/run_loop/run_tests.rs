@@ -186,27 +186,15 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 22.0));
 }
 
-/// Miri audit-slate: bare-name forward-splice lifetime contract — see
+/// Miri audit-slate: both park lifetime contracts in one batch-submitted program — see
 /// [design/execution/README.md § Miri forward-splice and replay-park lifetime
 /// contract](../../../../design/execution/name-placeholders.md#miri-forward-splice-and-replay-park-lifetime-contract).
+/// `LET y = z` forward-splices a bare name whose producer has not run yet (the lift park), and
+/// `LET out = (DOUBLE y)` parks a FN call on that same binding and replays it on the wake — the
+/// parked slot's scope must stay valid across both the wake and the re-dispatch, which is
+/// `Scheduler::replace` / `NodeStore::reinstall` re-projecting the slot's scope from the frame cart.
 #[test]
-fn lift_park_minimal_program_for_miri() {
-    let program = program_storage();
-    let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let scope = test_run.scope;
-    let runtime = &mut test_run.runtime;
-    for e in parse_all(&program, "LET z = 11\nLET y = z") {
-        runtime.dispatch_in_scope(e, scope);
-    }
-    runtime.execute().unwrap();
-    assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 11.0));
-}
-
-/// Miri audit-slate: pins the replay-park scope-lifetime contract — the parked
-/// slot's scope must stay valid across the wake and the re-dispatch.
-#[test]
-fn replay_park_minimal_program_for_miri() {
+fn park_and_replay_minimal_program_for_miri() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -214,14 +202,16 @@ fn replay_park_minimal_program_for_miri() {
     let runtime = &mut test_run.runtime;
     for e in parse_all(
         &program,
-        "FN (DOUBLE x :Number) -> Number = (x)\n\
-         LET aa = 7\n\
-         LET out = (DOUBLE aa)",
+        "LET z = 11\n\
+         LET y = z\n\
+         FN (DOUBLE x :Number) -> Number = (x)\n\
+         LET out = (DOUBLE y)",
     ) {
         runtime.dispatch_in_scope(e, scope);
     }
     runtime.execute().unwrap();
-    assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0));
+    assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 11.0));
+    assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 11.0));
 }
 
 /// A producer that errors at dispatch time finalizes its slot with the error

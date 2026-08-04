@@ -246,7 +246,9 @@ fn user_fn_call_releases_callee_frame() {
 /// the aggregate live and readable while every one of the 100 producer frames is released.
 /// **Measured retention: 100 callee frames minted → 0 live after the run.** Before the empty-reach
 /// change each escaped scalar pinned its whole per-call arena for the program's life, so the census
-/// would read 100 live here; the finalize sever drives it to 0.
+/// would read 100 live here; the finalize sever drives it to 0. The producers are identical, so the
+/// hundredth buys the audit nothing the fifth did not; the slate runs the five-call mixed twin below
+/// and this width measurement stays under plain `cargo test`.
 #[test]
 fn aggregate_of_call_results_releases_every_producer_frame() {
     FRAME_CENSUS.with(|census| census.borrow_mut().clear());
@@ -278,35 +280,46 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
     );
 }
 
-/// Escape with **copy** (`Residence::Released`): a plain-data record threading the same list-literal
-/// `Residence::Copied` seam as the scalar aggregate above is instead totally rebuilt at the
-/// destination (`copy_object_into`, via `fold_cells`'s per-cell seam selection) — and because no
-/// field borrows anything, no run of the rebuilt record names its producer, so every producer frame
-/// releases exactly like the scalar case, not conservatively pinned by the record's own carrier bit.
-// Pins the copy/release mechanism; the `seam-force-pin` build pins the record and retains the frames,
-// so this cannot hold there. The equivalence battery proves language-output invisibility separately.
+/// The slate's dep-envelope census: five real scheduler steps, each producing into its own per-call
+/// frame, aggregated by one consumer step that opens all five delivered deps at once. The cells
+/// **mix** the two escape shapes the seam selects between — a region-pure scalar
+/// (`Residence::Copied`, rebuilt into the aggregate's own region) and a plain-data record
+/// (escape with **copy**: totally rebuilt by `copy_object_into` via `fold_cells`'s per-cell seam
+/// selection, and because no field borrows anything, no run of the rebuilt record names its producer)
+/// — so one run pins both verdicts against the same consumer open. Every producer arena is gone
+/// while the aggregate still reads correctly: a use-after-free under tree borrows the moment the
+/// redundancy claim is wrong, and a lifetime leak the moment a fold re-pins a producer it copied
+/// out of.
+// Pins the copy/release mechanism; the `seam-force-pin` build pins the record cells and retains
+// their frames, so this cannot hold there. The equivalence battery proves language-output
+// invisibility separately.
 #[cfg(not(feature = "seam-force-pin"))]
 #[test]
-fn aggregate_of_plain_record_results_releases_every_producer_frame() {
+fn aggregate_of_mixed_call_results_releases_every_producer_frame() {
     FRAME_CENSUS.with(|census| census.borrow_mut().clear());
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     register_probe(scope, &test_run.types);
-    test_run.run("FN (GETREC) -> :{acc :Number, tag :Number} = ({acc = 1, tag = (PROBE)})");
+    test_run.run(
+        "FN (GETONE) -> Number = (PROBE)\n\
+         FN (GETREC) -> :{acc :Number, tag :Number} = ({acc = 1, tag = (PROBE)})",
+    );
 
-    const DEPTH: usize = 5;
-    let calls = ["(GETREC)"; DEPTH].join(" ");
-    test_run.run(&format!("LET results = [{calls}]"));
+    const CALLS: usize = 5;
+    test_run.run("LET results = [(GETONE) (GETREC) (GETONE) (GETREC) (GETONE)]");
 
     let results = test_run.run_one(parse_one(&program, "results"));
     match results {
         KObject::List(items, _) => {
-            assert_eq!(items.elements().len(), DEPTH, "all records retained");
-            for item in items.elements().iter() {
-                match item.object() {
-                    KObject::Record(substrate, _) => {
+            assert_eq!(items.elements().len(), CALLS, "all five results retained");
+            for (i, item) in items.elements().iter().enumerate() {
+                match (i % 2, item.object()) {
+                    (0, KObject::Number(n)) => {
+                        assert_eq!(*n, 1.0, "the scalar cell survives its producer's release")
+                    }
+                    (1, KObject::Record(substrate, _)) => {
                         match substrate.field("acc").map(|h| h.object()) {
                             Some(KObject::Number(n)) => {
                                 assert_eq!(*n, 1.0, "the acc field survives the total copy")
@@ -314,24 +327,24 @@ fn aggregate_of_plain_record_results_releases_every_producer_frame() {
                             _ => panic!("expected field acc: Number"),
                         }
                     }
-                    other => panic!(
-                        "expected a Record element, got {}",
+                    (_, other) => panic!(
+                        "cell {i}: expected an alternating scalar / record, got {}",
                         other.ktype().name(&test_run.types)
                     ),
                 }
             }
         }
         other => panic!(
-            "expected a {DEPTH}-element List, got {}",
+            "expected a {CALLS}-element List, got {}",
             other.ktype().name(&test_run.types)
         ),
     }
     let total = FRAME_CENSUS.with(|census| census.borrow().len());
-    assert_eq!(total, DEPTH, "each call captured its own producer frame");
+    assert_eq!(total, CALLS, "each call captured its own producer frame");
     assert_eq!(
         live_frames(),
         0,
-        "a plain-data record's total copy releases every producer arena — escape-with-copy"
+        "every producer arena released — the escaped scalars and the records' total copies pin none"
     );
 }
 

@@ -113,27 +113,14 @@ fn with_scope_relocates_seed_value_into_brand() {
     });
 }
 
-/// The opened child scope's re-borrow stays valid when the region is mutated through a sibling
-/// pointer afterward — `with_scope`'s `&Scope` and `region().alloc(...)` must coexist soundly under
-/// tree borrows.
-#[test]
-fn call_frame_scope_survives_subsequent_alloc() {
-    let program = program_storage();
-    let region = run_root_storage();
-    let test_run = TestRun::silent(&program, &region);
-    let scope = test_run.scope;
-    let frame = CallFrame::new(scope);
-    frame.with_scope(|s| {
-        let _new = s.brand().alloc_scalar(Scalar::Number(1.0));
-        assert!(std::ptr::eq(s.region(), frame.region()));
-    });
-}
-
 /// The born door's own erase-store / re-anchor round trip, nested inside an open: a grandchild
 /// scope allocated through [`Scope::alloc_child_under`] at the frame brand comes back co-located,
 /// and stays readable while its own brand mutates the same region underneath it. The store the door
 /// routes is the substrate's, so the shape is exercised end to end with no hand-written pointer
-/// arithmetic anywhere — the re-anchor is the library's single audited retype.
+/// arithmetic anywhere — the re-anchor is the library's single audited retype. The opened child's
+/// own re-borrow rides along: it stays valid — and still names the frame's region — while a sibling
+/// pointer allocates into that same region, so `with_scope`'s `&Scope` and `brand().alloc(…)`
+/// coexisting soundly is pinned by the same run.
 #[test]
 fn born_child_scope_survives_subsequent_alloc_in_its_own_region() {
     let program = program_storage();
@@ -142,6 +129,8 @@ fn born_child_scope_survives_subsequent_alloc_in_its_own_region() {
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
     frame.with_scope(|child| {
+        let _sibling = child.brand().alloc_scalar(Scalar::Number(1.0));
+        assert!(std::ptr::eq(child.region(), frame.region()));
         let grandchild = child.alloc_child_under();
         assert!(std::ptr::eq(grandchild.region(), child.region()));
         // Alloc into the region through the freshly stored scope's own brand while the parent

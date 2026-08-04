@@ -478,13 +478,20 @@ fn closure_argument_stays_live_through_user_fn_call() {
     );
 }
 
-/// A `let`-bound list reaching two *distinct* per-call regions keeps both alive: each `MAKE_HOLDER`
-/// call captures its own per-call frame, and the list holds both closures. The bind's carrier fold
-/// (C1) must contribute *every* region the multi-region value reaches — the case the single-frame
-/// relocate-seam fold under-recorded. Reading the list back after the producing frames retire must
-/// find both closures intact. (Miri: the multi-region no-use-after-free check.)
+/// One `let`-bound list mixing the two cell shapes whose reach verdicts disagree, over four
+/// *distinct* per-call regions, read back after every producer retires.
+///
+/// A **closure** cell rides a bare borrow into its defining region and never gets rebuilt, so the
+/// bind's carrier fold must contribute *every* region the multi-region value reaches — the case the
+/// single-frame relocate-seam fold under-recorded. A **string** cell answers the opposite way: its
+/// reach verdict names no region at all, honest only because the substrate door re-bumps the bytes
+/// into the list's own region first (`section_cells`); a cell that skipped the re-home would name no
+/// region while still pointing into a retiring one. Interleaving them puts one fold under both rules
+/// at once — drop the closure's region and the captured read dangles, share the producer's string
+/// bump and the byte read dangles. (Miri: the multi-region and region-resident-string
+/// no-use-after-free checks in one scheduler run.)
 #[test]
-fn let_bound_list_reaching_two_call_regions_keeps_both_live() {
+fn let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_free() {
     use crate::machine::model::{Held, KObject};
     let program = program_storage();
     let region = run_root_storage();
@@ -492,51 +499,21 @@ fn let_bound_list_reaching_two_call_regions_keeps_both_live() {
     test_run.run(
         "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
          (FN (GET q :Number) -> Number = (base))\n\
-         LET holders = [(MAKE_HOLDER 1) (MAKE_HOLDER 2)]",
+         FN (LABEL n :Number) -> Str = (PRINT n)\n\
+         LET mixed = [(LABEL 1) (MAKE_HOLDER 1) (LABEL 2) (MAKE_HOLDER 2)]",
     );
-    let result = test_run.run_one(parse_one(&program, "holders"));
+    let result = test_run.run_one(parse_one(&program, "mixed"));
     match result {
         KObject::List(items, _) => {
+            let cells = items.elements();
             assert_eq!(
-                items.elements().len(),
-                2,
-                "list should hold both holder closures"
+                cells.len(),
+                4,
+                "list should hold both labels and both holders"
             );
-            assert!(
-                items
-                    .elements()
-                    .iter()
-                    .all(|h| matches!(h, Held::Object(KObject::KFunction(_)))),
-                "both list elements must be intact closures after their call regions retired",
-            );
-        }
-        other => panic!("expected a List, got {:?}", other.ktype()),
-    }
-}
-
-/// A `let`-bound container whose cells are **strings** survives every producer region retiring. Each
-/// `LABEL` call bumps its result's bytes into its own per-call region and the list literal sections
-/// those results as cells; the substrate door re-bumps each one into the list's own region
-/// (`section_cells`), which is what makes a string cell's empty-reach run verdict honest — a cell
-/// that named no region while still pointing into a retiring one would dangle. Reading the bytes
-/// back after the calls retire is the check. (Miri: the region-resident-string no-use-after-free
-/// check.)
-#[test]
-fn let_bound_list_of_call_produced_strings_survives_every_producer_free() {
-    use crate::machine::model::{Held, KObject};
-    let program = program_storage();
-    let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    test_run.run(
-        "FN (LABEL n :Number) -> Str = (PRINT n)\n\
-         LET labels = [(LABEL 1) (LABEL 2)]",
-    );
-    let result = test_run.run_one(parse_one(&program, "labels"));
-    match result {
-        KObject::List(items, _) => {
-            let rendered: Vec<&str> = items
-                .elements()
+            let rendered: Vec<&str> = cells
                 .iter()
+                .step_by(2)
                 .map(|cell| match cell {
                     Held::Object(KObject::KString(s)) => *s,
                     other => panic!(
@@ -549,6 +526,14 @@ fn let_bound_list_of_call_produced_strings_survives_every_producer_free() {
                 rendered,
                 vec!["1", "2"],
                 "both string cells must read back intact after their call regions retired",
+            );
+            assert!(
+                cells
+                    .iter()
+                    .skip(1)
+                    .step_by(2)
+                    .all(|h| matches!(h, Held::Object(KObject::KFunction(_)))),
+                "both closure cells must stay intact after their distinct call regions retired",
             );
         }
         other => panic!("expected a List, got {:?}", other.ktype()),

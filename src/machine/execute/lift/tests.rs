@@ -794,15 +794,24 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
     );
 }
 
-/// A record's **name index** is bump-hosted at the destination, not borrowed back into the producer.
-/// The fields go in unsorted, so the name slice the substrate binary-searches is genuinely reordered
-/// at construction and every name is re-bumped by the relocation into `dest`'s own region. Dropping
-/// the producer frame and *then* looking each field up by name is the no-use-after-free check: a name
-/// slice still pointing into the producer's freed bump reads dead bytes here, which only tree borrows
-/// observes — a normal build compares them back intact and the lookup succeeds.
+/// Both bump-hosted **index** shapes, rebuilt at the destination by one relocation and read back
+/// after the producer frame frees.
+///
+/// A record's index is the sorted name slice `alloc_record` bumps (the slice and every name's
+/// bytes); the fields go in unsorted, so the slice the substrate binary-searches is genuinely
+/// reordered against the literal. A dict's is the `hashbrown` table `alloc_dict` freezes over
+/// re-bumped keys — and the keys were already re-bumped once into the producer at construction, so
+/// the relocation must re-bump them *again* rather than share. Nesting the dict in a record field
+/// puts both under a single `transfer_into_placing`: the outer index is read on the way to the inner
+/// one, so an index still pointing into the producer's freed bump reads dead bytes here — which only
+/// tree borrows observes, since a normal build compares them back intact and the lookup succeeds.
 #[test]
-fn record_name_index_rehomes_and_reads_back_after_producer_free() {
+fn substrate_indexes_rehome_and_read_back_after_producer_free() {
+    use crate::machine::model::KKey;
+    use std::collections::HashMap;
     const NAMES: [&str; 4] = ["zeta", "alpha", "middle", "beta"];
+    const KEYS: [&str; 4] = ["yankee", "bravo", "lima", "delta"];
+    const TABLE: &str = "table";
     let program = program_storage();
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
@@ -824,11 +833,17 @@ fn record_name_index_rehomes_and_reads_back_after_producer_free() {
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(producer.brand().handle()))
             .with_holder(&born_cells);
+    let mut map: HashMap<KKey, Held> = HashMap::new();
+    for (i, key) in KEYS.iter().enumerate() {
+        map.insert(KKey::String(key), Held::Object(KObject::Number(i as f64)));
+    }
+    let table = KObject::dict_of_held(door, map, &types);
     let fields = Record::from_pairs(
         NAMES
             .iter()
             .enumerate()
             .map(|(i, name)| ((*name).to_string(), Held::Object(KObject::Number(i as f64))))
+            .chain(std::iter::once((TABLE.to_string(), Held::Object(table))))
             .collect::<Vec<_>>(),
     );
     let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
@@ -860,17 +875,43 @@ fn record_name_index_rehomes_and_reads_back_after_producer_free() {
             .unseal()
             .with_pinned(&dest_storage, |(_region, cells)| match cells[0].object() {
                 KObject::Record(substrate, _) => {
-                    // Read through the index twice over: the name-order walk, and a by-name
+                    // Read through the name index twice over: the name-order walk, and a by-name
                     // lookup per field — the binary search over the sorted name slice.
                     let walked: Vec<String> =
                         substrate.fields().map(|(n, _)| n.to_string()).collect();
-                    let mut sorted = NAMES.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+                    let mut sorted = NAMES
+                        .iter()
+                        .chain(std::iter::once(&TABLE))
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>();
                     sorted.sort();
                     assert_eq!(
                         walked, sorted,
                         "the relocated record walks its fields in name order — the index is the \
                          sorted slice, not the order the literal was written"
                     );
+                    // Then the nested dict's own index, reached *through* the outer one: walk the
+                    // table, then look every key back up — the hash and the byte-wise compare both
+                    // read key slices the relocation re-bumped.
+                    match substrate.field(TABLE).map(|h| h.object()) {
+                        Some(KObject::Dict(table, _)) => {
+                            assert_eq!(
+                                table.entries().count(),
+                                KEYS.len(),
+                                "the relocated dict keeps every entry"
+                            );
+                            for (i, key) in KEYS.iter().enumerate() {
+                                match table.entry(&KKey::String(key)).map(|h| h.object()) {
+                                    Some(KObject::Number(n)) => assert_eq!(
+                                        *n, i as f64,
+                                        "entry {key} looks up after the producer frame freed"
+                                    ),
+                                    _ => panic!("expected entry {key}: Number"),
+                                }
+                            }
+                        }
+                        _ => panic!("expected field {TABLE}: Dict"),
+                    }
                     NAMES
                         .iter()
                         .map(|name| match substrate.field(name).map(|h| h.object()) {
@@ -889,99 +930,6 @@ fn record_name_index_rehomes_and_reads_back_after_producer_free() {
             .map(|(i, name)| ((*name).to_string(), i as f64))
             .collect::<Vec<_>>(),
         "every field reads back by name after the producer frame freed"
-    );
-}
-
-/// A dict's **key index** — the `hashbrown` table hosted in the region bump, keyed by string bytes
-/// the door re-bumped — is rebuilt at the destination by the relocation. The keys were already
-/// re-bumped once into the producer's region at construction, so the relocated table's keys must be
-/// re-bumped *again* rather than shared; looking every key up after the producer frame frees is the
-/// no-use-after-free check. A table or a key slice still pointing into the producer hashes and
-/// compares freed bytes here, which only tree borrows observes.
-#[test]
-fn dict_key_index_rehomes_and_looks_up_after_producer_free() {
-    use crate::machine::model::KKey;
-    use std::collections::HashMap;
-    const KEYS: [&str; 4] = ["zeta", "alpha", "middle", "beta"];
-    let program = program_storage();
-    let root = run_root_storage();
-    let test_run = TestRun::silent(&program, &root);
-    let scope = test_run.scope;
-    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
-    let dest_storage = dest_frame.storage_rc();
-
-    let acc = Delivered::seal(
-        KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-            (region.handle(), Vec::with_capacity(1))
-        }),
-        Rc::clone(&dest_storage),
-        FrameCoverage::empty(),
-    );
-
-    let producer: Rc<CallFrame> = CallFrame::new(scope);
-    let born_cells = crate::machine::core::FrameCoverage::empty();
-    let door =
-        FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(producer.brand().handle()))
-            .with_holder(&born_cells);
-    let mut map: HashMap<KKey, Held> = HashMap::new();
-    for (i, key) in KEYS.iter().enumerate() {
-        map.insert(KKey::String(key), Held::Object(KObject::Number(i as f64)));
-    }
-    let obj: &KObject<'_> = door.alloc_object_folded(KObject::dict_of_held(door, map, &types));
-    let sealed = producer.with_scope(|child| {
-        child
-            .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
-            .unseal()
-    });
-    let dep: DeliveredCarried =
-        Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
-    let acc_final = dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
-        acc,
-        cell_still_borrows(&dep),
-        |value, (region, mut cells), placement| {
-            cells.push(copy_held_from_carried(
-                value,
-                FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
-            ));
-            (region, cells)
-        },
-    );
-
-    drop(producer);
-
-    let (acc_cell, _coverage) = acc_final.into_parts();
-    let mut read: Vec<(String, f64)> =
-        acc_cell
-            .unseal()
-            .with_pinned(&dest_storage, |(_region, cells)| match cells[0].object() {
-                KObject::Dict(substrate, _) => {
-                    // Walk the table, then look every key back up through it — the hash and the
-                    // byte-wise compare both read key slices the relocation re-bumped.
-                    let walked = substrate.entries().count();
-                    assert_eq!(walked, KEYS.len(), "the relocated dict keeps every entry");
-                    KEYS.iter()
-                        .map(
-                            |key| match substrate.entry(&KKey::String(key)).map(|h| h.object()) {
-                                Some(KObject::Number(n)) => ((*key).to_string(), *n),
-                                _ => panic!("expected entry {key}: Number"),
-                            },
-                        )
-                        .collect()
-                }
-                other => panic!("expected a Dict, got {}", other.ktype().name(&types)),
-            });
-    read.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut expected: Vec<(String, f64)> = KEYS
-        .iter()
-        .enumerate()
-        .map(|(i, key)| ((*key).to_string(), i as f64))
-        .collect();
-    expected.sort_by(|a, b| a.0.cmp(&b.0));
-    assert_eq!(
-        read, expected,
-        "every entry looks up by key after the producer frame freed"
     );
 }
 

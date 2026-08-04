@@ -146,9 +146,10 @@ read of the aliased slot resolves to the producer and returns the producer's own
 outlive every consumer that reads through the alias. The replay-park route is
 symmetric: a parked dispatch decide's captured scope, and the `&KObject<'a>` its
 resolved producers carry, must stay valid across the wake and the re-dispatch.
-The `lift_park_minimal_program_for_miri` (a bare-name forward, `LET y = z`) and
-`replay_park_minimal_program_for_miri` (a parked-and-resumed FN call) tests pin
-the contract under Miri tree borrows.
+The `park_and_replay_minimal_program_for_miri` test pins both halves of the
+contract under Miri tree borrows in one batch-submitted program: `LET y = z` is
+the bare-name forward, and `LET out = (DOUBLE y)` is the FN call parked on that
+same binding and replayed on the wake.
 
 ### Submission-time binder install and the position rule
 
