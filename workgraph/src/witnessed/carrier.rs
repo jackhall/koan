@@ -35,8 +35,8 @@
 use std::rc::Rc;
 
 use super::{
-    Delivered, Erased, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable, Region,
-    RegionHandle, RegionOwner, StorageProfile, Witness, Witnessed,
+    Delivered, DropFree, Erased, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable,
+    Region, RegionHandle, RegionOwner, StorageProfile, Witness, Witnessed,
 };
 // `with_branded_ref` re-anchors the erased reach reference: for the `Sealed → Delivered` lift's
 // description-to-bundle upgrade ([`Carrier::upgrade_bundle`]) and for the membership queries the
@@ -52,6 +52,9 @@ struct HostedSetRef<F>(std::marker::PhantomData<F>);
 unsafe impl<F: PinsRegion + 'static> Reattachable for HostedSetRef<F> {
     type At<'r> = &'r ReachDescription<F>;
 }
+
+/// A shared reference needs no drop, so the erased reach reference rests in the Copy tier.
+impl<F> DropFree for HostedSetRef<F> {}
 
 /// A destination family's live form that exposes the [`RegionHandle`] mint target a reach
 /// composition needs to allocate a hosted set into — the compose-time counterpart of
@@ -184,7 +187,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     }
 }
 
-impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
+impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
     /// Bundle a **region-pure** value under a carrier hosted in `home`'s own region — the
     /// reference-only counterpart of [`Witnessed::resident`](super::Witnessed::resident), which a
     /// [`Carrier`] cannot use because there is no default carrier to name a residence with. Mints a
@@ -213,7 +216,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
 /// `'b` under the pin that was presented to open it, and that borrow is exactly the coverage
 /// re-anchoring the erased reach reference requires — so these need no `pin` argument, and there is
 /// no way to ask the question without one (design/reach.md § The carrier states).
-impl<'b, T: Reattachable, F: PinsRegion + 'static> Opened<'b, T, Carrier<F>> {
+impl<'b, T: Reattachable + DropFree, F: PinsRegion + 'static> Opened<'b, T, Carrier<F>> {
     /// Whether the value's borrows reach `region` — home included when the borrows genuinely reach
     /// it, which is the question [`Self::borrows_home`] asks against the value's own residence.
     pub fn reach_covers(&self, region: &F::Region) -> bool {

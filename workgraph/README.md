@@ -21,8 +21,9 @@ crate reads as a standalone library rather than as one of koan's internals.
   - [witnessed-memory.md](design/witnessed-memory.md) — the memory substrate:
     the erase-store / witness / reattach core, the `Region<P>` bump allocator,
     the `yoke` / `merge_pinned` / `map` construction surface with its
-    one-wrapper-per-cell invariant, and the `seal` / `open` / `transfer_into`
-    access surface.
+    one-wrapper-per-cell invariant, the `seal` / `open` / `transfer_into` access
+    surface, and the dormant union slot with the `DropFree` split between its
+    Copy and owned resting tiers.
   - [reach.md](design/reach.md) — reach evidence: the split into non-owning
     descriptions and holder-owned pin bundles, the three carrier states and
     their transform verbs, the holder rule, the mint rules (self, subsumption,

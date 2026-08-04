@@ -32,9 +32,9 @@
 use std::rc::Rc;
 
 use super::{
-    Carrier, Erased, FoldToken, FoldedPlacement, HasRegionHandle, Opened, PinBundle, PinsRegion,
-    ReachDescription, Reattachable, Region, RegionHandle, RegionHandleFamily, RegionOwner, Sealed,
-    StepCoverage, StorageProfile, Witnessed,
+    Carrier, DropFree, Erased, FoldToken, FoldedPlacement, HasRegionHandle, Opened, PinBundle,
+    PinsRegion, ReachDescription, Reattachable, Region, RegionHandle, RegionHandleFamily,
+    RegionOwner, Sealed, StepCoverage, StorageProfile, Witnessed,
 };
 
 /// A sealed carrier paired with the owned [`PinBundle`] that pins every region its value reaches —
@@ -42,7 +42,7 @@ use super::{
 /// `W` its reach witness, `F` the workload's frame-owner type. The carrier's reach description is
 /// non-owning; the envelope's bundle is the ownership that keeps the value's whole reach alive
 /// across transit — from a scheduler pull to the point a consumer adopts or re-homes it.
-pub struct Delivered<T: Reattachable, W, F: PinsRegion> {
+pub struct Delivered<T: Reattachable + DropFree, W, F: PinsRegion> {
     /// The dormant carrier — value, residence and reach description as one unit.
     cell: Sealed<T, W>,
     /// The owned pins for every region the value's borrows reach, **home included** — the ownership
@@ -55,7 +55,7 @@ pub struct Delivered<T: Reattachable, W, F: PinsRegion> {
     pins: StepCoverage<F>,
 }
 
-impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
+impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
     /// Read the delivered value at a **rank-2** (`for<'b>`) brand, pinned by the envelope's own
     /// owned pins ([`Sealed::open_with`]) — the single read verb for a delivered value, whose
     /// carrier witness bundles no pin of its own. The `for<'b>` quantifier confines the re-anchored
@@ -175,7 +175,7 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
     /// This is how a family-specific carrier is reached without splitting the value from its pins:
     /// a projection that went out through a bare read would arrive somewhere else with no proven
     /// reach at all.
-    pub fn project<P: Reattachable>(
+    pub fn project<P: Reattachable + DropFree>(
         self,
         f: impl for<'b> FnOnce(T::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> Delivered<P, W, F> {
@@ -207,7 +207,7 @@ impl<T: Reattachable, W, F: PinsRegion> Delivered<T, W, F> {
 
 /// The envelope-bearing verbs over the reference-only [`Carrier`] witness. The envelope is the
 /// holder that owns the value's pins, so it is what a mint folds and what covers every read here.
-impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
+impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
     /// Pair a sealed carrier with the owner of the region its value lives in and the owned
     /// [`PinBundle`] pinning every other region it reaches, unioning the two into the envelope's
     /// single member set. `home` is the pin the transit needs — the residence itself is already the
@@ -330,7 +330,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
     /// retention discharge — the tail-loop turnover rule; a `true` verdict keeps it, so the producer
     /// transfers by hold. The claim is therefore a checked property of the bytes that exist. A
     /// predicate that answers conservatively costs retention, never soundness.
-    pub fn transfer_into<B: Reattachable, P: Reattachable, Pr>(
+    pub fn transfer_into<B: Reattachable + DropFree, P: Reattachable + DropFree, Pr>(
         &self,
         dest: Delivered<B, Carrier<F>, F>,
         still_borrows: impl for<'b> FnMut(&P::At<'b>, &F::Region) -> bool,
@@ -370,7 +370,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
     /// [`Carrier::compose_into`] mints the composed reach set over, so the folded store rides the same
     /// confinement the composition establishes — the destination is the engine's own operand region,
     /// never a caller-captured handle.
-    pub fn transfer_into_placing<B: Reattachable, P: Reattachable, Pr>(
+    pub fn transfer_into_placing<B: Reattachable + DropFree, P: Reattachable + DropFree, Pr>(
         &self,
         dest: Delivered<B, Carrier<F>, F>,
         still_borrows: impl for<'b> FnMut(&P::At<'b>, &F::Region) -> bool,
@@ -404,8 +404,8 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> Delivered<P, Carrier<F>, F>
     where
-        B: Reattachable,
-        P: Reattachable,
+        B: Reattachable + DropFree,
+        P: Reattachable + DropFree,
         Pr: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<Pr>>,
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
@@ -450,8 +450,8 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P::At<'b>,
     ) -> Delivered<P, Carrier<F>, F>
     where
-        B: Reattachable,
-        P: Reattachable,
+        B: Reattachable + DropFree,
+        P: Reattachable + DropFree,
         Pr: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<Pr>>,
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
@@ -484,7 +484,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
     /// region as an ordinary member, instead of correcting a fold-composed witness after the fact.
     /// The product rides back as its own envelope, so the birth site keeps the pins the mint
     /// composed rather than re-deriving them.
-    pub fn restamp_in_place<P: Reattachable, Pr>(
+    pub fn restamp_in_place<P: Reattachable + DropFree, Pr>(
         &self,
         home: &Rc<F>,
         relocate: impl for<'b> FnOnce(

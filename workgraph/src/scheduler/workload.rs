@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::Reattachable;
+use super::{DropFree, Reattachable};
 use crate::witnessed::{Carrier, PinsRegion, Sealed, Witnessed};
 
 /// The live (caller-lifetime) form of the inter-node value for a workload `W`, re-anchored from the
@@ -40,7 +40,7 @@ pub trait Workload {
     /// bundled with the producer frame `Rc`) and re-anchors it to the read borrow through
     /// `Witnessed::read`. `At<'static>: Copy` lets a `&self` read copy the erased carrier out before
     /// re-anchoring it.
-    type Value: Reattachable<At<'static>: Copy>;
+    type Value: Reattachable<At<'static>: Copy> + DropFree;
     /// The terminal error type (stored in a finalized terminal; the scheduler only stores/borrows it).
     type Error;
     /// The per-slot memory anchor the scheduler manages by `Rc` (minted by the workload). The
@@ -54,5 +54,5 @@ pub trait Workload {
     /// (`Erased<Self::Continuation>`) on the node and hands back once per step; the workload
     /// re-anchors it, witnessed by the node's anchor `Rc`, then runs it once. Never inspected. Not
     /// `Copy` — a one-shot boxed closure consumed by value.
-    type Continuation: Reattachable;
+    type Continuation: Reattachable + DropFree;
 }

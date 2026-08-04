@@ -11,8 +11,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{
-    Carrier, Delivered, FoldToken, FoldedPlacement, PinsRegion, Reattachable, Region, RegionHandle,
-    RegionOwner, StepCoverage, StorageProfile, Witnessed,
+    Carrier, Delivered, DropFree, FoldToken, FoldedPlacement, PinsRegion, Reattachable, Region,
+    RegionHandle, RegionOwner, StepCoverage, StorageProfile, Witnessed,
 };
 
 /// The step construction context — handed to a finish by the step loop, whose held region owner is
@@ -84,7 +84,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         build: impl for<'b> FnOnce(&'b F::Region) -> T::At<'b>,
     ) -> Witnessed<T, Carrier<F>>
     where
-        T: Reattachable,
+        T: Reattachable + DropFree,
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
@@ -146,31 +146,29 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     pub fn alloc_with<T, V, P>(
         &self,
         deps: &[&Delivered<V, Carrier<F>, F>],
-        build: impl for<'b> FnOnce(&'b F::Region, Vec<V::At<'b>>, FoldToken<'b>) -> T::At<'b>,
+        build: impl for<'b> FnOnce(&'b F::Region, &'b [V::At<'b>], FoldToken<'b>) -> T::At<'b>,
     ) -> Delivered<T, Carrier<F>, F>
     where
-        T: Reattachable,
-        V: Reattachable,
-        V::At<'static>: Copy,
+        T: Reattachable + DropFree,
+        V: Reattachable + DropFree,
+        for<'b> V::At<'b>: Copy,
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
     {
         // The accumulator is enveloped over this context's own frame — the region it is yoked into —
         // so each fold step composes into an envelope rather than a carrier plus a loose bundle.
         let acc0 = Delivered::seal(
-            self.alloc::<AllocViews<V, F::Region>, P>(|region| {
-                (region, Vec::with_capacity(deps.len()))
-            }),
+            self.alloc::<AllocViews<V, F::Region>, P>(|region| (region, &[][..])),
             Rc::clone(&self.frame),
             StepCoverage::empty(),
         );
         let acc = deps.iter().fold(acc0, |acc, dep| {
-            dep.transfer_into::<AllocViews<V, F::Region>, AllocViews<V, F::Region>, P>(
+            dep.transfer_into_placing::<AllocViews<V, F::Region>, AllocViews<V, F::Region>, P>(
                 acc,
                 // The view rides the accumulator un-copied, so the built value genuinely
                 // borrows into every region the dep does: the predicate releases none.
                 |_product, _region| true,
-                fold_dep_view::<V, F::Region>(),
+                fold_dep_view::<V, P>(),
             )
         });
         // `map_pinned` re-projects the value under the same witness, so the accumulated envelope's
@@ -191,7 +189,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
-        T: Reattachable,
+        T: Reattachable + DropFree,
     {
         self.alloc::<T, P>(|region| build(RegionHandle::new(region)))
     }
@@ -204,14 +202,14 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     pub fn alloc_with_handle<P, T, V>(
         &self,
         deps: &[&Delivered<V, Carrier<F>, F>],
-        build: impl for<'b> FnOnce(FoldedPlacement<'b, P>, Vec<V::At<'b>>) -> T::At<'b>,
+        build: impl for<'b> FnOnce(FoldedPlacement<'b, P>, &'b [V::At<'b>]) -> T::At<'b>,
     ) -> Delivered<T, Carrier<F>, F>
     where
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
-        T: Reattachable,
-        V: Reattachable,
-        V::At<'static>: Copy,
+        T: Reattachable + DropFree,
+        V: Reattachable + DropFree,
+        for<'b> V::At<'b>: Copy,
     {
         self.alloc_with::<T, V, P>(deps, |region, views, token| {
             // The accumulator was yoked over this frame's own region and `alloc_with` folds every
@@ -235,8 +233,8 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         f: impl for<'b> FnOnce(T::At<'b>, FoldedPlacement<'b, P>) -> P2::At<'b>,
     ) -> Witnessed<P2, Carrier<F>>
     where
-        T: Reattachable,
-        P2: Reattachable,
+        T: Reattachable + DropFree,
+        P2: Reattachable + DropFree,
         P: StorageProfile + 'static,
         for<'b> T::At<'b>: super::HasRegionHandle<'b, P>,
     {
@@ -256,12 +254,24 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
 /// pins, so every view's producer frame is a member of the accumulator's minted set, pinned by the
 /// consumer's own arena for the built value's life.
 #[allow(clippy::type_complexity)]
-fn fold_dep_view<V: Reattachable, R: ?Sized + 'static>(
-) -> impl for<'b> FnOnce(V::At<'b>, (&'b R, Vec<V::At<'b>>), FoldToken<'b>) -> (&'b R, Vec<V::At<'b>>)
+fn fold_dep_view<V, P>() -> impl for<'b> FnOnce(
+    V::At<'b>,
+    (&'b Region<P>, &'b [V::At<'b>]),
+    FoldedPlacement<'b, P>,
+) -> (&'b Region<P>, &'b [V::At<'b>])
+where
+    V: Reattachable,
+    P: StorageProfile + 'static,
+    for<'b> V::At<'b>: Copy,
 {
-    |view, (region, mut views), _token| {
-        views.push(view);
-        (region, views)
+    |view, (region, views), placement| {
+        // Re-bump the accumulated views plus this one into the destination region. The step's
+        // allocations interleave with the reach mints each fold composes, so extending the previous
+        // slice in place is not available; the copy is the price of a slot the Copy tier can hold.
+        let mut grown = Vec::with_capacity(views.len() + 1);
+        grown.extend_from_slice(views);
+        grown.push(view);
+        (region, placement.bump().slice(&grown))
     }
 }
 
@@ -270,23 +280,32 @@ fn fold_dep_view<V: Reattachable, R: ?Sized + 'static>(
 /// `alloc_with`'s `V::At<'static>: Copy` scope.
 #[allow(clippy::type_complexity)]
 fn finalize_alloc_with<F: RegionOwner, T: Reattachable, V: Reattachable>(
-    build: impl for<'b> FnOnce(&'b F::Region, Vec<V::At<'b>>, FoldToken<'b>) -> T::At<'b>,
-) -> impl for<'b> FnOnce((&'b F::Region, Vec<V::At<'b>>), FoldToken<'b>) -> T::At<'b> {
+    build: impl for<'b> FnOnce(&'b F::Region, &'b [V::At<'b>], FoldToken<'b>) -> T::At<'b>,
+) -> impl for<'b> FnOnce((&'b F::Region, &'b [V::At<'b>]), FoldToken<'b>) -> T::At<'b> {
     |(region, views), token| build(region, views, token)
 }
 
 /// `alloc_with`'s fold accumulator: the context's own region reference paired with the dep views
-/// folded in so far, re-anchored as one carrier. Layout-invariant in `'r`: a reference and a `Vec` of
-/// a layout-invariant family are each layout-invariant, so the pair is too — the [`Reattachable`]
-/// contract, discharged componentwise, the same justification as [`super::And`].
+/// folded in so far, re-anchored as one carrier. Layout-invariant in `'r`: a reference and a slice
+/// of a layout-invariant family are each layout-invariant, so the pair is too — the
+/// [`Reattachable`] contract, discharged componentwise, the same justification as [`super::And`].
+///
+/// The views ride a **region-bumped slice** rather than an owned `Vec`, which is what puts the
+/// accumulator in the Copy tier: the accumulator *rests* between fold steps (each
+/// [`Delivered::transfer_into`] seals it), and the Copy tier's dormant slot is glue-free, so an
+/// owned buffer resting there would be dropped by nobody. A bumped slice needs no destructor — the
+/// region releases its chunks whole — so the family is honestly [`DropFree`].
 struct AllocViews<V, R: ?Sized>(PhantomData<(V, *const R)>);
 
-// SAFETY: `(&'r R, Vec<V::At<'r>>)` is one type up to `'r` when `V` is — see the type's doc comment.
-// `R: 'static` is required for the GAT to type-check for every `'r` (a bound the concrete `Region`
-// types this is instantiated with — lifetime-free arena handles — trivially satisfy).
+// SAFETY: `(&'r R, &'r [V::At<'r>])` is one type up to `'r` when `V` is — see the type's doc
+// comment. `R: 'static` is required for the GAT to type-check for every `'r` (a bound the concrete
+// `Region` types this is instantiated with — lifetime-free arena handles — trivially satisfy).
 unsafe impl<V: Reattachable, R: ?Sized + 'static> Reattachable for AllocViews<V, R> {
-    type At<'r> = (&'r R, Vec<V::At<'r>>);
+    type At<'r> = (&'r R, &'r [V::At<'r>]);
 }
+
+/// A pair of shared references needs no drop, so the accumulator rests in the Copy tier.
+impl<V, R: ?Sized> DropFree for AllocViews<V, R> {}
 
 // SAFETY: the handle authorizes allocation into `self.0`'s own region — exactly the region a
 // `Carrier` composed against this accumulator's live form re-homes into. Generic over the

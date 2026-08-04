@@ -39,8 +39,8 @@ use bumpalo::Bump;
 use hashbrown::{DefaultHashBuilder, HashMap};
 
 use super::{
-    Carrier, FoldedPlacement, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable,
-    Region, RegionHandle, RegionOwner, StorageProfile,
+    Carrier, DropFree, FoldedPlacement, Opened, PinBundle, PinsRegion, ReachDescription,
+    Reattachable, Region, RegionHandle, RegionOwner, StorageProfile,
 };
 
 /// The **byte-placement** capability: the write surface a [`fold_and_bump`](FoldedPlacement::fold_and_bump)
@@ -331,8 +331,8 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
         construct: impl FnOnce(BumpPlacement<'b, W>, &[V::At<'b>]) -> K::At<'b>,
     ) -> Opened<'b, K, Carrier<F>>
     where
-        K: Reattachable,
-        V: Reattachable,
+        K: Reattachable + DropFree,
+        V: Reattachable + DropFree,
         V::At<'b>: Copy,
         F: PinsRegion + RegionOwner<Region = Region<W>> + 'static,
         W: StorageProfile<FrameOwner = F>,
