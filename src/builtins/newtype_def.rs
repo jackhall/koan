@@ -714,15 +714,18 @@ mod tests {
         assert!(scope.bindings().type_placeholder_producer("Tree").is_none());
     }
 
-    /// Miri slate — the pin-less read of a declaration-window sibling cell from a *different step*
-    /// than the one that rested it. `rewrite_threaded_self_refs` seals each threaded `Tree` leaf as a
-    /// resident cell in the declarator's own scope region and bumps the rewritten record body beside
-    /// it; the field walker that reads them back runs inside the `:(LIST OF …)` sub-Dispatch, a step
-    /// the declarator merely parked on. So the coverage is the parked declarator's, named by nothing
-    /// the reader holds — which is what [`read_resting`](crate::machine::core::read_resting)'s
-    /// `NoPins` asserts. Tree borrows catches a use-after-free if the declarator's region were ever
-    /// freed before its own dep-finish. The whole program runs to a constructed value so the sealed
+    /// The declaration-window sibling cell read back from a *different step* than the one that
+    /// rested it. `rewrite_threaded_self_refs` seals each threaded `Tree` leaf as a resident cell in
+    /// the declarator's own scope region and bumps the rewritten record body beside it; the field
+    /// walker that reads them back runs inside the `:(LIST OF …)` sub-Dispatch, a step the
+    /// declarator merely parked on. The whole program runs to a constructed value so the sealed
     /// handle is used, not merely elaborated.
+    ///
+    /// Plain `cargo test`: the read names a pin rather than asserting one. A sub-Dispatch is
+    /// submitted against its declarator's own cart (`dispatch_in_own_scope`), so the reading step's
+    /// scope *is* the scope the cell was sealed in, and the walker reads it through
+    /// `Scope::read_spliced` under that scope's own region owner. The pointee-outlives-the-read
+    /// obligation is discharged by the door's signature, not by this program's step ordering.
     #[test]
     fn declaration_window_sibling_cell_read_from_a_sub_dispatch_no_uaf() {
         let program = program_storage();

@@ -60,9 +60,10 @@ pub type SplicedCell = crate::witnessed::Sealed<CarriedFamily, CarrierWitness>;
 /// the expression, and that step holds the region the cell was rested into — its own cart for a
 /// decide, the run loop's TCO handoff hold across a framed tail hop. So the pointee outlives the read
 /// for a reason outside it, which is exactly what [`NoPins`] names. Stated once here so the
-/// assertion has one home rather than one per call site; a reader that goes on to *adopt* the value
-/// takes [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) instead, which owns the
-/// reach rather than merely naming it.
+/// assertion has one home rather than one per call site. A reader that holds a scope names a pin
+/// instead: [`Scope::read_spliced`](crate::machine::core::Scope::read_spliced) for another verdict,
+/// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) when it goes on to *adopt* the
+/// value, which owns the reach rather than merely naming it.
 pub(crate) fn read_resting<R>(
     cell: &SplicedCell,
     read: impl for<'b> FnOnce(Carried<'b>) -> R,

@@ -32,10 +32,6 @@ no — the test is redundant; **delete it** rather than whitelist. Do not whitel
 group just to silence the stale-anchor check.
 
 <!-- slate-audit-whitelist:start -->
-- `src/machine/model/types/typed_field_list.rs` — the declaration-window sibling-cell group pins a
-  pin-less read (`read_resting`) whose coverage is a *parked* step's region, not the reading step's —
-  an ordering claim no other slate test makes. The real `unsafe` is the `Sealed::open_with` retype in
-  `witnessed.rs`; typed_field_list.rs carries none of its own.
 - `src/machine/core/arena.rs` — arena.rs split into `arena/{frame,step_allocator}` child
   modules. Its groups (CallFrame lifetime erasure, the record substrate door, MATCH-Tagged /
   TRY-WITH TCO, per-call frame
@@ -112,8 +108,8 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-25 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
-below are the exact test identifiers; pass them after `--` in the Miri command. A further 44 tests
+21 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+below are the exact test identifiers; pass them after `--` in the Miri command. A further 52 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
 whose failure modes live entirely in the library's verbs (the region alloc engine, the envelope
@@ -258,21 +254,6 @@ so the region holds re-homed bytes and index metadata as well as cells, then dro
 nothing outside borrowing in. Miri's process-exit leak count is the assertion.
 
 - `region_death_frees_every_drop_free_substrate_shape`
-
-**Declaration-window sibling cell read from a sub-Dispatch**
-([src/machine/model/types/typed_field_list.rs](../src/machine/model/types/typed_field_list.rs)) —
-`rewrite_threaded_self_refs` seals each co-declared reference in a sigil field's body as a resident
-cell in the *declarator's* scope region and bumps the rewritten body beside it. The field walker
-reading those cells back runs inside the `:(LIST OF …)` sub-Dispatch — a step the declarator merely
-parked on — and reads them through `read_resting`, which names **no pin at all**. So the claim under
-test is entirely about ordering: the parked declarator's region outlives every step its own field
-list spawned. Nothing the reader holds says so, and no other slate test pins a pin-less read whose
-coverage belongs to a *parked* step rather than the reading one. The test declares a self-recursive
-record whose sibling reference sits inside a record type nested in a sub-dispatched sigil — the one
-position that reaches the walker's resolved-cell arm — and runs on to a constructed value, so the
-sealed handle is used rather than merely elaborated.
-
-- `declaration_window_sibling_cell_read_from_a_sub_dispatch_no_uaf`
 
 **Retaining adoption's delivered re-home across retention** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) —
 `Scope::adopt_carried` at the retaining seam consuming a *delivered* envelope. The verb's Pin arm is
@@ -576,9 +557,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-04: 931s — 21 tests, 0 leaks, 0 UB
 - 2026-08-04: 962s — 22 tests, 0 leaks, 0 UB
 - 2026-08-04: 1047s — 24 tests, 0 leaks, 0 UB
 - 2026-08-04: 1014s — 25 tests, 0 leaks, 0 UB
 - 2026-08-04: 971s — 25 tests, 0 leaks, 0 UB
-- 2026-08-03: 1028s — 27 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

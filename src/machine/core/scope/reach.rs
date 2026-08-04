@@ -236,6 +236,28 @@ impl<'a> Scope<'a> {
         cell.open_at(&self.home()).lift_out()
     }
 
+    /// Read a resting splice cell for a **verdict only** — the reader extracts region-free data (an
+    /// interned [`KType`] handle, a rendered summary) and adopts nothing, so it needs the cell's
+    /// pointee live for the read and no reach owned afterwards. The pin is this scope's own region
+    /// owner, held across the whole call, which is what a rank-2 `for<'b>` read confines the value
+    /// to.
+    ///
+    /// `self` must be a scope whose **own region hosts the cell** — the same relation
+    /// [`Self::seal_resident`] establishes when it seals one. That is stricter than
+    /// [`Self::lift_spliced`]'s (which also accepts a descendant of the resting region) because
+    /// nothing here upgrades the cell's members: the pin names one region, so it must be the one
+    /// the description lives in.
+    ///
+    /// The pin-less twin ([`read_resting`](crate::machine::core::read_resting)) stays for probes
+    /// reached from signatures that carry no scope at all.
+    pub(crate) fn read_spliced<R>(
+        &self,
+        cell: &SplicedCell,
+        read: impl for<'b> FnOnce(Carried<'b>) -> R,
+    ) -> R {
+        cell.open_with(&self.home(), read)
+    }
+
     /// **Lift** a binding's dormant carrier into a delivery envelope pinned by this scope's own
     /// region owner (`Sealed → Delivered`): the library [`Delivered::lift`] upgrades the sealed
     /// description's members `Weak → Rc` under that pin, so the value's whole reach travels owned

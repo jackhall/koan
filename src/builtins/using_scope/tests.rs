@@ -106,13 +106,65 @@ fn using_window_shadows_call_site_binding() {
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
 
-/// SAFETY-anchor: closure escape for a functor-result module. `MAKE` returns
-/// a module living in its per-call `CallFrame`; opening it with `USING` and
-/// returning a closure that reads a surfaced member must keep both the
-/// closure's transparent scope and the module's region alive past the block.
-/// Run-root churn after the escape exercises drop discipline; under Miri this
-/// pins the `Scope::open_module_window` born-door store
-/// against use-after-free.
+/// `MODULE` and its `USING` in the **same block**, both inside one per-call frame: the module's
+/// child scope and the window live in the same region, so the window door's fold is empty — the
+/// library's self rule strips the destination region from what the envelope retains — and the
+/// window's backing is held by the very frame it is built in. The co-located shape of the door's
+/// one-operand fold, which the top-level tests above reach only through the run-root region.
+#[test]
+fn using_opens_a_module_declared_in_the_same_block() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "FN (RUNIT) -> Number = ((MODULE some_module = (LET v = 3)) (USING some_module SCOPE (v)))",
+    );
+    let result = test_run.run_one(parse_one(&program, "RUNIT"));
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 3.0),
+        "a module declared in the calling block opens against that block's own region",
+    );
+}
+
+/// The same block, but the module's region is **not** the window's: `MAKEIT`'s per-call frame hosts
+/// the child scope, the bind adopts the module into `RUNIT`'s frame, and the `USING` window is built
+/// there too — so the envelope's members, not the self rule, are what keep the surfaced bindings
+/// alive, and both frames die at the call's end. The cross-region twin of the test above.
+#[test]
+fn using_opens_a_bound_functor_module_in_the_declaring_block() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("FN (MAKEIT) -> Module = (MODULE res = (LET v = 9))");
+    test_run.run("FN (RUNIT) -> Number = ((LET inst = (MAKEIT)) (USING inst SCOPE (v)))");
+    let result = test_run.run_one(parse_one(&program, "RUNIT"));
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 9.0),
+        "the window must read the functor module's member while both per-call frames are live",
+    );
+}
+
+/// A window-surfaced member read *after* the `USING` statement, from a later statement of the same
+/// block: the block's `LET k = v` forwards the surfaced value out of the window, so the read
+/// outlives the window's own statement while staying inside the declaring frame.
+#[test]
+fn using_window_member_forwards_to_a_later_statement_of_the_same_block() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("FN (MAKEIT) -> Module = (MODULE res = (LET v = 11))");
+    test_run.run("FN (RUNIT) -> Number = ((USING (MAKEIT) SCOPE (LET k = v)) (k))");
+    let result = test_run.run_one(parse_one(&program, "RUNIT"));
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 11.0),
+        "a bind forwarded out of the window survives to the block's next statement",
+    );
+}
+
+/// Closure escape for a functor-result module. `MAKE` returns a module living in its per-call
+/// `CallFrame`; opening it with `USING` and returning a closure that reads a surfaced member must
+/// keep both the closure's transparent scope and the module's region alive past the block. Run-root
+/// churn after the escape exercises drop discipline.
 #[test]
 fn using_functor_result_closure_escapes_soundly() {
     let program = program_storage();

@@ -6,7 +6,6 @@ use super::ktype::KType;
 use super::recursive_group_window::RecursiveGroupWindow;
 use super::registry::TypeRegistry;
 use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
-use crate::machine::core::read_resting;
 use crate::machine::model::ast::{
     ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,
 };
@@ -192,10 +191,13 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     Err(format!("{msg} in {context_list} for `{}`", name))
                 }
             },
-            // A co-declared sibling `rewrite_threaded_self_refs` already sealed in. The cell rests
-            // in the declarator's scope, which is parked on this very walk, so the handle is read
-            // through the pin-less door: a `KType` is an interned registry handle borrowing nothing.
-            FieldSlot::Resolved(cell) => read_resting(&cell, |carried| match carried {
+            // A co-declared sibling `rewrite_threaded_self_refs` already sealed in. The cell is a
+            // resident of the elaborating scope's own region — the walk that seals one and the walk
+            // that reads it back run against the same cart — so the read stands under that scope's
+            // own region owner. What it yields is region-free either way: a `KType` is an interned
+            // registry handle borrowing nothing.
+            FieldSlot::Resolved(cell) => elaborator.scope.read_spliced(&cell, |carried| match carried
+            {
                 Carried::Type(kt) => checked(kt),
                 other => Err(format!(
                     "{context_list} type for `{}` resolved to non-type value `{}`",
