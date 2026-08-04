@@ -61,7 +61,7 @@ fn invoke_work<'step>(
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
-) -> NodeWork<KoanWorkload> {
+) -> NodeWork<'step, KoanWorkload> {
     let carrier = working_expr.summarize();
     let continuation = ignore_results(Box::new(move |view, _idx| {
         invoke(view, picked, working_expr)

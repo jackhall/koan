@@ -14,9 +14,11 @@ use crate::machine::core::{
     CallFrame, FrameStorage, LexicalFrame, RegionBrand, Scope, StepAllocator,
 };
 use crate::machine::execute::StepCarried;
+#[cfg(test)]
+use crate::machine::model::Carried;
 use crate::machine::model::Held;
+use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KType, Record, TypeNode};
 use crate::machine::model::{WorkingExpression, WorkingPart};
@@ -360,13 +362,14 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
     }
 }
 
-/// A resolved dep terminal as a continuation receives it. `value` is the terminal re-anchored
-/// **live at the step brand** (pinned by the step open) for a value-reading finish that reads it
-/// directly (`resolve_or_await`, `fn_def`/`return_type`, dispatch constructors / literal);
-/// `delivered` is the producer's own carrier bundled with its retained producer-frame owner as one
-/// [`DeliveredCarried`] envelope — a [`duplicate`](crate::witnessed::Delivered::duplicate), so the
-/// producer keeps its terminal for other consumers. A **construction finish** folds the dep
-/// *witnessed* via the envelope's cell
+/// A resolved dep terminal as a continuation receives it: the producer's own carrier bundled with
+/// its retained producer-frame owner as one [`DeliveredCarried`] envelope — a
+/// [`duplicate`](crate::witnessed::Delivered::duplicate), so the producer keeps its terminal for
+/// other consumers. The envelope is **lifetime-free** and self-witnessed: a value-reading finish
+/// (`resolve_or_await`, `fn_def`/`return_type`, dispatch constructors / literal) reads it under its
+/// own pins through [`Delivered::open_at`](crate::witnessed::Delivered::open_at), at the borrow of
+/// the guard it binds — so a dep's value rides no shared step brand and no in-band dep carrier
+/// exists. A **construction finish** folds the dep *witnessed* via the envelope's cell
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into)), its reach named on the
 /// result by construction; a finish that parks the carrier on the working expression across steps
 /// (the working-copy splice) **rests** the envelope into the finishing step's own region
@@ -375,18 +378,17 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
 /// union bundle keeps retained through the `Replace` to the step that adopts it.
 /// Defined here in core (not the execute layer that resolves it) so the builtin-`Action` currency —
 /// [`AwaitContinue`] — can name it.
-pub struct DepTerminal<'a> {
-    pub value: Carried<'a>,
+pub struct DepTerminal {
     pub delivered: DeliveredCarried,
 }
 
 /// A `AwaitDeps` finish: re-entered at wake with the resolved dep terminals as a [`DepResults`] view
-/// (addressed by `park` / `owned` position) of un-relocated [`DepTerminal`]s — each carrying its
-/// step-brand `value` and its own reach `carrier` — yielding another `Action` the harness recurses
-/// into. Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
-pub type AwaitContinue<'a> = Box<
-    dyn for<'r> FnOnce(&FinishCtx<'a, 'r>, DepResults<'_, &DepTerminal<'a>>) -> Action<'a> + 'a,
->;
+/// (addressed by `park` / `owned` position) of un-relocated [`DepTerminal`]s — each a delivery
+/// envelope carrying its value, its reach, and the pins to read them under — yielding another
+/// `Action` the harness recurses into. Reads only a `FinishCtx`, never the scheduler — exec's
+/// continuation pattern.
+pub type AwaitContinue<'a> =
+    Box<dyn for<'r> FnOnce(&FinishCtx<'a, 'r>, DepResults<'_, &DepTerminal>) -> Action<'a> + 'a>;
 
 /// A `Catch` finish: re-entered with the watched slot's delivery envelope (value, reach, and
 /// retained producer pin as one unit, adopted or opened at the finish's own step brand) or the

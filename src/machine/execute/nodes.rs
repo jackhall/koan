@@ -10,8 +10,10 @@ use super::StepCarried;
 
 /// The generic per-node work lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
 /// execute tree has a single `nodes` surface combining it with the Koan-side [`NodeStep`] /
-/// [`NodePayload`] / [`NodeScope`] / [`SlotFrame`].
-pub(super) use crate::scheduler::nodes::NodeWork;
+/// [`NodePayload`] / [`NodeScope`] / [`SlotFrame`]. `NodeWork` is the **live** construction-site
+/// currency every install path takes; `StoredWork` is what the scheduler hands back at run, with the
+/// continuation sealed on the owned tier against the slot's anchor.
+pub(super) use crate::scheduler::nodes::{NodeWork, StoredWork};
 
 /// Koan's `Workload::Frame` — the scheduler-held per-slot memory anchor. Wraps the shared
 /// per-call cart with the slot's own [`NodeScope`] handle and lexical [`chain`]. The scheduler
@@ -74,7 +76,7 @@ pub(super) enum NodeStep<'step> {
     /// re-check, the producer already enforced its own contract. (`Alias` is the not-yet-ready twin.)
     ForwardReady(NodeId),
     Replace {
-        work: NodeWork<KoanWorkload>,
+        work: NodeWork<'step, KoanWorkload>,
         frame: Option<Rc<CallFrame>>,
         chain: ChainOp,
         /// A block overlay the tail slot runs in, erased to a cart-witnessed carrier (lifetime-free,

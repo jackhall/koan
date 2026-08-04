@@ -8,8 +8,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::{
-    FamilyArena, PinBundle, PinsRegion, Reattachable, Region, RegionOwner, SealedExtern, StorageOf,
-    StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
+    DropFree, FamilyArena, PinBundle, PinsRegion, Reattachable, Region, RegionOwner, SealedExtern,
+    StorageOf, StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
 };
 
 /// A shared-reference carrier family: `&'r u32`.
@@ -18,6 +18,8 @@ pub struct RefFamily;
 unsafe impl Reattachable for RefFamily {
     type At<'r> = &'r u32;
 }
+// A shared reference needs no drop.
+impl DropFree for RefFamily {}
 
 /// A text carrier family: `&'r str` — the shape a bump-stored string takes. It has **no**
 /// [`Stored`] impl on purpose: the bump door
@@ -28,6 +30,8 @@ pub struct StrFamily;
 unsafe impl Reattachable for StrFamily {
     type At<'r> = &'r str;
 }
+// A shared reference needs no drop.
+impl DropFree for StrFamily {}
 
 /// An invariant carrier family: `Cell<&'r u32>`.
 pub struct InvFamily;
@@ -35,6 +39,8 @@ pub struct InvFamily;
 unsafe impl Reattachable for InvFamily {
     type At<'r> = Cell<&'r u32>;
 }
+// A `Cell` of a shared reference needs no drop.
+impl DropFree for InvFamily {}
 
 /// A local witness owning its region — the `Vec`'s heap buffer stays at a fixed
 /// address across the witness's move, so a value built from `region()` stays pinned.
@@ -77,7 +83,7 @@ pub fn set_witnessed(cart: std::rc::Rc<Cart>) -> Witnessed<RefFamily, PinBundle<
 /// crate-private (no production caller builds one from an arbitrary borrow), but a doctest
 /// compiles as an external crate, so the `SealedExtern::open` guard and its compiling twin need
 /// this in-crate wrapper to construct one at all.
-pub fn seal_extern<T: Reattachable>(live: T::At<'_>) -> SealedExtern<T> {
+pub fn seal_extern<T: Reattachable + DropFree>(live: T::At<'_>) -> SealedExtern<T> {
     SealedExtern::erase(live)
 }
 
@@ -101,6 +107,8 @@ pub struct HomedRefFamily;
 unsafe impl Reattachable for HomedRefFamily {
     type At<'r> = HomedRef<'r>;
 }
+// A pair of thin pointers needs no drop.
+impl DropFree for HomedRefFamily {}
 
 /// Profile for the region/handle doctests: the reference family, the witness-set family the fold
 /// verbs mint into, and the homed-reference family the checked-store doctests audit against.

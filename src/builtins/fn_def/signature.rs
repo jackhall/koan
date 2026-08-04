@@ -1,6 +1,6 @@
 //! Signature parsing for the `FN` builtin.
 
-use crate::machine::model::Carried;
+use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::{Argument, SignatureElement};
@@ -63,13 +63,15 @@ pub(crate) enum ParamListOutcome<'a> {
 /// `resolved` is `None` on the first walk (every `Expression` / `SigiledTypeExpr` /
 /// `RecordType` slot schedules a sub-Dispatch, recorded by part-index in
 /// `ParamListOutcome::Pending::sub_dispatches`) and `Some` on the dep-finish re-walk: the walk
-/// re-descends the same `signature`, and each such slot looks its resolved carrier up by that
-/// same part-index instead of sub-dispatching again.
+/// re-descends the same `signature`, and each such slot looks its resolved type up by that
+/// same part-index instead of sub-dispatching again. The feed carries interned `KType` handles,
+/// not carriers — the finish extracts them (and rejects a non-type terminal) while it holds the
+/// dep envelopes open, so the walk borrows no producer region.
 pub(crate) fn parse_fn_param_list<'a>(
     signature: &KExpression<'a>,
     elaborator: &mut Elaborator<'_, 'a>,
     types: &TypeRegistry,
-    resolved: Option<&[(usize, Carried<'a>)]>,
+    resolved: Option<&[(usize, KType)]>,
 ) -> ParamListOutcome<'a> {
     let parts = signature.parts;
     let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
@@ -95,7 +97,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                 let ty = parts.get(slot_idx).map(|p| p.value);
                 let feed = resolved.and_then(|r| {
                     r.iter()
-                        .find_map(|(idx, carried)| (*idx == slot_idx).then_some(*carried))
+                        .find_map(|(idx, ktype)| (*idx == slot_idx).then_some(*ktype))
                 });
                 match (ty, feed) {
                     (Some(ExpressionPart::Type(t)), _) => {
@@ -123,28 +125,17 @@ pub(crate) fn parse_fn_param_list<'a>(
                             | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::RecordType(_),
                         ),
-                        Some(carried),
+                        Some(ktype),
                     ) => {
-                        // The dep-finish re-walk: this slot's sub-Dispatch already resolved. The
-                        // type is owned data, fed back positionally rather than spliced into the
+                        // The dep-finish re-walk: this slot's sub-Dispatch already resolved, and the
+                        // finish rejected a non-type terminal before feeding it here. The type is an
+                        // interned handle, fed back positionally rather than spliced into the
                         // expression.
-                        match carried {
-                            Carried::Type(ktype) => {
-                                elements.push(SignatureElement::Argument(Argument {
-                                    name: name.clone(),
-                                    ktype,
-                                }));
-                                i += 2;
-                            }
-                            other => {
-                                return ParamListOutcome::Err(format!(
-                                    "FN signature parameter `{name}` type slot resolved to a \
-                                     non-type value `{}` (expected a type expression like \
-                                     `:Number` or `:(LIST OF Str)`)",
-                                    other.summarize(types),
-                                ));
-                            }
-                        }
+                        elements.push(SignatureElement::Argument(Argument {
+                            name: name.clone(),
+                            ktype,
+                        }));
+                        i += 2;
                     }
                     (Some(ExpressionPart::Expression(inner)), None) => {
                         sub_dispatches.push((slot_idx, *inner));

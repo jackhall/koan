@@ -96,7 +96,7 @@ impl<'step> StepAllocator<'step> {
     pub(crate) fn alloc_carried_with(
         &self,
         deps: &[&DeliveredCarried],
-        build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
+        build: impl for<'b> FnOnce(FoldingBrand<'b>, &'b [Carried<'b>]) -> Carried<'b>,
     ) -> StepCarried<'step> {
         // The fold composes the deps' reach into the built carrier and hands back the product as a
         // delivery envelope homed in this context's own frame; `born_delivered` releases that home

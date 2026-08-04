@@ -41,7 +41,7 @@ use elsa::FrozenMap;
 use typed_arena::Arena;
 
 use super::{
-    erase_to_static, BumpMap, FoldedPlacement, PinBundle, PinsRegion, ReachDescription,
+    erase_to_static, BumpMap, DropFree, FoldedPlacement, PinBundle, PinsRegion, ReachDescription,
     Reattachable, RegionOwner, SealedExtern, StepCoverage, Witness,
 };
 
@@ -813,7 +813,7 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// );
     /// assert_eq!(*stored.value, 7);
     /// ```
-    pub fn alloc_resident_born_with<K: Stored<W>, Op: Reattachable, P: Witness>(
+    pub fn alloc_resident_born_with<K: Stored<W>, Op: Reattachable + DropFree, P: Witness>(
         self,
         operand: SealedExtern<Op>,
         pin: &'a P,
@@ -840,3 +840,6 @@ pub struct RegionHandleFamily<W>(PhantomData<W>);
 unsafe impl<W: StorageProfile + 'static> Reattachable for RegionHandleFamily<W> {
     type At<'r> = RegionHandle<'r, W>;
 }
+
+/// A [`RegionHandle`] is a `Copy` thin pointer, so the handle family rests in the Copy tier.
+impl<W> DropFree for RegionHandleFamily<W> {}

@@ -67,8 +67,31 @@ reattachable! {
     RefFamily => &'r u32,
     InvFamily => Cell<&'r u32>,
     ScopeFamily => ScopeAndPool<'r>,
+}
+// Both boxed stand-ins carry drop glue, so they rest on the owned tier (`SealedPinned`) and take
+// the `droppable` arm, which emits no `DropFree`.
+reattachable! {
+    droppable
     BoxFamily => Box<&'r u32>,
     DynContinuationFamily => TestContinuation<'r>,
+    GlueProbeFamily => GlueProbe<'r>,
+}
+
+/// A droppable *and* region-pointing stand-in — the shape the owned tier exists for. Its
+/// destructor dereferences `last`, a borrow into a region, so it is only sound to drop while that
+/// region is still pinned.
+struct GlueProbe<'r> {
+    last: &'r u32,
+    seen: Rc<Cell<u32>>,
+}
+
+/// Family for [`GlueProbe`] — a reference plus an `Rc`, layout identical for every `'r`.
+struct GlueProbeFamily;
+
+impl Drop for GlueProbe<'_> {
+    fn drop(&mut self) {
+        self.seen.set(*self.last);
+    }
 }
 
 /// Cart stand-in for the witness-with-a-region cases (`yoke` / `merge_pinned`): a backing `Vec` (the
@@ -372,57 +395,112 @@ fn sealed_extern_open_externally_witnessed() {
     let _again: &u32 = &backing[2];
 }
 
-/// `SealedExtern::open` over a **non-`Copy`** carrier: a `Box<&u32>` is moved (not copied) through the
-/// seal and consumed by the open, proving the verb admits the boxed continuation shape
-/// [`Sealed::open`]'s `Copy` bound excludes. The boxed borrow is read inside the brand after the
-/// source drops; the held witness pins it. Fails on UB, not values.
+/// `SealedPinned::open` over a **non-`Copy`** carrier: a `Box<&u32>` is moved (not copied) through
+/// the seal and consumed by the open, proving the owned tier admits the boxed continuation shape
+/// the Copy tier's `DropFree` bound excludes. The boxed borrow is read inside the brand after the
+/// source borrow ends; the seal's own bundled pin keeps it live. The trivial extern operand is what
+/// a caller with nothing to zip passes — the tier has one open verb. Fails on UB, not values.
 #[test]
-fn sealed_extern_open_consumes_non_copy() {
+fn sealed_pinned_open_consumes_non_copy() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![10, 20]);
-    let sealed: SealedExtern<BoxFamily> = {
+    let sealed: SealedPinned<BoxFamily, Rc<Vec<u32>>> = {
         let borrow: &u32 = &backing[0];
-        SealedExtern::erase(Box::new(borrow))
+        SealedPinned::erase(Box::new(borrow), Rc::clone(&backing))
     };
-    let seen: u32 = sealed.open(&backing, |boxed: Box<&u32>| **boxed);
-    assert_eq!(seen, 10);
+    let operand: SealedExtern<RefFamily> = SealedExtern::erase(&backing[1]);
+    let seen: u32 = sealed.open(operand, &backing, |boxed: Box<&u32>, other: &u32| {
+        **boxed + *other
+    });
+    assert_eq!(seen, 30);
     let _again: &u32 = &backing[1];
 }
 
-/// `SealedExtern::open` over a **fat-pointer** carrier: a `Box<dyn FnOnce>` continuation capturing a
-/// real borrow is erased to the `'static` store, opened against a separately-held `Rc` witness, and
-/// **invoked inside the brand** — so the retype runs over a two-word data + vtable pointer (the
-/// stored-continuation shape) and tree borrows checks the capture read through the lifetime-fabricated
-/// box. The single-shot call consumes the non-`Copy` carrier by value. Fails on UB, not values.
+/// `SealedPinned::open` over a **fat-pointer** carrier: a `Box<dyn FnOnce>` continuation capturing a
+/// real borrow is erased to the `'static` store with its pin co-located, and **invoked inside the
+/// brand** — so the retype runs over a two-word data + vtable pointer (the stored-continuation
+/// shape) and tree borrows checks the capture read through the lifetime-fabricated box. The
+/// single-shot call consumes the non-`Copy` carrier by value. Fails on UB, not values.
 #[test]
-fn sealed_extern_open_invokes_a_fat_pointer_continuation() {
+fn sealed_pinned_open_invokes_a_fat_pointer_continuation() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![7, 8, 9]);
-    let sealed: SealedExtern<DynContinuationFamily> = {
+    let sealed: SealedPinned<DynContinuationFamily, Rc<Vec<u32>>> = {
         let captured: &u32 = &backing[2];
-        SealedExtern::erase(Box::new(move || *captured) as TestContinuation<'_>)
+        SealedPinned::erase(
+            Box::new(move || *captured) as TestContinuation<'_>,
+            Rc::clone(&backing),
+        )
     };
-    let got: u32 = sealed.open(&backing, |continuation: TestContinuation<'_>| {
-        continuation()
-    });
-    assert_eq!(got, 9);
+    let operand: SealedExtern<RefFamily> = SealedExtern::erase(&backing[1]);
+    let got: u32 = sealed.open(
+        operand,
+        &backing,
+        |continuation: TestContinuation<'_>, other: &u32| continuation() + *other,
+    );
+    assert_eq!(got, 17);
     // Mutate the region through a sibling `Rc` after the open to catch a tree-borrows regression.
     let _again: &u32 = &backing[0];
 }
 
-/// `SealedExtern::zip` + [`seal_option`]: heterogeneous carriers pinned by the same witness open at a
-/// **single** brand — the run-loop step's (continuation, contract, region) shape in miniature. A
-/// non-`Copy` boxed carrier, an *optional* present carrier, and a plain reference are combined and
-/// opened together; each is read at one `'b`, and a sibling mutation after catches a regression.
+/// **The owned tier's drop order** — a `SealedPinned` dropped unopened, holding the last `Rc` on
+/// the region its value's own drop glue reads. `GlueProbe`'s destructor dereferences a region
+/// borrow, so the value's glue must run while the bundled pins still hold that region: field order
+/// (`value` before `pins`) is what supplies it. A by-value drop of the seal is also the retag shape
+/// the dormant union slot exists for. Fails on UB, not values — the assertion only confirms the
+/// glue ran at all.
 #[test]
-fn sealed_extern_zip_opens_heterogeneous_at_one_brand() {
+fn sealed_pinned_drop_runs_value_glue_before_pins() {
+    let cart = Rc::new(TestCart {
+        backing: vec![41, 42],
+        outer: None,
+    });
+    let seen = Rc::new(Cell::new(0u32));
+    let alive = Rc::downgrade(&cart);
+
+    let sealed: SealedPinned<GlueProbeFamily, Rc<TestCart>> = SealedPinned::erase(
+        GlueProbe {
+            last: &cart.backing[1],
+            seen: Rc::clone(&seen),
+        },
+        Rc::clone(&cart),
+    );
+    // The seal's bundled pin is now the last `Rc` on the region its probe borrows into.
+    drop(cart);
+    assert!(
+        alive.upgrade().is_some(),
+        "the seal's pin is the sole holder"
+    );
+
+    std::mem::drop(sealed);
+    assert_eq!(
+        seen.get(),
+        42,
+        "the value's drop glue read region memory before the bundled pins released it"
+    );
+    assert!(
+        alive.upgrade().is_none(),
+        "and the pins freed the region once the glue had run"
+    );
+}
+
+/// The **step-open shape** under the two-tier split: an owned-tier continuation opens beside its
+/// zipped `SealedExtern` operands at a **single** brand — the run-loop step's (continuation,
+/// contract, region) miniature. The droppable boxed carrier rests on `SealedPinned` with its pin
+/// co-located; the `DropFree` side — an *optional* present carrier and a plain reference — zips into
+/// one `SealedExtern`. All three are read at one `'b` through the tier's single open verb, and a
+/// sibling mutation after catches a regression.
+#[test]
+fn sealed_pinned_opens_beside_a_zipped_extern_operand() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![1, 2, 3]);
-    let boxed: SealedExtern<BoxFamily> = SealedExtern::erase(Box::new(&backing[0]));
+    let boxed: SealedPinned<BoxFamily, Rc<Vec<u32>>> =
+        SealedPinned::erase(Box::new(&backing[0]), Rc::clone(&backing));
     // The optional operand is sealed via `seal`-of-`Erased` then folded into an `Option` carrier; the
     // `Some` arm proves a present optional opens to `Some(..)` at the brand.
     let contract: SealedExtern<OptionOf<RefFamily>> = seal_option(Some(Erased::erase(&backing[1])));
     let region: SealedExtern<RefFamily> = SealedExtern::seal(Erased::erase(&backing[2]));
-    let sum: u32 = boxed.zip(contract).zip(region).open(
+    let sum: u32 = boxed.open(
+        contract.zip(region),
         &backing,
-        |((boxed, contract), region): ((Box<&u32>, Option<&u32>), &u32)| {
+        |boxed: Box<&u32>, (contract, region): (Option<&u32>, &u32)| {
             **boxed + *contract.expect("present optional opens to Some") + *region
         },
     );

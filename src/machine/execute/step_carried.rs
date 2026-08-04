@@ -19,7 +19,7 @@ use std::rc::Rc;
 use crate::machine::core::{run_root_storage, FrameCoverage, FrameStorage, StepAllocator};
 use crate::machine::model::CarriedFamily;
 use crate::machine::CarrierWitness;
-use crate::witnessed::{Delivered, Reattachable, Witnessed};
+use crate::witnessed::{Delivered, DropFree, Reattachable, Witnessed};
 
 /// A value carrier confined to the scheduler step that built it. The brand lifetime `'step` is the
 /// step tail's rank-2 open lifetime (`run_loop.rs`), unnameable outside that closure, so a
@@ -40,7 +40,7 @@ use crate::witnessed::{Delivered, Reattachable, Witnessed};
 /// API). The confinement rests on [`born`](Self::born) (`pub(crate)`) and
 /// [`seal_at_step`](Self::seal_at_step) (`pub(super)`) being unreachable outside the crate, plus the
 /// brand lifetime — never on the type being unnameable.
-pub struct StepCarried<'step, T: Reattachable = CarriedFamily> {
+pub struct StepCarried<'step, T: Reattachable + DropFree = CarriedFamily> {
     inner: Witnessed<T, CarrierWitness>,
     /// The carrier's owned foreign coverage — pinning every region the value reaches beyond the
     /// producer's own. Empty for a region-pure / empty-reach producer (the majority of Done sites);
@@ -51,7 +51,7 @@ pub struct StepCarried<'step, T: Reattachable = CarriedFamily> {
     step: PhantomData<&'step ()>,
 }
 
-impl<'step, T: Reattachable> StepCarried<'step, T> {
+impl<'step, T: Reattachable + DropFree> StepCarried<'step, T> {
     /// Wrap a **no-foreign-reach** carrier into the step brand — the majority of Done sites (literals,
     /// type carriers, region-pure `alloc_scalar_witnessed` products, and a value that borrows only its
     /// own home, e.g. a fresh closure capturing its defining scope), whose owned pin bundle is

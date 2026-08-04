@@ -237,8 +237,9 @@ Await::on(deps).finish_witnessed(|ctx, terminals| ...)
 The sole constructor of a parked continuation, over either finish channel.
 Error short-circuit is built in through one shared walk: a finish never sees
 an errored dep. Dep delivery is the terminal channel only — no bare
-pre-relocated value handoff: a finish reads each dep's step-brand value and
-reach carrier un-relocated. A dep whose value must outlive the resolving step
+pre-relocated value handoff: a finish reads each dep's value and reach
+un-relocated, out of the dep's own delivery envelope and under that envelope's
+own pins. A dep whose value must outlive the resolving step
 travels as its **delivery envelope**
 ([`Delivered`](../workgraph/src/witnessed/delivered.rs)) — the sealed carrier
 paired with the producer's retained frame owner

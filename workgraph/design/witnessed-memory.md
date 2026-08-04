@@ -268,9 +268,78 @@ dying but whose consumer outlives it.
 `transfer_into` shares its `ComposeWitness::compose` engine with `merge_pinned`,
 so a delivered operand and a co-located one fold through one composition rule.
 
-## Two witness forms
+## The dormant slot and the two resting tiers
 
-A sealed carrier comes in two shapes, distinguished by where the witness lives.
+A dormant carrier's value is not live: nothing may be assumed about it until a
+witnessed re-anchor. A struct field typed as a reference tells the abstract
+machine the opposite. A function-entry retag descends into by-value aggregate
+arguments and *protects* every reference it finds, so a carrier passed by value
+while its own pins hold the last owner of the region its contents point into
+would deallocate memory carrying a protected tag when those pins drop inside the
+call. Retag does not descend into unions, so the slot is one:
+[`Dormant<V>`](../src/witnessed/dormant.rs), a one-field union over
+`ManuallyDrop<V>`. `Erased<T>` stores its `T::At<'static>` there, and so does the
+carrier's own erased reach reference — which is itself an `Erased`, so both
+protected tags go at once. The union carries no `repr`: nothing depends on its
+layout, because every retype operates on a value moved *out* of the slot, never
+on the slot itself. The declaring module is the single audited home for union
+reads, and every one of them leans on one invariant — the slot is always
+initialized: the only constructor initializes the field, no method deinitializes
+it without consuming the wrapper, and the union has no other field.
+
+A union field has no drop glue, and `Copy + Drop` cannot share a type, so the
+resting surface splits into two tiers, partitioned by the marker trait
+[`DropFree`](../src/witnessed.rs).
+
+The **Copy tier** — `Erased`, `Sealed`, `SealedExtern`, and the `Witnessed` /
+`Delivered` carriers built over `Erased` — bounds its family `T: DropFree` and
+stores a bare `Dormant`, so resting a droppable family there is an ordinary
+trait error at type-check time. `DropFree` is *safe* to implement: a false impl
+leaks the value's owned contents (the glue-free slot runs no destructor) and
+cannot cause UB. The intended route is the default
+[`reattachable!`](../src/witnessed.rs) arm, which certifies the marker and backs
+that certification with a `needs_drop` const assert — declaring a droppable
+family through it is a compile error, not a silent leak. A family that genuinely
+needs drop takes the macro's `droppable` arm, which emits the `Reattachable`
+impl alone.
+
+The **owned tier** is [`SealedPinned<T, W>`](../src/witnessed/dormant.rs): the
+same union wrapped in the one type that owns the value's destructor, paired with
+the pins covering the value, co-located at its erase door. Co-location at the
+door is what makes the tier strict — a droppable erased value never exists
+without its glue and its pins, unwind included — and field order (value before
+pins) is what makes dropping one unopened sound: struct fields drop in
+declaration order, so the value's own destructor may freely dereference region
+memory the bundled pins still hold. Droppable *and* region-pointing families are
+thereby supported rather than excluded. The bundled pin closes no reference
+cycle: sections are `Copy` and `Drop`-free
+([sectioned-reach.md](sectioned-reach.md)), so a region owns no counted edge back
+out of itself.
+
+`SealedPinned` ships a **single** consuming open verb, which re-anchors the
+pinned value *and* a zipped `SealedExtern` operand at one brand under a
+caller-supplied operand pin — the step-open shape, where an embedder's
+continuation opens beside its scope operand and an invariant family rejects
+separately-branded opens. There is no operand-free open: a caller with nothing
+to zip passes a trivial operand, which keeps the surface to one verb.
+
+The scheduler's node slot is the tier's production instance. `Workload::Continuation`
+is `Reattachable` alone — no `DropFree` — because the slot rests it as
+`SealedPinned<W::Continuation, Rc<W::Frame>>`
+([nodes.rs](../src/scheduler/nodes.rs)): a one-shot boxed closure owning its
+captures. An embedder hands an install path a `NodeWork<'a, W>` holding the
+continuation **live** at its own lifetime, and the scheduler's single private
+erase door seals it against that install path's *effective* anchor `Rc`, storing
+the result as the scheduler-internal `StoredWork<W>`. Because the anchor
+transitively holds the storage chain the continuation reads, the bundled pin is
+the same liveness the step open was already bounded by — now carried rather than
+supplied externally, so a parked slot torn down unopened runs the continuation's
+glue while the memory that glue touches is still pinned. No embedder call site
+ever pairs a continuation with a pin by hand.
+
+## Three witness forms
+
+A sealed carrier comes in three shapes, distinguished by where the witness lives.
 
 - The **self-witnessed** form bundles `W` (the `Sealed<T, W>` above): for a value
   *minted* into a region whose pin nothing else holds. `yoke`, which moves `W`
@@ -279,14 +348,22 @@ A sealed carrier comes in two shapes, distinguished by where the witness lives.
   already pins the backing and supplies it at the access, read through a
   **consuming, externally-witnessed `open`** — the witness handed in at the call
   and the carrier moved into the same rank-2 `for<'b>` brand, so a non-`Copy`
-  carrier (a continuation) passes and nothing branded escapes. It is built with
-  the witness-less `erase` and read against an external pin.
+  carrier passes and nothing branded escapes. It is built with the witness-less
+  `erase` and read against an external pin. It rests in the Copy tier, so its
+  family is `DropFree`.
+- The **internally-witnessed** form (`SealedPinned`, the owned tier above) is
+  where a *droppable* family rests: the pins are bundled, like the
+  self-witnessed form, but they are bundled at the erase door rather than
+  inherited from a construction verb, because the value's drop glue is what they
+  have to outlast.
 
 Bundling a witness the carrier does not need would be a redundant second owner —
 and, when the witness is reference-counted, an extra count the holder's own
 uniqueness checks must subtract. A value held *inside* the region it would witness
 therefore takes the externally-witnessed form; a value held *outside* that region
-takes the self-witnessed one.
+takes the self-witnessed one. A droppable value bundles regardless of where it is
+held: its destructor runs at a moment no external holder is present to supply a
+pin for, so the pin has to be its own.
 
 The split is what keeps self-witnessing cycle-free. A self-witnessed carrier's
 strong region owner rides the *carrier*, which a cell holds outside the region it

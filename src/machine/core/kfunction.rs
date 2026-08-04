@@ -8,9 +8,7 @@ use crate::source::Spanned;
 use crate::machine::core::ref_carriers::ScopeRefFamily;
 use crate::machine::core::{KError, KErrorKind, RegionBrand, Scope};
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode, TypeRegistry};
-use crate::machine::model::{
-    ExpressionSignature, ExpressionSignatureFamily, Record, SignatureElement,
-};
+use crate::machine::model::{ExpressionSignature, Record, ReturnTypeFamily, SignatureElement};
 use crate::machine::model::{Held, NamedPairs};
 use crate::witnessed::{And, SealedExtern};
 
@@ -132,24 +130,31 @@ impl<'a> KFunction<'a> {
         binder: bool,
         types: &TypeRegistry,
     ) -> &'a KFunction<'a> {
+        // Only `return_type` names the region; `elements` is owned data, so it rides into the born
+        // closure as a move-capture rather than through a carrier.
+        let ExpressionSignature {
+            return_type,
+            elements,
+        } = signature;
         let operands = captured.zip(
-            SealedExtern::<ExpressionSignatureFamily>::erase(signature).zip(SealedExtern::<
-                BodyFamily,
-            >::erase(
-                body
-            )),
+            SealedExtern::<ReturnTypeFamily>::erase(return_type)
+                .zip(SealedExtern::<BodyFamily>::erase(body)),
         );
         brand
             .handle()
             .alloc_resident_born_with::<
                 KFunction<'static>,
-                And<ScopeRefFamily, And<ExpressionSignatureFamily, BodyFamily>>,
+                And<ScopeRefFamily, And<ReturnTypeFamily, BodyFamily>>,
                 _,
             >(
                 operands,
                 pin,
-                |_placement, (captured_b, (signature_b, body_b))| {
-                    KFunction::new(signature_b, body_b, captured_b, binder, types)
+                move |_placement, (captured_b, (return_type_b, body_b))| {
+                    let signature = ExpressionSignature {
+                        return_type: return_type_b,
+                        elements,
+                    };
+                    KFunction::new(signature, body_b, captured_b, binder, types)
                 },
             )
     }

@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-48 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+52 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -86,9 +86,9 @@ own — the `unsafe` they exercise is this primitive).
 - `merge_pinned_binds_ancestor_ref_into_descendant_scope`
 - `merge_pinned_keeps_unrelated_carts_as_a_two_member_set`
 - `sealed_extern_open_externally_witnessed`
-- `sealed_extern_open_consumes_non_copy`
-- `sealed_extern_open_invokes_a_fat_pointer_continuation`
-- `sealed_extern_zip_opens_heterogeneous_at_one_brand`
+- `sealed_pinned_open_consumes_non_copy`
+- `sealed_pinned_open_invokes_a_fat_pointer_continuation`
+- `sealed_pinned_opens_beside_a_zipped_extern_operand`
 - `seal_option_none_opens_to_none`
 
 **Envelope mint — one pin bundle, home among its members** ([src/witnessed/delivered.rs](../src/witnessed/delivered.rs),
@@ -214,12 +214,45 @@ arena in its own union reads a hosted `&ReachDescription` two links away — eve
 both the arena and what it names dropped before the lift runs (embedder twin: koan's `USING` window
 overlay fold).
 
+A further shape rides this group: an envelope dropped **by value** while its own bundle holds the
+last `Rc` on the region its contents point into. The function-entry retag descends into the
+by-value aggregate, so the in-call deallocation must not free memory carrying a protected tag —
+which is what the dormant union slot supplies (retag does not descend into unions). Two tests drop
+the envelope directly rather than splitting it with `into_parts`, and a third builds the shape
+minimally.
+
 - `lift_reowns_description_into_transit_bundle`
 - `adopt_settles_resident_value_into_dest`
 - `transform_verb_round_trip_preserves_liveness`
 - `lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle`
+- `delivered_by_value_drop_frees_region_in_call`
 - `a_regions_union_pins_what_its_own_members_reach`
 - `lift_reads_a_description_hosted_under_a_transitive_root`
+
+**The owned resting tier — `SealedPinned`** ([src/witnessed/dormant.rs](../src/witnessed/dormant.rs))
+— a droppable family rests with its drop glue and its pins co-located, and the glue runs **before**
+the pins (struct field order). A family whose destructor dereferences region memory is therefore
+sound to drop unopened: the region is still pinned while its glue runs. The test drops the seal by
+value as the last holder of its pointee's region, so it exercises the retag shape and the drop
+order at once.
+
+- `sealed_pinned_drop_runs_value_glue_before_pins`
+
+**The scheduler's continuation slot — the owned tier in production shape**
+([src/scheduler/nodes.rs](../src/scheduler/nodes.rs)) — a node's continuation rests as
+`SealedPinned<W::Continuation, Rc<W::Frame>>`, sealed against the slot's anchor at the one install
+door (`seal_work`, reached from `alloc_node` / `replace`) and opened once per step. The minimal
+tier tests above pin the seal in isolation; these two drive it through the real `Scheduler`, where
+the pin is an anchor `Rc` the scheduler *also* holds a second copy of on the dep row. A parked slot
+torn down unopened must run its continuation's glue while the seal's own pin still holds the
+region the continuation borrows into — `Scheduler`'s field order drops the dep row's anchor first,
+so the seal's bundled pin is what remains. The round trip walks install → ready-queue pop →
+`take_for_run` → `into_run_parts` → open → invoke, with every direct handle on the region dropped
+before the open. The `unsafe` routed is the shared `retype` (through `SealedPinned::erase` / `open`)
+with none of the scheduler's own.
+
+- `parked_continuation_drops_under_its_own_pin`
+- `parked_continuation_opens_and_runs_after_its_handles_drop`
 
 **`StepContext::alloc_with` — finish-surface fold** ([src/witnessed/step_ctx.rs](../src/witnessed/step_ctx.rs))
 — guarantee 5 made structural: every listed dep's envelope folds into the result's carrier by
@@ -238,7 +271,7 @@ assertions) run under plain `cargo test` and stay off the slate. Embedder twin: 
 — an embedder's return-contract opens at its run-loop step brand alongside the continuation (a
 `seal_option` optional operand of the step's `SealedExtern::open`), so it is live at the Done arm
 with no reattach of its own; the `unsafe` lives in `SealedExtern::open` (`Erased::reattach`).
-`erased_roundtrip` / `sealed_extern_zip_opens_heterogeneous_at_one_brand` above pin it end-to-end
+`erased_roundtrip` / `sealed_pinned_opens_beside_a_zipped_extern_operand` above pin it end-to-end
 (Koan's `try_inside_tco_position_preserves_frame_chain`, in that embedder's own slate, exercises
 the production shape). No separate minimal test here.
 
@@ -246,7 +279,8 @@ the production shape). No separate minimal test here.
 — the `unsafe { self.value.reattach() }` inside `SealedExtern::open` runs the transmute defined in the
 `retype` group above with none of its own. An embedder's run-loop routes its step's continuation,
 contract, and consumer-`dest` region together through this one call at a single generative `for<'b>`
-brand its start cart pins. The `sealed_extern_*` minimal tests above pin it directly; an embedder's
+brand its start cart pins. The `sealed_extern_*` / `sealed_pinned_*` minimal tests above pin it
+directly; an embedder's
 own scheduler-driving tests exercise it end-to-end. No separate minimal test here.
 
 **The born doors — build-at-destination store, cross-region operand** ([src/witnessed/region.rs](../src/witnessed/region.rs))

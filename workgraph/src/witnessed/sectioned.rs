@@ -37,8 +37,8 @@ use std::marker::PhantomData;
 use std::ops::Range;
 
 use super::{
-    Carrier, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable, Region, RegionHandle,
-    RegionOwner, StepCoverage, StorageProfile,
+    Carrier, DropFree, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable, Region,
+    RegionHandle, RegionOwner, StepCoverage, StorageProfile,
 };
 
 /// One physical partition: the index its span starts at, paired with the interned description that
@@ -74,6 +74,10 @@ pub struct CellRef<K>(PhantomData<K>);
 unsafe impl<K: Reattachable + 'static> Reattachable for CellRef<K> {
     type At<'r> = &'r K::At<'r>;
 }
+
+/// A shared reference to a cell needs no drop whatever the cell family is, so a cell reference
+/// rests in the Copy tier unconditionally.
+impl<K> DropFree for CellRef<K> {}
 
 /// A container whose cells carry reach at sub-value granularity: cells of the embedder's family `K`
 /// in semantic order, region-resident in `'a`, physically partitioned into contiguous runs that each

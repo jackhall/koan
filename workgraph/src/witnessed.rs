@@ -56,6 +56,10 @@ pub use sectioned::{CellInput, CellReach, CellRef, Sectioned};
 mod delivered;
 pub use delivered::Delivered;
 
+mod dormant;
+use dormant::Dormant;
+pub use dormant::SealedPinned;
+
 mod step_ctx;
 pub use step_ctx::StepContext;
 
@@ -76,8 +80,38 @@ mod tests;
 /// `type At<'r> = Foo<'r>;` where `Foo` is generic only in that lifetime satisfies this. Do not
 /// implement it for a family whose layout depends on the lifetime.
 pub unsafe trait Reattachable {
-    type At<'r>;
+    /// The family's form at `'r`. Bounded `: 'r` because a single-lifetime family's value borrows
+    /// only through `'r` — every well-formed `type At<'r> = Foo<'r>;` satisfies it — which is what
+    /// lets a family's form be held behind a `&'r` (a region-bumped slice of views, say).
+    type At<'r>: 'r;
 }
+
+/// Marker: this family's `At<'static>` has no drop glue, so it may rest in the Copy tier's
+/// glue-free dormant slot ([`Erased`] and everything built over it). A family whose erased form
+/// *does* need drop rests on the owned tier, [`SealedPinned`], instead.
+///
+/// Safe to implement: a false impl leaks the value's owned contents (the glue-free slot never runs
+/// drop) and cannot cause UB. The intended route is the default [`reattachable!`] arm, whose const
+/// backstop rejects a false declaration at compile time.
+///
+/// Resting a droppable family in the Copy tier is an ordinary trait error at type-check time:
+///
+/// ```compile_fail
+/// use workgraph::witnessed::{reattachable, SealedExtern};
+/// struct BoxedFamily;
+/// reattachable!(droppable BoxedFamily => Box<&'r u32>);
+/// // The `droppable` arm emits no `DropFree`, so the Copy tier rejects the family.
+/// let _: Option<SealedExtern<BoxedFamily>> = None;
+/// ```
+///
+/// ```
+/// use workgraph::witnessed::{reattachable, SealedExtern};
+/// struct RefFamily;
+/// reattachable!(RefFamily => &'r u32);
+/// // The default arm certifies `DropFree` — the compiling twin of the guard above.
+/// let _: Option<SealedExtern<RefFamily>> = None;
+/// ```
+pub trait DropFree {}
 
 /// Generate `unsafe impl Reattachable` for layout-invariant carrier families. Each
 /// `Family => At<'r>` pair expands to the trait impl; write the GAT body with a literal `'r`
@@ -88,9 +122,41 @@ pub unsafe trait Reattachable {
 /// size, alignment, and validity for every `'r`, per [`Reattachable`]'s contract) — is discharged
 /// **once** here, so the carrier sites carry no open-coded `unsafe impl`. The macro cannot *check*
 /// layout-invariance, so only invoke it with families that genuinely satisfy the contract.
+///
+/// The default arm additionally certifies [`DropFree`](crate::witnessed::DropFree) — the family
+/// rests in the Copy tier's glue-free slot — and backs that certification with a `needs_drop` const
+/// assert, so declaring a droppable family through it is a compile error:
+///
+/// ```compile_fail
+/// use workgraph::witnessed::reattachable;
+/// struct BoxedFamily;
+/// // `Box<&'r u32>` needs drop — the default arm's `needs_drop` backstop rejects it.
+/// reattachable!(BoxedFamily => Box<&'r u32>);
+/// ```
+///
+/// A family whose erased form needs drop takes the `droppable` arm instead, which emits the
+/// `Reattachable` impl alone; it rests on [`SealedPinned`](crate::witnessed::SealedPinned):
+///
+/// ```
+/// use workgraph::witnessed::reattachable;
+/// struct BoxedFamily;
+/// reattachable!(droppable BoxedFamily => Box<&'r u32>);
+/// ```
 #[macro_export]
 macro_rules! reattachable {
     ($($family:ty => $at:ty),+ $(,)?) => {$(
+        // SAFETY: see the macro docs — `$family`'s `At<'r>` is layout-invariant in `'r`.
+        unsafe impl $crate::witnessed::Reattachable for $family {
+            type At<'r> = $at;
+        }
+        impl $crate::witnessed::DropFree for $family {}
+        // Backstop for the `DropFree` certification above: a droppable family declared through
+        // this arm is a compile error, not a silent leak.
+        const _: () = assert!(!::core::mem::needs_drop::<
+            <$family as $crate::witnessed::Reattachable>::At<'static>,
+        >());
+    )+};
+    (droppable $($family:ty => $at:ty),+ $(,)?) => {$(
         // SAFETY: see the macro docs — `$family`'s `At<'r>` is layout-invariant in `'r`.
         unsafe impl $crate::witnessed::Reattachable for $family {
             type At<'r> = $at;
@@ -318,18 +384,38 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
 /// re-anchored either through a [`Witnessed`] that bundles its witness, or transiently through the
 /// externally-witnessed [`SealedExtern::open`] (routing [`Self::reattach`]) against a borrowed witness.
 /// The single audited home for the carrier families; see the module docs.
-pub struct Erased<T: Reattachable> {
-    inner: T::At<'static>,
+///
+/// This is the **Copy tier**'s owner, so its family is [`DropFree`]: the dormant slot is a union
+/// and a union field has no drop glue. A droppable family rests on [`SealedPinned`] instead.
+pub struct Erased<T: Reattachable + DropFree> {
+    inner: Dormant<T::At<'static>>,
 }
 
-impl<T: Reattachable> Erased<T> {
+impl<T: Reattachable + DropFree> Erased<T> {
     /// Erase a live carrier to its storable `'static` form. Safe: forgetting a lifetime for
     /// storage cannot fabricate one — the value is stored, never used at `'static`, until a
     /// witnessed re-anchor.
     pub fn erase(live: T::At<'_>) -> Self {
         Erased {
-            inner: erase_to_static::<T>(live),
+            inner: Dormant::new(erase_to_static::<T>(live)),
         }
+    }
+
+    /// Wrap an **already-erased** value in the dormant slot — the module-internal constructor for
+    /// a site that rebuilds an `Erased` out of erased parts (the [`SealedExtern::zip`] product,
+    /// [`seal_option`]'s `Option` fold). Safe: the value is already erased, so wrapping it
+    /// fabricates nothing.
+    pub(in crate::witnessed) fn from_static(value: T::At<'static>) -> Self {
+        Erased {
+            inner: Dormant::new(value),
+        }
+    }
+
+    /// Move the erased value out of the dormant slot, still erased — the inverse of
+    /// [`from_static`](Self::from_static), for the same rebuild sites. Safe: no re-anchor happens,
+    /// so no lifetime is fabricated.
+    pub(in crate::witnessed) fn into_static(self) -> T::At<'static> {
+        self.inner.into_inner()
     }
 
     /// Re-anchor the carrier to a caller-chosen `'r` without a bundled witness — the raw fabrication
@@ -345,7 +431,7 @@ impl<T: Reattachable> Erased<T> {
     /// the fabricated `'r` cannot outlive the pointee. `'r` is driven by the return-type annotation.
     pub unsafe fn reattach<'r>(self) -> T::At<'r> {
         // SAFETY: see the method contract; lifetime-only retype of a single-lifetime family.
-        unsafe { retype::<T::At<'static>, T::At<'r>>(self.inner) }
+        unsafe { retype::<T::At<'static>, T::At<'r>>(self.inner.into_inner()) }
     }
 
     /// The `'static`-erased inner value, for a crate-internal re-anchor via [`with_branded_ref`] —
@@ -357,11 +443,11 @@ impl<T: Reattachable> Erased<T> {
     /// under a held pin immediately (as the reach readers do) and never let the `'static` form escape
     /// the re-anchor expression.
     pub(in crate::witnessed) fn as_static(&self) -> &T::At<'static> {
-        &self.inner
+        self.inner.get()
     }
 }
 
-impl<T: Reattachable> Clone for Erased<T>
+impl<T: Reattachable + DropFree> Clone for Erased<T>
 where
     T::At<'static>: Clone,
 {
@@ -372,7 +458,7 @@ where
     }
 }
 
-impl<T: Reattachable> Copy for Erased<T> where T::At<'static>: Copy {}
+impl<T: Reattachable + DropFree> Copy for Erased<T> where T::At<'static>: Copy {}
 
 /// A liveness witness bundled into a [`Witnessed`] (or borrowed by [`SealedExtern::open`]): holding it
 /// keeps the carrier's lifetime-erased pointee at a fixed address, so a re-anchor that borrows the
@@ -493,7 +579,7 @@ pub unsafe trait ComposeWitness<B: Reattachable>: Sized {
 /// re-seal the carrier goes through [`Self::map`]. Both fabricate the content lifetime behind a
 /// rank-2 (`for<'b>`) brand, the generativity trick that keeps the fabricated lifetime from escaping
 /// the witness pin.
-pub struct Witnessed<T: Reattachable, W> {
+pub struct Witnessed<T: Reattachable + DropFree, W> {
     value: Erased<T>,
     witness: W,
 }
@@ -503,7 +589,7 @@ pub struct Witnessed<T: Reattachable, W> {
 /// witness (the collapsed [`Carrier`]) stores and travels here freely. The pin obligation sits on
 /// the *reattaching* verbs (the `W: Witness` block below, and the externally-pinned siblings), not
 /// on construction.
-impl<T: Reattachable, W> Witnessed<T, W> {
+impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// Bundle an **already-erased** carrier with its witness. The `'static`-erased input carries no
     /// lifetime, so it leaves no input lifetime for inference to pick: it is the constructor for a
     /// `Result::map(Erased::erase)` pipeline, where threading the live value's lifetime through a
@@ -612,7 +698,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         // The borrowed `pin` keeps the pointee live for the whole call — the same role the bundled
         // witness plays in `with`, supplied externally here; `with_branded_ref` confines the view.
         let _ = pin;
-        with_branded_ref::<T, R>(&self.value.inner, f)
+        with_branded_ref::<T, R>(self.value.as_static(), f)
     }
 
     /// [`Witnessed::map`] under an **externally supplied pin** — consume, re-anchor at a `for<'b>`
@@ -620,7 +706,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// pins nothing (the reference-only [`Carrier`]). `pin` is held for the whole call and keeps
     /// the carrier's pointee live; the [`FoldToken<'b>`] argument is load-bearing exactly as in
     /// `map` (`E0582`).
-    pub fn map_pinned<P: Reattachable, Pin: Witness>(
+    pub fn map_pinned<P: Reattachable + DropFree, Pin: Witness>(
         self,
         pin: &Pin,
         f: impl for<'b> FnOnce(T::At<'b>, FoldToken<'b>) -> P::At<'b>,
@@ -648,7 +734,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// was yoked over at birth, never a caller argument or a closure capture — the placement's
     /// destination cannot be substituted by caller code; the covariance a bare handle would admit
     /// is closed.
-    pub fn map_pinned_placing<P: Reattachable, PP: StorageProfile, Pin: Witness>(
+    pub fn map_pinned_placing<P: Reattachable + DropFree, PP: StorageProfile, Pin: Witness>(
         self,
         pin: &Pin,
         f: impl for<'b> FnOnce(T::At<'b>, FoldedPlacement<'b, PP>) -> P::At<'b>,
@@ -686,7 +772,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// whole call — the delivery envelope's own pins, the retention hold — while `other` (the
     /// destination operand being built into) is covered by its own live destination, which the
     /// caller necessarily holds to be composing into it.
-    pub fn merge_pinned<B: Reattachable, P: Reattachable, Pin: Witness>(
+    pub fn merge_pinned<B: Reattachable + DropFree, P: Reattachable + DropFree, Pin: Witness>(
         self,
         other: Witnessed<B, W>,
         pin: &Pin,
@@ -716,8 +802,8 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P2::At<'b>,
     ) -> Witnessed<P2, W>
     where
-        B: Reattachable,
-        P2: Reattachable,
+        B: Reattachable + DropFree,
+        P2: Reattachable + DropFree,
         Pin: Witness,
         Pr: StorageProfile + 'static,
         W: ComposeWitness<B>,
@@ -745,8 +831,8 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// fold step or the terminal seal), or `()` for a self-contained composed witness that owns
     /// what it names.
     pub(in crate::witnessed) fn merge_composed<
-        B: Reattachable,
-        P: Reattachable,
+        B: Reattachable + DropFree,
+        P: Reattachable + DropFree,
         Pin: Witness,
         X,
     >(
@@ -800,7 +886,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
 ///
 /// Manual rather than derived: a derive would bound `T: Copy` (the family marker, which is never
 /// `Copy`) instead of the erased value.
-impl<T: Reattachable, W: Copy> Clone for Witnessed<T, W>
+impl<T: Reattachable + DropFree, W: Copy> Clone for Witnessed<T, W>
 where
     T::At<'static>: Copy,
 {
@@ -808,7 +894,7 @@ where
         *self
     }
 }
-impl<T: Reattachable, W: Copy> Copy for Witnessed<T, W> where T::At<'static>: Copy {}
+impl<T: Reattachable + DropFree, W: Copy> Copy for Witnessed<T, W> where T::At<'static>: Copy {}
 
 /// Adapt a folded-placement relocate closure into the [`FoldToken`]-shaped closure
 /// [`Witnessed::merge_composed`] expects: mint a [`FoldedPlacement`] over the destination operand's
@@ -834,7 +920,7 @@ where
     }
 }
 
-impl<T: Reattachable, W: Witness> Witnessed<T, W> {
+impl<T: Reattachable + DropFree, W: Witness> Witnessed<T, W> {
     /// Bundle a carrier **sourced from the witness's own region** — the co-location-enforcing
     /// constructor, the build-time twin of [`Self::map`]. Where [`Self::new`] pairs an *arbitrary*
     /// value with an *arbitrary* witness (co-location asserted in prose at the call site), `yoke`
@@ -935,7 +1021,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         // hands the reattached view to the `for<'b>` closure, so the fabricated content lifetime
         // cannot escape into `R`. Routes the single audited brand-retype home, so `with` carries no
         // `unsafe` of its own.
-        with_branded_ref::<T, R>(&self.value.inner, f)
+        with_branded_ref::<T, R>(self.value.as_static(), f)
     }
 
     /// Transform the carrier (the `yoke::map_project` shape): consume `self`, re-anchor the carrier
@@ -976,7 +1062,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// });
     /// println!("{}", *stolen.unwrap());
     /// ```
-    pub fn map<P: Reattachable>(
+    pub fn map<P: Reattachable + DropFree>(
         self,
         f: impl for<'b> FnOnce(T::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> Witnessed<P, W> {
@@ -1019,7 +1105,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     }
 }
 
-impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Rc<F>> {
+impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Witnessed<T, Rc<F>> {
     /// Forget the bundled frame pin, re-bundling under a reference-only [`Carrier`] hosted in that
     /// frame's own region — the lift a freshly-[`yoke`](Self::yoke)d region-pure construction takes
     /// into the carrier world. The yoke brand already proved the value is derived from the frame's
@@ -1050,7 +1136,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Rc<F>> {
 /// "this carrier is dormant — nothing is borrowed from it" is a type, not a convention. It wraps a
 /// [`Witnessed`] rather than re-storing the erased carrier, so [`retype`] stays the single audited
 /// reattach home and `Sealed` adds no `unsafe` of its own.
-pub struct Sealed<T: Reattachable, W> {
+pub struct Sealed<T: Reattachable + DropFree, W> {
     inner: Witnessed<T, W>,
 }
 
@@ -1058,7 +1144,7 @@ pub struct Sealed<T: Reattachable, W> {
 /// witness (the collapsed [`Carrier`]) seals, travels, and duplicates as plain data, and opens
 /// only under an externally supplied pin. The bundled-witness read ([`Self::open`]) sits in the
 /// `W: Witness` block below — a bare `open` under a witness that pins nothing does not compile.
-impl<T: Reattachable, W> Sealed<T, W> {
+impl<T: Reattachable + DropFree, W> Sealed<T, W> {
     /// Seal a live [`Witnessed`] into its dormant storage form — the only way in. `Sealed` exposes no
     /// other constructor and no transform once sealed, so a value can re-enter circulation only
     /// through an accessor below.
@@ -1187,7 +1273,7 @@ impl<T: Reattachable, W> Sealed<T, W> {
 ///
 /// Manual rather than derived: a derive would bound `T: Copy` (the family marker, which is never
 /// `Copy`) instead of the erased value.
-impl<T: Reattachable, W: Copy> Clone for Sealed<T, W>
+impl<T: Reattachable + DropFree, W: Copy> Clone for Sealed<T, W>
 where
     T::At<'static>: Copy,
 {
@@ -1195,13 +1281,13 @@ where
         *self
     }
 }
-impl<T: Reattachable, W: Copy> Copy for Sealed<T, W> where T::At<'static>: Copy {}
+impl<T: Reattachable + DropFree, W: Copy> Copy for Sealed<T, W> where T::At<'static>: Copy {}
 
 /// The bundled-witness re-anchors — gated on `W: Witness`, so they exist only for a witness that
 /// genuinely pins. A reference-only carrier witness has no bundled coverage: its seal opens
 /// through [`Sealed::open_with`] under an external pin, or relocates through the envelope-bearing
 /// verbs; a bare `open` under it is a compile error by this bound.
-impl<T: Reattachable, W: Witness> Sealed<T, W> {
+impl<T: Reattachable + DropFree, W: Witness> Sealed<T, W> {
     /// Open the sealed carrier at a **rank-2** (`for<'b>`) brand — the destination verb. The value is
     /// re-anchored and handed *by value* to a closure whose result `R` cannot mention the
     /// universally-quantified `'b`, so nothing branded by the fabricated content lifetime escapes the
@@ -1285,7 +1371,7 @@ where
 }
 impl<'b, T: Reattachable, W: Copy> Copy for Opened<'b, T, W> where T::At<'b>: Copy {}
 
-impl<'b, T: Reattachable, W> Opened<'b, T, W> {
+impl<'b, T: Reattachable + DropFree, W> Opened<'b, T, W> {
     /// The re-anchored value, borrowed at the step lifetime `'b`. `Copy` families hand it back by
     /// value; the borrow checker keeps it inside `'b` (the opening pin's borrow), so it cannot
     /// outlive the frame that pins its backing.
@@ -1345,11 +1431,11 @@ impl<'b, T: Reattachable, W> Opened<'b, T, W> {
 /// `Box<dyn FnOnce>` continuation — passes where [`Sealed::open`]'s `At<'static>: Copy` excludes it;
 /// and several can be combined under one brand with [`zip`](Self::zip) so heterogeneous carriers
 /// witnessed by the same pin open together (the run-loop step's continuation / contract / region).
-pub struct SealedExtern<T: Reattachable> {
+pub struct SealedExtern<T: Reattachable + DropFree> {
     value: Erased<T>,
 }
 
-impl<T: Reattachable> SealedExtern<T> {
+impl<T: Reattachable + DropFree> SealedExtern<T> {
     /// Seal an **already-erased** carrier into its externally-witnessed dormant form — the entry for a
     /// carrier the node already stores erased (the continuation / contract). No witness is bundled.
     pub fn seal(value: Erased<T>) -> Self {
@@ -1423,16 +1509,24 @@ impl<T: Reattachable> SealedExtern<T> {
     /// step lifetime. The combined carrier is an [`And`] product of the two families; opening it hands
     /// the closure a `(T::At<'b>, U::At<'b>)` pair at one `'b`. A pure-data combine of two already-erased
     /// carriers, so it adds no `unsafe`: both halves are re-anchored together by the eventual `open`.
-    pub fn zip<U: Reattachable>(self, other: SealedExtern<U>) -> SealedExtern<And<T, U>> {
+    pub fn zip<U: Reattachable + DropFree>(
+        self,
+        other: SealedExtern<U>,
+    ) -> SealedExtern<And<T, U>> {
         SealedExtern {
-            value: Erased {
-                inner: (self.value.inner, other.value.inner),
-            },
+            value: Erased::from_static((self.value.into_static(), other.value.into_static())),
         }
+    }
+
+    /// The wrapped [`Erased`] — a field move, for the module-internal opens that re-anchor an
+    /// externally-witnessed operand themselves ([`SealedPinned::open`]). Adds no `unsafe`: the
+    /// value stays erased through the move.
+    pub(in crate::witnessed) fn into_erased(self) -> Erased<T> {
+        self.value
     }
 }
 
-impl<T: Reattachable> Clone for SealedExtern<T>
+impl<T: Reattachable + DropFree> Clone for SealedExtern<T>
 where
     T::At<'static>: Clone,
 {
@@ -1446,18 +1540,18 @@ where
 /// A `SealedExtern` whose carrier value is `Copy` — a thin pointer family (a `&Scope`) — is itself
 /// `Copy`, so a holder can `open` a copied-out carrier each access without disturbing the stored
 /// field. The non-`Copy` carriers (a `Box<dyn FnOnce>` continuation) simply do not meet the bound.
-impl<T: Reattachable> Copy for SealedExtern<T> where T::At<'static>: Copy {}
+impl<T: Reattachable + DropFree> Copy for SealedExtern<T> where T::At<'static>: Copy {}
 
 /// Seal an **optional** already-erased carrier into the externally-witnessed dormant form, folding the
 /// `Option` *inside* the seal as an [`OptionOf`] carrier — so an optional operand (the run-loop's
 /// frame-gated return contract) can [`zip`](SealedExtern::zip) into a combined open and arrive as
 /// `Option<T::At<'b>>` at the brand. A pure-data rewrap of `Option<Erased<T>>` into
 /// `Erased<OptionOf<T>>` (both are `'static`-erased), so it carries no `unsafe`.
-pub fn seal_option<T: Reattachable>(value: Option<Erased<T>>) -> SealedExtern<OptionOf<T>> {
+pub fn seal_option<T: Reattachable + DropFree>(
+    value: Option<Erased<T>>,
+) -> SealedExtern<OptionOf<T>> {
     SealedExtern {
-        value: Erased {
-            inner: value.map(|erased| erased.inner),
-        },
+        value: Erased::from_static(value.map(Erased::into_static)),
     }
 }
 
@@ -1472,6 +1566,10 @@ unsafe impl<A: Reattachable, B: Reattachable> Reattachable for And<A, B> {
     type At<'r> = (A::At<'r>, B::At<'r>);
 }
 
+/// A pair of drop-free erased forms is drop-free — the componentwise `DropFree` certification, so
+/// a zipped operand rests in the Copy tier exactly when both halves do.
+impl<A: DropFree, B: DropFree> DropFree for And<A, B> {}
+
 /// `Option` of a carrier family, re-anchored as one — the family [`seal_option`] seals so an
 /// **optional** operand opens to `Option<T::At<'b>>` at the brand. Layout-invariant in `'r` because
 /// an `Option` of a layout-invariant family is itself layout-invariant.
@@ -1482,3 +1580,7 @@ pub struct OptionOf<T>(PhantomData<T>);
 unsafe impl<T: Reattachable> Reattachable for OptionOf<T> {
     type At<'r> = Option<T::At<'r>>;
 }
+
+/// An `Option` of a drop-free erased form is drop-free — the `DropFree` certification through the
+/// inner family, so an optional operand rests in the Copy tier exactly when its payload does.
+impl<T: DropFree> DropFree for OptionOf<T> {}

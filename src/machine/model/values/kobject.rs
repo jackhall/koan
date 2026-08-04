@@ -195,7 +195,8 @@ impl<'a> KObject<'a> {
         items: Vec<KObject<'a>>,
         types: &TypeRegistry,
     ) -> KObject<'a> {
-        KObject::list_of_held(door, items.into_iter().map(Held::Object).collect(), types)
+        let held: Vec<Held<'a>> = items.into_iter().map(Held::Object).collect();
+        KObject::list_of_held(door, &held, types)
     }
 
     /// Fresh `List` carrier over [`Held`] cells — the type-aware path (a list element may be
@@ -205,7 +206,7 @@ impl<'a> KObject<'a> {
     /// sole construction site.
     pub fn list_of_held(
         door: SubstrateDoor<'a, '_>,
-        items: Vec<Held<'a>>,
+        items: &[Held<'a>],
         types: &TypeRegistry,
     ) -> KObject<'a> {
         let element = types.join_iter(items.iter().map(|i| i.ktype(types)));
@@ -231,7 +232,7 @@ impl<'a> KObject<'a> {
         items: Vec<Held<'a>>,
         list_type: KType,
     ) -> KObject<'a> {
-        KObject::List(alloc_list(door, items), list_type)
+        KObject::List(alloc_list(door, &items), list_type)
     }
 
     /// Fresh `Dict` carrier: memoizes key + value types as the join of the keys / values. `door` is
@@ -700,13 +701,14 @@ fn scope_coverage(owner: Weak<FrameStorage>) -> FrameCoverage {
 /// container door.
 fn section_cells<'a>(
     door: SubstrateDoor<'a, '_>,
-    cells: Vec<Held<'a>>,
+    cells: &[Held<'a>],
 ) -> (HeldCells<'a>, &'a FrameReach, u64) {
     let copy_cost = cells.iter().fold(0u64, |total, cell| {
         total.saturating_add(held_copy_cost(cell))
     });
     let inputs: Vec<CellInput<'a, 'a, Held<'static>, FrameStorage>> = cells
-        .into_iter()
+        .iter()
+        .copied()
         .map(rehome_cell_text(door))
         .map(|cell| {
             // The verdict is read before the cell moves into storage: it names the cell's *stored*
@@ -740,7 +742,7 @@ fn rehome_cell_text<'a: 'h, 'h>(door: SubstrateDoor<'a, 'h>) -> impl Fn(Held<'a>
 
 /// Section a list's elements and store the [`ListSubstrate`] — positional, so the layout is implicit
 /// and a cell's index is its position.
-fn alloc_list<'a>(door: SubstrateDoor<'a, '_>, items: Vec<Held<'a>>) -> &'a ListSubstrate<'a> {
+fn alloc_list<'a>(door: SubstrateDoor<'a, '_>, items: &[Held<'a>]) -> &'a ListSubstrate<'a> {
     let (cells, reach, copy_cost) = section_cells(door, items);
     door.alloc_substrate_folded(ContainerSubstrate::new(ListLayout, cells, reach, copy_cost))
 }
@@ -764,7 +766,7 @@ fn alloc_record<'a>(
         cells.push(cell);
     }
     let names = door.alloc_slice(&names);
-    let (cells, reach, copy_cost) = section_cells(door, cells);
+    let (cells, reach, copy_cost) = section_cells(door, &cells);
     door.alloc_substrate_folded(ContainerSubstrate::new(
         RecordLayout::new(names),
         cells,
@@ -792,7 +794,7 @@ fn alloc_dict<'a>(
         cells.push(cell);
     }
     let index = door.alloc_map(entries);
-    let (cells, reach, copy_cost) = section_cells(door, cells);
+    let (cells, reach, copy_cost) = section_cells(door, &cells);
     door.alloc_substrate_folded(ContainerSubstrate::new(index, cells, reach, copy_cost))
 }
 
@@ -801,7 +803,7 @@ fn alloc_dict<'a>(
 /// [`KObject::wrapped_hold`], the non-`Wrapped` arm of [`KObject::wrapped_peel`], and the seam copy
 /// verb's tagged/wrapped arms) funnels through.
 fn alloc_payload<'a>(door: SubstrateDoor<'a, '_>, value: KObject<'a>) -> &'a PayloadSubstrate<'a> {
-    let (cells, reach, copy_cost) = section_cells(door, vec![Held::Object(value)]);
+    let (cells, reach, copy_cost) = section_cells(door, &[Held::Object(value)]);
     door.alloc_substrate_folded(ContainerSubstrate::new(
         PayloadLayout,
         cells,

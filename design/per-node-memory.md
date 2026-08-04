@@ -242,13 +242,15 @@ accumulator or deposit list exists to keep consistent alongside it.
 The substrate's rank-2 brand forces the entire per-step consumption to nest inside
 the closure. Koan pays that in full: the run-loop step nests its whole tail in one
 brand — the continuation run, the outcome apply, and the finalize — through the
-consuming externally-witnessed `open`, so nothing branded crosses the step
-boundary.
+owned tier's single consuming `open` on the slot's `SealedPinned` continuation, so
+nothing branded crosses the step boundary.
 
-- **The dep slice** opens *in-band* at that same brand: each producer terminal is
-  read out borrow-bounded, erased into one slice carrier, and zipped alongside the
-  continuation, so every dep value is born at `'b` through the one step `open` with
-  no separate slice reattach.
+- **The dep slice** rides no carrier and enters the step `open` through no channel
+  of its own: each `DepTerminal` is exactly the producer's lifetime-free delivery
+  envelope — value, reach, and the retained producer-frame pins as one unit — so
+  the slice is plain step-local data. A reader opens an envelope under its *own*
+  pins (`Delivered::open_at`) at the borrow of the guard it binds, which is why no
+  dep value has to reach the shared step brand at all.
 - **The active scope** opens at that same brand: its carrier — the frame's own
   `SealedExtern<ScopeRefFamily>` for a `Yoked` slot, the node's own for a
   `YokedChild` — is zipped into the step `open` alongside the continuation, so the

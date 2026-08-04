@@ -41,7 +41,7 @@ struct PairVals;
 reattachable! {
     ValFamily => u32,
     RefValFamily => &'r u32,
-    PairAcc => (RegionHandle<'r, ShapeProfile>, Vec<&'r u32>),
+    PairAcc => (RegionHandle<'r, ShapeProfile>, &'r [&'r u32]),
     PairVals => (&'r u32, &'r u32),
 }
 
@@ -138,7 +138,7 @@ fn transfer_unions_element_reach_across_folds() {
 
     let acc0 = Delivered::seal(
         StepContext::new(Rc::clone(&dest))
-            .alloc_handle::<ShapeProfile, PairAcc>(|handle| (handle, Vec::new())),
+            .alloc_handle::<ShapeProfile, PairAcc>(|handle| (handle, &[][..])),
         Rc::clone(&dest),
         StepCoverage::empty(),
     );
@@ -146,18 +146,24 @@ fn transfer_unions_element_reach_across_folds() {
     let acc1 = element_a.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
         acc0,
         |_product, _region| true,
-        |value, (handle, mut values), _brand| {
-            values.push(value);
-            (handle, values)
+        |value, (handle, values), _brand| {
+            // The accumulated views ride a region-bumped slice, so the accumulator rests in the
+            // Copy tier between folds; each fold re-bumps the grown run.
+            let mut grown = values.to_vec();
+            grown.push(value);
+            (handle, handle.bump_slice(&grown))
         },
     );
     let element_b = reach_element(&dest, &content_b, 2);
     let acc2 = element_b.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
         acc1,
         |_product, _region| true,
-        |value, (handle, mut values), _brand| {
-            values.push(value);
-            (handle, values)
+        |value, (handle, values), _brand| {
+            // The accumulated views ride a region-bumped slice, so the accumulator rests in the
+            // Copy tier between folds; each fold re-bumps the grown run.
+            let mut grown = values.to_vec();
+            grown.push(value);
+            (handle, handle.bump_slice(&grown))
         },
     );
     let pair: Witnessed<PairVals, Carrier<ShapeFrame>> = acc2
@@ -187,7 +193,7 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
 
     let acc0 = Delivered::seal(
         StepContext::new(Rc::clone(&dest))
-            .alloc_handle::<ShapeProfile, PairAcc>(|handle| (handle, Vec::new())),
+            .alloc_handle::<ShapeProfile, PairAcc>(|handle| (handle, &[][..])),
         Rc::clone(&dest),
         StepCoverage::empty(),
     );
@@ -199,18 +205,24 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
     let acc1 = element_a.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
         acc0,
         |_product, _region| true,
-        |value, (handle, mut values), _brand| {
-            values.push(value);
-            (handle, values)
+        |value, (handle, values), _brand| {
+            // The accumulated views ride a region-bumped slice, so the accumulator rests in the
+            // Copy tier between folds; each fold re-bumps the grown run.
+            let mut grown = values.to_vec();
+            grown.push(value);
+            (handle, handle.bump_slice(&grown))
         },
     );
     let element_b = reach_element(&reader_b, &content_b, 4);
     let acc2 = element_b.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
         acc1,
         |_product, _region| true,
-        |value, (handle, mut values), _brand| {
-            values.push(value);
-            (handle, values)
+        |value, (handle, values), _brand| {
+            // The accumulated views ride a region-bumped slice, so the accumulator rests in the
+            // Copy tier between folds; each fold re-bumps the grown run.
+            let mut grown = values.to_vec();
+            grown.push(value);
+            (handle, handle.bump_slice(&grown))
         },
     );
     let pair: Witnessed<PairVals, Carrier<ShapeFrame>> = acc2
@@ -448,6 +460,11 @@ fn lift_reowns_description_into_transit_bundle() {
     // backing) alive on its own.
     drop(host);
     assert_eq!(delivered.open(|r| *r), 5);
+    // Drop the envelope **by value** while its own bundle holds the last `Rc` on `host`: the
+    // function-entry retag descends into the by-value argument, and the in-call drop deallocates
+    // that region. The dormant slot is a union, which retag does not descend into, so nothing the
+    // deallocation frees carries a protected tag.
+    std::mem::drop(delivered);
     drop(content);
 }
 
@@ -490,14 +507,48 @@ fn lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle() {
     );
     assert_eq!(delivered.open(|r| *r), 37);
 
-    // Split the envelope before releasing it: a resting cell is plain `Copy` data, so the pins are
-    // the whole of its ownership and dropping them alone is what frees the region — along with the
-    // hosted description the cell references.
-    let (_cell, pins) = delivered.into_parts();
-    drop(pins);
+    // Release the envelope **by value**: it holds the last `Rc` on the hosting region, so the
+    // in-call drop frees that region — the shape the union slot makes sound, and the reason this
+    // needs no `into_parts` split to observe it. The pins are the whole of the envelope's
+    // ownership, so the region frees whole.
+    std::mem::drop(delivered);
     assert!(
         alive.upgrade().is_none(),
         "and the region frees whole once the envelope's pins go — no refcount outlives it"
+    );
+}
+
+/// **A `Delivered` dropped by value while it holds the last pin on its own pointee's region** —
+/// the by-value carrier drop. Every external handle on `host` is released first, so the envelope's
+/// own bundle is the sole `Rc`; passing it by value to `drop` fires a function-entry retag over the
+/// aggregate, and the in-call deallocation frees the very region the carrier's erased payload and
+/// erased reach reference point into. Both of those rest in dormant union slots, which retag does
+/// not descend into, so neither carries a protected tag when the region dies. Fails on UB, not
+/// values.
+#[test]
+fn delivered_by_value_drop_frees_region_in_call() {
+    let host = frame();
+    let alive = Rc::downgrade(&host);
+    let handle = RegionHandle::from_owner(&*host);
+    let value: &u32 = handle.bump_value(11u32);
+    let reach = handle.mint_retained(&[]);
+    let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
+        Erased::erase(value),
+        Carrier::new(reach),
+    ));
+    let delivered = Delivered::lift(sealed, Rc::clone(&host));
+
+    // Release the frame handle: the envelope's bundle is now the last `Rc` on the region.
+    drop(host);
+    assert!(
+        alive.upgrade().is_some(),
+        "the envelope's own bundle is the sole pin before the by-value drop"
+    );
+
+    std::mem::drop(delivered);
+    assert!(
+        alive.upgrade().is_none(),
+        "the by-value drop deallocated the region from inside the call"
     );
 }
 

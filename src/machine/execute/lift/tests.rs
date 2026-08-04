@@ -102,7 +102,7 @@ fn list_relocation_rebuilds_substrate_into_dest() {
             .with_holder(&owned_cells);
     let list: &KObject = source_door.alloc_object_folded(KObject::list_of_held(
         source_door,
-        vec![
+        &[
             Held::Object(KObject::Number(1.0)),
             Held::Object(KObject::Number(2.0)),
         ],
@@ -438,11 +438,12 @@ fn type_recursive_member_relocates_and_navigates() {
 }
 
 /// Build-time accumulator for the aggregate-fold mirrors below: the destination region plus the
-/// partial cell vector — a local twin of `dispatch::literal::AggBuildFamily` (private to that
+/// cells folded in so far — a local twin of `dispatch::literal::AggBuildFamily` (private to that
 /// module), reattached here so the tests can drive `fold_cells`'s own mechanism
-/// (`cell_still_borrows` + `transfer_into_placing` + `copy_held_from_carried`) directly.
+/// (`cell_still_borrows` + `transfer_into_placing` + `copy_held_from_carried`) directly, including
+/// its region-bumped cell slice.
 struct RecordAggFamily;
-reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
+reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held<'r>]));
 
 /// The birth mint at a fold door: a record literal assembled by `merge_into_placing` into the
 /// destination brand — `schedule_record_literal`'s terminal step verbatim — references a
@@ -460,12 +461,12 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
     let types = TypeRegistry::new();
     let dest_storage = dest_frame.storage_rc();
 
-    // `fold_cells`'s seed: a bare handle on the destination region plus an empty cell vector, homed
-    // in the destination frame. A handle and an empty `Vec` reach nothing, so the seed's own
+    // `fold_cells`'s seed: a bare handle on the destination region plus an empty cell slice, homed
+    // in the destination frame. A handle and an empty slice reach nothing, so the seed's own
     // coverage is empty — every member the product ends up with comes from the birth mint.
     let acc = Delivered::seal(
         KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-            (region.handle(), Vec::new())
+            (region.handle(), &[][..])
         }),
         Rc::clone(&dest_storage),
         FrameCoverage::empty(),
@@ -535,7 +536,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
     let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
     let acc0 = Delivered::seal(
         KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-            (region.handle(), Vec::with_capacity(DEPTH))
+            (region.handle(), &[][..])
         }),
         Rc::clone(&dest_storage),
         FrameCoverage::empty(),
@@ -569,12 +570,15 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
         dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
             acc,
             cell_still_borrows(&dep),
-            |value, (region, mut cells), placement| {
-                cells.push(copy_held_from_carried(
+            |value, (region, cells), placement| {
+                let cell = copy_held_from_carried(
                     value,
                     FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
-                ));
-                (region, cells)
+                );
+                let mut grown = Vec::with_capacity(cells.len() + 1);
+                grown.extend_from_slice(cells);
+                grown.push(cell);
+                (region, placement.bump().slice(&grown))
             },
         )
     });
@@ -637,7 +641,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
     let mut expected_ids = Vec::with_capacity(DEPTH);
     let acc0 = Delivered::seal(
         KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-            (region.handle(), Vec::with_capacity(DEPTH))
+            (region.handle(), &[][..])
         }),
         Rc::clone(&dest_storage),
         FrameCoverage::empty(),
@@ -667,12 +671,15 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
             acc,
             cell_still_borrows(&dep),
-            |value, (region, mut cells), placement| {
-                cells.push(copy_held_from_carried(
+            |value, (region, cells), placement| {
+                let cell = copy_held_from_carried(
                     value,
                     FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
-                ));
-                (region, cells)
+                );
+                let mut grown = Vec::with_capacity(cells.len() + 1);
+                grown.extend_from_slice(cells);
+                grown.push(cell);
+                (region, placement.bump().slice(&grown))
             },
         )
     });
@@ -822,7 +829,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
 
     let acc = Delivered::seal(
         KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-            (region.handle(), Vec::with_capacity(1))
+            (region.handle(), &[][..])
         }),
         Rc::clone(&dest_storage),
         FrameCoverage::empty(),
@@ -858,12 +865,15 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
     let acc_final = dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
         acc,
         cell_still_borrows(&dep),
-        |value, (region, mut cells), placement| {
-            cells.push(copy_held_from_carried(
+        |value, (region, cells), placement| {
+            let cell = copy_held_from_carried(
                 value,
                 FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
-            ));
-            (region, cells)
+            );
+            let mut grown = Vec::with_capacity(cells.len() + 1);
+            grown.extend_from_slice(cells);
+            grown.push(cell);
+            (region, placement.bump().slice(&grown))
         },
     );
 
@@ -1115,7 +1125,7 @@ fn substrate_memo_list_cell_is_priceable_and_home_free() {
     let list_door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
-    let list = KObject::list_of_held(list_door, vec![Held::Object(KObject::Number(1.0))], &types);
+    let list = KObject::list_of_held(list_door, &[Held::Object(KObject::Number(1.0))], &types);
     let fields = Record::from_pairs(vec![("l".to_string(), Held::Object(list))]);
     let (cost, borrows_home) = record_memos(&home, fields, &types);
     assert_eq!(

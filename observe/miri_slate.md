@@ -451,19 +451,25 @@ the `frameset_*` / `pins_region_walks_outer_chain` unit tests in
 
 **`ContinuationFamily` continuation erasure** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs))
 — the continuation generalizes the contract discipline from a `ReturnContract` enum to the whole
-`NodeContinuation` (`Box<dyn FnOnce>`), as an `Erased<ContinuationFamily>` routing the shared `retype`:
-`erase` forgets the captured `'run` for storage on a lifetime-free node, and `SealedExtern::open`
-recovers a step brand `'b` witnessed by the slot's start cart `Rc` (which pins the captures' home —
-the run region or a strict ancestor of the cart). The distinguishing layout — the retype over a
-**fat pointer** (data + vtable), consumed by value and invoked inside the brand — is pinned
-library-side (`sealed_extern_open_invokes_a_fat_pointer_continuation` in the workgraph slate). The
-open call site in
+`NodeContinuation` (`Box<dyn FnOnce>`). It is koan's only carrier family on the **owned tier**: a
+boxed `FnOnce` owns its captures, so the family takes the `droppable` `reattachable!` arm (no
+`DropFree`) and rests as `SealedPinned<ContinuationFamily, Rc<SlotFrame>>`, sealed against the slot's
+anchor at the scheduler's install door and opened once per step by that tier's single consuming verb.
+Both directions route the shared `retype`: `erase` forgets the captured `'run` for storage on a
+lifetime-free node, and `open` recovers a step brand `'b` witnessed by the seal's own bundled anchor
+`Rc` (which pins the captures' home — the run region or a strict ancestor of the cart). The
+distinguishing layouts — the retype over a **fat pointer** (data + vtable), consumed by value and
+invoked inside the brand, and the drop of a parked slot that was never opened — are pinned
+library-side (`sealed_extern_open_invokes_a_fat_pointer_continuation`,
+`parked_continuation_drops_under_its_own_pin`, and
+`parked_continuation_opens_and_runs_after_its_handles_drop` in the workgraph slate). The open call
+site in
 [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs) (`run_step`) runs the same
 transmute end-to-end every step, exercised by every scheduler-driving slate test. No separate
 minimal test here.
 
-The run-loop step-tail `SealedExtern::open` (`run_step`, opening the continuation, contract, and
-consumer `dest` region together at one generative brand) and the doctest fixture markers backing the
+The run-loop step-tail open (`run_step`, opening the sealed continuation and the active-scope
+operand together at one generative brand) and the doctest fixture markers backing the
 `compile_fail` soundness guards are audited in
 [workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md) alongside the `retype` group they
 route through — [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs)'s and
@@ -597,9 +603,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-04: 1014s — 25 tests, 0 leaks, 0 UB
 - 2026-08-04: 971s — 25 tests, 0 leaks, 0 UB
 - 2026-08-03: 1028s — 27 tests, 0 leaks, 0 UB
 - 2026-08-03: 1474s — 32 tests, 0 leaks, 0 UB
 - 2026-08-03: 1512s — 33 tests, 0 leaks, 0 UB
-- 2026-08-03: 2313s — 54 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

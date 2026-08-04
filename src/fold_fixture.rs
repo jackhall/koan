@@ -43,7 +43,7 @@ where
     F: for<'b> FnOnce(FoldingBrand<'b>, &[Carried<'b>]) -> &'b KObject<'b>,
 {
     drive_step_allocator(|ctx| {
-        let _ = ctx.alloc_carried_with(deps, |brand, views| Carried::Object(build(brand, &views)));
+        let _ = ctx.alloc_carried_with(deps, |brand, views| Carried::Object(build(brand, views)));
     });
 }
 

@@ -13,6 +13,7 @@ use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::KExpression;
+use crate::machine::model::KType;
 use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, SignatureElement};
 use crate::machine::Action;
@@ -338,17 +339,23 @@ pub(crate) fn defer<'a>(
         owned_count += 1;
     }
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        let mut resolved: Vec<(usize, Carried<'a>)> = Vec::with_capacity(splice_layout.len());
+        // Extract each signature slot's resolved type under that dep envelope's own pins. A `KType`
+        // is an interned handle, so it escapes the open guard's borrow and the re-walk below feeds on
+        // owned data alone.
+        let mut resolved: Vec<(usize, KType)> = Vec::with_capacity(splice_layout.len());
         for &(slot_idx, owned_pos) in &splice_layout {
             let terminal = results.owned(owned_pos);
-            if !matches!(terminal.value, Carried::Type(_)) {
-                return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "FN signature slot at part-index {slot_idx} expected a type expression, \
-                     got a {} value",
-                    terminal.value.ktype(fctx.types).name(fctx.types),
-                )))));
+            let opened = terminal.delivered.open_at();
+            match opened.value() {
+                Carried::Type(ktype) => resolved.push((slot_idx, ktype)),
+                other => {
+                    return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+                        "FN signature slot at part-index {slot_idx} expected a type expression, \
+                         got a {} value",
+                        other.ktype(fctx.types).name(fctx.types),
+                    )))))
+                }
             }
-            resolved.push((slot_idx, terminal.value));
         }
         let return_type: ReturnType<'a> = crate::try_action!(resolve_capture_at_finish(
             capture, fctx.scope, results, fctx.types

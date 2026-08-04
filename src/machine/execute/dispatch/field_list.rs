@@ -78,13 +78,15 @@ impl<'step> FieldListRewalk<'step> {
     /// Re-walk the field list: the sub-Dispatch results arrive as `feed`, and each elaborated field
     /// type is cloned out as owned data. The expression stays at `'step` (only walked, never
     /// embedded), while the output pairs are owned `KType`s; the parser carries the two lifetimes
-    /// separately so they can diverge. `ResultFeed` is always installed: a
-    /// `Done`-shaped walk never pops it, and a popped-dry feed hits the loud "fewer resolved
-    /// sub-dispatches" error inside the walker.
-    fn run<'b>(
+    /// separately so they can diverge. `'f` is likewise independent of the scope's own `'b`: the walk
+    /// reads a fed value only to extract its `KType` or render it into an error string, so the feed
+    /// may arrive at the short borrow of a dep envelope's open guard. `ResultFeed` is always
+    /// installed: a `Done`-shaped walk never pops it, and a popped-dry feed hits the loud "fewer
+    /// resolved sub-dispatches" error inside the walker.
+    fn run<'b, 'f>(
         self,
         scope: &Scope<'b>,
-        feed: &[Carried<'b>],
+        feed: &[Carried<'f>],
         types: &TypeRegistry,
     ) -> Result<Vec<(String, KType)>, KError>
     where
@@ -130,11 +132,11 @@ impl<'step> FieldListRewalk<'step> {
 /// `feed` is the owned suffix of the dep terminals in DFS order — the parks are notify-only waits
 /// on a forward reference, so they never reach the walk. Every field type the walk produces is
 /// owned data, so the composed type embeds no borrow of a producer region.
-fn compose_field_list<'step>(
+fn compose_field_list<'step, 'f>(
     step_ctx: &StepAllocator<'step>,
     scope: &'step Scope<'step>,
     rewalk: FieldListRewalk<'step>,
-    feed: &[Carried<'step>],
+    feed: &[Carried<'f>],
     compose: BrandCompose<'step>,
     types: &TypeRegistry,
 ) -> Result<StepCarried<'step>, KError> {
@@ -241,10 +243,17 @@ impl<'a> FieldListDeferral<'a> {
     pub(in crate::machine::execute) fn outcome(self, compose: BrandCompose<'a>) -> Outcome<'a> {
         let (rewalk, deps) = self.into_parts();
         let finish: TerminalDepFinish<'a> = Box::new(move |view, terminals| {
-            // The owned suffix — each sub-Dispatch's terminal read live at the step brand — is the
-            // walk's feed; the parks are notify-only waits on a forward reference. Each field type the
-            // walk yields is cloned out as owned data, so the composed type needs no operand fold.
-            let owned: Vec<Carried<'a>> = terminals.owned_slice().iter().map(|t| t.value).collect();
+            // The owned suffix — each sub-Dispatch's terminal read under its envelope's own pins — is
+            // the walk's feed; the parks are notify-only waits on a forward reference. The guards
+            // stay bound across the walk, so every value is read at one common borrow. Each field
+            // type the walk yields is cloned out as owned data, so the composed type needs no
+            // operand fold.
+            let opened: Vec<_> = terminals
+                .owned_slice()
+                .iter()
+                .map(|t| t.delivered.open_at())
+                .collect();
+            let owned: Vec<Carried<'_>> = opened.iter().map(|o| o.value()).collect();
             match compose_field_list(
                 &view.step_ctx(),
                 view.current_scope(),
@@ -279,10 +288,17 @@ impl<'a> FieldListDeferral<'a> {
         use crate::machine::core::{Action, AwaitContinue};
         let (rewalk, deps) = self.into_parts();
         let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-            // The owned suffix — each sub-Dispatch's terminal read live at the step brand — feeds the
-            // re-walk; the parks are notify-only waits on a forward reference. Each field type the
-            // walk yields is cloned out as owned data, so the composed type needs no operand fold.
-            let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
+            // The owned suffix — each sub-Dispatch's terminal read under its envelope's own pins —
+            // feeds the re-walk; the parks are notify-only waits on a forward reference. The guards
+            // stay bound across the walk, so every value is read at one common borrow. Each field
+            // type the walk yields is cloned out as owned data, so the composed type needs no
+            // operand fold.
+            let opened: Vec<_> = results
+                .owned_slice()
+                .iter()
+                .map(|t| t.delivered.open_at())
+                .collect();
+            let owned: Vec<Carried<'_>> = opened.iter().map(|o| o.value()).collect();
             Action::done_writing(
                 rewalk
                     .run(fctx.scope, &owned, fctx.types)

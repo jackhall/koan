@@ -14,7 +14,7 @@
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use super::nodes::NodeWork;
+use super::nodes::StoredWork;
 use super::workload::OwnerOf;
 use super::{Live, NodeId, SealedTerminal, Terminal, Workload};
 use crate::witnessed::Sealed;
@@ -64,7 +64,7 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
 }
 
 enum SlotState<W: Workload> {
-    PreRun(NodeWork<W>),
+    PreRun(StoredWork<W>),
     /// Node work has been moved out by `take_for_run`. A matching
     /// `reinstall` / `finalize` / `free_one` exits this state.
     Running,
@@ -97,9 +97,8 @@ enum DeadlockSample {
 /// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier wait carries a
 /// renderable expression summary (`Preferred`); a carrier-less wait carries only a generic tag
 /// (`Fallback`).
-fn work_deadlock_sample<W: Workload>(work: &NodeWork<W>) -> DeadlockSample {
-    let NodeWork { carrier, .. } = work;
-    match carrier {
+fn work_deadlock_sample<W: Workload>(work: &StoredWork<W>) -> DeadlockSample {
+    match &work.carrier {
         Some(carrier) => DeadlockSample::Preferred(carrier.clone()),
         None => DeadlockSample::Fallback("<wait>"),
     }
@@ -124,7 +123,7 @@ impl<W: Workload> NodeStore<W> {
     /// The only path that picks an index. `DepGraph::install_for_slot`
     /// mirrors the recycle-vs.-extend choice via
     /// `consumer.index() < notify_list.len()`.
-    pub(super) fn alloc_slot(&mut self, work: NodeWork<W>) -> NodeId {
+    pub(super) fn alloc_slot(&mut self, work: StoredWork<W>) -> NodeId {
         match self.free_list.pop() {
             Some(id) => {
                 self.slots[id] = SlotState::PreRun(work);
@@ -139,7 +138,7 @@ impl<W: Workload> NodeStore<W> {
     }
 
     /// Panics if the slot wasn't `PreRun`.
-    pub(super) fn take_for_run(&mut self, id: NodeId) -> NodeWork<W> {
+    pub(super) fn take_for_run(&mut self, id: NodeId) -> StoredWork<W> {
         match std::mem::replace(&mut self.slots[id], SlotState::Running) {
             SlotState::PreRun(work) => work,
             _ => panic!("scheduler must not revisit a completed node"),
@@ -147,7 +146,7 @@ impl<W: Workload> NodeStore<W> {
     }
 
     /// Tail-call path: reuse the slot index for a new node's work.
-    pub(super) fn reinstall(&mut self, id: NodeId, work: NodeWork<W>) {
+    pub(super) fn reinstall(&mut self, id: NodeId, work: StoredWork<W>) {
         self.slots[id] = SlotState::PreRun(work);
     }
 
@@ -359,9 +358,16 @@ mod tests {
         UnitCarrier => (),
     }
 
-    /// A minimal memory anchor projecting a trivial `PinsRegion` owner — purely a type binding, the
-    /// white-box store tests never construct it.
+    /// A minimal memory anchor projecting a trivial `PinsRegion` owner. The store tests seal work
+    /// against one, so it is constructible over an empty cart.
     struct TestAnchor(std::rc::Rc<crate::witnessed::doctest_fixture::Cart>);
+    impl TestAnchor {
+        fn new() -> std::rc::Rc<Self> {
+            std::rc::Rc::new(TestAnchor(std::rc::Rc::new(
+                crate::witnessed::doctest_fixture::Cart(Vec::new()),
+            )))
+        }
+    }
     impl crate::scheduler::Anchor for TestAnchor {
         type Owner = crate::witnessed::doctest_fixture::Cart;
         fn owner(&self) -> &std::rc::Rc<Self::Owner> {
@@ -379,8 +385,11 @@ mod tests {
         type Continuation = UnitCarrier;
     }
 
-    fn sample_wait(carrier: Option<String>) -> NodeWork<TestWorkload> {
-        NodeWork::new(super::super::ResolvedDeps::new(), (), carrier)
+    fn sample_wait(carrier: Option<String>) -> StoredWork<TestWorkload> {
+        super::super::nodes::seal_work(
+            super::super::nodes::NodeWork::new(super::super::ResolvedDeps::new(), (), carrier),
+            &TestAnchor::new(),
+        )
     }
 
     #[test]

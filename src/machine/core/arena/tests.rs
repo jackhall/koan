@@ -319,11 +319,12 @@ fn fold_witnessed_yokes_a_reference_only_value() {
 }
 
 /// Workload-level accumulator carrier for the aggregate construction fold: the dest region the
-/// finished aggregate node lands in, paired with the partial element cells built so far. The
+/// finished aggregate node lands in, paired with the element cells built so far — re-bumped into
+/// that region each step, so the accumulator rests on the Copy tier between folds. The
 /// production family the object-family construction inversion uses lives in the execute layer; this
 /// is the spike stand-in that proves the carrier round-trips and the fold composition is sound.
 struct AggBuildFamily;
-crate::witnessed::reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
+crate::witnessed::reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held<'r>]));
 
 /// The **aggregate** construction fold: a list / dict / record built from several dep producers —
 /// the shape the object family folds with shipped verbs only (no new substrate primitive). The
@@ -363,7 +364,7 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
     let acc0: Delivered<AggBuildFamily, CarrierWitness, FrameStorage> = Delivered::seal(
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
-            (region.handle(), Vec::new())
+            (region.handle(), &[][..])
         }),
         Rc::clone(&dest_frame),
         FrameCoverage::empty(),
@@ -372,20 +373,24 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
     // foreign region exactly as a surviving closure rides its bare borrow); the accumulated envelope
     // covers the union. `transfer_into` borrows the dep's seal (does not consume it — other
     // consumers keep reading the producer terminal).
-    let acc1 = dep_a.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+    let acc1 = dep_a.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
         acc0,
         |_product, _region| true,
-        |dep, (region, mut cells), _brand| {
-            cells.push(Held::from_carried(dep));
-            (region, cells)
+        |dep, (region, cells), placement| {
+            let mut grown = Vec::with_capacity(cells.len() + 1);
+            grown.extend_from_slice(cells);
+            grown.push(Held::from_carried(dep));
+            (region, placement.bump().slice(&grown))
         },
     );
-    let acc2 = dep_b.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+    let acc2 = dep_b.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
         acc1,
         |_product, _region| true,
-        |dep, (region, mut cells), _brand| {
-            cells.push(Held::from_carried(dep));
-            (region, cells)
+        |dep, (region, cells), placement| {
+            let mut grown = Vec::with_capacity(cells.len() + 1);
+            grown.extend_from_slice(cells);
+            grown.push(Held::from_carried(dep));
+            (region, placement.bump().slice(&grown))
         },
     );
     // Allocate the list node from the carried dest region; the cells ride borrows into both foreign
@@ -901,7 +906,7 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
     let types = TypeRegistry::new();
     let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&frame), |region| {
-            (region.handle(), Vec::new())
+            (region.handle(), &[][..])
         });
     let stored: Witnessed<CarriedFamily, CarrierWitness> =
         acc0.map_pinned(&frame, |(region, _cells), _token| {
@@ -1012,7 +1017,7 @@ fn region_death_frees_every_drop_free_substrate_shape() {
             let door = brand.with_holder(&owned_cells);
             KObject::list_of_held(
                 door,
-                vec![
+                &[
                     Held::Object(KObject::KString(door.alloc_text("first"))),
                     Held::Object(KObject::Number(2.0)),
                 ],

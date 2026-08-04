@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::Reattachable;
+use super::{DropFree, Reattachable};
 use crate::witnessed::{Carrier, PinsRegion, Sealed, Witnessed};
 
 /// The live (caller-lifetime) form of the inter-node value for a workload `W`, re-anchored from the
@@ -40,7 +40,7 @@ pub trait Workload {
     /// bundled with the producer frame `Rc`) and re-anchors it to the read borrow through
     /// `Witnessed::read`. `At<'static>: Copy` lets a `&self` read copy the erased carrier out before
     /// re-anchoring it.
-    type Value: Reattachable<At<'static>: Copy>;
+    type Value: Reattachable<At<'static>: Copy> + DropFree;
     /// The terminal error type (stored in a finalized terminal; the scheduler only stores/borrows it).
     type Error;
     /// The per-slot memory anchor the scheduler manages by `Rc` (minted by the workload). The
@@ -50,9 +50,11 @@ pub trait Workload {
     /// destination has pulled the terminal, releasing at pull-count zero
     /// (design/reach.md § Retention model).
     type Frame: Anchor;
-    /// The per-node continuation: a one-lifetime [`Reattachable`] family the scheduler stores erased
-    /// (`Erased<Self::Continuation>`) on the node and hands back once per step; the workload
-    /// re-anchors it, witnessed by the node's anchor `Rc`, then runs it once. Never inspected. Not
-    /// `Copy` — a one-shot boxed closure consumed by value.
+    /// The per-node continuation: a one-lifetime [`Reattachable`] family the scheduler rests on the
+    /// owned tier (`SealedPinned<Self::Continuation, Rc<Self::Frame>>`), sealed against the node's
+    /// anchor at install and handed back once per step for the workload to open and run. Never
+    /// inspected. Not `Copy` — a one-shot boxed closure consumed by value — and not `DropFree`
+    /// either: the owned tier keeps the value's drop glue, so a continuation owning heap contents
+    /// (a boxed closure) rests soundly and drops soundly if its slot is never opened.
     type Continuation: Reattachable;
 }

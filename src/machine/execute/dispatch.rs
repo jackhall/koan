@@ -485,7 +485,7 @@ pub(in crate::machine::execute) type ResumeFn<'step> =
 pub(in crate::machine::execute) fn decide_tail<'step>(
     expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
-) -> NodeWork<KoanWorkload> {
+) -> NodeWork<'step, KoanWorkload> {
     let carrier = expr.summarize();
     // A birth decide waits on no deps: it runs on first poll, classifies, and routes.
     let continuation = ignore_results(Box::new(move |view, idx| {
@@ -502,10 +502,10 @@ pub(in crate::machine::execute) fn decide_tail<'step>(
 /// submission to pre-error a nested binder in an eager sub-dispatch position: the node is slot-terminal
 /// (TRY-catchable) and propagates through its dep like any other failed dep. `carrier` renders the
 /// offending expression for the deadlock report.
-pub(in crate::machine::execute) fn decide_error(
+pub(in crate::machine::execute) fn decide_error<'step>(
     error: KError,
     carrier: String,
-) -> NodeWork<KoanWorkload> {
+) -> NodeWork<'step, KoanWorkload> {
     let continuation = ignore_results(Box::new(move |_view: &SchedulerView<'_, '_>, _idx| {
         Outcome::Done(Err(error))
     }));
