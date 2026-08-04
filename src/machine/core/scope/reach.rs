@@ -12,6 +12,7 @@ use super::Scope;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::carrier_witness::{OpenedFunction, SealedFunction};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
+use crate::machine::core::ref_carriers::BindingsReferenceFamily;
 use crate::machine::core::{
     product_reaches_region, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
     KoanRegionExt, KoanStorageProfile, ModuleRefFamily, ScopeRefFamily,
@@ -21,7 +22,9 @@ use crate::machine::model::{
     RegionEscape, TypeIdentifier,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, KError, SplicedCell};
-use crate::witnessed::{Delivered, DropFree, Reattachable, RegionHandleFamily, Sealed, Witnessed};
+use crate::witnessed::{
+    Delivered, DropFree, Reattachable, RegionHandleFamily, Sealed, SealedExtern, Witnessed,
+};
 
 // The sole test here pins the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy`
 // build rebuilds the record instead, so the module cannot hold there. The equivalence battery proves
@@ -623,6 +626,50 @@ impl<'a> Scope<'a> {
                 },
             )
             .into_cell()
+    }
+
+    /// Open the module `delivered` carries as a transparent `USING … SCOPE` window on this scope —
+    /// the root that keeps the opened module's region alive and the borrowed-bindings child
+    /// ([`Scope::alloc_child_transparent`]), in that order, as one act. `None` if the envelope
+    /// carries something other than a module.
+    ///
+    /// The window surfaces the module's members by *borrowing* its child scope's binding table, so
+    /// the window's reads are only as valid as the module's own region. That region is pinned by the
+    /// eager `m` argument's delivery envelope, which dies with the step that opened the window,
+    /// while the block runs in later steps — so the envelope's coverage is minted into this scope's
+    /// region, whose union then roots the module's region for that region's life. A transparent
+    /// child is same-region with its parent, so the window inherits that root as its own; an
+    /// escaping closure captures the window, which anchors the call-site frame, which pins the
+    /// folded region.
+    ///
+    /// **One operand carries both facts.** The table is read off the module inside the envelope
+    /// ([`Module::child_scope`](crate::machine::model::Module::child_scope)) and the root is that
+    /// same envelope's coverage, so there is no pair of arguments a caller could draw from two
+    /// different values — and the mint runs before the window that borrows into it exists.
+    ///
+    /// The envelope is required, not optional: the module argument fills a value slot of a
+    /// non-name-literal type, so every part shape that can carry a module into it — a bare name
+    /// through the auto-wrap rail, a `(…)` through the eager rail — is spliced before the call, and
+    /// a spliced part always delivers. A co-located module's coverage is stripped by the library's
+    /// self rule, so "nothing to root" is an empty member set, not an absent envelope.
+    pub(crate) fn open_module_window(
+        &'a self,
+        delivered: &DeliveredCarried,
+    ) -> Option<&'a Scope<'a>> {
+        // The table crosses the born door as an erased operand: it lives in the opened module's own
+        // region, so it is re-anchored at the construction brand rather than at an ambient `'a` it
+        // has no outlives relation to. The open's pins cover the read, and the mint below keeps the
+        // pointee live for the re-anchor inside the door.
+        let opened = delivered.open_at();
+        let Carried::Object(KObject::Module(module)) = opened.value() else {
+            return None;
+        };
+        let bindings =
+            SealedExtern::<BindingsReferenceFamily>::erase(module.child_scope().bindings());
+        // Root first. Non-owning mint: the owning bundle folds straight into this region's union, so
+        // the root outlives every read through the window rather than the returned description.
+        self.mint_retained(&[delivered.coverage()]);
+        Some(self.alloc_child_transparent(bindings))
     }
 
     /// The transparent-ascription store: a fresh `Module` tagged `name`, re-tagging a *foreign*

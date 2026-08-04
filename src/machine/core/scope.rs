@@ -80,9 +80,11 @@ pub struct Scope<'a> {
 #[allow(clippy::large_enum_variant)]
 enum ScopeBindings<'a> {
     Owned(Bindings),
-    /// The borrowed façade lives in the opened module's child-scope region; the
-    /// `USING` builtin keeps that region alive by rooting the module value in the
-    /// call-site region.
+    /// The borrowed façade lives in the opened module's child-scope region;
+    /// [`Scope::open_module_window`](crate::machine::core::Scope) keeps that region alive by
+    /// minting the module's own delivery envelope's coverage into the call-site region before
+    /// building the window that borrows into it, so a window and its root are one act over one
+    /// operand.
     Borrowed(&'a Bindings),
 }
 
@@ -475,14 +477,33 @@ impl<'a> Scope<'a> {
     }
 
     /// Allocate a transparent `USING … SCOPE` child whose bindings are a read-only window onto
-    /// `module_bindings`. The table lives in the opened module's own region, so it crosses the brand
-    /// as the door's second operand; the `USING` builtin is what keeps that region alive.
-    pub fn alloc_child_transparent(&'a self, module_bindings: &'a Bindings) -> &'a Scope<'a> {
-        Self::alloc_child_with(
-            self,
-            SealedExtern::<BindingsReferenceFamily>::erase(module_bindings),
-            |outer_b, bindings_b| Scope::child_transparent(outer_b, bindings_b),
-        )
+    /// `module_bindings`. The table lives in the opened module's own region, so it arrives already
+    /// erased and crosses the brand as the door's second operand.
+    ///
+    /// Cluster-private: a bare window states no claim on the region its table lives in, so the only
+    /// caller outside the test fixture below is `Scope::open_module_window`, which reads the table
+    /// off a module's own delivery envelope and roots that envelope's coverage first.
+    pub(in crate::machine::core::scope) fn alloc_child_transparent(
+        &'a self,
+        module_bindings: SealedExtern<BindingsReferenceFamily>,
+    ) -> &'a Scope<'a> {
+        Self::alloc_child_with(self, module_bindings, |outer_b, bindings_b| {
+            Scope::child_transparent(outer_b, bindings_b)
+        })
+    }
+
+    /// Test fixture: a transparent window onto a bare scope's binding table, for a suite that builds
+    /// the opened side as a plain scope rather than a module value in an envelope. Production takes
+    /// `Scope::open_module_window`, which reads the table off the envelope whose coverage it roots;
+    /// this door states no such claim, so a fixture reaching it mints the root itself.
+    #[cfg(test)]
+    pub(crate) fn alloc_transparent_window_for_test(
+        &'a self,
+        module_bindings: &'a Bindings,
+    ) -> &'a Scope<'a> {
+        self.alloc_child_transparent(SealedExtern::<BindingsReferenceFamily>::erase(
+            module_bindings,
+        ))
     }
 
     pub fn bindings(&self) -> &Bindings {

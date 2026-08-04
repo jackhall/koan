@@ -4,7 +4,7 @@
 //! `m` is eager (a resolved module value), `body` is lazy
 //! (a [`KType::KEXPRESSION`] type) so it evaluates in the opened scope.
 //!
-//! The block runs in a transparent scope ([`Scope::alloc_child_transparent`])
+//! The block runs in a transparent scope (`Scope::open_module_window`)
 //! allocated in the **call-site region** — not a per-call frame — so forwarded
 //! binds and functions defined in the block stay live after the block ends.
 //! A bind colliding with a surfaced member is rejected in
@@ -15,11 +15,13 @@
 //!
 //! Functor-result escape soundness: the opened module's child scope lives in a
 //! per-call region pinned only by the eager `m` dep across the USING step. The
-//! body runs in later steps, so the seed folds the `m` carrier's reach onto the
-//! overlay (which lives in the call-site region), keeping that region alive for
-//! the window's life. An escaping closure captures the transparent overlay,
-//! which anchors the call-site frame, which pins the folded region. A top-level
-//! module reaches no per-call region and needs no fold.
+//! body runs in later steps, so the window door folds the `m` envelope's
+//! coverage into the call-site region *before* building the window that borrows
+//! into it, keeping the module's region alive for the window's life. A
+//! transparent child is same-region with its parent, so the window inherits that
+//! root. An escaping closure captures the window, which anchors the call-site
+//! frame, which pins the folded region. A module whose region the call site
+//! already holds folds an empty member set — the library's self rule strips it.
 
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
@@ -32,60 +34,56 @@ use super::{arg, kw, sig};
 /// ordinary `DoneWitnessed` path, not a forwarded dep. Surfaced members resolve through
 /// [`Scope::binding_cutoff`]'s index-0 (no-cutoff) rule for a borrowed window.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::model::{Held, KObject};
-    use crate::machine::{arg_held, require_kexpression, Action, FramePlacement};
-    use crate::machine::{block_tail, BlockBody, BlockScope, BlockSeed};
+    use crate::machine::{block_tail, BlockBody, BlockScope};
+    use crate::machine::{require_kexpression, Action, FramePlacement};
 
-    let module = match arg_held(ctx.args, "m") {
-        // A module reaches USING on the value channel's Object arm.
-        Some(Held::Object(KObject::Module(m))) => *m,
-        Some(Held::Type(other)) => {
-            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "m".to_string(),
-                expected: "Module".to_string(),
-                got: other.name(ctx.types),
-            })))
-        }
-        Some(Held::UnresolvedType(ti)) => {
-            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "m".to_string(),
-                expected: "Module".to_string(),
-                got: ti.render(),
-            })))
-        }
-        Some(Held::Object(other)) => {
-            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "m".to_string(),
-                expected: "Module".to_string(),
-                got: other.ktype().name(ctx.types).to_string(),
-            })))
-        }
-        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
-    };
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
-    let module_bindings = module.child_scope().bindings();
-    let overlay: &'a Scope<'a> = ctx.scope.alloc_child_transparent(module_bindings);
-    // Fold the eager `m` carrier's reach onto the overlay so the opened module's per-call region stays
-    // alive for the window's life (see the module-level soundness note). The minted description is
-    // non-owning, so the mint **retains** its owning bundle in the overlay's region union for that
-    // region's life — that is what roots the opened module's per-call region one hop removed. A top-level module reaches no
-    // per-call region and a carrier-less module has no reach to root, so both fold nothing.
-    let seed: Option<BlockSeed<'a>> = ctx.arg_carrier("m").map(|carrier| {
-        let carrier = carrier.duplicate();
-        let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope, _types: &TypeRegistry, _gate| {
-            overlay.mint_retained(&[carrier.coverage()]);
-        });
-        seed
-    });
+    // `m` is a value slot of a non-name-literal type, so its part is spliced before the call on
+    // every shape that can carry a module — the absent arm is unreachable by construction and takes
+    // a diagnostic rather than a panic.
+    let Some(delivered) = ctx.arg_carrier("m") else {
+        return Action::done(Err(KError::new(KErrorKind::ShapeError(
+            "internal: USING's module argument reached the window door with no delivery envelope"
+                .to_string(),
+        ))));
+    };
+    // One door, one operand: the window's binding table is read off the module inside `delivered`
+    // and the root is that same envelope's coverage (see the module-level soundness note), so the
+    // block cannot run against a window whose backing region nothing holds. The door is also the
+    // authority on whether the envelope carries a module at all; the arm below only renders what
+    // the value channel holds for the diagnostic.
+    let Some(overlay) = ctx.scope.open_module_window(delivered) else {
+        return Action::done(Err(non_module_argument(ctx)));
+    };
     block_tail(
         ctx.scope.brand(),
         FramePlacement::Inherit,
         BlockScope::Overlay(overlay),
-        seed,
+        None,
         BlockBody::Block(body_expr),
         None,
         ctx.types,
     )
+}
+
+/// Render the `m`-slot diagnostic for an argument the window door refused. Strict admission already
+/// rejects most non-modules against the `:Signature` slot, so this surfaces the shapes that satisfy
+/// an empty signature without being a module.
+fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_>) -> KError {
+    use crate::machine::arg_held;
+    use crate::machine::model::Held;
+
+    let got = match arg_held(ctx.args, "m") {
+        Some(Held::Type(other)) => other.name(ctx.types),
+        Some(Held::UnresolvedType(ti)) => ti.render(),
+        Some(Held::Object(other)) => other.ktype().name(ctx.types).to_string(),
+        None => return KError::new(KErrorKind::MissingArg("m".to_string())),
+    };
+    KError::new(KErrorKind::TypeMismatch {
+        arg: "m".to_string(),
+        expected: "Module".to_string(),
+        got,
+    })
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {

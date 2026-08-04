@@ -340,7 +340,7 @@ fn using_window_surfaces_the_modules_operator_group() {
     assert!(root.resolve_operator_group_delivered("+", None).is_none());
 
     // `USING vec_ops SCOPE (…)`: the window borrows the module's façade over the call site.
-    let window = root.alloc_child_transparent(module.bindings());
+    let window = root.alloc_transparent_window_for_test(module.bindings());
     let resolved = window
         .resolve_operator_group_delivered("+", None)
         .expect("the window surfaces the module's registry entry");

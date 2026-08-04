@@ -31,7 +31,7 @@ pub struct ModuleRefFamily;
 /// `Reattachable` family for a **reference** to a [`Bindings`] table — `&'r Bindings`. The pointee is
 /// lifetime-free, so `'r` names only the borrow; the family exists so a transparent `USING … SCOPE`
 /// window can cross a construction brand alongside its parent scope
-/// ([`Scope::alloc_child_transparent`]), which a bare `&'a Bindings` cannot — an ambient borrow has
+/// ([`Scope::open_module_window`](crate::machine::core::Scope)), which a bare `&'a Bindings` cannot — an ambient borrow has
 /// no outlives relation to a `for<'b>` brand.
 pub struct BindingsReferenceFamily;
 

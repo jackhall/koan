@@ -7,7 +7,6 @@
 use std::rc::Rc;
 
 use crate::builtins::test_support::{parse_one, per_call_storage, run_root_bare, TestRun};
-use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::KErrorKind;
 use crate::machine::{program_storage, run_root_storage, BindingIndex, FrameCoverage};
@@ -112,7 +111,7 @@ fn using_window_shadows_call_site_binding() {
 /// returning a closure that reads a surfaced member must keep both the
 /// closure's transparent scope and the module's region alive past the block.
 /// Run-root churn after the escape exercises drop discipline; under Miri this
-/// pins the `Scope::alloc_child_transparent` born-door store
+/// pins the `Scope::open_module_window` born-door store
 /// against use-after-free.
 #[test]
 fn using_functor_result_closure_escapes_soundly() {
@@ -137,12 +136,16 @@ fn using_functor_result_closure_escapes_soundly() {
     );
 }
 
-/// SAFETY-anchor: `USING (MAKE) SCOPE …` opens an unbound module, so its
-/// child-scope region's frame `Rc` lives only on the eager `m` arg, which
-/// drops when the builtin body returns. The builtin roots that `Rc` in the
-/// call-site region so the borrowed window stays valid for the deferred
-/// sub-dispatch and any escaping closure. Without the rooting this is an
-/// immediate use-after-free; under Miri this pins the rooting path.
+/// `USING (MAKE) SCOPE …` opens an unbound module, so its child-scope region's frame `Rc` lives
+/// only on the eager `m` arg, which drops when the builtin body returns. `Scope::open_module_window`
+/// roots that `Rc` in the call-site region so the borrowed window stays valid for the deferred
+/// sub-dispatch and any escaping closure.
+///
+/// Plain `cargo test`: the rooting is no longer a step the builtin can omit — the window door mints
+/// the module's delivered coverage into the window's own region as it builds the window, and the
+/// bare-window constructor is core-private — so what is left to check is the language-level result.
+/// The library contract the rooting relies on (a description read under a *transitive* root) is
+/// pinned under Miri by workgraph's `lift_reads_a_description_hosted_under_a_transitive_root`.
 #[test]
 fn using_temporary_functor_result_is_sound() {
     let program = program_storage();
@@ -191,76 +194,6 @@ fn using_on_non_module_fails_dispatch() {
     );
 }
 
-/// SAFETY-anchor: the transparent-window transitive-root exception documented on `Witness for
-/// Carrier` and `Scope::resident_witness`. A module binding's stored reach lives in the *module's*
-/// own arena, not the reading window's call-site arena -- sound only because the window's overlay
-/// fold (mirrored here, as `USING`'s own body performs it in `builtins/using_scope.rs`) mints the
-/// module's own carrier into the call-site arena before any read, rooting the module region
-/// transitively. Drops every other handle on both the module and foreign frames before reading the
-/// carrier's reach back; under Miri this is a use-after-free the moment that rooting is missing.
-#[test]
-fn using_window_value_read_reach_survives_under_module_root() {
-    let foreign_storage = per_call_storage();
-    let foreign_weak = Rc::downgrade(&foreign_storage);
-
-    let module_storage = per_call_storage();
-    let module_weak = Rc::downgrade(&module_storage);
-    let module_scope = run_root_bare(&module_storage);
-
-    // Bind a value in the module scope whose reach names the foreign frame -- minted for real into
-    // the module's own arena via `mint_retained`, the same primitive every bind door uses, which
-    // folds the owning bundle into the module region's union.
-    let value_obj = module_scope.brand().alloc_scalar(Scalar::Number(1.0));
-    let reach = module_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign_storage))]);
-    let sealed = module_scope.seal_reaching(Carried::Object(value_obj), reach);
-    module_scope
-        .bind_value_direct(
-            "val".to_string(),
-            sealed,
-            BindingIndex::value(0),
-            &mut crate::machine::WriteGate::for_test(),
-        )
-        .expect("fresh binding name in an unborrowed scope");
-
-    let call_site_storage = run_root_storage();
-    let call_site_scope = run_root_bare(&call_site_storage);
-    let window = call_site_scope.alloc_child_transparent(module_scope.bindings());
-
-    // Mirror `USING`'s own overlay fold (`builtins/using_scope.rs`): mint the opened module's own
-    // carrier into the window's (call-site) arena at overlay construction, before any read through
-    // the window -- the step that roots the module's region transitively.
-    // The window region's own union is what roots the module's region transitively.
-    let _window_reach = window.mint_retained(&[&FrameCoverage::of(Rc::clone(&module_storage))]);
-
-    let delivered = window
-        .resolve_value_delivered("val", None)
-        .expect("val is bound in the module scope, surfaced through the transparent window")
-        .bound()
-        .expect("val is fully bound, not a placeholder");
-
-    drop(module_storage);
-    drop(foreign_storage);
-    assert!(
-        module_weak.upgrade().is_some(),
-        "the window's overlay fold roots the module region transitively"
-    );
-    assert!(
-        foreign_weak.upgrade().is_some(),
-        "the module's own arena, rooted transitively, keeps the entry's stored reach set -- and \
-         the foreign frame it names -- alive"
-    );
-
-    let foreign_region_owner = foreign_weak.upgrade().unwrap();
-    // The membership query lives on the **in-use** carrier state: the delivery envelope's own pins
-    // are the coverage the reach re-anchor needs, so it opens without an external witness.
-    assert!(
-        delivered
-            .open_at()
-            .reach_covers(foreign_region_owner.region()),
-        "the read carrier's reach still covers the foreign region after every other handle drops"
-    );
-}
-
 /// A `USING` window's overlay is the one scope whose `region_owner` is the *call site* while the
 /// bindings it surfaces live in the **module's** region — the single place residence and the reading
 /// scope diverge. Residence rides the value's own description, not the reading scope, so a record
@@ -305,7 +238,7 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
     // module's — the one place residence and the reading scope genuinely diverge.
     let call_site_storage = run_root_storage();
     let call_site_scope = run_root_bare(&call_site_storage);
-    let window = call_site_scope.alloc_child_transparent(module_scope.bindings());
+    let window = call_site_scope.alloc_transparent_window_for_test(module_scope.bindings());
     // `USING`'s own overlay fold, which roots the module's arena under the call-site region.
     let _window_reach = window.mint_retained(&[&FrameCoverage::of(Rc::clone(&module_storage))]);
 

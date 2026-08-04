@@ -310,23 +310,6 @@ buy the audit nothing past the fifth. The only `unsafe` routed is the shared `re
 
 - `aggregate_of_mixed_call_results_releases_every_producer_frame`
 
-**`USING … SCOPE` transparent-window aliasing** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
-`ScopeBindings::Borrowed` window reads another scope's `RefCell` maps through a
-borrowed reference, and the block (run in a transparent scope allocated in the
-call-site region) can define a closure that escapes carrying that window. Pins
-that an escaping closure reading a surfaced member of a *temporary* functor-result
-module — the harder case, relying on the call-site-region `Rc` rooting — does not
-dangle into the freed module/USING region. (Safe code by construction; pinned
-because tree borrows catches a regression in the aliasing or rooting discipline.)
-A second shape pins the transitive-root exception on `Scope::resident_witness`: a value read through
-the window carries a reference-only carrier whose reach set lives in the **module's own arena**,
-sound only because `USING`'s own overlay fold mints the opened module's carrier into the call-site
-arena before any such read — so the call-site frame (held by its retention hold) roots the module's
-arena one hop removed, and through it the read entry's reach set.
-
-- `using_temporary_functor_result_is_sound`
-- `using_window_value_read_reach_survives_under_module_root`
-
 **Tail-hop argument adoption ordering (Lemma 2)** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
 tail call's loop-carried argument is delivered as its envelope (host = the retiring incarnation's
 frame) and adopted through `Scope::adopt_for_binding`
@@ -593,9 +576,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-04: 962s — 22 tests, 0 leaks, 0 UB
 - 2026-08-04: 1047s — 24 tests, 0 leaks, 0 UB
 - 2026-08-04: 1014s — 25 tests, 0 leaks, 0 UB
 - 2026-08-04: 971s — 25 tests, 0 leaks, 0 UB
 - 2026-08-03: 1028s — 27 tests, 0 leaks, 0 UB
-- 2026-08-03: 1474s — 32 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
