@@ -49,7 +49,13 @@ a concept, not a final identifier.
 - **Brand** — a `for<'b>` closure lifetime used as an unforgeable tag: a
   reference issued at brand `'b` cannot escape the closure that introduced
   `'b`. The substrate's construction surface
-  ([witnessed.rs](../workgraph/src/witnessed.rs)) is built on this device.
+  ([witnessed.rs](../workgraph/src/witnessed.rs)) is built on this device. The
+  step open bounds its brand from above with a
+  [`Within<'b, 'outer>`](../workgraph/src/witnessed/dormant.rs) token, so an
+  embedder capability held as a live borrow for the whole run — Koan's
+  `ProgramBrand` is the one in use — shortens *into* the step brand by ordinary
+  subtyping without becoming a carrier
+  ([witnessed-memory.md](../workgraph/design/witnessed-memory.md)).
 - **Carrier** — a stored value bundled with its witness (`Witnessed`), or
   its storable, reopenable form (`Sealed`). A carrier is born at the
   allocation site already naming everything that keeps it alive.

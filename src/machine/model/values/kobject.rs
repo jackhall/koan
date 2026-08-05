@@ -593,8 +593,8 @@ impl<'a> KObject<'a> {
     /// no audit can name, so the copy has to re-bump them at the destination
     /// ([`copy_object_into`]) exactly as a substrate has to be re-sectioned there.
     ///
-    /// Everything else — the scalars, a `KExpression` whose parts run stays in the eternal-tier
-    /// storage that parsed it, a `KFunction` / `Module` borrow leaf that rides verbatim — copies as
+    /// Everything else — the scalars, a `KExpression` whose [`ProgramExpression`] payload keeps its
+    /// parts run in program storage, a `KFunction` / `Module` borrow leaf that rides verbatim — copies as
     /// a top node under the fused mint.
     pub(crate) fn needs_destination_door(&self) -> bool {
         // Exhaustive on purpose, like [`Self::embeds_substrate`]: a new variant defaulting into the
@@ -664,9 +664,9 @@ fn object_cell_reach<'a>(
             declared.absorb(door.holder());
             CellReach::Seed(declared)
         }
-        // An expression borrows only the eternal-tier storage that parsed it, and it has no arm
-        // that can name a producer region, so a cell holding one reaches nothing this door has to
-        // pin.
+        // The cell's payload is a [`ProgramExpression`], so its parts run is program-storage hosted
+        // by type. Program storage is no region a holder can outlive, so a cell holding one reaches
+        // nothing this door has to pin.
         KObject::KExpression(_) => CellReach::Owned,
         KObject::Record(substrate, _) => pinned_cell(substrate.reach(), door),
         KObject::List(substrate, _) => pinned_cell(substrate.reach(), door),
@@ -825,7 +825,7 @@ pub(crate) fn copy_object_into<'b>(
         KObject::KString(s) => KObject::KString(dest.alloc_text(s)),
         KObject::Bool(b) => KObject::Bool(*b),
         KObject::Null => KObject::Null,
-        // A pointer copy: the parts run lives in the eternal-tier storage that parsed it, which the
+        // A pointer copy: the payload's marker puts its parts run in program storage, which the
         // copy verb's release claim never covers, so there is nothing to re-bump here.
         KObject::KExpression(e) => KObject::KExpression(*e),
         KObject::KFunction(f) => KObject::KFunction(f),
@@ -934,8 +934,9 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: SubstrateDoor<'b, '_>) -> Held<'b> 
 /// - **Owned data** — scalars — borrows nothing. A **string** answers `false` for the same reason
 ///   though its bytes do live in a region: the copy verb re-bumps them at the destination
 ///   ([`copy_object_into`]), so the relocation genuinely releases whichever region held them. A
-///   **`KExpression`** answers `false` because the only storage it borrows is the eternal-tier
-///   program storage that parsed it, which no relocation releases and `home` is never.
+///   **`KExpression`** answers `false` on the proof its own payload carries: a
+///   [`ProgramExpression`] borrows program storage and nothing else, which no relocation releases
+///   and `home` is never.
 pub(crate) fn retains_home(value: &KObject<'_>, home: &KoanRegion) -> bool {
     match value {
         KObject::Number(_)

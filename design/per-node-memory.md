@@ -51,12 +51,14 @@ separate facts make that borrow harmless:
   [`ProgramStorage`](../src/machine/core/arena/frame.rs) the parse door bumped it
   into. The eternal rule filters such a member out of every reach description
   ([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)),
-  so the cell reaches nothing. The parse door takes a `ProgramBrand`, which types
-  that tier; a node the runtime synthesizes mid-dispatch takes an ordinary
-  `RegionBrand` and stays out of the value channel by flow rather than by type —
-  the residual, stated in [`ProgramBrand`](../src/machine/core/arena/frame.rs)'s
-  own doc and owned by
-  [Typed expression value channel](../roadmap/compile_safety/expression-value-channel-guard.md).
+  so the cell reaches nothing. That tier is typed: the cell holds a
+  [`ProgramExpression`](../src/machine/model/ast/program.rs), minted only through a
+  [`ProgramBrand`](../src/machine/core/arena/frame.rs) door, so a node the runtime
+  synthesizes at a per-call brand cannot enter the value channel at all
+  ([value-substrates.md § Value-channel AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
+  Shortening the brand into a step is what lets step code borrow long-lived data;
+  the parts a door is handed are program-hosted by the door's own contract
+  ([value-substrates.md § Value-channel AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
 - **No expression names a producer region.** The per-call resolved sub-result the
   scheduler folds into a parent's parts lives on a different type —
   `WorkingPart::Spliced` on the scheduler's
@@ -71,9 +73,9 @@ takes its own door
 `alloc_expression_witnessed`) rather than the scalar one, for a lifetime reason
 only: `KObject<'a>` is invariant, so a cell holding raw AST has no owned rebuild to
 offer a lifetime-free signature. The door's own signature is the enforcement —
-only a [`KExpression`](../src/machine/model/ast.rs) reaches it, and an AST node
-names no producer region, so the cell it bumps borrows nothing a seal would have to
-pin.
+only a [`ProgramExpression`](../src/machine/model/ast/program.rs) reaches it, so the
+node's parts run is program-storage hosted by type and the cell the door bumps
+borrows nothing a seal would have to pin.
 
 **`merge_pinned` / `transfer_into` — everything that references a pre-existing
 value.** An aggregate folds its *element carriers* (deps arriving witnessed from
@@ -259,6 +261,13 @@ nothing branded crosses the step boundary.
   dispatch decide reads `&Scope<'b>` from the one brand (and the consumer `dest`
   region is the opened scope's own `region`, derived inside it) rather than
   re-anchoring a free `&Scope<'step>` up the dispatcher stack.
+- **The run's program brand** enters by subtyping rather than by channel. The step
+  `open` bounds its brand above with a
+  [`Within<'b, 'run>`](../workgraph/src/witnessed/dormant.rs) token, so the
+  covariant [`ProgramBrand<'run>`](../src/machine/core/arena/frame.rs) the runtime
+  holds shortens to `'b` where the step's `SchedulerView` is built. It needs no
+  seal, no re-anchor and no pin: it is a live borrow the compiler proves, and its
+  region is eternal-tier, which every pin bundle filters out anyway.
 - **Frame-side reads** fold onto `open` the same way: a frame's own child scope
   opens at a `for<'b>` brand through
   [`CallFrame::with_scope`](../src/machine/core/arena.rs) — the `&mut self` submit /

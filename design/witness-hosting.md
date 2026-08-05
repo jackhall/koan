@@ -180,11 +180,13 @@ destination through a door whose *signature* is the enforcement instead:
   nothing to check. `alloc_string` is its sibling for the leaf whose bytes are
   region-hosted: re-homing them into the destination *is* the store.
 - **Raw AST** takes `RegionBrand::alloc_expression`, which admits a
-  [`KExpression`](../src/machine/model/ast.rs) and nothing else. A `KObject::KExpression`
-  needs no *coverage* claim of its own either: it borrows only the eternal-tier program
-  storage that parsed it, and the one part kind that could name a producer region lives
-  on the scheduler's own node type, which no value can hold
-  ([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+  [`ProgramExpression`](../src/machine/model/ast/program.rs) and nothing else — the marker
+  minted only through a [`ProgramBrand`](../src/machine/core/arena/frame.rs) door. A
+  `KObject::KExpression` needs no *coverage* claim of its own either: the marker on its
+  payload is the proof that the node's parts run is eternal-tier program storage, and the
+  one part kind that could name a producer region lives on the scheduler's own node type,
+  which no value can hold
+  ([value-substrates.md § Value-channel AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
 - **A fresh `KFunction` wrapper** takes
   [`Scope::store_function_object`](../src/machine/core/scope/reach.rs), a merge modelled
   on the module store fold: the composition mints the callable's home region into the

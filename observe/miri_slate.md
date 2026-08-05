@@ -108,7 +108,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-20 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+19 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
 below are the exact test identifiers; pass them after `--` in the Miri command. A further 52 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
@@ -208,20 +208,6 @@ variants alone would leave exactly this shape pointer-copied under a release cla
 - `let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_free`
 - `let_bound_dict_with_call_produced_string_keys_survives_every_producer_free`
 - `a_bound_bare_string_rebumps_at_its_destination`
-
-**Region-hosted expression at the container door** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
-— the expression peer of the group above, and the one check on the rule that lets
-`KObject::KExpression` answer without a reach description at all: an expression cell's reach verdict
-is `Owned`, `retains_home` answers `false`, and the expression door
-(`RegionBrand::alloc_expression`) seals its cell with no member. All three are honest only because the node's `parts` run, its keyword text and its
-structural cache live in the eternal-tier program storage that parsed them, which no relocation
-releases. A node whose parts were bumped into the call region its producer ran in would satisfy
-every one of those answers while pointing into a retiring region — and no address probe could catch
-it, since the bump keeps no address table. The test produces its quotes inside per-call function
-regions, binds the list in an outer scope so every producer frame retires, then walks the stored
-`parts` on the read. The door is safe code throughout; tree borrows is the only check.
-
-- `let_bound_list_of_call_produced_quotes_survives_every_producer_free`
 
 **Bump-hosted substrate index re-home** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
 — the peer of the group above one level up: not a *cell*, but the substrate's own **index metadata**,
@@ -543,9 +529,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-05: 864s — 19 tests, 0 leaks, 0 UB
 - 2026-08-04: 845s — 20 tests, 0 leaks, 0 UB
 - 2026-08-04: 931s — 21 tests, 0 leaks, 0 UB
 - 2026-08-04: 962s — 22 tests, 0 leaks, 0 UB
 - 2026-08-04: 1047s — 24 tests, 0 leaks, 0 UB
-- 2026-08-04: 1014s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

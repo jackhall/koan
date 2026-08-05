@@ -71,7 +71,7 @@ Entry point: `parse` in [src/parse/expression_tree.rs](src/parse/expression_tree
 
 The output is one [`KExpression`](src/machine/model/ast.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
 
-`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/machine/model/ast/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. See [design/expressions-and-parsing.md](design/expressions-and-parsing.md).
+`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/machine/model/ast/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/machine/model/ast/program.rs), which types the tier the channel's verdicts assume. See [design/expressions-and-parsing.md](design/expressions-and-parsing.md).
 
 ### dispatch — `KExpression` → `ResolveOutcome` against a `Scope`
 

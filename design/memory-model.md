@@ -9,7 +9,9 @@ its parsed AST are bumped into: created before the run root and dropped after it
 the same **eternal** tier (`PinsRegion::needs_no_pin`), so a value pointing at
 program text names no member any pin bundle has to hold. It stays outside the frame
 lifecycle entirely — no `CallFrame` adopts it, no `Scope` names it as `region_owner`,
-and its only capability in use is the bump its `ProgramBrand` hands parse output. The target storage model for composite
+and its only capability in use is the bump its `ProgramBrand` hands parse output and the one runtime
+body that synthesizes a value-channel node
+([§ Value-channel AST](value-substrates.md#value-channel-ast-the-program-storage-marker)). The target storage model for composite
 value substrates — region-resident payloads, witnessed-only construction, the
 pin-versus-copy escape policy — is pinned in
 [value-substrates.md](value-substrates.md).
@@ -276,7 +278,14 @@ scheduler's install door — re-anchors through the run-loop step's single consu
 [`run_step`](../src/machine/execute/run_loop.rs) opens it beside the active-scope operand at one
 rank-2 `for<'b>` brand standing in for the step lifetime, witnessed by the seal's own bundled anchor
 pin plus the step's owned pins, so the whole tail nests inside the brand and carries no loose
-witness-borrow reattach. The
+witness-borrow reattach. That brand is **bounded above by `'run`**: the open hands its closure a
+[`Within<'b, 'run>`](../workgraph/src/witnessed/dormant.rs) token whose declared `'run: 'b` the
+`for<'b>` instantiation discharges, which is what lets the run's covariant
+[`ProgramBrand<'run>`](../src/machine/core/arena/frame.rs) — a live borrow, not a sealed carrier —
+shorten to the step brand by ordinary subtyping where the step's
+[`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) is built, so program storage reaches a
+builtin body with no carrier, no pin and no `unsafe`
+([witnessed-memory.md](../workgraph/design/witnessed-memory.md)). The
 consumer-pull lift and the `Outcome::Forward` ready pull re-anchor their reads at a *node* lifetime,
 not a fabricated `'run`: each dep terminal is a lifetime-free
 [`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope riding the step as plain data, and a
@@ -375,9 +384,10 @@ The **region-free leaf doors** are the first kind. [`Scalar`](../src/machine/mod
 `RegionBrand::alloc_scalar` admits nothing that borrows a region and rebuilds each arm from its owned
 payload; `RegionBrand::alloc_string` is its sibling for the one leaf whose *representation* is
 region-hosted, re-homing the bytes into this region as part of the store; and
-`RegionBrand::alloc_expression` takes a [`KExpression`](../src/machine/model/ast.rs) and nothing
-else, which is what proves the cell it bumps borrows only the eternal-tier program storage that
-parsed it. Each yields a resident `&'a KObject<'a>` bumped in the destination, so residence is where
+`RegionBrand::alloc_expression` takes a
+[`ProgramExpression`](../src/machine/model/ast/program.rs) and nothing else — the marker minted only
+by a [`ProgramBrand`](../src/machine/core/arena/frame.rs) door — which is what proves the cell it
+bumps borrows only eternal-tier program storage. Each yields a resident `&'a KObject<'a>` bumped in the destination, so residence is where
 the door placed it. The witnessed spellings (`alloc_scalar_witnessed`,
 `alloc_expression_witnessed`) seal that product under a member-less own-region description: the empty
 witness pins nothing, so its carrier is sound only as a within-step transient — the step doors return

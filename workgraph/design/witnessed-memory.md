@@ -323,6 +323,21 @@ continuation opens beside its scope operand and an invariant family rejects
 separately-branded opens. There is no operand-free open: a caller with nothing
 to zip passes a trivial operand, which keeps the surface to one verb.
 
+The open's brand carries an **upper bound**. Its closure receives a
+[`Within<'b, 'outer>`](../src/witnessed/dormant.rs) token — a ZST whose declared
+`'outer: 'b` the `for<'b>` instantiation must discharge — so `'b` can no longer
+be instantiated at `'static` behind the caller's back. This is
+`std::thread::scope`'s shape (`for<'scope>` bounded by `'env` through the
+`Scope<'scope, 'env: 'scope>` argument type), and it is the channel for an
+**ambient capability** the embedder holds as a live borrow-checked reference for
+all of `'outer`: a covariant value of that kind shortens to the brand by ordinary
+subtyping inside the closure, needing no seal, no re-anchor and no pin, because
+its liveness is the borrow checker's rather than the witness system's. A value
+whose lifetime *was* erased still enters through the sealed operand. The
+anti-escape guarantee is untouched — the bound points one way, so nothing
+`'b`-branded gains a route into the result or into `'outer`-typed storage, and an
+invariant family still cannot unify `'b` with anything.
+
 The scheduler's node slot is the tier's production instance. `Workload::Continuation`
 is `Reattachable` alone — no `DropFree` — because the slot rests it as
 `SealedPinned<W::Continuation, Rc<W::Frame>>`

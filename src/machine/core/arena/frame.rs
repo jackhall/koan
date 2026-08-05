@@ -72,15 +72,17 @@ impl ProgramStorage {
 /// points take this rather than a bare `RegionBrand`, so a parsed AST's storage tier is checked at
 /// every call site rather than held by the discipline of one.
 ///
-/// What this pins is the *parse* door. Two answers in [`KObject`](crate::machine::model::KObject)
-/// — `object_cell_reach` calling an expression's cell `Owned`, `retains_home` answering `false` —
-/// hold because no expression reaching the value channel borrows a region a holder can outlive, and
-/// so does the expression door's own claim that the cell it bumps names no producer region
-/// ([`RegionBrand::alloc_expression`]). Parse output satisfies that by this type.
-/// A node the runtime builds mid-dispatch (`fn_def`'s deferred placeholder, `val_decl`'s type
-/// wrapper, `op_def`'s bridge body) takes an ordinary [`RegionBrand`] at its declaring scope, and
-/// satisfies it instead by never reaching the value channel: each is unwrapped or sub-dispatched
-/// where it is built, and the re-wrap sites pass their program-resident inner straight back out.
+/// This is also the value channel's only key. Two answers in
+/// [`KObject`](crate::machine::model::KObject) — `object_cell_reach` calling an expression's cell
+/// `Owned`, `retains_home` answering `false` — hold because no expression reaching the value
+/// channel borrows a region a holder can outlive, and so does the expression door's own claim that
+/// the cell it bumps names no producer region ([`RegionBrand::alloc_expression`]). All three cite
+/// one type rather than a flow: the channel admits only a
+/// [`ProgramExpression`](crate::machine::model::ast::ProgramExpression), which this brand's doors
+/// alone mint. A node built at an ordinary [`RegionBrand`] carries no such marker, so the channel
+/// is closed to it by type — a runtime-synthesized node dispatches in place instead, and a site
+/// that needs one as a value takes this brand (`op_def`'s bridge body) or threads the proof out of
+/// the arm it matched.
 ///
 /// The distinction needs a type because `KExpression` is covariant: a node borrowing a per-call
 /// region coerces to any shorter lifetime, so the borrow checker sees nothing to object to.

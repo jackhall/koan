@@ -120,11 +120,13 @@ channel:
   hold: `StagedSlot`, the hole an eager operand is staged into, and `Spliced`, the
   resting carrier cell a dep-finish writes back.
 
-`KObject::KExpression` takes a `KExpression`, and there is no conversion from a
+`KObject::KExpression` takes a
+[`ProgramExpression`](../src/machine/model/ast/program.rs) — a marked AST node,
+mintable only through a program-storage door — and there is no conversion from a
 working node to an AST one, so **a value can never carry a producer's reach
 through an expression** — the property the alloc door and the escape seam read as
-a structural fact ([value-substrates.md § Untyped
-arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+a structural fact ([value-substrates.md § Value-channel
+AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
 
 Crossing runs one way, through `WorkingExpression::from_ast(brand, ast)`: the
 parts run is wrapped as `Ast` parts and the cache copied, which is a slice copy

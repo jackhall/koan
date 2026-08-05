@@ -422,12 +422,51 @@ storage tiers differ and that difference is what the value channel reads:
   because that is where the scheduler writes a resolved sub-result's resting
   `Sealed` cell when it splices one in.
 
-`KObject::KExpression` takes a `KExpression`, and there is no conversion the other
-way, so a resolved sub-result is **unreachable from the value channel** by typing
-rather than by audit. That is what lets the alloc door call an expression cell's
-run empty, `retains_home` answer `false` for one, and the cost memo price it at
-zero as a borrow leaf ([§ Cost-driven copy](#cost-driven-copy-the-optimization)) —
-each an O(1) read of a structural fact, with no walk over the node behind it.
+A `WorkingExpression` has no conversion into the raw-AST family, so a resolved
+sub-result is **unreachable from the value channel** by typing rather than by
+audit. The tier of the raw node is typed in turn, one section down.
+
+### Value-channel AST: the program-storage marker
+
+The value channel's three verdicts — the alloc door calling an expression cell's
+run empty, `retains_home` answering `false`, and the cost memo pricing the cell
+at zero as a borrow leaf ([§ Cost-driven copy](#cost-driven-copy-the-optimization))
+— are each an O(1) read of one structural fact: the node's parts run is hosted in
+program storage, which no relocation releases. The claim is about the **parts
+slice**, not the node struct: `KExpression` is `Copy` and rides by value in the
+cell, so what a holder can outlive is the run the node borrows and everything
+reachable from it.
+
+That fact is a type, [`ProgramExpression` / `ProgramNode`](../src/machine/model/ast/program.rs)
+— `Copy` newtypes whose fields are private to their module, so the only way to
+obtain one is a mint door taking a
+[`ProgramBrand`](../src/machine/core/arena/frame.rs) or an accessor on a value
+that already carries the proof. A door mints at the brand it is handed, so a
+`ProgramBrand` shortened to a per-call step mints at that step's lifetime, which
+is what lets step code read program-hosted AST without a copy. The door's
+contract is the tier: every string and slice reachable from `parts` is
+allocated under that brand's region, which the parser discharges structurally —
+its whole pipeline runs under a `ProgramBrand` — and the one runtime minter
+discharges by allocating its texts and operand nodes through the same brand.
+`KObject::KExpression` takes a
+`ProgramExpression`, and the four expression-holding
+[`ExpressionPart`](../src/machine/model/ast.rs) arms (`Expression`,
+`SigiledTypeExpr`, `RecordType`, `QuotedExpression`) — the only conduits from the
+AST into the value channel — hold a `ProgramNode`, so each door compiles its
+proof out of the arm it matched. A node built at a per-call brand cannot be
+wrapped as a value.
+
+The marker is consumed only where the claim is used. The dispatch channel —
+sub-dispatches, `WorkingExpression`, the classifier, the structural cache — keeps
+carrying a bare `KExpression`, so the marker goes nowhere viral and there is no
+erase point to audit. Re-homing the node *struct* at any brand is sound for the
+same reason the claim is about the slice, and has its own door. Two consequences
+for the runtime's own node builders: one that merely dispatches what it builds
+(the dispatcher's multi-part construction group) takes the working form rather
+than minting a marker, so per-call AST never lands in eternal storage; and the
+one that mints a value-channel node (`OP`'s bridge body) builds under the run's
+program brand, which reaches it through the step's `SchedulerView`
+([memory-model.md](memory-model.md)) and bounds its growth by program size.
 
 ## Invariants preserved
 
@@ -458,3 +497,11 @@ left:
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
   — pricing copying-the-survivors-out against transferring-the-region, the
   local decision the cost seam's two numbers already support.
+
+The mint doors' tier contract is prose, not a type — a brand shortened to a step
+shares its lifetime with the step's own allocator, so nothing stops a part hosted
+at the step from being handed to a door:
+
+- [Eternal storage as its own lifetime](../roadmap/compile_safety/eternal-tier-lifetime.md)
+  — keeping the program-storage lifetime distinct from the step's, so the parts a
+  door accepts are checked rather than promised.
