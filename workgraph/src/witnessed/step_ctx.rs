@@ -57,14 +57,15 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// ```
     /// use std::rc::Rc;
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
-    /// use workgraph::witnessed::{Carrier, StepContext, Witnessed};
+    /// use workgraph::witnessed::{Carrier, Delivered, StepContext, StepCoverage, Witnessed};
     ///
     /// static SEVEN: u32 = 7;
     /// let cart = fresh_cart();
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
     /// let w: Witnessed<RefFamily, Carrier<RegionCart>> =
     ///     ctx.alloc::<RefFamily, FixtureProfile>(|_region| &SEVEN);
-    /// assert_eq!(w.with_pinned(&cart, |r| **r), 7);
+    /// let sealed = Delivered::seal(w, Rc::clone(&cart), StepCoverage::empty());
+    /// assert_eq!(sealed.open(|r| *r), 7);
     /// ```
     ///
     /// ```compile_fail
@@ -220,7 +221,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         })
     }
 
-    /// [`Witnessed::map_pinned_placing`] pinned by **this context's own held frame** (guarantee 4):
+    /// The operand-placing fold pinned by **this context's own held frame** (guarantee 4):
     /// the build closure receives a [`FoldedPlacement`] over the operand's own head handle — the
     /// handle its [`Carrier<F>`] witness was yoked over — instead of a bare [`FoldToken`], so a
     /// value the closure folds from `operand`'s declared views stores through the placement with no

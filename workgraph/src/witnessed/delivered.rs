@@ -67,6 +67,13 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
         self.cell.open_with(&self.pins, f)
     }
 
+    /// [`Self::open`] handing `f` the re-anchored value **by reference**, for a value family whose
+    /// views are not `Copy` — pinned by the envelope's own owned pins, exactly as `open` is. The
+    /// by-ref read for a delivered value; like every read here it takes no pin parameter.
+    pub fn open_ref<R>(&self, f: impl for<'b> FnOnce(&'b T::At<'b>) -> R) -> R {
+        self.cell.open_ref_with(&self.pins, f)
+    }
+
     /// Open the delivered value into the **in-use** [`Opened`] state at the step lifetime `'b`,
     /// pinned by the envelope's own owned pins — the one-line convenience over
     /// [`Sealed::open_at`] that supplies its own owned coverage (the envelope already holds the pins

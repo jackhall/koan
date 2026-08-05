@@ -593,25 +593,20 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
         drop(producer);
     }
 
-    // The accumulator is not a `Copy` family, so the read goes through the carrier under a held
-    // pin; `_coverage` keeps everything the fold claimed alive across it.
-    let (acc_cell, _coverage) = acc_final.into_parts();
-    let values: Vec<f64> = acc_cell
-        .unseal()
-        .with_pinned(&dest_storage, |(_region, cells)| {
-            cells
-                .iter()
-                .map(|h| match h.object() {
-                    KObject::Record(substrate, _) => {
-                        match substrate.field("acc").map(|h| h.object()) {
-                            Some(KObject::Number(n)) => *n,
-                            _ => panic!("expected field acc: Number"),
-                        }
-                    }
-                    other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
-                })
-                .collect()
-        });
+    // The accumulator is not a `Copy` family, so the read is by reference; the envelope's own pins
+    // keep everything the fold claimed alive across it.
+    let values: Vec<f64> = acc_final.open_ref(|(_region, cells)| {
+        cells
+            .iter()
+            .map(|h| match h.object() {
+                KObject::Record(substrate, _) => match substrate.field("acc").map(|h| h.object()) {
+                    Some(KObject::Number(n)) => *n,
+                    _ => panic!("expected field acc: Number"),
+                },
+                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+            })
+            .collect()
+    });
     assert_eq!(
         values,
         (0..DEPTH).map(|i| i as f64).collect::<Vec<_>>(),
@@ -694,25 +689,20 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         drop(producer);
     }
 
-    // The accumulator is not a `Copy` family, so the read goes through the carrier under a held
-    // pin; `_coverage` keeps everything the fold claimed alive across it.
-    let (acc_cell, _coverage) = acc_final.into_parts();
-    let read_ids: Vec<_> = acc_cell
-        .unseal()
-        .with_pinned(&dest_storage, |(_region, cells)| {
-            cells
-                .iter()
-                .map(|h| match h.object() {
-                    KObject::Record(substrate, _) => {
-                        match substrate.field("f").map(|h| h.object()) {
-                            Some(KObject::KFunction(f)) => f.captured_scope().id,
-                            _ => panic!("expected field f: KFunction"),
-                        }
-                    }
-                    other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
-                })
-                .collect()
-        });
+    // The accumulator is not a `Copy` family, so the read is by reference; the envelope's own pins
+    // keep everything the fold claimed alive across it.
+    let read_ids: Vec<_> = acc_final.open_ref(|(_region, cells)| {
+        cells
+            .iter()
+            .map(|h| match h.object() {
+                KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+                    Some(KObject::KFunction(f)) => f.captured_scope().id,
+                    _ => panic!("expected field f: KFunction"),
+                },
+                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+            })
+            .collect()
+    });
     assert_eq!(
         read_ids, expected_ids,
         "every closure's captured scope reads back unchanged after its producer frame freed"
@@ -780,19 +770,15 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
     let read_ids: Vec<_> = relocated
         .into_iter()
         .map(|envelope| {
-            // The read goes through the carrier under a held pin; `_coverage` keeps everything the
-            // seam's fold claimed — each pinned producer among it — alive across it.
-            let (cell, _coverage) = envelope.into_parts();
-            cell.unseal()
-                .with_pinned(&dest_storage, |carried| match carried.object() {
-                    KObject::Record(substrate, _) => {
-                        match substrate.field("f").map(|h| h.object()) {
-                            Some(KObject::KFunction(f)) => f.captured_scope().id,
-                            _ => panic!("expected field f: KFunction"),
-                        }
-                    }
-                    other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
-                })
+            // The envelope's own pins cover the read, keeping everything the seam's fold claimed —
+            // each pinned producer among it — alive across it.
+            envelope.open_ref(|carried| match carried.object() {
+                KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+                    Some(KObject::KFunction(f)) => f.captured_scope().id,
+                    _ => panic!("expected field f: KFunction"),
+                },
+                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+            })
         })
         .collect();
     assert_eq!(
@@ -879,59 +865,54 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
 
     drop(producer);
 
-    let (acc_cell, _coverage) = acc_final.into_parts();
-    let read: Vec<(String, f64)> =
-        acc_cell
-            .unseal()
-            .with_pinned(&dest_storage, |(_region, cells)| match cells[0].object() {
-                KObject::Record(substrate, _) => {
-                    // Read through the name index twice over: the name-order walk, and a by-name
-                    // lookup per field — the binary search over the sorted name slice.
-                    let walked: Vec<String> =
-                        substrate.fields().map(|(n, _)| n.to_string()).collect();
-                    let mut sorted = NAMES
-                        .iter()
-                        .chain(std::iter::once(&TABLE))
-                        .map(|n| n.to_string())
-                        .collect::<Vec<_>>();
-                    sorted.sort();
-                    assert_eq!(
-                        walked, sorted,
-                        "the relocated record walks its fields in name order — the index is the \
+    let read: Vec<(String, f64)> = acc_final.open_ref(|(_region, cells)| match cells[0].object() {
+        KObject::Record(substrate, _) => {
+            // Read through the name index twice over: the name-order walk, and a by-name
+            // lookup per field — the binary search over the sorted name slice.
+            let walked: Vec<String> = substrate.fields().map(|(n, _)| n.to_string()).collect();
+            let mut sorted = NAMES
+                .iter()
+                .chain(std::iter::once(&TABLE))
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>();
+            sorted.sort();
+            assert_eq!(
+                walked, sorted,
+                "the relocated record walks its fields in name order — the index is the \
                          sorted slice, not the order the literal was written"
+            );
+            // Then the nested dict's own index, reached *through* the outer one: walk the
+            // table, then look every key back up — the hash and the byte-wise compare both
+            // read key slices the relocation re-bumped.
+            match substrate.field(TABLE).map(|h| h.object()) {
+                Some(KObject::Dict(table, _)) => {
+                    assert_eq!(
+                        table.entries().count(),
+                        KEYS.len(),
+                        "the relocated dict keeps every entry"
                     );
-                    // Then the nested dict's own index, reached *through* the outer one: walk the
-                    // table, then look every key back up — the hash and the byte-wise compare both
-                    // read key slices the relocation re-bumped.
-                    match substrate.field(TABLE).map(|h| h.object()) {
-                        Some(KObject::Dict(table, _)) => {
-                            assert_eq!(
-                                table.entries().count(),
-                                KEYS.len(),
-                                "the relocated dict keeps every entry"
-                            );
-                            for (i, key) in KEYS.iter().enumerate() {
-                                match table.entry(&KKey::String(key)).map(|h| h.object()) {
-                                    Some(KObject::Number(n)) => assert_eq!(
-                                        *n, i as f64,
-                                        "entry {key} looks up after the producer frame freed"
-                                    ),
-                                    _ => panic!("expected entry {key}: Number"),
-                                }
-                            }
+                    for (i, key) in KEYS.iter().enumerate() {
+                        match table.entry(&KKey::String(key)).map(|h| h.object()) {
+                            Some(KObject::Number(n)) => assert_eq!(
+                                *n, i as f64,
+                                "entry {key} looks up after the producer frame freed"
+                            ),
+                            _ => panic!("expected entry {key}: Number"),
                         }
-                        _ => panic!("expected field {TABLE}: Dict"),
                     }
-                    NAMES
-                        .iter()
-                        .map(|name| match substrate.field(name).map(|h| h.object()) {
-                            Some(KObject::Number(n)) => ((*name).to_string(), *n),
-                            _ => panic!("expected field {name}: Number"),
-                        })
-                        .collect()
                 }
-                other => panic!("expected a Record, got {}", other.ktype().name(&types)),
-            });
+                _ => panic!("expected field {TABLE}: Dict"),
+            }
+            NAMES
+                .iter()
+                .map(|name| match substrate.field(name).map(|h| h.object()) {
+                    Some(KObject::Number(n)) => ((*name).to_string(), *n),
+                    _ => panic!("expected field {name}: Number"),
+                })
+                .collect()
+        }
+        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+    });
     assert_eq!(
         read,
         NAMES

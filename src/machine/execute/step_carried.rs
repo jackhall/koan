@@ -114,24 +114,23 @@ impl<'step, T: Reattachable + DropFree> StepCarried<'step, T> {
         Delivered::seal(self.inner, host, self.pins)
     }
 
-    /// Borrow the carrier the door built and read its pointee under an externally supplied `pin`,
-    /// exactly as [`Witnessed::with_pinned`] does — the borrowed inspection a door test uses to
-    /// assert a product's contents without ever extracting the carrier. `read` sees a `for<'b>`
-    /// re-anchored view and returns owned data; the lifetime-free [`Witnessed`] never leaves the
-    /// wrapper. `#[cfg(test)]`-gated, so it is absent from every production build: the no-stash
-    /// compile guarantee AC 1 names holds for all non-test code, pinned by the `compile_fail`
-    /// fixtures. A `machine::core` door test cannot reach the `pub(super)` [`Self::seal_at_step`]
-    /// exit, so this borrowed read is how it inspects the carrier the door built.
+    /// Seal the carrier the door built over its anchor's owner and read the delivered value by
+    /// reference — the inspection a door test uses to assert a product's contents without ever
+    /// extracting the carrier. `host` is the anchor's owner, the same trust [`Self::seal_at_step`]
+    /// places; the read runs under the envelope's own pins, so there is no free pin parameter to
+    /// mis-supply. `read` sees a `for<'b>` re-anchored view and returns owned data; the
+    /// lifetime-free [`Witnessed`] never leaves the wrapper. Consuming, since every caller reads
+    /// once and drops the carrier. `#[cfg(test)]`-gated, so it is absent from every production
+    /// build: the no-stash compile guarantee AC 1 names holds for all non-test code, pinned by the
+    /// `compile_fail` fixtures. A `machine::core` door test cannot reach the `pub(super)`
+    /// [`Self::seal_at_step`] exit, so this read is how it inspects the carrier the door built.
     #[cfg(test)]
-    pub(crate) fn inspect_pinned<Pin, R>(
-        &self,
-        pin: &Pin,
+    pub(crate) fn inspect_at<R>(
+        self,
+        host: Rc<FrameStorage>,
         read: impl for<'b> FnOnce(&'b <T as Reattachable>::At<'b>) -> R,
-    ) -> R
-    where
-        Pin: crate::witnessed::Witness,
-    {
-        self.inner.with_pinned(pin, read)
+    ) -> R {
+        Delivered::seal(self.inner, host, self.pins).open_ref(read)
     }
 }
 

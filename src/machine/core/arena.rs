@@ -253,7 +253,7 @@ impl<'a> RegionBrand<'a> {
 }
 
 /// The allocation capability inside a reach-folding closure: the enclosing combinator
-/// (`transfer_into` / `merge_pinned` / `map_pinned` / [`StepAllocator::alloc_carried_with`])
+/// (`transfer_into` / `merge_into` / `project` / [`StepAllocator::alloc_carried_with`])
 /// composes a witness naming every source operand's reach, so a value built *from the closure's
 /// operands* is covered by the fold without a per-value audit. Carries the folded-placement
 /// methods [`RegionBrand`] deliberately lacks; everything else derefs. A [`FoldedPlacement`] is the
@@ -462,7 +462,7 @@ pub(crate) trait KoanRegionExt {
     /// every other construction site. One primitive for both value families — the closure returns a
     /// `Carried::Object` (an [`alloc_object_folded`](FoldingBrand::alloc_object_folded)) or a
     /// `Carried::Type` (a `Copy` `KType` handle, needing no storage door). A value that *references*
-    /// another region's resident value folds that in with [`Witnessed::merge_pinned`] instead,
+    /// another region's resident value folds that in with the envelope merge instead,
     /// unioning its reach; this primitive covers the case whose references are all region-derived or
     /// owned, so the `for<'b>` brand admits them.
     ///

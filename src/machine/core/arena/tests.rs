@@ -395,22 +395,17 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
     );
     // Allocate the list node from the carried dest region; the cells ride borrows into both foreign
     // regions, both now minted as members into the dest arena.
-    let list: Witnessed<CarriedFamily, CarrierWitness> =
-        acc2.into_cell()
-            .unseal()
-            .map_pinned(&dest_frame, |(region, cells), _token| {
-                let owned_cells = crate::machine::core::FrameCoverage::empty();
-                let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
-                    .with_holder(&owned_cells);
-                Carried::Object(
-                    region.alloc_object_folded(KObject::list_of_held(region, cells, &types)),
-                )
-            });
+    let list = acc2.project::<CarriedFamily>(|(region, cells), _token| {
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
+        let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
+            .with_holder(&owned_cells);
+        Carried::Object(region.alloc_object_folded(KObject::list_of_held(region, cells, &types)))
+    });
     // Drop the producer handles: the dest arena's minted set solely owns both foreign regions; the
-    // dest region itself rides the held `dest_frame` (the retention stand-in), which the read names.
+    // dest region itself rides the envelope's own pins, which cover the read.
     drop(frame_a);
     drop(frame_b);
-    let got = list.with_pinned(&dest_frame, |c| match c.object() {
+    let got = list.open_ref(|c| match c.object() {
         KObject::List(items, _) => items
             .elements()
             .iter()
@@ -568,7 +563,7 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
     drop(producer_frame);
     drop(consumer_frame);
 
-    let read_addr = sealed.inspect_pinned(&consumer_storage, |c| match c.object() {
+    let read_addr = sealed.inspect_at(Rc::clone(&consumer_storage), |c| match c.object() {
         KObject::Record(substrate, record_type) => {
             assert_eq!(
                 *record_type, narrowed_type,
@@ -889,7 +884,7 @@ fn raw_expression_seals_through_the_expression_door() {
                 brand.alloc_text("x"),
             ))]);
     let carried = scope.brand().alloc_expression_witnessed(expression);
-    let parts = carried.inspect_pinned(&storage, |c| match c.object() {
+    let parts = carried.inspect_at(Rc::clone(&storage), |c| match c.object() {
         KObject::KExpression(e) => e.parts.len(),
         _ => panic!("the expression door stores an expression cell"),
     });
@@ -908,8 +903,8 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&frame), |region| {
             (region.handle(), &[][..])
         });
-    let stored: Witnessed<CarriedFamily, CarrierWitness> =
-        acc0.map_pinned(&frame, |(region, _cells), _token| {
+    let stored = Delivered::seal(acc0, Rc::clone(&frame), FrameCoverage::empty())
+        .project::<CarriedFamily>(|(region, _cells), _token| {
             let owned_cells = crate::machine::core::FrameCoverage::empty();
             let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
                 .with_holder(&owned_cells);
@@ -917,7 +912,7 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
                 Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
             Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, &types)))
         });
-    let homed = stored.with_pinned(&frame, |c| match c.object() {
+    let homed = stored.open_ref(|c| match c.object() {
         KObject::Record(substrate, _) => substrate.homed_in(frame.region()),
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
     });

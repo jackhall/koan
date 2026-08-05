@@ -11,8 +11,10 @@
 //! are rank-2 (`for<'b>`) branded so a fabricated content lifetime cannot escape the witness pin:
 //! [`Witnessed::with`] (borrow + read) and [`Witnessed::map`] (consume + transform) re-anchor an
 //! already-bundled carrier, [`Witnessed::yoke`] *sources* one from the witness's own region so
-//! co-location holds by construction, and [`Witnessed::merge_pinned`] combines two under one brand
-//! and re-seals under their composed witness. For storage *between* accesses a carrier rests in a
+//! co-location holds by construction, and the envelope-bearing
+//! [`Delivered::merge_into`](delivered::Delivered::merge_into) /
+//! [`transfer_into`](delivered::Delivered::transfer_into) combine two under one brand and re-seal
+//! under their composed witness. For storage *between* accesses a carrier rests in a
 //! [`Sealed`], the opaque dormant form that hides every transform and re-anchors only through the
 //! rank-2 [`Sealed::open`]. *During* a step it opens into an [`Opened`], the borrow-tied in-use
 //! state whose content lifetime rides the frame borrow so a step reads freely and
@@ -223,7 +225,7 @@ pub(crate) fn with_branded_ref<T: Reattachable, R>(
 }
 
 /// Proof of being inside a fold combinator's `for<'b>` closure. Minted only by the fold engines
-/// ([`Witnessed::map`] / [`Witnessed::map_pinned`] / [`Witnessed::merge_composed`] /
+/// ([`Witnessed::map`] / [`Delivered::project`](delivered::Delivered::project) /
 /// [`Delivered::transfer_into`](delivered::Delivered::transfer_into) /
 /// [`StepContext::alloc_with`](step_ctx::StepContext::alloc_with)); the private field keeps an
 /// embedder from forging one, and the `'b` brand keeps it from escaping the closure — so a
@@ -420,8 +422,9 @@ impl<T: Reattachable + DropFree> Erased<T> {
 
     /// Re-anchor the carrier to a caller-chosen `'r` without a bundled witness — the raw fabrication
     /// the externally-witnessed [`SealedExtern::open`] wraps behind its rank-2 brand, supplying the pin
-    /// at the access. The bundled-witness accessors ([`Witnessed::map`], [`Witnessed::merge_pinned`],
-    /// the borrow-bounded [`Witnessed::read`]) route their re-anchor through here, each discharging this
+    /// at the access. The bundled-witness accessors ([`Witnessed::map`], the composition engine under
+    /// the envelope merge, the borrow-bounded [`Witnessed::read`]) route their re-anchor through here,
+    /// each discharging this
     /// contract with its held witness; [`Witnessed::with`] reads through [`with_branded_ref`] instead.
     ///
     /// # Safety
@@ -545,10 +548,12 @@ unsafe impl<F: RegionOwner> WitnessRegion for Rc<F> {
     }
 }
 
-/// Witness composition for [`Witnessed::merge_pinned`] /
-/// [`Delivered::transfer_into`](delivered::Delivered::transfer_into), run **inside** the `for<'b>`
-/// brand while both operands' backings are still covered (by the bundled witnesses, or by the
-/// pinned-merge caller's external pins) and the destination's live form `B::At<'b>` is in scope —
+/// Witness composition for the envelope merge
+/// ([`Delivered::transfer_into`](delivered::Delivered::transfer_into) /
+/// [`merge_into`](delivered::Delivered::merge_into)), run **inside** the `for<'b>`
+/// brand while both operands' backings are still covered (by the bundled witnesses, or by the pins
+/// the envelope supplies to the composition engine) and the destination's live form `B::At<'b>` is
+/// in scope —
 /// so an impl can *mint* into the destination rather than only computing a pure union. Total: every
 /// pair of witnesses is composable against any destination, so there is no failure verdict.
 ///
@@ -600,8 +605,8 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// a production construction path. Every production carrier is born co-located instead — via
     /// [`yoke`](Self::yoke) (sourced from the witness's region), [`resident`](Self::resident) (a
     /// region-pure value under the empty witness) or its reference-only twin
-    /// [`resident_in`](Witnessed::resident_in), or [`merge_pinned`](Self::merge_pinned) (folding two
-    /// co-located carriers) — so no site pairs an arbitrary value with an arbitrary witness.
+    /// [`resident_in`](Witnessed::resident_in), or the envelope merge (folding two co-located
+    /// carriers) — so no site pairs an arbitrary value with an arbitrary witness.
     pub fn from_erased(value: Erased<T>, witness: W) -> Self {
         Witnessed { value, witness }
     }
@@ -622,7 +627,7 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// read: the active frame pins its region during the producing step, and once stored on a node the
     /// scheduler's retention hold (the delivery envelope's host) carries that pin — reads open under
     /// it, never bare. A value that *references* another region is the [`yoke`](Self::yoke) /
-    /// [`merge_pinned`](Self::merge_pinned) path, which sources or folds that region's pin instead.
+    /// envelope-merge path, which sources or folds that region's pin instead.
     ///
     /// Safe because the erase cannot fabricate a lifetime, and `W::default()` is the pins-nothing
     /// element of the witness type (the empty set).
@@ -690,7 +695,7 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// carrier whose bundled witness pins nothing (the reference-only [`Carrier`]), mirroring
     /// [`Sealed::open_with`]. `pin` is held for the whole call and keeps the pointee live; the
     /// `for<'b>` brand confines the re-anchored view exactly as `with` does.
-    pub fn with_pinned<Pin: Witness, R>(
+    pub(in crate::witnessed) fn with_pinned<Pin: Witness, R>(
         &self,
         pin: &Pin,
         f: impl for<'b> FnOnce(&'b T::At<'b>) -> R,
@@ -706,7 +711,7 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// pins nothing (the reference-only [`Carrier`]). `pin` is held for the whole call and keeps
     /// the carrier's pointee live; the [`FoldToken<'b>`] argument is load-bearing exactly as in
     /// `map` (`E0582`).
-    pub fn map_pinned<P: Reattachable + DropFree, Pin: Witness>(
+    pub(in crate::witnessed) fn map_pinned<P: Reattachable + DropFree, Pin: Witness>(
         self,
         pin: &Pin,
         f: impl for<'b> FnOnce(T::At<'b>, FoldToken<'b>) -> P::At<'b>,
@@ -734,7 +739,11 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// was yoked over at birth, never a caller argument or a closure capture — the placement's
     /// destination cannot be substituted by caller code; the covariance a bare handle would admit
     /// is closed.
-    pub fn map_pinned_placing<P: Reattachable + DropFree, PP: StorageProfile, Pin: Witness>(
+    pub(in crate::witnessed) fn map_pinned_placing<
+        P: Reattachable + DropFree,
+        PP: StorageProfile,
+        Pin: Witness,
+    >(
         self,
         pin: &Pin,
         f: impl for<'b> FnOnce(T::At<'b>, FoldedPlacement<'b, PP>) -> P::At<'b>,
@@ -763,62 +772,9 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
         }
     }
 
-    /// Combine two witnessed carriers under an **externally supplied pin** rather than bundled
-    /// pinning witnesses — the pinned-merge verb for reference-only-witnessed carriers (the
-    /// collapsed [`Carrier`]), mirroring [`Sealed::open_with`]'s relationship to [`Sealed::open`].
-    /// The composed witness
-    /// still comes from [`ComposeWitness::compose`], so a caller cannot forge coverage; what the
-    /// caller supplies is liveness: `pin` covers the *source* (`self`) carrier's backing for the
-    /// whole call — the delivery envelope's own pins, the retention hold — while `other` (the
-    /// destination operand being built into) is covered by its own live destination, which the
-    /// caller necessarily holds to be composing into it.
-    pub fn merge_pinned<B: Reattachable + DropFree, P: Reattachable + DropFree, Pin: Witness>(
-        self,
-        other: Witnessed<B, W>,
-        pin: &Pin,
-        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
-    ) -> Witnessed<P, W>
-    where
-        W: ComposeWitness<B>,
-    {
-        // The generic composed witness owns whatever it names (a self-contained union), so it threads
-        // nothing out — `merge_composed`'s `X` is `()`. It reads the destination operand before `f`
-        // consumes it, and depends on neither the product nor a source claim.
-        let (out, ()) = self.merge_composed(other, pin, |l, r, left, right, token| {
-            let witness = W::compose(l, r, &right);
-            (f(left, right, token), witness, ())
-        });
-        out
-    }
-
-    /// [`Self::merge_pinned`] handing `f` a [`FoldedPlacement`] over the destination operand `other`'s
-    /// own handle instead of a bare [`FoldToken`]. The composed witness names `other`'s region, and
-    /// the placement is minted over that same handle, so a value `f` folds from the two operands
-    /// stores through the engine-controlled destination — never a caller-captured handle.
-    pub fn merge_pinned_placing<B, P2, Pr, Pin>(
-        self,
-        other: Witnessed<B, W>,
-        pin: &Pin,
-        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P2::At<'b>,
-    ) -> Witnessed<P2, W>
-    where
-        B: Reattachable + DropFree,
-        P2: Reattachable + DropFree,
-        Pin: Witness,
-        Pr: StorageProfile + 'static,
-        W: ComposeWitness<B>,
-        for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
-    {
-        let placing = place_over_dest::<T, B, P2, Pr>(f);
-        let (out, ()) = self.merge_composed(other, pin, |l, r, left, right, token| {
-            let witness = W::compose(l, r, &right);
-            (placing(left, right, token), witness, ())
-        });
-        out
-    }
-
-    /// The engine under [`Self::merge_pinned`] and the envelope-bearing
-    /// [`Delivered::transfer_into`](delivered::Delivered::transfer_into): a pinned merge whose
+    /// The engine under the envelope-bearing relocation and merge verbs
+    /// ([`Delivered::transfer_into`](delivered::Delivered::transfer_into),
+    /// [`Delivered::merge_into`](delivered::Delivered::merge_into)): a pinned merge whose
     /// `fold` both builds the product and computes the composed witness, inside one brand. Both
     /// operand witnesses and both live forms are in scope there, so a composition that must see the
     /// *product* — the retention predicate at a relocation verb, which asks what the folded bytes
@@ -1196,6 +1152,19 @@ impl<T: Reattachable + DropFree, W> Sealed<T, W> {
         // outlives `pin`.
         let _ = pin;
         f(self.inner.read_pinned())
+    }
+
+    /// [`Self::open_with`] handing `f` the re-anchored value **by reference** — the externally-pinned
+    /// read for a value family whose views are not `Copy`. Same soundness story as `open_with`: `pin`
+    /// is held for the whole call and keeps the pointee live, and the `for<'b>` brand confines the
+    /// view. Crate-internal: the public reads are the envelope's own-pinned
+    /// [`Delivered::open_ref`](delivered::Delivered::open_ref) family, which supplies the pin itself.
+    pub(in crate::witnessed) fn open_ref_with<Wx: Witness, R>(
+        &self,
+        pin: &Wx,
+        f: impl for<'b> FnOnce(&'b T::At<'b>) -> R,
+    ) -> R {
+        self.inner.with_pinned(pin, f)
     }
 
     /// Open the sealed carrier into the **in-use** [`Opened`] state at the step lifetime `'b` — the

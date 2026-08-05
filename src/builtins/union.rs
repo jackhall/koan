@@ -347,7 +347,7 @@ mod tests {
                     .apply(scope, &mut crate::machine::WriteGate::for_test())
                     .expect("a same-handle re-install overwrites idempotently");
             }
-            carrier.inspect_pinned(&crate::witnessed::NoPins, |c| {
+            carrier.inspect_at(std::rc::Rc::clone(&region), |c| {
                 matches!(c, Carried::Type(kt)
                     if matches!(types.node(*kt), TypeNode::Union { members } if members.len() == 2))
             })
