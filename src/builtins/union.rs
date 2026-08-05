@@ -83,7 +83,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "UNION", ctx.types));
     let schema_expr = match arg_object(ctx.args, "schema") {
-        Some(KObject::KExpression(e)) => *e,
+        Some(KObject::KExpression(e)) => e.node(),
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "UNION schema slot must be a parenthesized dict literal".to_string(),

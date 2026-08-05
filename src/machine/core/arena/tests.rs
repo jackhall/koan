@@ -874,7 +874,7 @@ fn mint_teardown_releases_members() {
 /// lane (`dispatch::single_poll::literal_pass_through`) stores every quoted body through this door.
 #[test]
 fn raw_expression_seals_through_the_expression_door() {
-    use crate::machine::model::{ExpressionPart, KExpression};
+    use crate::machine::model::ExpressionPart;
     use crate::source::Spanned;
 
     let program = program_storage();
@@ -882,12 +882,12 @@ fn raw_expression_seals_through_the_expression_door() {
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
 
-    let expression = KExpression::new(
-        brand,
-        vec![Spanned::bare(ExpressionPart::Identifier(
-            brand.alloc_text("x"),
-        ))],
-    );
+    let expression =
+        program
+            .brand()
+            .new_expression(vec![Spanned::bare(ExpressionPart::Identifier(
+                brand.alloc_text("x"),
+            ))]);
     let carried = scope.brand().alloc_expression_witnessed(expression);
     let parts = carried.inspect_pinned(&storage, |c| match c.object() {
         KObject::KExpression(e) => e.parts.len(),

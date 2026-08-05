@@ -118,8 +118,9 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
         &mut crate::machine::WriteGate::for_test(),
     );
     let brand = region.brand();
+    let program = program_storage();
     let inner = ExpressionPart::expression(
-        brand,
+        program.brand(),
         vec![
             Spanned::bare(ExpressionPart::Identifier("x")),
             Spanned::bare(ExpressionPart::Keyword(":")),

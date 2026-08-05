@@ -22,7 +22,7 @@ use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::KType;
 use crate::machine::model::{
-    Carried, CarriedFamily, ContainerSubstrate, Held, KExpression, KObject, Module, Scalar,
+    Carried, CarriedFamily, ContainerSubstrate, Held, KObject, Module, ProgramExpression, Scalar,
 };
 use crate::witnessed::reattachable;
 use crate::witnessed::{
@@ -194,20 +194,24 @@ impl<'a> RegionBrand<'a> {
 
     /// The store for a `#(...)` quote's body as data — the shape [`Self::alloc_scalar_witnessed`]
     /// cannot take, since `KObject<'a>` is invariant and raw AST has no `'static` rebuild. The
-    /// signature is the enforcement: only a [`KExpression`](crate::machine::model::KExpression)
-    /// reaches this door, and an AST node names no producer region, so the cell the door bumps here
-    /// borrows nothing a seal would have to pin.
+    /// signature is the enforcement: the parameter is a
+    /// [`ProgramExpression`](crate::machine::model::ast::ProgramExpression), so the node's parts run
+    /// is program-storage hosted by type, and the cell the door bumps here borrows nothing a seal
+    /// would have to pin.
     ///
     /// The cell lands in this brand's own region bump, so its residence is where it was placed,
     /// and it costs region death nothing — an expression's parts are already bump-hosted runs.
-    pub(crate) fn alloc_expression(self, expression: KExpression<'a>) -> &'a KObject<'a> {
+    pub(crate) fn alloc_expression(self, expression: ProgramExpression<'a>) -> &'a KObject<'a> {
         self.alloc_value(KObject::KExpression(expression))
     }
 
     /// [`Self::alloc_expression`] bundled as the resident carrier — the quote terminal's one call,
     /// sealed under the same member-less own-region description
     /// [`Self::alloc_scalar_witnessed`] mints.
-    pub(crate) fn alloc_expression_witnessed(self, expression: KExpression<'a>) -> StepCarried<'a> {
+    pub(crate) fn alloc_expression_witnessed(
+        self,
+        expression: ProgramExpression<'a>,
+    ) -> StepCarried<'a> {
         StepCarried::born(
             self.seal_resident::<CarriedFamily>(Carried::Object(self.alloc_expression(expression))),
         )

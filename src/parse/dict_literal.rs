@@ -5,13 +5,13 @@
 //! delegate to `accept_colon`, `accept_equals`, `accept_comma`, and `finish`; multi-part
 //! keys/values collapse into a sub-expression via `single_or_wrapped`.
 
-use crate::machine::core::RegionBrand;
+use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::KError;
 use crate::source::Spanned;
 
 pub(super) struct DictFrame<'a> {
-    brand: RegionBrand<'a>,
+    brand: ProgramBrand<'a>,
     pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
     state: DictPairState<'a>,
     mode: BraceMode,
@@ -50,7 +50,7 @@ enum DictPairState<'a> {
 /// dispatches them. The wrapper is spanless: a brace frame stores bare parts, so no span
 /// survives to stamp on it.
 fn single_or_wrapped<'a>(
-    brand: RegionBrand<'a>,
+    brand: ProgramBrand<'a>,
     parts: Vec<ExpressionPart<'a>>,
 ) -> ExpressionPart<'a> {
     match <[ExpressionPart<'a>; 1]>::try_from(parts) {
@@ -76,7 +76,7 @@ fn is_dict_key_start_part(part: &ExpressionPart<'_>) -> bool {
 }
 
 impl<'a> DictFrame<'a> {
-    pub(super) fn new(brand: RegionBrand<'a>) -> Self {
+    pub(super) fn new(brand: ProgramBrand<'a>) -> Self {
         Self {
             brand,
             pairs: Vec::new(),

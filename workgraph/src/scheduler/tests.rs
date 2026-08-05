@@ -138,7 +138,7 @@ fn parked_continuation_opens_and_runs_after_its_handles_drop() {
     let got = sealed.open(
         SealedExtern::<UnitOperand>::erase(()),
         &NoPins,
-        |continuation: Box<dyn FnOnce() -> u32 + '_>, ()| continuation(),
+        |_within, continuation: Box<dyn FnOnce() -> u32 + '_>, ()| continuation(),
     );
     assert_eq!(got, 9);
 }

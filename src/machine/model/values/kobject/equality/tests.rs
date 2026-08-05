@@ -337,28 +337,19 @@ fn wrapped_distinct_nominal_is_unequal() {
 fn kexpression_structural_equality() {
     let types = TypeRegistry::new();
     let program = program_storage();
-    let brand = program.brand().region();
-    let a = KObject::KExpression(KExpression::new(
-        brand,
-        vec![
-            part(ExpressionPart::Keyword("LET")),
-            part(ExpressionPart::Identifier("x")),
-        ],
-    ));
-    let b = KObject::KExpression(KExpression::new(
-        brand,
-        vec![
-            part(ExpressionPart::Keyword("LET")),
-            part(ExpressionPart::Identifier("x")),
-        ],
-    ));
-    let c = KObject::KExpression(KExpression::new(
-        brand,
-        vec![
-            part(ExpressionPart::Keyword("LET")),
-            part(ExpressionPart::Identifier("y")),
-        ],
-    ));
+    let brand = program.brand();
+    let a = KObject::KExpression(brand.new_expression(vec![
+        part(ExpressionPart::Keyword("LET")),
+        part(ExpressionPart::Identifier("x")),
+    ]));
+    let b = KObject::KExpression(brand.new_expression(vec![
+        part(ExpressionPart::Keyword("LET")),
+        part(ExpressionPart::Identifier("x")),
+    ]));
+    let c = KObject::KExpression(brand.new_expression(vec![
+        part(ExpressionPart::Keyword("LET")),
+        part(ExpressionPart::Identifier("y")),
+    ]));
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&c, &types), Ok(false));
 }
@@ -367,20 +358,17 @@ fn kexpression_structural_equality() {
 fn kexpression_number_literal_is_ieee() {
     let types = TypeRegistry::new();
     let program = program_storage();
-    let brand = program.brand().region();
-    let nan = KObject::KExpression(KExpression::new(
-        brand,
-        vec![part(ExpressionPart::Literal(KLiteral::Number(f64::NAN)))],
-    ));
+    let brand = program.brand();
+    let nan = KObject::KExpression(brand.new_expression(vec![part(ExpressionPart::Literal(
+        KLiteral::Number(f64::NAN),
+    ))]));
     assert_eq!(nan.value_equal(&nan, &types), Ok(false));
-    let one = KObject::KExpression(KExpression::new(
-        brand,
-        vec![part(ExpressionPart::Literal(KLiteral::Number(1.0)))],
-    ));
-    let one2 = KObject::KExpression(KExpression::new(
-        brand,
-        vec![part(ExpressionPart::Literal(KLiteral::Number(1.0)))],
-    ));
+    let one = KObject::KExpression(
+        brand.new_expression(vec![part(ExpressionPart::Literal(KLiteral::Number(1.0)))]),
+    );
+    let one2 = KObject::KExpression(
+        brand.new_expression(vec![part(ExpressionPart::Literal(KLiteral::Number(1.0)))]),
+    );
     assert_eq!(one.value_equal(&one2, &types), Ok(true));
 }
 
@@ -388,23 +376,15 @@ fn kexpression_number_literal_is_ieee() {
 fn kexpression_length_and_variant_mismatch() {
     let types = TypeRegistry::new();
     let program = program_storage();
-    let brand = program.brand().region();
-    let a = KObject::KExpression(KExpression::new(
-        brand,
-        vec![part(ExpressionPart::Keyword("LET"))],
-    ));
-    let longer = KObject::KExpression(KExpression::new(
-        brand,
-        vec![
-            part(ExpressionPart::Keyword("LET")),
-            part(ExpressionPart::Identifier("x")),
-        ],
-    ));
+    let brand = program.brand();
+    let a = KObject::KExpression(brand.new_expression(vec![part(ExpressionPart::Keyword("LET"))]));
+    let longer = KObject::KExpression(brand.new_expression(vec![
+        part(ExpressionPart::Keyword("LET")),
+        part(ExpressionPart::Identifier("x")),
+    ]));
     // Different part variants at the same position.
-    let variant = KObject::KExpression(KExpression::new(
-        brand,
-        vec![part(ExpressionPart::Identifier("LET"))],
-    ));
+    let variant =
+        KObject::KExpression(brand.new_expression(vec![part(ExpressionPart::Identifier("LET"))]));
     assert_eq!(a.value_equal(&longer, &types), Ok(false));
     assert_eq!(a.value_equal(&variant, &types), Ok(false));
 }

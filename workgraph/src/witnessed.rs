@@ -58,7 +58,7 @@ pub use delivered::Delivered;
 
 mod dormant;
 use dormant::Dormant;
-pub use dormant::SealedPinned;
+pub use dormant::{SealedPinned, Within};
 
 mod step_ctx;
 pub use step_ctx::StepContext;

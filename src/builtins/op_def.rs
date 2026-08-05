@@ -28,7 +28,7 @@
 use crate::machine::WriteGate;
 
 use crate::machine::core::bindings::{powerset_probes, WriteOp};
-use crate::machine::core::RegionBrand;
+use crate::machine::core::ProgramBrand;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
@@ -235,6 +235,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
         body_expr,
         in_group: group.is_some(),
         bind_index: ctx.bind_index(),
+        program: ctx.program,
     };
     if parks.is_empty() && subs.is_empty() {
         let operand = crate::try_action!(done_type(operand_capture, OPERAND_SLOT, ctx.types));
@@ -322,6 +323,9 @@ struct OpPlan<'a> {
     /// writes the function bucket only.
     in_group: bool,
     bind_index: BindingIndex,
+    /// The run's program storage capability, carried off the declaring step's [`BodyCtx`]: the
+    /// bridge body is a **value-channel** node, so its marked operand arms are mintable only here.
+    program: ProgramBrand<'a>,
 }
 
 impl<'a> OpPlan<'a> {
@@ -342,6 +346,7 @@ impl<'a> OpPlan<'a> {
             body_expr,
             in_group,
             bind_index,
+            program,
         } = self;
         let mut writes: Vec<WriteOp> = Vec::new();
         let carrier = match kind {
@@ -398,7 +403,7 @@ impl<'a> OpPlan<'a> {
                     },
                     OperatorForm {
                         signature: bridge_signature,
-                        body: Body::UserDefined(bridge_body(scope.brand(), sym)),
+                        body: Body::UserDefined(bridge_body(program, sym)),
                     },
                     in_group,
                     bind_index,
@@ -519,10 +524,18 @@ fn register_body<'a>(
 /// expression element: a list literal interns a bare `Identifier` element as a symbol rather than
 /// resolving it, so the two operands ride in as element expressions (exactly as a reduced infix run
 /// carries its named operands).
-fn bridge_body<'a>(brand: RegionBrand<'a>, sym: &str) -> KExpression<'a> {
+///
+/// The one runtime site that mints **value-channel** nodes: the operand wrappers are marked
+/// `Expression` arms, so the whole body — texts, operand nodes, and the node the parts reach —
+/// builds in program storage, discharging the mint doors' hosted-under-this-brand obligation.
+fn bridge_body<'a>(program: ProgramBrand<'a>, sym: &str) -> KExpression<'a> {
+    let brand = program.region();
     let sym = brand.alloc_text(sym);
     let operand = |name: &'a str| {
-        ExpressionPart::expression(brand, vec![Spanned::bare(ExpressionPart::Identifier(name))])
+        ExpressionPart::expression(
+            program,
+            vec![Spanned::bare(ExpressionPart::Identifier(name))],
+        )
     };
     KExpression::new(
         brand,

@@ -103,7 +103,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
         ],
     );
-    let mut runtime = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new(program.brand());
     let id = runtime.dispatch_in_scope(working(&program, expr), inner);
     runtime.execute().unwrap();
     let (matched, summary) = runtime
@@ -152,7 +152,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         program.brand().region(),
         vec![Spanned::bare(ExpressionPart::Identifier("foo"))],
     );
-    let mut runtime = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new(program.brand());
     let id = runtime.dispatch_in_scope(working(&program, expr), scope);
     runtime.execute().unwrap();
     let types = TypeRegistry::new();
@@ -204,7 +204,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
         ],
     );
-    let mut runtime = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new(program.brand());
     let id = runtime.dispatch_in_scope(working(&program, expr), scope);
     runtime.execute().unwrap();
     assert!(runtime

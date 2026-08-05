@@ -4,7 +4,7 @@
 //! `close_collection` helpers live here since they bind `ParseStack` and the
 //! token-buffer flush.
 
-use crate::machine::core::RegionBrand;
+use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::KError;
 use crate::parse::tokens::classify_token;
@@ -13,17 +13,18 @@ use crate::source::Spanned;
 use super::dict_literal::DictFrame;
 use super::frame::BracketFrame;
 
-/// The stack carries the region every token string and every parts run is bumped into, so no
-/// parse site reaches for storage of its own. The root run stays a plain `Vec` until
+/// The stack carries the program storage every token string and every parts run is bumped into, so
+/// no parse site reaches for storage of its own. It is a [`ProgramBrand`] rather than a plain
+/// region brand because the nested-node arms the frames fold into are value-channel conduits. The root run stays a plain `Vec` until
 /// [`ParseStack::finish`] freezes it — a node is built only once its parts are final.
 pub(super) struct ParseStack<'a> {
-    brand: RegionBrand<'a>,
+    brand: ProgramBrand<'a>,
     root: Vec<Spanned<ExpressionPart<'a>>>,
     rest: Vec<BracketFrame<'a>>,
 }
 
 impl<'a> ParseStack<'a> {
-    pub(super) fn new(brand: RegionBrand<'a>) -> Self {
+    pub(super) fn new(brand: ProgramBrand<'a>) -> Self {
         Self {
             brand,
             root: Vec::new(),
@@ -31,8 +32,8 @@ impl<'a> ParseStack<'a> {
         }
     }
 
-    /// The region every part this stack collects is bumped into.
-    pub(super) fn brand(&self) -> RegionBrand<'a> {
+    /// The program storage every part this stack collects is bumped into.
+    pub(super) fn brand(&self) -> ProgramBrand<'a> {
         self.brand
     }
 
@@ -76,7 +77,7 @@ impl<'a> ParseStack<'a> {
                 None,
             ));
         }
-        Ok(KExpression::new(self.brand, self.root))
+        Ok(KExpression::new(self.brand.region(), self.root))
     }
 }
 

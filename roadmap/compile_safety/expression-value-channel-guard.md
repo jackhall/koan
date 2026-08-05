@@ -30,23 +30,47 @@ about a live value, under-pinning its producer region.
 - A runtime-synthesized node still reaches its own dispatch without being forced
   into eternal storage — the guard does not turn per-call AST into unbounded
   program-storage growth.
+- `let_bound_list_of_call_produced_quotes_survives_every_producer_free` no longer
+  sits on the koan Miri audit slate — the claim it pinned is compile-enforced.
 - The Miri audit slate is green.
 
 **Directions.**
 
-- *Where the proof lives — open.* (a) A branded wrapper type
-  (`ProgramExpression<'a>`) that only `ProgramBrand`'s door mints, with
-  `KObject::KExpression` taking it instead of a bare `KExpression`; (b) a
-  lifetime-brand parameter on `KExpression` itself, distinguishing the tier at the
-  node rather than at the cell; (c) a `Tier` type parameter carried by the node.
-  Recommended: (a) — it confines the change to the value-channel constructors and
-  keeps `KExpression` a single node type the shared readers already serve.
-- *What the synthesized sites do instead — open.* (a) Leave them at the ordinary
-  brand and route them through the working form
-  ([`WorkingExpression`](../../src/machine/model/ast/working.rs)), which is where
-  each already ends up; (b) build them in program storage under a size bound.
-  Recommended: (a) — a node built to be dispatched is already the working form's
-  business.
+- *Where the proof lives — decided.* At the arm level, not the node. `KExpression`
+  is `Copy` and embedded by value in the cell, so the eternal-tier claim is about
+  the **parts slice** the node borrows — and the four expression-holding
+  [`ExpressionPart`](../../src/machine/model/ast.rs) arms (`Expression`,
+  `SigiledTypeExpr`, `RecordType`, `QuotedExpression`) are the only conduits into
+  the value channel. Those arm payloads become a `ProgramNode<'a>` (newtype over
+  `&'a KExpression<'a>`, minted only under
+  [`ProgramBrand`](../../src/machine/core/arena/frame.rs)), and
+  `KObject::KExpression` takes a `ProgramExpression<'a>` (`Copy` newtype over the
+  node). Every value-channel door then compiles its proof out of the matched arm,
+  while the dispatch channel — `sub_dispatches`,
+  [`WorkingExpression`](../../src/machine/model/ast/working.rs), the classifier,
+  the structural cache — keeps carrying bare `KExpression`: the marker is consumed
+  only where the claim is used, so it never goes viral and needs no erase point.
+  Parser internals retype `RegionBrand` → `ProgramBrand` (they widened too early;
+  the entry points already take `ProgramBrand`).
+  Rejected: a node-level tier parameter (viral through dispatch), and the
+  reach-as-data inversion (doors take the node's coverage as an operand) — region
+  identity is not derivable from a bare node, so honest coverage would have to
+  travel as envelopes through `Held`, `WorkingPart`, `NodeWork` and every
+  container seal, a bind-channel re-currency that computes an empty coverage on
+  every live path.
+- *What the synthesized sites do — decided.* Most ride through unchanged:
+  `fn_def.rs`'s placeholder and `val_decl.rs`'s wrapper build no marked arm;
+  `fn_def/signature.rs`'s and `newtype_def.rs`'s re-wraps take their proof from
+  the marked arm or `KObject` arm they matched it out of, via a re-host door (the
+  node struct may bump at any brand — only the parts matter). Two sites fabricate
+  marked arms from scratch and change shape instead: `op_def.rs`'s `bridge_body`
+  builds in program storage — once per `OP` declaration, so growth is bounded by
+  program size — which requires `ProgramBrand` to be reachable from the builtin's
+  ctx; and `dispatch/constructors.rs`'s `single_value_cell`, whose multi-part
+  wrap exists only to be dispatched, moves to the working form
+  ([`WorkingExpression`](../../src/machine/model/ast/working.rs)) — the lane
+  scheduler-synthesized nodes already dispatch through — rather than minting a
+  marker or growing program storage per call.
 
 ## Dependencies
 

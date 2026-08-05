@@ -1175,7 +1175,6 @@ mod seam_verb_table {
     /// so the relocation's retention claim frees it.
     #[test]
     fn seam_verb_expression_cell_prices_as_a_borrow_leaf_and_copies() {
-        use crate::machine::model::ast::KExpression;
         let program = program_storage();
         let root = run_root_storage();
         let test_run = TestRun::silent(&program, &root);
@@ -1184,7 +1183,7 @@ mod seam_verb_table {
         let types = TypeRegistry::new();
 
         // Program storage is where a raw AST node lives; an expression cell points into it.
-        let expr = KObject::KExpression(KExpression::new(program.brand().region(), Vec::new()));
+        let expr = KObject::KExpression(program.brand().new_expression(Vec::new()));
         let fields = Record::from_pairs(vec![("e".to_string(), Held::Object(expr))]);
         let value = build_record(&home, fields, &types);
 

@@ -80,7 +80,7 @@ impl<'a> TestRun<'a> {
         out: Box<dyn Write + 'a>,
     ) -> Self {
         let (root, child) = unseeded_scopes(run_storage, out);
-        let mut runtime = KoanRuntime::new();
+        let mut runtime = KoanRuntime::new(program.brand());
         // The run frame adopts `child`, exactly as `interpret` does: dispatch targets it, and the
         // frame it mints carries the registry seeding needs.
         runtime.ensure_run_frame(child);

@@ -408,9 +408,11 @@ fn sealed_pinned_open_consumes_non_copy() {
         SealedPinned::erase(Box::new(borrow), Rc::clone(&backing))
     };
     let operand: SealedExtern<RefFamily> = SealedExtern::erase(&backing[1]);
-    let seen: u32 = sealed.open(operand, &backing, |boxed: Box<&u32>, other: &u32| {
-        **boxed + *other
-    });
+    let seen: u32 = sealed.open(
+        operand,
+        &backing,
+        |_within, boxed: Box<&u32>, other: &u32| **boxed + *other,
+    );
     assert_eq!(seen, 30);
     let _again: &u32 = &backing[1];
 }
@@ -434,7 +436,7 @@ fn sealed_pinned_open_invokes_a_fat_pointer_continuation() {
     let got: u32 = sealed.open(
         operand,
         &backing,
-        |continuation: TestContinuation<'_>, other: &u32| continuation() + *other,
+        |_within, continuation: TestContinuation<'_>, other: &u32| continuation() + *other,
     );
     assert_eq!(got, 17);
     // Mutate the region through a sibling `Rc` after the open to catch a tree-borrows regression.
@@ -500,7 +502,7 @@ fn sealed_pinned_opens_beside_a_zipped_extern_operand() {
     let sum: u32 = boxed.open(
         contract.zip(region),
         &backing,
-        |boxed: Box<&u32>, (contract, region): (Option<&u32>, &u32)| {
+        |_within, boxed: Box<&u32>, (contract, region): (Option<&u32>, &u32)| {
             **boxed + *contract.expect("present optional opens to Some") + *region
         },
     );

@@ -22,6 +22,7 @@
 //! > The slot is always initialized: the only constructor initializes `value`, no method
 //! > deinitializes it without consuming the wrapper, and the union has no other field.
 
+use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
 use super::{erase_to_static, retype, DropFree, Reattachable, SealedExtern, Witness};
@@ -95,6 +96,28 @@ impl<V> Drop for DormantGlue<V> {
     }
 }
 
+/// Proof that an open's rank-2 brand `'b` sits inside the caller-visible `'outer` — the declared
+/// `'outer: 'b` bound is the fact the token carries. [`SealedPinned::open`] hands one to its
+/// closure, and the HRTB instantiation must discharge the bound, so `'b` can no longer be
+/// instantiated at `'static` behind the caller's back: inside the closure, a **covariant**
+/// `'outer`-lifetime value the closure captures shortens to the brand by ordinary subtyping.
+///
+/// This is the channel for an ambient capability that is a live, borrow-checked reference for the
+/// whole of `'outer` (an embedder's run-long allocation brand, say): such a value needs no seal, no
+/// re-anchor and no pin — its liveness is the borrow checker's, not the witness system's — it only
+/// needs the outlives fact the quantifier would otherwise erase. A value whose lifetime *was*
+/// erased still enters through the sealed operand, exactly as before. The shape is
+/// `std::thread::scope`'s: the closure's `'scope` is bounded by `'env` through the declared bound
+/// on its argument type.
+///
+/// An invariant family is unaffected: nothing unifies `'b` with `'outer` — the closure must still
+/// typecheck for every `'b` inside it — and the `for<'b>` quantifier still keeps every
+/// `'b`-branded value from escaping into the result.
+#[derive(Clone, Copy)]
+pub struct Within<'b, 'outer: 'b> {
+    _bound: PhantomData<&'b &'outer ()>,
+}
+
 /// The **internally witnessed** dormant form for a droppable family: the slot keeps its drop glue
 /// and the pins that cover the value are bundled at the erase door. Where
 /// [`SealedExtern`] is externally witnessed — the pin supplied at the open — a `SealedPinned` owns
@@ -135,11 +158,17 @@ impl<T: Reattachable, W: Witness> SealedPinned<T, W> {
     /// The bundled pins cover the owned value; `operand_pin` covers the extern operand (the
     /// [`SealedExtern::open`] obligation, unchanged). Both live values are consumed by `f` before
     /// the pins drop, and the `for<'b>` quantifier keeps either from escaping into `R`.
-    pub fn open<U: Reattachable + DropFree, Wx: Witness, R>(
+    ///
+    /// The brand is bounded by the caller's `'outer` through the [`Within`] token the closure
+    /// receives, so an ambient covariant value live for all of `'outer` shortens to `'b` inside the
+    /// closure with no carrier — see [`Within`] for why that channel is borrow-checked rather than
+    /// witnessed. A caller with no ambient value to shorten binds the token `_` and lets `'outer`
+    /// infer.
+    pub fn open<'outer, U: Reattachable + DropFree, Wx: Witness, R>(
         self,
         operand: SealedExtern<U>,
         operand_pin: &Wx,
-        f: impl for<'b> FnOnce(T::At<'b>, U::At<'b>) -> R,
+        f: impl for<'b> FnOnce(Within<'b, 'outer>, T::At<'b>, U::At<'b>) -> R,
     ) -> R {
         // Destructuring by move is legal — `SealedPinned` has no `Drop` of its own — and binding
         // `pins` before any live value makes the locals drop live-value-then-pins on every path.
@@ -154,7 +183,13 @@ impl<T: Reattachable, W: Witness> SealedPinned<T, W> {
         // retype of single-lifetime families (the `Reattachable` contract).
         let live: T::At<'_> = unsafe { retype::<T::At<'static>, T::At<'_>>(erased) };
         let live_operand: U::At<'_> = unsafe { operand.into_erased().reattach() };
-        let result = f(live, live_operand);
+        let result = f(
+            Within {
+                _bound: PhantomData,
+            },
+            live,
+            live_operand,
+        );
         let _ = operand_pin;
         drop(pins);
         result

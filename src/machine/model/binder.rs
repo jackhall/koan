@@ -167,7 +167,7 @@ fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> boo
 
 fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>> {
     match expr.parts.get(1)?.value {
-        ExpressionPart::Expression(inner) => Some(inner),
+        ExpressionPart::Expression(inner) => Some(inner.reference()),
         _ => None,
     }
 }
@@ -214,7 +214,7 @@ pub(crate) fn symbol_from_parts<'a>(expr: &KExpression<'a>) -> Result<&'a str, K
         .parts
         .iter()
         .find_map(|part| match part.value {
-            ExpressionPart::QuotedExpression(inner) => Some(inner),
+            ExpressionPart::QuotedExpression(inner) => Some(inner.reference()),
             _ => None,
         })
         .ok_or_else(symbol_shape_error)?;

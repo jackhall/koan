@@ -22,7 +22,7 @@ pub use values::{
 
 pub(crate) use ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass,
-    TypeIdentifier, WorkingExpression, WorkingPart,
+    ProgramExpression, TypeIdentifier, WorkingExpression, WorkingPart,
 };
 pub(crate) use binder::{symbol_from_parts, symbol_from_quote_body, BinderKey, StoredBinderKey};
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn};

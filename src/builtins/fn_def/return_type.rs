@@ -74,7 +74,7 @@ pub(crate) fn extract_type_slot_raw<'a>(
     } else if let Some(kt) = arg_type(args, slot) {
         Ok(ReturnTypeRaw::Resolved(kt))
     } else if let Some(KObject::KExpression(e)) = arg_object(args, slot) {
-        Ok(ReturnTypeRaw::ExprCarrier(*e))
+        Ok(ReturnTypeRaw::ExprCarrier(e.node()))
     } else {
         Err(KError::new(KErrorKind::ShapeError(format!(
             "{label} must be a type expression (e.g. `Number`, `:(LIST OF Str)`)"

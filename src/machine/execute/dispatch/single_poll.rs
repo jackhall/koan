@@ -103,7 +103,9 @@ pub(super) fn record_type<'step>(
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let fields = match expr.parts.first().map(|part| part.value) {
-        Some(WorkingPart::Ast(ExpressionPart::RecordType(fields))) => FieldParts::of(fields),
+        Some(WorkingPart::Ast(ExpressionPart::RecordType(fields))) => {
+            FieldParts::of(fields.reference())
+        }
         // A body whose co-declared references the declarator already threaded — same field list,
         // read through the part family that can hold a resolved sibling handle.
         Some(WorkingPart::RecordType(fields)) => FieldParts::threaded(fields),
@@ -154,7 +156,7 @@ pub(super) fn literal_pass_through<'step>(
         WorkingPart::Ast(ExpressionPart::QuotedExpression(body)) => Outcome::Done(Ok(ctx
             .current_scope()
             .brand()
-            .alloc_expression_witnessed(*body))),
+            .alloc_expression_witnessed(body.expression()))),
         WorkingPart::Ast(ExpressionPart::Expression(inner)) => become_dispatch(
             ctx,
             WorkingExpression::from_ast(ctx.current_scope().brand(), *inner),

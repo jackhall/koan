@@ -109,16 +109,32 @@ pub(in crate::machine::execute) fn prepare_args<'step>(
 #[cfg(test)]
 mod tests;
 
+/// One dep's worth of construction value, in whichever form it already has: a parsed part
+/// straight out of the body, or a node the dispatcher synthesized for a multi-part value. Local to
+/// this file — [`launch`] is its only consumer, and it exists so the multi-part case never has to
+/// mint an AST arm.
+enum ValueCell<'step> {
+    /// A part lifted verbatim out of the construction body.
+    Part(ExpressionPart<'step>),
+    /// A multi-part value the dispatcher grouped itself, already in working form.
+    Synthesized(WorkingExpression<'step>),
+}
+
 /// Paren-unwrap a construction's value parts to a single value cell: a redundant `(...)`
 /// wrapper group unwraps first, so `(Distance 3.0)` / `Distance (3.0)` construct identically
 /// and `Distance ()` is arity-zero (rejected here). A single remaining part dispatches
 /// directly (a bare `(p)` reference resolves in place when ready, the way tagged construction
-/// dispatches its lone value); a multi-part value (`Bar (Foo 3.0)`) wraps into one `Expression`
-/// so `launch` dispatches it as one unit.
+/// dispatches its lone value); a multi-part value (`Bar (Foo 3.0)`) becomes one synthesized
+/// [`WorkingExpression`] so `launch` dispatches it as one unit.
+///
+/// The multi-part case groups in **working** form rather than wrapping an AST `Expression` arm
+/// around it. The group exists only to be dispatched, and it is minted per call — so the lane
+/// scheduler-synthesized nodes already take (`WorkingPart::Expression`) is the one it belongs on,
+/// and the per-call node never has to claim the eternal-tier residence an AST arm's payload does.
 fn single_value_cell<'step>(
     brand: RegionBrand<'step>,
     mut value_parts: &[Spanned<ExpressionPart<'step>>],
-) -> Result<ExpressionPart<'step>, KError> {
+) -> Result<ValueCell<'step>, KError> {
     if let [Spanned {
         value: ExpressionPart::Expression(inner),
         ..
@@ -131,8 +147,16 @@ fn single_value_cell<'step>(
             expected: 1,
             got: 0,
         })),
-        [only] => Ok(only.value),
-        many => Ok(ExpressionPart::expression(brand, many.to_vec())),
+        [only] => Ok(ValueCell::Part(only.value)),
+        many => Ok(ValueCell::Synthesized(WorkingExpression::new(
+            brand,
+            many.iter()
+                .map(|part| Spanned {
+                    value: WorkingPart::Ast(part.value),
+                    span: part.span,
+                })
+                .collect(),
+        ))),
     }
 }
 
@@ -182,7 +206,10 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
         .iter()
         .map(|(n, _)| (*n).to_string())
         .collect();
-    let value_parts: Vec<ExpressionPart<'step>> = record_fields.iter().map(|(_, p)| *p).collect();
+    let value_parts: Vec<ValueCell<'step>> = record_fields
+        .iter()
+        .map(|(_, p)| ValueCell::Part(*p))
+        .collect();
     launch(
         brand,
         value_parts,
@@ -314,7 +341,7 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
 ) -> Outcome<'step> {
     launch(
         brand,
-        vec![value_part],
+        vec![ValueCell::Part(value_part)],
         CtorKind::Tagged {
             schema,
             member,
@@ -331,7 +358,7 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
 /// every region it reaches; dep errors propagate frameless.
 fn launch<'step>(
     brand: RegionBrand<'step>,
-    value_parts: Vec<ExpressionPart<'step>>,
+    value_parts: Vec<ValueCell<'step>>,
     kind: CtorKind,
 ) -> Outcome<'step> {
     debug_assert!(
@@ -340,8 +367,13 @@ fn launch<'step>(
     );
     let deps: Vec<DepRequest<'step>> = value_parts
         .into_iter()
-        .map(|part| DepRequest::Dispatch {
-            expr: WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]),
+        .map(|cell| DepRequest::Dispatch {
+            expr: match cell {
+                ValueCell::Part(part) => {
+                    WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))])
+                }
+                ValueCell::Synthesized(expr) => expr,
+            },
             placement: DepPlacement::OwnScope,
             binder_covered: false,
         })

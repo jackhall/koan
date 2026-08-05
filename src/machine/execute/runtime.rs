@@ -16,14 +16,13 @@
 //! `dispatch_body`, `submit_dep_finish_in_own_scope`) — the only callers that turn a
 //! [`WorkingExpression`] into scheduler work.
 
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{
     Action, ActionKind, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
 };
-use crate::machine::core::{RegionBrand, ScopeRefFamily};
+use crate::machine::core::{ProgramBrand, RegionBrand, ScopeRefFamily};
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, Part, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::{
@@ -83,19 +82,20 @@ pub struct KoanRuntime<'run> {
     /// into a [`NodeHandle`](crate::machine::NodeHandle) so a declaration statement stays
     /// distinguishable from a same-positioned statement in a later run over one persistent scope.
     pub(in crate::machine::execute) run: RunId,
-    /// The run lifetime the harness processes its AST/scope against. The scheduler is value-erased
-    /// (`Scheduler<KoanWorkload>`), so `'run` lives only in the harness's own method signatures; this
-    /// marker keeps it on the type.
-    _run: PhantomData<&'run ()>,
+    /// This run's program storage capability, handed to every step through its
+    /// [`SchedulerView`](super::dispatch::SchedulerView). It also carries `'run`: the scheduler is
+    /// value-erased (`Scheduler<KoanWorkload>`), so without this the run lifetime would live only in
+    /// the harness's own method signatures.
+    pub(in crate::machine::execute) program: ProgramBrand<'run>,
 }
 
 impl<'run> KoanRuntime<'run> {
-    pub fn new() -> Self {
+    pub fn new(program: ProgramBrand<'run>) -> Self {
         Self {
             sched: Scheduler::new(),
             ambient: super::ambient::AmbientContext::default(),
             run: RunId::next(),
-            _run: PhantomData,
+            program,
         }
     }
 
@@ -111,12 +111,6 @@ impl<'run> KoanRuntime<'run> {
     #[cfg(test)]
     pub(crate) fn reset_slots(&mut self) {
         self.sched = Scheduler::new();
-    }
-}
-
-impl Default for KoanRuntime<'_> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

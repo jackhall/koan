@@ -252,7 +252,7 @@ fn redundant_parens_pass_through() {
     let wrapped = KExpression::new(
         brand.region(),
         vec![Spanned::bare(ExpressionPart::Expression(
-            brand.region().alloc_value(inner),
+            brand.nested_node(inner.parts.to_vec()),
         ))],
     );
     assert_eq!(names(wrapped.binder_installs()), expected);

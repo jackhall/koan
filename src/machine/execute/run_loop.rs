@@ -172,11 +172,15 @@ impl<'run> KoanRuntime<'run> {
         };
         // Open the owned-tier continuation beside the active-scope operand at one rank-2 `for<'b>`
         // brand: the seal carries its own anchor pin, and `combined` witnesses the operand (see the
-        // doc comment for why nothing branded escapes).
+        // doc comment for why nothing branded escapes). The `Within` token bounds the brand by
+        // `'run`, which is what lets `rt.program` — a live borrow-checked `ProgramBrand<'run>`, not
+        // a sealed carrier — shorten covariantly to the step brand at the `SchedulerView` build.
         sealed_continuation.open(
             scope_carrier,
             &combined,
-            |continuation: super::outcome::NodeContinuation<'_>, scope| {
+            |_within: crate::witnessed::Within<'_, 'run>,
+             continuation: super::outcome::NodeContinuation<'_>,
+             scope| {
                 // `scope` is now live at `'b` and the `dest` region is its own region; deps arrive
                 // un-relocated. A `ForwardReady` relocation below builds its destination carrier
                 // from this same scope's brand.
@@ -203,6 +207,7 @@ impl<'run> KoanRuntime<'run> {
                                 },
                                 &step_effects,
                                 &combined,
+                                rt.program,
                             ),
                             deps.results(&dep_sources),
                             idx,

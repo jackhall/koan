@@ -22,10 +22,10 @@ fn part_references_any(part: ExpressionPart<'_>, param_names: &[String]) -> bool
     match part {
         ExpressionPart::Identifier(name) => param_names.iter().any(|n| n == name),
         ExpressionPart::Type(t) => type_expr_references_any(t, param_names),
-        ExpressionPart::Expression(inner) => kexpression_references_any(inner, param_names),
-        ExpressionPart::SigiledTypeExpr(inner) => kexpression_references_any(inner, param_names),
+        ExpressionPart::Expression(inner) => kexpression_references_any(&inner, param_names),
+        ExpressionPart::SigiledTypeExpr(inner) => kexpression_references_any(&inner, param_names),
         // A `:{…}` field type can reference a param in a nested sigil (`:{y :er.Carrier}`).
-        ExpressionPart::RecordType(inner) => kexpression_references_any(inner, param_names),
+        ExpressionPart::RecordType(inner) => kexpression_references_any(&inner, param_names),
         ExpressionPart::ListLiteral(items) => {
             items.iter().any(|p| part_references_any(*p, param_names))
         }

@@ -6,14 +6,14 @@
 //! synthetic `Keyword("ATTR"|"TRY")` carries the 1-codepoint trigger
 //! span so diagnostics can point at the exact operator character.
 
-use crate::machine::core::RegionBrand;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::core::ProgramBrand;
+use crate::machine::model::ast::ExpressionPart;
 use crate::source::{self, Span, Spanned};
 
 pub type UnaryBuild =
-    for<'a> fn(RegionBrand<'a>, Spanned<ExpressionPart<'a>>, Span) -> Spanned<ExpressionPart<'a>>;
+    for<'a> fn(ProgramBrand<'a>, Spanned<ExpressionPart<'a>>, Span) -> Spanned<ExpressionPart<'a>>;
 pub type BinaryBuild = for<'a> fn(
-    RegionBrand<'a>,
+    ProgramBrand<'a>,
     Spanned<ExpressionPart<'a>>,
     Spanned<ExpressionPart<'a>>,
     Span,
@@ -45,7 +45,7 @@ const OPERATORS: &[Operator] = &[
 ];
 
 fn build_attr<'a>(
-    brand: RegionBrand<'a>,
+    brand: ProgramBrand<'a>,
     lhs: Spanned<ExpressionPart<'a>>,
     rhs: Spanned<ExpressionPart<'a>>,
     trigger: Span,
@@ -58,17 +58,17 @@ fn build_attr<'a>(
     // value field (lowercase `Identifier`, e.g. `M.x`) stays the value-context `Expression`.
     let type_context = matches!(rhs.value, ExpressionPart::Type(_));
     let kw = Spanned::at(ExpressionPart::Keyword("ATTR"), trigger);
-    let kexp = KExpression::build(brand, vec![kw, lhs, rhs], Some(outer), source::current());
+    let kexp = brand.build_expression(vec![kw, lhs, rhs], Some(outer), source::current());
     let part = if type_context {
-        ExpressionPart::SigiledTypeExpr(brand.alloc_value(kexp))
+        ExpressionPart::SigiledTypeExpr(brand.alloc_node(kexp))
     } else {
-        ExpressionPart::Expression(brand.alloc_value(kexp))
+        ExpressionPart::Expression(brand.alloc_node(kexp))
     };
     Spanned::at(part, outer)
 }
 
 fn build_try<'a>(
-    brand: RegionBrand<'a>,
+    brand: ProgramBrand<'a>,
     lhs: Spanned<ExpressionPart<'a>>,
     trigger: Span,
 ) -> Spanned<ExpressionPart<'a>> {
@@ -78,8 +78,8 @@ fn build_try<'a>(
         end: trigger.end,
     };
     let kw = Spanned::at(ExpressionPart::Keyword("TRY"), trigger);
-    let kexp = KExpression::build(brand, vec![kw, lhs], Some(outer), source::current());
-    Spanned::at(ExpressionPart::Expression(brand.alloc_value(kexp)), outer)
+    let kexp = brand.build_expression(vec![kw, lhs], Some(outer), source::current());
+    Spanned::at(ExpressionPart::Expression(brand.alloc_node(kexp)), outer)
 }
 
 /// Variant view returned by `find_suffix`: the operator kinds that appear after an atom.

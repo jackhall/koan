@@ -10,14 +10,16 @@
 
 use crate::source::{FileId, Span, Spanned};
 
-use crate::machine::core::RegionBrand;
+use crate::machine::core::{ProgramBrand, RegionBrand};
 use crate::machine::model::{Held, KObject, Parseable, StoredBinderKey};
 use crate::machine::model::{StoredElement, UntypedElement, UntypedKey};
 use crate::witnessed::reattachable;
 
+pub mod program;
 mod shape;
 pub mod working;
 
+pub use program::{ProgramExpression, ProgramNode};
 pub use shape::{
     classify_dispatch_shape, operator_probe_for, stored_untyped_key, DispatchShape, FieldSlot,
     Part, PartClass,
@@ -97,19 +99,19 @@ pub enum ExpressionPart<'a> {
     Keyword(&'a str),
     Identifier(&'a str),
     Type(TypeIdentifier<'a>),
-    Expression(&'a KExpression<'a>),
+    Expression(ProgramNode<'a>),
     /// Parse-context marker for a `:(...)` group: the wrapped `KExpression` must dispatch
     /// in type-context, returning a type-side carrier. Shape recognition is the
     /// dispatcher's responsibility — the parser does no folding here. See
     /// [design/typing/type-language-via-dispatch.md](../../../design/typing/type-language-via-dispatch.md).
-    SigiledTypeExpr(&'a KExpression<'a>),
+    SigiledTypeExpr(ProgramNode<'a>),
     /// First-class record type `:{x :Number, y :Str}`. The nested `KExpression` is the
     /// field-list `(x :Number, y :Str)` — the same `<name> :<Type>` pair shape a SIG member
     /// or FN parameter list uses. Unlike `SigiledTypeExpr`, this is matched
     /// structurally (the elaborator folds it straight to `KType::Record`); there is no
     /// internal type-constructor builtin behind it. See
     /// [design/typing/type-language-via-dispatch.md](../../../design/typing/type-language-via-dispatch.md).
-    RecordType(&'a KExpression<'a>),
+    RecordType(ProgramNode<'a>),
     ListLiteral(&'a [ExpressionPart<'a>]),
     DictLiteral(&'a [(ExpressionPart<'a>, ExpressionPart<'a>)]),
     /// Anonymous record literal (`{x = 1, y = "a"}`) — identifier-keyed `=` pairs. The
@@ -123,7 +125,7 @@ pub enum ExpressionPart<'a> {
     /// `Slot` in the untyped key, a single one classifies [`DispatchShape::LiteralPassThrough`],
     /// and it resolves to `KObject::KExpression(<body>)` — the value `$(...)` evaluates. See
     /// [design/expressions-and-parsing.md](../../../design/expressions-and-parsing.md).
-    QuotedExpression(&'a KExpression<'a>),
+    QuotedExpression(ProgramNode<'a>),
 }
 
 impl<'a> Part<'a> for ExpressionPart<'a> {
@@ -147,8 +149,8 @@ impl<'a> Part<'a> for ExpressionPart<'a> {
         match self {
             ExpressionPart::Identifier(s) => FieldSlot::Name(s),
             ExpressionPart::Type(t) => FieldSlot::Type(*t),
-            ExpressionPart::SigiledTypeExpr(body) => FieldSlot::AstSigil(body),
-            ExpressionPart::RecordType(body) => FieldSlot::AstRecord(body),
+            ExpressionPart::SigiledTypeExpr(body) => FieldSlot::AstSigil(body.reference()),
+            ExpressionPart::RecordType(body) => FieldSlot::AstRecord(body.reference()),
             _ => FieldSlot::Other,
         }
     }
@@ -160,12 +162,13 @@ impl<'a> Part<'a> for ExpressionPart<'a> {
 
 impl<'a> ExpressionPart<'a> {
     /// Wrap a run of parts as a nested `Expression` part, bumping both the run and the node into
-    /// `brand`'s region.
+    /// the program storage `brand` names. Takes a [`ProgramBrand`] because the arm it builds is a
+    /// value-channel conduit: the marker on its payload is the proof the cell doors cite.
     pub fn expression(
-        brand: RegionBrand<'a>,
+        brand: ProgramBrand<'a>,
         parts: Vec<Spanned<ExpressionPart<'a>>>,
     ) -> ExpressionPart<'a> {
-        ExpressionPart::Expression(KExpression::nested(brand, parts))
+        ExpressionPart::Expression(brand.nested_node(parts))
     }
 
     /// Per-part subset of [`KExpression::summarize`].
@@ -229,10 +232,10 @@ impl<'a> ExpressionPart<'a> {
             };
         }
         if let (ExpressionPart::SigiledTypeExpr(inner), KType::SIGILED_TYPE_EXPR) = (self, *slot) {
-            return Held::Object(KObject::KExpression(**inner));
+            return Held::Object(KObject::KExpression(inner.expression()));
         }
         if let (ExpressionPart::RecordType(inner), KType::RECORD_TYPE) = (self, *slot) {
-            return Held::Object(KObject::KExpression(**inner));
+            return Held::Object(KObject::KExpression(inner.expression()));
         }
         Held::Object(self.resolve(scope.brand()))
     }
@@ -248,10 +251,10 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Literal(KLiteral::String(s)) => KObject::KString(brand.alloc_text(s)),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
-            ExpressionPart::Expression(e) => KObject::KExpression(**e),
+            ExpressionPart::Expression(e) => KObject::KExpression(e.expression()),
             // A quote denotes its body as data — the same `KObject` an `Expression` part in a
             // `:KExpression` slot denotes, reached from any slot a literal reaches.
-            ExpressionPart::QuotedExpression(e) => KObject::KExpression(**e),
+            ExpressionPart::QuotedExpression(e) => KObject::KExpression(e.expression()),
             // Reaches a value only through the dispatcher's type-context fast lane or sub-Dispatch,
             // both of which unwrap it; hitting `resolve()` means a builtin lost the marker.
             ExpressionPart::SigiledTypeExpr(_) => {

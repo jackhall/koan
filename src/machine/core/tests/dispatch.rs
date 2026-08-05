@@ -1,6 +1,6 @@
 //! `dispatch` arm of `machine::core` tests.
 
-use super::super::{run_root_storage, FrameStorageExt, Scope};
+use super::super::{program_storage, run_root_storage, FrameStorageExt, Scope};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
@@ -261,8 +261,9 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
         &mut crate::machine::WriteGate::for_test(),
     );
     let brand = region.brand();
+    let program = program_storage();
     let inner = ExpressionPart::expression(
-        brand,
+        program.brand(),
         vec![Spanned::bare(ExpressionPart::Identifier("deep_call"))],
     );
     let expr = working(
@@ -421,8 +422,9 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
         &mut crate::machine::WriteGate::for_test(),
     );
     let brand = region.brand();
+    let program = program_storage();
     let nested = ExpressionPart::expression(
-        brand,
+        program.brand(),
         vec![Spanned::bare(ExpressionPart::Identifier("deep_call"))],
     );
     let expr = working(

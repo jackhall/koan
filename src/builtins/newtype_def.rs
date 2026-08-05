@@ -28,7 +28,7 @@ use crate::machine::model::{
     declarator_window, finalize_nominal_member, FieldListContext, FieldNameKind, Record,
     RecursiveGroupWindow, RelativeSchema, SealOutcome,
 };
-use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionPart, KExpression, ProgramExpression};
 use crate::machine::FinishCtx;
 use crate::machine::{seal_type_identity, StepCarried};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
@@ -170,7 +170,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 fn defer_resolved_sigil<'a>(
     brand: crate::machine::core::RegionBrand<'a>,
     name: String,
-    inner: KExpression<'a>,
+    inner: ProgramExpression<'a>,
     site: DeclarationSite,
 ) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::dispatch_type_then;
@@ -178,7 +178,7 @@ fn defer_resolved_sigil<'a>(
     let wrapped = KExpression::new(
         brand,
         vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
-            brand.alloc_value(inner),
+            inner.rehost(brand),
         ))],
     );
     dispatch_type_then(brand, wrapped, "NEWTYPE repr slot", move |fctx, kt| {
@@ -197,7 +197,7 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
         ctx.args, "name", "NEWTYPE", ctx.types
     ));
     let fields = match arg_object(ctx.args, "repr") {
-        Some(KObject::KExpression(e)) => *e,
+        Some(KObject::KExpression(e)) => e.node(),
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "NEWTYPE record repr slot must be a record type `:{…}`".to_string(),

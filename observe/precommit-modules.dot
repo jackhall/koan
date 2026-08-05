@@ -95,6 +95,7 @@ digraph {
     "koan::machine::execute::step_carried" [label="koan::machine::execute::step_carried"];
     "koan::machine::model" [label="koan::machine::model"];
     "koan::machine::model::ast" [label="koan::machine::model::ast"];
+    "koan::machine::model::ast::program" [label="koan::machine::model::ast::program"];
     "koan::machine::model::ast::shape" [label="koan::machine::model::ast::shape"];
     "koan::machine::model::ast::working" [label="koan::machine::model::ast::working"];
     "koan::machine::model::binder" [label="koan::machine::model::binder"];
@@ -237,6 +238,7 @@ digraph {
     "koan::machine::model" -> "koan::machine::model::operators" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::types" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::values" [label="owns", style="solid"];
+    "koan::machine::model::ast" -> "koan::machine::model::ast::program" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::shape" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::working" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::kkind" [label="owns", style="solid"];
@@ -730,7 +732,6 @@ digraph {
     "koan::machine::execute::lift" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::execute::run_loop" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::execute::lift" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -805,6 +806,9 @@ digraph {
     "koan::machine::model::ast" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::ast::program" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::ast::program" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::ast::program" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::machine::model" [label="uses", style="dashed"];

@@ -5,7 +5,7 @@ use crate::machine::core::KFunction;
 use crate::machine::core::{
     FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
 };
-use crate::machine::model::ast::KExpression;
+use crate::machine::model::ast::{KExpression, ProgramExpression};
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 use crate::witnessed::{CellInput, CellReach, Sectioned};
 
@@ -100,7 +100,10 @@ pub enum KObject<'a> {
     /// and never `Rc::new`: the substrate is born only through
     /// [`FoldingBrand::alloc_substrate_folded`].
     Dict(&'a DictSubstrate<'a>, KType),
-    KExpression(KExpression<'a>),
+    /// Quoted / captured AST as data. The payload is the marked [`ProgramExpression`], not a bare
+    /// node: the cell's `Owned` reach verdict and its `false` [`retains_home`] answer are exactly
+    /// the claim that marker carries, so the arm takes its proof as an operand.
+    KExpression(ProgramExpression<'a>),
     KFunction(&'a KFunction<'a>),
     /// Tagged-union value. The `value` field is a region borrow of the payload's
     /// [`PayloadSubstrate`] — the single payload cell in sectioned storage plus its stored reach and

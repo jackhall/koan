@@ -71,7 +71,7 @@ pub(crate) fn body_statement_refs<'ast, 'a>(
         body.parts
             .iter()
             .filter_map(|p| match &p.value {
-                ExpressionPart::Expression(e) => Some(*e),
+                ExpressionPart::Expression(e) => Some(e.reference()),
                 _ => None,
             })
             .collect()
@@ -137,7 +137,7 @@ mod tests {
                 .parts
                 .iter()
                 .find_map(|p| match p.value {
-                    ExpressionPart::Expression(e) => Some(*e),
+                    ExpressionPart::Expression(e) => Some(e.reference()),
                     _ => None,
                 })
                 .expect("captured body");

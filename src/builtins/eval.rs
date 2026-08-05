@@ -20,7 +20,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use crate::machine::{block_tail, BlockBody, BlockScope};
     use crate::machine::{KError, KErrorKind};
     let inner = match arg_object(ctx.args, "expr") {
-        Some(KObject::KExpression(e)) => *e,
+        Some(KObject::KExpression(e)) => e.node(),
         Some(other) => {
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "expr".to_string(),

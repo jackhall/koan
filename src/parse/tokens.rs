@@ -19,7 +19,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::machine::core::RegionBrand;
+use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeIdentifier};
 use crate::machine::model::is_keyword_token;
 use crate::machine::KError;
@@ -32,9 +32,10 @@ static FLOAT: LazyLock<Regex> =
 /// Whole-token literal match runs first so e.g. `3.14` stays a number rather than
 /// being desugared as `(attr 3 14)`. `start` is the token's original-source byte
 /// offset, used to compute absolute spans for atoms and operator triggers. Every name the
-/// classification keeps is bumped into `brand`'s region, so the part borrows nothing from `tok`.
+/// classification keeps is bumped into `brand`'s program storage, so the part borrows nothing from
+/// `tok`.
 pub fn classify_token<'a>(
-    brand: RegionBrand<'a>,
+    brand: ProgramBrand<'a>,
     tok: &str,
     start: u32,
 ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
@@ -81,7 +82,7 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
 /// glue like `Number>` or `a@b` errors instead of sneaking through; Keywords are
 /// exempt because `=` / `->` / `+` are legitimate keyword shapes.
 fn classify_atom<'a>(
-    brand: RegionBrand<'a>,
+    brand: ProgramBrand<'a>,
     tok: &str,
     token_span: Span,
 ) -> Result<ExpressionPart<'a>, KError> {
@@ -89,7 +90,7 @@ fn classify_atom<'a>(
         return Ok(part);
     }
     if is_keyword_token(tok) {
-        return Ok(ExpressionPart::Keyword(brand.alloc_text(tok)));
+        return Ok(ExpressionPart::Keyword(brand.region().alloc_text(tok)));
     }
     if is_type_name(tok) {
         if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric()) {
@@ -102,7 +103,7 @@ fn classify_atom<'a>(
             ));
         }
         return Ok(ExpressionPart::Type(TypeIdentifier::leaf(
-            brand.alloc_text(tok),
+            brand.region().alloc_text(tok),
         )));
     }
     if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
@@ -127,7 +128,7 @@ fn classify_atom<'a>(
             Some(token_span),
         ));
     }
-    Ok(ExpressionPart::Identifier(brand.alloc_text(tok)))
+    Ok(ExpressionPart::Identifier(brand.region().alloc_text(tok)))
 }
 
 /// The lexical Type-token classifier: first char ASCII-uppercase plus at least one
@@ -150,7 +151,7 @@ pub(crate) fn is_type_name(tok: &str) -> bool {
 /// the output shape; the dispatcher just knows arity. Operator triggers take a
 /// 1-codepoint span at their position so error messages can point at the trigger char.
 fn parse_compound<'a>(
-    brand: RegionBrand<'a>,
+    brand: ProgramBrand<'a>,
     chars: &mut Peekable<CharIndices>,
     start: u32,
     token_span: Span,
@@ -183,7 +184,7 @@ fn trigger_span(token_start: u32, ci: usize, c: char) -> Span {
 
 /// Errors on an empty atom — operators must have an atom between them.
 fn read_atom<'a>(
-    brand: RegionBrand<'a>,
+    brand: ProgramBrand<'a>,
     chars: &mut Peekable<CharIndices>,
     token_start: u32,
     token_span: Span,
@@ -275,7 +276,7 @@ mod tests {
 
     fn classify(tok: &str) -> Result<String, String> {
         let program = program_storage();
-        classify_token(program.brand().region(), tok, 0)
+        classify_token(program.brand(), tok, 0)
             .map(|s| describe(&s.value))
             .map_err(|e| e.to_string())
     }

@@ -11,7 +11,7 @@ use super::body::ReturnContract;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::carrier_witness::SealedFunction;
 use crate::machine::core::{
-    CallFrame, FrameStorage, LexicalFrame, RegionBrand, Scope, StepAllocator,
+    CallFrame, FrameStorage, LexicalFrame, ProgramBrand, RegionBrand, Scope, StepAllocator,
 };
 use crate::machine::execute::StepCarried;
 #[cfg(test)]
@@ -206,7 +206,7 @@ pub fn require_kexpression<'a>(
     slot: &str,
 ) -> Result<KExpression<'a>, KError> {
     match arg_object(args, slot) {
-        Some(KObject::KExpression(e)) => Ok(*e),
+        Some(KObject::KExpression(e)) => Ok(e.node()),
         _ => Err(KError::new(KErrorKind::ShapeError(format!(
             "{builtin} {slot} slot must be a parenthesized expression"
         )))),
@@ -252,6 +252,11 @@ pub struct BodyCtx<'a, 'c> {
     /// registry is owned by the run frame and outlives the call, so the body forwards the borrow
     /// rather than sharing ownership.
     pub types: &'c TypeRegistry,
+    /// The run's program storage allocation capability, threaded down from the scheduler view. A
+    /// body that has to synthesize a node reaching the **value channel** builds it through this
+    /// (`OP`'s bridge body is the one such site), since the marker those arms carry is mintable
+    /// only here. Everything a body builds merely to dispatch takes [`Self::brand`] instead.
+    pub program: ProgramBrand<'a>,
 }
 
 impl<'a, 'c> BodyCtx<'a, 'c> {

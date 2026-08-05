@@ -283,6 +283,7 @@ fn run_action_builtin<'step>(
             node: view.node_handle(),
             ctx: view.step_ctx(),
             types: view.types(),
+            program: view.program(),
         };
         f(&body_ctx)
     };
@@ -347,7 +348,10 @@ fn extract_carried_args<'step>(
             // construction, so it takes the expression door — whose signature is what proves the
             // cell reaches nothing outside the region it is bumped into.
             (WorkingPart::Ast(ExpressionPart::QuotedExpression(body)), _) => {
-                let object = view.current_scope().brand().alloc_expression(**body);
+                let object = view
+                    .current_scope()
+                    .brand()
+                    .alloc_expression(body.expression());
                 *lifted = Some(view.current_scope().deliver_resident_object(object));
                 args.push(Carried::Object(object));
             }

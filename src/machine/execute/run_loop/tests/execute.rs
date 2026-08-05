@@ -60,7 +60,7 @@ fn later_expression_sees_earlier_binding_via_lookup() {
             Spanned::bare(ExpressionPart::Identifier("b")),
             Spanned::bare(ExpressionPart::Keyword("=")),
             Spanned::bare(ExpressionPart::expression(
-                brand,
+                program.brand(),
                 vec![Spanned::bare(ExpressionPart::Identifier("a"))],
             )),
         ],

@@ -16,7 +16,7 @@ use std::rc::Rc;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::{scope_frame, DepPlacement};
-use crate::machine::core::{FrameCoverage, FrameStorage, StepAllocator};
+use crate::machine::core::{FrameCoverage, FrameStorage, ProgramBrand, StepAllocator};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::FoldDirection;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
@@ -117,6 +117,12 @@ pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
     /// chain does not reach the retiring one. The handoff hold is precisely the pin that spans that
     /// hop, so it is named here rather than re-derived from the reader's scope.
     coverage: &'view FrameCoverage,
+    /// The run's program storage capability, minted once per run and carried unchanged across every
+    /// step. A builtin body reaches it through [`BodyCtx::program`](crate::machine::BodyCtx); it is
+    /// what the one runtime site that synthesizes a **value-channel** node (`OP`'s bridge body)
+    /// builds against. `ProgramBrand` is `Copy` and covariant, so the run-lifetime brand shortens to
+    /// the step lifetime here for free.
+    program: ProgramBrand<'step>,
 }
 
 impl<'step, 'view> SchedulerView<'step, 'view> {
@@ -129,6 +135,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         node: NodeHandle,
         effects: &'view RefCell<Vec<WriteOp>>,
         coverage: &'view FrameCoverage,
+        program: ProgramBrand<'step>,
     ) -> Self {
         Self {
             sched,
@@ -138,7 +145,13 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             node,
             effects,
             coverage,
+            program,
         }
+    }
+
+    /// This run's program storage capability — see the [`program`](Self::program) field.
+    pub(in crate::machine::execute) fn program(&self) -> ProgramBrand<'step> {
+        self.program
     }
 
     /// **Lift** a resting splice cell back into a delivery envelope owning its whole reach, under
