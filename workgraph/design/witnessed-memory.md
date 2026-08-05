@@ -171,7 +171,7 @@ unsafe-to-implement `RegionOwner` contract. An embedder that holds a region owne
 picks up the library's region behaviour through that seam and allocates through
 handles it threads itself.
 
-## Construction: `yoke`, `merge_pinned`, `map`
+## Construction: `yoke`, `merge_into`, `map`
 
 The carrier `Witnessed<T, W>` bundles `Erased<T>` with the witness `W` that pins
 it, so "the witness keeps the value alive" is a type invariant, not a co-stored
@@ -194,18 +194,24 @@ empty or hold several. A minted leaf lifts to the **reference-only** carrier an
 aggregate stores through a distinct [`into_reference_only`](../src/witnessed.rs)
 lift: its own region is kept alive externally, by containment or a retention hold,
 so that carrier holds no pin. Keeping the lift separate from `yoke` is what keeps
-minting a one-region act, leaving the combining of regions to `merge_pinned`.
+minting a one-region act, leaving the combining of regions to the merge.
 
-**`merge_pinned` — fold many region-resident values into one.** A value built from
+**`merge_into` — fold many region-resident values into one.** A value built from
 references into *two* regions cannot be bundled with one witness by `yoke` alone.
-`merge_pinned` re-anchors two carriers at one shared brand under an **externally
-supplied pin** covering the source (`self`) operand's backing, runs a projection
-that binds one into the other, and re-seals under the **composed** witness — the
-union of the two operands' regions, with `outer`-chain subsumption dropping a
-region another already pins. The composition is `ComposeWitness::compose`, run
-inside the shared brand with the destination in scope: an owned region *set*
-composes by plain union (total, since a set can always represent the combined
-pin), while a hosted carrier mints the union into the destination's own arena.
+[`Delivered::merge_into`](../src/witnessed/delivered.rs) re-anchors two delivery
+envelopes at one shared brand, runs a projection that binds one into the other,
+and re-seals under the **composed** witness — the union of the two operands'
+regions, with `outer`-chain subsumption dropping a region another already pins.
+Neither operand's backing needs a pin threaded in from the caller: each envelope
+carries its own pins, and the union of the two covers the shared re-anchor for
+the whole fold. The composition is `ComposeWitness::compose`, run inside the
+shared brand with the destination in scope: an owned region *set* composes by
+plain union (total, since a set can always represent the combined pin), while a
+hosted carrier mints the union into the destination's own arena. Both `merge_into`
+and `transfer_into` run one crate-private engine, `Witnessed::merge_composed`,
+whose `fold` builds the product and composes the witness inside a single brand;
+the engine is the only thing that takes the pin, and it is reachable only from
+the envelope verbs that derive it.
 
 This is what keeps witnessed-ness at the *boundary*. Without it, an aggregate of
 independently-witnessed elements would nest `Witnessed<…Witnessed<…>>` wrappers
@@ -213,15 +219,15 @@ with the data and be unstorable as a single cell carrier. With it, the invariant
 holds:
 
 > **One wrapper per cell.** A cell stores exactly one carrier, regardless of value
-> complexity. `yoke` mints leaves into a region; `merge_pinned` folds
+> complexity. `yoke` mints leaves into a region; `merge_into` folds
 > region-resident values — same-region or cross-region — into one aggregate under
 > the single witness that pins them all; the result seals as one unit. Wrapper
 > count is O(1) per cell, not O(data size).
 
-`merge_pinned`'s trigger is *referencing a pre-existing region-resident value* —
+The merge's trigger is *referencing a pre-existing region-resident value* —
 the foreign borrow a `yoke` closure would reject. Where the two operands are
 ancestry-related, subsumption collapses the union to the deeper owner. The case
-`merge_pinned` *cannot* collapse — a value whose backing reaches an **independent,
+`merge_into` *cannot* collapse — a value whose backing reaches an **independent,
 dying** region — is `transfer_into` (below) instead: there the source is a dying
 *descendant*, so subsumption would collapse onto the backing about to drop, and
 the union must be held *whole* as the set of both.
@@ -265,8 +271,8 @@ flattened into the set; a value with no cross-region reference is the degenerate
 singleton. This closes the one case `open` cannot: a value whose source backing is
 dying but whose consumer outlives it.
 
-`transfer_into` shares its `ComposeWitness::compose` engine with `merge_pinned`,
-so a delivered operand and a co-located one fold through one composition rule.
+`transfer_into` shares its `ComposeWitness::compose` engine with `merge_into`,
+so a relocated operand and a co-located one fold through one composition rule.
 
 ## The dormant slot and the two resting tiers
 
@@ -382,10 +388,10 @@ pin for, so the pin has to be its own.
 
 The split is what keeps self-witnessing cycle-free. A self-witnessed carrier's
 strong region owner rides the *carrier*, which a cell holds outside the region it
-witnesses; `merge_pinned` folds every intermediate into that one carrier (the *one
+witnesses; `merge_into` folds every intermediate into that one carrier (the *one
 wrapper per cell* invariant), so no region-resident value strong-owns its own
 region — the value in-region holds only non-owning pointers. A value that
-*captures* an in-region value has no bundled witness to `merge_pinned` against: it
+*captures* an in-region value has no bundled witness to merge against: it
 mints its merge operand from the region owner its builder already holds, so the
 capturing carrier gains that owner and pins the region exactly as a cell result
 does.
@@ -423,5 +429,5 @@ Inside a step, the step construction context is the maximally-checked path: the
 scheduler holds the consumer's region owner for the step's duration, so region
 access is infallible and every allocation is brand-confined. Outside a step, an
 embedder allocates through a held [`RegionHandle`](../src/witnessed/region.rs) —
-the `yoke` / `merge_pinned` surface above — with the same guarantees and no
+the `yoke` / `merge_into` surface above — with the same guarantees and no
 scheduler involvement.

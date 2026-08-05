@@ -20,7 +20,7 @@ crate reads as a standalone library rather than as one of koan's internals.
 - [design/](design/) — the library's design docs.
   - [witnessed-memory.md](design/witnessed-memory.md) — the memory substrate:
     the erase-store / witness / reattach core, the `Region<P>` bump allocator,
-    the `yoke` / `merge_pinned` / `map` construction surface with its
+    the `yoke` / `merge_into` / `map` construction surface with its
     one-wrapper-per-cell invariant, the `seal` / `open` / `transfer_into` access
     surface, and the dormant union slot with the `DropFree` split between its
     Copy and owned resting tiers.

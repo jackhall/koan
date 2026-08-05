@@ -333,7 +333,8 @@ crate::witnessed::reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageP
 /// [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into), which re-anchors it at
 /// the shared brand, binds it into the cells, and re-seals under the union of
 /// every reached region (a `FrameReach` set witness — the multi-foreign case a single-region witness
-/// cannot represent); a final [`map`](Witnessed::map) allocates the list node into the carried region.
+/// cannot represent); a final [`project`](crate::witnessed::Delivered::project) allocates the list
+/// node into the carried region under the envelope's own pins.
 /// After every producer handle drops, the folded witness is the sole owner of all three regions the
 /// list reaches, so reading the cells back is sound — the proof the construction site names its reach
 /// on the one carrier rather than reconstructing it from the value. Mirrors the production fold; fails
@@ -394,7 +395,11 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
         },
     );
     // Allocate the list node from the carried dest region; the cells ride borrows into both foreign
-    // regions, both now minted as members into the dest arena.
+    // regions, both now minted as members into the dest arena. A production `project` closure only
+    // *selects* a part of the value — a placement is mintable only by a fold engine — so the door
+    // here comes from the test-only forge over the operand's own head handle. That keeps the
+    // envelope's coverage correct for the same reason selection does: the product is built into the
+    // envelope's home region, which its pins already name.
     let list = acc2.project::<CarriedFamily>(|(region, cells), _token| {
         let owned_cells = crate::machine::core::FrameCoverage::empty();
         let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
@@ -903,6 +908,9 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&frame), |region| {
             (region.handle(), &[][..])
         });
+    // The door is forged over the operand's own head handle (test-only: a production `project`
+    // closure gets a bare `FoldToken` and so can only select), which is why the store lands in the
+    // envelope's home region — exactly what the assertion below reads back.
     let stored = Delivered::seal(acc0, Rc::clone(&frame), FrameCoverage::empty())
         .project::<CarriedFamily>(|(region, _cells), _token| {
             let owned_cells = crate::machine::core::FrameCoverage::empty();

@@ -39,7 +39,7 @@ Root concerns:
   cost-driven copy, and the Drop-free untyped-arena end state.
 - [per-node-memory.md](per-node-memory.md) — Koan on the witnessed
   substrate: the `KoanRegion` storage profile, which construction verb
-  (`yoke` / `merge_pinned` / `transfer_into`) each Koan site takes,
+  (`yoke` / `merge_into` / `transfer_into`) each Koan site takes,
   which witness form each node holds, where a bind mints its reach, and
   how the run loop nests inside the substrate's access brand. The
   substrate itself is

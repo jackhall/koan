@@ -39,7 +39,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 
 - [Eternal storage as its own lifetime](compile_safety/eternal-tier-lifetime.md)
 - [Region debug audits](compile_safety/region-debug-audits.md)
-- [Typed pins for the pinned fold verbs](compile_safety/typed-fold-pins.md)
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [EVAL splices in place](metaprogramming/eval-splices-in-place.md)

@@ -9,7 +9,7 @@ minted, and how the run loop's reads nest under the substrate's access brand.
 The generic machinery itself is the library's:
 [workgraph/design/witnessed-memory.md](../workgraph/design/witnessed-memory.md)
 owns the erase-store contract, the `Region<P>` allocator, the
-`yoke` / `merge_pinned` / `map` construction surface, and the
+`yoke` / `merge_into` / `map` construction surface, and the
 `seal` / `open` / `transfer_into` access surface;
 [workgraph/design/reach.md](../workgraph/design/reach.md) owns the reach
 description / pin bundle representation and the holder rule.
@@ -77,10 +77,11 @@ only a [`ProgramExpression`](../src/machine/model/ast/program.rs) reaches it, so
 node's parts run is program-storage hosted by type and the cell the door bumps
 borrows nothing a seal would have to pin.
 
-**`merge_pinned` / `transfer_into` — everything that references a pre-existing
+**`merge_into` / `transfer_into` — everything that references a pre-existing
 value.** An aggregate folds its *element carriers* (deps arriving witnessed from
 the lift) via `transfer_into`; a closure folds the captured-scope operand minted
-from its frame `Rc` via `merge_pinned` directly. The object family's leaves and
+from its frame `Rc` via `merge_into_placing`
+([reach.rs](../src/machine/core/scope/reach.rs)) directly. The object family's leaves and
 aggregates are built this way — a single-part literal and a static aggregate cell
 `yoke` their owned data, and a list / dict / record folds its dep carriers via
 `transfer_into` ([dispatch/literal.rs](../src/machine/execute/dispatch/literal.rs) /
@@ -104,7 +105,7 @@ at the fold brand from the lhs operand's own view (crossed via
 folds in by construction; the Resolved arm goes through the binding scope's own
 [`Scope::seal_resident`](../src/machine/core/scope/reach.rs).
 
-In Koan the cross-region case is rare. `merge_pinned` is the **same-region** case
+In Koan the cross-region case is rare. `merge_into` is the **same-region** case
 almost always — a list assembled in one call's arena, or a closure capturing its
 defining scope (a `KFunction` is allocated *into that scope's region*, so the
 capture is co-located) — where subsumption trivially collapses the union to a
@@ -148,8 +149,8 @@ envelope, and [`finalize_terminal`](../src/machine/execute/finalize.rs) hands th
 envelope on whole — value and coverage stay one value all the way to
 `Scheduler::finalize`, which derives the retention hold's reach from it. An error
 carries no value and finalizes bare. The type / region construction operands are computed carriers
-too — the newtype / tagged-union / `CATCH` build `merge_pinned`s a delivered
-type-identity carrier under the binding's stored reach
+too — the newtype / tagged-union / `CATCH` build folds a delivered type-identity
+carrier in as the destination operand under the binding's stored reach
 ([`build_type_operand`](../src/machine/execute/dispatch/constructors.rs)). A
 declared return is checked and re-stamped in place in the producer's own region; no
 relocation operand exists at Done.
@@ -177,7 +178,7 @@ incidental:
   a scope-specialized erasure beside the substrate.
 
 A value that *captures* the per-call scope therefore has no bundled scope witness
-to `merge_pinned` against: it mints its merge operand from the frame `Rc` the
+to merge against: it mints its merge operand from the frame `Rc` the
 builder already holds — co-located, since the scope lives in that frame's region —
 so the capturing carrier's minted reach gains that `Rc` and the escaping closure
 pins the frame exactly as a node result does.

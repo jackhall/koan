@@ -678,7 +678,7 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// Re-anchor the carrier bounded by the `&self` borrow **under an externally supplied pin** —
     /// the unbounded sibling of the `W: Witness`-gated [`Self::read`], for a carrier whose bundled
     /// witness pins nothing (the reference-only [`Carrier`]). Module-private: the sole callers are
-    /// [`Sealed::open_with`] and the pinned merge, each of which holds the external pin for the
+    /// [`Sealed::open_with`] and [`Sealed::open_at`], each of which holds the external pin for the
     /// whole call — that pin, not the bundle, is what keeps the pointee live across the borrow.
     fn read_pinned(&self) -> T::At<'_>
     where
