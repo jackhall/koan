@@ -8,7 +8,7 @@
 #[cfg(test)]
 use super::AdoptSeam;
 use super::Scope;
-use crate::machine::core::bindings::NameLookup;
+use crate::machine::core::bindings::{NameLookup, Visibility};
 use crate::machine::core::LexicalFrame;
 #[cfg(test)]
 use crate::machine::model::KObject;
@@ -89,6 +89,13 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// The full read-side visibility context for a per-scope `bindings` lookup: this scope's
+    /// [`binding_cutoff`](Self::binding_cutoff) beside the reader's chain, which the predicate
+    /// gates window-forwarded entries by ([`crate::machine::core::bindings::Visibility`]).
+    pub(crate) fn visibility<'c>(&self, chain: Option<&'c LexicalFrame>) -> Visibility<'c> {
+        Visibility::at(self.binding_cutoff(chain), chain)
+    }
+
     /// Walk `self` and its `outer` ancestors, returning the first scope's `probe` hit — the single
     /// ancestor-with-cutoff traversal every name-resolution ladder shares. Each ladder supplies the
     /// per-scope `probe`, which reads that scope's `bindings` gated by its
@@ -127,7 +134,7 @@ impl<'a> Scope<'a> {
         self.walk_chain(|scope| {
             scope
                 .bindings()
-                .lookup_value(name, scope.binding_cutoff(chain))
+                .lookup_value(name, scope.visibility(chain))
                 .map(|hit| hit.map(|sealed| scope.lift_resident(sealed)))
         })
     }
@@ -157,13 +164,15 @@ impl<'a> Scope<'a> {
         name: &str,
         cutoff: Option<usize>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
-        self.bindings().lookup_value(name, cutoff).map(|hit| {
-            hit.map(|sealed| {
-                let delivered = self.lift_resident(sealed);
-                self.adopt_carried(&delivered, AdoptSeam::Retaining)
-                    .object()
+        self.bindings()
+            .lookup_value(name, Visibility::at(cutoff, None))
+            .map(|hit| {
+                hit.map(|sealed| {
+                    let delivered = self.lift_resident(sealed);
+                    self.adopt_carried(&delivered, AdoptSeam::Retaining)
+                        .object()
+                })
             })
-        })
     }
 
     /// Resolve a *finalized* type, unfiltered. The `Option<KType>` adapter over
@@ -193,13 +202,9 @@ impl<'a> Scope<'a> {
         // resolves by the chain walk below.
         let root = self.root_scope().bindings();
         if root.has_builtin_type(name) {
-            return root.lookup_type(name, None);
+            return root.lookup_type(name, Visibility::UNFILTERED);
         }
-        self.walk_chain(|scope| {
-            scope
-                .bindings()
-                .lookup_type(name, scope.binding_cutoff(chain))
-        })
+        self.walk_chain(|scope| scope.bindings().lookup_type(name, scope.visibility(chain)))
     }
 
     /// Resolve a chain's operator-group probe against this scope and the `outer` chain, **lifting**
@@ -224,7 +229,7 @@ impl<'a> Scope<'a> {
         self.walk_chain(|scope| {
             scope
                 .bindings()
-                .lookup_operator_group(probe, scope.binding_cutoff(chain))
+                .lookup_operator_group(probe, scope.visibility(chain))
                 .map(|sealed| scope.lift_resident(sealed))
         })
     }

@@ -3,6 +3,7 @@
 use crate::builtins::test_support::{binds_module, lookup_module, parse_one, TestRun};
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::KErrorKind;
+use crate::machine::Visibility;
 use crate::machine::{program_storage, run_root_storage};
 use crate::parse::parse;
 
@@ -381,7 +382,7 @@ fn two_opaque_ascriptions_seed_distinct_mints() {
         lookup_module(scope, name, &test_run.types)
             .child_scope()
             .bindings()
-            .lookup_type("Elem", None)
+            .lookup_type("Elem", Visibility::UNFILTERED)
             .and_then(|hit| hit.bound())
             .expect("each view scope is seeded with its own `Elem`")
     };

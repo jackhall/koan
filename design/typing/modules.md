@@ -442,7 +442,18 @@ whose name collides with a surfaced member is rejected — on the value channel 
 the type channel alike, by the write op's two window-forwarding targets
 ([`ops.rs`](../../src/machine/core/bindings/ops.rs)'s `value_write_target` and
 `type_write_target`, each a presence probe of the borrowed table) — so a forwarded
-bind or type declaration can never be silently shadowed by the window. Forwarding outward
+bind or type declaration can never be silently shadowed by the window. A forwarded
+entry carries two lexical positions (`Scope::binding_position`): it anchors in the
+call-site scope's numbering at the `USING` statement's own index — so to every
+statement outside the block it is a binding the `USING` statement made, visible
+from the next statement on and shadowing accordingly — and it also records its
+window position (`BindingIndex::window`), which readers *inside* the block are
+gated by instead, so a block statement sees exactly its earlier siblings' binds
+and an intra-block forward reference stays a position error. The rule spans all
+four binding channels — values, `functions` buckets, types, operators — and the
+dispatch-time placeholder stamp carries the same pair, so a consumer parks on an
+in-flight sibling binder under the same visibility it will read the finalized
+bind with. Forwarding outward
 is safe because the block is unconditional — unlike `TRY`/`MATCH` branches it
 always runs, so there is no divergent-binding hazard. A module function dispatched
 inside the block resolves its own internal names in the module's lexical scope:
@@ -465,3 +476,9 @@ A bare `FN` registration writes only the `functions` dispatch bucket, never
 `data`; only the `LET f = (FN …)` capture form also writes `data`. The surfaced
 window therefore carries captured values in `data` and the dispatch surface in
 `functions`, cleanly separated rather than conflated.
+
+## Open work
+
+- [Nested `USING` windows](../../roadmap/type_language/nested-using-windows.md) —
+  forwarded-bind visibility for intermediate-block readers, and the collision
+  guard across every window on the forwarding path.

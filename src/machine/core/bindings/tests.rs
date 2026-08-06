@@ -63,7 +63,7 @@ fn data_binding_round_trips_sealed_reach() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("value bind should succeed");
-    match bindings.lookup_value("x", None) {
+    match bindings.lookup_value("x", Visibility::UNFILTERED) {
         Some(NameLookup::Bound(hit)) => assert!(
             Rc::ptr_eq(&sole_reach_member(&hit, &storage), &foreign),
             "the sealed reach should round-trip the foreign frame",
@@ -92,7 +92,7 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
         )
         .expect("value bind should succeed");
 
-    let read = |label: &str| match bindings.lookup_value("x", None) {
+    let read = |label: &str| match bindings.lookup_value("x", Visibility::UNFILTERED) {
         Some(NameLookup::Bound(hit)) => hit.open_at(&storage).with_reach(|reach| reach as *const _),
         _ => panic!("expected a bound value hit for {label}"),
     };
@@ -368,7 +368,7 @@ fn value_write_finalizes_the_pending_arm_in_place() {
         Some(NodeId(11)),
     );
     assert!(matches!(
-        bindings.lookup_value("x", None),
+        bindings.lookup_value("x", Visibility::UNFILTERED),
         Some(NameLookup::Parked(NodeId(11))),
     ));
 
@@ -384,7 +384,7 @@ fn value_write_finalizes_the_pending_arm_in_place() {
     assert!(bindings.pending_value("x").is_none());
     assert!(bindings.pending_names().is_empty());
     assert!(matches!(
-        bindings.lookup_value("x", None),
+        bindings.lookup_value("x", Visibility::UNFILTERED),
         Some(NameLookup::Bound(_)),
     ));
     assert_eq!(bindings.data().len(), 1, "the key is stored once");
@@ -418,7 +418,7 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
         .expect("the in-flight producer claims the same slot");
 
     assert!(matches!(
-        bindings.lookup_type("Wrapper", None),
+        bindings.lookup_type("Wrapper", Visibility::UNFILTERED),
         Some(NameLookup::Bound(kt)) if kt == KType::NUMBER,
     ));
     assert_eq!(

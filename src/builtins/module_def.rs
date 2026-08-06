@@ -14,6 +14,7 @@ use crate::machine::model::{KKind, SigSchema};
 use crate::machine::model::{Module, ModuleDraft};
 use crate::machine::BindingIndex;
 use crate::machine::StepCarried;
+use crate::machine::Visibility;
 use crate::machine::WriteGate;
 use crate::machine::{Action, BodyCtx};
 use crate::machine::{NameLookup, Scope};
@@ -60,8 +61,10 @@ pub(super) fn await_module_body<'a>(
         move |fctx| {
             // Idempotent-finalize guard: a re-bound name short-circuits, re-surfacing the
             // already-bound module value from its **stored** reach.
-            if let Some(NameLookup::Bound(sealed)) =
-                fctx.scope.bindings().lookup_value(&name_for_finish, None)
+            if let Some(NameLookup::Bound(sealed)) = fctx
+                .scope
+                .bindings()
+                .lookup_value(&name_for_finish, Visibility::UNFILTERED)
             {
                 return Action::done(Ok(StepCarried::born_delivered(
                     fctx.scope.lift_resident(sealed),

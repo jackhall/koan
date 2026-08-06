@@ -406,8 +406,8 @@ fn pending_operator_producers<'b>(
     for operator in operators {
         for key in [binary_key(operator), unary_key(operator)] {
             for scope in s.ancestors() {
-                let cutoff = scope.binding_cutoff(chain);
-                if let Some(producer) = scope.bindings().lookup_function(&key, cutoff).pending {
+                let vis = scope.visibility(chain);
+                if let Some(producer) = scope.bindings().lookup_function(&key, vis).pending {
                     if !producers.contains(&producer) {
                         producers.push(producer);
                     }

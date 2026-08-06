@@ -20,7 +20,7 @@
 //! — need no such discipline and stay direct (`*_direct` on [`Scope`]), under the construction-door
 //! mint of the same gate.
 
-use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
+use super::{BindingIndex, DeclarationSite, SealedValue, Visibility, WriteGate};
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{probe_key, KType};
@@ -152,7 +152,7 @@ impl WriteOp {
 /// forwards to the call site, where the binding belongs (the caller's own block and statement
 /// position).
 fn value_write_target<'s, 'a>(scope: &'s Scope<'a>, name: &str) -> Result<&'s Scope<'a>, KError> {
-    if scope.is_using_window() && scope.bindings().has_value(name, None) {
+    if scope.is_using_window() && scope.bindings().has_value(name, Visibility::UNFILTERED) {
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "USING: local bind `{name}` collides with a surfaced module member; \
              rename it to avoid silently shadowing the module's `{name}`",
@@ -167,7 +167,7 @@ fn value_write_target<'s, 'a>(scope: &'s Scope<'a>, name: &str) -> Result<&'s Sc
 /// token partition keeps a type name from colliding with a value member, so the one probe is
 /// complete.
 fn type_write_target<'s, 'a>(scope: &'s Scope<'a>, name: &str) -> Result<&'s Scope<'a>, KError> {
-    if scope.is_using_window() && scope.bindings().has_type(name, None) {
+    if scope.is_using_window() && scope.bindings().has_type(name, Visibility::UNFILTERED) {
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "USING: local type `{name}` collides with a surfaced module type member; \
              rename it to avoid silently shadowing the module's `{name}`",

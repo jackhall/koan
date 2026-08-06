@@ -5,8 +5,8 @@
 //! keywords); dispatch keywords (`SHOW`, `PAINT`, `TAKES`, `NAMEOF`) stay all-uppercase, and never
 //! a lone capital — a single uppercase letter classifies as neither keyword nor type name.
 
-use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::model::KObject;
+use crate::builtins::test_support::{extract_terminal, parse_one, TestRun};
+use crate::machine::model::{Carried, KObject};
 use crate::machine::KErrorKind;
 use crate::machine::{program_storage, run_root_storage};
 
@@ -150,6 +150,39 @@ fn block_type_declaration_colliding_with_a_member_errors() {
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("collides with a surfaced module type member") && msg.contains("`Elem`")),
         "expected the type-side collision ShapeError naming `Elem`, got {err}",
+    );
+}
+
+/// The type channel under real per-statement chains (`enter_source`, not the detached-chain
+/// `run`): a block-local type alias types a block-local `FN`'s slot, and a later statement of the
+/// same block dispatches through it. The forwarded `types` entry carries its window position
+/// ([`BindingIndex::window`](crate::machine::BindingIndex)), so the in-block reader gates by
+/// block ordering exactly as the value channel does.
+#[test]
+fn block_type_alias_types_a_later_statement_of_the_same_block() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let ids = test_run.enter_source(
+        "MODULE some_module = ((UNION Color = (Red :Null Blue :Null)))\n\
+         USING some_module SCOPE (\n  \
+         LET Alias = Color\n  \
+         FN (SHOW c :Alias) -> Str = (\"a color\")\n  \
+         (SHOW (Alias (Blue null)))\n\
+         )",
+    );
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
+    let tail = extract_terminal(
+        &test_run.runtime,
+        test_run.scope,
+        *ids.last().expect("two top-level statements"),
+    );
+    assert!(
+        matches!(tail, Carried::Object(KObject::KString(s)) if *s == "a color"),
+        "a block statement dispatches through its earlier siblings' alias and FN",
     );
 }
 

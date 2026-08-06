@@ -23,7 +23,7 @@ use crate::machine::core::bindings::{
     BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
 };
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
-use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
+use crate::machine::core::{KError, KErrorKind, KFunction, LexicalFrame, NodeId};
 use crate::machine::model::{Carried, KObject, KType, OperatorGroup, ReductionMode};
 use crate::machine::DeliveredCarried;
 
@@ -58,6 +58,28 @@ impl<'a> Scope<'a> {
             );
         }
         target
+    }
+
+    /// The [`BindingIndex`] a binding installed from a statement of this scope takes, read off
+    /// the statement's `chain`. In an ordinary scope that is the chain head's index. In a
+    /// transparent `USING` window the entry lands in the forwarded [`Self::write_scope`] target,
+    /// so the position anchors there — at the `USING` statement's own index in that scope's
+    /// numbering — and carries the window head `(scope, index)` as the intra-block ordering
+    /// refinement ([`BindingIndex::window`]). Shared by the builtin binder bodies
+    /// ([`BodyCtx::bind_index`](crate::machine::core::kfunction::action::BodyCtx)) and the
+    /// dispatch-time placeholder stamp, so a claim and the write that finalizes it agree.
+    pub(crate) fn binding_position(&self, chain: Option<&LexicalFrame>) -> BindingIndex {
+        let Some(chain) = chain else {
+            return BindingIndex::BUILTIN;
+        };
+        if self.is_using_window() && chain.scope_id == self.id {
+            let host = self.write_scope();
+            return BindingIndex {
+                idx: chain.index_for(host.id).unwrap_or(0),
+                window: Some((self.id, chain.index)),
+            };
+        }
+        BindingIndex::value(chain.index)
     }
 
     /// Fused MODULE-finish value **construction**: merge the resident module reference into this

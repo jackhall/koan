@@ -55,7 +55,7 @@ use crate::machine::core::carrier_witness::{
     GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
 };
 use crate::machine::core::kfunction::NodeId;
-use crate::machine::core::RunId;
+use crate::machine::core::{LexicalFrame, RunId, ScopeId};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::DispatchToken;
 use crate::machine::model::{KType, UntypedKey};
@@ -329,19 +329,60 @@ pub struct FunctionLookup {
 /// position (FN parameters, MATCH/TRY `it`) and also tags the builtins in the immutable
 /// root — [`BindingIndex::BUILTIN`]; per-block indices restart inside nested blocks (see
 /// [`crate::machine::core::scope::Scope::resolve`] for the predicate).
+///
+/// A statement of a transparent `USING` block binds through the window into the call site's
+/// table, whose `idx` numbering it does not share. Such a binding carries both positions
+/// ([`crate::machine::core::Scope::binding_position`]): `idx` anchors it in the host scope's
+/// numbering at the `USING` statement's own position — so to readers outside the block it is
+/// a binding the `USING` statement made — and `window` carries `(window scope, statement
+/// position within the block)`, which readers *inside* the block gate by instead
+/// ([`Bindings::visible`]), keeping intra-block lexical ordering strict.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct BindingIndex {
     pub idx: usize,
+    /// `Some((window, position))` only on a binding forwarded through a transparent `USING`
+    /// window: the window's scope and the installing statement's position in the block's own
+    /// numbering.
+    pub window: Option<(ScopeId, usize)>,
 }
 
 impl BindingIndex {
-    pub const BUILTIN: BindingIndex = BindingIndex { idx: 0 };
+    pub const BUILTIN: BindingIndex = BindingIndex {
+        idx: 0,
+        window: None,
+    };
 
     /// A binding at lexical position `idx`. FN / STRUCT / etc. all install here; FN
     /// *parameters* and MATCH / TRY `it` sit at `idx 0`, with the body's statements at
     /// `idx >= 1`, so the strict `idx < cutoff` predicate admits them.
     pub const fn value(idx: usize) -> Self {
-        BindingIndex { idx }
+        BindingIndex { idx, window: None }
+    }
+}
+
+/// The read-side visibility context a per-scope lookup filters entries through: the host
+/// scope's `cutoff` (from [`crate::machine::core::Scope::binding_cutoff`]) beside the
+/// reader's lexical `chain`, which a window-forwarded entry ([`BindingIndex::window`]) is
+/// gated against instead. Built by [`crate::machine::core::Scope::visibility`];
+/// [`Self::UNFILTERED`] is the everything-visible mode (off-chain reads, module member
+/// access, the collision guards).
+#[derive(Copy, Clone, Default)]
+pub struct Visibility<'c> {
+    cutoff: Option<usize>,
+    chain: Option<&'c LexicalFrame>,
+}
+
+impl<'c> Visibility<'c> {
+    /// Everything visible: no host cutoff, no chain to gate window entries by.
+    pub const UNFILTERED: Visibility<'static> = Visibility {
+        cutoff: None,
+        chain: None,
+    };
+
+    /// A visibility context from its parts — the [`crate::machine::core::Scope::visibility`]
+    /// constructor and the explicit-cutoff test affordances build through this.
+    pub fn at(cutoff: Option<usize>, chain: Option<&'c LexicalFrame>) -> Self {
+        Visibility { cutoff, chain }
     }
 }
 
@@ -450,21 +491,18 @@ impl Bindings {
 
     /// Per-scope value-side lookup. One probe of `data[name]`: a visible bound slot answers
     /// `Bound`, a visible pending slot answers `Parked` on its producer.
-    /// `chain_cutoff = None` means the scope
+    /// [`Visibility::UNFILTERED`] means the scope
     /// is off-chain (or unfiltered) — everything is visible. `None` return
     /// means no visible entry at this scope; the caller keeps walking
     /// ancestors, and chain exhaustion stays `None` (the terminal unbound
     /// disposition is materialized on the resolution path, not here).
-    pub fn lookup_value(
-        &self,
-        name: &str,
-        chain_cutoff: Option<usize>,
-    ) -> Option<NameLookup<SealedValue>> {
+    pub fn lookup_value(&self, name: &str, vis: Visibility<'_>) -> Option<NameLookup<SealedValue>> {
         match self.tables.borrow().data.get(name)? {
-            ValueSlot::Bound(entry) => Self::visible(entry.index, chain_cutoff)
-                .then(|| NameLookup::Bound(entry.sealed.duplicate())),
+            ValueSlot::Bound(entry) => {
+                Self::visible(entry.index, vis).then(|| NameLookup::Bound(entry.sealed.duplicate()))
+            }
             ValueSlot::Pending(p) => {
-                Self::visible(p.index, chain_cutoff).then_some(NameLookup::Parked(p.producer))
+                Self::visible(p.index, vis).then_some(NameLookup::Parked(p.producer))
             }
         }
     }
@@ -472,45 +510,41 @@ impl Bindings {
     /// Whether a **visible** value entry named `name` exists at this scope — the presence-only
     /// probe, for a write gate that must not read the bound value (the USING-window collision
     /// check). A still-finalizing pending slot is not an entry and reads `false`.
-    pub fn has_value(&self, name: &str, chain_cutoff: Option<usize>) -> bool {
+    pub fn has_value(&self, name: &str, vis: Visibility<'_>) -> bool {
         self.tables
             .borrow()
             .data
             .get(name)
             .and_then(ValueSlot::bound)
-            .is_some_and(|entry| Self::visible(entry.index, chain_cutoff))
+            .is_some_and(|entry| Self::visible(entry.index, vis))
     }
 
     /// Whether a **visible** bound type entry named `name` exists at this scope — the type-side
     /// mirror of [`Self::has_value`], for the USING-window collision check. A still-finalizing
     /// pending slot is not an entry and reads `false`.
-    pub fn has_type(&self, name: &str, chain_cutoff: Option<usize>) -> bool {
+    pub fn has_type(&self, name: &str, vis: Visibility<'_>) -> bool {
         self.tables
             .borrow()
             .types
             .get(name)
             .and_then(TypeSlot::bound)
-            .is_some_and(|(_, site)| Self::visible(site.index, chain_cutoff))
+            .is_some_and(|(_, site)| Self::visible(site.index, vis))
     }
 
     /// Per-scope type-side lookup. The type-language mirror of [`Self::lookup_value`]: one probe of
     /// `types[name]`, preferring the slot's bound arm over its pending one, returning the first
     /// visible hit as a [`NameLookup`], or `None` so the caller keeps walking. Bound-preferred is
     /// load-bearing: on a slot carrying both, a consumer that can read the identity must not park.
-    pub fn lookup_type(
-        &self,
-        name: &str,
-        chain_cutoff: Option<usize>,
-    ) -> Option<NameLookup<KType>> {
+    pub fn lookup_type(&self, name: &str, vis: Visibility<'_>) -> Option<NameLookup<KType>> {
         let tables = self.tables.borrow();
         let slot = tables.types.get(name)?;
         if let Some((kt, site)) = slot.bound() {
-            if Self::visible(site.index, chain_cutoff) {
+            if Self::visible(site.index, vis) {
                 return Some(NameLookup::Bound(kt));
             }
         }
         slot.pending()
-            .filter(|p| Self::visible(p.index, chain_cutoff))
+            .filter(|p| Self::visible(p.index, vis))
             .map(|p| NameLookup::Parked(p.producer))
     }
 
@@ -521,19 +555,15 @@ impl Bindings {
     /// is "no member", not a fall-through. The cross-kind exclusion keeps the two arms from both
     /// matching, so the result is unambiguous. Bound arms only — a read module is finalized, so a
     /// pending arm never surfaces here.
-    pub fn lookup_member(
-        &self,
-        name: &str,
-        chain_cutoff: Option<usize>,
-    ) -> Option<MemberResolution> {
+    pub fn lookup_member(&self, name: &str, vis: Visibility<'_>) -> Option<MemberResolution> {
         let tables = self.tables.borrow();
         if let Some(entry) = tables.data.get(name).and_then(ValueSlot::bound) {
-            if Self::visible(entry.index, chain_cutoff) {
+            if Self::visible(entry.index, vis) {
                 return Some(MemberResolution::Value(entry.sealed.duplicate()));
             }
         }
         if let Some((kt, site)) = tables.types.get(name).and_then(TypeSlot::bound) {
-            if Self::visible(site.index, chain_cutoff) {
+            if Self::visible(site.index, vis) {
                 return Some(MemberResolution::Type { kt });
             }
         }
@@ -559,7 +589,7 @@ impl Bindings {
     /// Per-scope dispatch-bucket lookup. One pass over `functions[key]` surfaces the visible sealed
     /// overloads AND the earliest-index visible pending sibling together, so the scope walk decides
     /// pending-vs-finalized precedence with both in hand.
-    pub fn lookup_function(&self, key: &UntypedKey, chain_cutoff: Option<usize>) -> FunctionLookup {
+    pub fn lookup_function(&self, key: &UntypedKey, vis: Visibility<'_>) -> FunctionLookup {
         let tables = self.tables.borrow();
         let Some(bucket) = tables.functions.get(key) else {
             return FunctionLookup {
@@ -570,14 +600,14 @@ impl Bindings {
         let overloads: Vec<SealedFunction> = bucket
             .iter()
             .filter_map(OverloadSlot::sealed)
-            .filter(|entry| Self::visible(entry.index, chain_cutoff))
+            .filter(|entry| Self::visible(entry.index, vis))
             .map(|entry| entry.sealed.duplicate())
             .collect();
         // Earliest-index visible producer: most likely to finalize first.
         let pending = bucket
             .iter()
             .filter_map(OverloadSlot::pending)
-            .filter(|p| Self::visible(p.index, chain_cutoff))
+            .filter(|p| Self::visible(p.index, vis))
             .min_by_key(|p| p.index.idx)
             .map(|p| p.producer);
         FunctionLookup { overloads, pending }
@@ -590,11 +620,11 @@ impl Bindings {
     pub(in crate::machine::core) fn lookup_operator_group(
         &self,
         probe: &str,
-        chain_cutoff: Option<usize>,
+        vis: Visibility<'_>,
     ) -> Option<SealedOperatorGroup> {
         let tables = self.tables.borrow();
         let entry = tables.operators.get(probe)?;
-        Self::visible(entry.index, chain_cutoff).then(|| entry.sealed.duplicate())
+        Self::visible(entry.index, vis).then(|| entry.sealed.duplicate())
     }
 
     /// Register `probe → seal`'s group in the operator registry. The `OP` / `GROUP` binder installs
@@ -706,11 +736,18 @@ impl Bindings {
         })
     }
 
-    /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒ `b.idx < c`. The cutoff
-    /// itself comes from [`Scope::binding_cutoff`](crate::machine::Scope); this is the only place
-    /// it is applied.
-    fn visible(b: BindingIndex, chain_cutoff: Option<usize>) -> bool {
-        match chain_cutoff {
+    /// Visibility predicate — the only place a [`Visibility`] is applied. A window-forwarded
+    /// entry whose window is on the reader's chain gates by the reader's position *within the
+    /// block* (`window_position < reader position`), so intra-block ordering stays strict; a
+    /// reader off the window (before the `USING` statement, or after the block) falls through
+    /// to the host anchor. Plain entries: `cutoff = None` ⇒ visible; `Some(c)` ⇒ `idx < c`.
+    fn visible(b: BindingIndex, vis: Visibility<'_>) -> bool {
+        if let Some((window, window_position)) = b.window {
+            if let Some(reader_position) = vis.chain.and_then(|c| c.index_for(window)) {
+                return window_position < reader_position;
+            }
+        }
+        match vis.cutoff {
             None => true,
             Some(c) => b.idx < c,
         }

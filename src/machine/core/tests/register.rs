@@ -1,6 +1,6 @@
 //! `register` arm of `machine::core` tests.
 
-use super::super::{BindingIndex, DeclarationSite, NameLookup};
+use super::super::{BindingIndex, DeclarationSite, NameLookup, Visibility};
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::{run_root_storage, FrameStorageExt};
@@ -209,7 +209,7 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
         .expect("a value bind of a callable is an ordinary bind, not an overload");
     let lookup = scope
         .bindings()
-        .lookup_function(&f1.signature.untyped_key(), None);
+        .lookup_function(&f1.signature.untyped_key(), Visibility::UNFILTERED);
     assert_eq!(
         lookup.overloads.len(),
         1,
@@ -402,15 +402,17 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
     );
     let bindings = scope.bindings();
     assert!(matches!(
-        bindings.lookup_member("val", None),
+        bindings.lookup_member("val", Visibility::UNFILTERED),
         Some(MemberResolution::Value(sealed))
             if matches!(sealed.open_at(&region).value(), Carried::Object(KObject::Number(n)) if *n == 1.0)
     ));
     assert!(matches!(
-        bindings.lookup_member("Ty", None),
+        bindings.lookup_member("Ty", Visibility::UNFILTERED),
         Some(MemberResolution::Type { kt, .. }) if kt == KType::NUMBER
     ));
-    assert!(bindings.lookup_member("absent", None).is_none());
+    assert!(bindings
+        .lookup_member("absent", Visibility::UNFILTERED)
+        .is_none());
 }
 
 #[test]
@@ -691,7 +693,7 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
     );
     let lookup = scope
         .bindings()
-        .lookup_function(&f.signature.untyped_key(), None);
+        .lookup_function(&f.signature.untyped_key(), Visibility::UNFILTERED);
     assert!(
         lookup.overloads.is_empty(),
         "a value bind must not register a keyworded overload",
@@ -724,7 +726,7 @@ fn bare_fn_registration_seals_the_empty_reach() {
     let foreign = run_root_storage();
     let lookup = scope
         .bindings()
-        .lookup_function(&f.signature.untyped_key(), None);
+        .lookup_function(&f.signature.untyped_key(), Visibility::UNFILTERED);
     assert_eq!(lookup.overloads.len(), 1);
     assert!(
         !scope

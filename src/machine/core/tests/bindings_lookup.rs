@@ -5,7 +5,9 @@
 
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, NameLookup};
+use crate::machine::core::{
+    run_root_storage, BindingIndex, FrameStorageExt, NameLookup, Visibility,
+};
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
@@ -45,7 +47,10 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    assert!(scope.bindings().lookup_value("later", Some(3)).is_none());
+    assert!(scope
+        .bindings()
+        .lookup_value("later", Visibility::at(Some(3), None))
+        .is_none());
 }
 
 #[test]
@@ -82,9 +87,12 @@ fn lookup_value_placeholder_filtered_same_as_value() {
         .unwrap();
     assert!(scope
         .bindings()
-        .lookup_value("placeholder", Some(3))
+        .lookup_value("placeholder", Visibility::at(Some(3), None))
         .is_none());
-    match scope.bindings().lookup_value("placeholder", Some(9)) {
+    match scope
+        .bindings()
+        .lookup_value("placeholder", Visibility::at(Some(9), None))
+    {
         Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId(2)),
         _ => panic!("placeholder must be visible past its install index"),
     }
@@ -101,7 +109,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(matches!(
-        scope.bindings().lookup_type("Tee", None),
+        scope.bindings().lookup_type("Tee", Visibility::UNFILTERED),
         Some(NameLookup::Bound(kt)) if kt == KType::NUMBER,
     ));
 }
@@ -116,8 +124,14 @@ fn lookup_type_strict_less_than_hides_later_sibling() {
         mock_declaration_site(1, 5),
         &mut crate::machine::WriteGate::for_test(),
     );
-    assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
-    assert!(scope.bindings().lookup_type("TyLate", Some(9)).is_some());
+    assert!(scope
+        .bindings()
+        .lookup_type("TyLate", Visibility::at(Some(3), None))
+        .is_none());
+    assert!(scope
+        .bindings()
+        .lookup_type("TyLate", Visibility::at(Some(9), None))
+        .is_some());
 }
 
 #[test]
@@ -141,7 +155,9 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         )
         .unwrap();
     let key = f.signature.untyped_key();
-    let lookup = scope.bindings().lookup_function(&key, None);
+    let lookup = scope
+        .bindings()
+        .lookup_function(&key, Visibility::UNFILTERED);
     assert_eq!(lookup.overloads.len(), 1);
     assert!(std::ptr::eq(
         scope.open_function(&lookup.overloads[0]).value(),
@@ -199,7 +215,9 @@ fn lookup_function_filters_per_overload_visibility() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let visible_early = scope.bindings().lookup_function(&key, Some(5));
+    let visible_early = scope
+        .bindings()
+        .lookup_function(&key, Visibility::at(Some(5), None));
     assert_eq!(
         visible_early.overloads.len(),
         1,
@@ -209,7 +227,9 @@ fn lookup_function_filters_per_overload_visibility() {
         scope.open_function(&visible_early.overloads[0]).value(),
         f_early
     ));
-    let visible_both = scope.bindings().lookup_function(&key, Some(9));
+    let visible_both = scope
+        .bindings()
+        .lookup_function(&key, Visibility::at(Some(9), None));
     assert_eq!(visible_both.overloads.len(), 2);
 }
 
@@ -229,11 +249,15 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let visible = scope.bindings().lookup_function(&key, Some(5));
+    let visible = scope
+        .bindings()
+        .lookup_function(&key, Visibility::at(Some(5), None));
     assert!(visible.overloads.is_empty());
     assert_eq!(visible.pending, Some(NodeId(11)));
     // Filtered out: no overloads and no visible pending — the old `None`.
-    let hidden = scope.bindings().lookup_function(&key, Some(1));
+    let hidden = scope
+        .bindings()
+        .lookup_function(&key, Visibility::at(Some(1), None));
     assert!(hidden.overloads.is_empty());
     assert!(hidden.pending.is_none());
 }
@@ -269,7 +293,9 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let lookup = scope.bindings().lookup_function(&key, Some(9));
+    let lookup = scope
+        .bindings()
+        .lookup_function(&key, Visibility::at(Some(9), None));
     assert_eq!(lookup.overloads.len(), 1);
     assert_eq!(lookup.pending, Some(NodeId(99)));
 }
@@ -297,7 +323,9 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     let key = f.signature.untyped_key();
     // Empty-after-filter must surface an empty `overloads` with no pending, so
     // the dispatch walker keeps walking ancestors.
-    let lookup = scope.bindings().lookup_function(&key, Some(3));
+    let lookup = scope
+        .bindings()
+        .lookup_function(&key, Visibility::at(Some(3), None));
     assert!(lookup.overloads.is_empty());
     assert!(lookup.pending.is_none());
 }
@@ -364,7 +392,10 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
     );
     // The finalized overload sharing a bucket with a purged claim survives.
     assert_eq!(
-        bindings.lookup_function(&sealed_key, None).overloads.len(),
+        bindings
+            .lookup_function(&sealed_key, Visibility::UNFILTERED)
+            .overloads
+            .len(),
         1
     );
 

@@ -106,8 +106,9 @@ impl<'step> Scope<'step> {
         // root falls through to the full walk below unchanged, preserving precedence.
         let root = self.root_scope();
         if root.bindings().has_builtin_function(&key) {
-            let cutoff = chain.and_then(|c| c.index_for(root.id));
-            let lookup = root.bindings().lookup_function(&key, cutoff);
+            let lookup = root
+                .bindings()
+                .lookup_function(&key, root.visibility(chain));
             if let ScopeDecision::Terminal(outcome) =
                 decide_scope(root, &lookup, expr, bare_outcomes, types)
             {
@@ -118,8 +119,9 @@ impl<'step> Scope<'step> {
         // scope reached a terminal decision.
         let mut dead_lean: Option<String> = None;
         for scope in self.ancestors() {
-            let cutoff = scope.binding_cutoff(chain);
-            let lookup = scope.bindings().lookup_function(&key, cutoff);
+            let lookup = scope
+                .bindings()
+                .lookup_function(&key, scope.visibility(chain));
             match decide_scope(scope, &lookup, expr, bare_outcomes, types) {
                 ScopeDecision::Terminal(outcome) => return outcome,
                 ScopeDecision::DeadLean(name) => {

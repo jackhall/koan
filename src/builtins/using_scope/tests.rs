@@ -166,6 +166,101 @@ fn using_window_member_forwards_to_a_later_statement_of_the_same_block() {
     );
 }
 
+/// A block-local bind and a block-local `FN` used by a *later statement of the same block*, under
+/// real per-statement chains (`enter_source`, not the detached-chain `run`). The forwarded entries
+/// anchor at the `USING` statement's call-site position and carry their window position
+/// ([`BindingIndex::window`]), so the in-block reader gates by block ordering regardless of where
+/// the `USING` statement sits in its own block.
+#[test]
+fn using_block_bind_and_function_are_visible_to_later_statements_of_the_same_block() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let ids = test_run.enter_source(
+        "MODULE some_module = (LET val = 1)\n\
+         USING some_module SCOPE (\n  \
+         LET localv = 5\n  \
+         FN (DOUBLE x :Number) -> Number = (x + x)\n  \
+         (DOUBLE localv)\n\
+         )",
+    );
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
+    let tail = crate::builtins::test_support::extract_terminal(
+        &test_run.runtime,
+        test_run.scope,
+        *ids.last().expect("two top-level statements"),
+    );
+    assert!(
+        matches!(tail, Carried::Object(KObject::Number(n)) if *n == 10.0),
+        "a block statement reads its earlier siblings' binds on both channels",
+    );
+}
+
+/// The forwarded binds of a block *longer than the `USING` statement's own position* read from the
+/// immediately following call-site statement. The entries anchor at the `USING` statement's index,
+/// so every one of them is visible from the next statement on — the window-relative positions
+/// never leak into the call site's numbering.
+#[test]
+fn using_block_forwarded_binds_are_visible_immediately_after_a_long_block() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let ids = test_run.enter_source(
+        "MODULE some_module = (LET val = 1)\n\
+         USING some_module SCOPE (\n  \
+         LET first = 1\n  \
+         LET second = 2\n  \
+         LET third = 3\n\
+         )\n\
+         third",
+    );
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
+    let tail = crate::builtins::test_support::extract_terminal(
+        &test_run.runtime,
+        test_run.scope,
+        *ids.last().expect("three top-level statements"),
+    );
+    assert!(
+        matches!(tail, Carried::Object(KObject::Number(n)) if *n == 3.0),
+        "the block's last bind reads from the statement right after the block",
+    );
+}
+
+/// Intra-block ordering stays strict: a statement of the block reading a name its *later* sibling
+/// binds is a forward reference, exactly as it would be in an ordinary block — the window position
+/// the forwarded entry carries is what the in-block reader is gated by.
+#[test]
+fn using_block_forward_reference_stays_a_position_error() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let ids = test_run.enter_source(
+        "MODULE some_module = (LET val = 1)\n\
+         USING some_module SCOPE (\n  \
+         early\n  \
+         LET early = 5\n\
+         )",
+    );
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
+    let error = test_run
+        .runtime
+        .result_error(ids[1])
+        .expect_err("reading a later sibling's bind from inside the block is an error");
+    assert!(
+        matches!(&error.kind, KErrorKind::UnboundName(name) if name == "early"),
+        "expected UnboundName(early), got {error}",
+    );
+}
+
 /// Closure escape for a functor-result module. `MAKE` returns a module living in its per-call
 /// `CallFrame`; opening it with `USING` and returning a closure that reads a surfaced member must
 /// keep both the closure's transparent scope and the module's region alive past the block. Run-root

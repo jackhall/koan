@@ -260,14 +260,13 @@ pub struct BodyCtx<'a, 'c> {
 }
 
 impl<'a, 'c> BodyCtx<'a, 'c> {
-    /// The lexical position a binding the builtin installs takes: the ambient chain's index, or
-    /// [`BindingIndex::BUILTIN`] when there is no chain (a top-level / direct-body binder, e.g. a
-    /// test fixture that bypasses the scheduler).
+    /// The lexical position a binding the builtin installs takes
+    /// ([`Scope::binding_position`](crate::machine::Scope::binding_position)): the ambient
+    /// chain's index — window-qualified when this step's scope is a transparent `USING` window —
+    /// or [`BindingIndex::BUILTIN`] when there is no chain (a top-level / direct-body binder,
+    /// e.g. a test fixture that bypasses the scheduler).
     pub fn bind_index(&self) -> BindingIndex {
-        self.chain
-            .as_ref()
-            .map(|chain| BindingIndex::value(chain.index))
-            .unwrap_or(BindingIndex::BUILTIN)
+        self.scope.binding_position(self.chain.as_deref())
     }
 
     /// The installing declaration's identity: this body's run-qualified slot ([`Self::node`])
