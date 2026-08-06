@@ -131,8 +131,8 @@ impl SigSchema {
     /// A module never carries abstract members. The manifest members are the union of the
     /// draft's `type_members` map (the per-call mints + mirrored manifests an ascription
     /// installs) and the child scope's type-class entries — the map wins on a shared name, so
-    /// this covers a plain module (map ∪ scope agree), an opaque view (map only — the view
-    /// scope carries no type entries), and a transparent view (scope only — the map is empty).
+    /// this covers a plain module and an opaque view (map and scope agree, the map being a mirror
+    /// of the scope) and a transparent view (scope only — the map is empty).
     /// Value slots are the child scope's data bindings read through [`KObject::ktype`], with the
     /// `slot_type_tags` map overriding by name (an opaque view's abstract slot identities).
     ///

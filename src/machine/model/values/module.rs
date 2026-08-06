@@ -42,8 +42,10 @@ use super::super::types::{
 /// every key at the destination brand on the way in.
 #[derive(Default)]
 pub struct ModuleDraft {
-    /// Member name → type. The per-call abstract mints and mirrored manifest members an opaque
-    /// ascription installs; for a plain `MODULE`, a mirror of the child scope's type bindings.
+    /// Member name → type: a mirror of the child scope's type bindings, for a plain `MODULE` and an
+    /// opaque view alike (the ascription seeds the view scope with the per-call abstract mints and
+    /// the signature's manifest members, then reads them straight back out). A transparent view
+    /// reuses its source's child scope and leaves this map empty, reading types through that scope.
     pub type_members: HashMap<String, KType>,
     /// VAL-slot name → the per-call abstract `KType` an opaque ascription minted for the slot's
     /// SIG-declared type. ATTR re-tags a value-side slot read with this identity so

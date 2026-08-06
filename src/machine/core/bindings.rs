@@ -468,6 +468,18 @@ impl Bindings {
             .is_some_and(|entry| Self::visible(entry.index, chain_cutoff))
     }
 
+    /// Whether a **visible** bound type entry named `name` exists at this scope — the type-side
+    /// mirror of [`Self::has_value`], for the USING-window collision check. A still-finalizing
+    /// pending slot is not an entry and reads `false`.
+    pub fn has_type(&self, name: &str, chain_cutoff: Option<usize>) -> bool {
+        self.tables
+            .borrow()
+            .types
+            .get(name)
+            .and_then(TypeSlot::bound)
+            .is_some_and(|(_, site)| Self::visible(site.index, chain_cutoff))
+    }
+
     /// Per-scope type-side lookup. The type-language mirror of [`Self::lookup_value`]: one probe of
     /// `types[name]`, preferring the slot's bound arm over its pending one, returning the first
     /// visible hit as a [`NameLookup`], or `None` so the caller keeps walking. Bound-preferred is
@@ -911,8 +923,10 @@ impl Bindings {
     /// module's keyworded dispatch surface as-is (keyword → keyword), it does not re-derive it from
     /// the value bindings. Pending arms are not replayed: a claim names a producer in the source's
     /// own scheduler run, so copying one would hand the target a park on a node that will never
-    /// wake it. Snapshots the source maps and releases the source `Ref` before the replay
-    /// so re-entrant ascription cannot deadlock.
+    /// wake it. The `types` table is not replayed: a view's type interface is its own, seeded by
+    /// [`Scope::alloc_module_view`](crate::machine::core::Scope) from the ascribed signature rather
+    /// than inherited from the source. Snapshots the source maps and releases the source `Ref`
+    /// before the replay so re-entrant ascription cannot deadlock.
     pub(crate) fn bulk_install_from(
         &self,
         src: &Bindings,

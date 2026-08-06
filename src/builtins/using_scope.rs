@@ -7,11 +7,16 @@
 //! The block runs in a transparent scope (`Scope::open_module_window`)
 //! allocated in the **call-site region** — not a per-call frame — so forwarded
 //! binds and functions defined in the block stay live after the block ends.
-//! A bind colliding with a surfaced member is rejected in
-//! the value-write op's transparent-window arm.
+//! A bind colliding with a surfaced member is rejected in the write op's
+//! transparent-window arm, on the value and type channels alike.
 //!
-//! Only `data` and `functions` are surfaced; `Module::type_members` is not in
-//! `Bindings`, so abstract ascriptions stay opaque inside the block.
+//! All four tables of the opened module's child scope are surfaced, `types`
+//! included, so a module's type members name types by bare name inside the
+//! block exactly as its value members name values. An opaque view's child
+//! scope holds *only* the view's own type members — the per-call abstract
+//! mints and the signature's manifest members, seeded at ascription — so an
+//! abstract member surfaces as its `AbstractType` identity and the hidden
+//! representation type is absent from the window by construction.
 //!
 //! Functor-result escape soundness: the opened module's child scope lives in a
 //! per-call region pinned only by the eager `m` dep across the USING step. The

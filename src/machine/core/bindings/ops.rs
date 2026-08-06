@@ -123,7 +123,7 @@ impl WriteOp {
                 policy,
                 builtin_shadow_guard,
             } => {
-                let target = scope.write_scope();
+                let target = type_write_target(scope, &name)?;
                 if builtin_shadow_guard && target.shadows_builtin_type(&name) {
                     return Err(KError::new(KErrorKind::Rebind { name }));
                 }
@@ -155,6 +155,21 @@ fn value_write_target<'s, 'a>(scope: &'s Scope<'a>, name: &str) -> Result<&'s Sc
     if scope.is_using_window() && scope.bindings().has_value(name, None) {
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "USING: local bind `{name}` collides with a surfaced module member; \
+             rename it to avoid silently shadowing the module's `{name}`",
+        ))));
+    }
+    Ok(scope.write_scope())
+}
+
+/// The scope a type-side write lands in — [`value_write_target`]'s mirror over the `types` table.
+/// The window surfaces the opened module's type members, so a block-local type declaration reusing
+/// a member's name would be silently shadowed; reject it, otherwise forward to the call site. The
+/// token partition keeps a type name from colliding with a value member, so the one probe is
+/// complete.
+fn type_write_target<'s, 'a>(scope: &'s Scope<'a>, name: &str) -> Result<&'s Scope<'a>, KError> {
+    if scope.is_using_window() && scope.bindings().has_type(name, None) {
+        return Err(KError::new(KErrorKind::ShapeError(format!(
+            "USING: local type `{name}` collides with a surfaced module type member; \
              rename it to avoid silently shadowing the module's `{name}`",
         ))));
     }

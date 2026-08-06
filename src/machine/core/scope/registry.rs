@@ -24,8 +24,8 @@ use crate::machine::core::bindings::{
 };
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
-use crate::machine::model::{Carried, KObject, OperatorGroup, ReductionMode};
-use crate::machine::DeliveredCarried;
+use crate::machine::model::{Carried, KObject, KType, OperatorGroup, ReductionMode};
+use crate::machine::{DeliveredCarried, NodeHandle, RunId};
 
 impl<'a> Scope<'a> {
     /// Spike guard: a bind after [`Self::close`] means the scope's defining block finished yet a
@@ -264,22 +264,40 @@ impl<'a> Scope<'a> {
         .apply(self, gate)
     }
 
-    /// Allocate an ascription view's scope under `outer` and replay `src`'s bindings into it —
-    /// value entries and dispatch buckets both, so the view preserves the source module's
-    /// keyworded surface as-is. The replay is pure seal duplication; the binding table opens
-    /// nothing.
+    /// Allocate an ascription view's scope under `outer`, replay `src`'s bindings into it — value
+    /// entries and dispatch buckets both, so the view preserves the source module's keyworded
+    /// surface as-is — and seed the view's own type members from `type_entries`, which receives the
+    /// newborn scope's id (the generativity nonce a per-call abstract mint folds in). The replay is
+    /// pure seal duplication; the binding table opens nothing. The seeded `types` table *is* the
+    /// view's type interface: what the table does not hold — the source's representation types
+    /// behind an abstract member — is unreachable through the view by construction.
     ///
     /// Born-inside-the-door like [`Self::alloc_group_child`]: the view scope is returned only once
-    /// the replay has landed, and nothing else has a reference to it before then, so the door mints
-    /// its own [`WriteGate`]. `:|` / `:!` run builtin-side, where no gate can be minted.
+    /// the replay and the seeding have landed, and nothing else has a reference to it before then,
+    /// so the door mints its own [`WriteGate`]. `:|` / `:!` run builtin-side, where no gate can be
+    /// minted.
     pub(crate) fn alloc_module_view(
         outer: &'a Scope<'a>,
         path: String,
         src: &crate::machine::core::Bindings,
+        type_entries: impl FnOnce(crate::machine::core::ScopeId) -> Vec<(String, KType)>,
     ) -> Result<&'a Scope<'a>, KError> {
         let view = outer.alloc_child_under_module(path);
         view.bindings()
             .bulk_install_from(src, &mut WriteGate::for_unpublished_scope())?;
+        // A view's type member is installed by the ascription, not by a declaration statement, so
+        // its identity node is the off-scheduler sentinel and its index the `value(0)` position the
+        // visibility predicate reads — the same site shape a type-denoting FN parameter takes.
+        let site = DeclarationSite {
+            node: NodeHandle {
+                run: RunId::OFF_SCHEDULER,
+                node: NodeId(0),
+            },
+            index: BindingIndex::value(0),
+        };
+        for (name, ktype) in type_entries(view.id) {
+            view.register_type_direct(name, ktype, site, &mut WriteGate::for_unpublished_scope())?;
+        }
         Ok(view)
     }
 

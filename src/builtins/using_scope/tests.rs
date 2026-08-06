@@ -3,6 +3,11 @@
 //! Module names carry a lowercase letter (`some_module`, `res`) because the token
 //! classifier reads all-uppercase names as keywords; dispatch keywords
 //! (`DBL`, `GETIT`, `GETV`, `NOOP`) stay all-uppercase.
+//!
+//! - [`type_members`] — the window's type channel: a module's type members named in type
+//!   positions inside the block, and the collision guard over them.
+
+mod type_members;
 
 use std::rc::Rc;
 
