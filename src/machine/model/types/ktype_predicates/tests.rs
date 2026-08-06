@@ -4,6 +4,7 @@ use crate::machine::core::SubstrateDoor;
 use crate::machine::model::ast::{ExpressionPart, WorkingPart};
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::Carried;
+use crate::machine::model::ModuleDraft;
 use crate::machine::model::Record;
 use crate::machine::model::Scalar;
 
@@ -323,10 +324,11 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(newtype_token)), &types));
     assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(struct_token)), &types));
     let child = scope.alloc_child_under_module("IntMod".into());
-    let module = Module::alloc_at_child_scope("IntMod".into(), child);
-    // A module value surfaces its principal signature, sealed once at construction — do the same
-    // here so `ktype()` has a filled cell.
-    module.seal_self_sig(SigSchema::raw_self_sig(module), &types);
+    // A module value surfaces its principal signature, interned from its members before the value
+    // exists — build it through the same door production does.
+    let draft = ModuleDraft::empty();
+    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+    let module = Module::alloc_at_child_scope("IntMod", child, draft, self_sig);
     // A module is a value: it reaches a slot on the Object channel, and a `:Type` slot refuses it.
     let module_value = scope.brand().alloc_value(KObject::Module(module));
     assert!(!t.accepts_working_part(
@@ -828,35 +830,33 @@ fn module_object_ktype_reports_self_sig() {
     let scope = test_run.scope;
     let types = test_run.types.clone();
 
-    let child = scope.alloc_child_under_module("Mod".into());
-    let m: &Module = Module::alloc_at_child_scope("Mod".into(), child);
-    m.type_members
-        .borrow_mut()
-        .insert("Elt".into(), KType::NUMBER);
-    m.seal_self_sig(SigSchema::raw_self_sig(m), &types);
+    // One-member modules built through the production door: the draft carries `Elt`, and the
+    // self-sig is derived from it and interned before the value exists.
+    let one_member = |name: &str, elt: KType| {
+        let child = scope.alloc_child_under_module(name.into());
+        let mut draft = ModuleDraft::empty();
+        draft.type_members.insert("Elt".into(), elt);
+        let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+        (
+            Module::alloc_at_child_scope(name, child, draft, self_sig),
+            self_sig,
+        )
+    };
+
+    let (m, m_self_sig) = one_member("Mod", KType::NUMBER);
     let kt = KObject::Module(m).ktype();
     // Ruling 12: the `Signature` node carries no `sig_id` — identity is its self-sig
     // *content*, checked below.
     assert!(matches!(types.node(kt), TypeNode::Signature { .. }));
-    // Identity is content: the module's type equals its own re-derived self-sig.
-    assert_eq!(kt, types.signature(SigSchema::raw_self_sig(m)));
+    // Identity is content: the module's type is the self-sig its members derive.
+    assert_eq!(kt, m_self_sig);
 
     // A second module with the identical interface shares the type — content, not mint.
-    let child2 = scope.alloc_child_under_module("Mod2".into());
-    let m2: &Module = Module::alloc_at_child_scope("Mod2".into(), child2);
-    m2.type_members
-        .borrow_mut()
-        .insert("Elt".into(), KType::NUMBER);
-    m2.seal_self_sig(SigSchema::raw_self_sig(m2), &types);
+    let (m2, _) = one_member("Mod2", KType::NUMBER);
     assert_eq!(kt, KObject::Module(m2).ktype());
 
     // A module whose interface differs by one member is a distinct type.
-    let child3 = scope.alloc_child_under_module("Mod3".into());
-    let m3: &Module = Module::alloc_at_child_scope("Mod3".into(), child3);
-    m3.type_members
-        .borrow_mut()
-        .insert("Elt".into(), KType::STR);
-    m3.seal_self_sig(SigSchema::raw_self_sig(m3), &types);
+    let (m3, _) = one_member("Mod3", KType::STR);
     assert_ne!(kt, KObject::Module(m3).ktype());
 }
 
@@ -881,11 +881,10 @@ fn matches_value_admits_module_object_via_signature_slot() {
     let schema = SigSchema::project_decl(sig_scope, &types);
 
     let child = scope.alloc_child_under_module("M".into());
-    let m: &Module = Module::alloc_at_child_scope("M".into(), child);
-    m.type_members
-        .borrow_mut()
-        .insert("Type".into(), KType::NUMBER);
-    m.seal_self_sig(SigSchema::raw_self_sig(m), &types);
+    let mut draft = ModuleDraft::empty();
+    draft.type_members.insert("Type".into(), KType::NUMBER);
+    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+    let m: &Module = Module::alloc_at_child_scope("M", child, draft, self_sig);
 
     let declared = types.signature(schema.clone());
     assert!(declared.matches_value(&KObject::Module(m), &types));

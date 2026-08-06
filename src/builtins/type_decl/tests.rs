@@ -198,7 +198,7 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
          LET view = (implementation :| Container)",
     );
     let view = lookup_module(scope, "view", &test_run.types);
-    let elt = view.type_members.borrow().get("Elt").copied();
+    let elt = view.type_members.get(&"Elt").copied();
     let declared = member_type(scope, test_run.types(), "Container", "Elt");
     match elt {
         Some(minted) => {
@@ -240,8 +240,7 @@ fn two_ascriptions_of_one_sig_mint_distinct_slot_types() {
     let elt = |view_name: &str| {
         lookup_module(scope, view_name, &test_run.types)
             .type_members
-            .borrow()
-            .get("Elt")
+            .get(&"Elt")
             .copied()
             .expect("each view mints Elt")
     };
@@ -431,7 +430,7 @@ fn module_attr_access_returns_type_constructor() {
          LET mo = (int_list :| Monad)",
     );
     let mo = lookup_module(scope, "mo", &test_run.types);
-    let wrap_t = mo.type_members.borrow().get("Wrap").copied();
+    let wrap_t = mo.type_members.get(&"Wrap").copied();
     match wrap_t {
         Some(kt) => {
             let name = assert_type_constructor(kt, &["Type"], test_run.types());

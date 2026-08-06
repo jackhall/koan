@@ -110,7 +110,7 @@ fn retaining_adopt_reanchors_the_same_value_copy_free() {
 #[test]
 fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
     use crate::machine::core::arena::KoanRegion;
-    use crate::machine::model::{KObject, Module};
+    use crate::machine::model::{KObject, Module, ModuleDraft};
 
     // A frame foreign to everything else here — the region a nested member's own reach names.
     let inner_storage = per_call_storage();
@@ -139,7 +139,14 @@ fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
 
     // The module lives in its own child scope's region — `alloc_at_child_scope` derives the
     // destination from that scope, so it can live nowhere else.
-    let module = Module::alloc_at_child_scope("m".to_string(), source_scope);
+    // The interface is beside the point here — this asserts reach composition — so the module is
+    // born at the pre-seeded empty signature rather than deriving one through a registry.
+    let module = Module::alloc_at_child_scope(
+        "m",
+        source_scope,
+        ModuleDraft::empty(),
+        KType::EMPTY_SIGNATURE,
+    );
 
     let parent_storage = run_root_storage();
     let parent = run_root_bare(&parent_storage);

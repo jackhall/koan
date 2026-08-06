@@ -69,8 +69,8 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     }
     let a = lookup_module(scope, "first_abstract", &test_run.types);
     let b = lookup_module(scope, "second_abstract", &test_run.types);
-    let a_t = a.type_members.borrow().get("Carrier").cloned();
-    let b_t = b.type_members.borrow().get("Carrier").cloned();
+    let a_t = a.type_members.get(&"Carrier").copied();
+    let b_t = b.type_members.get(&"Carrier").copied();
     // An opaque-ascription abstract-type member mints as
     // `KType::AbstractType { name, nonce: Some(<view module's scope id>), .. }`.
     assert!(matches!(
@@ -99,7 +99,7 @@ fn transparent_ascription_does_not_mint_module_types() {
          LET view_mod = (int_ord :! Ordered)",
     );
     let v = lookup_module(scope, "view_mod", &test_run.types);
-    assert!(v.type_members.borrow().is_empty());
+    assert!(v.type_members.is_empty());
 }
 
 /// End-to-end example from [design/typing/modules.md](../../../../design/typing/modules.md).
@@ -118,9 +118,8 @@ fn roadmap_example_int_ord_with_ordered_sig() {
     let abstract_mod = lookup_module(scope, "int_ord_abstract", &test_run.types);
     let minted = abstract_mod
         .type_members
-        .borrow()
-        .get("Carrier")
-        .cloned()
+        .get(&"Carrier")
+        .copied()
         .expect("opaque ascription should mint a Carrier member");
     match test_run.types.node(minted) {
         TypeNode::AbstractType { name, .. } => assert_eq!(name, "Carrier"),
@@ -154,7 +153,7 @@ fn opaque_view_reads_manifest_type_member_concretely() {
          LET view = (implementation :| Tagged)",
     );
     let view = lookup_module(scope, "view", &test_run.types);
-    let tag = view.type_members.borrow().get("Tag").cloned();
+    let tag = view.type_members.get(&"Tag").copied();
     assert_eq!(
         tag,
         Some(KType::NUMBER),
@@ -179,7 +178,7 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
     );
     let view = lookup_module(scope, "view", &test_run.types);
     assert!(
-        view.slot_type_tags.borrow().get("x").is_none(),
+        view.slot_type_tags.get(&"x").is_none(),
         "a manifest-typed VAL slot must not be re-tagged in slot_type_tags",
     );
     let result = test_run.run_one(parse_one(&program, "view.x"));

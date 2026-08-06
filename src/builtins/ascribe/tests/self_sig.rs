@@ -53,9 +53,8 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
     // The view's manifest `Elem` is the per-call abstract identity it minted.
     let elem_abstract = view
         .type_members
-        .borrow()
-        .get("Elem")
-        .cloned()
+        .get(&"Elem")
+        .copied()
         .expect("opaque view mints an abstract `Elem`");
     assert!(matches!(
         test_run.types.node(elem_abstract),

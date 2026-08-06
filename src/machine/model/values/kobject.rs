@@ -1057,7 +1057,7 @@ impl<'a> KObject<'a> {
                     inner.payload().summarize(types)
                 )
             }
-            KObject::Module(m) => m.path.clone(),
+            KObject::Module(m) => m.path.to_string(),
         }
     }
 }

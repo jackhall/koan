@@ -21,5 +21,5 @@ pub(crate) use container_substrate::{
 pub use kkey::KKey;
 pub(crate) use kobject::{copy_or_pin, relocate_object_into, retains_home, RegionEscape};
 pub use kobject::{KObject, Scalar, ValueEqualityError};
-pub use module::Module;
+pub use module::{Module, ModuleDraft};
 pub use named_pairs::NamedPairs;

@@ -9,9 +9,9 @@
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
-use crate::machine::model::Module;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KKind, SigSchema};
+use crate::machine::model::{Module, ModuleDraft};
 use crate::machine::BindingIndex;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
@@ -67,21 +67,21 @@ pub(super) fn await_module_body<'a>(
                     fctx.scope.lift_resident(sealed),
                 )));
             }
-            let module: &'a Module<'a> =
-                Module::alloc_at_child_scope(name_for_finish.clone(), child_scope);
-            // Mirror the module's type members into `type_members`. The cross-kind exclusion keeps
+            // Mirror the module's type members into the draft. The cross-kind exclusion keeps
             // `data` and `types` disjoint by name, so this is an exact mirror of `iter_types` (no
             // value-member name can also be a type name to filter out). A nested `MODULE` is a
             // value member, so it lives in the child's `data` and is typed by its own self-sig.
-            {
-                let mut tm = module.type_members.borrow_mut();
-                for (member, kt) in child_scope.bindings().iter_types() {
-                    tm.insert(member, kt);
-                }
+            let mut draft = ModuleDraft::empty();
+            for (member, kt) in child_scope.bindings().iter_types() {
+                draft.type_members.insert(member, kt);
             }
-            // Seal the module's self-sig now that `type_members` reflects the body — a plain
-            // module carries no SIG, so the raw derivation is the whole signature.
-            module.seal_self_sig(SigSchema::raw_self_sig(module), fctx.types);
+            // The self-sig is derived from the draft and interned before the module exists — a
+            // plain module carries no SIG, so the raw derivation is the whole signature.
+            let self_sig = fctx
+                .types
+                .signature(SigSchema::raw_self_sig(child_scope, &draft));
+            let module: &'a Module<'a> =
+                Module::alloc_at_child_scope(&name_for_finish, child_scope, draft, self_sig);
             // Fused MODULE-finish seal: the module reference held **directly** here (never
             // recovered by walking the built value) is merged into this scope's region, which mints
             // and retains the child's region as the Object-arm module value's reach — this scope's
@@ -154,8 +154,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 mod tests {
     use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
     use crate::machine::model::KObject;
-    use crate::machine::model::Module;
     use crate::machine::model::SigSchema;
+    use crate::machine::model::{Module, ModuleDraft};
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
     use crate::machine::{BindingIndex, KErrorKind};
@@ -426,10 +426,14 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         let child = scope.alloc_child_under_module("foo".into());
-        let module: &Module<'_> = Module::alloc_at_child_scope("foo".into(), child);
-        // Every mint seals its self-sig (2d eager-seal invariant), so a manually pre-seeded
-        // module seals its (empty) interface before it is bound and its `ktype()` is read.
-        module.seal_self_sig(SigSchema::raw_self_sig(module), &test_run.types);
+        // Every mint carries its self-sig (2d eager-seal invariant), so a manually pre-seeded
+        // module derives its interface from the same (empty) draft production would, before the
+        // value exists.
+        let draft = ModuleDraft::empty();
+        let self_sig = test_run
+            .types
+            .signature(SigSchema::raw_self_sig(child, &draft));
+        let module: &Module<'_> = Module::alloc_at_child_scope("foo", child, draft, self_sig);
         let sealed = scope.seal_module(module);
         scope
             .bind_value_direct(

@@ -495,13 +495,16 @@ fn length_mismatch_short_circuits_before_banned_cell() {
 fn module_operand_is_error() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::run_root_storage;
-    use crate::machine::model::values::Module;
+    use crate::machine::model::values::{Module, ModuleDraft};
+    use crate::machine::model::SigSchema;
     let program = program_storage();
     let storage = run_root_storage();
     let test_run = TestRun::silent(&program, &storage);
     let types = test_run.types.clone();
-    let m = Module::new("m".into(), test_run.scope);
-    let module = KObject::Module(&m);
+    let draft = ModuleDraft::empty();
+    let self_sig = types.signature(SigSchema::raw_self_sig(test_run.scope, &draft));
+    let m = Module::alloc_at_child_scope("m", test_run.scope, draft, self_sig);
+    let module = KObject::Module(m);
     assert_eq!(
         module.value_equal(&num(1.0), &types),
         Err(ValueEqualityError::Module)

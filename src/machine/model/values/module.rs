@@ -15,44 +15,69 @@
 //! [`KFunction`](crate::machine::core::KFunction) and
 //! [`Scope::outer`](crate::machine::core::Scope) hold theirs — so `child_scope` is a bare field
 //! read with no per-pointer handle and no `unsafe` of its own.
+//!
+//! **Built once, then frozen.** A module is assembled complete: construction gathers its members
+//! into an owned [`ModuleDraft`] and derives the self-sig from that draft *before* the value
+//! exists, so the value itself carries a bumped `path`, two build-once
+//! [`BumpMap`](crate::witnessed::BumpMap)s and a plain interned self-sig handle. `Module` is
+//! therefore `Copy` and `Drop`-free: it rides the region bump and region death frees it as a chunk
+//! ([value-substrates.md § Untyped arenas](../../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
 
-use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 
-use crate::machine::core::{Scope, ScopeId, ScopeRefFamily};
-use crate::witnessed::SealedExtern;
+use crate::machine::core::{RegionBrand, Scope, ScopeId};
+use crate::witnessed::BumpMap;
 
 use super::super::types::{
     empty_schema_digest, sig_subtype, KType, Relation, SigSchema, TypeDigest, TypeNode,
     TypeRegistry,
 };
 
+/// The owned members a module is assembled from — gathered by a construction site before the value
+/// exists, because a built module's maps are frozen. Both maps are keyed by member name and resolve
+/// duplicates last-wins, so an overlay (an opaque ascription's per-call mints under its mirrored
+/// manifest members) is expressed by insertion order here rather than by a post-alloc write.
+///
+/// Plain owned data with no lifetime: the draft never enters a region. [`Module::assemble`] re-homes
+/// every key at the destination brand on the way in.
+#[derive(Default)]
+pub struct ModuleDraft {
+    /// Member name → type. The per-call abstract mints and mirrored manifest members an opaque
+    /// ascription installs; for a plain `MODULE`, a mirror of the child scope's type bindings.
+    pub type_members: HashMap<String, KType>,
+    /// VAL-slot name → the per-call abstract `KType` an opaque ascription minted for the slot's
+    /// SIG-declared type. ATTR re-tags a value-side slot read with this identity so
+    /// `(int_ord.zero)` reads as the abstract `Type`, not the underlying concrete value. Empty for
+    /// unascribed and transparently-ascribed (`:!`) modules.
+    pub slot_type_tags: HashMap<String, KType>,
+}
+
+impl ModuleDraft {
+    /// A draft with no members — a bare module's, and a transparent view's (which reads its members
+    /// through the source's child scope rather than a map of its own).
+    pub fn empty() -> ModuleDraft {
+        ModuleDraft::default()
+    }
+}
+
 /// First-class module value. `path` is the lexical-source label (`"int_ord"`,
 /// `"outer.inner"`). The module value rides the value channel as `KObject::Module(self)` and is
 /// typed by its principal signature — the interned `Signature` handle [`Module::ktype`] returns;
 /// opaque-ascription members mint `AbstractType { name, nonce: Some(self.scope_id()), .. }`.
+#[derive(Clone, Copy)]
 pub struct Module<'a> {
-    pub path: String,
+    pub path: &'a str,
     child_scope_ref: &'a Scope<'a>,
-    /// `RefCell` because opaque-ascription installs entries after the surrounding `KObject`
-    /// is alloc'd. `Module` is region-pinned and never moved, so a `&'a Module<'a>` borrow
-    /// stays valid alongside interior mutation.
-    pub type_members: RefCell<HashMap<String, KType>>,
-    /// VAL-slot name → the per-call abstract `KType` an opaque ascription minted for the
-    /// slot's SIG-declared type. ATTR re-tags a value-side slot read with this identity so
-    /// `(int_ord.zero)` reads as the abstract `Type`, not the underlying concrete value.
-    /// Empty for unascribed and transparently-ascribed (`:!`) modules. `RefCell` for the same
-    /// reason as `type_members`.
-    pub slot_type_tags: RefCell<HashMap<String, KType>>,
+    /// Member name → type, frozen at assembly from [`ModuleDraft::type_members`]. Lookup is by
+    /// content, so a shorter-lived `&str` probe reads it.
+    pub type_members: &'a BumpMap<'a, &'a str, KType>,
+    /// VAL-slot name → the opaque-ascription tag, frozen at assembly from
+    /// [`ModuleDraft::slot_type_tags`]. Empty for unascribed and transparently-ascribed modules.
+    pub slot_type_tags: &'a BumpMap<'a, &'a str, KType>,
     /// The module's principal signature (self-sig): the handle naming the interned `Signature`
-    /// node this module is typed by. Sealed exactly once at the end of construction
-    /// ([`Module::seal_self_sig`]) and immutable thereafter. `OnceCell` because — like the maps
-    /// above — it is installed after the surrounding value is alloc'd, and because the derivation
-    /// reads `type_members` / `slot_type_tags`, which construction writes first.
-    ///
-    /// Every mint seals: an unfilled cell is a construction bug, not a state, so the reads below
-    /// panic rather than deriving anything late.
-    self_sig: OnceCell<KType>,
+    /// node this module is typed by. Interned from the draft before the value exists, so "every
+    /// mint seals" is structural rather than an invariant a read has to check.
+    self_sig: KType,
 }
 
 impl<'a> Module<'a> {
@@ -61,61 +86,63 @@ impl<'a> Module<'a> {
     /// scope `MODULE` opened for its body. Its one sibling is the fold brand named below.
     ///
     /// The destination is derived from `child_scope`'s own brand rather than passed alongside it, so
-    /// pairing a module with a foreign region is unrepresentable. The scope crosses into a `for<'b>`
-    /// construction brand
-    /// ([`RegionHandle::alloc_resident_born_with`](crate::witnessed::RegionHandle)) where `new` assembles
-    /// the value and the store happens in the same act — residence discharged by the brand, with no
-    /// runtime check. `path` is owned, so it captures into the closure rather than crossing it.
+    /// pairing a module with a foreign region is unrepresentable. `path` and the draft's keys may
+    /// borrow from anywhere — [`Self::assemble`] re-homes every byte at that same brand before the
+    /// value is assembled — and the store is [`RegionBrand::alloc_value`], the plain bump door a
+    /// `Copy` value takes. Nothing is erased and re-anchored on the way in, so no residence audit
+    /// stands behind this door: every reference the value holds is a plain `&'a` the borrow checker
+    /// already checked against the lifetime the destination brand borrows its region for.
     ///
     /// A module re-tagging a *foreign* child scope has no route here: it is built at a fold brand
     /// instead ([`Scope::store_transparent_view`](crate::machine::core::Scope)), where the borrow it
-    /// re-tags is the fold's own operand view. The interior-mutable maps (`type_members`,
-    /// `slot_type_tags`) and the self-sig cell are written after this returns, at the caller's `'a`.
-    pub fn alloc_at_child_scope(path: String, child_scope: &'a Scope<'a>) -> &'a Module<'a> {
-        child_scope
-            .brand()
-            .handle()
-            .alloc_resident_born_with::<Module<'static>, ScopeRefFamily, _>(
-                SealedExtern::<ScopeRefFamily>::erase(child_scope),
-                child_scope.region(),
-                move |_placement, child_b| Module::new(path, child_b),
-            )
+    /// re-tags is the fold's own operand view.
+    pub fn alloc_at_child_scope(
+        path: &str,
+        child_scope: &'a Scope<'a>,
+        draft: ModuleDraft,
+        self_sig: KType,
+    ) -> &'a Module<'a> {
+        let brand = child_scope.brand();
+        brand.alloc_value(Self::assemble(brand, path, child_scope, draft, self_sig))
     }
 
-    /// Assemble a module value over `child_scope`. Crate-internal and never a store: the two doors
-    /// that place one are [`Self::alloc_at_child_scope`] and the fold brand's
+    /// Assemble a module value over `child_scope`, re-homing `path` and every draft key into
+    /// `brand`'s region and freezing both maps as [`BumpMap`]s there. Crate-internal and never a
+    /// store: the two doors that place one are [`Self::alloc_at_child_scope`] and the fold brand's
     /// [`FoldingBrand::alloc_module_folded`](crate::machine::core::FoldingBrand), which is how a
     /// transparent-ascribe view re-tags a foreign child scope.
-    pub(crate) fn new(path: String, child_scope: &'a Scope<'a>) -> Self {
-        Self {
-            path,
-            child_scope_ref: child_scope,
-            type_members: RefCell::new(HashMap::new()),
-            slot_type_tags: RefCell::new(HashMap::new()),
-            self_sig: OnceCell::new(),
-        }
-    }
-
-    /// Install the module's self-sig. Runs exactly once, at the end of construction (after the
-    /// `type_members` / `slot_type_tags` writes that feed the derivation) — a double-seal is a
-    /// construction bug. Interns `schema` as a `Signature` node and stores its handle.
-    pub fn seal_self_sig(&self, schema: SigSchema, types: &TypeRegistry) {
-        let handle = types.signature(schema);
-        if self.self_sig.set(handle).is_err() {
-            panic!("self-sig sealed twice on module `{}`", self.path);
-        }
-    }
-
-    /// The module's type: the handle naming its principal signature, copied out of the sealed
-    /// cell. This is what `KObject::Module(self).ktype()` reports, which is why it takes no
-    /// registry — every mint seals, so the handle is already interned.
-    pub fn ktype(&self) -> KType {
-        *self.self_sig.get().unwrap_or_else(|| {
-            panic!(
-                "module `{}` was surfaced before its self-sig was sealed",
-                self.path
+    ///
+    /// The single `brand` parameter is the residence discipline: path bytes, key bytes and both
+    /// bucket arrays land in one region, and it is the destination's — a `String` key cannot enter a
+    /// `BumpMap` (`K: Copy`), so the re-home is the only spelling the compiler admits.
+    pub(crate) fn assemble<'b>(
+        brand: RegionBrand<'b>,
+        path: &str,
+        child_scope: &'b Scope<'b>,
+        draft: ModuleDraft,
+        self_sig: KType,
+    ) -> Module<'b> {
+        let rehome = |entries: HashMap<String, KType>| {
+            brand.alloc_map(
+                entries
+                    .into_iter()
+                    .map(|(name, kt)| (brand.alloc_text(&name) as &'b str, kt)),
             )
-        })
+        };
+        Module {
+            path: brand.alloc_text(path),
+            child_scope_ref: child_scope,
+            type_members: rehome(draft.type_members),
+            slot_type_tags: rehome(draft.slot_type_tags),
+            self_sig,
+        }
+    }
+
+    /// The module's type: the handle naming its principal signature. This is what
+    /// `KObject::Module(self).ktype()` reports, which is why it takes no registry — the handle was
+    /// interned before the value existed.
+    pub fn ktype(&self) -> KType {
+        self.self_sig
     }
 
     /// The module's self-sig schema, cloned out of its signature node.

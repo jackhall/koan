@@ -5,14 +5,14 @@
 use super::*;
 use crate::builtins::test_support::{per_call_storage, run_root_bare, TestRun};
 use crate::machine::core::Bindings;
+use crate::machine::core::{Action, Body, KFunction};
 use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
+use crate::machine::model::Scalar;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{Carried, CarriedFamily, Held, KObject};
-use crate::machine::model::Scalar;
-use crate::machine::core::{Action, Body, KFunction};
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;

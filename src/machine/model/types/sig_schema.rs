@@ -21,7 +21,7 @@ use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
 use super::registry::TypeRegistry;
-use crate::machine::model::values::Module;
+use crate::machine::model::values::ModuleDraft;
 
 /// Normalized signature schema — the carrier the subtyping relation is defined over.
 ///
@@ -124,10 +124,12 @@ impl SigSchema {
         schema
     }
 
-    /// Derive a module's principal signature (self-sig) directly from its body.
+    /// Derive a module's principal signature (self-sig) directly from the body it is being built
+    /// over — `child_scope` is the module's child scope and `draft` the members its construction
+    /// gathered, both read before the module value exists.
     ///
     /// A module never carries abstract members. The manifest members are the union of the
-    /// module's `type_members` map (the per-call mints + mirrored manifests an ascription
+    /// draft's `type_members` map (the per-call mints + mirrored manifests an ascription
     /// installs) and the child scope's type-class entries — the map wins on a shared name, so
     /// this covers a plain module (map ∪ scope agree), an opaque view (map only — the view
     /// scope carries no type entries), and a transparent view (scope only — the map is empty).
@@ -135,13 +137,12 @@ impl SigSchema {
     /// `slot_type_tags` map overriding by name (an opaque view's abstract slot identities).
     ///
     /// [`KObject::ktype`]: crate::machine::model::values::KObject::ktype
-    pub fn raw_self_sig(module: &Module<'_>) -> SigSchema {
-        let child = module.child_scope();
+    pub fn raw_self_sig(child: &Scope<'_>, draft: &ModuleDraft) -> SigSchema {
         let mut manifest_members: HashMap<String, KType> = HashMap::new();
         for (name, kt) in child.bindings().iter_types() {
             manifest_members.insert(name, kt);
         }
-        for (name, kt) in module.type_members.borrow().iter() {
+        for (name, kt) in draft.type_members.iter() {
             manifest_members.insert(name.clone(), *kt);
         }
         let mut value_slots: HashMap<String, KType> = HashMap::new();
@@ -154,7 +155,7 @@ impl SigSchema {
         for (name, sealed) in child.bindings().iter_data() {
             value_slots.insert(name, sealed.open_at(&home).value().object().ktype());
         }
-        for (name, tag) in module.slot_type_tags.borrow().iter() {
+        for (name, tag) in draft.slot_type_tags.iter() {
             value_slots.insert(name.clone(), *tag);
         }
         SigSchema {

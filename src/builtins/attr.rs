@@ -342,7 +342,7 @@ fn access_field<'a>(
 /// constraint.)
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     let module_scope = m.child_scope();
-    if let Some(minted) = m.type_members.borrow().get(field).cloned() {
+    if let Some(minted) = m.type_members.get(&field).copied() {
         // Prefer the child scope's own binding; a member present only in the mirror is an
         // `:|`-minted abstract type.
         return Ok(StepCarried::born(
@@ -360,7 +360,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
     // identity is the lhs).
     match module_scope.bindings().lookup_member(field, None) {
         Some(MemberResolution::Value(sealed)) => {
-            if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
+            if let Some(tag) = m.slot_type_tags.get(&field).copied() {
                 // The re-tag allocates in the module region (not the read site's): both the value
                 // member and the re-tag identity `tag` cross as declared fold operands. The member
                 // is a binding seal lifted into an envelope pinned by the module scope's own region

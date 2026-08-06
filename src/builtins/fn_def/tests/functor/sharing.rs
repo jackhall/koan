@@ -285,9 +285,8 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     let view = lookup_module(scope, "view", &types);
     let carrier_abstract = view
         .type_members
-        .borrow()
-        .get("Carrier")
-        .cloned()
+        .get(&"Carrier")
+        .copied()
         .expect("opaque view mints an abstract `Carrier`");
     let slot =
         types.signature(schema.fold_pins(&[("Carrier".to_string(), carrier_abstract)], &types));

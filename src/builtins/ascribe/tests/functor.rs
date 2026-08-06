@@ -109,8 +109,8 @@ fn functor_application_mints_distinct_abstract_types() {
 
     let one = lookup_module(scope, "set_one", &test_run.types);
     let two = lookup_module(scope, "set_two", &test_run.types);
-    let one_carrier = one.type_members.borrow().get("Carrier").cloned();
-    let two_carrier = two.type_members.borrow().get("Carrier").cloned();
+    let one_carrier = one.type_members.get(&"Carrier").copied();
+    let two_carrier = two.type_members.get(&"Carrier").copied();
     assert!(
         matches!(one_carrier.map(|h| test_run.types.node(h)), Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"),
         "the first application must mint an abstract Carrier, got {one_carrier:?}",
@@ -369,8 +369,8 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     }
     let a = lookup_module(scope, "first", &test_run.types);
     let b = lookup_module(scope, "second", &test_run.types);
-    let a_wrap = a.type_members.borrow().get("Wrap").cloned();
-    let b_wrap = b.type_members.borrow().get("Wrap").cloned();
+    let a_wrap = a.type_members.get(&"Wrap").copied();
+    let b_wrap = b.type_members.get(&"Wrap").copied();
     let is_type_constructor = |kt: Option<KType>| {
         matches!(
             kt.map(|h| test_run.types.node(h)),

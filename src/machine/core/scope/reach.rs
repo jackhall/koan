@@ -18,7 +18,7 @@ use crate::machine::core::{
     KoanRegionExt, KoanStorageProfile, ModuleRefFamily, ScopeRefFamily,
 };
 use crate::machine::model::{
-    copy_or_pin, relocate_object_into, Carried, CarriedFamily, KObject, KType, Module,
+    copy_or_pin, relocate_object_into, Carried, CarriedFamily, KObject, KType, Module, ModuleDraft,
     RegionEscape, TypeIdentifier,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, KError, SplicedCell};
@@ -678,18 +678,20 @@ impl<'a> Scope<'a> {
     /// source module's child scope, whose region is not this scope's own. The re-tagged `Module` is
     /// **built inside the fold** over that child scope as its operand view, so its borrow is the
     /// merge's own — which is what lets the composition, rather than a runtime walk, evidence the
-    /// foreign region. `seal` installs the view's self-sig on the resident module before it is
-    /// wrapped; it takes the module at the fold's own brand lifetime, so nothing it writes can
-    /// smuggle a borrow out.
+    /// foreign region. A module is assembled complete, so `self_sig` derives the view's self-sig
+    /// from the operand view inside the fold and the module is born carrying it; taking the scope at
+    /// the fold's own brand lifetime is what keeps the derivation from smuggling a borrow out.
     ///
     /// Both the `Module` and the `KObject::Module` wrapping it are allocated at the same fold brand
-    /// into this scope's region, and the composed reach names the source child's region — the one
-    /// claim covering both, minted and retained here in one act.
+    /// into this scope's region — including the `name` bytes and the (empty) member tables
+    /// [`Module::assemble`](crate::machine::model::Module) bumps there — and the composed reach
+    /// names the source child's region, the one claim covering both, minted and retained here in one
+    /// act.
     pub(crate) fn store_transparent_view(
         &self,
         name: String,
         source_child: &'a Scope<'a>,
-        seal: impl for<'b> FnOnce(&'b Module<'b>),
+        self_sig: impl for<'b> FnOnce(&'b Scope<'b>) -> KType,
     ) -> SealedValue {
         let source = source_child.seal_resident_delivered(
             source_child.resident::<ScopeRefFamily>(source_child),
@@ -700,8 +702,14 @@ impl<'a> Scope<'a> {
                 self.dest_operand(),
                 |scope_view, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement);
-                    let module = door.alloc_module_folded(Module::new(name, scope_view));
-                    seal(module);
+                    let sig = self_sig(scope_view);
+                    let module = door.alloc_module_folded(Module::assemble(
+                        *door,
+                        &name,
+                        scope_view,
+                        ModuleDraft::empty(),
+                        sig,
+                    ));
                     Carried::Object(door.alloc_object_folded(KObject::Module(module)))
                 },
             )

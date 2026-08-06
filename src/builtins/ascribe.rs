@@ -4,7 +4,8 @@
 //! Satisfaction is checked through the signature-subtyping relation: the source module's
 //! self-sig must be a subtype of the signature's schema (manifest members equal, abstract
 //! members at the right kind and over the same parameter names, value slots covariantly
-//! compatible). Each view also seals its own self-sig at creation.
+//! compatible). Each view is born carrying its own self-sig, derived from the members its
+//! construction gathered before the view module exists.
 
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
@@ -12,7 +13,7 @@ use crate::machine::model::{
     sig_subtype, substitute_sig_members, KKind, RecursiveGroupWindow, RelativeSchema, SigSchema,
     TypeNode,
 };
-use crate::machine::model::{Held, KObject, Module, Record};
+use crate::machine::model::{Held, KObject, Module, ModuleDraft, Record};
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
@@ -49,81 +50,69 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // A member folded into the set rides the escaping view-module value sealed in.
     new_scope.close();
 
-    let new_module: &'a Module<'a> = Module::alloc_at_child_scope(m.path.clone(), new_scope);
+    // The view's members are gathered into a draft before the module value exists — a built module
+    // is frozen — so the nonce every mint carries is read off the view scope directly
+    // (`Module::scope_id` reports this same id once the module is built).
+    let nonce = new_scope.id;
+    let mut draft = ModuleDraft::empty();
     // Per-slot kind: a SIG-declared higher-kinded slot (`TYPE (Elem AS Wrap)`) mints a fresh
     // `TypeConstructor` family over the slot's declared parameter names rather than the default
     // `AbstractType` arm, preserving the higher-kinded shape across the ascription barrier.
-    let mut minted: Vec<(String, KType)> = Vec::new();
     for (name, kt) in &s_schema.abstract_members {
         let minted_kt = match ctx.types.node(*kt) {
             TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
-                // Generative: the per-application nonce (the minted module's `scope_id`) folds
-                // into the member's component digest, so two `:|` applications never unify.
+                // Generative: the per-application nonce (the view scope's id) folds into the
+                // member's component digest, so two `:|` applications never unify.
                 RecursiveGroupWindow::seal_singleton(
                     name.clone(),
                     RelativeSchema::TypeConstructor {
                         schema: HashMap::new(),
                         param_names,
                     },
-                    Some(new_module.scope_id()),
+                    Some(nonce),
                     ctx.types,
                 )
             }
             // Generative by the same mechanism as the higher-kinded arm above: the per-application
-            // nonce (the minted module's `scope_id`) folds into the digest, so two `:|`
-            // applications never unify. `source` stays the declaring SIG's binder — the two
-            // meanings ride separate fields.
+            // nonce (the view scope's id) folds into the digest, so two `:|` applications never
+            // unify. `source` stays the declaring SIG's binder — the two meanings ride separate
+            // fields.
             TypeNode::AbstractType { source, .. } => ctx.types.intern(TypeNode::AbstractType {
                 source,
                 name: name.clone(),
                 param_names: Vec::new(),
-                nonce: Some(new_module.scope_id()),
+                nonce: Some(nonce),
             }),
             // Unreachable: `is_abstract_sig_member` admits only `AbstractType` into
             // `abstract_members`, so the two arms above are exhaustive over this map.
             _ => *kt,
         };
-        minted.push((name.clone(), minted_kt));
+        draft.type_members.insert(name.clone(), minted_kt);
     }
     // A manifest member reads concretely through the opaque view: the view scope carries no
     // type entries (`try_bulk_install_from` copies only the data table), so its fixed `KType`
-    // is mirrored into `type_members` alongside the per-call abstract mints.
-    let manifest: Vec<(String, KType)> = s_schema
-        .manifest_members
-        .iter()
-        .map(|(n, t)| (n.clone(), *t))
-        .collect();
-    if !minted.is_empty() || !manifest.is_empty() {
-        let mut tm = new_module.type_members.borrow_mut();
-        for (n, t) in minted {
-            tm.insert(n, t);
-        }
-        for (n, t) in manifest {
-            tm.insert(n, t);
-        }
+    // is mirrored into `type_members` over the per-call abstract mints.
+    for (name, kt) in &s_schema.manifest_members {
+        draft.type_members.insert(name.clone(), *kt);
     }
 
-    {
-        let tm = new_module.type_members.borrow();
-        let mut tags: Vec<(String, KType)> = Vec::new();
-        for (slot_name, kt) in &s_schema.value_slots {
-            if let TypeNode::AbstractType { name: member, .. } = ctx.types.node(*kt) {
-                if let Some(per_call) = tm.get(&member) {
-                    tags.push((slot_name.clone(), *per_call));
-                }
-            }
-        }
-        drop(tm);
-        if !tags.is_empty() {
-            let mut stt = new_module.slot_type_tags.borrow_mut();
-            for (slot_name, tag) in tags {
-                stt.insert(slot_name, tag);
+    let mut tags: Vec<(String, KType)> = Vec::new();
+    for (slot_name, kt) in &s_schema.value_slots {
+        if let TypeNode::AbstractType { name: member, .. } = ctx.types.node(*kt) {
+            if let Some(per_call) = draft.type_members.get(&member) {
+                tags.push((slot_name.clone(), *per_call));
             }
         }
     }
+    for (slot_name, tag) in tags {
+        draft.slot_type_tags.insert(slot_name, tag);
+    }
 
-    // Seal the view's self-sig after the type-member / slot-tag writes that feed the derivation.
-    seal_view_self_sig(new_module, &s_schema, ctx.types);
+    // The view's self-sig is derived from the draft the mints and slot tags just filled, then the
+    // module is born carrying it.
+    let self_sig = view_self_sig(new_scope, &draft, &s_schema, ctx.types);
+    let new_module: &'a Module<'a> =
+        Module::alloc_at_child_scope(m.path, new_scope, draft, self_sig);
 
     if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types) {
         return Action::done(Err(e));
@@ -168,25 +157,27 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     let sealed = ctx.scope.store_transparent_view(
         format!("{} :! {}", m.path, s_name),
         m.child_scope(),
-        |view| seal_view_self_sig(view, &s_schema, ctx.types),
+        |scope_view| view_self_sig(scope_view, &ModuleDraft::empty(), &s_schema, ctx.types),
     );
     Action::done(Ok(StepCarried::born_delivered(
         ctx.scope.lift_resident(sealed),
     )))
 }
 
-/// Seal an ascription view's self-sig. The raw derivation captures the view's members; each
+/// Intern an ascription view's self-sig, from the child scope it is being built over and the
+/// members its construction gathered. The raw derivation captures the view's members; each
 /// SIG-declared value slot is then re-expressed in the view's own type members — the SIG's
 /// abstract-member references substituted by the view's bindings for them (an opaque view's
 /// per-call abstract mints, a transparent view's concrete source types). Without this a slot
 /// typed against an abstract member would read concrete off the underlying value and the view
 /// would not structurally satisfy its own signature.
-fn seal_view_self_sig<'a>(
-    module: &Module<'a>,
+fn view_self_sig(
+    child_scope: &Scope<'_>,
+    draft: &ModuleDraft,
     signature: &SigSchema,
     types: &crate::machine::model::TypeRegistry,
-) {
-    let mut view_sig = SigSchema::raw_self_sig(module);
+) -> KType {
+    let mut view_sig = SigSchema::raw_self_sig(child_scope, draft);
     let member_map: std::collections::HashMap<String, KType> = view_sig
         .manifest_members
         .iter()
@@ -201,7 +192,7 @@ fn seal_view_self_sig<'a>(
             substitute_sig_members(*declared, sig_id, &member_map, types),
         );
     }
-    module.seal_self_sig(view_sig, types);
+    types.signature(view_sig)
 }
 
 /// The bare schema and its content digest carried by the signature handle `s`. `s` rode the `s`

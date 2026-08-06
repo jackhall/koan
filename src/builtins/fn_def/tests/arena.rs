@@ -341,7 +341,7 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (ECHO v :Number) -> Number = (v)");
-    // `allocated_total` weighs both halves of the region: the two typed sub-arenas and the bump
+    // `allocated_total` weighs both halves of the region: the typed sub-arena and the bump
     // the `Drop`-free families live in. A per-call leak into run-root shows up in one or the other,
     // so the growth bound has to read them together.
     //
