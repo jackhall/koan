@@ -803,9 +803,16 @@ impl Bindings {
             // Absent, or the same declaration re-entering: write the identity.
             _ => {}
         }
-        tables
-            .types
-            .insert(name.to_string(), TypeSlot::Bound(kt, site));
+        match tables.types.get_mut(name) {
+            // Whatever the slot held — a pending arm, a bound identity, or both — the finalized
+            // identity replaces it where it sits, so the key is never re-keyed.
+            Some(slot) => *slot = TypeSlot::Bound(kt, site),
+            None => {
+                tables
+                    .types
+                    .insert(name.to_string(), TypeSlot::Bound(kt, site));
+            }
+        }
         Ok(())
     }
 
@@ -996,8 +1003,8 @@ impl Bindings {
         }
         match tables.data.get_mut(name) {
             Some(ValueSlot::Bound(_)) => return Err(rebind()),
-            // The pending arm this write finalizes: overwritten in place, by name — matching the
-            // claim's producer is not required, exactly as the old by-name-and-kind clear was not.
+            // The pending arm this write finalizes: overwritten in place, keyed by name alone —
+            // a write whose producer differs from the one that claimed the slot still finalizes it.
             Some(slot @ ValueSlot::Pending(_)) => {
                 *slot = ValueSlot::Bound(DataEntry { index, sealed });
             }

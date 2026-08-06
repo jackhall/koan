@@ -300,16 +300,17 @@ reified as [`BinderKey::Name`](../../src/machine/model/binder.rs) and
 
 The bucket-keyed channel admits *sibling* overloads under one head
 keyword. Two `FN (PICK xs :A) ...` / `FN (PICK xs :B) ...`
-declarations each install a distinct entry into the same
-`pending_overloads[bucket]` per-bucket vec; the earlier-index entry
+declarations each claim a distinct pending slot in the same
+`functions[bucket]` vec — the very bucket the sealed overloads land in; the
+earlier-index slot
 is the wake target for a consumer parking on the bucket, and the
 later-index siblings remain pending until their own finalize. On
-each producer's finalize, only its own entry is removed; if a parked
+each producer's finalize, the seal overwrites only its own slot; if a parked
 consumer's first wake doesn't deliver an admitting overload, the
-consumer re-dispatches and either picks from the now-live
+consumer re-dispatches and either picks from the now-live sealed slots of
 `functions[bucket]` or re-parks on the next-earliest pending sibling
 (see [execution/README.md § Dispatch-time name
 placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)).
 A name-keyed install would collide on the second sibling — both
-`PICK` binders trying to claim `placeholders[PICK]` — which is why
+`PICK` binders trying to claim the single name slot `PICK` — which is why
 FN does not install on the name channel.

@@ -105,7 +105,8 @@ not-yet-visible registration.
 [`OverloadBucket::pick_strict`](../../../src/machine/execute/dispatch/resolve_dispatch.rs)
 receives the pre-filtered survivor list (the `FunctionLookup`'s `overloads`)
 and runs only the admit predicate over it. The same lookup also surfaces the
-earliest-index visible `pending_overloads[key]` producer in `FunctionLookup`'s
+earliest-index visible pending slot of that same `functions[key]` bucket in
+`FunctionLookup`'s
 `pending` field; a visible pending parks that scope for a park-and-replay on
 wake, since it would shadow once finalized.
 

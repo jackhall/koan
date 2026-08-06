@@ -39,9 +39,6 @@ capped by geometric growth.
 - [`Region::bump_capacity`](../../workgraph/src/witnessed/region.rs) — shipped:
   the pin figure is read off the allocator, so these tables' off-door
   allocations are priced without a counted door.
-- [Pending bindings as a value state](pending-binding-union.md) — resolution
-  must overwrite in place, or every resolved placeholder abandons its bytes in
-  the bump.
 - [Frame-owned scopes retire the typed cells](frame-owned-scopes.md) — the
   retype site that will cover the tables' lifetime moves once, not twice.
 

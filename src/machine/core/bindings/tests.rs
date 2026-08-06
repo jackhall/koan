@@ -348,8 +348,7 @@ fn type_token_may_not_bind_value_side() {
 
 /// A value write finalizes the name's pending arm **in place**: the slot flips to `Bound` and the
 /// claim is gone, with the key stored once. The overwrite keys on the name alone — a write whose
-/// producer differs from the one that claimed the slot still finalizes it, matching the by-name
-/// clear the finalize path has always performed.
+/// producer differs from the one that claimed the slot still finalizes it.
 #[test]
 fn value_write_finalizes_the_pending_arm_in_place() {
     let storage = run_root_storage();

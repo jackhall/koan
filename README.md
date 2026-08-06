@@ -219,7 +219,7 @@ src/
     │   ├── arena/
     │   │   ├── frame.rs           FrameStorage / FrameSet / CallFrame — per-call allocation frame, run-root storage, witnessed child-scope construction door
     │   │   └── step_allocator.rs  StepAllocator — the step-branded construction doors (alloc_carried / alloc_type_* / alloc_object_scalar)
-    │   ├── bindings.rs    Bindings façade — six-map (data/functions/placeholders/types/pending_overloads/operators) with the firm write_value / write_type / write_operator_group primitives, the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)]); one RefCell over all six maps, nothing else interior-mutable
+    │   ├── bindings.rs    Bindings façade — four-map (data/types/functions/operators), each slot bound or claimed by a still-finalizing binder (ValueSlot/TypeSlot/OverloadSlot), with the firm write_value / write_type / write_operator_group primitives, the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)]); one RefCell over all four maps, nothing else interior-mutable
     │   ├── bindings/
     │   │   ├── ops.rs     WriteOp / TypeWritePolicy — a binding-table write as outcome data, and the single apply interpreter the run loop drives
     │   │   └── gate.rs    WriteGate — the zero-sized capability every table write verb requires, minted only inside crate::machine (run loop + unpublished-scope construction door)

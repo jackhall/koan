@@ -47,46 +47,82 @@ binder, and which name or bucket each declares, is the static
 signature shape and pinned against the live builtin table by a spec⟺registration
 consistency test.
 
-A `placeholders` table — a `RefCell<HashMap<String, (NodeId, BindingIndex)>>`
-— lives inside the [`Bindings`](../../src/machine/core/bindings.rs) façade
-on `Scope` alongside `data`, `types`, `functions`, and
-`pending_overloads`. *Name-keyed binders* (`LET`, `TYPE`, `MODULE`, `GROUP`,
-`SIG`, `UNION`, `NEWTYPE`, `RECURSIVE TYPES`) declare a
+### A placeholder is a pending arm of the slot it resolves into
+
+A placeholder has no table of its own. The
+[`Bindings`](../../src/machine/core/bindings.rs) façade on `Scope` holds four
+maps — `data`, `types`, `functions`, `operators` — and a still-finalizing binder
+occupies **a slot of the very table it will resolve into**, as a
+[`PendingBinding { producer, index }`](../../src/machine/core/bindings.rs) arm of
+that slot. Three properties follow, and they are the reason for the shape: a name
+lookup is answered by one probe; finalization overwrites the claimed slot in
+place, so the key is stored once and the claim's bytes are never abandoned; and
+the exclusivity rule each table obeys is a fact of its slot enum.
+
+*Name-keyed binders* (`LET`, `TYPE`, `MODULE`, `GROUP`, `SIG`, `UNION`,
+`NEWTYPE`, `RECURSIVE TYPES`) declare a
 [`BinderKey::Name`](../../src/machine/model/binder.rs) — the to-be-bound name the
-matching spec's extractor pulls structurally out of the expression's parts —
-stamping `name → producer NodeId` paired with the binder's
+matching spec's extractor pulls structurally out of the expression's parts. The
+claim stamps `producer NodeId` paired with the binder's
 [`BindingIndex { idx }`](../../src/machine/core/bindings.rs) — the lexical
-statement index, gated by the strict `idx < cutoff` rule like every other
-binder.
+statement index — into `data[name]` or `types[name]` per the binder's
+`BindKind`, gated by the strict `idx < cutoff` rule like every other binder. The
+same visibility predicate therefore gates a pending arm and the binding it
+becomes.
+
+The two name-side tables carry different slot enums because they enforce
+different rules:
+
+- `data[name]` is a [`ValueSlot`](../../src/machine/core/bindings.rs) — `Bound`
+  xor `Pending`. A value name is never bound and pending at once: the claim
+  errors `Rebind` against a committed value, and the value write finalizes the
+  claim.
+- `types[name]` is a [`TypeSlot`](../../src/machine/core/bindings.rs) —
+  `Bound`, `Pending`, or `BoundWithPending`. Bound and pending coexist here by
+  design: a parallel nominal finalize pre-installs the name's external identity
+  while its producer is still in flight, and the finalize gate must still park
+  the type-identifier memo on that producer. The third arm makes the coexistence
+  — and the impossibility of an empty slot — type-level facts. Reads go through
+  the slot's `bound()` / `pending()` accessors; only the three transition sites
+  (the type write, the claim, the producer-failure sweep) match the arms
+  directly.
 
 *Bucket-keyed binders* (`FN`, `OP`) declare a
 [`BinderKey::Bucket`](../../src/machine/model/binder.rs) — every inner-call
-bucket key a call to the to-be-registered overloads would compute — into a
-separate `pending_overloads` table — a
-`RefCell<HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>>` keyed by
-the inner-call bucket key so a later-arriving call expression can park
-on a not-yet-finalized overload. A named `FN` / `OP` uses the bucket channel,
-never the name channel, because sibling
-overloads under one head keyword (e.g. two `FN (PICK xs :A) ...` /
-`FN (PICK xs :B) ...` declarations) must not collide on a single
-`placeholders[name]` slot. The two channels are mutually exclusive per
-binder: each binder uses exactly one, and the
-[`BinderKey`](../../src/machine/model/binder.rs) enum
+bucket key a call to the to-be-registered overloads would compute. A pending
+overload already keys on the same full `UntypedKey` as the overload it becomes,
+so it lands in the bucket it resolves into: `functions[key]` is a `Vec` of
+[`OverloadSlot`](../../src/machine/core/bindings.rs), each either `Sealed` or
+`Pending`, and a bucket legitimately holds both at once. Keying by the full
+bucket key is what keeps `(MAKESET _)` and `(MAKESET _ USING _)` from colliding.
+A named `FN` / `OP` uses the bucket channel, never the name channel, because
+sibling overloads under one head keyword (e.g. two `FN (PICK xs :A) ...` /
+`FN (PICK xs :B) ...` declarations) must not collide on a single name slot. The
+two channels are mutually exclusive per binder: each binder uses exactly one, and
+the [`BinderKey`](../../src/machine/model/binder.rs) enum
 (`Name(String, BindKind)` vs. `Bucket(Vec<UntypedKey>)`) makes the dichotomy a
 type-level fact rather than a two-Option convention.
 
 The bucket vec is what admits multiple sibling FN binders
-sharing one bucket key: each install appends a distinct entry at its
+sharing one bucket key: each install appends a distinct pending slot at its
 own `BindingIndex`. A consumer looking up the bucket via
 [`Bindings::lookup_function`](../../src/machine/core/bindings.rs) gets the
-*earliest-index visible* `pending_overloads[key]` entry in the returned
-`FunctionLookup`'s `pending` field — the most-likely-first-finalizer. On
-that producer's finalize, only the matching entry is removed from the vec
+*earliest-index visible* pending slot in the returned `FunctionLookup`'s
+`pending` field — the most-likely-first-finalizer. On that producer's finalize,
+the seal lands in that binder's own pending slot, matched by `BindingIndex`
 (others stay pending); the consumer wakes, re-dispatches, and either picks
 from the now-live `functions[bucket]` or re-parks on the next-earliest
 pending sibling. Each re-dispatch is cheap, and the expected case
 (consumer's match lands in the first 1–2 siblings) avoids the cost
-entirely.
+entirely. Slot order within a bucket is not observable: the picker returns the
+signature that strictly dominates every other survivor, or a tie that surfaces
+as deferred/ambiguous either way.
+
+Bulk reads see bound state only. [`iter_data`](../../src/machine/core/bindings.rs)
+/ `iter_types` / `iter_functions` and the module-view `bulk_install_from` skip
+pending arms and skip a bucket holding no sealed slot: a claim names a producer
+in its own scheduler run, so a copy of one would hand the target a park on a node
+that will never wake it.
 
 Binder builtins opt in through the `binder: bool` flag they pass to
 [`register_builtin_full`](../../src/builtins.rs) (`LET`, `TYPE`, `MODULE`,
@@ -97,14 +133,18 @@ placeholder — while the name or bucket each installs lives once in the
 [`BINDER_SPECS`](../../src/machine/model/binder.rs) table. `VAL` is a declaration
 form that installs nothing; everything else stays placeholder-free.
 
-A placeholder is keyed by `BindKind` (value or type), and each binder's kind is
-fixed by the name part its binder-name extractor reads: `type_part_binder_name`
-(SIG / UNION / NEWTYPE / RECURSIVE TYPES) reads a `Type` part and tags
-`BindKind::Type`; `identifier_part_binder_name` (`LET <name> = …`, `MODULE`) reads
-an `Identifier` part and tags `BindKind::Value`. `MODULE` binds a value under a
-value token, so its placeholder and its write sit on the same ladder — no binder
-straddles the two kinds, and no write clears a placeholder of the other kind
-([`WriteOp::apply`](../../src/machine/core/bindings/ops.rs)). A spec's extractors
+A claim's `BindKind` (value or type) picks its destination table, and each
+binder's kind is fixed by the name part its binder-name extractor reads:
+`type_part_binder_name` (SIG / UNION / NEWTYPE / RECURSIVE TYPES) reads a `Type`
+part and tags `BindKind::Type`; `identifier_part_binder_name` (`LET <name> = …`,
+`MODULE`) reads an `Identifier` part and tags `BindKind::Value`. `MODULE` binds a
+value under a value token, so its claim and its write sit on the same ladder — no
+binder straddles the two kinds, and a write of one kind can never finalize the
+other kind's claim, because the two live in different tables
+([`WriteOp::apply`](../../src/machine/core/bindings/ops.rs)). Since the parser
+tags a `Type` part only for a name that classifies as a Type token, and an
+`Identifier` part only for one that does not, the two channels cannot even
+contend for a name. A spec's extractors
 run in order and the first `Some` wins, so an expression whose name part is of one
 class selects the correctly-classified channel — the value extractor misses a
 `Type` part, and vice versa
@@ -118,24 +158,35 @@ predicates accept or reject the candidate. The placeholder mechanism
 extends the value- and function-side lookups so a still-running visible
 producer surfaces as `NameLookup::Parked(NodeId)` /
 `FunctionLookup { pending: Some(_), .. }` rather than a miss —
-[`Bindings::lookup_value`](../../src/machine/core/bindings.rs) consults
-`data` then `placeholders`, and
+[`Bindings::lookup_value`](../../src/machine/core/bindings.rs) reads the arm of
+the one `data[name]` slot it probes, and
 [`Bindings::lookup_function`](../../src/machine/core/bindings.rs) surfaces
-the visibility-filtered `functions[key]` overloads and the earliest-index
-visible `pending_overloads[key]` producer *together* in one
+the visibility-filtered sealed overloads of `functions[key]` and the
+earliest-index visible pending sibling in that same bucket *together* in one
 `FunctionLookup`. The dispatcher decides each scope's contribution from
 that pair as it walks (a visible pending parks the scope; see
 [scheduler.md § In-walk dispatch precedence](../typing/scheduler.md#in-walk-dispatch-precedence)),
-so the bucket / pending-overload pair surfaces from one traversal rather
-than two. The
-raw map accessors (`data` / `types` / `functions` / `placeholders` /
-`pending_overloads`) are gated `#[cfg(test)]`; production sites that
+so the sealed / pending pair surfaces from one traversal rather
+than two. `lookup_type` prefers its slot's bound arm over its pending one, which
+is load-bearing: on a slot carrying both, a consumer that can read the identity
+must not park. The
+raw map accessors (`data` / `types` / `functions`) and the pending probes
+(`pending_value` / `pending_names` / `pending_overload_entries`) are gated
+`#[cfg(test)]`; production sites that
 genuinely sweep all members (`MODULE` member mirroring, signature
 shape-check, REPL reflection) consume the value-yielding `iter_data` /
 `iter_types` / `iter_functions`, which release the underlying borrow at
-the iterator boundary. `bind_value` and `register_function` remove their
-own placeholder before inserting into `data` / `functions`, so the two
-tables are mutually exclusive at any moment.
+the iterator boundary. `bind_value` and `register_function` finalize their own
+claim by overwriting the slot that holds it, so no name is ever both bound and
+claimed on the value side, and a bucket's sealed entry sits where its claim was.
+
+The error path is the one place a claim dies without a write. When a producer's
+node finalizes with an error, `clear_placeholders_for_producer` drops every
+name-keyed pending arm naming it — a `types` slot that also holds a bound
+identity keeps the identity and loses only its pending arm — so a binder body
+that failed before its write path cannot leak a scheduler-local `NodeId` into a
+later run on a persistent scope. The sweep is name-keyed: a bucket's pending slot
+carries no name, and dies only under a later write at the same `BindingIndex`.
 
 ### Miri forward-splice and replay-park lifetime contract
 
@@ -160,7 +211,8 @@ in `fill_cache` from the [`BINDER_SPECS`](../../src/machine/model/binder.rs)
 table. The dispatch-layer submission chokepoint
 [`KoanRuntime::submit_expression`](../../src/machine/execute/dispatch/submit.rs)
 reads that aggregate **once**, for a statement submission, and stamps each
-entry's `placeholders[name]` or `pending_overloads[bucket]` entry on the
+entry's claim — a pending arm of `data[name]` / `types[name]`, or a pending slot
+appended to `functions[bucket]` — on the
 dispatching scope — with the enclosing statement's freshly allocated node id and
 `BindingIndex::value(chain.index)` — before the slot is ever popped from the work
 queues. A later sibling that dispatches before the statement's slot pops finds the

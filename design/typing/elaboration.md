@@ -3,9 +3,10 @@
 Type elaboration runs in the same scheduler that runs value evaluation.
 A type-binding site (`LET Ty = ...`, `NEWTYPE Ty = ...`, `UNION Ty = ...`)
 registers a placeholder in the
-[`Bindings`](../../src/machine/core/scope.rs) façade on `Scope` — the
-same `placeholders` table value bindings use, sitting alongside `data` and
-`functions` — and dispatches its body as scheduler work.
+[`Bindings`](../../src/machine/core/scope.rs) façade on `Scope` — a pending arm
+of the `types` slot the name will resolve into, the type-side mirror of the
+pending arm a value binding claims in `data` — and dispatches its body as
+scheduler work.
 
 **Type names obey strict source order.** The elaborator carries an
 `Option<Rc<LexicalFrame>>` chain and resolves a bare leaf through
@@ -160,11 +161,11 @@ cross-link this section rather than restating its slice.
 
 Type bindings live in a separate map from value bindings — the type-side
 slice of the [lookup → admit protocol](lookup-protocol.md)'s Layer 2.
-The [`Bindings`](../../src/machine/core/bindings.rs) façade owns six
+The [`Bindings`](../../src/machine/core/bindings.rs) façade owns four
 maps under one `RefCell`: `data` for values, `functions` for registered overloads,
-`placeholders` for in-flight dispatch tasks, `pending_overloads` for in-flight
-dispatch buckets, `operators` for the operator-group registry, and `types` for
-type-name → `KType` handles.
+`operators` for the operator-group registry, and `types` for type-name → `KType`
+handles. An in-flight dispatch task holds no map of its own — it claims a pending
+arm of the slot it will resolve into, in whichever of those three tables that is.
 
 `types` and `data` are **different universes, and a name's token class decides which one it
 belongs to** — a Type token names something that can type a field, a value token names

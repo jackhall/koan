@@ -505,9 +505,6 @@ left:
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
   — pricing copying-the-survivors-out against transferring-the-region, the
   local decision the cost seam's two numbers already support.
-- [Pending bindings as a value state](../roadmap/untyped_arena/pending-binding-union.md)
-  — dissolve the placeholder side tables into pending arms of the tables they
-  resolve into.
 - [Drop-free `KFunction`](../roadmap/untyped_arena/drop-free-kfunction.md)
   — bumped signature elements take the function family out of its typed cell.
 - [Drop-free `Module`](../roadmap/untyped_arena/drop-free-module.md)

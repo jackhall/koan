@@ -69,11 +69,13 @@ threads a chain.
 [`Bindings`](../../src/machine/core/bindings.rs) owns the per-scope
 maps — `data` (values), `types` (type-name → `&KType`), `functions`
 (registered overloads), `operators` (operator probe → the sealed carrier of a
-region-hosted [`OperatorGroup`](../../src/machine/model/operators.rs)),
-`placeholders` (in-flight name-keyed binders, each tagged with a
-[`BindKind`](../../src/machine/core/bindings.rs) — `Value` or `Type` —
-recording which language the forward reference resolves in),
-`pending_overloads` (in-flight bucket-keyed binders). The `data`/`types`
+region-hosted [`OperatorGroup`](../../src/machine/model/operators.rs)). An
+in-flight binder gets no map of its own: it claims a *pending arm* of the slot it
+will resolve into, so each of the three tables holds bound and pending state in
+one entry ([execution/name-placeholders.md § A placeholder is a pending arm of
+the slot it resolves into](../execution/name-placeholders.md#a-placeholder-is-a-pending-arm-of-the-slot-it-resolves-into)),
+and a [`BindKind`](../../src/machine/core/bindings.rs) — `Value` or `Type` —
+picks which table a name-keyed claim lands in. The `data`/`types`
 split is **structural, not conventional**, and it is enforced twice over. First by
 **token class**: `Bindings::partition_guard` refuses a value token entering `types` and a
 Type token entering `data`, so a name is committed to one universe by its spelling alone,
@@ -88,14 +90,13 @@ belt-and-braces backstop rather than a routine gate: no map mixes classes, since
 value slots live off the binding map in the decl scope's slot collector.
 One name can never hold both a
 value and a type, and a lookup can never return the wrong kind. `bind_value`
-and `register_function` remove their own *matching-kind* placeholder before
-inserting — a value write clears only a `BindKind::Value` placeholder, a type
-write only a `BindKind::Type` one — so a binding never appears in both `data` /
-`functions` and `placeholders` at once, and a value bind never satisfies or
-clears an in-flight type producer's placeholder (nor the reverse).
+and `register_function` finalize their own claim by overwriting the slot holding
+it, and a claim of one kind lives in a table a write of the other kind never
+touches — so a value bind can never satisfy an in-flight type producer's claim,
+nor the reverse.
 
 - [`Bindings::lookup_value`](../../src/machine/core/bindings.rs)
-  consults `data` then the `BindKind::Value` `placeholders`. Returns
+  reads the one `data[name]` slot, whose arm is bound xor pending. Returns
   `Some(NameLookup::Bound(&KObject))` for a finalized visible binding,
   `Some(NameLookup::Parked(NodeId))` for a still-running visible
   producer (the caller parks on it), or `None` on a miss — the caller keeps
@@ -105,11 +106,11 @@ clears an in-flight type producer's placeholder (nor the reverse).
   merge point that adds the `Unbound` state. A producer error is absorbed at the
   resolution surface as an `Err` rather than a `NameOutcome` variant, and a cycle
   is classified only at a park site with a consumer id — neither is a state the
-  cache carries. A same-name `BindKind::Type` placeholder is invisible here — it
-  belongs to the type language.
+  cache carries. A same-name type-side claim is invisible here — it lives in
+  `types`, and belongs to the type language.
 - [`Bindings::lookup_type`](../../src/machine/core/bindings.rs) is the
-  type-side symmetry: consults `types` then the `BindKind::Type`
-  `placeholders`, surfacing the result as the same
+  type-side symmetry: reads the one `types[name]` slot, preferring its bound arm
+  over its pending one, surfacing the result as the same
   [`NameLookup`](../../src/machine/core/bindings.rs) shape instantiated for the type
   channel (`NameLookup<KType>`) — `Bound(KType)`, `Parked(NodeId)`, or `None`. Every
   single-scope lookup — value and type alike — shares this one
@@ -120,15 +121,16 @@ clears an in-flight type producer's placeholder (nor the reverse).
   hands the handle back by copy. The
   finalize gate that must park on an
   in-flight type producer even after a seal pre-installs the name's identity
-  into `types` reads the placeholder directly through
+  into `types` — the slot's `BoundWithPending` arm — reads the pending producer
+  directly through
   [`Bindings::type_placeholder_producer`](../../src/machine/core/bindings.rs),
-  bypassing the `types`-first preference. Declaration identity itself is not read
+  bypassing the bound-first preference. Declaration identity itself is not read
   here: it is decided at the install door by
   [`Bindings::try_register_type_upsert`](../../src/machine/core/bindings.rs), which
   compares the installing [`NodeHandle`](../../src/machine/core/bindings.rs) against the
   stored entry's. What this gate resolves is in-flight status, not identity: a nominal
   member named by a relative `Sibling` reference is in flight iff the scope carrying the
-  very group window that reference resolves against still holds a type-side placeholder for
+  very group window that reference resolves against still holds a pending arm for
   the name
   ([resolve_type_identifier.rs](../../src/machine/execute/dispatch/resolve_type_identifier.rs)).
   The window match is what stops a same-named in-flight declaration of a
@@ -142,10 +144,11 @@ clears an in-flight type producer's placeholder (nor the reverse).
   is a missing member, not a fall-through to a builtin or outer type — and the
   cross-kind exclusion keeps a name from matching both arms.
 - [`Bindings::lookup_function`](../../src/machine/core/bindings.rs)
-  surfaces both maps in one pass as a `FunctionLookup` struct:
-  `overloads` is the visibility-filtered `functions[key]` bucket (possibly
-  empty) and `pending` is the earliest-index visible `pending_overloads[key]`
-  producer (an in-flight FN binder to park on, if any). The two are
+  surfaces both kinds of slot in one pass over the one bucket, as a
+  `FunctionLookup` struct: `overloads` is the visibility-filtered sealed slots of
+  `functions[key]` (possibly empty) and `pending` is the earliest-index visible
+  pending slot in that same bucket (an in-flight FN binder to park on, if any).
+  The two are
   returned together — a bucket may hold a finalized overload *and* an in-flight
   pending sibling at once — so the scope walk decides pending-vs-finalized
   precedence with both in hand rather than the lookup shadowing one. A scope
@@ -324,7 +327,7 @@ What each topic doc adds beyond this protocol:
   stratification for a concrete member handle vs `OfKind(KKind)` vs `Any`, and the
   `RECURSIVE TYPES` block for mutually recursive nominals.
 - [execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)
-  — how forward references park through the `placeholders` /
-  `pending_overloads` tables and resume on producer finalize, plus
+  — how forward references park on the pending arms of the `data` / `types` /
+  `functions` tables and resume on producer finalize, plus
   the submission-time binder install that prevents `UnboundName` /
   `DispatchFailed` for not-yet-popped sibling binders.

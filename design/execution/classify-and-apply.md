@@ -208,23 +208,24 @@ The rails the dispatch driver feeds:
   Forward references resolve through the fast lane and the eager
   name-resolve rail (below), both of which route name lookups through
   `Scope::resolve_with_chain` against the consumer's `LexicalFrame` and so
-  consult the visibility-gated `placeholders` table. A *keyword-headed*
+  consult the visibility-gated pending arm of the `data` slot. A *keyword-headed*
   call — `ID 7`, where `ID` is the head Keyword — dispatches through the
   `functions` bucket, which applies the same per-overload visibility filter
   (see [ktype/dispatch.md § Overload bucket visibility filter](../typing/ktype/dispatch.md#overload-bucket-visibility-filter)).
   A later-sibling overload registered after this consumer's statement is
   hidden, and dispatch falls through to outer scopes; finding nothing
   surfaces as `DispatchFailed`. Forward calls between sibling FNs work
-  through the bucket-keyed `pending_overloads` channel: each sibling FN
-  install appends a distinct entry to the per-bucket vec, and a parking
+  through the bucket-keyed pending-slot channel: each sibling FN
+  install appends a distinct pending slot to the `functions[bucket]` vec, and a parking
   consumer wakes on the earliest-index visible producer, re-parking on
   the next-earliest if its pick doesn't admit. Forward calls from a
   function *body* are unaffected because bodies re-dispatch per call
   against the body's lexical chain, by which point every sibling binder
   has registered.
 - **Binder classification** (Step 2.5). The pick reads the picked function's
-  `binder` flag but installs nothing: a binder's `placeholders[name]` or
-  `pending_overloads[bucket]` entry was already stamped at statement submission
+  `binder` flag but installs nothing: a binder's claim — a pending arm of
+  `data[name]` / `types[name]`, or a pending slot in `functions[bucket]` — was
+  already stamped at statement submission
   from the enclosing statement's parse-static aggregate (see [Submission-time
   binder install and the position
   rule](name-placeholders.md#submission-time-binder-install-and-the-position-rule)
@@ -353,16 +354,17 @@ cannot transit a park edge into a sibling producer's subtree. Same-scope
 rebind of a value name surfaces as `KErrorKind::Rebind`; an `FN` overload
 indistinguishable from an existing one surfaces as
 `KErrorKind::DuplicateOverload`. Type bindings share this placeholder
-mechanism: a type-binding site registers in `Scope::placeholders` exactly
-like a value binding, external lookups park the same way, and
+mechanism: a type-binding site claims a pending arm of its `types` slot exactly
+like a value binding claims one of its `data` slot, external lookups park the
+same way, and
 self-references during a binding's own elaboration short-circuit through
 the elaborator's threaded-set recognition (see
 [typing/elaboration.md](../typing/elaboration.md)) so recursive type
 definitions don't deadlock on their own placeholder. FN-signature
 elaboration plugs into the same mechanism: when
 [`elaborate_type_expr`](../../src/machine/model/types/resolver.rs) hits a
-bare type-name leaf whose binder is in `Scope::placeholders` but not yet
-finalized, it returns `TypeResolution::Park(producers)` and FN-def's body
+bare type-name leaf whose binder still holds the `types` slot's pending arm but
+has not finalized, it returns `TypeResolution::Park(producers)` and FN-def's body
 schedules a dep-finish over those producers that re-runs the signature
 elaboration against the now-final scope at finish time. (See
 [typing/elaboration.md § Layers](../typing/elaboration.md#layers) § Layer 3
@@ -432,7 +434,7 @@ against the now-populated scope:
   to bound values, so the rebuilt `bare_outcomes` picks them up and the
   wrap-slot splice fires `Future(obj)` on the second pass.
 - A keyworded **overload** park carries the original (unspliced) expression and
-  re-runs the resolve against the now-populated `pending_overloads` bucket.
+  re-runs the resolve against the now-sealed slots of the `functions` bucket.
   **Eager subs never park here**: a `Deferred`/eager-subs resolve returns a
   `ParkThenContinue` with a `Continuation::Finish` and parks on a node with a
   dep-finish `cont` whose finish re-resolves the spliced expression — so a
