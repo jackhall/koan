@@ -18,10 +18,13 @@ where an in-place overwrite would abandon nothing.
 
 - `placeholders` and `pending_overloads` are deleted as tables; each
   destination table's entry grows a pending arm — a `{Bound, Pending}` union
-  for `types` / `data` values, a pending variant beside the sealed entries in a
-  `functions` bucket. A pending overload already keys on the same full
-  `UntypedKey` as the overload it becomes, so it lands in the bucket it
-  resolves into.
+  for `data` values, a `{Bound, Pending, BoundWithPending}` union for `types`
+  (a parallel nominal finalize pre-installs a name's external identity while
+  its producer is still in flight, and the finalize gate parks on that
+  producer — bound and pending coexist there by design), and a pending
+  variant beside the sealed entries in a `functions` bucket. A pending
+  overload already keys on the same full `UntypedKey` as the overload it
+  becomes, so it lands in the bucket it resolves into.
 - Resolution overwrites the pending arm in place — no remove-plus-insert, the
   key stored once.
 - A name lookup probes one table; parking on a pending arm replays exactly as
