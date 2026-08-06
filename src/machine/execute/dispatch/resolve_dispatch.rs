@@ -348,11 +348,11 @@ fn signature_admits_strict<'e>(
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> bool {
-    if sig.elements.len() != expr.parts.len() {
+    if sig.elements().len() != expr.parts.len() {
         return false;
     }
     let has_lazy_kexpr_slot = has_lazy_kexpr_slot(sig, expr);
-    sig.elements
+    sig.elements()
         .iter()
         .zip(expr.parts)
         .enumerate()
@@ -388,12 +388,12 @@ fn relaxed_admits<'e>(
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> Option<Vec<Lean>> {
-    if sig.elements.len() != expr.parts.len() {
+    if sig.elements().len() != expr.parts.len() {
         return None;
     }
     let has_lazy_kexpr_slot = has_lazy_kexpr_slot(sig, expr);
     let mut leans: Vec<Lean> = Vec::new();
-    for (i, (el, part)) in sig.elements.iter().zip(expr.parts).enumerate() {
+    for (i, (el, part)) in sig.elements().iter().zip(expr.parts).enumerate() {
         if slot_admits_strict(
             el,
             &part.value,
@@ -428,7 +428,7 @@ fn relaxed_admits<'e>(
 /// `Expression` / `SigiledTypeExpr` parts speculatively (they route through
 /// `eager_indices` post-pick). Required by FN overloads.
 fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &WorkingExpression<'_>) -> bool {
-    sig.elements
+    sig.elements()
         .iter()
         .zip(expr.parts)
         .any(|(el, part)| match (el, part.value.as_ast()) {
@@ -451,7 +451,7 @@ fn slot_admits_strict<'e>(
     types: &TypeRegistry,
 ) -> bool {
     match (el, slot.as_ast()) {
-        (SignatureElement::Keyword(s), Some(ExpressionPart::Keyword(t))) => s == t,
+        (SignatureElement::Keyword(s), Some(ExpressionPart::Keyword(t))) => *s == t,
         (SignatureElement::Keyword(_), _) => false,
         // A slot the scheduler filled classifies by its carried value, never by a part shape: a
         // resolved cell opens at its own brand, and a synthesized node / staging hole names no value

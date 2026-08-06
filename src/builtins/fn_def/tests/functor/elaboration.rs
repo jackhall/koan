@@ -62,10 +62,10 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
         _ => panic!("Ordered should be a Signature KType, got {ordered:?}"),
     };
     let f = lookup_fn(scope, "USE_ORD");
-    match f.signature.elements.as_slice() {
+    match f.signature.elements() {
         [SignatureElement::Keyword(kw), SignatureElement::Argument(Argument { name, ktype })] => {
-            assert_eq!(kw, "USE_ORD");
-            assert_eq!(name, "er");
+            assert_eq!(*kw, "USE_ORD");
+            assert_eq!(*name, "er");
             match test_run.types.node(*ktype) {
                 TypeNode::Signature { schema, .. } => {
                     assert_eq!(

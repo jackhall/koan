@@ -419,9 +419,7 @@ fn key_and_shape_invariant_across_eager_slot_variants() {
 
 #[test]
 fn cached_key_agrees_with_expression_signature_untyped_key() {
-    use crate::machine::model::types::{
-        Argument, ExpressionSignature, ReturnType, SignatureElement,
-    };
+    use crate::machine::model::types::{Argument, ReturnType, SignatureDraft, SignatureElement};
     let program = program_storage();
     let brand = program.brand();
     // `a + b + c` against a `Slot + Slot + Slot` signature: the two
@@ -430,21 +428,21 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
         brand,
         vec![ident("a"), kw("+"), ident("b"), kw("+"), ident("c")],
     );
-    let sig = ExpressionSignature {
+    let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
-                name: "x".into(),
+                name: "x",
                 ktype: KType::ANY,
             }),
-            SignatureElement::Keyword("+".into()),
+            SignatureElement::Keyword("+"),
             SignatureElement::Argument(Argument {
-                name: "y".into(),
+                name: "y",
                 ktype: KType::ANY,
             }),
-            SignatureElement::Keyword("+".into()),
+            SignatureElement::Keyword("+"),
             SignatureElement::Argument(Argument {
-                name: "z".into(),
+                name: "z",
                 ktype: KType::ANY,
             }),
         ],

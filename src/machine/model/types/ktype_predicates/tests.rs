@@ -689,10 +689,14 @@ fn two_functions_differ_only_in_deferred_return_are_distinct() {
 #[test]
 fn deferred_return_admission_via_function_compat() {
     let types = TypeRegistry::new();
-    let candidate = ExpressionSignature {
-        return_type: ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er"))),
-        elements: vec![],
-    };
+    let program = crate::machine::core::program_storage();
+    let candidate = ExpressionSignature::mint(
+        program.brand().region(),
+        crate::machine::model::SignatureDraft {
+            return_type: ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er"))),
+            elements: vec![],
+        },
+    );
     let no_params = Record::new();
 
     // Matching shadow → admit.

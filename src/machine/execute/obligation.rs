@@ -45,8 +45,8 @@ impl ReturnObligation {
             // still a `Deferred` carrier in the FN-def signature.
             ReturnContract::Function(func) => {
                 func.open_with(callable_pin(pin), |f: &KFunction<'_>| ReturnObligation {
-                    declared: match &f.signature.return_type {
-                        ReturnType::Resolved(d) => Some((*d, false)),
+                    declared: match f.signature.return_type() {
+                        ReturnType::Resolved(d) => Some((d, false)),
                         _ => None,
                     },
                     label: f.summarize(),

@@ -383,31 +383,24 @@ impl CallFrame {
         Rc::clone(self.storage())
     }
 
-    /// Build a [`KFunction`] capturing **this frame's own child scope**, born into this frame's own
-    /// region, and hand it back at the frame borrow's lifetime.
+    /// Build a [`KFunction`] capturing a scope **in this frame's own region**, and hand it back at the
+    /// frame borrow's lifetime — the shape a closure capturing its defining frame takes.
     ///
-    /// Test-only. Production functions take [`KFunction::alloc_captured`], which derives the
-    /// destination from a scope the caller holds directly; the Miri shapes need the same value at the
-    /// *frame's* lifetime, where the child scope is reachable only through the frame's sealed carrier
-    /// ([`Self::scope_sealed`]) and [`Self::with_scope`]'s rank-2 brand deliberately lets nothing
-    /// escape. Both the destination handle and the captured scope come off `frame`, so there is still
-    /// no pairing for a call site to get wrong; `frame` is the pin, and holding it keeps the storage
-    /// that owns the region alive for the returned borrow's whole life.
+    /// Test-only. Production functions take [`KFunction::alloc_captured`] directly, with a scope the
+    /// caller already holds; the Miri shapes need the same value at the *frame's* lifetime. The
+    /// captured scope is minted here rather than read off [`Self::scope_sealed`]: the bump door stores
+    /// the function at the destination's own `'f`, so it needs a `&'f Scope<'f>`, and the frame's
+    /// envelope opens only at a rank-2 brand nothing escapes. What the tests exercise — a callable
+    /// whose captured scope lives in the region the callable itself lives in — holds either way, since
+    /// the minted scope is allocated in `frame`'s storage.
     #[cfg(test)]
     pub(crate) fn alloc_capturing_scope<'f>(
         frame: &'f Rc<CallFrame>,
-        signature: crate::machine::model::ExpressionSignature<'f>,
+        signature: crate::machine::model::SignatureDraft<'f>,
         body: crate::machine::core::Body<'f>,
         types: &TypeRegistry,
     ) -> &'f crate::machine::core::KFunction<'f> {
-        crate::machine::core::KFunction::alloc_captured_sealed(
-            frame.brand(),
-            frame.scope_sealed(),
-            frame,
-            signature,
-            body,
-            false,
-            types,
-        )
+        let captured = Scope::alloc_run_root(frame.storage(), Box::new(std::io::sink()));
+        crate::machine::core::KFunction::alloc_captured(captured, signature, body, false, types)
     }
 }

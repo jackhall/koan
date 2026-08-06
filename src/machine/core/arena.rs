@@ -19,7 +19,6 @@ use std::rc::Rc;
 use crate::machine::execute::StepCarried;
 
 use super::scope::Scope;
-use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::KType;
 use crate::machine::model::{
     Carried, CarriedFamily, ContainerSubstrate, Held, KObject, Module, ProgramExpression, Scalar,
@@ -43,11 +42,11 @@ pub use step_allocator::StepAllocator;
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
 /// [`FamilyArena`] cell per family.
 ///
-/// **Exactly the three families designed to own things.** A `KFunction` owns its captured binding
-/// table, a `Scope` its bindings, a `Module` its member map — each runs a real `Drop` at region death
-/// and so needs a typed cell that will run it. Every other value family is `Drop`-free by
-/// construction (`Copy`, checked at the bump doors) and lives in the region's bump instead, where
-/// death is chunk deallocation and no per-slot glue runs at all. See
+/// **Exactly the two families designed to own things.** A `Scope` owns its bindings, a `Module` its
+/// member map — each runs a real `Drop` at region death and so needs a typed cell that will run it.
+/// Every other value family is `Drop`-free by construction (`Copy`, checked at the bump doors) and
+/// lives in the region's bump instead, where death is chunk deallocation and no per-slot glue runs at
+/// all — a `KFunction` among them, its signature elements a bumped run of `&str`. See
 /// [value-substrates.md § Untyped arenas](../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
 ///
 /// A [`TypeIdentifier`](crate::machine::model::TypeIdentifier) and a [`KType`] need no cell either:
@@ -56,7 +55,7 @@ pub use step_allocator::StepAllocator;
 pub struct KoanStorageProfile;
 
 impl StorageProfile for KoanStorageProfile {
-    type Families = (KFunction<'static>, (Scope<'static>, (Module<'static>, ())));
+    type Families = (Scope<'static>, (Module<'static>, ()));
 
     /// Reach descriptions live in the region's side table, typed at the per-call frame owner.
     type FrameOwner = FrameStorage;
@@ -399,13 +398,12 @@ impl SubstrateDoor<'_, '_> {
 // shared `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its
 // docs).
 //
-// The three arena-stored families own heap contents (a closure's captures, a scope's bindings, a
-// module's table), so they take the `droppable` arm: it emits no `DropFree`, which is exactly the
-// claim that keeps them off the Copy tier's glue-free dormant slot. They never rest in a carrier —
-// the region arena is their owner and runs their drop — so the arm costs them nothing.
+// The two arena-stored families own heap contents (a scope's bindings, a module's table), so they
+// take the `droppable` arm: it emits no `DropFree`, which is exactly the claim that keeps them off
+// the Copy tier's glue-free dormant slot. They never rest in a carrier — the region arena is their
+// owner and runs their drop — so the arm costs them nothing.
 reattachable! {
     droppable
-    KFunction<'static> => KFunction<'r>,
     Scope<'static> => Scope<'r>,
     Module<'static> => Module<'r>,
 }
@@ -424,28 +422,22 @@ reattachable!(Held<'static> => Held<'r>);
 pub struct RegionTypeFamily;
 reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, KType));
 
-// Per-family `Stored` policy: which sub-arena each of the three droppy families lands in. None
-// carries a self-targeting `Rc<FrameStorage>` — a stored closure / module is a bare borrow into its
-// defining region, kept alive by its carrier's witness set rather than an owned anchor — so no
-// allocation can self-cycle and the engine needs no cycle gate. None records an address either:
-// residence is answered entirely by the construction door's brand — a born door builds the value at
-// its destination and a fold placement at the fold's — never by a runtime probe or a side table.
+// Per-family `Stored` policy: which sub-arena each of the two droppy families lands in. Neither
+// carries a self-targeting `Rc<FrameStorage>` — a stored module is a bare borrow into its defining
+// region, kept alive by its carrier's witness set rather than an owned anchor — so no allocation can
+// self-cycle and the engine needs no cycle gate. Neither records an address either: residence is
+// answered entirely by the construction door's brand — a born door builds the value at its
+// destination and a fold placement at the fold's — never by a runtime probe or a side table.
 
-impl Stored<KoanStorageProfile> for KFunction<'static> {
+impl Stored<KoanStorageProfile> for Scope<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
         &s.0
     }
 }
 
-impl Stored<KoanStorageProfile> for Scope<'static> {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .0
-    }
-}
-
 impl Stored<KoanStorageProfile> for Module<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .0
+        &s.1 .0
     }
 }
 
@@ -554,10 +546,7 @@ impl KoanRegionExt for KoanRegion {
         fn weigh<K: Stored<KoanStorageProfile>>(region: &KoanRegion) -> u64 {
             region.family_len::<K>() as u64 * std::mem::size_of::<K>() as u64
         }
-        weigh::<KFunction<'static>>(self)
-            + weigh::<Scope<'static>>(self)
-            + weigh::<Module<'static>>(self)
-            + self.bump_capacity() as u64
+        weigh::<Scope<'static>>(self) + weigh::<Module<'static>>(self) + self.bump_capacity() as u64
     }
 }
 
@@ -565,7 +554,7 @@ impl KoanRegionExt for KoanRegion {
 /// reason as [`KoanRegionExt`].
 #[cfg(test)]
 pub(crate) trait KoanRegionTestExt {
-    /// Total number of values stored across the three typed sub-arenas. Each typed `alloc_*` writes
+    /// Total number of values stored across the two typed sub-arenas. Each typed `alloc_*` writes
     /// to exactly one of them, so this is the precise count without double-counting. It says nothing
     /// about the `Drop`-free families: those live in the bump, which reports reserved capacity
     /// ([`Region::bump_capacity`]) rather than values.
@@ -575,9 +564,7 @@ pub(crate) trait KoanRegionTestExt {
 #[cfg(test)]
 impl KoanRegionTestExt for KoanRegion {
     fn alloc_count(&self) -> usize {
-        self.family_len::<KFunction<'static>>()
-            + self.family_len::<Scope<'static>>()
-            + self.family_len::<Module<'static>>()
+        self.family_len::<Scope<'static>>() + self.family_len::<Module<'static>>()
     }
 }
 

@@ -12,10 +12,10 @@ pub use types::TypeRegistry;
 pub use types::{
     is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, DispatchToken,
     DispatchTokenElement, ExpressionSignature, KKind, KType, NodeSchema, Parseable, PendingMember,
-    Record, RecursiveGroupWindow, RelativeSchema, ReturnType, ReturnTypeFamily, SealedGroup,
+    Record, RecursiveGroupWindow, RelativeSchema, ReturnType, SealedGroup, SignatureDraft,
     SignatureElement, TypeNode, UntypedElement, UntypedKey,
 };
-pub use types::{owned_untyped_key, StoredElement};
+pub use types::{most_specific_ktype, owned_untyped_key, StoredElement};
 pub use values::{
     Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, Scalar, ValueEqualityError,
 };

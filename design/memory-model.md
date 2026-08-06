@@ -343,7 +343,7 @@ read, both deferring every fabrication hazard to the witnessed retype.
 The allocation engine needs **no cycle gate**: a stored value holds no owning `Rc` back to a region —
 a closure / future / module is a bare borrow into its defining region, kept alive by its holder's
 pin bundle rather than an embedded anchor — so storing it where requested can never close an
-allocation back-edge. Each of the three typed families implements the `Stored` trait and routes the
+allocation back-edge. Each of the two typed families implements the `Stored` trait and routes the
 one [`alloc_resident`](../workgraph/src/witnessed/region.rs) engine, which erases the value to
 `'static`, stores it in the family's sub-arena, and re-anchors the store to `'a`; the engine carries
 no redirect logic. It stays unbypassable by construction: the substrate's `storage` bundle is private
@@ -617,10 +617,11 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
 - Per-call-region protocol verification (escaping-value relocation and retention, TCO
   frame reuse, MATCH `FrameStorage.outer` chain) is enumerated in
   [per-call-region/scope-handles.md § Verification](per-call-region/scope-handles.md#verification).
-- [`region_death_frees_every_drop_free_substrate_shape`](../src/machine/core/arena/tests.rs)
+- [`region_death_frees_every_drop_free_family`](../src/machine/core/arena/tests.rs)
   fills one frame region with all five substrate shapes — each carrying a bumped string leaf, so
-  the region holds re-homed bytes and index metadata as well as cells — and drops it with nothing
-  borrowing in. That region death is *deallocation only* is a leak claim rather than a UB claim, and
+  the region holds re-homed bytes and index metadata as well as cells — plus a run of `KFunction`s
+  whose signatures put a bumped element run and synthesized keyword / parameter-name bytes in the
+  same region, and drops it with nothing borrowing in. That region death is *deallocation only* is a leak claim rather than a UB claim, and
   the only one a bump cannot fail loudly on: a family that reintroduced an owning slot would still
   read and write correctly and simply never free. Miri's process-exit leak count is the assertion;
   `Copy` at every bump primitive is the static proxy this checks in composition.

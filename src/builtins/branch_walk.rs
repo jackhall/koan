@@ -8,10 +8,9 @@
 //! (ruling F1). [`resolve_arm_contract`] builds the `-> :T` return contract both arms
 //! enforce on their result.
 
-use super::{arg, sig};
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::{most_specific_ktype, TypeResolution};
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
-use crate::machine::model::{ExpressionSignature, TypeResolution};
 
 use crate::machine::model::{Carried, CarriedFamily, KObject, KType};
 use crate::machine::DeliveredCarried;
@@ -395,10 +394,9 @@ pub(crate) fn find_branch_body_by_type<'a>(
     }
 
     // Typed tournament via the shared core: admit by `matches_value`, then let
-    // `ExpressionSignature::most_specific` pick the strictly most-specific admitting arm — the
-    // same filter→`most_specific` core ordinary overload buckets resolve through. Each arm lowers
-    // to a one-slot signature whose only argument carries the head's `KType`, so specificity turns
-    // entirely on that type.
+    // `most_specific_ktype` pick the strictly most-specific admitting arm — the one-slot case of
+    // the same tournament ordinary overload buckets resolve through, where specificity turns
+    // entirely on the head's own `KType`.
     let admitted: Vec<TypedArm<'a>> = typed_arms
         .into_iter()
         .filter(|arm| arm.ktype.matches_value(scrutinee, types))
@@ -406,12 +404,8 @@ pub(crate) fn find_branch_body_by_type<'a>(
     if admitted.is_empty() {
         return Ok(None);
     }
-    let sigs: Vec<ExpressionSignature<'a>> = admitted
-        .iter()
-        .map(|arm| sig(KType::ANY, vec![arg("it", arm.ktype)]))
-        .collect();
-    let refs: Vec<&ExpressionSignature<'a>> = sigs.iter().collect();
-    match ExpressionSignature::most_specific(&refs, types) {
+    let heads: Vec<KType> = admitted.iter().map(|arm| arm.ktype).collect();
+    match most_specific_ktype(&heads, types) {
         Some(winner) => {
             let arm = admitted
                 .into_iter()

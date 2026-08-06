@@ -8,6 +8,8 @@
 
 use super::KFunction;
 use crate::machine::model::Carried;
+#[cfg(test)]
+use crate::machine::model::SignatureDraft;
 use crate::machine::model::{Argument, ExpressionSignature, Record, SignatureElement};
 use crate::machine::{KError, KErrorKind};
 
@@ -32,8 +34,8 @@ pub fn bind_args_by_name<'a>(
     for arg in arguments(signature) {
         let value = values
             .next()
-            .ok_or_else(|| KError::new(KErrorKind::MissingArg(arg.name.clone())))?;
-        bound.insert(arg.name.clone(), value);
+            .ok_or_else(|| KError::new(KErrorKind::MissingArg(arg.name.to_string())))?;
+        bound.insert(arg.name.to_string(), value);
     }
     Ok(bound)
 }
@@ -42,8 +44,8 @@ pub fn bind_args_by_name<'a>(
 /// bound values, so they are skipped.
 fn arguments<'sig, 'a>(
     signature: &'sig ExpressionSignature<'a>,
-) -> impl Iterator<Item = &'sig Argument> {
-    signature.elements.iter().filter_map(|el| match el {
+) -> impl Iterator<Item = &'sig Argument<'a>> {
+    signature.elements().iter().filter_map(|el| match el {
         SignatureElement::Argument(arg) => Some(arg),
         SignatureElement::Keyword(_) => None,
     })
@@ -52,24 +54,27 @@ fn arguments<'sig, 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{run_root_storage, FrameStorageExt, RegionBrand};
     use crate::machine::model::KObject;
     use crate::machine::model::KType;
     use crate::machine::model::ReturnType;
     use crate::machine::model::Scalar;
 
-    /// `(DOUBLE x: Number)` — one keyword, one parameter.
-    fn double_signature<'a>() -> ExpressionSignature<'a> {
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::NUMBER),
-            elements: vec![
-                SignatureElement::Keyword("DOUBLE".to_string()),
-                SignatureElement::Argument(Argument {
-                    name: "x".to_string(),
-                    ktype: KType::NUMBER,
-                }),
-            ],
-        }
+    /// `(DOUBLE x: Number)` — one keyword, one parameter, minted into `brand`'s region.
+    fn double_signature(brand: RegionBrand<'_>) -> ExpressionSignature<'_> {
+        ExpressionSignature::mint(
+            brand,
+            SignatureDraft {
+                return_type: ReturnType::Resolved(KType::NUMBER),
+                elements: vec![
+                    SignatureElement::Keyword("DOUBLE"),
+                    SignatureElement::Argument(Argument {
+                        name: "x",
+                        ktype: KType::NUMBER,
+                    }),
+                ],
+            },
+        )
     }
 
     fn bound_x(bound: &Record<Carried<'_>>) -> f64 {
@@ -86,13 +91,15 @@ mod tests {
         let region = storage.brand();
         let seven = Carried::Object(region.alloc_scalar(Scalar::Number(7.0)));
 
-        let bound = bind_args_by_name(&double_signature(), vec![seven]).expect("positional binds");
+        let bound =
+            bind_args_by_name(&double_signature(region), vec![seven]).expect("positional binds");
         assert_eq!(bound_x(&bound), 7.0);
     }
 
     #[test]
     fn missing_parameter_errors() {
-        let result = bind_args_by_name(&double_signature(), Vec::new());
+        let storage = run_root_storage();
+        let result = bind_args_by_name(&double_signature(storage.brand()), Vec::new());
         assert!(matches!(
             result,
             Err(e) if matches!(e.kind, KErrorKind::MissingArg(ref n) if n == "x")

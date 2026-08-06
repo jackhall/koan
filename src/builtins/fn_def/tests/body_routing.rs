@@ -17,7 +17,7 @@ fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
     test_run.run("FN (USE xs :Number) -> :(somefn xs) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
-        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        matches!(f.signature.return_type(), ReturnType::Deferred(_)),
         "USE return type should be Deferred (sigil-form Identifier referencing param)",
     );
 }
@@ -33,7 +33,7 @@ fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
     test_run.run("FN (USE xs :Number) -> :([xs]) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
-        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        matches!(f.signature.return_type(), ReturnType::Deferred(_)),
         "USE return type should be Deferred (ListLiteral referencing param)",
     );
 }
@@ -49,7 +49,7 @@ fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
     test_run.run("FN (USE xs :Number) -> :({\"k\": xs}) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
-        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        matches!(f.signature.return_type(), ReturnType::Deferred(_)),
         "USE return type should be Deferred (DictLiteral value referencing param)",
     );
 }
@@ -70,9 +70,9 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
     );
     let f = lookup_fn(scope, "USE_ORD");
     assert!(
-        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        matches!(f.signature.return_type(), ReturnType::Deferred(_)),
         "USE_ORD return type should be Deferred after dep-finish wake, got {:?}",
-        f.signature.return_type,
+        f.signature.return_type(),
     );
 }
 
@@ -91,10 +91,10 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
          LET MyT = Number",
     );
     let f = lookup_fn(scope, "USE");
-    let ReturnType::Resolved(kt) = &f.signature.return_type else {
+    let ReturnType::Resolved(kt) = f.signature.return_type() else {
         panic!("USE return type should resolve to List<Number> after dep-finish wake");
     };
-    assert_eq!(*kt, test_run.types.list(KType::NUMBER));
+    assert_eq!(kt, test_run.types.list(KType::NUMBER));
 }
 
 /// A bare forward-LET return type with no parameters parks on the LET's placeholder
@@ -110,10 +110,10 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
          LET MyT = Number",
     );
     let f = lookup_fn(scope, "NOP");
-    let ReturnType::Resolved(kt) = &f.signature.return_type else {
+    let ReturnType::Resolved(kt) = f.signature.return_type() else {
         panic!("NOP return type should resolve to Number after LET wakes");
     };
-    assert_eq!(*kt, KType::NUMBER);
+    assert_eq!(kt, KType::NUMBER);
 }
 
 /// A parens-form parameter type that sub-dispatches to a non-type value must

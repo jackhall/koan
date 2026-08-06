@@ -16,7 +16,7 @@ use crate::machine::execute::dispatch::{
 };
 use crate::machine::model::Held;
 use crate::machine::model::Scalar;
-use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{Carried, KObject, TypeNode, TypeRegistry};
 use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::{BindingIndex, KFunction, Scope};
@@ -82,10 +82,10 @@ fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
 /// Bind a function value `f` with signature `<n :Number>` on `scope`, giving an
 /// Identifier head that resolves to a function value without going through FN/LET.
 fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
-    let sig = ExpressionSignature {
+    let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Argument(Argument {
-            name: "n".into(),
+            name: "n",
             ktype: KType::NUMBER,
         })],
     };

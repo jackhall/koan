@@ -15,7 +15,7 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
 use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
-use crate::machine::model::{ExpressionSignature, SignatureElement};
+use crate::machine::model::{SignatureDraft, SignatureElement};
 use crate::machine::Action;
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
@@ -43,7 +43,7 @@ pub(crate) enum FnKind {
 /// (short-circuited before [`classify`] runs) and with `Pending`'s payload
 /// kept by-value so the planning match stays readable.
 pub(crate) enum ParamListResult<'a> {
-    Done(Vec<SignatureElement>),
+    Done(Vec<SignatureElement<'a>>),
     Pending {
         park_producers: Vec<NodeId>,
         sub_dispatches: Vec<(usize, KExpression<'a>)>,
@@ -53,7 +53,7 @@ pub(crate) enum ParamListResult<'a> {
 /// Terminal shape of FN-def's planning step.
 pub(crate) enum FnPlan<'a> {
     Synchronous {
-        elements: Vec<SignatureElement>,
+        elements: Vec<SignatureElement<'a>>,
         return_type: ReturnType<'a>,
     },
     Deferred(DeferredInputs<'a>),
@@ -78,7 +78,7 @@ pub(crate) struct DeferredInputs<'a> {
     /// verbatim instead of re-parsing `signature_expr` (which the anonymous path
     /// has no keyword/arg form of). `None` for the keyworded FN path, which
     /// re-elaborates the spliced signature.
-    pub prebuilt_elements: Option<Vec<SignatureElement>>,
+    pub prebuilt_elements: Option<Vec<SignatureElement<'a>>>,
 }
 
 /// Decide between the synchronous build path and the deferred path.
@@ -191,7 +191,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
 /// reach [`finalize_fn_with_kind`]. A [`ReturnType::Deferred`] carrier names a parameter and
 /// elaborates per call, so it is checked at that boundary, not here.
 fn check_value_type_kinds(
-    elements: &[SignatureElement],
+    elements: &[SignatureElement<'_>],
     return_type: &ReturnType<'_>,
     types: &TypeRegistry,
 ) -> Result<(), KError> {
@@ -220,7 +220,7 @@ fn check_value_type_kinds(
 /// function's only handle.
 pub(crate) fn finalize_fn_with_kind<'a>(
     scope: &'a Scope<'a>,
-    elements: Vec<SignatureElement>,
+    elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
     kind: FnKind,
@@ -234,17 +234,17 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // shadow-by-name, neither of which has a single right answer for a
     // multi-token signature like `(a ADD b)`.
     let name = elements.iter().find_map(|e| match e {
-        SignatureElement::Keyword(s) => Some(s.clone()),
+        SignatureElement::Keyword(s) => Some((*s).to_string()),
         _ => None,
     });
 
-    let user_sig = ExpressionSignature {
+    let draft = SignatureDraft {
         return_type,
         elements,
     };
 
     let f: &'a KFunction<'a> =
-        KFunction::alloc_captured(scope, user_sig, Body::UserDefined(body_expr), false, types);
+        KFunction::alloc_captured(scope, draft, Body::UserDefined(body_expr), false, types);
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just allocated
     // into `scope`'s own region above, which is what `store_function_object`'s merge names as the

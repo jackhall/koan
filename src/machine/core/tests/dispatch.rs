@@ -7,7 +7,7 @@ use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::RegionBrand;
 use crate::machine::model::Carried;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, DispatchOutcome, LexicalFrame};
 use crate::source::Spanned;
@@ -31,17 +31,17 @@ fn body_b<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done_resident(ctx.scope, Carried::Object(marker(ctx.scope, "b")))
 }
 
-fn two_slot_sig<'a>(a: KType, b: KType) -> ExpressionSignature<'a> {
-    ExpressionSignature {
+fn two_slot_sig<'a>(a: KType, b: KType) -> SignatureDraft<'a> {
+    SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
-                name: "a".into(),
+                name: "a",
                 ktype: a,
             }),
-            SignatureElement::Keyword("OP".into()),
+            SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: "b".into(),
+                name: "b",
                 ktype: b,
             }),
         ],
@@ -171,17 +171,17 @@ fn resolve_marks_binder_pick_for_binder_function() {
     use crate::builtins::register_builtin_full;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let sig = ExpressionSignature {
+    let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("LETLIKE".into()),
+            SignatureElement::Keyword("LETLIKE"),
             SignatureElement::Argument(Argument {
-                name: "n".into(),
+                name: "n",
                 ktype: KType::IDENTIFIER,
             }),
-            SignatureElement::Keyword("=".into()),
+            SignatureElement::Keyword("="),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::ANY,
             }),
         ],
@@ -348,12 +348,12 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     // Outer finalized overload that strictly Picks `(MARK <number>)`.
-    let outer_sig = ExpressionSignature {
+    let outer_sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("MARK".into()),
+            SignatureElement::Keyword("MARK"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::NUMBER,
             }),
         ],
@@ -480,7 +480,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     match inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &types) {
         DispatchOutcome::Resolved(r) => assert!(
             matches!(
-                r.function.value().signature.elements.first(),
+                r.function.value().signature.elements().first(),
                 Some(SignatureElement::Argument(arg)) if arg.ktype == KType::IDENTIFIER
             ),
             "outer `:Identifier` overload must Pick the bare name shape-only",
@@ -506,12 +506,12 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     // Finalized `(PICK <number>)` user overload that strictly Picks. Registered at a
     // user index (not BUILTIN) so the same-bucket sibling below is a legitimate
     // user-vs-user overload — a builtin bucket admits no user siblings.
-    let pick_num = ExpressionSignature {
+    let pick_num = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("PICK".into()),
+            SignatureElement::Keyword("PICK"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::NUMBER,
             }),
         ],
@@ -559,12 +559,12 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     // Finalize the pending sibling: registering a same-bucket overload at the
     // pending's index overwrites its pending slot in place (the real finalize path,
     // which matches by `BindingIndex`).
-    let pick_str = ExpressionSignature {
+    let pick_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("PICK".into()),
+            SignatureElement::Keyword("PICK"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::STR,
             }),
         ],

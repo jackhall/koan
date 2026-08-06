@@ -27,7 +27,7 @@ use crate::machine::core::carrier_witness::SealedFunction;
 /// sealed [`ReturnObligation`](crate::machine::execute) the chain actually keeps is region-free
 /// `Copy` data resolved once, at the first read.
 pub enum ReturnContract {
-    /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
+    /// An FN / builtin call: check against `signature.return_type()`, label via `summarize()`.
     Function(SealedFunction),
     /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`. `ret`
     /// is a `Copy` handle, so this arm names no region at all.
@@ -81,22 +81,15 @@ pub(crate) fn body_statement_refs<'ast, 'a>(
 }
 
 /// Enum (not `Box<dyn Fn>`) so `UserDefined` stays introspectable — TCO and
-/// error-frame attribution walk into the captured expression.
+/// error-frame attribution walk into the captured expression. `Copy`: an action `fn` pointer and a
+/// `KExpression` handle both are, which is part of what keeps a `KFunction` bump-storable.
+#[derive(Clone, Copy)]
 pub enum Body<'a> {
     UserDefined(KExpression<'a>),
     /// A builtin authored against the `Action` harness. Runs through
     /// `machine::execute::runtime::run_action`.
     Builtin(super::action::ActionFn),
 }
-
-/// [`Reattachable`](crate::witnessed::Reattachable) family for a [`Body`] — the operand form it
-/// takes when a function is born at its captured scope's construction brand
-/// ([`KFunction::alloc_captured`](super::KFunction::alloc_captured)). Layout-invariant in `'r`: the
-/// `UserDefined` arm holds a `KExpression<'r>` and the `Builtin` arm a lifetime-free `fn` pointer, so
-/// every choice of `'r` is one type up to the lifetime.
-pub struct BodyFamily;
-
-crate::witnessed::reattachable!(BodyFamily => Body<'r>);
 
 #[cfg(test)]
 mod tests {

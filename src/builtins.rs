@@ -1,6 +1,6 @@
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::{BindingIndex, Scope, WriteGate};
 use crate::machine::{Body, KFunction};
 
@@ -40,26 +40,25 @@ mod tests;
 
 pub mod test_support;
 
-/// Signature-element constructor for a keyword slot.
-pub(crate) fn kw(s: &str) -> SignatureElement {
-    SignatureElement::Keyword(s.into())
+/// Signature-element constructor for a keyword slot. The text rides as a borrow at whatever
+/// lifetime the caller has — a `&'static` literal for a builtin, an operator symbol at the defining
+/// scope's — since the mint door re-homes every signature name at the function's own region.
+pub(crate) fn kw(s: &str) -> SignatureElement<'_> {
+    SignatureElement::Keyword(s)
 }
 
-/// Signature-element constructor for an argument slot.
-pub(crate) fn arg(name: &str, ktype: KType) -> SignatureElement {
-    SignatureElement::Argument(Argument {
-        name: name.into(),
-        ktype,
-    })
+/// Signature-element constructor for an argument slot. Same borrowed-text story as [`kw`].
+pub(crate) fn arg(name: &str, ktype: KType) -> SignatureElement<'_> {
+    SignatureElement::Argument(Argument { name, ktype })
 }
 
-/// Assemble an `ExpressionSignature` with `Resolved(return_type)`. Builtins needing
-/// `Deferred(...)` build the `ExpressionSignature` directly.
+/// Assemble a [`SignatureDraft`] with `Resolved(return_type)`. Builtins needing
+/// `Deferred(...)` build the draft directly.
 pub(crate) fn sig<'a>(
     return_type: KType,
-    elements: Vec<SignatureElement>,
-) -> ExpressionSignature<'a> {
-    ExpressionSignature {
+    elements: Vec<SignatureElement<'a>>,
+) -> SignatureDraft<'a> {
+    SignatureDraft {
         return_type: ReturnType::Resolved(return_type),
         elements,
     }
@@ -73,7 +72,7 @@ pub(crate) fn sig<'a>(
 pub(crate) fn register_builtin_full<'a>(
     scope: &'a Scope<'a>,
     name: &str,
-    signature: ExpressionSignature<'a>,
+    signature: SignatureDraft<'a>,
     body: crate::machine::ActionFn,
     binder: bool,
     types: &TypeRegistry,
@@ -88,7 +87,7 @@ pub(crate) fn register_builtin_full<'a>(
 pub(crate) fn register_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,
-    signature: ExpressionSignature<'a>,
+    signature: SignatureDraft<'a>,
     body: crate::machine::ActionFn,
     types: &TypeRegistry,
     gate: &mut WriteGate,
@@ -104,7 +103,7 @@ pub(crate) fn register_builtin<'a>(
 pub(crate) fn register_overload_at<'a>(
     scope: &'a Scope<'a>,
     name: &str,
-    signature: ExpressionSignature<'a>,
+    signature: SignatureDraft<'a>,
     body: crate::machine::ActionFn,
     index: BindingIndex,
     types: &TypeRegistry,

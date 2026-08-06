@@ -196,7 +196,7 @@ pub(super) fn invoke<'step>(
                 .into_iter()
                 .map(|e| WorkingExpression::from_ast(brand, *e))
                 .collect();
-            statements.push(WorkingExpression::from_ast(brand, *type_expr));
+            statements.push(WorkingExpression::from_ast(brand, type_expr));
             super::super::runtime::run_action(
                 view,
                 Action::tail(
@@ -250,9 +250,9 @@ fn map_arg_carriers<'e, 'step>(
     let mut record = Record::new();
     for (slot, carrier) in arg_carriers.iter().enumerate() {
         if let (Some(carrier), Some(SignatureElement::Argument(arg))) =
-            (carrier, picked.signature.elements.get(slot))
+            (carrier, picked.signature.elements().get(slot))
         {
-            record.insert(arg.name.clone(), carrier);
+            record.insert(arg.name.to_string(), carrier);
         }
     }
     record

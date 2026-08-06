@@ -656,7 +656,7 @@ pub(super) fn function_compat<'v>(
     types: &TypeRegistry,
 ) -> bool {
     use crate::machine::model::types::{DeferredReturnSurface, ReturnType};
-    let ret_ok = match &sig.return_type {
+    let ret_ok = match &sig.return_type() {
         ReturnType::Resolved(kt) => *kt == ret || kt.is_more_specific_than(ret, types),
         ReturnType::Deferred(d) => match types.node(ret) {
             TypeNode::Any => true,
@@ -667,9 +667,9 @@ pub(super) fn function_compat<'v>(
     if !ret_ok {
         return false;
     }
-    for el in &sig.elements {
+    for el in sig.elements() {
         if let SignatureElement::Argument(a) = el {
-            match params.get(&a.name) {
+            match params.get(a.name) {
                 None => return false,
                 Some(slot_pt) => {
                     if !(*slot_pt == a.ktype || slot_pt.is_more_specific_than(a.ktype, types)) {

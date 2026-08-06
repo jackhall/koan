@@ -53,7 +53,7 @@ pub enum ExecOutcome<'ast> {
     /// tail-replace into `tail` carrying the resolved per-call type. Subsequent calls skip resolution
     /// under keep-first, so the recursion stays TCO-flat.
     DeferredExprTail {
-        type_expr: &'ast KExpression<'ast>,
+        type_expr: KExpression<'ast>,
         leading: Vec<&'ast KExpression<'ast>>,
         tail: &'ast KExpression<'ast>,
     },
@@ -160,7 +160,7 @@ where
             )))
         }
     };
-    match &func.signature.return_type {
+    match func.signature.return_type() {
         ReturnType::Resolved(_) => {
             let (leading, tail) = split_leading_tail(body_expr);
             ExecOutcome::Tail {
@@ -187,7 +187,7 @@ where
                 DeferredReturn::Type(type_expr) => {
                     let resolved = ctx.region.with_scope(|child| {
                         let resolved: Result<KType, KError> =
-                            match child.resolve_type_identifier(type_expr, None, types) {
+                            match child.resolve_type_identifier(&type_expr, None, types) {
                                 TypeResolution::Done(kt) => Ok(kt),
                                 // A park at this point cannot be honored — the body is about to
                                 // run — so fall back to Any and let the body's own dispatch surface

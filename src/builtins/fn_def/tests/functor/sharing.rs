@@ -76,9 +76,9 @@ fn functor_with_two_pinned_slots_round_trips() {
     ));
     let f = lookup_fn(scope, "TWOPIN");
     use crate::machine::model::ReturnType;
-    match &f.signature.return_type {
+    match f.signature.return_type() {
         ReturnType::Resolved(handle) => assert_eq!(
-            *handle, expected,
+            handle, expected,
             "TWOPIN's captured return type is the folded specialization",
         ),
         other => panic!(
@@ -110,13 +110,13 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     let expected = test_run.run_one_type(parse_one(&program, "Set WITH {Elt = Number}"));
     let f = lookup_fn(scope, "MAKESETN");
     use crate::machine::model::{ReturnType, TypeNode};
-    match &f.signature.return_type {
+    match f.signature.return_type() {
         ReturnType::Resolved(handle) => {
             assert_eq!(
-                *handle, expected,
+                handle, expected,
                 "MAKESETN's captured return type is the folded specialization",
             );
-            match test_run.types.node(*handle) {
+            match test_run.types.node(handle) {
                 TypeNode::Signature { schema, .. } => {
                     assert_eq!(schema.manifest_members.get("Elt"), Some(&KType::NUMBER));
                 }

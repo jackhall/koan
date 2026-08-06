@@ -15,8 +15,8 @@ fn fn_registers_user_function_under_keyword_signature() {
     test_run.run("FN (GREET) -> Null = (PRINT \"hi\")");
 
     let f = lookup_fn(scope, "GREET");
-    match f.signature.elements.as_slice() {
-        [SignatureElement::Keyword(s)] => assert_eq!(s, "GREET"),
+    match f.signature.elements() {
+        [SignatureElement::Keyword(s)] => assert_eq!(*s, "GREET"),
         _ => panic!("expected single-Keyword signature [Keyword(\"GREET\")]"),
     }
 }

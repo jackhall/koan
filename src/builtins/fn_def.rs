@@ -143,11 +143,14 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
             ))))
         }
     };
-    let elements: Vec<SignatureElement> = schema
+    // The schema's field names are owned by the resolved record type, so each is bumped into the
+    // defining scope's region to ride the draft as a borrow; the mint door re-homes it from there.
+    let brand = ctx.scope.brand();
+    let elements: Vec<SignatureElement<'a>> = schema
         .iter()
         .map(|(name, ktype)| {
             SignatureElement::Argument(Argument {
-                name: name.clone(),
+                name: brand.alloc_text(name),
                 ktype: *ktype,
             })
         })

@@ -29,7 +29,7 @@ fn overload_has_hook(f: &crate::machine::KFunction<'_>) -> bool {
 /// `KEXPRESSION`; keyword positions are `false`.
 fn overload_mask(f: &crate::machine::KFunction<'_>) -> Vec<bool> {
     f.signature
-        .elements
+        .elements()
         .iter()
         .map(|element| match element {
             SignatureElement::Argument(arg) => arg.ktype != KType::KEXPRESSION,

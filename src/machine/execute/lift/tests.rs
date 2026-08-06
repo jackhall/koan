@@ -26,18 +26,16 @@ use std::rc::Rc;
 /// A `KFunction` allocated into `home`'s region (its captured scope lives there), for the
 /// borrow-preservation tests. The body is never run.
 fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFunction<'run> {
-    use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
+    use crate::machine::model::{ReturnType, SignatureDraft, SignatureElement};
     use crate::machine::Body;
-    // Capture the home frame's child scope (read at the brand), build the function there, and alloc it
-    // into `home`'s region — where the captured scope genuinely lives — inside the open, so the re-homed
-    // `&KFunction` escapes at `home`'s lifetime without a fixed-lifetime reattach. Mirrors a closure
-    // capturing its defining scope in its own region.
+    // The captured scope and the function both land in `home`'s region, so the `&KFunction` comes back
+    // at `home`'s own lifetime with nothing retyped. Mirrors a closure capturing its defining scope.
     let types = crate::machine::model::TypeRegistry::new();
     CallFrame::alloc_capturing_scope(
         home,
-        ExpressionSignature {
+        SignatureDraft {
             return_type: ReturnType::Resolved(KType::NULL),
-            elements: vec![SignatureElement::Keyword("__INNER__".into())],
+            elements: vec![SignatureElement::Keyword("__INNER__")],
         },
         Body::Builtin(|ctx| {
             crate::machine::core::Action::done_resident(

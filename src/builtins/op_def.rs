@@ -33,8 +33,8 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{ExpressionSignature, KKind};
 use crate::machine::model::{Held, KType, Record};
+use crate::machine::model::{KKind, SignatureDraft};
 use crate::machine::BindingIndex;
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
@@ -420,7 +420,7 @@ impl<'a> OpPlan<'a> {
 /// One dispatchable form of an operator: the signature naming a surface, and the body that surface
 /// reaches. A unary operator is registered from two — the list form and the binary form.
 pub(super) struct OperatorForm<'a> {
-    pub signature: ExpressionSignature<'a>,
+    pub signature: SignatureDraft<'a>,
     pub body: Body<'a>,
 }
 
@@ -504,7 +504,7 @@ pub(super) fn register_unary_operator<'a>(
 fn register_body<'a>(
     scope: &'a Scope<'a>,
     sym: &str,
-    signature: ExpressionSignature<'a>,
+    signature: SignatureDraft<'a>,
     body: Body<'a>,
     bind_index: BindingIndex,
     types: &TypeRegistry,

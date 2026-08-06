@@ -25,9 +25,9 @@ fn deferred_type_of_param_return_yields_the_module() {
     test_run.run("FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)");
     let f = lookup_fn(scope, "USE_ORD");
     assert!(
-        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        matches!(f.signature.return_type(), ReturnType::Deferred(_)),
         "USE_ORD's return type should be Deferred, got {:?}",
-        f.signature.return_type,
+        f.signature.return_type(),
     );
     match test_run.run_one(parse_one(&program, "USE_ORD int_ord")) {
         KObject::Module(m) => assert_eq!(m.path, "int_ord"),

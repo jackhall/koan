@@ -42,7 +42,6 @@ exactly as long as the region, which frame ownership gives it directly.
 
 **Requires:**
 
-- [Drop-free `KFunction`](drop-free-kfunction.md)
 - [Drop-free `Module`](drop-free-module.md)
 
 **Unblocks:**

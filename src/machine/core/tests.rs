@@ -6,12 +6,12 @@ mod operator_registry;
 mod register;
 mod types;
 
-use crate::machine::model::{ExpressionSignature, KType, ReturnType, Scalar, SignatureElement};
+use crate::machine::model::{KType, ReturnType, Scalar, SignatureDraft, SignatureElement};
 
-pub(super) fn unit_signature<'a>() -> ExpressionSignature<'a> {
-    ExpressionSignature {
+pub(super) fn unit_signature<'a>() -> SignatureDraft<'a> {
+    SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Keyword("FOO".into())],
+        elements: vec![SignatureElement::Keyword("FOO")],
     }
 }
 

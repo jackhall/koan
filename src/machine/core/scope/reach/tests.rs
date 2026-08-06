@@ -11,7 +11,7 @@ use crate::builtins::test_support::TestRun;
 use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::Scalar;
 use crate::machine::model::{
-    ExpressionSignature, Held, Record, ReturnType, SignatureElement, TypeRegistry,
+    Held, Record, ReturnType, SignatureDraft, SignatureElement, TypeRegistry,
 };
 use crate::machine::{program_storage, run_root_storage};
 use crate::machine::{Body, CallFrame, KFunction};
@@ -23,9 +23,9 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KFunction<'run> 
     let types = TypeRegistry::new();
     CallFrame::alloc_capturing_scope(
         home,
-        ExpressionSignature {
+        SignatureDraft {
             return_type: ReturnType::Resolved(KType::NULL),
-            elements: vec![SignatureElement::Keyword("__INNER__".into())],
+            elements: vec![SignatureElement::Keyword("__INNER__")],
         },
         Body::Builtin(|ctx| {
             crate::machine::core::Action::done_resident(

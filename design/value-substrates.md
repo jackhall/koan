@@ -388,13 +388,16 @@ bytes and alignment, with no per-slot type or destructor bookkeeping, which is
 exactly what Drop-freedom licenses. Region death for those bytes is
 deallocation with no per-slot `Drop` glue: free the arena's chunks, done.
 
-The typed residue is **three families** — `KFunction`, `Scope`, and `Module`,
-each owning heap contents (a captured binding table, a scope's bindings, a
-module's member map) — plus the region's own bookkeeping (the interned reach
-side table, the union pin bundle). The residue is a holdover, not a design
-commitment: its retirement is tracked in [§ Open work](#open-work). Everything
-in the value channel is in the bump: the `KObject` and `Held` cells, all four
-container substrates, their index metadata, the strings, the expression parts.
+The typed residue is **two families** — `Scope` and `Module`, each owning heap
+contents (a scope's bindings, a module's member map) — plus the region's own
+bookkeeping (the interned reach side table, the union pin bundle). The residue
+is a holdover, not a design commitment: its retirement is tracked in
+[§ Open work](#open-work). Everything in the value channel is in the bump: the
+`KObject` and `Held` cells, all four container substrates, their index
+metadata, the strings, the expression parts — and the `KFunction` family, whose
+signature is a bumped run of elements with `&str` names re-homed into the
+function's own region by the one signature constructor
+([`ExpressionSignature::mint`](../src/machine/model/types/signature.rs)).
 
 `Copy` is what holds a family to that: every bump primitive is `T: Copy`-bounded,
 because "`Drop`-free" has no expressible bound and `Copy` is the honest static
@@ -505,8 +508,6 @@ left:
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
   — pricing copying-the-survivors-out against transferring-the-region, the
   local decision the cost seam's two numbers already support.
-- [Drop-free `KFunction`](../roadmap/untyped_arena/drop-free-kfunction.md)
-  — bumped signature elements take the function family out of its typed cell.
 - [Drop-free `Module`](../roadmap/untyped_arena/drop-free-module.md)
   — a bumped path and bump-hosted member maps take the module family out of
   its typed cell.

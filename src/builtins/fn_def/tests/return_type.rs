@@ -15,10 +15,10 @@ fn fn_parses_declared_return_type_onto_signature() {
     test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
 
     let f = lookup_fn(scope, "DOUBLE");
-    let ReturnType::Resolved(kt) = &f.signature.return_type else {
+    let ReturnType::Resolved(kt) = f.signature.return_type() else {
         panic!("declared return type should land resolved on the signature");
     };
-    assert_eq!(*kt, KType::NUMBER);
+    assert_eq!(kt, KType::NUMBER);
 }
 
 /// Missing `-> Type`: the FN call doesn't match the registered signature, so no user-fn

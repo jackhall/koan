@@ -154,7 +154,7 @@ pub fn body_and<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
-    let number_sig = |op: &str| {
+    let number_sig = |op: &'static str| {
         sig(
             KType::NUMBER,
             vec![
@@ -164,7 +164,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         )
     };
-    let comparison_sig = |op: &str| {
+    let comparison_sig = |op: &'static str| {
         sig(
             KType::BOOL,
             vec![

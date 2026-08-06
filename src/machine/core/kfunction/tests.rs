@@ -2,7 +2,7 @@ use super::*;
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, run_root_bare, TestRun};
 use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt, Scope};
-use crate::machine::model::{Argument, ExpressionSignature, KExpression, KType, ReturnType};
+use crate::machine::model::{Argument, KExpression, KType, ReturnType, SignatureDraft};
 use crate::machine::model::{KKind, KObject};
 use crate::machine::model::{KLiteral, TypeIdentifier};
 
@@ -55,12 +55,12 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let sig = ExpressionSignature {
+    let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("OP".into()),
+            SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::NUMBER,
             }),
         ],
@@ -97,15 +97,15 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let sig = ExpressionSignature {
+    let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
-                name: "verb".into(),
+                name: "verb",
                 ktype: KType::IDENTIFIER,
             }),
             SignatureElement::Argument(Argument {
-                name: "args".into(),
+                name: "args",
                 ktype: KType::KEXPRESSION,
             }),
         ],
@@ -180,12 +180,12 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let sig = ExpressionSignature {
+    let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("OP".into()),
+            SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::of_kind(KKind::ProperType),
             }),
         ],
@@ -217,16 +217,16 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
 /// carrying its parameter record and return slot.
 #[test]
 fn function_value_ktype_projects_kfunction() {
-    use crate::machine::model::{ExpressionSignature, ReturnType, TypeNode, TypeRegistry};
+    use crate::machine::model::{ReturnType, SignatureDraft, TypeNode, TypeRegistry};
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let sig = ExpressionSignature {
+    let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![
-            SignatureElement::Keyword("CALL".into()),
+            SignatureElement::Keyword("CALL"),
             SignatureElement::Argument(crate::machine::model::Argument {
-                name: "x".into(),
+                name: "x",
                 ktype: KType::NUMBER,
             }),
         ],
@@ -251,12 +251,12 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let sig = ExpressionSignature {
+    let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("OP".into()),
+            SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::ANY,
             }),
         ],

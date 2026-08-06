@@ -172,7 +172,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
     // carriers: an `Identifier` name binds the group's module value, a Type-token name takes the
     // respelling diagnostic MODULE's second overload produces (a group is a module, and a module is
     // a value).
-    let fold = |name_kt: KType, direction: &str| {
+    let fold = |name_kt: KType, direction: &'static str| {
         sig(
             KType::EMPTY_SIGNATURE,
             vec![
@@ -185,7 +185,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         )
     };
-    let pairwise = |name_kt: KType, direction: &str| {
+    let pairwise = |name_kt: KType, direction: &'static str| {
         sig(
             KType::EMPTY_SIGNATURE,
             vec![

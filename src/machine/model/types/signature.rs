@@ -9,6 +9,7 @@
 //! reference a per-call parameter (`-> er`, `-> er.Carrier`) survive FN-definition without
 //! sub-dispatching against the outer scope.
 
+use crate::machine::core::RegionBrand;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier, WorkingPart};
 
 use super::ktype::KType;
@@ -50,7 +51,7 @@ pub fn owned_untyped_key(stored: &[StoredElement<'_>]) -> UntypedKey {
 
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
 /// `KExpression::untyped_key`; they MUST agree for any pair that should match. The parser
-/// classifies source tokens via `is_keyword_token`; `ExpressionSignature::normalize`
+/// classifies source tokens via `is_keyword_token`; [`ExpressionSignature::mint`]
 /// uppercases lowercase registered tokens so the two sides agree on spelling.
 pub type UntypedKey = Vec<UntypedElement>;
 
@@ -89,6 +90,52 @@ pub fn is_keyword_token(s: &str) -> bool {
     upper_count >= 2 && !has_lower
 }
 
+/// The one-slot case of [`ExpressionSignature::most_specific`], over the slot types alone: returns
+/// `Some(i)` iff `candidates[i]` is strictly more specific than every peer. A tournament whose
+/// candidates differ in exactly one type — MATCH's typed arms — needs no signature to run through,
+/// since with a single slot [`ExpressionSignature::specificity_vs`] reduces to the pairwise
+/// [`KType::is_more_specific_than`] probe this reads directly.
+pub fn most_specific_ktype(candidates: &[KType], types: &TypeRegistry) -> Option<usize> {
+    candidates
+        .iter()
+        .enumerate()
+        .find(|(i, a)| {
+            candidates
+                .iter()
+                .enumerate()
+                .all(|(j, b)| *i == j || a.is_more_specific_than(*b, types))
+        })
+        .map(|(i, _)| i)
+}
+
+/// The normalized spelling of a fixed token: uppercased iff it contains a lowercase ASCII letter.
+/// [`ExpressionSignature::mint`] applies it on the way into the region and
+/// [`SignatureDraft::untyped_key`] applies it to answer what bucket a draft *will* key, so the two
+/// never disagree about a token's spelling.
+fn normalized_keyword(token: &str) -> std::borrow::Cow<'_, str> {
+    if token.chars().any(|c| c.is_ascii_lowercase()) {
+        std::borrow::Cow::Owned(token.to_ascii_uppercase())
+    } else {
+        std::borrow::Cow::Borrowed(token)
+    }
+}
+
+impl SignatureDraft<'_> {
+    /// The bucket key this draft will key once minted — [`ExpressionSignature::untyped_key`] read off
+    /// the pre-mint buffer, with the same token normalization applied.
+    pub fn untyped_key(&self) -> UntypedKey {
+        self.elements
+            .iter()
+            .map(|el| match el {
+                SignatureElement::Keyword(s) => {
+                    UntypedElement::Keyword(normalized_keyword(s).into_owned())
+                }
+                SignatureElement::Argument(_) => UntypedElement::Slot,
+            })
+            .collect()
+    }
+}
+
 /// `Incomparable` means neither dominates — e.g. `<Number> <Any>` vs `<Any> <Number>` against
 /// an input that matches both.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -99,12 +146,33 @@ pub enum Specificity {
     Incomparable,
 }
 
-/// `'a` threads through to `return_type`'s `Deferred` arm, which captures a live
-/// [`KExpression`] for per-call re-elaboration — `elements` is owned data (`KType` carries
-/// no lifetime of its own).
+/// A callable's call shape at rest: a bumped run of elements plus a `return_type`. Every field is
+/// `Copy` and `Drop`-free — the keyword and parameter-name text is `&'a str` bumped into the
+/// signature's own region — which is what lets a `KFunction` live in the region bump rather than a
+/// typed arena ([value-substrates.md § Untyped arenas](../../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+///
+/// `'a` names both the elements run and `return_type`'s `Deferred` arm, which captures a live
+/// [`KExpression`] for per-call re-elaboration.
+///
+/// The fields are private because [`Self::mint`] is the only door: it is what normalizes the fixed
+/// tokens and re-homes every name at the destination brand, so a signature that skipped either is
+/// unconstructible. Build one through a [`SignatureDraft`].
+#[derive(Clone, Copy)]
 pub struct ExpressionSignature<'a> {
+    return_type: ReturnType<'a>,
+    elements: &'a [SignatureElement<'a>],
+}
+
+/// The pre-mint form of an [`ExpressionSignature`]: the same elements in a growable buffer, before
+/// [`ExpressionSignature::mint`] normalizes them and re-homes their text.
+///
+/// A draft's names may borrow from anywhere at `'a` — a `&'static` builtin literal, a program-storage
+/// AST part, a string already bumped elsewhere — because the mint door re-bumps every one of them at
+/// the destination. That is what keeps this a *buffer* of the stored element type rather than a
+/// parallel owned representation.
+pub struct SignatureDraft<'a> {
     pub return_type: ReturnType<'a>,
-    pub elements: Vec<SignatureElement>,
+    pub elements: Vec<SignatureElement<'a>>,
 }
 
 /// Carrier for an FN's declared return type. The surface admits parameter-name references
@@ -120,17 +188,6 @@ pub enum ReturnType<'a> {
     Resolved(KType),
     Deferred(DeferredReturn<'a>),
 }
-
-/// [`Reattachable`](crate::witnessed::Reattachable) family for a [`ReturnType`] — the operand form
-/// it takes when a function is born at its captured scope's construction brand
-/// ([`KFunction::alloc_captured`](crate::machine::core::KFunction::alloc_captured)). The signature's
-/// other half, `elements`, is owned data with no region lifetime, so it rides into the born closure
-/// as a plain move-capture and only the return type needs a carrier. `ReturnType` is `Copy`, so this
-/// family rests on the Copy tier; layout-invariant in `'r`, whose only occurrence is the `Deferred`
-/// arm's captured expression reference.
-pub struct ReturnTypeFamily;
-
-crate::witnessed::reattachable!(ReturnTypeFamily => ReturnType<'r>);
 
 /// Surface form preserved for per-call re-elaboration. Two carriers mirror the two FN
 /// return-type slot kinds:
@@ -224,15 +281,55 @@ impl<'a> ReturnType<'a> {
 }
 
 impl<'a> ExpressionSignature<'a> {
+    /// **Build a signature into `brand`'s region** — the sole door, and the reason a signature's text
+    /// always lives where the signature does.
+    ///
+    /// Two things happen here and nowhere else. Fixed tokens are **normalized**: a lowercase
+    /// registered token is uppercased so the bucket key matches what dispatch computes from incoming
+    /// expressions. TODO(monadic-effects): emit a warning instead of silently rewriting once effects
+    /// exist — rejecting would lose the "drop in a builtin without thinking about caps" affordance.
+    /// And every name is **re-homed** through [`RegionBrand::alloc_text`], including a `&'static`
+    /// builtin literal, so "a signature's text lives in the signature's own region" holds with no
+    /// exceptions and a draft is free to name text borrowed from anywhere at `'a`.
+    pub fn mint(brand: RegionBrand<'a>, draft: SignatureDraft<'a>) -> Self {
+        let elements: Vec<SignatureElement<'a>> = draft
+            .elements
+            .into_iter()
+            .map(|element| match element {
+                SignatureElement::Keyword(s) => {
+                    SignatureElement::Keyword(brand.alloc_text(&normalized_keyword(s)))
+                }
+                SignatureElement::Argument(argument) => SignatureElement::Argument(Argument {
+                    name: brand.alloc_text(argument.name),
+                    ktype: argument.ktype,
+                }),
+            })
+            .collect();
+        ExpressionSignature {
+            return_type: draft.return_type,
+            elements: brand.alloc_slice(&elements),
+        }
+    }
+
+    /// This signature's declared return contract.
+    pub fn return_type(&self) -> ReturnType<'a> {
+        self.return_type
+    }
+
+    /// The call shape, as the bumped run it rests in.
+    pub fn elements(&self) -> &'a [SignatureElement<'a>] {
+        self.elements
+    }
+
     pub fn matches<'e>(&self, expr: &KExpression<'e>, types: &TypeRegistry) -> bool {
-        if self.elements.len() != expr.parts.len() {
+        if self.elements().len() != expr.parts.len() {
             return false;
         }
-        self.elements
+        self.elements()
             .iter()
             .zip(expr.parts)
             .all(|(el, part)| match (el, &part.value) {
-                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s.as_str() == *t,
+                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
                 (SignatureElement::Keyword(_), _) => false,
                 (SignatureElement::Argument(arg), part_value) => arg.matches(part_value, types),
             })
@@ -241,10 +338,10 @@ impl<'a> ExpressionSignature<'a> {
     /// Slot types are erased — same shape with different types lives in the same bucket and
     /// competes on specificity at dispatch time.
     pub fn untyped_key(&self) -> UntypedKey {
-        self.elements
+        self.elements()
             .iter()
             .map(|el| match el {
-                SignatureElement::Keyword(s) => UntypedElement::Keyword(s.clone()),
+                SignatureElement::Keyword(s) => UntypedElement::Keyword(s.to_string()),
                 SignatureElement::Argument(_) => UntypedElement::Slot,
             })
             .collect()
@@ -256,28 +353,14 @@ impl<'a> ExpressionSignature<'a> {
     /// re-anchor the callables already stored there.
     pub fn dispatch_token(&self) -> DispatchToken {
         DispatchToken(
-            self.elements
+            self.elements()
                 .iter()
                 .map(|el| match el {
-                    SignatureElement::Keyword(s) => DispatchTokenElement::Keyword(s.clone()),
+                    SignatureElement::Keyword(s) => DispatchTokenElement::Keyword(s.to_string()),
                     SignatureElement::Argument(a) => DispatchTokenElement::Slot(a.ktype),
                 })
                 .collect(),
         )
-    }
-
-    /// Uppercases lowercase fixed tokens so the bucket key matches what dispatch computes
-    /// from incoming expressions. TODO(monadic-effects): emit a warning instead of silently
-    /// rewriting once effects exist — rejecting would lose the "drop in a builtin without
-    /// thinking about caps" affordance.
-    pub fn normalize(&mut self) {
-        for el in &mut self.elements {
-            if let SignatureElement::Keyword(s) = el {
-                if s.chars().any(|c| c.is_ascii_lowercase()) {
-                    *s = s.to_ascii_uppercase();
-                }
-            }
-        }
     }
 
     /// Assumes `self` and `other` share an `UntypedKey` — only argument slots contribute,
@@ -289,7 +372,7 @@ impl<'a> ExpressionSignature<'a> {
     ) -> Specificity {
         let mut any_more = false;
         let mut any_less = false;
-        for (a, b) in self.elements.iter().zip(other.elements.iter()) {
+        for (a, b) in self.elements().iter().zip(other.elements().iter()) {
             if let (SignatureElement::Argument(aa), SignatureElement::Argument(bb)) = (a, b) {
                 if aa.ktype.is_more_specific_than(bb.ktype, types) {
                     any_more = true;
@@ -336,12 +419,12 @@ impl<'a> ExpressionSignature<'a> {
     /// without the two regions having to be the same. [`DispatchToken`] equality is the stored
     /// form of this same predicate.
     pub fn indistinguishable_from(&self, other: &ExpressionSignature<'_>) -> bool {
-        if self.elements.len() != other.elements.len() {
+        if self.elements().len() != other.elements().len() {
             return false;
         }
-        self.elements
+        self.elements()
             .iter()
-            .zip(other.elements.iter())
+            .zip(other.elements().iter())
             .all(|(x, y)| match (x, y) {
                 (SignatureElement::Keyword(s), SignatureElement::Keyword(t)) => s == t,
                 (SignatureElement::Argument(ax), SignatureElement::Argument(ay)) => {
@@ -352,19 +435,24 @@ impl<'a> ExpressionSignature<'a> {
     }
 }
 
-pub enum SignatureElement {
-    Keyword(String),
-    Argument(Argument),
+/// One position of a call shape: a fixed token, or a parameter slot. Both spellings are `&'a str`
+/// borrows — bumped into the signature's own region once [`ExpressionSignature::mint`] has run, and
+/// free to borrow from anywhere at `'a` before that.
+#[derive(Clone, Copy, Debug)]
+pub enum SignatureElement<'a> {
+    Keyword(&'a str),
+    Argument(Argument<'a>),
 }
 
 /// `name` keys the slot in the bound argument record; `ktype` gates what `ExpressionPart`s it
 /// accepts.
-pub struct Argument {
-    pub name: String,
+#[derive(Clone, Copy, Debug)]
+pub struct Argument<'a> {
+    pub name: &'a str,
     pub ktype: KType,
 }
 
-impl Argument {
+impl Argument<'_> {
     pub fn matches<'e>(&self, part: &ExpressionPart<'e>, types: &TypeRegistry) -> bool {
         self.ktype.accepts_part(part, types)
     }

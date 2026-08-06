@@ -20,9 +20,9 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     test_run.run("FN (USE_ID Er :Signature) -> Er = (int_ord :| Er)");
     let f = lookup_fn(scope, "USE_ID");
     assert!(
-        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        matches!(f.signature.return_type(), ReturnType::Deferred(_)),
         "USE_ID's return type should be Deferred, got {:?}",
-        f.signature.return_type,
+        f.signature.return_type(),
     );
     let result = test_run.run_one(parse_one(&program, "USE_ID Ordered"));
     match result {
@@ -60,9 +60,9 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     test_run.run("FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero)");
     let f = lookup_fn(scope, "GET_ZERO");
     assert!(
-        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        matches!(f.signature.return_type(), ReturnType::Deferred(_)),
         "GET_ZERO's return type should be Deferred, got {:?}",
-        f.signature.return_type,
+        f.signature.return_type(),
     );
 }
 
@@ -135,9 +135,9 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     );
     let f = lookup_fn(scope, "MK");
     assert!(
-        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        matches!(f.signature.return_type(), ReturnType::Deferred(_)),
         "MK's return type should be Deferred, got {:?}",
-        f.signature.return_type,
+        f.signature.return_type(),
     );
 }
 

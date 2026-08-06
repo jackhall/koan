@@ -148,9 +148,9 @@ fn deferred_return_resolves_against_builtin_keyed_bind() {
     test_run.run("FN (BUILD Elt :Type) -> :Elt = (42)");
     let f = crate::builtins::test_support::lookup_fn(scope, "BUILD");
     assert!(
-        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        matches!(f.signature.return_type(), ReturnType::Deferred(_)),
         "BUILD's return type should be Deferred, got {:?}",
-        f.signature.return_type,
+        f.signature.return_type(),
     );
     let result = test_run.run_one(parse_one(&program, "BUILD Number"));
     match result {

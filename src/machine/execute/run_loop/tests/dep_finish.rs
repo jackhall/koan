@@ -217,7 +217,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     use crate::builtins::register_builtin;
     use crate::machine::core::{Action, AwaitContinue, BodyCtx};
     use crate::machine::model::Carried;
-    use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
+    use crate::machine::model::{KType, SignatureDraft, SignatureElement};
 
     fn body<'run>(_ctx: &BodyCtx<'run, '_>) -> Action<'run> {
         let finish: AwaitContinue<'run> = Box::new(|fctx, _results| {
@@ -234,9 +234,9 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     register_builtin(
         scope,
         "DEFERTEST",
-        ExpressionSignature {
+        SignatureDraft {
             return_type: ReturnType::Resolved(KType::STR),
-            elements: vec![SignatureElement::Keyword("DEFERTEST".into())],
+            elements: vec![SignatureElement::Keyword("DEFERTEST")],
         },
         body,
         &test_run.types,

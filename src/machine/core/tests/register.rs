@@ -7,7 +7,7 @@ use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 
 use super::{body_no_op, unit_signature};
 use crate::machine::model::Scalar;
@@ -257,22 +257,22 @@ fn register_function_allows_overload_with_different_arg_types() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let sig_num = ExpressionSignature {
+    let sig_num = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("BAR".into()),
+            SignatureElement::Keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::NUMBER,
             }),
         ],
     };
-    let sig_str = ExpressionSignature {
+    let sig_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("BAR".into()),
+            SignatureElement::Keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::STR,
             }),
         ],

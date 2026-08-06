@@ -399,9 +399,9 @@ fn a_function<'a>(
     types: &TypeRegistry,
 ) -> KObject<'a> {
     use crate::machine::core::{Body, FrameStorageExt};
-    use crate::machine::model::types::{ExpressionSignature, ReturnType};
+    use crate::machine::model::types::{ReturnType, SignatureDraft};
     use crate::machine::KFunction;
-    let sig = ExpressionSignature {
+    let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: Vec::new(),
     };

@@ -15,7 +15,7 @@ use crate::machine::core::{
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject, TypeRegistry};
-use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::{KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::AdoptSeam;
 use crate::machine::CallFrame;
 use crate::witnessed::Delivered;
@@ -187,9 +187,9 @@ fn probe_body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 /// Register `(PROBE)` — a nullary keyword builtin returning `Number` — into `scope`, against the
 /// run's own registry.
 fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, types: &TypeRegistry) {
-    let signature = ExpressionSignature {
+    let signature = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
-        elements: vec![SignatureElement::Keyword("PROBE".into())],
+        elements: vec![SignatureElement::Keyword("PROBE")],
     };
     crate::builtins::register_builtin(
         scope,

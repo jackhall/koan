@@ -9,7 +9,10 @@ use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::{Argument, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{Carried, CarriedFamily, Held, KObject};
+use crate::machine::model::Scalar;
+use crate::machine::core::{Action, Body, KFunction};
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
@@ -1028,12 +1031,16 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
 /// Region death for the `Drop`-free families is deallocation only. A frame region is filled with
 /// every substrate shape — list, dict, record, and both payload carriers (`Tagged` and `Wrapped`) —
 /// each carrying a string leaf so the bump holds re-homed bytes as well as cells and index metadata,
-/// and then dropped while nothing outside it holds a borrow. No slot in any of those shapes has a
-/// destructor to run, so the whole teardown is the bump's chunk free; Miri's process-exit leak check
-/// is the assertion. A family that quietly reintroduced an owning slot — a `Vec` spine, a `String`
-/// name, an `Rc` — leaks its buffer here, because a bump frees its chunks without visiting them.
+/// and with a run of **callables**, whose signatures put a bumped element run and re-homed keyword /
+/// parameter-name bytes in the same region. The region is then dropped while nothing outside it holds
+/// a borrow. No slot in any of those shapes has a destructor to run, so the whole teardown is the
+/// bump's chunk free; Miri's process-exit leak check is the assertion. A family that quietly
+/// reintroduced an owning slot — a `Vec` spine, a `String` name, an `Rc` — leaks its buffer here,
+/// because a bump frees its chunks without visiting them. The signature names are synthesized rather
+/// than literal so the bytes genuinely belong to this region: a `&'static` spelling would pass the
+/// leak check without exercising the re-home it exists to pin.
 #[test]
-fn region_death_frees_every_drop_free_substrate_shape() {
+fn region_death_frees_every_drop_free_family() {
     use crate::machine::model::KKey;
     use std::collections::HashMap;
     let program = program_storage();
@@ -1095,8 +1102,38 @@ fn region_death_frees_every_drop_free_substrate_shape() {
         "the shapes genuinely occupy the region under test"
     );
 
+    let brand = scope.brand();
+    let callables: Vec<&KFunction<'_>> = (0..4)
+        .map(|i| {
+            let draft = SignatureDraft {
+                return_type: ReturnType::Resolved(KType::NULL),
+                elements: vec![
+                    SignatureElement::Keyword(brand.alloc_text(&format!("TAKE_{i}"))),
+                    SignatureElement::Argument(Argument {
+                        name: brand.alloc_text(&format!("operand_{i}")),
+                        ktype: KType::NUMBER,
+                    }),
+                ],
+            };
+            KFunction::alloc_captured(
+                scope,
+                draft,
+                Body::Builtin(|ctx| {
+                    Action::done_resident(
+                        ctx.scope,
+                        Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
+                    )
+                }),
+                false,
+                &types,
+            )
+        })
+        .collect();
+    assert_eq!(callables.len(), 4, "every callable is live in the region");
+
     // Nothing outside the region borrows into it, so this is the whole of region death: the typed
     // arenas hold none of these families, and the bump frees its chunks without a destructor pass.
     drop(shapes);
+    drop(callables);
     drop(frame);
 }

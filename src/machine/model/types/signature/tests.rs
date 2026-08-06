@@ -5,14 +5,19 @@ use crate::source::Spanned;
 // `KType` leaf constants replace the retired enum variants (`KType::NUMBER` etc.); these tests
 // build only ground types, so no registry is needed to name a slot type.
 
-fn one_slot<'a>(kt: KType) -> ExpressionSignature<'a> {
-    ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Argument(Argument {
-            name: "v".into(),
-            ktype: kt,
-        })],
-    }
+/// A signature is minted into a region, so every builder here takes a brand; program storage is the
+/// cheapest one a predicate test can stand up.
+fn one_slot(brand: RegionBrand<'_>, kt: KType) -> ExpressionSignature<'_> {
+    ExpressionSignature::mint(
+        brand,
+        SignatureDraft {
+            return_type: ReturnType::Resolved(KType::ANY),
+            elements: vec![SignatureElement::Argument(Argument {
+                name: "v",
+                ktype: kt,
+            })],
+        },
+    )
 }
 
 fn expr_with_keyword<'a>(brand: RegionBrand<'a>, kw: &'a str) -> KExpression<'a> {
@@ -22,8 +27,10 @@ fn expr_with_keyword<'a>(brand: RegionBrand<'a>, kw: &'a str) -> KExpression<'a>
 #[test]
 fn most_specific_picks_number_over_any() {
     let types = TypeRegistry::new();
-    let any = one_slot(KType::ANY);
-    let num = one_slot(KType::NUMBER);
+    let program = program_storage();
+    let brand = program.brand().region();
+    let any = one_slot(brand, KType::ANY);
+    let num = one_slot(brand, KType::NUMBER);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&any, &num];
     assert_eq!(ExpressionSignature::most_specific(&cands, &types), Some(1));
 }
@@ -39,8 +46,10 @@ fn most_specific_returns_none_for_empty() {
 fn most_specific_returns_none_when_tied() {
     let types = TypeRegistry::new();
     // Ambiguity must surface, not a winner.
-    let a = one_slot(KType::NUMBER);
-    let b = one_slot(KType::NUMBER);
+    let program = program_storage();
+    let brand = program.brand().region();
+    let a = one_slot(brand, KType::NUMBER);
+    let b = one_slot(brand, KType::NUMBER);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&a, &b];
     assert_eq!(ExpressionSignature::most_specific(&cands, &types), None);
 }
@@ -72,12 +81,15 @@ fn type_name_eq_compares_leaf_names() {
 #[test]
 fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
     let types = TypeRegistry::new();
-    let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Keyword("FOO".into())],
-    };
     let program = program_storage();
     let brand = program.brand().region();
+    let sig = ExpressionSignature::mint(
+        brand,
+        SignatureDraft {
+            return_type: ReturnType::Resolved(KType::ANY),
+            elements: vec![SignatureElement::Keyword("FOO")],
+        },
+    );
     let empty: KExpression<'_> = KExpression::new(brand, vec![]);
     assert!(!sig.matches(&empty, &types));
 
@@ -125,14 +137,21 @@ fn return_type_name_covers_all_arms() {
     assert_eq!(e.name(&types), "FOO");
 }
 
-fn sig_with<'a>(ret: ReturnType<'a>, slot: KType) -> ExpressionSignature<'a> {
-    ExpressionSignature {
-        return_type: ret,
-        elements: vec![SignatureElement::Argument(Argument {
-            name: "v".into(),
-            ktype: slot,
-        })],
-    }
+fn sig_with<'a>(
+    brand: RegionBrand<'a>,
+    ret: ReturnType<'a>,
+    slot: KType,
+) -> ExpressionSignature<'a> {
+    ExpressionSignature::mint(
+        brand,
+        SignatureDraft {
+            return_type: ret,
+            elements: vec![SignatureElement::Argument(Argument {
+                name: "v",
+                ktype: slot,
+            })],
+        },
+    )
 }
 
 /// Return types never distinguish overloads: dispatch selects on argument slots alone, so
@@ -140,38 +159,53 @@ fn sig_with<'a>(ret: ReturnType<'a>, slot: KType) -> ExpressionSignature<'a> {
 /// indistinguishable and collide at definition.
 #[test]
 fn indistinguishable_ignores_return_type() {
+    let program = program_storage();
+    let brand = program.brand().region();
     let er = sig_with(
+        brand,
         ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er"))),
         KType::NUMBER,
     );
     let ar = sig_with(
+        brand,
         ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Ar"))),
         KType::NUMBER,
     );
     assert!(er.indistinguishable_from(&ar));
 
-    let num = sig_with(ReturnType::Resolved(KType::NUMBER), KType::NUMBER);
-    let text = sig_with(ReturnType::Resolved(KType::STR), KType::NUMBER);
+    let num = sig_with(brand, ReturnType::Resolved(KType::NUMBER), KType::NUMBER);
+    let text = sig_with(brand, ReturnType::Resolved(KType::STR), KType::NUMBER);
     assert!(num.indistinguishable_from(&text));
 }
 
 #[test]
 fn indistinguishable_splits_on_argument_type_and_keywords() {
-    let num = sig_with(ReturnType::Resolved(KType::ANY), KType::NUMBER);
-    let text = sig_with(ReturnType::Resolved(KType::ANY), KType::STR);
+    let program = program_storage();
+    let brand = program.brand().region();
+    let num = sig_with(brand, ReturnType::Resolved(KType::ANY), KType::NUMBER);
+    let text = sig_with(brand, ReturnType::Resolved(KType::ANY), KType::STR);
     assert!(!num.indistinguishable_from(&text));
 
-    let kw = |token: &str| ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Keyword(token.into())],
+    let kw = |token: &'static str| {
+        ExpressionSignature::mint(
+            brand,
+            SignatureDraft {
+                return_type: ReturnType::Resolved(KType::ANY),
+                elements: vec![SignatureElement::Keyword(token)],
+            },
+        )
     };
+    let empty = ExpressionSignature::mint(
+        brand,
+        SignatureDraft {
+            return_type: ReturnType::Resolved(KType::ANY),
+            elements: vec![],
+        },
+    );
     assert!(kw("FOO").indistinguishable_from(&kw("FOO")));
     assert!(!kw("FOO").indistinguishable_from(&kw("BAR")));
     assert!(!kw("FOO").indistinguishable_from(&num));
-    assert!(!kw("FOO").indistinguishable_from(&ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![],
-    }));
+    assert!(!kw("FOO").indistinguishable_from(&empty));
 }
 
 #[test]
@@ -196,40 +230,55 @@ fn return_type_matches_value_deferred_always_true_resolved_delegates() {
 /// arity alike.
 #[test]
 fn dispatch_token_equality_matches_indistinguishable_from() {
-    fn keyworded<'a>(keyword: &str, slots: &[KType]) -> ExpressionSignature<'a> {
-        let mut elements = vec![SignatureElement::Keyword(keyword.into())];
+    fn keyworded<'a>(
+        brand: RegionBrand<'a>,
+        keyword: &'a str,
+        slots: &[KType],
+    ) -> ExpressionSignature<'a> {
+        let mut elements = vec![SignatureElement::Keyword(keyword)];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: *kt,
             })
         }));
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::ANY),
-            elements,
-        }
+        ExpressionSignature::mint(
+            brand,
+            SignatureDraft {
+                return_type: ReturnType::Resolved(KType::ANY),
+                elements,
+            },
+        )
     }
 
+    let program = program_storage();
+    let brand = program.brand().region();
     let signatures = [
-        one_slot(KType::ANY),
-        one_slot(KType::NUMBER),
+        one_slot(brand, KType::ANY),
+        one_slot(brand, KType::NUMBER),
         // Same shape and slot type as the previous, different slot *name* — the predicate is
         // independent of `Argument::name`, so both must call these indistinguishable.
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::BOOL),
-            elements: vec![SignatureElement::Argument(Argument {
-                name: "other".into(),
-                ktype: KType::NUMBER,
-            })],
-        },
-        keyworded("TAKE", &[KType::NUMBER]),
-        keyworded("TAKE", &[KType::ANY]),
-        keyworded("DROP", &[KType::NUMBER]),
-        keyworded("TAKE", &[KType::NUMBER, KType::NUMBER]),
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::ANY),
-            elements: vec![],
-        },
+        ExpressionSignature::mint(
+            brand,
+            SignatureDraft {
+                return_type: ReturnType::Resolved(KType::BOOL),
+                elements: vec![SignatureElement::Argument(Argument {
+                    name: "other",
+                    ktype: KType::NUMBER,
+                })],
+            },
+        ),
+        keyworded(brand, "TAKE", &[KType::NUMBER]),
+        keyworded(brand, "TAKE", &[KType::ANY]),
+        keyworded(brand, "DROP", &[KType::NUMBER]),
+        keyworded(brand, "TAKE", &[KType::NUMBER, KType::NUMBER]),
+        ExpressionSignature::mint(
+            brand,
+            SignatureDraft {
+                return_type: ReturnType::Resolved(KType::ANY),
+                elements: vec![],
+            },
+        ),
     ];
     for (i, a) in signatures.iter().enumerate() {
         for (j, b) in signatures.iter().enumerate() {

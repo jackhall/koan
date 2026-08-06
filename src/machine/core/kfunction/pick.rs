@@ -47,15 +47,15 @@ impl<'a> KFunction<'a> {
         types: &TypeRegistry,
     ) -> Option<Vec<usize>> {
         let sig = &self.signature;
-        if sig.elements.len() != expr.parts.len() {
+        if sig.elements().len() != expr.parts.len() {
             return None;
         }
         let mut eager_indices: Vec<usize> = Vec::new();
         let mut has_lazy_slot = false;
-        for (i, (el, part)) in sig.elements.iter().zip(expr.parts.iter()).enumerate() {
+        for (i, (el, part)) in sig.elements().iter().zip(expr.parts.iter()).enumerate() {
             match (el, &part.value) {
                 (SignatureElement::Keyword(s), WorkingPart::Ast(ExpressionPart::Keyword(t)))
-                    if s.as_str() == *t => {}
+                    if *s == *t => {}
                 (SignatureElement::Keyword(_), _) => return None,
                 (SignatureElement::Argument(arg), part_value) => match (arg.ktype, part_value) {
                     (KType::KEXPRESSION, WorkingPart::Ast(ExpressionPart::Expression(_))) => {
@@ -144,7 +144,7 @@ impl<'a> KFunction<'a> {
         let picked_has_binder_name = self.binder;
         for (i, (el, part)) in self
             .signature
-            .elements
+            .elements()
             .iter()
             .zip(expr.parts.iter())
             .enumerate()

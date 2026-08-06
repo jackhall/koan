@@ -45,8 +45,8 @@ fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
     for (_, bucket) in scope.bindings().iter_functions() {
         for sealed in bucket {
             let first_kw = scope.read_function(&sealed, |f| {
-                f.signature.elements.iter().find_map(|e| match e {
-                    SignatureElement::Keyword(s) => Some(s.clone()),
+                f.signature.elements().iter().find_map(|e| match e {
+                    SignatureElement::Keyword(s) => Some((*s).to_string()),
                     _ => None,
                 })
             });

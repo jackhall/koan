@@ -39,10 +39,10 @@ pub use sig_schema::{
 pub use signature::Specificity;
 pub use signature::{
     is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, DispatchToken,
-    DispatchTokenElement, ExpressionSignature, ReturnType, ReturnTypeFamily, SignatureElement,
+    DispatchTokenElement, ExpressionSignature, ReturnType, SignatureDraft, SignatureElement,
     UntypedElement, UntypedKey,
 };
-pub use signature::{owned_untyped_key, StoredElement};
+pub use signature::{most_specific_ktype, owned_untyped_key, StoredElement};
 pub(crate) use type_digest::{empty_schema_digest, TypeDigest};
 pub use typed_field_list::{
     pair_list_names, parse_typed_field_list_via_elaborator, FieldListContext, FieldListOutcome,

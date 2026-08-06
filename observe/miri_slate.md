@@ -161,8 +161,9 @@ slate), and the shared-substrate-across-producer-free shape stays pinned here by
 test.
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
-closure invocation reads `KFunction::captured_scope`, now a bare field read of the stored
-`&'a Scope<'a>` (re-anchored with the holder when it is read out of its region). The
+closure invocation reads `KFunction::captured_scope`, a bare field read of a stored `&'a Scope<'a>`
+that was never retyped: the callable lives in the region bump, whose door stores at the destination's
+own `'a`, and `KFunction::alloc_captured` derives that destination from the captured scope itself. The
 escaped-closure shape — a closure returned out of its defining call and invoked after that frame
 has returned — is pinned by `captured_per_call_value_survives_let_bind_and_call`, whose program
 additionally dereferences a captured per-call value on the invocation.
@@ -236,10 +237,12 @@ and reads correctly, and the buffer simply never frees, because freeing a chunk 
 the chunk holds. `Copy` is the static proxy that forbids it at every bump primitive; this test is
 the dynamic check that the proxy is load-bearing in composition. It fills one frame region with all
 five substrate shapes (list, dict, record, `Tagged`, `Wrapped`), each carrying a bumped string leaf
-so the region holds re-homed bytes and index metadata as well as cells, then drops the frame with
-nothing outside borrowing in. Miri's process-exit leak count is the assertion.
+so the region holds re-homed bytes and index metadata as well as cells, plus a run of `KFunction`s
+whose signatures put a bumped element run and synthesized keyword / parameter-name bytes in the same
+region, then drops the frame with nothing outside borrowing in. Miri's process-exit leak count is the
+assertion.
 
-- `region_death_frees_every_drop_free_substrate_shape`
+- `region_death_frees_every_drop_free_family`
 
 **Dep envelopes held across a step's own open** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
 — `run_step`'s consumer-step coverage is a plain `FrameCoverage` that absorbs each dep envelope's
@@ -529,9 +532,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-06: 882s — 19 tests, 0 leaks, 0 UB
 - 2026-08-05: 815s — 19 tests, 0 leaks, 0 UB
 - 2026-08-05: 979s — 19 tests, 0 leaks, 0 UB
 - 2026-08-05: 864s — 19 tests, 0 leaks, 0 UB
 - 2026-08-04: 845s — 20 tests, 0 leaks, 0 UB
-- 2026-08-04: 931s — 21 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

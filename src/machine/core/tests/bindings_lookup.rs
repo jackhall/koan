@@ -8,7 +8,7 @@ use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, NameLookup};
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 
 use super::{body_no_op, unit_signature};
 use crate::machine::model::Scalar;
@@ -157,22 +157,22 @@ fn lookup_function_filters_per_overload_visibility() {
     let scope = run_root_bare(&region);
     // Two overloads sharing the same bucket key but differing on a value-side
     // argument shape so they coexist in `functions[key]`.
-    let sig_num = ExpressionSignature {
+    let sig_num = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("BAR".into()),
+            SignatureElement::Keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::NUMBER,
             }),
         ],
     };
-    let sig_str = ExpressionSignature {
+    let sig_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("BAR".into()),
+            SignatureElement::Keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::STR,
             }),
         ],
@@ -327,9 +327,9 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
         )
         .unwrap();
     let sealed_key = f.signature.untyped_key();
-    let other_key = ExpressionSignature {
+    let other_key = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Keyword("BAR".into())],
+        elements: vec![SignatureElement::Keyword("BAR")],
     }
     .untyped_key();
 

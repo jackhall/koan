@@ -41,7 +41,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
 }
 
 pub(crate) enum ParamListOutcome<'a> {
-    Done(Vec<SignatureElement>),
+    Done(Vec<SignatureElement<'a>>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules an
     /// `AwaitDeps` over `park_producers` and any sub-Dispatches, then re-runs
     /// `parse_fn_param_list` over the same (unmodified) `signature` with the resolved
@@ -74,7 +74,12 @@ pub(crate) fn parse_fn_param_list<'a>(
     resolved: Option<&[(usize, KType)]>,
 ) -> ParamListOutcome<'a> {
     let parts = signature.parts;
-    let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
+    // Parameter names and fixed tokens ride as `&'a str`: a token and a bare identifier already
+    // borrow program storage, and the one synthesized name (a bare-leaf `Type` part in
+    // parameter-name position) is bumped here so the draft holds a borrow rather than a `String`.
+    // The mint door re-homes all of them at the function's own region.
+    let brand = elaborator.scope.brand();
+    let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(parts.len());
     let mut parks: Vec<NodeId> = Vec::new();
     let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
     let mut first_err: Option<String> = None;
@@ -82,14 +87,14 @@ pub(crate) fn parse_fn_param_list<'a>(
     while i < parts.len() {
         // A bare-leaf `Type` part (e.g. `er` in `FN (LIFT er: Ordered) -> ...`) in
         // parameter-name position denotes a binder, not a type reference.
-        let param_name: Option<String> = match parts[i].value {
-            ExpressionPart::Identifier(name) => Some(name.to_string()),
-            ExpressionPart::Type(t) => Some(t.render()),
+        let param_name: Option<&'a str> = match parts[i].value {
+            ExpressionPart::Identifier(name) => Some(name),
+            ExpressionPart::Type(t) => Some(brand.alloc_text(&t.render())),
             _ => None,
         };
         match (param_name, parts[i].value) {
             (_, ExpressionPart::Keyword(s)) => {
-                elements.push(SignatureElement::Keyword(s.to_string()));
+                elements.push(SignatureElement::Keyword(s));
                 i += 1;
             }
             (Some(name), _) => {
@@ -103,10 +108,8 @@ pub(crate) fn parse_fn_param_list<'a>(
                     (Some(ExpressionPart::Type(t)), _) => {
                         match elaborate_type_identifier(elaborator, &t, types) {
                             TypeResolution::Done(kt) => {
-                                elements.push(SignatureElement::Argument(Argument {
-                                    name: name.clone(),
-                                    ktype: kt,
-                                }));
+                                elements
+                                    .push(SignatureElement::Argument(Argument { name, ktype: kt }));
                             }
                             TypeResolution::Park(producers) => {
                                 parks.extend(producers);
@@ -131,10 +134,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         // finish rejected a non-type terminal before feeding it here. The type is an
                         // interned handle, fed back positionally rather than spliced into the
                         // expression.
-                        elements.push(SignatureElement::Argument(Argument {
-                            name: name.clone(),
-                            ktype,
-                        }));
+                        elements.push(SignatureElement::Argument(Argument { name, ktype }));
                         i += 2;
                     }
                     (Some(ExpressionPart::Expression(inner)), None) => {

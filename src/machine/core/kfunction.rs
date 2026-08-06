@@ -5,12 +5,10 @@
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::source::Spanned;
 
-use crate::machine::core::ref_carriers::ScopeRefFamily;
 use crate::machine::core::{KError, KErrorKind, RegionBrand, Scope};
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode, TypeRegistry};
-use crate::machine::model::{ExpressionSignature, Record, ReturnTypeFamily, SignatureElement};
+use crate::machine::model::{ExpressionSignature, Record, SignatureDraft, SignatureElement};
 use crate::machine::model::{Held, NamedPairs};
-use crate::witnessed::{And, SealedExtern};
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
 /// `machine::execute::runtime::run_action`.
@@ -23,23 +21,23 @@ pub mod pick;
 
 pub use crate::scheduler::NodeId;
 pub use action::ActionFn;
-pub use body::{Body, BodyFamily};
+pub use body::Body;
 use pick::slot_admits;
 pub use pick::ClassifiedSlots;
 
-/// SAFETY: the captured scope is allocated in a `KoanRegion` that outlives this
-/// `KFunction` — they share the region (FN registers the function in the same scope it
-/// captures; builtins are registered in run-root). See `core/arena.rs` for the broader
-/// lifetime-erasure pattern.
+/// The captured scope is allocated in the same `KoanRegion` this `KFunction` lives in —
+/// [`Self::alloc_captured`] derives the destination brand from the scope, so the two cannot come
+/// apart. Every field is `Copy` and `Drop`-free, which is what puts the value in the region bump
+/// rather than a typed arena.
+#[derive(Clone, Copy)]
 pub struct KFunction<'a> {
     pub signature: ExpressionSignature<'a>,
     pub body: Body<'a>,
-    /// The captured definition scope, held as a plain `&'a Scope<'a>`. The holder re-anchors to `'a`
-    /// as a whole when read out of its region (the substrate retype in
-    /// [`Region::alloc_resident`](crate::witnessed::Region)), so the embedded reference re-anchors with it and
-    /// [`Self::captured_scope`] is a bare field read. The captured region's owner is read off the
-    /// scope itself ([`Scope::region_owner`]); when the closure escapes, the consumer frame retains
-    /// that region in its witness set.
+    /// The captured definition scope, held as a plain `&'a Scope<'a>` into the very region this
+    /// function lives in, so [`Self::captured_scope`] is a bare field read and nothing is retyped on
+    /// the way out. The captured region's owner is read off the scope itself
+    /// ([`Scope::region_owner`]); when the closure escapes, the consumer frame retains that region in
+    /// its witness set.
     ///
     /// **Variance-load-bearing.** `&'a Scope<'a>` is invariant in `'a` (`Scope<'a>` holds `RefCell`s),
     /// so `captured` keeps `KFunction<'a>` invariant in `'a`.
@@ -72,9 +70,6 @@ pub struct KFunction<'a> {
 /// `ExpressionSignature<'r>`, a `Body<'r>`, a `&'r Scope<'r>`, a `bool`, and a lifetime-free
 /// `KType`), so every choice of `'r` is one type up to the lifetime and the shared `reattachable!`
 /// macro discharges the layout-invariance obligation once.
-// Phase 3 consumes it (the `functions` table entries become `Sealed<KFunctionFamily, _>` and
-// dispatch resolves on `Opened<'step, KFunctionFamily>`); Phase 1 only registers the family.
-#[allow(dead_code)]
 pub struct KFunctionFamily;
 
 crate::witnessed::reattachable! {
@@ -86,104 +81,42 @@ impl<'a> KFunction<'a> {
     /// `KFunction`, and the reason the value never exists outside the region that owns its capture.
     ///
     /// The destination is derived from `captured`'s own brand rather than passed alongside it, so
-    /// pairing a function with a region other than its captured scope's is unrepresentable. The
-    /// signature, the body and the scope all cross into a single `for<'b>` construction brand
-    /// ([`RegionHandle::alloc_resident_born_with`](crate::witnessed::RegionHandle)), where the private
-    /// `new` assembles them and the store happens in the same act — residence discharged by the
-    /// brand, with no runtime check.
+    /// pairing a function with a region other than its captured scope's is unstateable. The `draft`'s
+    /// signature text may borrow from anywhere at `'a` — a builtin's `&'static` literal, a
+    /// program-storage AST part — because [`ExpressionSignature::mint`] re-homes every name at that
+    /// same brand before the value is assembled.
     ///
-    /// `types` and `binder` carry no region borrow, so they are read straight from the enclosing
-    /// frame inside the closure; `types` is consulted during construction and never stored.
+    /// The store is [`RegionBrand::alloc_value`]: a `KFunction` is `Copy`, so it lands in the region
+    /// bump and region death frees it as a chunk with no destructor pass
+    /// ([value-substrates.md § Untyped arenas](../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+    /// Nothing is erased and re-anchored on the way in, so no residence audit stands behind this door:
+    /// the signature, the body and the captured scope are all plain `&'a`, checked by the borrow
+    /// checker against the very lifetime the destination brand borrows its region for.
     pub fn alloc_captured(
         captured: &'a Scope<'a>,
-        signature: ExpressionSignature<'a>,
+        draft: SignatureDraft<'a>,
         body: Body<'a>,
         binder: bool,
         types: &TypeRegistry,
     ) -> &'a KFunction<'a> {
-        Self::alloc_captured_sealed(
-            captured.brand(),
-            SealedExtern::<ScopeRefFamily>::erase(captured),
-            captured.region(),
-            signature,
-            body,
-            binder,
-            types,
-        )
-    }
-
-    /// [`Self::alloc_captured`] over a captured scope that arrives **sealed**, with the destination
-    /// brand and the pin named separately — the shape a holder takes when the scope is reachable only
-    /// through a carrier ([`CallFrame::scope_sealed`](crate::machine::CallFrame::scope_sealed)) rather
-    /// than as a live borrow.
-    ///
-    /// Crate-internal, and [`Self::alloc_captured`] is the only production route through it: there,
-    /// all three arguments are read off the one scope, so no pairing is stateable. A caller reaching
-    /// this directly owes what the signature no longer says — `brand`'s region must be the one
-    /// `captured`'s scope lives in, and `pin` must keep that region alive for the whole of `'a`.
-    pub(crate) fn alloc_captured_sealed(
-        brand: RegionBrand<'a>,
-        captured: SealedExtern<ScopeRefFamily>,
-        pin: &'a impl crate::witnessed::Witness,
-        signature: ExpressionSignature<'a>,
-        body: Body<'a>,
-        binder: bool,
-        types: &TypeRegistry,
-    ) -> &'a KFunction<'a> {
-        // Only `return_type` names the region; `elements` is owned data, so it rides into the born
-        // closure as a move-capture rather than through a carrier.
-        let ExpressionSignature {
-            return_type,
-            elements,
-        } = signature;
-        let operands = captured.zip(
-            SealedExtern::<ReturnTypeFamily>::erase(return_type)
-                .zip(SealedExtern::<BodyFamily>::erase(body)),
-        );
-        brand
-            .handle()
-            .alloc_resident_born_with::<
-                KFunction<'static>,
-                And<ScopeRefFamily, And<ReturnTypeFamily, BodyFamily>>,
-                _,
-            >(
-                operands,
-                pin,
-                move |_placement, (captured_b, (return_type_b, body_b))| {
-                    let signature = ExpressionSignature {
-                        return_type: return_type_b,
-                        elements,
-                    };
-                    KFunction::new(signature, body_b, captured_b, binder, types)
-                },
-            )
-    }
-
-    fn new(
-        mut signature: ExpressionSignature<'a>,
-        body: Body<'a>,
-        captured: &'a Scope<'a>,
-        binder: bool,
-        types: &TypeRegistry,
-    ) -> Self {
-        signature.normalize();
+        let brand = captured.brand();
+        let signature = ExpressionSignature::mint(brand, draft);
         let value_ktype = function_value_ktype(&signature, types);
-        Self {
+        brand.alloc_value(KFunction {
             signature,
             body,
             captured,
             binder,
             value_ktype,
-        }
+        })
     }
 
-    /// This function value's type handle — a copy of the memo [`Self::new`] interned.
+    /// This function value's type handle — a copy of the memo [`Self::alloc_captured`] interned.
     pub fn value_ktype(&self) -> KType {
         self.value_ktype
     }
 
-    /// The captured definition scope. Bare field read — the holder was already re-anchored to `'a`
-    /// when read out of its region.
+    /// The captured definition scope. Bare field read — the stored reference is already at `'a`.
     pub fn captured_scope(&self) -> &'a Scope<'a> {
         self.captured
     }
@@ -191,10 +124,10 @@ impl<'a> KFunction<'a> {
     pub fn summarize(&self) -> String {
         let parts: Vec<String> = self
             .signature
-            .elements
+            .elements()
             .iter()
             .map(|el| match el {
-                SignatureElement::Keyword(s) => s.clone(),
+                SignatureElement::Keyword(s) => (*s).to_string(),
                 SignatureElement::Argument(arg) => format!("<{}>", arg.name),
             })
             .collect();
@@ -211,16 +144,16 @@ impl<'a> KFunction<'a> {
         parts: &[Spanned<WorkingPart<'a>>],
         types: &TypeRegistry,
     ) -> Result<(), KError> {
-        if self.signature.elements.len() != parts.len() {
+        if self.signature.elements().len() != parts.len() {
             return Err(KError::new(KErrorKind::ArityMismatch {
-                expected: self.signature.elements.len(),
+                expected: self.signature.elements().len(),
                 got: parts.len(),
             }));
         }
-        for (el, part) in self.signature.elements.iter().zip(parts.iter()) {
+        for (el, part) in self.signature.elements().iter().zip(parts.iter()) {
             match el {
                 SignatureElement::Keyword(s) => match part.value.as_ast() {
-                    Some(ExpressionPart::Keyword(t)) if s == t => {}
+                    Some(ExpressionPart::Keyword(t)) if s == &t => {}
                     Some(ExpressionPart::Keyword(t)) => {
                         return Err(KError::new(KErrorKind::DispatchFailed {
                             expr: summarize_parts(parts),
@@ -237,7 +170,7 @@ impl<'a> KFunction<'a> {
                 SignatureElement::Argument(arg) => {
                     if !slot_admits(arg, &part.value, types) {
                         return Err(KError::new(KErrorKind::TypeMismatch {
-                            arg: arg.name.clone(),
+                            arg: arg.name.to_string(),
                             expected: arg.ktype.name(types),
                             got: part.value.summarize(),
                         }));
@@ -270,10 +203,10 @@ impl<'a> KFunction<'a> {
     ) -> Result<Record<Held<'a>>, KError> {
         self.validate_call_args(parts, types)?;
         let mut args: Record<Held<'a>> = Record::new();
-        for (el, part) in self.signature.elements.iter().zip(parts.iter()) {
+        for (el, part) in self.signature.elements().iter().zip(parts.iter()) {
             if let SignatureElement::Argument(arg) = el {
                 args.insert(
-                    arg.name.clone(),
+                    arg.name.to_string(),
                     part.value.resolve_for(&arg.ktype, scope, types),
                 );
             }
@@ -303,16 +236,16 @@ impl<'a> KFunction<'a> {
         let mut pairs = NamedPairs::from_fields(fields)
             .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)))?;
         let mut parts: Vec<Spanned<WorkingPart<'b>>> =
-            Vec::with_capacity(self.signature.elements.len());
-        for el in &self.signature.elements {
+            Vec::with_capacity(self.signature.elements().len());
+        for el in self.signature.elements() {
             match el {
                 SignatureElement::Keyword(s) => parts.push(Spanned::bare(WorkingPart::Ast(
                     ExpressionPart::Keyword(brand.alloc_text(s)),
                 ))),
-                SignatureElement::Argument(a) => match pairs.take(&a.name) {
+                SignatureElement::Argument(a) => match pairs.take(a.name) {
                     Some(v) => parts.push(Spanned::bare(WorkingPart::Ast(v))),
                     None => {
-                        return Err(KError::new(KErrorKind::MissingArg(a.name.clone())));
+                        return Err(KError::new(KErrorKind::MissingArg(a.name.to_string())));
                     }
                 },
             }
@@ -342,17 +275,17 @@ fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>]) -> String {
 /// [ktype/records-and-limits.md § Record fields](../../../design/typing/ktype/records-and-limits.md#record-fields-and-ktype-hashing).
 fn function_value_ktype(signature: &ExpressionSignature<'_>, types: &TypeRegistry) -> KType {
     let params: Record<KType> = signature
-        .elements
+        .elements()
         .iter()
         .filter_map(|el| match el {
-            SignatureElement::Argument(a) => Some((a.name.clone(), a.ktype)),
+            SignatureElement::Argument(a) => Some((a.name.to_string(), a.ktype)),
             _ => None,
         })
         .collect();
-    let ret = match &signature.return_type {
-        ReturnType::Resolved(kt) => *kt,
+    let ret = match signature.return_type() {
+        ReturnType::Resolved(kt) => kt,
         ReturnType::Deferred(d) => types.intern(TypeNode::DeferredReturn(
-            DeferredReturnSurface::from_deferred(d),
+            DeferredReturnSurface::from_deferred(&d),
         )),
     };
     types.function_type(params, ret)

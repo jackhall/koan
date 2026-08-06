@@ -559,9 +559,9 @@ impl<'a> Scope<'a> {
     }
 
     /// Wrap a resident `KFunction` in its `KObject` carrier — the store every `FN` / `OP`
-    /// registration hands its fresh callable out through. `function` was born at its captured
-    /// scope's own brand ([`KFunction::alloc_captured`](crate::machine::core::KFunction), whose
-    /// `for<'b>` closure makes living in that scope's region a type fact), so the door envelopes the
+    /// registration hands its fresh callable out through. `function` was stored at its captured
+    /// scope's own brand ([`KFunction::alloc_captured`](crate::machine::core::KFunction), which derives
+    /// the destination from that scope so the pair cannot come apart), so the door envelopes the
     /// reference at this scope's home and **merges** it into the same region: the composition mints
     /// that region into the product's reach, which is the borrows-home fact the wrapper carries.
     /// Source and destination coincide, so the library's self rule strips the region from the

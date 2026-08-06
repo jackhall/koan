@@ -324,8 +324,8 @@ fn fn_return_type_constructor_apply_root_scope() {
         other => panic!("pure not KFunction: {:?}", other.ktype()),
     };
     use crate::machine::model::ReturnType;
-    match &f.signature.return_type {
-        ReturnType::Resolved(handle) => match test_run.types().node(*handle) {
+    match f.signature.return_type() {
+        ReturnType::Resolved(handle) => match test_run.types().node(handle) {
             TypeNode::ConstructorApply { arguments, .. } => {
                 assert_eq!(
                     arguments,

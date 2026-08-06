@@ -10,7 +10,7 @@ use crate::machine::execute::KoanRuntime;
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 
 use super::working;
@@ -54,12 +54,12 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let program = program_storage();
     let region = run_root_storage();
     let outer = run_root_bare(&region);
-    let outer_sig = ExpressionSignature {
+    let outer_sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("MARK".into()),
+            SignatureElement::Keyword("MARK"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::NUMBER,
             }),
         ],
@@ -77,12 +77,12 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     );
 
     let inner = outer.alloc_child_under();
-    let inner_sig = ExpressionSignature {
+    let inner_sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("MARK".into()),
+            SignatureElement::Keyword("MARK"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::ANY,
             }),
         ],
@@ -178,12 +178,12 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let program = program_storage();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let sig = ExpressionSignature {
+    let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("foo".into()),
+            SignatureElement::Keyword("foo"),
             SignatureElement::Argument(Argument {
-                name: "v".into(),
+                name: "v",
                 ktype: KType::NUMBER,
             }),
         ],

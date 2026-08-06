@@ -18,7 +18,7 @@ use crate::machine::model::KObject;
 use crate::machine::model::Module;
 use crate::machine::model::TypeRegistry;
 #[cfg(test)]
-use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 #[cfg(test)]
 #[cfg(test)]
 use crate::machine::KFunction;
@@ -422,8 +422,8 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
 #[cfg(test)]
 fn first_keyword_of(scope: &Scope<'_>, sealed: &SealedFunction) -> Option<String> {
     scope.read_function(sealed, |f| {
-        f.signature.elements.iter().find_map(|e| match e {
-            SignatureElement::Keyword(s) => Some(s.clone()),
+        f.signature.elements().iter().find_map(|e| match e {
+            SignatureElement::Keyword(s) => Some((*s).to_string()),
             _ => None,
         })
     })
@@ -482,12 +482,9 @@ pub(crate) fn spliced_part<'a>(
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.
 #[cfg(test)]
-pub(crate) fn one_slot_sig<'a>(name: &str, kt: KType) -> ExpressionSignature<'a> {
-    ExpressionSignature {
+pub(crate) fn one_slot_sig<'a>(name: &'a str, kt: KType) -> SignatureDraft<'a> {
+    SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Argument(Argument {
-            name: name.into(),
-            ktype: kt,
-        })],
+        elements: vec![SignatureElement::Argument(Argument { name, ktype: kt })],
     }
 }

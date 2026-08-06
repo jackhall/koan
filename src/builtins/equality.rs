@@ -79,7 +79,7 @@ pub fn body_ne<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 /// Register `==` / `!=` as binary-only builtins. Deliberately **not** seeded into any operator
 /// group (see [`super::arithmetic::register_builtin_operator_groups`]) — equality does not chain.
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
-    let eq_sig = |op: &str| {
+    let eq_sig = |op: &'static str| {
         sig(
             KType::BOOL,
             vec![arg("left", KType::ANY), kw(op), arg("right", KType::ANY)],
