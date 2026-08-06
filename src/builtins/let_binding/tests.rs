@@ -11,8 +11,8 @@ fn binder_name_extracts_let_name() {
     assert_eq!(name, Some("hello"));
 }
 
-/// End-to-end install-then-clear: statement submission installs the placeholder from the
-/// cached binder plan before the body runs; the value write clears it at apply.
+/// End-to-end claim-then-finalize: statement submission claims the name's slot from the
+/// cached binder plan before the body runs; the value write overwrites the pending arm at apply.
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::builtins::test_support::TestRun;
@@ -31,7 +31,7 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
         );
     }
     runtime.execute().unwrap();
-    assert!(scope.bindings().placeholders().get("hello").is_none());
+    assert!(scope.bindings().pending_value("hello").is_none());
     assert!(matches!(scope.lookup("hello"), Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -232,12 +232,14 @@ fn let_aliases_struct_preserves_type_identity() {
     let types = scope.bindings().types();
     let pt: KType = types
         .get("Pt")
-        .map(|(kt, _)| *kt)
-        .expect("Pt should be in bindings.types after alias");
+        .and_then(|slot| slot.bound())
+        .map(|(kt, _)| kt)
+        .expect("Pt should be bound in bindings.types after alias");
     let point: KType = types
         .get("Point")
-        .map(|(kt, _)| *kt)
-        .expect("Point should be in bindings.types");
+        .and_then(|slot| slot.bound())
+        .map(|(kt, _)| kt)
+        .expect("Point should be bound in bindings.types");
     assert_eq!(pt, point, "alias must preserve type identity field-wise");
 }
 

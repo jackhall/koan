@@ -215,9 +215,9 @@ impl<'a> Scope<'a> {
             .install_placeholder(name, idx, index, kind, gate)
     }
 
-    /// Error-path companion to [`Self::install_placeholder`]: remove any value-side
-    /// placeholder pointing at `producer`. Routes to the same target the install used so a
-    /// failed binder body can't leak a scheduler-local placeholder into a later run on a
+    /// Error-path companion to [`Self::install_placeholder`]: drop any name-keyed pending arm
+    /// pointing at `producer`. Routes to the same target the install used so a
+    /// failed binder body can't leak a scheduler-local producer into a later run on a
     /// persistent scope. See [`Bindings::clear_placeholders_for_producer`].
     pub fn clear_placeholders_for_producer(&self, producer: NodeId, gate: &mut WriteGate) {
         self.write_scope()
@@ -225,10 +225,10 @@ impl<'a> Scope<'a> {
             .clear_placeholders_for_producer(producer, gate);
     }
 
-    /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a
-    /// `pending_overloads[bucket]` entry so dispatch's no-bucket fallback parks
+    /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a pending slot to
+    /// `functions[bucket]` so dispatch's no-bucket fallback parks
     /// bare-arg calls on the producing FN binder. Sibling installs sharing the
-    /// bucket each append a distinct entry; entries are removed on finalize by
+    /// bucket each append a distinct slot; a slot is sealed in place on finalize by
     /// matching the producing binder's `BindingIndex`. See
     /// [`Bindings::install_pending_overload`].
     pub fn install_pending_overload(

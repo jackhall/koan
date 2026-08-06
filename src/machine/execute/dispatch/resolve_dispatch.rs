@@ -71,7 +71,7 @@ pub enum DispatchOutcome<'step> {
     Ambiguous(usize),
     Deferred,
     /// Park on forward-reference placeholders (or an in-flight sibling
-    /// FN `pending_overloads[key]`) and re-dispatch once they bind.
+    /// FN's pending slot in `functions[key]`) and re-dispatch once they bind.
     /// Distinct from `Deferred`: waits on existing producers without
     /// scheduling new work.
     ParkOnProducers(Vec<NodeId>),

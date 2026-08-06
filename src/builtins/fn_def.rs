@@ -204,7 +204,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
     // extractor is `Bucket`, not `Name` — sibling FN overloads share one bucket and each installs
     // its own per-bucket entry, and consumers park on the earliest-index visible entry. A
     // single-name install (LET / UNION / SIG / MODULE, via `Name` extractors) would Rebind on the
-    // second sibling sharing a head keyword (two `PICK` overloads both claiming `placeholders[PICK]`),
+    // second sibling sharing a head keyword (two `PICK` overloads both claiming the name `PICK`),
     // collapsing the overload set — right for a one-name-to-one-value binder, wrong for an overload
     // family.
     //

@@ -11,7 +11,7 @@
 //! back through the interpreter either.
 //!
 //! An apply error is the node's error terminal — the run loop drops the step's remaining ops and
-//! turns the step into an error, so the ordinary finalize arms clear the producer's placeholders
+//! turns the step into an error, so the ordinary finalize arms drop the producer's pending arms
 //! and attribute the error. A body that errors before deciding its write installs nothing at all:
 //! the writes are outcome data, and an error terminal carries none.
 //!
@@ -29,8 +29,8 @@ use crate::machine::model::{probe_key, KType};
 /// present name is a `Rebind`), `UpsertEqual` admits a re-entry of the *same* declaration — the
 /// nominal finalizes, which overwrite a `RECURSIVE TYPES` block's pre-installed identity and
 /// tolerate a parallel finalize of their own slot. Folding the two type writers into one
-/// description site keeps the shared skeleton — cross-kind probe, partition guard, placeholder
-/// clear — in one place.
+/// description site keeps the shared skeleton — cross-kind probe, partition guard, in-place
+/// finalize of the pending arm — in one place.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum TypeWritePolicy {
     Insert,

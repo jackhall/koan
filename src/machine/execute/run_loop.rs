@@ -220,7 +220,7 @@ impl<'run> KoanRuntime<'run> {
                         // writes land while the scope is still open and before any graph edge an
                         // errored step would strand is installed. On the first failure the
                         // remaining ops are dropped and the step becomes the node's error terminal,
-                        // so the finalize arms below clear the producer's placeholders and
+                        // so the finalize arms below drop the producer's pending arms and
                         // attribute the error exactly as for an in-step error. A body that errors
                         // before deciding its write installs nothing at all: the writes are outcome
                         // data, and an error terminal carries none.

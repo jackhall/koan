@@ -1,8 +1,8 @@
 //! Scope-bound resolution of a surface [`TypeIdentifier`] into an interned `KType` handle.
 //!
 //! Read-only consumer of the bindings façade: writes nothing, and of the tables reads only
-//! `types` (through the elaborator) and the type-side `placeholders` — the read-only dependency
-//! is what justifies the split from `scope.rs`.
+//! `types` — bound identities through the elaborator, pending arms through the finalize gate. The
+//! read-only dependency is what justifies the split from `scope.rs`.
 //!
 //! ## Invariant pinned here
 //!

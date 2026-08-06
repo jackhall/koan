@@ -281,7 +281,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     ));
 }
 
-/// `pending_overloads` is keyed by the *full* bucket. An entry for `(MAKESET _)`
+/// A pending overload sits in the *full* bucket it resolves into. A slot in `(MAKESET _)`
 /// parks `(MAKESET <bare>)` but must not park `(MAKESET <bare> USING <bare>)` —
 /// sharing a lead keyword is not enough to collide.
 #[test]
@@ -557,8 +557,8 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     }
 
     // Finalize the pending sibling: registering a same-bucket overload at the
-    // pending's index removes its `pending_overloads` entry (mirrors the real
-    // finalize-clear path, which retains-by-`BindingIndex`).
+    // pending's index overwrites its pending slot in place (the real finalize path,
+    // which matches by `BindingIndex`).
     let pick_str = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
@@ -610,10 +610,10 @@ fn scope_install_pending<'a>(
         .expect("install_pending_overload");
 }
 
-/// Two sibling binders that share a bucket key each install their own
-/// `pending_overloads[bucket]` entry — coalescing or rejecting the second would
+/// Two sibling binders that share a bucket key each claim their own pending slot in
+/// `functions[bucket]` — coalescing or rejecting the second would
 /// drop a distinct wake source. A consumer parks on the earliest-index visible
-/// entry.
+/// one.
 #[test]
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let types = TypeRegistry::new();
@@ -638,12 +638,11 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("second install must not collide");
-    let entries = scope.bindings().pending_overloads().get(&bucket).cloned();
-    let entries = entries.expect("bucket should be populated");
+    let entries = scope.bindings().pending_overload_entries(&bucket);
     assert_eq!(
         entries.len(),
         2,
-        "both sibling installs must coexist as distinct entries; got {:?}",
+        "both sibling installs must coexist as distinct slots; got {:?}",
         entries,
     );
 

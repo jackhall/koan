@@ -27,6 +27,7 @@ fn find_match<'a>(
         let bucket: Vec<_> = match s.bindings().functions().get(&key) {
             Some(bucket) => bucket
                 .iter()
+                .filter_map(|slot| slot.sealed())
                 .map(|entry| entry.sealed.duplicate())
                 .collect(),
             None => {

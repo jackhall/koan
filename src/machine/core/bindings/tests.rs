@@ -1,5 +1,6 @@
-//! Unit coverage for the `types` map write primitive `write_type`, plus the cross-kind
-//! exclusion that makes the `data`/`types` partition structural (no name in both).
+//! Unit coverage for the `types` map write primitive `write_type`, the cross-kind
+//! exclusion that makes the `data`/`types` partition structural (no name in both), and the
+//! pending arms a still-finalizing binder occupies in its destination table.
 
 use std::rc::Rc;
 
@@ -123,7 +124,8 @@ fn write_type_inserts_into_types_map() {
     let stored = bindings
         .types()
         .get("Foo")
-        .expect("Foo should be in types map")
+        .and_then(|slot| slot.bound())
+        .expect("Foo should be bound in the types map")
         .0;
     assert_eq!(stored, kt);
     assert!(bindings.data().get("Foo").is_none());
@@ -157,13 +159,14 @@ fn write_type_rejects_collision_with_rebind() {
     let stored = bindings
         .types()
         .get("Foo")
-        .expect("Foo should still be present")
+        .and_then(|slot| slot.bound())
+        .expect("Foo should still be bound")
         .0;
     assert_eq!(stored, kt1);
 }
 
 #[test]
-fn write_type_clears_matching_placeholder() {
+fn write_type_finalizes_pending_arm_in_place() {
     let bindings: Bindings = Bindings::new();
     let kt: KType = KType::NUMBER;
     bindings
@@ -175,7 +178,10 @@ fn write_type_clears_matching_placeholder() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("placeholder install should succeed on fresh bindings");
-    assert!(bindings.placeholders().contains_key("Bar"));
+    assert_eq!(
+        bindings.pending_names(),
+        vec![("Bar".to_string(), BindKind::Type, NodeId(7))],
+    );
     bindings
         .write_type(
             "Bar",
@@ -184,8 +190,9 @@ fn write_type_clears_matching_placeholder() {
             TypeWritePolicy::Insert,
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("type register should succeed and clear placeholder");
-    assert!(!bindings.placeholders().contains_key("Bar"));
+        .expect("type register should succeed and drop the pending arm");
+    assert!(bindings.pending_names().is_empty());
+    assert_eq!(bindings.expect_type("Bar"), kt);
 }
 
 #[test]
@@ -268,7 +275,8 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
         bindings
             .types()
             .get("Maybe")
-            .expect("Maybe should still be present")
+            .and_then(|slot| slot.bound())
+            .expect("Maybe should still be bound")
             .0,
         KType::NUMBER,
     );
@@ -332,4 +340,94 @@ fn type_token_may_not_bind_value_side() {
         "expected the token-class partition error, got {error}",
     );
     assert!(bindings.data().get("IntOrd").is_none());
+}
+
+// --- Pending arms live in the destination table ------------------------------
+// A still-finalizing binder claims the slot it will resolve into, so finalizing
+// overwrites that slot rather than moving an entry between containers.
+
+/// A value write finalizes the name's pending arm **in place**: the slot flips to `Bound` and the
+/// claim is gone, with the key stored once. The overwrite keys on the name alone — a write whose
+/// producer differs from the one that claimed the slot still finalizes it, matching the by-name
+/// clear the finalize path has always performed.
+#[test]
+fn value_write_finalizes_the_pending_arm_in_place() {
+    let storage = run_root_storage();
+    let region = storage.brand();
+    let bindings: Bindings = Bindings::new();
+    bindings
+        .install_placeholder(
+            "x".to_string(),
+            NodeId(11),
+            BindingIndex::value(2),
+            BindKind::Value,
+            &mut crate::machine::WriteGate::for_test(),
+        )
+        .expect("value claim should succeed on fresh bindings");
+    assert_eq!(
+        bindings.pending_value("x").map(|p| p.producer),
+        Some(NodeId(11)),
+    );
+    assert!(matches!(
+        bindings.lookup_value("x", None),
+        Some(NameLookup::Parked(NodeId(11))),
+    ));
+
+    let val: &KObject = region.alloc_scalar(Scalar::Number(5.0));
+    bindings
+        .write_value(
+            "x",
+            BindingIndex::value(2),
+            Sealed::seal(region.seal_resident(Carried::Object(val))),
+            &mut crate::machine::WriteGate::for_test(),
+        )
+        .expect("the finalize write should overwrite the pending arm");
+    assert!(bindings.pending_value("x").is_none());
+    assert!(bindings.pending_names().is_empty());
+    assert!(matches!(
+        bindings.lookup_value("x", None),
+        Some(NameLookup::Bound(_)),
+    ));
+    assert_eq!(bindings.data().len(), 1, "the key is stored once");
+}
+
+/// A `types` slot holds a bound identity and a pending producer at once: a parallel nominal
+/// finalize pre-installs the name's external identity while its producer is still in flight.
+/// `lookup_type` answers the bound identity (it prefers the bound arm), `type_placeholder_producer`
+/// still surfaces the producer for the finalize gate to park on, and the producer-failure sweep
+/// drops only the pending arm — the bound identity survives.
+#[test]
+fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
+    let bindings: Bindings = Bindings::new();
+    bindings
+        .write_type(
+            "Wrapper",
+            KType::NUMBER,
+            DeclarationSite::BUILTIN,
+            TypeWritePolicy::Insert,
+            &mut crate::machine::WriteGate::for_test(),
+        )
+        .expect("the seal pre-installs the external identity");
+    bindings
+        .install_placeholder(
+            "Wrapper".to_string(),
+            NodeId(9),
+            BindingIndex::BUILTIN,
+            BindKind::Type,
+            &mut crate::machine::WriteGate::for_test(),
+        )
+        .expect("the in-flight producer claims the same slot");
+
+    assert!(matches!(
+        bindings.lookup_type("Wrapper", None),
+        Some(NameLookup::Bound(kt)) if kt == KType::NUMBER,
+    ));
+    assert_eq!(
+        bindings.type_placeholder_producer("Wrapper"),
+        Some(NodeId(9)),
+    );
+
+    bindings.clear_placeholders_for_producer(NodeId(9), &mut crate::machine::WriteGate::for_test());
+    assert!(bindings.pending_names().is_empty());
+    assert_eq!(bindings.expect_type("Wrapper"), KType::NUMBER);
 }

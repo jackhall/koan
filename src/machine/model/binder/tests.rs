@@ -57,6 +57,7 @@ fn live_buckets() -> HashMap<UntypedKey, LiveBucket> {
                     key.clone(),
                     overloads
                         .iter()
+                        .filter_map(|slot| slot.sealed())
                         .map(|entry| {
                             scope.read_function(&entry.sealed, |f| {
                                 (overload_has_hook(f), overload_mask(f))

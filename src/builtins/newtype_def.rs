@@ -399,8 +399,9 @@ mod tests {
             let bindings = scope.bindings().types();
             let (kt, _) = bindings
                 .get("Distance")
-                .expect("Distance should be in bindings.types");
-            *kt
+                .and_then(|slot| slot.bound())
+                .expect("Distance should be bound in bindings.types");
+            kt
         };
         match test_run.types().node(handle) {
             TypeNode::SetMember {
@@ -460,8 +461,8 @@ mod tests {
     /// A record-repr NEWTYPE and a NEWTYPE depending on it, declared in the *same*
     /// scheduler, then constructed. The dependency's `:{…}` defers its finalize behind a
     /// sub-dispatch, so the dependent's body would run first; it must park on the
-    /// dependency's producer rather than error on an unresolved repr (which would leak a
-    /// stale value-side placeholder and panic the next construction).
+    /// dependency's producer rather than error on an unresolved repr (which would leave a
+    /// stale pending arm behind and panic the next construction).
     #[test]
     fn dependent_newtype_parks_on_record_repr_dependency() {
         let program = program_storage();
@@ -469,12 +470,12 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nNEWTYPE Boxed = Point");
-        // No placeholder may survive the declaration run: a leaked one corrupts the next
+        // No pending arm may survive the declaration run: a leaked one corrupts the next
         // scheduler on this REPL-persistent scope.
         assert!(
-            scope.bindings().placeholders().is_empty(),
-            "NEWTYPE declarations must leave no value-side placeholder, got {:?}",
-            *scope.bindings().placeholders(),
+            scope.bindings().pending_names().is_empty(),
+            "NEWTYPE declarations must leave no pending binding, got {:?}",
+            scope.bindings().pending_names(),
         );
         let result = test_run.run_one(parse_one(&program, "(Boxed (Point {x = 1, y = 2}))"));
         assert!(
@@ -484,8 +485,8 @@ mod tests {
         );
     }
 
-    /// A NEWTYPE whose repr names a genuinely unknown type errors — and clears the
-    /// value-side placeholder its dispatch installed, so a later construction of the same
+    /// A NEWTYPE whose repr names a genuinely unknown type errors — and drops the pending
+    /// arm its dispatch claimed, so a later construction of the same
     /// name fails cleanly (unbound) rather than tripping over a leaked producer `NodeId`.
     #[test]
     fn unknown_repr_errors_without_leaking_placeholder() {
@@ -495,9 +496,9 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("NEWTYPE Boxed = Nope");
         assert!(
-            scope.bindings().placeholders().is_empty(),
-            "a failed NEWTYPE must not leak its placeholder, got {:?}",
-            *scope.bindings().placeholders(),
+            scope.bindings().pending_names().is_empty(),
+            "a failed NEWTYPE must not leak a pending binding, got {:?}",
+            scope.bindings().pending_names(),
         );
         let err = test_run.run_one_err(parse_one(&program, "(Boxed (3.0))"));
         assert!(
@@ -932,8 +933,9 @@ mod tests {
             let bindings = scope.bindings().types();
             let (kt, _) = bindings
                 .get("Wrapper")
-                .expect("Wrapper should be in bindings.types");
-            *kt
+                .and_then(|slot| slot.bound())
+                .expect("Wrapper should be bound in bindings.types");
+            kt
         };
         match test_run.types().node(handle) {
             TypeNode::SetMember {

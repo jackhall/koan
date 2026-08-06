@@ -490,7 +490,7 @@ fn bind_value_direct_clears_own_placeholder() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    assert!(scope.bindings().placeholders().get("x").is_none());
+    assert!(scope.bindings().pending_value("x").is_none());
     assert!(
         matches!(scope.resolve("x"), Some(NameLookup::Bound(KObject::Number(n))) if *n == 42.0)
     );

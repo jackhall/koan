@@ -60,7 +60,7 @@ pub(super) fn initial<'step>(
             return install_overload_park(ctx, producers, expr, idx);
         }
     };
-    // Binder placeholders / pending-overload entries were installed at statement submission from the
+    // Binder name claims / pending overload slots were installed at statement submission from the
     // enclosing statement's parse-time aggregate (see `submit_expression`); nothing installs here.
     walk_and_invoke(
         ctx,
