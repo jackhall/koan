@@ -64,4 +64,7 @@ not consumed.
 - [USING surfaces module type members](using-type-members.md) — the migration path for
   members that today mirror flat into the enclosing scope.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Scopes move into the region bump](../untyped_arena/bump-hosted-scopes.md) —
+  retiring the block removes the `Rc`-carrying `RecursiveBlock` scope kind.

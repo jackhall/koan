@@ -514,12 +514,13 @@ left:
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
   — pricing copying-the-survivors-out against transferring-the-region, the
   local decision the cost seam's two numbers already support.
-- [Frame-owned scopes retire the typed cells](../roadmap/untyped_arena/frame-owned-scopes.md)
-  — scopes move beside the region as frame-owned droppy data, deleting
-  workgraph's typed-storage machinery and the `typed-arena` dependency.
 - [Bump-backed binding tables](../roadmap/untyped_arena/bump-backed-bindings.md)
-  — `allocator-api2` tables with bumped keys reduce `Scope::drop` to the
-  `Weak` back-link and the root writer.
+  — `allocator-api2` tables with bumped keys and bumped entry payloads make a
+  scope's tables `Drop`-free.
+- [Scopes move into the region bump](../roadmap/untyped_arena/bump-hosted-scopes.md)
+  — the last typed family becomes a structurally `Drop`-free bump resident,
+  deleting workgraph's typed-storage machinery, the `typed-arena` dependency,
+  and the last storage-side lifetime retype.
 
 The mint doors' tier contract is prose, not a type — a brand shortened to a step
 shares its lifetime with the step's own allocator, so nothing stops a part hosted
