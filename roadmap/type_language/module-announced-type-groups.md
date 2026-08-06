@@ -57,12 +57,12 @@ binding that admits no values, with inert predicate arms
 Retiring the `Group` node resolves the "reserved for value-language cycle
 construction" question recorded in
 [Constructing circular values](circular-value-construction.md) — resolved as retired,
-not consumed.
+not consumed. Members namespaced inside a module reach bare names again through the
+`USING` window, which surfaces a module's type members in type positions
+([modules.md § Block-scoped opening](../../design/typing/modules.md)).
 
-**Requires:**
+**Requires:** none — the substrate the announcement rule needs is shipped.
 
-- [USING surfaces module type members](using-type-members.md) — the migration path for
-  members that today mirror flat into the enclosing scope.
 
 **Unblocks:**
 

@@ -157,4 +157,30 @@ PRINT
 21
 ```
 
+Types declared in the module come into scope the same way, so you can name them
+without the prefix wherever a type is expected — an argument's `:Type`
+annotation, a return type, or the right-hand side of a type alias:
+
+```koan
+MODULE palette =
+  UNION Color = (Red :Null Blue :Null)
+PRINT
+  USING palette SCOPE (
+    (FN (DESCRIBE c :Color) -> Str = ("a color"))
+    (DESCRIBE (Color (Red null))))
+```
+
+```text
+a color
+```
+
+This works for a module sealed behind a signature too, and it is where opening
+one pays off: the block names the signature's abstract type members, and they
+stay abstract there — `Elem` is the sealed module's own type, never the concrete
+type it was built from.
+
+A name you declare inside the block may not collide with one the module surfaces:
+Koan rejects the declaration rather than letting your binding be silently
+shadowed by the module's member. That rule covers values and types alike.
+
 Next: [Functors](12-functors.md).

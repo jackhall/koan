@@ -148,9 +148,16 @@ constructor family) is manifest. Outer aliases and builtin annotations
 (`:Number`, an outer `LET MyAlias = Number`) stay concrete.
 
 Opaque ascription ([`ascribe.rs`](../../src/builtins/ascribe.rs)'s `body_opaque`)
-mints a per-call `AbstractType` into `type_members` for each abstract member and
-mirrors each manifest member's fixed `KType` in concretely (the view scope carries
-no type entries of its own), plus a `slot_type_tags` map
+seeds the view's fresh child scope with the view's own type interface — a per-call
+`AbstractType` mint for each abstract member of the signature, each manifest member
+at its fixed `KType` — and reads that table back into `type_members`, which is
+therefore a mirror of the scope (the seeding happens inside
+[`Scope::alloc_module_view`](../../src/machine/core/scope/registry.rs), the door that
+births the scope, because the mints need the newborn scope's id as their nonce and
+only the birthing door may mint the
+[`WriteGate`](../../src/machine/core/bindings/gate.rs) for an unpublished scope). What the seeded table does *not* hold — the source's
+representation type behind an abstract member — is unreachable through the view by
+construction rather than by masking. Ascription also builds a `slot_type_tags` map
 (VAL-slot name → per-call `AbstractType`) for each slot whose SIG-declared type is
 an abstract member sourced at the SIG's decl scope. Both maps are gathered into a
 `ModuleDraft` and frozen into the view module at construction — a built module has
@@ -415,19 +422,27 @@ The block runs in a single *transparent* scope
 the call site and whose bindings are a read-only window onto the module's
 child-scope façade (`ScopeBindings::Borrowed`). Reads consult the window first,
 then the call-site chain, so module names win inside the block; the resolver walk
-is unchanged. Only the module's `data` (values), `functions` (dispatch
-overloads), and `operators` (the per-scope operator registry) are surfaced — the
-whole `Bindings` façade is borrowed, while a module's abstract type ascriptions
-live in `Module::type_members`, *not* in `Bindings`, so opacity is preserved
-inside the block. Because the registry rides the same façade, opening a module
+is unchanged. The whole `Bindings` façade is borrowed, so every one of its tables
+is surfaced: `data` (values), `functions` (dispatch overloads), `operators` (the
+per-scope operator registry) and `types`. A module's type members therefore name
+types by bare name inside the block — in sigil type expressions and in dispatch
+slot types — exactly as its value members name values. Opacity is preserved by
+what the borrowed table *contains*, not by withholding a table: an opaque view's
+child scope holds only the view's own members (the per-call abstract mints and the
+signature's manifest members seeded at ascription, above), so an abstract member
+surfaces as its `AbstractType` identity and the hidden representation is absent
+from the window; a transparent view reuses its source's child scope, so its
+members read concretely. Because the registry rides the same façade, opening a module
 that declares operators ([operators.md](../operators.md)) puts both their bodies
 and their chaining mode in scope: a run inside the block reduces by the module's
 own group.
 
 Binds made inside the block forward to the call site and persist after it; a bind
-whose name collides with a surfaced member is rejected
-([`Scope::bind_value`](../../src/machine/core/scope.rs)'s borrowed-window arm), so
-a forwarded bind can never be silently shadowed by the window. Forwarding outward
+whose name collides with a surfaced member is rejected — on the value channel and
+the type channel alike, by the write op's two window-forwarding targets
+([`ops.rs`](../../src/machine/core/bindings/ops.rs)'s `value_write_target` and
+`type_write_target`, each a presence probe of the borrowed table) — so a forwarded
+bind or type declaration can never be silently shadowed by the window. Forwarding outward
 is safe because the block is unconditional — unlike `TRY`/`MATCH` branches it
 always runs, so there is no divergent-binding hazard. A module function dispatched
 inside the block resolves its own internal names in the module's lexical scope:
