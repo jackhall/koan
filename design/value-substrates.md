@@ -78,8 +78,10 @@ Each cell-bearing substrate is one index-generic **wrapper struct**,
 [`ContainerSubstrate<'a, C>`](../src/machine/model/values/container_substrate.rs):
 the cells in workgraph's sectioned storage ([§ Sectioned reach](#sectioned-reach)),
 a payload-specific index `C` mapping a name / key / position onto a cell index,
-the interned union over the runs, and the memoized copy cost. Reach and cost ride
-the substrate; the type handle rides the value carrier. The per-container names
+and the interned union over the runs. Reach and cost both ride the sectioned
+storage — the copy-cost memo is its stored weight, folded from the same per-cell
+inputs the reach verdicts arrive in — while the type handle rides the value
+carrier. The per-container names
 above are aliases of that one wrapper, differing only in `C`, and every `C` is
 `Copy` with no allocation of its own:
 
@@ -208,9 +210,11 @@ needs both).
   naming a substrate or a closure is unrepresentable downstream of that site,
   and the one borrow a key does carry — a string's bytes — is re-bumped into
   the dict's own region as the key table freezes.
-- **Memos are folds over runs.** Contains-borrows ⇔ any run's description
-  is non-empty; borrows-home ⇔ any run names the home region; `copy_cost`
-  is unchanged. Borrows-home is exact because of the **run-level self rule**
+- **Memos are stored facts.** Contains-borrows ⇔ any run's description
+  is non-empty; borrows-home ⇔ any run names the home region; `copy_cost` is
+  the storage's own weight, folded at the alloc door beside the runs
+  ([sectioned-reach.md § Weight](../workgraph/design/sectioned-reach.md#weight)),
+  so no container door re-folds over cells to price one. Borrows-home is exact because of the **run-level self rule**
   at the alloc door
   ([sectioned-reach.md § The alloc door](../workgraph/design/sectioned-reach.md#the-alloc-door)):
   a cell already resident in the destination contributes no residence member
@@ -308,9 +312,10 @@ forward pulls, seed binds, the root drain), the runtime chooses per value:
 The core decision is a **scale-free ratio** over two numbers that already exist
 at the seam:
 
-- **`copy_cost`** — memoized on every substrate at construction: leaves
-  contribute their weight (cell count as the first cut; byte-weighted where a
-  leaf's size varies, a string being the motivating case), nested substrates
+- **`copy_cost`** — memoized on every substrate at construction, as the sectioned
+  storage's own weight ([sectioned-reach.md § Weight](../workgraph/design/sectioned-reach.md#weight)):
+  leaves contribute their weight (cell count as the first cut; byte-weighted
+  where a leaf's size varies, a string being the motivating case), nested substrates
   contribute their own memoized cost, borrow leaves contribute zero. An
   expression cell is one of those borrow leaves: it holds its node by value, and
   the node's parts run, keyword text and structural cache all live in the

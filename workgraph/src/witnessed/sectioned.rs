@@ -28,10 +28,11 @@
 //! [`Opened::reseal`], which is the mint-consuming relocation seam.
 //!
 //! Containers are built through one door, [`Sectioned::build`], which takes a per-cell
-//! `(payload, reach verdict)` and owns everything downstream of it — grouping into runs, interning,
-//! pin folding, and the value-level union. Interning is what makes grouping cheap: within one
-//! region a description's *address* is its member set ([`Region::intern_reach_retained`]), so a run boundary
-//! is one pointer compare per cell rather than a set comparison. No `unsafe`.
+//! `(payload, reach verdict, weight)` and owns everything downstream of it — grouping into runs,
+//! interning, pin folding, the value-level union, and the weight total. Interning is what makes
+//! grouping cheap: within one region a description's *address* is its member set
+//! ([`Region::intern_reach_retained`]), so a run boundary is one pointer compare per cell rather
+//! than a set comparison. No `unsafe`.
 
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -102,6 +103,10 @@ pub struct Sectioned<'a, K: Reattachable + 'static, F: PinsRegion + 'static> {
     /// region alongside `cells`, so the partition is region state rather than a heap buffer a frame
     /// drop would have to free.
     runs: &'a [Run<'a, F>],
+    /// The saturating sum of the cells' input weights — see [`Self::weight`]. Stored beside the
+    /// runs for the reason a run's description is: it is a construction-time fact about the cells,
+    /// so a holder reads it rather than re-folding over them.
+    weight: u64,
 }
 
 // Manual impls: a derive would bound `K: Copy` / `F: Copy`, which two shared slices do not need.
@@ -133,13 +138,16 @@ pub enum CellReach<'r, F: PinsRegion> {
     Seed(StepCoverage<F>),
 }
 
-/// One input to [`Sectioned::build`]: a region-resident cell and its reach verdict. Pairing them in
-/// one value is what makes a verdict-per-cell mismatch unrepresentable — there is no separate
-/// cells-and-verdicts pair of sequences to fall out of step.
+/// One input to [`Sectioned::build`]: a region-resident cell, its reach verdict, and its weight.
+/// Pairing them in one value is what makes a fact-per-cell mismatch unrepresentable — there is no
+/// separate cells-and-verdicts pair of sequences to fall out of step.
 pub struct CellInput<'a, 'r, K: Reattachable, F: PinsRegion> {
     /// The cell, already resident in storage that outlives the destination region handle.
     pub payload: &'a K::At<'a>,
     pub reach: CellReach<'r, F>,
+    /// This cell's contribution to the container's [`Sectioned::weight`] — an opaque embedder
+    /// scalar the door folds and never interprets. `0` where an embedder prices nothing.
+    pub weight: u64,
 }
 
 impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F> {
@@ -162,6 +170,16 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     /// description and no per-cell lookup.
     pub fn is_single_run(&self) -> bool {
         self.runs.len() == 1
+    }
+
+    /// The container's weight: the saturating sum of its cells' input weights, folded once at
+    /// [`Self::build`] and stored. The scalar itself is the embedder's — workgraph neither reads
+    /// nor interprets it — so this is a *stored fact* in exactly the sense a run's description is:
+    /// a container that holds another contributes this memo rather than a walk, and an embedder
+    /// pricing a container never folds over cells at a door of its own. Saturating rather than
+    /// wrapping, so an overflowing total reads as "immense" instead of small.
+    pub fn weight(&self) -> u64 {
+        self.weight
     }
 
     /// The reach of the cell at `index`: the description of the run covering it, found by binary
@@ -237,7 +255,7 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     /// let cell: &&u32 = handle.alloc_resident::<RefFamily>(&7);
     /// let (container, _) = Sectioned::<RefFamily, _>::build(
     ///     handle,
-    ///     vec![CellInput { payload: cell, reach: CellReach::Owned }],
+    ///     vec![CellInput { payload: cell, reach: CellReach::Owned, weight: 1 }],
     /// );
     /// // The projection is one value: the cell reference and its reach, paired.
     /// let parted = container.project(0).expect("index is covered");
@@ -257,7 +275,7 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     /// let cell: &&u32 = handle.alloc_resident::<RefFamily>(&7);
     /// let (container, _) = Sectioned::<RefFamily, _>::build(
     ///     handle,
-    ///     vec![CellInput { payload: cell, reach: CellReach::Owned }],
+    ///     vec![CellInput { payload: cell, reach: CellReach::Owned, weight: 1 }],
     /// );
     /// let parted = container.project(0).unwrap();
     /// drop(cart);
@@ -276,7 +294,7 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     /// let cell: &&u32 = handle.alloc_resident::<RefFamily>(&7);
     /// let (container, _) = Sectioned::<RefFamily, _>::build(
     ///     handle,
-    ///     vec![CellInput { payload: cell, reach: CellReach::Owned }],
+    ///     vec![CellInput { payload: cell, reach: CellReach::Owned, weight: 1 }],
     /// );
     /// let reach = container.reach_at(0).unwrap();
     /// drop(container);
@@ -292,9 +310,9 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     }
 
     /// The alloc door: build a sectioned container resident in `dest` from per-cell
-    /// `(payload, reach verdict)` inputs, returning it alongside its **value-level** description —
-    /// what a whole-value carrier stores, so carriers keep their single-`&ReachDescription` shape
-    /// unchanged.
+    /// `(payload, reach verdict, weight)` inputs, returning it alongside its **value-level**
+    /// description — what a whole-value carrier stores, so carriers keep their
+    /// single-`&ReachDescription` shape unchanged.
     ///
     /// Each input cell arrives already resident as `&'a K::At<'a>`, tying it to the same `'a` the
     /// destination handle carries — so whatever pin keeps `dest`'s region alive covers both a
@@ -318,6 +336,9 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     /// retained: the self rule strips `dest`'s own region from what is retained while leaving it in
     /// the description, so a union built the other way would drop home from the value-level
     /// description exactly when a cell genuinely borrows into `dest`.
+    ///
+    /// [`Self::weight`] folds in the same pass, so an embedder hands each cell's facts in once and
+    /// runs no fold of its own.
     pub fn build<W>(
         dest: RegionHandle<'a, W>,
         inputs: Vec<CellInput<'a, '_, K, F>>,
@@ -329,8 +350,18 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
         let mut cells: Vec<&'a K::At<'a>> = Vec::with_capacity(inputs.len());
         let mut runs: Vec<Run<'a, F>> = Vec::new();
         let mut union = PinBundle::empty();
+        let mut total_weight = 0u64;
 
-        for (index, CellInput { payload, reach }) in inputs.into_iter().enumerate() {
+        for (
+            index,
+            CellInput {
+                payload,
+                reach,
+                weight,
+            },
+        ) in inputs.into_iter().enumerate()
+        {
+            total_weight = total_weight.saturating_add(weight);
             let source = match reach {
                 CellReach::Owned => PinBundle::empty(),
                 CellReach::Pinned { reach, coverage } => {
@@ -377,6 +408,7 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
         let sectioned = Sectioned {
             cells: dest.region().bump_slice(&cells),
             runs: dest.region().bump_slice(&runs),
+            weight: total_weight,
         };
         (sectioned, value_level)
     }

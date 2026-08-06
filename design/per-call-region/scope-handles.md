@@ -25,7 +25,10 @@ from the slot's live frame at read, never re-anchored at a free `'run`:
 
 The funnel [`resolve_node_scope`](../../src/machine/execute/runtime/submit.rs) decides the arm in
 order: a pointer test (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot
-to `Yoked`; a walk of the active cart's scope `outer` chain that reaches `scope`'s region routes a
+to `Yoked`; the cart's own pin claim over `scope`'s region
+([`CallFrame::pins_scope_region`](../../src/machine/core/arena.rs), a `pins_region` walk of the
+`FrameStorage.outer` chain — the pin that actually holds, not the lexical scope graph, and trivially
+satisfied for an eternal-tier region no frame has to pin) routes a
 cart-ancestor block scope to `YokedChild`, erasing the borrow through `SealedExtern::<ScopeRefFamily>::erase`; the
 frameless top-level run root routes to `Yoked` via the `run_frame` cart that adopts it (the slot's
 cart is that `run_frame`). The two residual fall-throughs are `unreachable!` — an instrumented

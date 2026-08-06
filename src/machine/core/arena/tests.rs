@@ -41,6 +41,33 @@ fn pins_region_walks_outer_chain() {
     );
 }
 
+/// `CallFrame::pins_scope_region` reads the **storage** chain, not the lexical scope graph: a frame
+/// pins its own child scope's region, answers `true` for an eternal-tier scope (which needs no pin
+/// at all), and `false` for a scope in an unrelated per-call region.
+#[test]
+fn pins_scope_region_reads_the_storage_chain() {
+    let root = run_root_storage();
+    let run_scope = run_root_bare(&root);
+    let frame = CallFrame::new(run_scope);
+
+    assert!(
+        frame.with_scope(|child| frame.pins_scope_region(child)),
+        "a frame pins the region its own child scope lives in"
+    );
+    assert!(
+        frame.pins_scope_region(run_scope),
+        "an eternal-tier scope needs no pin, so every frame answers for it"
+    );
+
+    // A per-call region no frame in this chain owns: the chain walk finds nothing.
+    let unrelated_storage = per_call_storage();
+    let unrelated = run_root_bare(&unrelated_storage);
+    assert!(
+        !frame.pins_scope_region(unrelated),
+        "a frame does not pin an unrelated per-call region"
+    );
+}
+
 /// The single-owner `Rc<FrameStorage>` witness (the `yoke` seam) exposes exactly its own region.
 /// The composition over those owners — union, subsumption, the antichain shape — is library
 /// mechanism koan holds no vocabulary for; it is read here off the descriptions the mint freezes

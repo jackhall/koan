@@ -75,18 +75,20 @@ fn pinned_input<'r>(
 
 /// A cell that is fully owned at the destination.
 fn owned<'a>(payload: &'a u32) -> CellInput<'a, 'a, CellFamily, SectionFrame> {
-    CellInput {
-        payload,
-        reach: CellReach::Owned,
-    }
+    cell(payload, CellReach::Owned)
 }
 
-/// A cell with an explicit reach verdict.
+/// A cell with an explicit reach verdict. Its weight is its own content, so a container's
+/// [`Sectioned::weight`] is the sum of the values this slate stores in it.
 fn cell<'a, 'r>(
     payload: &'a u32,
     reach: CellReach<'r, SectionFrame>,
 ) -> CellInput<'a, 'r, CellFamily, SectionFrame> {
-    CellInput { payload, reach }
+    CellInput {
+        payload,
+        reach,
+        weight: u64::from(*payload),
+    }
 }
 
 /// Whether `description`'s members are exactly `expected`, compared by owner identity.
@@ -390,4 +392,51 @@ fn an_empty_container_has_no_runs() {
     assert_eq!(container.run_count(), 0);
     assert!(container.reach_at(0).is_none());
     assert!(value_reach.is_empty());
+}
+
+/// The door folds the cells' input weights into one stored container total, independent of how the
+/// reach verdicts partition them into runs.
+#[test]
+fn weight_sums_the_cells_across_runs() {
+    let dest = frame();
+    let source = frame();
+    let member = frame();
+    let values: Vec<&u32> = [3u32, 40, 500]
+        .into_iter()
+        .map(|v| store(&dest, v))
+        .collect();
+
+    let (container, _value_reach) = Sectioned::build(
+        RegionHandle::from_owner(&*dest),
+        vec![
+            owned(values[0]),
+            cell(values[1], pinned_input(&source, &member)),
+            owned(values[2]),
+        ],
+    );
+
+    // Three runs, one total: the fixture weighs each cell as its own content.
+    assert_eq!(container.run_count(), 3);
+    assert_eq!(container.weight(), 543);
+}
+
+/// An empty container weighs nothing, and the fold saturates rather than wrapping — an immense
+/// total reads as immense.
+#[test]
+fn weight_is_zero_when_empty_and_saturates_when_immense() {
+    let dest = frame();
+    let handle = RegionHandle::from_owner(&*dest);
+
+    let (empty, _): (Sectioned<'_, CellFamily, SectionFrame>, _) =
+        Sectioned::build(handle, Vec::new());
+    assert_eq!(empty.weight(), 0);
+
+    let payload = store(&dest, 0);
+    let huge = || CellInput::<CellFamily, SectionFrame> {
+        payload,
+        reach: CellReach::Owned,
+        weight: u64::MAX,
+    };
+    let (saturated, _) = Sectioned::build(handle, vec![huge(), huge()]);
+    assert_eq!(saturated.weight(), u64::MAX);
 }

@@ -33,14 +33,6 @@ use crate::witnessed::{
 mod tests;
 
 impl<'a> Scope<'a> {
-    /// Whether any scope on this scope's lexical `outer` chain (including `self`) lives in `region`.
-    /// Holding a scope keeps its own region alive, so a region reached here is one this chain
-    /// already pins. Used at `runtime/submit.rs`'s cart check.
-    pub(crate) fn chain_reaches_region(&self, region: &KoanRegion) -> bool {
-        self.ancestors()
-            .any(|scope| std::ptr::eq(scope.region(), region))
-    }
-
     /// The live [`FrameStorage`] owning this scope's region — the pin every read of a resident
     /// carrier opens under. A live scope reference implies a live owner: the cart, a cart ancestor
     /// (through the `FrameStorage.outer` chain), or the run storage holds it for as long as the

@@ -22,26 +22,6 @@ shipped cost seam makes local (evacuating a dying frame). The
 is the realized pattern a later conversion copies: one `Copy` wrapper over cells,
 a bump-hosted index, and a stored reach the doors derive.
 
-## Unplanned work
-
-Reach or shape derivation still living in koan `src/` that no item below owns
-retiring — candidates for a new item or for folding into an existing one.
-
-- `Scope::chain_reaches_region`
-  ([src/machine/core/scope/reach.rs](../../src/machine/core/scope/reach.rs))
-  answers "does this scope chain pin `region`?" by walking `ancestors()` and
-  comparing region pointers — a reach question answered by a graph walk, not a
-  stored fact. Callers: the cart check in
-  [src/machine/execute/runtime/submit.rs](../../src/machine/execute/runtime/submit.rs).
-- The per-cell `held_copy_cost` fold at every container door
-  ([src/machine/model/values/container_substrate.rs](../../src/machine/model/values/container_substrate.rs),
-  driven from `section_cells` in
-  [src/machine/model/values/kobject.rs](../../src/machine/model/values/kobject.rs))
-  is the remaining shape-driven derivation koan runs at construction — and the
-  only reason `section_cells` touches every cell beyond the verdict map. Storing
-  cost as a workgraph fact beside the run descriptions would reduce the door to
-  pure verdict reads.
-
 ## Next items
 
 This project's items with no unshipped prerequisite — ready to start.

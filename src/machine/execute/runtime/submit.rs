@@ -77,13 +77,14 @@ impl<'run> KoanRuntime<'run> {
     /// at a free `'run`. Three cases, in order:
     ///
     /// - The active cart's *own* scope is `scope` → [`NodeScope::Yoked`] (re-projected from the cart).
-    /// - The active cart's outer-chain reaches `scope`'s region → [`NodeScope::YokedChild`]: `scope` is
-    ///   a block scope a builtin allocated in a cart *ancestor* region, pinned by the cart's
-    ///   `FrameStorage.outer` chain. Stored erased, reattached frame-bounded.
+    /// - The active cart pins `scope`'s region ([`CallFrame::pins_scope_region`]) →
+    ///   [`NodeScope::YokedChild`]: `scope` is a block scope a builtin allocated in a cart
+    ///   *ancestor* region, held by the cart's `FrameStorage.outer` chain. Stored erased,
+    ///   reattached frame-bounded.
     /// - No active frame and the `run_frame` (which adopts the run root) *is* `scope` → `Yoked`.
-    /// - No active frame and the run frame's chain reaches `scope`'s region → `YokedChild`, the
-    ///   frameless peer of the second case: `scope` is a child allocated in the run region, so the
-    ///   run frame pins it just as a cart pins an ancestor-region block scope.
+    /// - No active frame and the run frame pins `scope`'s region → `YokedChild`, the frameless peer
+    ///   of the second case: `scope` is a child allocated in the run region, so the run frame pins
+    ///   it just as a cart pins an ancestor-region block scope.
     pub(in crate::machine::execute) fn resolve_node_scope<'a>(
         &self,
         scope: &'a Scope<'a>,
@@ -92,7 +93,7 @@ impl<'run> KoanRuntime<'run> {
             if f.with_scope(|fs| scopes_eq(fs, scope)) {
                 return NodeScope::Yoked;
             }
-            if f.with_scope(|fs| fs.chain_reaches_region(scope.region())) {
+            if f.pins_scope_region(scope) {
                 return NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
             }
             unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");
@@ -101,7 +102,7 @@ impl<'run> KoanRuntime<'run> {
             if rf.with_scope(|rs| scopes_eq(rs, scope)) {
                 return NodeScope::Yoked;
             }
-            if rf.with_scope(|rs| rs.chain_reaches_region(scope.region())) {
+            if rf.pins_scope_region(scope) {
                 return NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
             }
         }

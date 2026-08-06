@@ -701,20 +701,21 @@ fn scope_coverage(owner: Weak<FrameStorage>) -> FrameCoverage {
 
 /// Section `cells` through `door`: re-home each top-node string ([`Rehomed::mint`]), store the
 /// cell resident (so the door receives a `&'a Held<'a>` anchored to the container's own region, and
-/// one pin covers a projected cell and its reach together), pair it with the verdict [`cell_reach`]
-/// reads off its stored facts, and hand the whole batch to the alloc door. Returns the sectioned
-/// storage, the value-level union the door mints, and the copy-cost fold — the shared body of every
-/// container door.
+/// one pin covers a projected cell and its reach together), and pair it with the two facts the
+/// alloc door folds — the reach verdict [`cell_reach`] reads off its stored facts, and the copy
+/// weight [`held_copy_cost`] prices. Returns the sectioned storage and the value-level union the
+/// door mints — the shared body of every container door.
+///
+/// One pass, and no fold of its own: both facts ride the same [`CellInput`], so the container's
+/// copy cost is the sectioned storage's own [`Sectioned::weight`] rather than a total this door
+/// re-derives.
 ///
 /// The re-home/verdict ordering is carried by the [`Rehomed`] token rather than by this function's
 /// statement order: `cell_reach` takes one, and only the mint produces one.
 fn section_cells<'a>(
     door: SubstrateDoor<'a, '_>,
     cells: &[Held<'a>],
-) -> (HeldCells<'a>, &'a FrameReach, u64) {
-    let copy_cost = cells.iter().fold(0u64, |total, cell| {
-        total.saturating_add(held_copy_cost(cell))
-    });
+) -> (HeldCells<'a>, &'a FrameReach) {
     let inputs: Vec<CellInput<'a, 'a, Held<'static>, FrameStorage>> = cells
         .iter()
         .copied()
@@ -723,21 +724,22 @@ fn section_cells<'a>(
             // The verdict is read before the cell moves into storage: it names the cell's *stored*
             // reach, whose `&'a` lifetime is the region's, not this borrow's.
             let reach = cell_reach(&cell, door);
+            let weight = held_copy_cost(cell.cell());
             CellInput {
                 payload: door.alloc_cell_folded(cell.into_cell()),
                 reach,
+                weight,
             }
         })
         .collect();
-    let (cells, union) = Sectioned::build(door.handle(), inputs);
-    (cells, union, copy_cost)
+    Sectioned::build(door.handle(), inputs)
 }
 
 /// Section a list's elements and store the [`ListSubstrate`] — positional, so the layout is implicit
 /// and a cell's index is its position.
 fn alloc_list<'a>(door: SubstrateDoor<'a, '_>, items: &[Held<'a>]) -> &'a ListSubstrate<'a> {
-    let (cells, reach, copy_cost) = section_cells(door, items);
-    door.alloc_substrate_folded(ContainerSubstrate::new(ListLayout, cells, reach, copy_cost))
+    let (cells, reach) = section_cells(door, items);
+    door.alloc_substrate_folded(ContainerSubstrate::new(ListLayout, cells, reach))
 }
 
 /// Sort a record's fields by name, section the cells in that order, and store the
@@ -759,12 +761,11 @@ fn alloc_record<'a>(
         cells.push(cell);
     }
     let names = door.alloc_slice(&names);
-    let (cells, reach, copy_cost) = section_cells(door, &cells);
+    let (cells, reach) = section_cells(door, &cells);
     door.alloc_substrate_folded(ContainerSubstrate::new(
         RecordLayout::new(names),
         cells,
         reach,
-        copy_cost,
     ))
 }
 
@@ -787,8 +788,8 @@ fn alloc_dict<'a>(
         cells.push(cell);
     }
     let index = door.alloc_map(entries);
-    let (cells, reach, copy_cost) = section_cells(door, &cells);
-    door.alloc_substrate_folded(ContainerSubstrate::new(index, cells, reach, copy_cost))
+    let (cells, reach) = section_cells(door, &cells);
+    door.alloc_substrate_folded(ContainerSubstrate::new(index, cells, reach))
 }
 
 /// Section one owned payload `value` as a [`PayloadSubstrate`]'s single cell through `door` — the
@@ -796,13 +797,8 @@ fn alloc_dict<'a>(
 /// [`KObject::wrapped_hold`], the non-`Wrapped` arm of [`KObject::wrapped_peel`], and the seam copy
 /// verb's tagged/wrapped arms) funnels through.
 fn alloc_payload<'a>(door: SubstrateDoor<'a, '_>, value: KObject<'a>) -> &'a PayloadSubstrate<'a> {
-    let (cells, reach, copy_cost) = section_cells(door, &[Held::Object(value)]);
-    door.alloc_substrate_folded(ContainerSubstrate::new(
-        PayloadLayout,
-        cells,
-        reach,
-        copy_cost,
-    ))
+    let (cells, reach) = section_cells(door, &[Held::Object(value)]);
+    door.alloc_substrate_folded(ContainerSubstrate::new(PayloadLayout, cells, reach))
 }
 
 /// The seam copy verb's total rebuild: reconstruct `value`'s entire reachable structure at `dest`'s

@@ -133,8 +133,8 @@ describes.
 
 Sectioned containers are built through one door
 ([`Sectioned::build`](../src/witnessed/sectioned.rs)): the destination
-region plus one `(resident cell, reach verdict)` per cell. Pairing the
-two in one input value is what makes a verdict-per-cell mismatch
+region plus one `(resident cell, reach verdict, weight)` per cell.
+Pairing them in one input value is what makes a fact-per-cell mismatch
 unrepresentable — there is no cells sequence and verdicts sequence to
 fall out of step. The unit is the **cell**, so a copied input whose own
 runs differ arrives already expanded into per-cell verdicts, each
@@ -180,7 +180,26 @@ their single stored `&ReachDescription` shape unchanged.
 
 The embedder supplies the copy-or-pin cost predicate, the deep-copy
 hooks, and the born-borrowing seeds. Everything else — grouping into
-runs, interning, pin folding, the value-level union — is workgraph's.
+runs, interning, pin folding, the value-level union, the weight total —
+is workgraph's.
+
+## Weight
+
+Beside each cell's reach verdict the door takes its **weight**: a `u64`
+whose meaning is entirely the embedder's — workgraph neither reads nor
+interprets it. The door folds the cells' weights (saturating, so an
+overflowing total reads as immense rather than small) into one container
+total, stored beside the runs and read back through
+[`Sectioned::weight`](../src/witnessed/sectioned.rs).
+
+It rides here for the reason a run's description does: it is a fact about
+the cells fixed at construction, and a container is immutable after the
+door, so the total can never drift. An embedder that prices a container —
+koan's copy-versus-pin decision is the motivating case
+([value-substrates.md § Cost-driven copy](../../design/value-substrates.md#cost-driven-copy-the-optimization))
+— reads the memo rather than folding over cells at a door of its own, and
+a container nested as a cell contributes its own stored total in O(1). An
+embedder that prices nothing hands in `0` and the total stays zero.
 
 ## What this replaces
 

@@ -1,7 +1,8 @@
 //! [`ContainerSubstrate<'a, C>`] — a region-resident container: its cells in workgraph's
 //! [`Sectioned`] storage (semantic order, physically partitioned into runs that each name one
 //! interned reach description), a payload-specific index `C` mapping a name / key / position onto a
-//! cell index, the interned union over the runs, and the memoized copy cost.
+//! cell index, and the interned union over the runs. The memoized copy cost rides the sectioned
+//! storage too, folded from the same per-cell inputs the reach verdicts arrive in.
 //! [`RecordSubstrate`] (`C = RecordLayout`) is the field substrate behind a record value;
 //! [`ListSubstrate`] (`C = ListLayout`) is the element substrate behind a list value;
 //! [`DictSubstrate`] (`C = &BumpMap<KKey, usize>`) is the entry substrate behind a dict
@@ -9,7 +10,9 @@
 //! `Tagged` or `Wrapped` value.
 //!
 //! The two borrow memos are **reads on the stored union**, not bits: contains-borrows is "the union
-//! is non-empty", borrows-home is the description's own home-relative query. See
+//! is non-empty", borrows-home is the description's own home-relative query. The cost memo is a
+//! read on the storage's own weight for the same reason — a stored construction-time fact, not a
+//! fold a door re-runs. See
 //! [design/value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach).
 
 use crate::machine::core::{FrameReach, FrameStorage};
@@ -58,8 +61,9 @@ pub struct ListLayout;
 #[derive(Clone, Copy)]
 pub struct PayloadLayout;
 
-/// A region-resident container: its cells in sectioned storage, the payload-specific index `C` over
-/// them, the interned union of their run descriptions, and the memoized copy cost. Immutable after
+/// A region-resident container: its cells in sectioned storage (whose weight is the memoized copy
+/// cost), the payload-specific index `C` over them, and the interned union of their run
+/// descriptions. Immutable after
 /// construction — no interior cell writes exist anywhere in the runtime, which is also what keeps a
 /// run's description from ever drifting out of exactness with the cells it covers. Born only through
 /// the branded door
@@ -81,29 +85,17 @@ pub struct ContainerSubstrate<'a, C> {
     /// The interned union over the runs — the whole value's reach, the second return of the
     /// sectioned alloc door. Both borrow memos are reads on it.
     reach: &'a FrameReach,
-    /// Exact cost in bytes of totally rebuilding this container's reachable structure at a
-    /// destination brand. Every cell family prices — a nested `Record`, `List`, `Dict`, `Tagged`, or
-    /// `Wrapped` contributes its own memoized cost, and the borrow leaves contribute nothing — so
-    /// this is always a real number and the copy/pin decision is never taken blind. The sums
-    /// saturate rather than wrap, and a saturated cost simply reads as "far too large to copy".
-    copy_cost: u64,
 }
 
 impl<'a, C> ContainerSubstrate<'a, C> {
-    /// Build from the parts the sectioned alloc door produced: the index over the cells, the
-    /// sectioned storage and its union description (both from the same
-    /// [`Sectioned::build`] call, so they can never be mispaired), and the cost fold.
-    pub(crate) fn new(
-        index: C,
-        cells: HeldCells<'a>,
-        reach: &'a FrameReach,
-        copy_cost: u64,
-    ) -> Self {
+    /// Build from the parts the sectioned alloc door produced: the index over the cells, and the
+    /// sectioned storage with its union description (both from the same [`Sectioned::build`] call,
+    /// so they can never be mispaired). The copy cost rides the storage — see [`Self::copy_cost`].
+    pub(crate) fn new(index: C, cells: HeldCells<'a>, reach: &'a FrameReach) -> Self {
         ContainerSubstrate {
             index,
             cells,
             reach,
-            copy_cost,
         }
     }
 
@@ -166,10 +158,15 @@ impl<'a, C> ContainerSubstrate<'a, C> {
         !self.reach.is_empty()
     }
 
-    /// Exact cost in bytes of totally rebuilding this container at a destination brand — see the
-    /// field's own doc.
+    /// Exact cost in bytes of totally rebuilding this container's reachable structure at a
+    /// destination brand — the sectioned storage's own [`Sectioned::weight`], folded from the
+    /// per-cell prices the door handed in ([`held_copy_cost`]) beside the reach verdicts. Every
+    /// cell family prices — a nested `Record`, `List`, `Dict`, `Tagged`, or `Wrapped` contributes
+    /// its own memoized cost, and the borrow leaves contribute nothing — so this is always a real
+    /// number and the copy/pin decision is never taken blind. The sums saturate rather than wrap,
+    /// and a saturated cost simply reads as "far too large to copy".
     pub fn copy_cost(&self) -> u64 {
-        self.copy_cost
+        self.cells.weight()
     }
 
     /// Whether some borrow leaf points into this container's own home region — the union's own

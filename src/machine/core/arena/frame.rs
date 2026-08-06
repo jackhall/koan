@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use super::{KoanRegion, KoanStorageProfile, RegionBrand};
 use crate::machine::core::kfunction::NodeId;
-use crate::machine::core::{Scope, ScopeId, ScopeRefFamily};
+use crate::machine::core::{scope_frame, Scope, ScopeId, ScopeRefFamily};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::CarrierWitness;
 use crate::witnessed::{
@@ -349,6 +349,22 @@ impl CallFrame {
 
     pub fn region(&self) -> &KoanRegion {
         self.storage().region()
+    }
+
+    /// Whether holding this frame keeps `scope`'s region alive — the gate a scheduler submission
+    /// reads before storing a scope reference erased and frame-bounded
+    /// (`runtime/submit.rs`'s `NodeScope::YokedChild`).
+    ///
+    /// Answered from the **pin that actually holds**, not from the lexical scope graph: this
+    /// frame's storage and the `outer` chain it keeps alive are the regions it owns a claim on, so
+    /// the question is [`RegionHost::pins_region`](crate::witnessed::RegionHost::pins_region) over
+    /// that chain, asked of the storage `scope` names as its own region's owner. A scope living at
+    /// the **eternal tier** (the run root) needs no claim at all — its region outlives every
+    /// per-call frame, which is exactly why [`Scope::parent_frame_pin`] declines to chain it — so
+    /// it answers `true` without consulting the chain.
+    pub(crate) fn pins_scope_region(&self, scope: &Scope<'_>) -> bool {
+        let owner = scope_frame(scope);
+        owner.is_eternal() || self.storage.pins_region(owner.region())
     }
 
     /// This frame's region [`RegionBrand`] allocation capability, minted from its owning storage.
