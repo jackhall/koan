@@ -373,6 +373,19 @@ impl DeclarationSite {
         },
         index: BindingIndex::BUILTIN,
     };
+
+    /// A binding installed when its scope is **born**, rather than by a declaration statement
+    /// running in it — a type-denoting FN parameter landing in the fresh per-call scope, an
+    /// ascription seeding the newborn view scope's type members. No slot installed it, so the
+    /// identity node is the off-scheduler sentinel and same-declaration checks never key on it;
+    /// the index is `value(0)`, the parameter position the visibility predicate admits.
+    pub const AT_CONSTRUCTION: DeclarationSite = DeclarationSite {
+        node: NodeHandle {
+            run: RunId::OFF_SCHEDULER,
+            node: NodeId(0),
+        },
+        index: BindingIndex::value(0),
+    };
 }
 
 /// Every lexical binding of one scope, in one cell. A still-finalizing binder lives in the table

@@ -25,7 +25,7 @@ use crate::machine::core::bindings::{
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
 use crate::machine::model::{Carried, KObject, KType, OperatorGroup, ReductionMode};
-use crate::machine::{DeliveredCarried, NodeHandle, RunId};
+use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
     /// Spike guard: a bind after [`Self::close`] means the scope's defining block finished yet a
@@ -285,18 +285,15 @@ impl<'a> Scope<'a> {
         let view = outer.alloc_child_under_module(path);
         view.bindings()
             .bulk_install_from(src, &mut WriteGate::for_unpublished_scope())?;
-        // A view's type member is installed by the ascription, not by a declaration statement, so
-        // its identity node is the off-scheduler sentinel and its index the `value(0)` position the
-        // visibility predicate reads — the same site shape a type-denoting FN parameter takes.
-        let site = DeclarationSite {
-            node: NodeHandle {
-                run: RunId::OFF_SCHEDULER,
-                node: NodeId(0),
-            },
-            index: BindingIndex::value(0),
-        };
+        // A view's type member is installed by the ascription, not by a declaration statement
+        // running in the view scope, so it takes the born-with-the-scope site.
         for (name, ktype) in type_entries(view.id) {
-            view.register_type_direct(name, ktype, site, &mut WriteGate::for_unpublished_scope())?;
+            view.register_type_direct(
+                name,
+                ktype,
+                DeclarationSite::AT_CONSTRUCTION,
+                &mut WriteGate::for_unpublished_scope(),
+            )?;
         }
         Ok(view)
     }
