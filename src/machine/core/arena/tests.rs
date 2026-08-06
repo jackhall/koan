@@ -13,6 +13,7 @@ use crate::machine::model::Scalar;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{Carried, CarriedFamily, Held, KObject};
+use crate::machine::model::{Module, ModuleDraft, SigSchema};
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
@@ -1032,13 +1033,15 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
 /// every substrate shape — list, dict, record, and both payload carriers (`Tagged` and `Wrapped`) —
 /// each carrying a string leaf so the bump holds re-homed bytes as well as cells and index metadata,
 /// and with a run of **callables**, whose signatures put a bumped element run and re-homed keyword /
-/// parameter-name bytes in the same region. The region is then dropped while nothing outside it holds
+/// parameter-name bytes in the same region, and with **modules**, whose paths, member-map keys and
+/// `BumpMap` bucket arrays land there too. The region is then dropped while nothing outside it holds
 /// a borrow. No slot in any of those shapes has a destructor to run, so the whole teardown is the
 /// bump's chunk free; Miri's process-exit leak check is the assertion. A family that quietly
 /// reintroduced an owning slot — a `Vec` spine, a `String` name, an `Rc` — leaks its buffer here,
 /// because a bump frees its chunks without visiting them. The signature names are synthesized rather
 /// than literal so the bytes genuinely belong to this region: a `&'static` spelling would pass the
-/// leak check without exercising the re-home it exists to pin.
+/// leak check without exercising the re-home it exists to pin — the same reason the module paths and
+/// member names below are built rather than spelled.
 #[test]
 fn region_death_frees_every_drop_free_family() {
     use crate::machine::model::KKey;
@@ -1131,9 +1134,33 @@ fn region_death_frees_every_drop_free_family() {
         .collect();
     assert_eq!(callables.len(), 4, "every callable is live in the region");
 
+    // A module at a child scope of this region, born through its own door: the path bytes, every
+    // member-map key's bytes and both `BumpMap` bucket arrays land in the same bump. Synthesized
+    // names again, for the same reason the callables' are.
+    let modules: Vec<&Module<'_>> = (0..2)
+        .map(|i| {
+            let child = scope.alloc_child_under_module(format!("member_module_{i}"));
+            let mut draft = ModuleDraft::empty();
+            draft
+                .type_members
+                .insert(format!("Member_{i}"), KType::NUMBER);
+            draft
+                .slot_type_tags
+                .insert(format!("slot_{i}"), KType::NUMBER);
+            let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+            Module::alloc_at_child_scope(&format!("module_{i}"), child, draft, self_sig)
+        })
+        .collect();
+    assert_eq!(modules.len(), 2, "every module is live in the region");
+    assert!(
+        modules[0].type_members.get(&"Member_0").is_some(),
+        "the member map reads back by content through its re-homed keys",
+    );
+
     // Nothing outside the region borrows into it, so this is the whole of region death: the typed
-    // arenas hold none of these families, and the bump frees its chunks without a destructor pass.
+    // arena holds none of these families, and the bump frees its chunks without a destructor pass.
     drop(shapes);
     drop(callables);
+    drop(modules);
     drop(frame);
 }

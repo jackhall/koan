@@ -37,9 +37,11 @@ group just to silence the stale-anchor check.
   TRY-WITH TCO, per-call frame
   re-anchor, NodeStore reinstall) pin safe-code frame / carrier / region drop-order and reattach
   disciplines whose backing `unsafe` is the `Region::alloc_resident` retype in `witnessed.rs`. Every
-  `KFunction` / `Scope` / `Module` store reaching that retype rides a born door
+  `Scope` store reaching that retype rides a born door
   (`RegionHandle::alloc_resident_born_with`), whose `for<'b>` brand discharges residence at compile
-  time — so koan-side `src/` carries no `unsafe` of its own at all.
+  time; the `Drop`-free families (`KFunction`, `Module`) take the bump doors, where the destination
+  brand's own lifetime is what borrowck checks — so koan-side `src/` carries no `unsafe` of its own
+  at all.
 - `src/machine/core/scope.rs` — `Scope::add` re-entry pins the queue-and-drain
   discipline that keeps `Scope`'s `RefCell<…>` invariant intact when a binding
   is added while a `data` borrow is live.
@@ -67,11 +69,11 @@ group just to silence the stale-anchor check.
   (`sealed_extern_open_invokes_a_fat_pointer_continuation`); the family's `unsafe impl` is
   `reattachable!`-generated, so outcome.rs carries none, and `run_step` runs the transmute
   end-to-end every step.
-- `src/machine/model/values/module.rs` — pointer-only groups: the interior-mutation-under-a-live-
-  `&'a Module` shape is pinned library-side (`the_returned_node_accepts_a_write_at_the_callers_lifetime`,
-  `invariant_same_brand_mutation`), the koan `RefCell` round trips run under plain `cargo test`,
-  and the MODULE-body Combine continuation rides the stored scope-pointer re-anchor the born-door
-  group pins. No `unsafe` of its own.
+- `src/machine/model/values/module.rs` — pointer-only groups: a `Module` is `Copy` and assembled
+  complete, so both its store doors are plain bump allocations whose destination brand discharges
+  residence at compile time; its `Drop`-free teardown rides the aggregate census test and its
+  member-map round trips run under plain `cargo test`. The MODULE-body Combine continuation rides
+  the stored scope-pointer re-anchor the born-door group pins. No `unsafe` of its own.
 - `src/machine/execute/dispatch/ctx.rs` — the `with_node_scope` read boundary is the
   sole production open of a `YokedChild` carrier; it passes the executing slot's
   cart `Rc` as the witness to `SealedExtern::open`, a **safe** call, so ctx.rs carries no
@@ -237,10 +239,11 @@ and reads correctly, and the buffer simply never frees, because freeing a chunk 
 the chunk holds. `Copy` is the static proxy that forbids it at every bump primitive; this test is
 the dynamic check that the proxy is load-bearing in composition. It fills one frame region with all
 five substrate shapes (list, dict, record, `Tagged`, `Wrapped`), each carrying a bumped string leaf
-so the region holds re-homed bytes and index metadata as well as cells, plus a run of `KFunction`s
+so the region holds re-homed bytes and index metadata as well as cells, a run of `KFunction`s
 whose signatures put a bumped element run and synthesized keyword / parameter-name bytes in the same
-region, then drops the frame with nothing outside borrowing in. Miri's process-exit leak count is the
-assertion.
+region, and a run of `Module`s, whose paths, member-map keys and `BumpMap` bucket arrays land there
+too — the map is the shape most likely to smuggle an owning spine back in. It then drops the frame
+with nothing outside borrowing in. Miri's process-exit leak count is the assertion.
 
 - `region_death_frees_every_drop_free_family`
 
@@ -404,16 +407,6 @@ operand together at one generative brand) and the doctest fixture markers backin
 route through — [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs)'s and
 `finalize.rs`'s call sites carry no `unsafe` of their own.
 
-**`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
-mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is
-live — the opaque-ascription shape. (The scope re-anchor itself is the stored scope-pointer group
-above; the carrier stores a `&'a Scope<'a>`.) The interior-write-through-the-re-anchored-holder
-shape is pinned library-side (`the_returned_node_accepts_a_write_at_the_callers_lifetime` and
-`invariant_same_brand_mutation` in the workgraph slate); the koan `RefCell` round trips
-(`module_type_members_refcell_mutation_with_held_module_ref` and its `slot_type_tags` twin) and the
-end-to-end `opaque_ascription_re_binds_do_not_alias_unsoundly` run under plain `cargo test`. No
-separate minimal test here.
-
 **MODULE body Combine continuation** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — the
 MODULE body schedules a `Combine` whose `finish` closure captures the child
 scope and runs on the outer scheduler's main loop after every body statement
@@ -461,15 +454,17 @@ the destination's arena, whose composition retains it for the consumer region's 
 because tree borrows catches a regression in the retention discipline that would dangle an escaped
 closure / module past its per-call frame's drop. The closure shape rides the `KFunction`
 captured-scope group above; the tests below pin the **module** shape — a functor-minted module
-surviving the run that built it, and a **transparent-ascription view**, the one value shape whose
-residence and the scope it borrows are different regions (the view is re-tagged into the ascribing
-call's own region while its child scope stays where the source module put it). A borrow leaf is never
+surviving the run that built it, an **opaque-ascription view** whose path and both member maps are
+read back out of the dead call region that bumped them, and a **transparent-ascription view**, the
+one value shape whose residence and the scope it borrows are different regions (the view is re-tagged
+into the ascribing call's own region while its child scope stays where the source module put it). A borrow leaf is never
 rebuilt, so a relocation carrying one out of a dying frame must keep the region it *lives* in, not the
 one it borrows; a release claim derived from the child scope frees the storage the returned value
 points at, which only tree borrows observes — a normal build reads the freed bytes back intact.
 
 - `functor_application_is_generative`
 - `a_returned_transparent_view_keeps_the_region_it_was_minted_in`
+- `functor_application_mints_distinct_abstract_types`
 
 **Record escape seam — cost-driven copy vs pin** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
 — two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The
@@ -532,9 +527,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-06: 924s — 20 tests, 0 leaks, 0 UB
 - 2026-08-06: 882s — 19 tests, 0 leaks, 0 UB
 - 2026-08-05: 815s — 19 tests, 0 leaks, 0 UB
 - 2026-08-05: 979s — 19 tests, 0 leaks, 0 UB
 - 2026-08-05: 864s — 19 tests, 0 leaks, 0 UB
-- 2026-08-04: 845s — 20 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

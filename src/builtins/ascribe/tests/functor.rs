@@ -78,14 +78,23 @@ fn functor_application_is_generative() {
 /// (`:|`) mints a fresh abstract type per application, so two calls yield modules whose `Carrier`
 /// type members are distinct `KType::AbstractType` carriers. Compare
 /// [`functor_application_is_generative`], which pins the same property on bare `scope_id`s.
+///
+/// Miri audit-slate: this is the opaque shape of the escaping-module retention discipline. Each view
+/// is born inside its call's own region carrying every byte it names — its path, both member maps'
+/// keys, and their `BumpMap` bucket arrays — and every read below happens after that frame is gone,
+/// probing each map by content with a `&str` built at the read site rather than the key the draft was
+/// assembled from. A release claim that freed the call's region would free the very storage those
+/// reads walk, which only tree borrows observes: a normal build reads the freed bytes back intact.
 #[test]
 fn functor_application_mints_distinct_abstract_types() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let src = "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
-               MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
+    // `VAL zero :Carrier` is typed against the SIG's abstract member, so each view records a
+    // `slot_type_tags` entry for it — the second member map, read back below.
+    let src = "SIG Ordered = ((TYPE Carrier) (VAL zero :Carrier) (VAL compare :Number))\n\
+               MODULE int_ord = ((LET Carrier = Number) (LET zero = 0) (LET compare = 7))\n\
                FN (MAKESET er :Ordered) -> Module = (er :| Ordered)\n\
                LET set_one = (MAKESET int_ord)\n\
                LET set_two = (MAKESET int_ord)";
@@ -122,6 +131,23 @@ fn functor_application_mints_distinct_abstract_types() {
     assert_ne!(
         one_carrier, two_carrier,
         "two applications of a module-returning FN must mint distinct abstract types",
+    );
+
+    // The second map and the bumped path, read out of the same dead call regions.
+    assert_eq!(
+        one.slot_type_tags.get(&"zero").copied(),
+        one_carrier,
+        "the abstract-typed VAL slot is tagged with that application's own minted Carrier",
+    );
+    assert_eq!(
+        two.slot_type_tags.get(&"zero").copied(),
+        two_carrier,
+        "and the second application's tag names its own mint, not the first's",
+    );
+    assert_eq!(
+        (one.path, two.path),
+        ("int_ord", "int_ord"),
+        "each view's path reads back out of the region it was minted in",
     );
 }
 
