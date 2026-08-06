@@ -326,9 +326,11 @@ at the seam:
   subvalue once per reference, the memoized sum is the copy's *exact*
   cost — no forwarding map, no walk.
 - **the region's allocated total** — its arenas already know their size, and
-  its bump reports its live occupancy
-  ([`Region::bump_bytes`](../workgraph/src/witnessed/region.rs)), so the string
-  bytes a pin would retain are in the denominator too.
+  its bump reports its reserved chunk capacity
+  ([`Region::bump_capacity`](../workgraph/src/witnessed/region.rs)), which is
+  what a pin retains: chunks whole, padding and unused tail included. So the
+  string bytes a pin would keep alive are in the denominator too, and so is
+  everything reserved around them.
 
 For a priceable value crossing out of its **own home region**, the rule is that
 ratio: copy when `copy_cost < α × region_allocated` — "this value is a small
@@ -386,10 +388,11 @@ bytes and alignment, with no per-slot type or destructor bookkeeping, which is
 exactly what Drop-freedom licenses. Region death for those bytes is
 deallocation with no per-slot `Drop` glue: free the arena's chunks, done.
 
-The split is settled, and the typed residue is **three families**: `KFunction`,
-`Scope`, and `Module` — the ones *designed* to own things (a captured binding
-table, a scope's bindings, a module's member map), plus the region's own
-bookkeeping (the interned reach side table, the union pin bundle). Everything
+The typed residue is **three families** — `KFunction`, `Scope`, and `Module`,
+each owning heap contents (a captured binding table, a scope's bindings, a
+module's member map) — plus the region's own bookkeeping (the interned reach
+side table, the union pin bundle). The residue is a holdover, not a design
+commitment: its retirement is tracked in [§ Open work](#open-work). Everything
 in the value channel is in the bump: the `KObject` and `Held` cells, all four
 container substrates, their index metadata, the strings, the expression parts.
 
@@ -502,6 +505,20 @@ left:
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
   — pricing copying-the-survivors-out against transferring-the-region, the
   local decision the cost seam's two numbers already support.
+- [Pending bindings as a value state](../roadmap/untyped_arena/pending-binding-union.md)
+  — dissolve the placeholder side tables into pending arms of the tables they
+  resolve into.
+- [Drop-free `KFunction`](../roadmap/untyped_arena/drop-free-kfunction.md)
+  — bumped signature elements take the function family out of its typed cell.
+- [Drop-free `Module`](../roadmap/untyped_arena/drop-free-module.md)
+  — a bumped path and bump-hosted member maps take the module family out of
+  its typed cell.
+- [Frame-owned scopes retire the typed cells](../roadmap/untyped_arena/frame-owned-scopes.md)
+  — scopes move beside the region as frame-owned droppy data, deleting
+  workgraph's typed-storage machinery and the `typed-arena` dependency.
+- [Bump-backed binding tables](../roadmap/untyped_arena/bump-backed-bindings.md)
+  — `allocator-api2` tables with bumped keys reduce `Scope::drop` to the
+  `Weak` back-link and the root writer.
 
 The mint doors' tier contract is prose, not a type — a brand shortened to a step
 shares its lifetime with the step's own allocator, so nothing stops a part hosted

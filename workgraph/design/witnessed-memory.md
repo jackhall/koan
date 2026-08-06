@@ -122,9 +122,7 @@ inherent impl, covering construction and every read, and they are what make the
 un-run destructor lossless: with `Copy` elements the table's `Drop` has nothing to
 do *but* free the bucket array, and that array lives in the very chunks region death
 releases. No `unsafe`, no `ManuallyDrop`. The surface is read-only — a table is
-frozen at construction because the value it indexes is, and mutation would have to
-rehash into the bump, stranding the old bucket array as garbage no occupancy figure
-could account for honestly.
+frozen at construction because the value it indexes is.
 
 The embedder's path in is two doors, split by whether the bumped value has
 operands whose reach the product must carry.
@@ -157,11 +155,15 @@ value into a *typed* family is gated at its own door — `alloc_resident`'s
 (`alloc_resident_born` / `alloc_resident_born_with` for a value built where it lands,
 `alloc_resident_folded` for one built at a fold) — none of which these doors touch. Occupancy is one
 whole-region figure,
-[`Region::bump_bytes`](../src/witnessed/region.rs) — **live bytes**, summed over
-what each allocating call actually stored, not the allocator's reserved chunk
-capacity, which would put a whole chunk's floor under a small region. There is no
-per-family breakdown, because the copy-versus-pin decision reads a region's total
-against a candidate value's own copy size and never needs one.
+[`Region::bump_capacity`](../src/witnessed/region.rs) — the allocator's
+**reserved chunk capacity**, padding and the newest chunk's unused tail
+included. A chunk's floor under a small region is the honest price, because a
+pin retains chunks whole; and reading the figure off the allocator rather than
+tallying it at the doors means an allocation that reaches the bump without a
+door call — a collection built over it through `allocator-api2` — is priced like
+any other. There is no per-family breakdown, because the copy-versus-pin
+decision reads a region's total against a candidate value's own copy size and
+never needs one.
 
 The allocation *capability* is a distinct type from the region. The engine's
 `alloc_resident` is `pub(crate)`, so a bare `&Region` has no allocation

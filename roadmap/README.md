@@ -56,5 +56,8 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Module element-type join](type_language/module-element-type-join.md)
 - [Union-typed carrier slots for builtin signatures](type_language/union-carrier-slots.md)
 - [USING surfaces module type members](type_language/using-type-members.md)
+- [Drop-free `KFunction`](untyped_arena/drop-free-kfunction.md)
+- [Drop-free `Module`](untyped_arena/drop-free-module.md)
+- [Pending bindings as a value state](untyped_arena/pending-binding-union.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 

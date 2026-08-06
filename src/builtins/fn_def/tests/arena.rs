@@ -346,11 +346,13 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     // so the growth bound has to read them together.
     //
     // The bump half reports reserved chunk capacity, which arrives in chunk-sized steps that double
-    // as the bump grows. A warmup window climbs that ladder before the baseline is taken, and the
-    // measured window is long enough that per-call growth dominates whatever single chunk step lands
-    // inside it — otherwise a cold region's first doubling would read as a leak.
+    // as the bump grows. Two things keep that from reading as a leak. A warmup window climbs the
+    // chunk ladder before the baseline is taken. And the measured window is long enough that
+    // per-call growth dominates a single step: below a few hundred calls the whole window fits
+    // inside one chunk, so the reading is that chunk's size and says nothing about per-call cost —
+    // it is flat from 100 calls to 200, then linear.
     const WARMUP: usize = 50;
-    const CALLS: u64 = 200;
+    const CALLS: u64 = 400;
     for _ in 0..WARMUP {
         let _ = test_run.run_one(parse_one(&program, "ECHO 7"));
     }
@@ -359,9 +361,11 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
         let _ = test_run.run_one(parse_one(&program, "ECHO 7"));
     }
     let growth = region.region().allocated_total() - baseline;
-    // Measured at four `KObject`-sized cells per call; the bound leaves 3x slack, which still
-    // catches any regression that re-introduces a per-call leak into run-root.
-    let budget = CALLS * 12 * std::mem::size_of::<crate::machine::model::KObject<'_>>() as u64;
+    // Measured at six `KObject`-sized cells per call over the linear stretch; the bound leaves 3x
+    // slack, which still catches any regression that re-introduces a per-call leak into run-root.
+    // Six rather than the four cells a live-byte tally would report: chunks double, so reserved
+    // capacity runs to roughly twice what is live in it.
+    let budget = CALLS * 18 * std::mem::size_of::<crate::machine::model::KObject<'_>>() as u64;
     assert!(
         growth < budget,
         "per-call leak regression: {growth} new run-root bytes across {CALLS} ECHO calls \
