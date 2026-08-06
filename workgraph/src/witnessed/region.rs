@@ -31,7 +31,7 @@
 //! [design/reach.md § Retention model](../../design/reach.md#retention-model)
 //! for how an escaped value's region stays alive.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::rc::Weak;
@@ -178,22 +178,10 @@ pub struct Region<W: StorageProfile> {
     /// death frees anyway — see [`BumpMap`](super::BumpMap).
     ///
     /// A cycle among bumped entries is harmless: everything here dies with the region, at once.
-    /// Occupancy is one figure for the whole bump ([`bump_bytes`](Self::bump_bytes)) — there is no
-    /// per-writer breakdown, because the copy-versus-pin decision reads a region's total against a
-    /// candidate value's own copy size and never needs one.
+    /// Occupancy is one figure for the whole bump ([`bump_capacity`](Self::bump_capacity)) — there
+    /// is no per-writer breakdown, because the copy-versus-pin decision reads a region's total
+    /// against a candidate value's own copy size and never needs one.
     bump: Bump,
-    /// Live bytes bumped into [`bump`](Self::bump) so far, summed over every allocating call — the
-    /// figure [`bump_bytes`](Self::bump_bytes) reports.
-    ///
-    /// Counted here rather than read off the allocator because `bumpalo` reports *chunk capacity*
-    /// (`Bump::allocated_bytes` returns the total size of the chunks it has reserved, padding and
-    /// the newest chunk's unused tail included). That would put a whole chunk's floor under the
-    /// copy-versus-pin ratio this figure exists to serve, so a region holding twenty live bytes
-    /// would price like one holding a full chunk.
-    ///
-    /// `Cell`, not `RefCell`: a `usize` counter needs no borrow tracking, and `Cell<usize>` is
-    /// `Copy` and `Drop`-free, so it costs a region teardown nothing.
-    bumped_bytes: Cell<usize>,
     /// The region's **union bundle**: one deduped [`PinBundle`] owning a pin for every region
     /// anything resident here reaches, retained for the region's whole life. It is the liveness home
     /// for a value **adopted** copy-free into this region ([`Region::retain_reach`], routed by
@@ -237,7 +225,6 @@ impl<W: StorageProfile> Region<W> {
             storage: StorageOf::<W>::default(),
             reach_table: FrozenMap::new(),
             bump: Bump::new(),
-            bumped_bytes: Cell::new(0),
             retained_reach: RefCell::new(PinBundle::empty()),
             host,
         }
@@ -310,7 +297,7 @@ impl<W: StorageProfile> Region<W> {
     /// for [`alloc_resident`](Self::alloc_resident), with no lifetime retype needed at all — the
     /// bump hands back `T` at whatever lifetime `T` already carried.
     pub(crate) fn bump_slice<'a, T: Copy>(&'a self, items: &[T]) -> &'a [T] {
-        self.note_bumped(self.bump.alloc_slice_copy(items))
+        self.bump.alloc_slice_copy(items)
     }
 
     /// [`bump_slice`](Self::bump_slice) for a single `Copy` value — same bump, same `T: Copy`
@@ -318,23 +305,19 @@ impl<W: StorageProfile> Region<W> {
     /// `&mut` the bump itself returns: a bumped value is region state a holder names, so no writer
     /// gets exclusive access to it after the allocating call.
     pub(crate) fn bump_value<T: Copy>(&self, value: T) -> &T {
-        self.note_bumped(self.bump.alloc(value))
+        self.bump.alloc(value)
     }
 
     /// [`bump_slice`](Self::bump_slice) for text — a `str` is a `Copy`-element slice with a
     /// UTF-8 invariant, so it carries no destructor either and needs no bound to say so.
     pub(crate) fn bump_text<'a>(&'a self, text: &str) -> &'a str {
-        self.note_bumped(self.bump.alloc_str(text))
+        self.bump.alloc_str(text)
     }
 
     /// Build a [`BumpMap`] over this region's bump from `entries` and place it there too — the one
     /// bump primitive whose stored value is not `Copy`, admitted because the `Copy` bound moves onto
     /// the table's elements and its buckets land in this same bump. [`BumpMap`] carries the argument
     /// in full.
-    ///
-    /// Both allocations are counted: the bucket array through
-    /// [`BumpMap::allocation_size`](super::BumpMap::allocation_size), the table header through
-    /// [`note_bumped`](Self::note_bumped) like every other bumped value.
     pub(crate) fn bump_map<'a, K, V>(
         &'a self,
         entries: impl IntoIterator<Item = (K, V)>,
@@ -344,38 +327,21 @@ impl<W: StorageProfile> Region<W> {
         V: Copy,
     {
         let map = BumpMap::build(&self.bump, entries);
-        self.note_bumped_amount(map.allocation_size());
-        self.note_bumped(self.bump.alloc(map))
+        self.bump.alloc(map)
     }
 
-    /// Add `stored`'s size to the region's live-byte count and hand it straight back — the return
-    /// path every bump primitive takes, so counting is a wrapper on the return value rather than a
-    /// separate step; nothing in the type system enforces that, so a new primitive has to be routed
-    /// the same way. `size_of_val` reads the size off the value the bump actually produced (a
-    /// slice's whole span, a `str`'s byte length), never a requested capacity.
-    fn note_bumped<'a, T: ?Sized>(&self, stored: &'a T) -> &'a T {
-        self.note_bumped_amount(size_of_val(stored));
-        stored
-    }
-
-    /// Add `bytes` to the region's live-byte count — the one writer of
-    /// [`bumped_bytes`](Self::bumped_bytes), split out for the allocation a bump primitive makes
-    /// *beside* the value it returns (a [`BumpMap`]'s bucket array, which `size_of_val` on the table
-    /// header does not see).
-    fn note_bumped_amount(&self, bytes: usize) {
-        self.bumped_bytes.set(self.bumped_bytes.get() + bytes);
-    }
-
-    /// The region's bump occupancy, in **total live bytes**: the sum of the sizes of the values
-    /// bumped into it, which is the figure the copy-versus-pin decision weighs a candidate value's
-    /// own copy size against. Not the allocator's reserved chunk capacity — see
-    /// [`bumped_bytes`](Self::bumped_bytes) for why that would misprice the ratio.
+    /// The region's bump footprint, in **reserved chunk capacity** (`Bump::allocated_bytes`):
+    /// padding and the newest chunk's unused tail included. Capacity rather than a live-byte tally
+    /// because this figure prices the copy-versus-pin decision and a pin retains chunks whole —
+    /// capacity *is* what a pin costs. Reading it off the allocator also means an allocation that
+    /// reaches the bump without going through a door here (a collection built over the bump through
+    /// `allocator-api2`) is priced like any other.
     ///
     /// It is a whole-region figure: there is no per-family or per-writer breakdown, because that
     /// decision never needs one (see the [`bump`](Self::bump) field). Monotonic, like the bump
     /// itself — nothing is freed before the region dies, so nothing is ever subtracted.
-    pub fn bump_bytes(&self) -> usize {
-        self.bumped_bytes.get()
+    pub fn bump_capacity(&self) -> usize {
+        self.bump.allocated_bytes()
     }
 
     /// Fold an owning [`PinBundle`] into the region's union bundle, retained for the region's whole

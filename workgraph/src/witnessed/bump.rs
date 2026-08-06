@@ -191,14 +191,6 @@ impl<'b, K: Copy + Eq + Hash, V: Copy> BumpMap<'b, K, V> {
         BumpMap { entries: table }
     }
 
-    /// The bucket array's byte footprint, the figure [`RegionHandle::bump_map`] adds to its region's
-    /// occupancy on top of the table header's own `size_of_val`. Read once, after the fill: with the
-    /// capacity reserved up front there is exactly one bucket allocation, so this is the whole of
-    /// what the table put in the bump.
-    pub(crate) fn allocation_size(&self) -> usize {
-        self.entries.allocation_size()
-    }
-
     /// The value `key` indexes, or `None`.
     pub fn get(&self, key: &K) -> Option<&V> {
         self.entries.get(key)

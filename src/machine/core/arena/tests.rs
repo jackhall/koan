@@ -957,22 +957,25 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
     );
 }
 
-/// [`KoanRegionExt::allocated_total`] weights each family by the flat size of its stored form:
-/// three fresh `KObject` allocations raise the total by exactly three `KObject` widths.
+/// [`KoanRegionExt::allocated_total`] weights each family by the flat size of its stored form, so a
+/// batch of scalar allocations puts at least that many `KObject` widths into the total. A lower
+/// bound rather than an exact delta because the total's other term is the bump's reserved capacity,
+/// which grows in chunks of the allocator's own choosing — an exact figure would be asserting
+/// bumpalo's private sizing policy.
 #[test]
-fn allocated_total_weights_families_by_size() {
+fn allocated_total_covers_the_families_it_weighs() {
+    const BATCH: usize = 1000;
     let storage = run_root_storage();
     let before = storage.region().allocated_total();
 
-    for n in 0..3 {
+    for n in 0..BATCH {
         storage.brand().alloc_scalar(Scalar::Number(n as f64));
     }
 
     let after = storage.region().allocated_total();
-    assert_eq!(
-        after - before,
-        3 * std::mem::size_of::<KObject<'static>>() as u64,
-        "three KObject allocations add three KObject widths"
+    assert!(
+        after - before >= BATCH as u64 * std::mem::size_of::<KObject<'static>>() as u64,
+        "{BATCH} KObject allocations add at least {BATCH} KObject widths"
     );
 }
 

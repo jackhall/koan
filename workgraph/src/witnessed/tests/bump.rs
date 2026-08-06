@@ -216,23 +216,27 @@ fn a_repeat_reach_interns_and_folds_no_second_retention() {
     assert_eq!(dest.region().retained_reach_len(), 1);
 }
 
-/// Occupancy is **live bytes**, exactly: each primitive adds the size of what it stored, and a door
-/// call that bumps nothing adds nothing. Asserted as exact totals rather than "it grew", because the
-/// figure prices the copy-versus-pin decision — a chunk-capacity reading would pass a growth
-/// assertion while overstating a small region by a whole chunk.
+/// The figure is **reserved chunk capacity**: it covers at least what was stored, it never shrinks,
+/// and a door call that bumps nothing reserves nothing. Asserted as lower bounds rather than exact
+/// totals — chunk sizing is the allocator's own policy, and the whole point of the figure is that it
+/// includes the padding and unused tail a pin would retain along with the live bytes.
 #[test]
-fn bump_bytes_reports_total_live_bytes() {
+fn bump_capacity_reports_reserved_chunks() {
     let dest = frame();
-    assert_eq!(dest.region().bump_bytes(), 0, "nothing bumped yet");
+    assert_eq!(
+        dest.region().bump_capacity(),
+        0,
+        "a fresh bump reserves no chunk"
+    );
 
     placement(&dest).fold_and_bump::<SpanFamily, WordFamily, BumpFrame>(&[], |bump, _| {
         bump.value(("koan", 4usize))
     });
-    let after_value = size_of::<(&str, usize)>();
-    assert_eq!(
-        dest.region().bump_bytes(),
-        after_value,
-        "a bumped value costs its own size, not the chunk reserved to hold it"
+    let live_after_value = size_of::<(&str, usize)>();
+    let after_value = dest.region().bump_capacity();
+    assert!(
+        after_value >= live_after_value,
+        "capacity covers at least what is stored, plus whatever chunk floor the allocator reserved"
     );
 
     placement(&dest).fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |bump, _| {
@@ -240,27 +244,28 @@ fn bump_bytes_reports_total_live_bytes() {
         let _stored: &[u64] = bump.slice(&block);
         "done"
     });
-    let after_slice = after_value + 4096 * size_of::<u64>();
-    assert_eq!(
-        dest.region().bump_bytes(),
-        after_slice,
-        "a slice costs its whole span"
+    let live_after_slice = live_after_value + 4096 * size_of::<u64>();
+    let after_slice = dest.region().bump_capacity();
+    assert!(
+        after_slice >= live_after_slice && after_slice >= after_value,
+        "a slice's whole span is reserved, and capacity is monotonic"
     );
 
     placement(&dest)
         .fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |bump, _| bump.text("tail"));
-    assert_eq!(
-        dest.region().bump_bytes(),
-        after_slice + "tail".len(),
-        "text costs its byte length"
+    let after_text = dest.region().bump_capacity();
+    assert!(
+        after_text >= live_after_slice + "tail".len() && after_text >= after_slice,
+        "text's byte length is reserved too"
     );
 
-    // A door call that bumps nothing — the constructor returns owned `'static` data — costs no bytes.
+    // A door call that bumps nothing — the constructor returns owned `'static` data — reserves no
+    // chunk, so the reading is unchanged.
     placement(&dest).fold_and_bump::<WordFamily, WordFamily, BumpFrame>(&[], |_bump, _| "literal");
     assert_eq!(
-        dest.region().bump_bytes(),
-        after_slice + "tail".len(),
-        "a door call that stores nothing is free"
+        dest.region().bump_capacity(),
+        after_text,
+        "a door call that stores nothing reserves nothing"
     );
 }
 
@@ -336,9 +341,9 @@ fn a_bumped_map_indexes_its_entries() {
     );
 }
 
-/// An empty table is a legitimate index, and it reserves nothing.
+/// An empty table is a legitimate index.
 #[test]
-fn an_empty_bumped_map_holds_and_reserves_nothing() {
+fn an_empty_bumped_map_holds_nothing() {
     let dest = frame();
     let handle = RegionHandle::<BumpProfile>::from_owner(&*dest);
 
@@ -347,29 +352,6 @@ fn an_empty_bumped_map_holds_and_reserves_nothing() {
     assert!(index.is_empty());
     assert_eq!(index.len(), 0);
     assert_eq!(index.get(&0), None);
-    assert_eq!(index.allocation_size(), 0, "no entries, no bucket array");
-}
-
-/// Occupancy counts **both** of the table's allocations — the header the bump placed and the bucket
-/// array the table reserved inside that same bump. The second is the one `size_of_val` on the header
-/// cannot see, and the reason the door adds it by hand.
-#[test]
-fn a_bumped_map_costs_its_header_and_its_bucket_array() {
-    let dest = frame();
-    let handle = RegionHandle::<BumpProfile>::from_owner(&*dest);
-    let before = dest.region().bump_bytes();
-
-    let index = handle.bump_map((0..16u32).map(|n| (n, n as usize)));
-
-    assert!(
-        index.allocation_size() > 0,
-        "sixteen entries reserve a bucket array"
-    );
-    assert_eq!(
-        dest.region().bump_bytes() - before,
-        size_of_val(index) + index.allocation_size(),
-        "live bytes, exactly: header plus buckets, and no chunk-capacity rounding"
-    );
 }
 
 /// A table may key on bytes from **its own region**, like every other bumped value — and region
@@ -400,7 +382,6 @@ fn a_bumped_map_keys_on_its_own_regions_bytes_and_dies_with_it() {
 #[test]
 fn placement_bump_writes_a_self_referential_value_into_its_own_destination() {
     let dest = frame();
-    let before = dest.region().bump_bytes();
     let placement = placement(&dest);
 
     let text: &str = placement.bump().text("koan");
@@ -408,9 +389,8 @@ fn placement_bump_writes_a_self_referential_value_into_its_own_destination() {
     let cell: &&str = placement.bump().value(text);
 
     assert_eq!(*cell, "koan");
-    assert_eq!(
-        dest.region().bump_bytes() - before,
-        "koan".len() + size_of::<&str>(),
+    assert!(
+        dest.region().bump_capacity() >= "koan".len() + size_of::<&str>(),
         "both the bytes and the cell pointing at them land in the destination's bump"
     );
     assert_eq!(

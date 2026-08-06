@@ -344,17 +344,27 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     // `allocated_total` weighs both halves of the region: the three typed sub-arenas and the bump
     // the `Drop`-free families live in. A per-call leak into run-root shows up in one or the other,
     // so the growth bound has to read them together.
+    //
+    // The bump half reports reserved chunk capacity, which arrives in chunk-sized steps that double
+    // as the bump grows. A warmup window climbs that ladder before the baseline is taken, and the
+    // measured window is long enough that per-call growth dominates whatever single chunk step lands
+    // inside it — otherwise a cold region's first doubling would read as a leak.
+    const WARMUP: usize = 50;
+    const CALLS: u64 = 200;
+    for _ in 0..WARMUP {
+        let _ = test_run.run_one(parse_one(&program, "ECHO 7"));
+    }
     let baseline = region.region().allocated_total();
-    for _ in 0..50 {
+    for _ in 0..CALLS {
         let _ = test_run.run_one(parse_one(&program, "ECHO 7"));
     }
     let growth = region.region().allocated_total() - baseline;
     // Measured at four `KObject`-sized cells per call; the bound leaves 3x slack, which still
     // catches any regression that re-introduces a per-call leak into run-root.
-    let budget = 50 * 12 * std::mem::size_of::<crate::machine::model::KObject<'_>>() as u64;
+    let budget = CALLS * 12 * std::mem::size_of::<crate::machine::model::KObject<'_>>() as u64;
     assert!(
         growth < budget,
-        "per-call leak regression: {growth} new run-root bytes across 50 ECHO calls \
+        "per-call leak regression: {growth} new run-root bytes across {CALLS} ECHO calls \
          (expected < {budget})",
     );
 }

@@ -500,10 +500,10 @@ pub(crate) trait KoanRegionExt {
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>;
 
     /// Total bytes allocated in this region: each Koan family's live count weighted by the flat size
-    /// of its stored `'static` form, plus the region's **bump occupancy**
-    /// ([`Region::bump_bytes`]) — the string bytes a value family slot holds and the library's own
-    /// sectioned-container metadata, which a pin would retain just as surely as an arena cell.
-    /// Prices the host region only, not the
+    /// of its stored `'static` form, plus the region's **reserved bump capacity**
+    /// ([`Region::bump_capacity`]) — the chunks holding the string bytes a value family slot holds
+    /// and the library's own sectioned-container metadata, which a pin retains whole just as surely
+    /// as it retains an arena cell. Prices the host region only, not the
     /// `outer` chain its `Rc<FrameStorage>` also retains (a documented approximation): the cost-copy
     /// seam reads this as the denominator of the payoff ratio, where the host's own footprint is the
     /// relevant scale. `#[allow(dead_code)]` because trait methods, unlike inherent ones, are checked
@@ -557,7 +557,7 @@ impl KoanRegionExt for KoanRegion {
         weigh::<KFunction<'static>>(self)
             + weigh::<Scope<'static>>(self)
             + weigh::<Module<'static>>(self)
-            + self.bump_bytes() as u64
+            + self.bump_capacity() as u64
     }
 }
 
@@ -567,8 +567,8 @@ impl KoanRegionExt for KoanRegion {
 pub(crate) trait KoanRegionTestExt {
     /// Total number of values stored across the three typed sub-arenas. Each typed `alloc_*` writes
     /// to exactly one of them, so this is the precise count without double-counting. It says nothing
-    /// about the `Drop`-free families: those live in the bump, which counts bytes
-    /// ([`Region::bump_bytes`]) rather than values.
+    /// about the `Drop`-free families: those live in the bump, which reports reserved capacity
+    /// ([`Region::bump_capacity`]) rather than values.
     fn alloc_count(&self) -> usize;
 }
 
