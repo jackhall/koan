@@ -150,17 +150,21 @@ constructor family) is manifest. Outer aliases and builtin annotations
 Opaque ascription ([`ascribe.rs`](../../src/builtins/ascribe.rs)'s `body_opaque`)
 mints a per-call `AbstractType` into `type_members` for each abstract member and
 mirrors each manifest member's fixed `KType` in concretely (the view scope carries
-no type entries of its own), then records on the new `Module` a `slot_type_tags` map
+no type entries of its own), plus a `slot_type_tags` map
 (VAL-slot name → per-call `AbstractType`) for each slot whose SIG-declared type is
-an abstract member sourced at the SIG's decl scope. Transparent `:!` leaves the map empty, so
+an abstract member sourced at the SIG's decl scope. Both maps are gathered into a
+`ModuleDraft` and frozen into the view module at construction — a built module has
+nothing to write — and the per-application generativity nonce is the view scope's own id, which
+`Module::scope_id` reports back off the finished value. Transparent `:!` leaves the maps empty, so
 transparent reads stay concrete.
 
 **Satisfaction and `WITH`.** Satisfaction is a **signature-subtyping** check
 ([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)). Every module carries a
 principal **self-sig** — a [`SigSchema`](../../src/machine/model/types/sig_schema.rs) of its
 abstract members (always none — `TYPE` is SIG-body-only), manifest type members, and
-value-slot types — derived once at creation and sealed immutable (`Module::seal_self_sig`;
-a bare construction derives it lazily via `raw_self_sig`). A signature *is* a
+value-slot types — derived from the members construction gathered, interned *before* the module
+value exists, and carried on it immutably (`SigSchema::raw_self_sig` is the whole derivation for a
+bare construction). A signature *is* a
 `SigSchema` (`WITH` pins are already folded into it at intern time). Ascription (`check_satisfies`,
 run for both `:|` and `:!`) holds iff `module.self_sig <: sig-schema` under `sig_subtype`:
 `Sub <: Super` iff `Sub` supplies every member `Super` names (width — extra `Sub` members are
@@ -171,7 +175,7 @@ parameter-name *set* equals the slot's — see
 [functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots)), and each value slot
 covariantly compatible — the module's member type must be `satisfied_by`-admissible for the
 slot's declared type, after the slot's references to `Super`'s abstract members are substituted
-with `Sub`'s bindings for them. Each ascription view seals its own self-sig recording those
+with `Sub`'s bindings for them. Each ascription view is born carrying a self-sig recording those
 substituted slot types, so a view structurally satisfies its own signature. The result is
 memoized in the type registry under `Relation::SigSatisfies`, keyed on the two schema content
 digests (a pure cache — types are immutable).

@@ -125,9 +125,9 @@ would close a loop.
 
 The allocation engine therefore needs **no cycle gate**. A stored value holds no owning `Rc` back to
 a region, so storing a composite that carries an escaping closure into any region — including the one
-the closure's scope lives in — can never close a region↔value back-edge. The born doors that place a
-`KFunction` / `Scope` / `Module` ([memory-model.md § Move-in
-residence](../memory-model.md#move-in-residence)) each route the single
+the closure's scope lives in — can never close a region↔value back-edge. The born door that places a
+`Scope` ([memory-model.md § Move-in
+residence](../memory-model.md#move-in-residence)) routes the single
 [`alloc_resident`](../../workgraph/src/witnessed/region.rs) engine, which
 erases the value to `'static`, stores it, and re-anchors the store to `'a` with no redirect step. The
 engine lives generically in the `Region<W>` substrate (`workgraph/src/witnessed/region.rs`), names no Koan type,

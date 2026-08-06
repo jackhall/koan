@@ -56,6 +56,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Module element-type join](type_language/module-element-type-join.md)
 - [Union-typed carrier slots for builtin signatures](type_language/union-carrier-slots.md)
 - [USING surfaces module type members](type_language/using-type-members.md)
-- [Drop-free `Module`](untyped_arena/drop-free-module.md)
+- [Frame-owned scopes retire the typed cells](untyped_arena/frame-owned-scopes.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 

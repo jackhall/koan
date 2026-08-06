@@ -388,21 +388,27 @@ bytes and alignment, with no per-slot type or destructor bookkeeping, which is
 exactly what Drop-freedom licenses. Region death for those bytes is
 deallocation with no per-slot `Drop` glue: free the arena's chunks, done.
 
-The typed residue is **two families** — `Scope` and `Module`, each owning heap
-contents (a scope's bindings, a module's member map) — plus the region's own
-bookkeeping (the interned reach side table, the union pin bundle). The residue
-is a holdover, not a design commitment: its retirement is tracked in
-[§ Open work](#open-work). Everything in the value channel is in the bump: the
-`KObject` and `Held` cells, all four container substrates, their index
-metadata, the strings, the expression parts — and the `KFunction` family, whose
+The typed residue is **one family** — `Scope`, which owns its bindings — plus
+the region's own bookkeeping (the interned reach side table, the union pin
+bundle). The residue is a holdover, not a design commitment: its retirement is
+tracked in [§ Open work](#open-work). Everything in the value channel is in the
+bump: the `KObject` and `Held` cells, all four container substrates, their index
+metadata, the strings, the expression parts — the `KFunction` family, whose
 signature is a bumped run of elements with `&str` names re-homed into the
 function's own region by the one signature constructor
-([`ExpressionSignature::mint`](../src/machine/model/types/signature.rs)).
+([`ExpressionSignature::mint`](../src/machine/model/types/signature.rs)) — and
+the `Module` family, whose path is a bumped `&str` and whose two member tables
+are build-once `BumpMap`s keyed by re-homed `&str`
+([`Module::assemble`](../src/machine/model/values/module.rs)). A module is
+assembled complete: its construction gathers members into an owned
+`ModuleDraft` and interns the self-sig *before* the value exists, so the stored
+value is frozen and `Copy` with nothing to mutate after the fact.
 
 `Copy` is what holds a family to that: every bump primitive is `T: Copy`-bounded,
 because "`Drop`-free" has no expressible bound and `Copy` is the honest static
 proxy. The one primitive whose stored value is not itself `Copy` — the
-[`BumpMap`](../workgraph/src/witnessed/bump.rs) door a dict's key index takes —
+[`BumpMap`](../workgraph/src/witnessed/bump.rs) door a dict's key index and a
+module's two member tables take —
 moves the bound onto the table's *elements* and allocates the buckets in the same
 bump, so the destructor it forgoes would have freed only bytes region death frees
 anyway. A family that reintroduced an owning slot would not fail loudly: it would
@@ -508,9 +514,6 @@ left:
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
   — pricing copying-the-survivors-out against transferring-the-region, the
   local decision the cost seam's two numbers already support.
-- [Drop-free `Module`](../roadmap/untyped_arena/drop-free-module.md)
-  — a bumped path and bump-hosted member maps take the module family out of
-  its typed cell.
 - [Frame-owned scopes retire the typed cells](../roadmap/untyped_arena/frame-owned-scopes.md)
   — scopes move beside the region as frame-owned droppy data, deleting
   workgraph's typed-storage machinery and the `typed-arena` dependency.

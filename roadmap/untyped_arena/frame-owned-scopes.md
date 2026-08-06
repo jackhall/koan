@@ -42,7 +42,6 @@ exactly as long as the region, which frame ownership gives it directly.
 
 **Requires:**
 
-- [Drop-free `Module`](drop-free-module.md)
 
 **Unblocks:**
 

@@ -202,17 +202,21 @@ instead, and arriving at the pure door is a construction bug reported as a diagn
 not a residence verdict a caller could turn into an admission.
 
 **No runtime residence check survives either.** A `KFunction`, `Scope`, or `Module` borrows a
-single region (its captured / parent / child scope), and each is *born at its destination*: the
-value is constructed and stored in one act inside a `for<'b>` brand over the destination region
+single region (its captured / parent / child scope), and none can carry a region pointer other
+than its destination's. `Scope` — the one still erased for storage — is *born at its destination*:
+the value is constructed and stored in one act inside a `for<'b>` brand over the destination region
 ([`RegionHandle::alloc_resident_born`](../workgraph/src/witnessed/region.rs) and its
-crossing-operand sibling `alloc_resident_born_with`), so the region pointer it carries is the
-destination's by construction. The koan doors —
+crossing-operand sibling `alloc_resident_born_with`). `KFunction` and `Module` are `Copy` and take
+the plain bump door, where nothing is erased and the borrow checker alone holds every embedded
+reference to the lifetime the destination brand borrows its region for; each re-homes its own bytes
+(a signature's element run and names, a module's path and member tables) at that same single brand,
+so splitting a value from its parts across two regions is unstateable. The koan doors —
 [`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its siblings,
 [`KFunction::alloc_captured`](../src/machine/core/kfunction.rs),
 [`Module::alloc_at_child_scope`](../src/machine/model/values/module.rs) — each derive the
 destination handle from the value's own anchoring scope rather than taking a brand alongside it,
 so pairing a value with a foreign region is not stateable at a call site. The value-returning
-constructors are private, so none of the three can exist outside the act that stores it. A
+constructors are crate-internal, so none of the three can exist outside the act that stores it. A
 `Module` re-tagging a *foreign* child scope (a transparent ascription view) takes the fold brand
 instead, inside the fold that merges that scope in
 ([`Scope::store_transparent_view`](../src/machine/core/scope/reach.rs)).
