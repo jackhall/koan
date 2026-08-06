@@ -301,3 +301,75 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     assert!(lookup.overloads.is_empty());
     assert!(lookup.pending.is_none());
 }
+
+/// The producer-failure sweep reaches dispatch buckets. One bucket-keyed binder claims a slot in
+/// every inner-call bucket it declares, so the purge keys on the producer each pending slot
+/// carries and spans all of them; a sibling producer's claim and a finalized overload both
+/// survive, and a bucket the purge empties loses its key.
+#[test]
+fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
+    let types = TypeRegistry::new();
+    let region = run_root_storage();
+    let scope = run_root_bare(&region);
+    let f = KFunction::alloc_captured(
+        scope,
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        false,
+        &types,
+    );
+    scope
+        .register_function_direct(
+            "FOO".to_string(),
+            f,
+            BindingIndex::value(1),
+            &mut crate::machine::WriteGate::for_test(),
+        )
+        .unwrap();
+    let sealed_key = f.signature.untyped_key();
+    let other_key = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::ANY),
+        elements: vec![SignatureElement::Keyword("BAR".into())],
+    }
+    .untyped_key();
+
+    // NodeId(7) is one binder declaring two inner-call buckets; NodeId(8) is a sibling sharing one.
+    for (key, producer, idx) in [
+        (&sealed_key, NodeId(7), 2),
+        (&other_key, NodeId(7), 2),
+        (&other_key, NodeId(8), 3),
+    ] {
+        scope
+            .install_pending_overload(
+                key.clone(),
+                producer,
+                BindingIndex::value(idx),
+                &mut crate::machine::WriteGate::for_test(),
+            )
+            .unwrap();
+    }
+
+    scope.clear_placeholders_for_producer(NodeId(7), &mut crate::machine::WriteGate::for_test());
+
+    let bindings = scope.bindings();
+    // The failed binder's claims are gone from both buckets it reached.
+    assert!(bindings.pending_overload_entries(&sealed_key).is_empty());
+    assert_eq!(
+        bindings
+            .pending_overload_entries(&other_key)
+            .iter()
+            .map(|p| p.producer)
+            .collect::<Vec<_>>(),
+        vec![NodeId(8)],
+    );
+    // The finalized overload sharing a bucket with a purged claim survives.
+    assert_eq!(
+        bindings.lookup_function(&sealed_key, None).overloads.len(),
+        1
+    );
+
+    // Purging the last claim in a bucket that holds nothing else drops the key.
+    bindings.clear_placeholders_for_producer(NodeId(8), &mut crate::machine::WriteGate::for_test());
+    assert!(!bindings.functions().contains_key(&other_key));
+    assert!(bindings.functions().contains_key(&sealed_key));
+}

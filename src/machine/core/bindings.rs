@@ -1057,25 +1057,23 @@ impl Bindings {
             .iter()
             .position(|slot| slot.pending().is_some_and(|p| p.index == index))
         {
-            Some(at) => {
-                bucket[at] = OverloadSlot::Sealed(entry);
-                // Any further claim at the same index is a leak from a prior run's failed binder —
-                // the pending-overload channel has no error-path sweep, so this write is where it
-                // dies.
-                bucket.retain(|slot| !slot.pending().is_some_and(|p| p.index == index));
-            }
+            Some(at) => bucket[at] = OverloadSlot::Sealed(entry),
             None => bucket.push(OverloadSlot::Sealed(entry)),
         }
         Ok(())
     }
 
-    /// Drop every name-keyed pending arm pointing at `producer`. The success write
-    /// paths finalize a binder's own claim in place; this is the error-path
+    /// Drop every pending arm pointing at `producer`, in all three claim-bearing tables. The
+    /// success write paths finalize a binder's own claim in place; this is the error-path
     /// companion, called when `producer`'s node finalizes with an error so a binder body
     /// that failed before its write path does not leak a scheduler-local [`NodeId`] into
     /// a later run on a persistent scope. A `types` slot that also holds a bound identity keeps
-    /// it — only the pending arm is dropped. Function buckets are untouched: a pending overload
-    /// dies only under a later same-index [`Self::write_overload`].
+    /// it — only the pending arm is dropped. One bucket-keyed binder claims a slot in every
+    /// inner-call bucket it declares, so the `functions` walk purges by producer across all of
+    /// them and drops a bucket the purge empties.
+    ///
+    /// The purge keys on the [`PendingBinding::producer`] each slot already carries; no table's
+    /// key participates.
     pub fn clear_placeholders_for_producer(&self, producer: NodeId, _gate: &mut WriteGate) {
         let mut tables = self.tables.borrow_mut();
         let claims = |slot: Option<PendingBinding>| slot.is_some_and(|p| p.producer == producer);
@@ -1087,6 +1085,10 @@ impl Bindings {
                 true
             }
             _ => true,
+        });
+        tables.functions.retain(|_, bucket| {
+            bucket.retain(|slot| !claims(slot.pending()));
+            !bucket.is_empty()
         });
     }
 }

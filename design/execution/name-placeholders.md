@@ -182,11 +182,15 @@ claimed on the value side, and a bucket's sealed entry sits where its claim was.
 
 The error path is the one place a claim dies without a write. When a producer's
 node finalizes with an error, `clear_placeholders_for_producer` drops every
-name-keyed pending arm naming it — a `types` slot that also holds a bound
+pending arm naming it — a `types` slot that also holds a bound
 identity keeps the identity and loses only its pending arm — so a binder body
 that failed before its write path cannot leak a scheduler-local `NodeId` into a
-later run on a persistent scope. The sweep is name-keyed: a bucket's pending slot
-carries no name, and dies only under a later write at the same `BindingIndex`.
+later run on a persistent scope. The sweep keys on the `producer` every
+`PendingBinding` already carries, so it spans all three claim-bearing tables
+alike: no table's key participates, and a bucket-keyed binder's claim dies in
+every inner-call bucket it declared, the emptied bucket losing its key. A
+finalize therefore only ever overwrites its own live claim — the write path has
+no leftover-claim cleanup of its own, because the error path leaves none behind.
 
 ### Miri forward-splice and replay-park lifetime contract
 
