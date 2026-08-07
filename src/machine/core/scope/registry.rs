@@ -24,7 +24,7 @@ use crate::machine::core::bindings::{
 };
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
-use crate::machine::model::{Carried, KObject, OperatorGroup, ReductionMode};
+use crate::machine::model::{Carried, KObject, KType, OperatorGroup, ReductionMode};
 use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
@@ -38,26 +38,16 @@ impl<'a> Scope<'a> {
         );
     }
 
-    /// Whether this scope is a transparent `USING` window — its bindings are the surfaced module's,
-    /// so a write here belongs at the call site ([`Self::write_scope`]).
-    pub(crate) fn is_using_window(&self) -> bool {
-        self.bindings.is_borrowed()
-    }
-
-    /// The scope a write against `self` lands in: `self`, or — through one or more transparent
-    /// `USING` windows — the innermost enclosing call site that owns its own bindings. The single
-    /// site expressing the forwarding decision, shared by the op-apply interpreter and the
-    /// submission-channel installs. Panics if a window is rootless: the transparent constructor
-    /// always sets `outer`, so that would be a construction bug.
-    pub(crate) fn write_scope<'s>(&'s self) -> &'s Scope<'a> {
-        let mut target: &'s Scope<'a> = self;
-        while target.is_using_window() {
-            target = target.outer().expect(
-                "a Borrowed (USING transparent) scope must have an outer call-site to forward \
-                 writes to",
-            );
-        }
-        target
+    /// Spike guard: every write target owns its own binding table. A `USING` window borrows the
+    /// opened module's, and is never one — the block's statements run in the owned child stacked
+    /// inside it ([`Self::open_module_window`]), so a write reaching a borrowed table would mean the
+    /// window leaked out of that door. `debug_assert` so release builds pay nothing.
+    pub(crate) fn assert_owns_bindings(&self) {
+        debug_assert!(
+            !self.bindings.is_borrowed(),
+            "write into the borrowed bindings of USING window {:?}",
+            self.id,
+        );
     }
 
     /// Fused MODULE-finish value **construction**: merge the resident module reference into this
@@ -210,8 +200,8 @@ impl<'a> Scope<'a> {
         kind: BindKind,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        self.write_scope()
-            .bindings()
+        self.assert_owns_bindings();
+        self.bindings()
             .install_placeholder(name, idx, index, kind, gate)
     }
 
@@ -221,8 +211,8 @@ impl<'a> Scope<'a> {
     /// failed binder body can't leak a scheduler-local producer into a later run on a
     /// persistent scope. See [`Bindings::clear_placeholders_for_producer`].
     pub fn clear_placeholders_for_producer(&self, producer: NodeId, gate: &mut WriteGate) {
-        self.write_scope()
-            .bindings()
+        self.assert_owns_bindings();
+        self.bindings()
             .clear_placeholders_for_producer(producer, gate);
     }
 
@@ -239,8 +229,8 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        self.write_scope()
-            .bindings()
+        self.assert_owns_bindings();
+        self.bindings()
             .install_pending_overload(bucket, idx, index, gate)
     }
 
@@ -264,22 +254,37 @@ impl<'a> Scope<'a> {
         .apply(self, gate)
     }
 
-    /// Allocate an ascription view's scope under `outer` and replay `src`'s bindings into it —
-    /// value entries and dispatch buckets both, so the view preserves the source module's
-    /// keyworded surface as-is. The replay is pure seal duplication; the binding table opens
-    /// nothing.
+    /// Allocate an ascription view's scope under `outer`, replay `src`'s bindings into it — value
+    /// entries and dispatch buckets both, so the view preserves the source module's keyworded
+    /// surface as-is — and seed the view's own type members from `type_entries`, which receives the
+    /// newborn scope's id (the generativity nonce a per-call abstract mint folds in). The replay is
+    /// pure seal duplication; the binding table opens nothing. The seeded `types` table *is* the
+    /// view's type interface: what the table does not hold — the source's representation types
+    /// behind an abstract member — is unreachable through the view by construction.
     ///
     /// Born-inside-the-door like [`Self::alloc_group_child`]: the view scope is returned only once
-    /// the replay has landed, and nothing else has a reference to it before then, so the door mints
-    /// its own [`WriteGate`]. `:|` / `:!` run builtin-side, where no gate can be minted.
+    /// the replay and the seeding have landed, and nothing else has a reference to it before then,
+    /// so the door mints its own [`WriteGate`]. `:|` / `:!` run builtin-side, where no gate can be
+    /// minted.
     pub(crate) fn alloc_module_view(
         outer: &'a Scope<'a>,
         path: String,
         src: &crate::machine::core::Bindings,
+        type_entries: impl FnOnce(crate::machine::core::ScopeId) -> Vec<(String, KType)>,
     ) -> Result<&'a Scope<'a>, KError> {
         let view = outer.alloc_child_under_module(path);
         view.bindings()
             .bulk_install_from(src, &mut WriteGate::for_unpublished_scope())?;
+        // A view's type member is installed by the ascription, not by a declaration statement
+        // running in the view scope, so it takes the born-with-the-scope site.
+        for (name, ktype) in type_entries(view.id) {
+            view.register_type_direct(
+                name,
+                ktype,
+                DeclarationSite::AT_CONSTRUCTION,
+                &mut WriteGate::for_unpublished_scope(),
+            )?;
+        }
         Ok(view)
     }
 

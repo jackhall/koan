@@ -1,8 +1,13 @@
 //! `USING … SCOPE` block-scoped module opening.
 //!
-//! Module names carry a lowercase letter (`some_module`, `res`) because the token
+//! Module names carry a lowercase letter (`some_module`, `res`, `outer_m`) because the token
 //! classifier reads all-uppercase names as keywords; dispatch keywords
-//! (`DBL`, `GETIT`, `GETV`, `NOOP`) stay all-uppercase.
+//! (`DBL`, `GETIT`, `NOOP`) stay all-uppercase.
+//!
+//! - [`type_members`] — the window's type channel: a module's type members named in type
+//!   positions inside the block, and block-local type declarations over them.
+
+mod type_members;
 
 use std::rc::Rc;
 
@@ -31,30 +36,39 @@ fn using_surfaces_module_function_for_bare_dispatch() {
     assert!(matches!(result, KObject::Number(n) if *n == 21.0));
 }
 
+/// A block bind is local to the block: it lands in the block's own scope, which no statement
+/// after the block reaches on its ancestor walk.
 #[test]
-fn using_block_bind_persists_at_call_site() {
+fn using_block_bind_dies_with_the_block() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = (LET val = 1)");
     test_run.run("USING some_module SCOPE (LET local = 5)");
-    let result = test_run.run_one(parse_one(&program, "local"));
-    assert!(matches!(result, KObject::Number(n) if *n == 5.0));
+    let err = test_run.run_one_err(parse_one(&program, "local"));
+    assert!(
+        matches!(&err.kind, KErrorKind::UnboundName(name) if name == "local"),
+        "expected UnboundName(local) after the block closed, got {err}",
+    );
 }
 
-/// Without the guard the op-apply runs before forwarding a value write through a transparent
-/// window, the surfaced member would silently shadow the bind.
+/// A block bind whose name matches a surfaced member is ordinary inner-scope shadowing: the walk
+/// hits the block scope before the window. A statement *before* the bind still reads the module's
+/// member — the block layer is index-gated like any other — and the tail reads the local one.
 #[test]
-fn using_block_bind_colliding_with_member_errors() {
+fn using_block_bind_shadows_a_surfaced_member() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = (LET x = 1)");
-    let err = test_run.run_one_err(parse_one(&program, "USING some_module SCOPE (LET x = 2)"));
+    let result = test_run.run_one(parse_one(
+        &program,
+        "USING some_module SCOPE ((LET before = x) (LET x = 20) (x + before))",
+    ));
     assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("collides with a surfaced module member") && msg.contains("`x`")),
-        "expected collision ShapeError naming `x`, got {err}",
+        matches!(result, KObject::Number(n) if *n == 21.0),
+        "expected 20 (the block's own `x`) + 1 (the module's, read before the bind), got {:?}",
+        result.ktype(),
     );
 }
 
@@ -145,26 +159,180 @@ fn using_opens_a_bound_functor_module_in_the_declaring_block() {
 }
 
 /// A window-surfaced member read *after* the `USING` statement, from a later statement of the same
-/// block: the block's `LET k = v` forwards the surfaced value out of the window, so the read
-/// outlives the window's own statement while staying inside the declaring frame.
+/// call-site block: the block's tail yields the surfaced value, which the call site binds, so the
+/// read outlives the window while staying inside the declaring frame.
 #[test]
-fn using_window_member_forwards_to_a_later_statement_of_the_same_block() {
+fn using_tail_value_reaches_a_later_statement_of_the_call_site_block() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (MAKEIT) -> Module = (MODULE res = (LET v = 11))");
-    test_run.run("FN (RUNIT) -> Number = ((USING (MAKEIT) SCOPE (LET k = v)) (k))");
+    test_run.run("FN (RUNIT) -> Number = ((LET k = (USING (MAKEIT) SCOPE (v))) (k))");
     let result = test_run.run_one(parse_one(&program, "RUNIT"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 11.0),
-        "a bind forwarded out of the window survives to the block's next statement",
+        "the tail's value escapes the window to the call site's next statement",
+    );
+}
+
+/// A block-local bind and a block-local `FN` used by a *later statement of the same block*, under
+/// real per-statement chains (`enter_source`, not the detached-chain `run`). Both entries live in
+/// the block's own scope at their plain statement indices, so the in-block reader gates by block
+/// ordering regardless of where the `USING` statement sits in its own block.
+#[test]
+fn using_block_bind_and_function_are_visible_to_later_statements_of_the_same_block() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let ids = test_run.enter_source(
+        "MODULE some_module = (LET val = 1)\n\
+         USING some_module SCOPE (\n  \
+         LET localv = 5\n  \
+         FN (DOUBLE x :Number) -> Number = (x + x)\n  \
+         (DOUBLE localv)\n\
+         )",
+    );
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
+    let tail = crate::builtins::test_support::extract_terminal(
+        &test_run.runtime,
+        test_run.scope,
+        *ids.last().expect("two top-level statements"),
+    );
+    assert!(
+        matches!(tail, Carried::Object(KObject::Number(n)) if *n == 10.0),
+        "a block statement reads its earlier siblings' binds on both channels",
+    );
+}
+
+/// The block's binds are gone from the statement right after it closes, under real per-statement
+/// chains. Nothing installs at the call site, so the call-site block's own numbering never carries
+/// a block entry at all.
+#[test]
+fn using_block_binds_are_unbound_immediately_after_the_block() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let ids = test_run.enter_source(
+        "MODULE some_module = (LET val = 1)\n\
+         USING some_module SCOPE (\n  \
+         LET first = 1\n  \
+         LET second = 2\n  \
+         LET third = 3\n\
+         )\n\
+         third",
+    );
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
+    let error = test_run
+        .runtime
+        .result_error(ids[2])
+        .expect_err("the block's last bind must not reach the statement after the block");
+    assert!(
+        matches!(&error.kind, KErrorKind::UnboundName(name) if name == "third"),
+        "expected UnboundName(third), got {error}",
+    );
+}
+
+/// Intra-block ordering stays strict: a statement of the block reading a name its *later* sibling
+/// binds is a forward reference, exactly as it would be in an ordinary block — the block scope's
+/// own statement indices are what the in-block reader is gated by.
+#[test]
+fn using_block_forward_reference_stays_a_position_error() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let ids = test_run.enter_source(
+        "MODULE some_module = (LET val = 1)\n\
+         USING some_module SCOPE (\n  \
+         early\n  \
+         LET early = 5\n\
+         )",
+    );
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
+    let error = test_run
+        .runtime
+        .result_error(ids[1])
+        .expect_err("reading a later sibling's bind from inside the block is an error");
+    assert!(
+        matches!(&error.kind, KErrorKind::UnboundName(name) if name == "early"),
+        "expected UnboundName(early), got {error}",
+    );
+}
+
+/// Nested windows gate by construction: each `USING` stacks its own window + block pair, so an
+/// intermediate-block reader — a later statement of the outer block, after the inner block ended —
+/// sees its own earlier binds and the enclosing window, and nothing of the inner pair.
+#[test]
+fn nested_using_intermediate_statement_sees_its_own_and_enclosing_binds() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("MODULE outer_m = (LET a = 1)");
+    test_run.run("MODULE inner_m = (LET b = 20)");
+    let result = test_run.run_one(parse_one(
+        &program,
+        "USING outer_m SCOPE (\
+           (LET x = a) \
+           (USING inner_m SCOPE (LET y = b)) \
+           (x + a))",
+    ));
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 2.0),
+        "the outer block's last statement reads its own `x` and the outer window's `a`, got {:?}",
+        result.ktype(),
+    );
+}
+
+/// The negative half: neither the inner block's bind nor the inner module's member reaches the
+/// outer block's later statements — the inner pair is off the reader's ancestor walk entirely.
+#[test]
+fn nested_using_inner_block_is_invisible_to_the_outer_block() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("MODULE outer_m = (LET a = 1)");
+    test_run.run("MODULE inner_m = (LET b = 20)");
+    for name in ["y", "b"] {
+        let source = format!("USING outer_m SCOPE ((USING inner_m SCOPE (LET y = b)) ({name}))");
+        let err = test_run.run_one_err(parse_one(&program, &source));
+        assert!(
+            matches!(&err.kind, KErrorKind::UnboundName(unbound) if unbound == name),
+            "expected UnboundName({name}) in the outer block, got {err}",
+        );
+    }
+}
+
+/// The escape route the block-local rule leaves open: a module built in the block against the
+/// window's bare names and returned from the tail statement. Only the tail's value escapes, and it
+/// carries its members with it — the block's own binding layer stays behind.
+#[test]
+fn using_block_module_escapes_through_the_tail() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("MODULE some_module = (LET val = 7)");
+    test_run
+        .run("LET derived = (USING some_module SCOPE (MODULE out = (LET doubled = (val + val))))");
+    let result = test_run.run_one(parse_one(&program, "derived.doubled"));
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 14.0),
+        "a module defined against the window's bare names escapes by value, got {:?}",
+        result.ktype(),
     );
 }
 
 /// Closure escape for a functor-result module. `MAKE` returns a module living in its per-call
-/// `CallFrame`; opening it with `USING` and returning a closure that reads a surfaced member must
-/// keep both the closure's transparent scope and the module's region alive past the block. Run-root
-/// churn after the escape exercises drop discipline.
+/// `CallFrame`; opening it with `USING` and tail-returning a closure that reads a surfaced member
+/// must keep the closure's captured block scope, the window it is stacked in, and the module's
+/// region alive past the block. Run-root churn after the escape exercises drop discipline.
 #[test]
 fn using_functor_result_closure_escapes_soundly() {
     let program = program_storage();
@@ -174,17 +342,17 @@ fn using_functor_result_closure_escapes_soundly() {
         "FN (MAKE) -> Module = (MODULE res = (LET val = 7))\n\
          LET inst = (MAKE)",
     );
-    test_run.run("USING inst SCOPE (FN (GETV) -> Number = (val))");
+    test_run.run("LET getv = (USING inst SCOPE (FN :{n :Number} -> Number = (val + n)))");
     // Churn the run-root region so a dangling reference into the dropped
     // USING/functor regions would surface under Miri.
     test_run.run("FN (NOOP) -> Number = (1)");
     for _ in 0..10 {
         test_run.run_one(parse_one(&program, "NOOP"));
     }
-    let result = test_run.run_one(parse_one(&program, "GETV"));
+    let result = test_run.run_one(parse_one(&program, "getv {n = 100}"));
     assert!(
-        matches!(result, KObject::Number(n) if *n == 7.0),
-        "GETV must still read the surfaced module `val` after escape + churn",
+        matches!(result, KObject::Number(n) if *n == 107.0),
+        "the escaped closure must still read the surfaced module `val` after churn",
     );
 }
 
@@ -204,15 +372,15 @@ fn using_temporary_functor_result_is_sound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (MAKE) -> Module = (MODULE res = (LET val = 9))");
-    test_run.run("USING (MAKE) SCOPE (FN (GETW) -> Number = (val))");
+    test_run.run("LET getw = (USING (MAKE) SCOPE (FN :{n :Number} -> Number = (val + n)))");
     test_run.run("FN (NOOP) -> Number = (1)");
     for _ in 0..10 {
         test_run.run_one(parse_one(&program, "NOOP"));
     }
-    let result = test_run.run_one(parse_one(&program, "GETW"));
+    let result = test_run.run_one(parse_one(&program, "getw {n = 100}"));
     assert!(
-        matches!(result, KObject::Number(n) if *n == 9.0),
-        "GETW must read the rooted temporary module's `val` after escape + churn",
+        matches!(result, KObject::Number(n) if *n == 109.0),
+        "the escaped closure must read the rooted temporary module's `val` after churn",
     );
 }
 

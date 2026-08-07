@@ -227,7 +227,7 @@ src/
     │   ├── scope.rs       Scope — lexical environment: the struct, the born-door allocators (alloc_run_root / alloc_child_under / …) with their private constructors, and small accessors (children below)
     │   ├── scope/
     │   │   ├── resolve.rs     name-resolution ladders — value / type / operator-group lookup, walk_chain / resolve_builtin_first, visibility cutoff, builtin-shadow consults
-    │   │   ├── registry.rs    write doors — the seal_* construction halves of the value binds, the submission-channel placeholder installs, the write_scope USING resolver, and the *_direct writes for unpublished scopes
+    │   │   ├── registry.rs    write doors — the seal_* construction halves of the value binds, the submission-channel placeholder installs, the owns-its-bindings write-target guard, and the *_direct writes for unpublished scopes
     │   │   └── reach.rs       reach / carrier derivation — resident value / type carriers, envelope sealing, copy-free / copying adoption, and the module store folds
     │   ├── ref_carriers.rs  ScopeRefFamily / ModuleRefFamily — the Reattachable families a region-stored &Scope / &Module carrier erases through
     │   ├── source.rs      source-span and provenance carrier for errors

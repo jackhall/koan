@@ -32,68 +32,37 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     let (s_schema, s_digest) = signature_schema(s, ctx.types);
     let s_name = s.name(ctx.types);
 
-    // Allocate the view scope and replay the source module's members into it in one door: the
-    // scope is unreachable until the replay has landed, which is what lets the write happen at
-    // construction time rather than riding a step outcome.
+    // Allocate the view scope, replay the source module's members into it, and seed its `types`
+    // table with the view's own type members, all in one door: the scope is unreachable until the
+    // whole install has landed, which is what lets the writes happen at construction time rather
+    // than riding a step outcome. The seeded table is what a `USING` window over this view borrows,
+    // so the view's members resolve by bare name in the block and the source's representation types
+    // are absent rather than masked.
     let new_scope = match Scope::alloc_module_view(
         ctx.scope,
         format!("{} :| {}", m.path, s_name),
         m.child_scope().bindings(),
+        // The nonce every per-call mint carries is the newborn view scope's id, handed in by the
+        // door before the scope is published (`Module::scope_id` reports the same id once the
+        // module is built). Abstract and manifest members are disjoint by `SigSchema` construction
+        // — a SIG member is one or the other — so the strict inserts cannot collide.
+        |nonce| view_type_members(&s_schema, nonce, ctx.types),
     ) {
         Ok(scope) => scope,
         Err(e) => return Action::done(Err(e)),
     };
 
-    // The view's members are all bulk-installed into `new_scope` above, and nothing binds into it
-    // below (the type-member / slot-tag writes target `new_module`, not the scope) — so seal its
-    // reach-set here, before the module captures it, mirroring the MODULE / SIG block-finish close.
-    // A member folded into the set rides the escaping view-module value sealed in.
+    // The view's members are all installed into `new_scope` above, and nothing binds into it below
+    // (the slot-tag writes target `new_module`, not the scope) — so seal its reach-set here, before
+    // the module captures it, mirroring the MODULE / SIG block-finish close. A member folded into
+    // the set rides the escaping view-module value sealed in.
     new_scope.close();
 
-    // The view's members are gathered into a draft before the module value exists — a built module
-    // is frozen — so the nonce every mint carries is read off the view scope directly
-    // (`Module::scope_id` reports this same id once the module is built).
-    let nonce = new_scope.id;
+    // `type_members` mirrors the child scope's type bindings, as it does for a plain module built
+    // by `module_def.rs`: the seeded entries are read straight back out.
     let mut draft = ModuleDraft::empty();
-    // Per-slot kind: a SIG-declared higher-kinded slot (`TYPE (Elem AS Wrap)`) mints a fresh
-    // `TypeConstructor` family over the slot's declared parameter names rather than the default
-    // `AbstractType` arm, preserving the higher-kinded shape across the ascription barrier.
-    for (name, kt) in &s_schema.abstract_members {
-        let minted_kt = match ctx.types.node(*kt) {
-            TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
-                // Generative: the per-application nonce (the view scope's id) folds into the
-                // member's component digest, so two `:|` applications never unify.
-                RecursiveGroupWindow::seal_singleton(
-                    name.clone(),
-                    RelativeSchema::TypeConstructor {
-                        schema: HashMap::new(),
-                        param_names,
-                    },
-                    Some(nonce),
-                    ctx.types,
-                )
-            }
-            // Generative by the same mechanism as the higher-kinded arm above: the per-application
-            // nonce (the view scope's id) folds into the digest, so two `:|` applications never
-            // unify. `source` stays the declaring SIG's binder — the two meanings ride separate
-            // fields.
-            TypeNode::AbstractType { source, .. } => ctx.types.intern(TypeNode::AbstractType {
-                source,
-                name: name.clone(),
-                param_names: Vec::new(),
-                nonce: Some(nonce),
-            }),
-            // Unreachable: `is_abstract_sig_member` admits only `AbstractType` into
-            // `abstract_members`, so the two arms above are exhaustive over this map.
-            _ => *kt,
-        };
-        draft.type_members.insert(name.clone(), minted_kt);
-    }
-    // A manifest member reads concretely through the opaque view: the view scope carries no
-    // type entries (`try_bulk_install_from` copies only the data table), so its fixed `KType`
-    // is mirrored into `type_members` over the per-call abstract mints.
-    for (name, kt) in &s_schema.manifest_members {
-        draft.type_members.insert(name.clone(), *kt);
+    for (name, kt) in new_scope.bindings().iter_types() {
+        draft.type_members.insert(name, kt);
     }
 
     let mut tags: Vec<(String, KType)> = Vec::new();
@@ -162,6 +131,54 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     Action::done(Ok(StepCarried::born_delivered(
         ctx.scope.lift_resident(sealed),
     )))
+}
+
+/// The type members an opaque view's scope is seeded with: a per-call mint for every abstract
+/// member of the ascribed signature, plus every manifest member at its fixed `KType`. `nonce` is
+/// the view scope's id — folded into each mint's digest, so two `:|` applications of one signature
+/// never unify.
+fn view_type_members(
+    signature: &SigSchema,
+    nonce: ScopeId,
+    types: &TypeRegistry,
+) -> Vec<(String, KType)> {
+    let mut members: Vec<(String, KType)> = Vec::new();
+    // Per-slot kind: a SIG-declared higher-kinded slot (`TYPE (Elem AS Wrap)`) mints a fresh
+    // `TypeConstructor` family over the slot's declared parameter names rather than the default
+    // `AbstractType` arm, preserving the higher-kinded shape across the ascription barrier.
+    for (name, kt) in &signature.abstract_members {
+        let minted_kt = match types.node(*kt) {
+            TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
+                RecursiveGroupWindow::seal_singleton(
+                    name.clone(),
+                    RelativeSchema::TypeConstructor {
+                        schema: HashMap::new(),
+                        param_names,
+                    },
+                    Some(nonce),
+                    types,
+                )
+            }
+            // Generative by the same mechanism as the higher-kinded arm above. `source` stays the
+            // declaring SIG's binder — the two meanings ride separate fields.
+            TypeNode::AbstractType { source, .. } => types.intern(TypeNode::AbstractType {
+                source,
+                name: name.clone(),
+                param_names: Vec::new(),
+                nonce: Some(nonce),
+            }),
+            // Unreachable: `is_abstract_sig_member` admits only `AbstractType` into
+            // `abstract_members`, so the two arms above are exhaustive over this map.
+            _ => *kt,
+        };
+        members.push((name.clone(), minted_kt));
+    }
+    // A manifest member reads concretely through the opaque view: its declared identity is the
+    // view's, unhidden.
+    for (name, kt) in &signature.manifest_members {
+        members.push((name.clone(), *kt));
+    }
+    members
 }
 
 /// Intern an ascription view's self-sig, from the child scope it is being built over and the

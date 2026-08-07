@@ -53,9 +53,9 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
 - [Record-typed parameter list in the FN type constructor](type_language/fn-type-record-parameter-list.md)
+- [Module bodies announce type groups](type_language/module-announced-type-groups.md)
 - [Module element-type join](type_language/module-element-type-join.md)
 - [Union-typed carrier slots for builtin signatures](type_language/union-carrier-slots.md)
-- [USING surfaces module type members](type_language/using-type-members.md)
 - [Bump-backed binding tables](untyped_arena/bump-backed-bindings.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 

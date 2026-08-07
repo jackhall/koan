@@ -74,19 +74,14 @@ impl<'a> Scope<'a> {
         self.resolve_with_chain(name, None)
     }
 
-    /// The chain-derived visibility cutoff for a per-scope `bindings` lookup, or `None` when this
-    /// scope's bindings are all unconditionally visible. A transparent `USING` window
-    /// ([`Self::child_transparent`]) surfaces a finalized module's members as imports available
-    /// throughout the block — index-0 semantics, like builtins and bound parameters — so they
-    /// carry no lexical-ordering relationship to the reading position and take no cutoff. Without
-    /// this, a body statement dispatched into the window via `enter_block` (chain frame
-    /// `(window, i)`) would filter the surfaced members by an unrelated index and miss them.
+    /// The chain-derived visibility cutoff for a per-scope `bindings` lookup: this scope's own
+    /// statement position on the reader's `chain`, or `None` when no frame names it — the scope is
+    /// complete to this reader and every entry in it is visible. A `USING` window
+    /// ([`Self::child_transparent`]) is never named by a frame: the block's statements run in the
+    /// owned layer stacked inside it, so the window surfaces the module's members throughout the
+    /// block with no lexical-ordering relationship to the reading position, exactly as builtins do.
     pub(crate) fn binding_cutoff(&self, chain: Option<&LexicalFrame>) -> Option<usize> {
-        if self.bindings.is_borrowed() {
-            None
-        } else {
-            chain.and_then(|c| c.index_for(self.id))
-        }
+        chain.and_then(|c| c.index_for(self.id))
     }
 
     /// Walk `self` and its `outer` ancestors, returning the first scope's `probe` hit — the single

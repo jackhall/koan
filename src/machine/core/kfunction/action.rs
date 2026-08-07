@@ -260,14 +260,17 @@ pub struct BodyCtx<'a, 'c> {
 }
 
 impl<'a, 'c> BodyCtx<'a, 'c> {
-    /// The lexical position a binding the builtin installs takes: the ambient chain's index, or
-    /// [`BindingIndex::BUILTIN`] when there is no chain (a top-level / direct-body binder, e.g. a
-    /// test fixture that bypasses the scheduler).
+    /// The lexical position a binding the builtin installs takes: the ambient chain head's index —
+    /// this step's own statement position in its block — or [`BindingIndex::BUILTIN`] when there is
+    /// no chain (a top-level / direct-body binder, e.g. a test fixture that bypasses the
+    /// scheduler). The dispatch-time placeholder stamp reads the same head, so a claim and the
+    /// write that finalizes it agree.
     pub fn bind_index(&self) -> BindingIndex {
         self.chain
-            .as_ref()
-            .map(|chain| BindingIndex::value(chain.index))
-            .unwrap_or(BindingIndex::BUILTIN)
+            .as_deref()
+            .map_or(BindingIndex::BUILTIN, |chain| {
+                BindingIndex::value(chain.index)
+            })
     }
 
     /// The installing declaration's identity: this body's run-qualified slot ([`Self::node`])

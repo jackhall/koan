@@ -315,3 +315,79 @@ fn a_returned_transparent_view_keeps_the_region_it_was_minted_in() {
         "the returned view reads its member back after its minting frame is gone",
     );
 }
+
+/// An opaque view's child scope carries the view's type interface directly: the ascription seeds
+/// its `types` table with exactly the per-call abstract mints and the signature's manifest members,
+/// and nothing of the source's representation. That table is what a `USING` window over the view
+/// borrows, so the seeding is the whole opacity story — the hidden type is absent, not masked.
+/// `Module::type_members` mirrors it, as it does for a plain `MODULE`.
+#[test]
+fn opaque_view_scope_holds_exactly_the_views_type_members() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "SIG Boxed = ((TYPE Elem) (LET Tag = Str) (VAL zero :Elem) (VAL label :Tag))\n\
+         MODULE int_ord = ((LET Elem = Number) (LET Tag = Str) (LET Hidden = Bool) \
+                           (LET zero = 0) (LET label = \"n\"))\n\
+         LET sealed = (int_ord :| Boxed)",
+    );
+    let view = lookup_module(scope, "sealed", &test_run.types);
+    let mut seeded: Vec<(String, KType)> = view.child_scope().bindings().iter_types();
+    seeded.sort_by(|a, b| a.0.cmp(&b.0));
+    let names: Vec<&str> = seeded.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["Elem", "Tag"],
+        "the view scope holds the signature's members and not the source's `Hidden`",
+    );
+
+    let elem = seeded[0].1;
+    assert!(
+        matches!(test_run.types.node(elem), TypeNode::AbstractType { name, nonce, .. }
+            if name == "Elem" && nonce == Some(view.scope_id())),
+        "the abstract member is seeded as this view's per-call mint",
+    );
+    assert_eq!(
+        seeded[1].1,
+        KType::STR,
+        "a manifest member is seeded at its fixed identity",
+    );
+    for (name, kt) in &seeded {
+        assert_eq!(
+            view.type_members.get(&name.as_str()).copied(),
+            Some(*kt),
+            "`type_members` mirrors the seeded scope entry for `{name}`",
+        );
+    }
+}
+
+/// Two ascriptions of one module seed *distinct* mints into their two view scopes — the generativity
+/// the nonce buys, read on the channel the `USING` window uses rather than through the mirror.
+#[test]
+fn two_opaque_ascriptions_seed_distinct_mints() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "SIG Pointed = ((TYPE Elem) (VAL zero :Elem))\n\
+         MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
+         LET first = (int_ord :| Pointed)\n\
+         LET second = (int_ord :| Pointed)",
+    );
+    let seeded = |name: &str| {
+        lookup_module(scope, name, &test_run.types)
+            .child_scope()
+            .bindings()
+            .lookup_type("Elem", None)
+            .and_then(|hit| hit.bound())
+            .expect("each view scope is seeded with its own `Elem`")
+    };
+    assert_ne!(
+        seeded("first"),
+        seeded("second"),
+        "two opaque ascriptions must seed distinct abstract identities",
+    );
+}
