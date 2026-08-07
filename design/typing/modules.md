@@ -417,12 +417,17 @@ a value-level namespace open in expression position — distinct from a file-lev
 import — so a region working against one instantiation writes `insert x s`
 instead of `int_ord.insert x s`, stating the qualifier once.
 
-The block runs in a single *transparent* scope
-([`Scope::child_transparent`](../../src/machine/core/scope.rs)) whose `outer` is
-the call site and whose bindings are a read-only window onto the module's
-child-scope façade (`ScopeBindings::Borrowed`). Reads consult the window first,
-then the call-site chain, so module names win inside the block; the resolver walk
-is unchanged. The whole `Bindings` façade is borrowed, so every one of its tables
+The block runs in an **owned scope stacked inside a *transparent* window**, both
+allocated by one door
+([`Scope::open_module_window`](../../src/machine/core/scope/reach.rs)). The
+window ([`Scope::child_transparent`](../../src/machine/core/scope.rs)) has the
+call site as its `outer` and read-only bindings onto the module's child-scope
+façade (`ScopeBindings::Borrowed`); the block's own scope is an ordinary owned
+child of it, and is what the door returns — the window stays an internal middle
+link, so a `Borrowed` table is never a write target. Reads therefore walk the
+block's own binds, then the window, then the call-site chain, so module names win
+over the call site inside the block; the resolver walk itself is unchanged. The
+whole `Bindings` façade is borrowed, so every one of its tables
 is surfaced: `data` (values), `functions` (dispatch overloads), `operators` (the
 per-scope operator registry) and `types`. A module's type members therefore name
 types by bare name inside the block — in sigil type expressions and in dispatch
@@ -437,35 +442,33 @@ that declares operators ([operators.md](../operators.md)) puts both their bodies
 and their chaining mode in scope: a run inside the block reduces by the module's
 own group.
 
-Binds made inside the block forward to the call site and persist after it; a bind
-whose name collides with a surfaced member is rejected — on the value channel and
-the type channel alike, by the write op's two window-forwarding targets
-([`ops.rs`](../../src/machine/core/bindings/ops.rs)'s `value_write_target` and
-`type_write_target`, each a presence probe of the borrowed table) — so a forwarded
-bind or type declaration can never be silently shadowed by the window. A forwarded
-entry carries two lexical positions (`Scope::binding_position`): it anchors in the
-call-site scope's numbering at the `USING` statement's own index — so to every
-statement outside the block it is a binding the `USING` statement made, visible
-from the next statement on and shadowing accordingly — and it also records its
-window position (`BindingIndex::window`), which readers *inside* the block are
-gated by instead, so a block statement sees exactly its earlier siblings' binds
-and an intra-block forward reference stays a position error. The rule spans all
-four binding channels — values, `functions` buckets, types, operators — and the
-dispatch-time placeholder stamp carries the same pair, so a consumer parks on an
-in-flight sibling binder under the same visibility it will read the finalized
-bind with. Forwarding outward
-is safe because the block is unconditional — unlike `TRY`/`MATCH` branches it
-always runs, so there is no divergent-binding hazard. A module function dispatched
-inside the block resolves its own internal names in the module's lexical scope:
-a `KFunction` carries its definition scope and evaluates its body under it, so
-`USING` is purely a lookup/dispatch surface, not a re-capture.
+Binds made inside the block are local to it and die when it closes; only the
+tail expression's value escapes. Locality is structural rather than a teardown
+action: a bind lands in the block's own scope at its plain statement index, and
+no statement after the block reaches that scope on its ancestor walk. A block
+statement sees exactly its earlier siblings' binds —
+an intra-block forward reference stays a position error — and a bind or type
+declaration whose name matches a surfaced member shadows the window from the
+next statement on, ordinary inner-scope shadowing on all four binding channels
+(values, `functions` buckets, types, operators). Nothing installs at the call
+site, so statements after the block see none of it; a group of operations built
+against the module escapes by value instead — define a module in the block and
+return it from the tail statement, open the module inside a single function
+definition, or write a functor from the module to a module of derived
+operations. A module function dispatched inside the block resolves its own
+internal names in the module's lexical scope: a `KFunction` carries its
+definition scope and evaluates its body under it, so `USING` is purely a
+lookup/dispatch surface, not a re-capture.
 
-The transparent scope is allocated in the **call-site region**, and the block is
-run as a deferred sub-dispatch whose result the `USING` node lifts. Allocating in
+Both scopes are allocated in the **call-site region** — a transparent child is
+same-region with its parent, and the block scope is an ordinary same-region child
+of that — and the block is run as a deferred sub-dispatch whose result the
+`USING` node lifts. Allocating in
 the call-site region (rather than a per-call frame that drops at block end) is what
-makes forwarding sound: a forwarded bind — or a function defined in the block and
-forward-registered into the call site — references values and a captured scope
-that all live in the call-site region. For a functor-result module whose child
+lets the tail value escape: the result — including a closure defined in the block,
+which carries its captured scope — references values that live in the call-site
+region, and the block's dead binding layer simply falls off the ambient chain
+(scopes are `Drop`-free; nothing tears down). For a functor-result module whose child
 scope lives in a per-call `CallFrame`, the opened module's value (carrying that
 region's `Rc` per the
 [per-call region protocol](../per-call-region/lifecycle.md#carriers)) is rooted in
@@ -476,9 +479,3 @@ A bare `FN` registration writes only the `functions` dispatch bucket, never
 `data`; only the `LET f = (FN …)` capture form also writes `data`. The surfaced
 window therefore carries captured values in `data` and the dispatch surface in
 `functions`, cleanly separated rather than conflated.
-
-## Open work
-
-- [Nested `USING` windows](../../roadmap/type_language/nested-using-windows.md) —
-  forwarded-bind visibility for intermediate-block readers, and the collision
-  guard across every window on the forwarding path.

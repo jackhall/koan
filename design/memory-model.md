@@ -552,8 +552,8 @@ field on [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) with one depo
 execute layer alone can reach, so a builtin (which receives a `BodyCtx`) cannot touch it. The sink
 is created per step by [`run_step`](../src/machine/execute/run_loop.rs) and drained there, after
 the step's continuation has returned and before its outcome is realized. `WriteOp::apply` is the
-single interpreter: it resolves the write target once (forwarding through a transparent `USING`
-window to the call site, with that window's surfaced-member collision check), runs the
+single interpreter: it writes against the step's own scope — which always owns its binding table,
+since even a `USING` block runs in an owned layer stacked inside the borrowed window — runs the
 builtin-shadow consult where the door asks for it, and mutates the table. Because nothing but the
 run loop reaches this point, every map borrow is a firm `borrow_mut` — there is no koan frame on
 the stack to hold a competing one, so contention is unrepresentable rather than tolerated.

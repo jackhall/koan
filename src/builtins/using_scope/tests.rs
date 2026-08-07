@@ -116,7 +116,6 @@ fn using_window_shadows_call_site_binding() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET val = 1");
     test_run.run("MODULE some_module = (LET val = 7)");
-    test_run.run("LET val2 = 7");
     let result = test_run.run_one(parse_one(&program, "USING some_module SCOPE (val)"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
@@ -320,7 +319,6 @@ fn using_block_module_escapes_through_the_tail() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = (LET val = 7)");
-    test_run.run("LET val2 = 7");
     test_run
         .run("LET derived = (USING some_module SCOPE (MODULE out = (LET doubled = (val + val))))");
     let result = test_run.run_one(parse_one(&program, "derived.doubled"));

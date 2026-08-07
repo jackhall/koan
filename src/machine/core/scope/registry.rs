@@ -211,6 +211,7 @@ impl<'a> Scope<'a> {
     /// failed binder body can't leak a scheduler-local producer into a later run on a
     /// persistent scope. See [`Bindings::clear_placeholders_for_producer`].
     pub fn clear_placeholders_for_producer(&self, producer: NodeId, gate: &mut WriteGate) {
+        self.assert_owns_bindings();
         self.bindings()
             .clear_placeholders_for_producer(producer, gate);
     }

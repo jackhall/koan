@@ -179,8 +179,27 @@ one pays off: the block names the signature's abstract type members, and they
 stay abstract there — `Elem` is the sealed module's own type, never the concrete
 type it was built from.
 
-A name you declare inside the block may not collide with one the module surfaces:
-Koan rejects the declaration rather than letting your binding be silently
-shadowed by the module's member. That rule covers values and types alike.
+Names you declare inside the block belong to the block. They are visible to the
+block's later statements, they shadow a module member of the same name from the
+next statement on — values and types alike, just like any inner scope — and they
+are gone once the block ends. Only the block's last statement produces a value,
+so that is what carries out of it:
+
+```koan
+MODULE counter =
+  LET step = 2
+PRINT
+  USING counter SCOPE (
+    (LET half = step)
+    (half + step))
+```
+
+```text
+4
+```
+
+To build a batch of definitions against an opened module, return them as a
+module from the block's last statement, or open the module inside the one
+function definition that needs it.
 
 Next: [Functors](12-functors.md).
