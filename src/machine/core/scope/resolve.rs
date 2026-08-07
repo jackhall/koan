@@ -8,7 +8,7 @@
 #[cfg(test)]
 use super::AdoptSeam;
 use super::Scope;
-use crate::machine::core::bindings::{NameLookup, Visibility};
+use crate::machine::core::bindings::NameLookup;
 use crate::machine::core::LexicalFrame;
 #[cfg(test)]
 use crate::machine::model::KObject;
@@ -74,26 +74,14 @@ impl<'a> Scope<'a> {
         self.resolve_with_chain(name, None)
     }
 
-    /// The chain-derived visibility cutoff for a per-scope `bindings` lookup, or `None` when this
-    /// scope's bindings are all unconditionally visible. A transparent `USING` window
-    /// ([`Self::child_transparent`]) surfaces a finalized module's members as imports available
-    /// throughout the block — index-0 semantics, like builtins and bound parameters — so they
-    /// carry no lexical-ordering relationship to the reading position and take no cutoff. Without
-    /// this, a body statement dispatched into the window via `enter_block` (chain frame
-    /// `(window, i)`) would filter the surfaced members by an unrelated index and miss them.
+    /// The chain-derived visibility cutoff for a per-scope `bindings` lookup: this scope's own
+    /// statement position on the reader's `chain`, or `None` when no frame names it — the scope is
+    /// complete to this reader and every entry in it is visible. A `USING` window
+    /// ([`Self::child_transparent`]) is never named by a frame: the block's statements run in the
+    /// owned layer stacked inside it, so the window surfaces the module's members throughout the
+    /// block with no lexical-ordering relationship to the reading position, exactly as builtins do.
     pub(crate) fn binding_cutoff(&self, chain: Option<&LexicalFrame>) -> Option<usize> {
-        if self.bindings.is_borrowed() {
-            None
-        } else {
-            chain.and_then(|c| c.index_for(self.id))
-        }
-    }
-
-    /// The full read-side visibility context for a per-scope `bindings` lookup: this scope's
-    /// [`binding_cutoff`](Self::binding_cutoff) beside the reader's chain, which the predicate
-    /// gates window-forwarded entries by ([`crate::machine::core::bindings::Visibility`]).
-    pub(crate) fn visibility<'c>(&self, chain: Option<&'c LexicalFrame>) -> Visibility<'c> {
-        Visibility::at(self.binding_cutoff(chain), chain)
+        chain.and_then(|c| c.index_for(self.id))
     }
 
     /// Walk `self` and its `outer` ancestors, returning the first scope's `probe` hit — the single
@@ -134,7 +122,7 @@ impl<'a> Scope<'a> {
         self.walk_chain(|scope| {
             scope
                 .bindings()
-                .lookup_value(name, scope.visibility(chain))
+                .lookup_value(name, scope.binding_cutoff(chain))
                 .map(|hit| hit.map(|sealed| scope.lift_resident(sealed)))
         })
     }
@@ -164,15 +152,13 @@ impl<'a> Scope<'a> {
         name: &str,
         cutoff: Option<usize>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
-        self.bindings()
-            .lookup_value(name, Visibility::at(cutoff, None))
-            .map(|hit| {
-                hit.map(|sealed| {
-                    let delivered = self.lift_resident(sealed);
-                    self.adopt_carried(&delivered, AdoptSeam::Retaining)
-                        .object()
-                })
+        self.bindings().lookup_value(name, cutoff).map(|hit| {
+            hit.map(|sealed| {
+                let delivered = self.lift_resident(sealed);
+                self.adopt_carried(&delivered, AdoptSeam::Retaining)
+                    .object()
             })
+        })
     }
 
     /// Resolve a *finalized* type, unfiltered. The `Option<KType>` adapter over
@@ -202,9 +188,13 @@ impl<'a> Scope<'a> {
         // resolves by the chain walk below.
         let root = self.root_scope().bindings();
         if root.has_builtin_type(name) {
-            return root.lookup_type(name, Visibility::UNFILTERED);
+            return root.lookup_type(name, None);
         }
-        self.walk_chain(|scope| scope.bindings().lookup_type(name, scope.visibility(chain)))
+        self.walk_chain(|scope| {
+            scope
+                .bindings()
+                .lookup_type(name, scope.binding_cutoff(chain))
+        })
     }
 
     /// Resolve a chain's operator-group probe against this scope and the `outer` chain, **lifting**
@@ -229,7 +219,7 @@ impl<'a> Scope<'a> {
         self.walk_chain(|scope| {
             scope
                 .bindings()
-                .lookup_operator_group(probe, scope.visibility(chain))
+                .lookup_operator_group(probe, scope.binding_cutoff(chain))
                 .map(|sealed| scope.lift_resident(sealed))
         })
     }

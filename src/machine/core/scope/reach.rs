@@ -630,19 +630,26 @@ impl<'a> Scope<'a> {
             .into_cell()
     }
 
-    /// Open the module `delivered` carries as a transparent `USING … SCOPE` window on this scope —
-    /// the root that keeps the opened module's region alive and the borrowed-bindings child
-    /// ([`Scope::alloc_child_transparent`]), in that order, as one act. `None` if the envelope
-    /// carries something other than a module.
+    /// Open the module `delivered` carries as a `USING … SCOPE` window on this scope — the root that
+    /// keeps the opened module's region alive, the borrowed-bindings window
+    /// ([`Scope::alloc_child_transparent`]), and the owned block layer stacked inside it, in that
+    /// order, as one act. The **block scope** is what comes back: the window stays an internal
+    /// middle link, so no caller can write into a borrowed table. `None` if the envelope carries
+    /// something other than a module.
+    ///
+    /// The two-scope stack is the whole visibility story. A block statement binds into the block
+    /// scope at its own plain statement index, and the resolver walk — block, then window, then the
+    /// call-site chain — gives the block its earlier binds, the module's members, and the call site,
+    /// in that precedence. Statements after the block never reach the block scope on their ancestor
+    /// walk, so a block bind's death at block close is structural.
     ///
     /// The window surfaces the module's members by *borrowing* its child scope's binding table, so
     /// the window's reads are only as valid as the module's own region. That region is pinned by the
     /// eager `m` argument's delivery envelope, which dies with the step that opened the window,
     /// while the block runs in later steps — so the envelope's coverage is minted into this scope's
-    /// region, whose union then roots the module's region for that region's life. A transparent
-    /// child is same-region with its parent, so the window inherits that root as its own; an
-    /// escaping closure captures the window, which anchors the call-site frame, which pins the
-    /// folded region.
+    /// region, whose union then roots the module's region for that region's life. Both children are
+    /// same-region with this scope, so they inherit that root as their own; an escaping closure
+    /// captures the block scope, which anchors the call-site frame, which pins the folded region.
     ///
     /// **One operand carries both facts.** The table is read off the module inside the envelope
     /// ([`Module::child_scope`](crate::machine::model::Module::child_scope)) and the root is that
@@ -671,7 +678,8 @@ impl<'a> Scope<'a> {
         // Root first. Non-owning mint: the owning bundle folds straight into this region's union, so
         // the root outlives every read through the window rather than the returned description.
         self.mint_retained(&[delivered.coverage()]);
-        Some(self.alloc_child_transparent(bindings))
+        let window = self.alloc_child_transparent(bindings);
+        Some(window.alloc_child_under())
     }
 
     /// The transparent-ascription store: a fresh `Module` tagged `name`, re-tagging a *foreign*

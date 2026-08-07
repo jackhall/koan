@@ -73,8 +73,8 @@ pub struct Scope<'a> {
 
 /// A scope's binding storage. `Owned` is the default. `Borrowed` is the
 /// `USING … SCOPE` transparent window: a read-only view onto another scope's
-/// façade. Writes through a `Borrowed` window forward to `outer` (the call site),
-/// so block-local binds persist after the block ends.
+/// façade. A `Borrowed` scope is never a write target — the block's statements run in the owned
+/// child stacked inside it, so every write lands in a table its scope owns.
 // Boxing `Owned` would add an allocation and an indirection on the hot `bindings()`
 // read path; inlining the large variant is the deliberate trade.
 #[allow(clippy::large_enum_variant)]
@@ -354,11 +354,11 @@ impl<'a> Scope<'a> {
         })
     }
 
-    /// Transparent `USING … SCOPE` child scope. `outer` is the call site (the lexical
+    /// Transparent `USING … SCOPE` window scope. `outer` is the call site (the lexical
     /// parent, not the opened module's def site); bindings are a read-only window onto
-    /// `module_bindings`. Reads consult the window first then walk `outer`; writes
-    /// forward to `outer`. `region` is `outer.region` so block-body allocations outlive
-    /// the block (forwarded binds are sound).
+    /// `module_bindings`. It is a middle link: the block's own owned scope stacks inside it, so a
+    /// read walks block, then window, then `outer`, and no write ever targets the window. `region`
+    /// is `outer.region` so block-body allocations outlive the block.
     fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings) -> Scope<'a> {
         Self::child_inheriting(
             outer,

@@ -24,7 +24,7 @@ pub use arena::{
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile};
 pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
-    NodeHandle, Visibility, WriteGate,
+    NodeHandle, WriteGate,
 };
 pub(crate) use carrier_witness::{product_reaches_region, read_resting, GroupSeal, OverloadSeal};
 pub use carrier_witness::{

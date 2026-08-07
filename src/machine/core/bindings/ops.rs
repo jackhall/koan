@@ -20,7 +20,7 @@
 //! — need no such discipline and stay direct (`*_direct` on [`Scope`]), under the construction-door
 //! mint of the same gate.
 
-use super::{BindingIndex, DeclarationSite, SealedValue, Visibility, WriteGate};
+use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{probe_key, KType};
@@ -83,19 +83,19 @@ pub(crate) enum WriteOp {
 }
 
 impl WriteOp {
-    /// Apply this write against `scope` — the step scope the op was returned from. The single
-    /// interpreter: resolve the write target (forwarding through a transparent `USING` window),
-    /// run the door's guards, then mutate the table.
+    /// Apply this write against `scope` — the step scope the op was returned from, which is always
+    /// the scope the entry lands in. The single interpreter: run the door's guards, then mutate the
+    /// table.
     pub(crate) fn apply(self, scope: &Scope<'_>, gate: &mut WriteGate) -> Result<(), KError> {
+        scope.assert_owns_bindings();
         match self {
             WriteOp::Value {
                 name,
                 index,
                 sealed,
             } => {
-                let target = value_write_target(scope, &name)?;
-                target.assert_open(&name);
-                target.bindings().write_value(&name, index, sealed, gate)
+                scope.assert_open(&name);
+                scope.bindings().write_value(&name, index, sealed, gate)
             }
             WriteOp::Overload {
                 name,
@@ -103,18 +103,17 @@ impl WriteOp {
                 seal,
                 builtin_shadow_guard,
             } => {
-                let target = scope.write_scope();
-                target.assert_open(&name);
+                scope.assert_open(&name);
                 // A user overload may not join a builtin's bucket — builtins are immutable and
                 // unshadowable. The root registers its own at `BUILTIN`, so only a non-`BUILTIN`
                 // index is gated.
                 if builtin_shadow_guard
                     && index != BindingIndex::BUILTIN
-                    && target.shadows_builtin_function(&seal.key)
+                    && scope.shadows_builtin_function(&seal.key)
                 {
                     return Err(KError::new(KErrorKind::Rebind { name }));
                 }
-                target.bindings().write_overload(&name, index, seal, gate)
+                scope.bindings().write_overload(&name, index, seal, gate)
             }
             WriteOp::Type {
                 name,
@@ -123,19 +122,18 @@ impl WriteOp {
                 policy,
                 builtin_shadow_guard,
             } => {
-                let target = type_write_target(scope, &name)?;
-                if builtin_shadow_guard && target.shadows_builtin_type(&name) {
+                if builtin_shadow_guard && scope.shadows_builtin_type(&name) {
                     return Err(KError::new(KErrorKind::Rebind { name }));
                 }
-                target.assert_open(&name);
-                target.bindings().write_type(&name, kt, site, policy, gate)
+                scope.assert_open(&name);
+                scope.bindings().write_type(&name, kt, site, policy, gate)
             }
             WriteOp::Group {
                 probes,
                 seal,
                 index,
             } => {
-                let bindings = scope.write_scope().bindings();
+                let bindings = scope.bindings();
                 for probe in probes {
                     bindings.write_operator_group(probe, &seal, index, gate)?;
                 }
@@ -144,36 +142,6 @@ impl WriteOp {
             WriteOp::SigSlot { name, kt } => scope.write_sig_slot(name, kt),
         }
     }
-}
-
-/// The scope a value-side write lands in, with the transparent-`USING` collision check. Reads
-/// through such a window consult the window before the call site, so a local bind whose name is
-/// already a surfaced module member would be silently shadowed — reject it; otherwise the write
-/// forwards to the call site, where the binding belongs (the caller's own block and statement
-/// position).
-fn value_write_target<'s, 'a>(scope: &'s Scope<'a>, name: &str) -> Result<&'s Scope<'a>, KError> {
-    if scope.is_using_window() && scope.bindings().has_value(name, Visibility::UNFILTERED) {
-        return Err(KError::new(KErrorKind::ShapeError(format!(
-            "USING: local bind `{name}` collides with a surfaced module member; \
-             rename it to avoid silently shadowing the module's `{name}`",
-        ))));
-    }
-    Ok(scope.write_scope())
-}
-
-/// The scope a type-side write lands in — [`value_write_target`]'s mirror over the `types` table.
-/// The window surfaces the opened module's type members, so a block-local type declaration reusing
-/// a member's name would be silently shadowed; reject it, otherwise forward to the call site. The
-/// token partition keeps a type name from colliding with a value member, so the one probe is
-/// complete.
-fn type_write_target<'s, 'a>(scope: &'s Scope<'a>, name: &str) -> Result<&'s Scope<'a>, KError> {
-    if scope.is_using_window() && scope.bindings().has_type(name, Visibility::UNFILTERED) {
-        return Err(KError::new(KErrorKind::ShapeError(format!(
-            "USING: local type `{name}` collides with a surfaced module type member; \
-             rename it to avoid silently shadowing the module's `{name}`",
-        ))));
-    }
-    Ok(scope.write_scope())
 }
 
 /// The probe key of every nonempty subset of `members` — the powerset-key story

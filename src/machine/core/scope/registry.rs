@@ -23,7 +23,7 @@ use crate::machine::core::bindings::{
     BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
 };
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
-use crate::machine::core::{KError, KErrorKind, KFunction, LexicalFrame, NodeId};
+use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
 use crate::machine::model::{Carried, KObject, KType, OperatorGroup, ReductionMode};
 use crate::machine::DeliveredCarried;
 
@@ -38,48 +38,16 @@ impl<'a> Scope<'a> {
         );
     }
 
-    /// Whether this scope is a transparent `USING` window — its bindings are the surfaced module's,
-    /// so a write here belongs at the call site ([`Self::write_scope`]).
-    pub(crate) fn is_using_window(&self) -> bool {
-        self.bindings.is_borrowed()
-    }
-
-    /// The scope a write against `self` lands in: `self`, or — through one or more transparent
-    /// `USING` windows — the innermost enclosing call site that owns its own bindings. The single
-    /// site expressing the forwarding decision, shared by the op-apply interpreter and the
-    /// submission-channel installs. Panics if a window is rootless: the transparent constructor
-    /// always sets `outer`, so that would be a construction bug.
-    pub(crate) fn write_scope<'s>(&'s self) -> &'s Scope<'a> {
-        let mut target: &'s Scope<'a> = self;
-        while target.is_using_window() {
-            target = target.outer().expect(
-                "a Borrowed (USING transparent) scope must have an outer call-site to forward \
-                 writes to",
-            );
-        }
-        target
-    }
-
-    /// The [`BindingIndex`] a binding installed from a statement of this scope takes, read off
-    /// the statement's `chain`. In an ordinary scope that is the chain head's index. In a
-    /// transparent `USING` window the entry lands in the forwarded [`Self::write_scope`] target,
-    /// so the position anchors there — at the `USING` statement's own index in that scope's
-    /// numbering — and carries the window head `(scope, index)` as the intra-block ordering
-    /// refinement ([`BindingIndex::window`]). Shared by the builtin binder bodies
-    /// ([`BodyCtx::bind_index`](crate::machine::core::kfunction::action::BodyCtx)) and the
-    /// dispatch-time placeholder stamp, so a claim and the write that finalizes it agree.
-    pub(crate) fn binding_position(&self, chain: Option<&LexicalFrame>) -> BindingIndex {
-        let Some(chain) = chain else {
-            return BindingIndex::BUILTIN;
-        };
-        if self.is_using_window() && chain.scope_id == self.id {
-            let host = self.write_scope();
-            return BindingIndex {
-                idx: chain.index_for(host.id).unwrap_or(0),
-                window: Some((self.id, chain.index)),
-            };
-        }
-        BindingIndex::value(chain.index)
+    /// Spike guard: every write target owns its own binding table. A `USING` window borrows the
+    /// opened module's, and is never one — the block's statements run in the owned child stacked
+    /// inside it ([`Self::open_module_window`]), so a write reaching a borrowed table would mean the
+    /// window leaked out of that door. `debug_assert` so release builds pay nothing.
+    pub(crate) fn assert_owns_bindings(&self) {
+        debug_assert!(
+            !self.bindings.is_borrowed(),
+            "write into the borrowed bindings of USING window {:?}",
+            self.id,
+        );
     }
 
     /// Fused MODULE-finish value **construction**: merge the resident module reference into this
@@ -232,8 +200,8 @@ impl<'a> Scope<'a> {
         kind: BindKind,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        self.write_scope()
-            .bindings()
+        self.assert_owns_bindings();
+        self.bindings()
             .install_placeholder(name, idx, index, kind, gate)
     }
 
@@ -243,8 +211,7 @@ impl<'a> Scope<'a> {
     /// failed binder body can't leak a scheduler-local producer into a later run on a
     /// persistent scope. See [`Bindings::clear_placeholders_for_producer`].
     pub fn clear_placeholders_for_producer(&self, producer: NodeId, gate: &mut WriteGate) {
-        self.write_scope()
-            .bindings()
+        self.bindings()
             .clear_placeholders_for_producer(producer, gate);
     }
 
@@ -261,8 +228,8 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        self.write_scope()
-            .bindings()
+        self.assert_owns_bindings();
+        self.bindings()
             .install_pending_overload(bucket, idx, index, gate)
     }
 

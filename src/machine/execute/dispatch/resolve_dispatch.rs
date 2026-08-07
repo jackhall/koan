@@ -108,7 +108,7 @@ impl<'step> Scope<'step> {
         if root.bindings().has_builtin_function(&key) {
             let lookup = root
                 .bindings()
-                .lookup_function(&key, root.visibility(chain));
+                .lookup_function(&key, root.binding_cutoff(chain));
             if let ScopeDecision::Terminal(outcome) =
                 decide_scope(root, &lookup, expr, bare_outcomes, types)
             {
@@ -121,7 +121,7 @@ impl<'step> Scope<'step> {
         for scope in self.ancestors() {
             let lookup = scope
                 .bindings()
-                .lookup_function(&key, scope.visibility(chain));
+                .lookup_function(&key, scope.binding_cutoff(chain));
             match decide_scope(scope, &lookup, expr, bare_outcomes, types) {
                 ScopeDecision::Terminal(outcome) => return outcome,
                 ScopeDecision::DeadLean(name) => {

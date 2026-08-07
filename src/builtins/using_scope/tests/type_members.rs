@@ -18,13 +18,10 @@ fn plain_module_type_member_types_a_dispatch_slot() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = ((UNION Color = (Red :Null Blue :Null)))");
-    test_run.run(
-        "USING some_module SCOPE ((FN (SHOW c :Color) -> Str = (\"a color\")) \
-         (SHOW (Color (Red null))))",
-    );
     let result = test_run.run_one(parse_one(
         &program,
-        "USING some_module SCOPE (SHOW (Color (Blue null)))",
+        "USING some_module SCOPE ((FN (SHOW c :Color) -> Str = (\"a color\")) \
+         (SHOW (Color (Blue null))))",
     ));
     assert!(matches!(result, KObject::KString(s) if *s == "a color"));
 }
@@ -82,8 +79,10 @@ fn opaque_view_hides_the_representation_inside_the_block() {
          MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
          LET sealed = (int_ord :| Pointed)",
     );
-    test_run.run("USING sealed SCOPE (FN (TAKES x :Elem) -> Str = (\"ok\"))");
-    let err = test_run.run_one_err(parse_one(&program, "USING sealed SCOPE (TAKES 5)"));
+    let err = test_run.run_one_err(parse_one(
+        &program,
+        "USING sealed SCOPE ((FN (TAKES x :Elem) -> Str = (\"ok\")) (TAKES 5))",
+    ));
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "a raw Number must not satisfy the view's abstract `Elem`, got {err}",
@@ -132,11 +131,12 @@ fn transparent_view_surfaces_the_concrete_type() {
     assert!(matches!(result, KObject::KString(s) if *s == "ok"));
 }
 
-/// The type-side collision guard, mirroring the value-side one: a block-local type declaration
-/// reusing a surfaced member's name would forward to the call site and be silently shadowed by the
-/// window's own entry, so the write op rejects it.
+/// Type-side shadowing, mirroring the value-side rule: a block-local type declaration reusing a
+/// surfaced member's name is ordinary inner-scope shadowing — the block layer answers before the
+/// window from the next statement on, so the view's abstract `Elem` gives way to the local `Str`
+/// and a bare `Str` satisfies the slot.
 #[test]
-fn block_type_declaration_colliding_with_a_member_errors() {
+fn block_type_declaration_shadows_a_surfaced_member() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -145,19 +145,23 @@ fn block_type_declaration_colliding_with_a_member_errors() {
          MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
          LET sealed = (int_ord :| Pointed)",
     );
-    let err = test_run.run_one_err(parse_one(&program, "USING sealed SCOPE (LET Elem = Str)"));
+    let result = test_run.run_one(parse_one(
+        &program,
+        "USING sealed SCOPE ((LET Elem = Str) (FN (TAKES x :Elem) -> Str = (x)) \
+         (TAKES \"shadowed\"))",
+    ));
     assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("collides with a surfaced module type member") && msg.contains("`Elem`")),
-        "expected the type-side collision ShapeError naming `Elem`, got {err}",
+        matches!(result, KObject::KString(s) if *s == "shadowed"),
+        "the block's own `Elem` must win over the view's abstract member, got {:?}",
+        result.ktype(),
     );
 }
 
 /// The type channel under real per-statement chains (`enter_source`, not the detached-chain
 /// `run`): a block-local type alias types a block-local `FN`'s slot, and a later statement of the
-/// same block dispatches through it. The forwarded `types` entry carries its window position
-/// ([`BindingIndex::window`](crate::machine::BindingIndex)), so the in-block reader gates by
-/// block ordering exactly as the value channel does.
+/// same block dispatches through it. The `types` entry lives in the block's own scope at its plain
+/// statement index, so the in-block reader gates by block ordering exactly as the value channel
+/// does.
 #[test]
 fn block_type_alias_types_a_later_statement_of_the_same_block() {
     let program = program_storage();
@@ -186,10 +190,10 @@ fn block_type_alias_types_a_later_statement_of_the_same_block() {
     );
 }
 
-/// The guard's companion: a type declaration that collides with nothing forwards to the call site
-/// like any other block bind, and is usable after the block ends.
+/// The type channel's locality half: a block-local type declaration dies with the block exactly as
+/// a value bind does, so a `FN` declared after the block cannot name it.
 #[test]
-fn non_colliding_block_type_declaration_forwards_to_the_call_site() {
+fn block_type_declaration_dies_with_the_block() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -199,7 +203,10 @@ fn non_colliding_block_type_declaration_forwards_to_the_call_site() {
          LET sealed = (int_ord :| Pointed)",
     );
     test_run.run("USING sealed SCOPE (LET Other = Str)");
-    test_run.run("FN (WIDEN s :Other) -> Str = (s)");
-    let result = test_run.run_one(parse_one(&program, "WIDEN \"after\""));
-    assert!(matches!(result, KObject::KString(s) if *s == "after"));
+    let err = test_run.run_one_err(parse_one(&program, "FN (WIDEN s :Other) -> Str = (s)"));
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("unknown type name `Other`")),
+        "expected the block-local `Other` to be unknown after the block, got {err}",
+    );
 }

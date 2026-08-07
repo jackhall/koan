@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use crate::builtins::test_support::{run_root_bare, TestRun};
 use crate::machine::core::{
-    program_storage, run_root_storage, BindingIndex, CallFrame, GroupSeal, Scope, Visibility,
+    program_storage, run_root_storage, BindingIndex, CallFrame, GroupSeal, Scope,
 };
 use crate::machine::model::{probe_key, OperatorGroup, ReductionMode};
 use crate::machine::DeliveredOperatorGroup;
@@ -172,12 +172,12 @@ fn visibility_cutoff_hides_later_sibling_registration() {
     // A consumer at cutoff 3 can't see a registration at index 5.
     assert!(scope
         .bindings()
-        .lookup_operator_group("+", Visibility::at(Some(3), None))
+        .lookup_operator_group("+", Some(3))
         .is_none());
     // A consumer at cutoff 9 can.
     assert!(scope
         .bindings()
-        .lookup_operator_group("+", Visibility::at(Some(9), None))
+        .lookup_operator_group("+", Some(9))
         .is_some());
 }
 
@@ -281,7 +281,7 @@ fn re_registering_an_equal_record_is_a_no_op() {
     // The first registration's index stands, so the entry stays visible where it was declared.
     assert!(scope
         .bindings()
-        .lookup_operator_group("+", Visibility::at(Some(2), None))
+        .lookup_operator_group("+", Some(2))
         .is_some());
 }
 

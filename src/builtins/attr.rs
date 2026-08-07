@@ -20,7 +20,7 @@ use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, Rec
 use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
-use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope, Visibility};
+use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::DeliveredCarried;
@@ -346,10 +346,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
         // Prefer the child scope's own binding; a member present only in the mirror is an
         // `:|`-minted abstract type.
         return Ok(StepCarried::born(
-            match module_scope
-                .bindings()
-                .lookup_type(field, Visibility::UNFILTERED)
-            {
+            match module_scope.bindings().lookup_type(field, None) {
                 Some(NameLookup::Bound(kt)) => module_scope.resident(Carried::Type(kt)),
                 _ => module_scope.resident(Carried::Type(minted)),
             },
@@ -361,10 +358,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
     // scope's home frame, which transitively pins the module's reach-set — so the read value
     // (or its re-tag carrier) names the full reach without an embedded lhs to fold (the module
     // identity is the lhs).
-    match module_scope
-        .bindings()
-        .lookup_member(field, Visibility::UNFILTERED)
-    {
+    match module_scope.bindings().lookup_member(field, None) {
         Some(MemberResolution::Value(sealed)) => {
             if let Some(tag) = m.slot_type_tags.get(&field).copied() {
                 // The re-tag allocates in the module region (not the read site's): both the value
