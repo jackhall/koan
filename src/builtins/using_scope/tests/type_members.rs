@@ -210,3 +210,27 @@ fn block_type_declaration_dies_with_the_block() {
         "expected the block-local `Other` to be unknown after the block, got {err}",
     );
 }
+
+/// An announced group's member reaches a bare type name through the `USING` window — the mechanism
+/// a mutually-recursive group declared inside a module is constructed by, since the members are
+/// namespaced in the module that hosts them.
+#[test]
+fn announced_group_member_reaches_bare_through_using() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "MODULE listy = (\n  \
+           NEWTYPE Cell = :{head :Number, tail :Rest}\n  \
+           NEWTYPE Rest = :{next :(Cell | Null)}\n\
+         )",
+    );
+    // Outside the window the members are `listy`'s, not this scope's.
+    let err = test_run.run_one_err(parse_one(&program, "FN (WRAP c :Cell) -> Number = (1)"));
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("unknown type name `Cell`")),
+        "an announced member stays namespaced in its module, got {err}",
+    );
+    test_run.run("USING listy SCOPE (LET CellAlias = Cell)");
+}

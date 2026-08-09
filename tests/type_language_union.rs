@@ -343,3 +343,28 @@ fn bare_sibling_tag_stays_unknown_type_error() {
         "a bare sibling tag stays an unknown-type error; got {err}",
     );
 }
+
+/// Two module-hosted unions may own the same bare tag. Qualified lookup is scoped by the binder's
+/// own member list, so `:(Graph Node)` and `:(Tree Node)` name different members; the owner is a
+/// canonical-order tiebreak only, never digested, so differing shapes digest apart and both seal.
+#[test]
+fn same_tag_under_two_binders_coexists_in_one_body() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let out = run_capture(
+        &program,
+        &region,
+        "MODULE shapes = (\n  \
+           UNION Graph = (Node :Number, Edge :Number)\n  \
+           UNION Tree = (Node :Str, Twig :Str)\n  \
+           NEWTYPE Pair = :{g :(Graph Node), t :(Tree Node)}\n\
+         )\n\
+         USING shapes SCOPE (\n  \
+           PRINT (Pair {g = (Graph (Node (1))), t = (Tree (Node (\"x\")))})\n\
+         )",
+    );
+    assert_eq!(
+        out, "Pair({g = Node(1), t = Node(x)})\n",
+        "each qualified sigil names its own binder's variant; got {out:?}"
+    );
+}
