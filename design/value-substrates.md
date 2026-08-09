@@ -406,21 +406,22 @@ assembled complete: its construction gathers members into an owned
 `ModuleDraft` and interns the self-sig *before* the value exists, so the stored
 value is frozen and `Copy` with nothing to mutate after the fact.
 
-`Copy` is what holds a family to that: every bump verb on
+`Copy` is what holds a family to that: the value-shaped bump verbs on
 [`BumpAllocator`](../workgraph/src/witnessed/bump.rs) — the one handle those verbs
-are defined on, which every brand and placement hands back — is `T: Copy`-bounded,
+are defined on, which every brand and placement hands back — are `T: Copy`-bounded,
 because "`Drop`-free" has no expressible bound and `Copy` is the honest static
-proxy. A **table** is where that bound stops travelling with the bytes, because it
-is built over the same allocator's raw `allocator-api2` seam and the trait says
-nothing about destructors. Both table shapes therefore restate the proof as a
-`const { assert!(!needs_drop::<…>()) }` where their own entry types are named: a
-dict's key index and a module's two member tables freeze at construction through
-[`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs), a verb that
-allocates the buckets over the same allocator it places the header through — so the
-half of the argument no assert can check, that the buckets are *this* bump's, is
-closed by construction rather than by a call-site claim; a scope's binding tables
-keep **mutating** after they are built and hold the same line at their own
-declaration sites. Deallocation through that seam is a no-op, so it suits a
+proxy. A **table** is where that bound stops travelling with the bytes, because its
+buckets come from the same allocator's raw `allocator-api2` seam and the trait says
+nothing about destructors. Both table shapes therefore rest on a
+`const { assert!(!needs_drop::<…>()) }` over their entry types instead. A dict's key
+index and a module's two member tables freeze at construction through
+[`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs), which carries
+that assert itself and allocates the buckets over the very allocator it places the
+header through — so the half of the argument no assert can check, that the buckets
+are *this* bump's, is closed by construction rather than by a call-site claim. A
+scope's binding tables keep **mutating** after they are built, so they take the raw
+seam directly and restate the assert at their own declaration sites.
+Deallocation through that seam is a no-op, so it suits a
 collection whose churn is bounded — geometric growth and in-place slot reuse — and
 not one that frees in a loop. A family that reintroduced an owning slot would not fail loudly: it would
 read and write correctly and simply never free, which is why the claim is pinned

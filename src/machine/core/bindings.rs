@@ -462,11 +462,18 @@ struct Tables<'a> {
 /// every other table allocation here.
 ///
 /// `ManuallyDrop` because the vec has a destructor and running it would be pure waste: its elements
-/// are proven glue-free by [`bump_table`]'s assert, and its buffer is bump memory the region
-/// releases whole. Suppressing it is also what makes `needs_drop::<Bucket>()` false, so the map
-/// holding buckets passes the same assert and its own teardown never walks them. No `unsafe` — the
+/// carry no glue (the assert below), and its buffer is bump memory the region releases whole.
+/// Suppressing it is also what makes `needs_drop::<Bucket>()` false, so the map holding buckets
+/// passes [`bump_table`]'s assert and its own teardown never walks them. No `unsafe` — the
 /// suppressed destructor had nothing to do.
 type Bucket<'a> = ManuallyDrop<allocator_api2::vec::Vec<OverloadSlot<'a>, BumpAllocator<'a>>>;
+
+/// The element proof the `ManuallyDrop` above would otherwise swallow. `needs_drop` is false for
+/// *any* `ManuallyDrop<U>`, so the wrapper that makes a bucket storable in a bump-backed table also
+/// makes [`bump_table`]'s entry assert say nothing about what the bucket holds. Stated here instead,
+/// against the element type directly, so an `OverloadSlot` arm that later brings a destructor back
+/// fails the build rather than leaking silently.
+const _: () = assert!(!std::mem::needs_drop::<OverloadSlot<'static>>());
 
 /// Build one of a scope's tables over its region bump, **proving at compile time** that its entries
 /// carry no drop glue. The bump runs no destructor, so a `Drop`-bearing key or value would silently

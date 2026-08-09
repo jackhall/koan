@@ -160,14 +160,16 @@ It is the one region storage needing **no** erasure: a bump's own type carries n
 lifetime, so `'a` enters only at the allocation and an entry may hold an `&'a` back
 into the same region with no residence audit at all. Its `T: Copy` bound is what
 keeps it honest — a bump releases its chunks whole and runs no destructor, so
-admitting a `Drop`-bearing entry would silently skip one. A **collection** built
-over the allocator's raw `allocator-api2` seam — a frozen keyed index
-([`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs)), a scope's
-churning binding table — is where that bound stops travelling with the bytes: such
-a writer proves its
-entries glue-free with a `const { assert!(!needs_drop::<_>()) }` at the
-declaration naming their type, which is the same proof the bound stood for, and
-the destructor it forgoes would have freed only bytes region death frees anyway.
+admitting a `Drop`-bearing entry would silently skip one. A **collection** is where
+that bound stops travelling with the bytes, and a
+`const { assert!(!needs_drop::<_>()) }` over the entry types stands in for it — the
+same proof the bound stood for. A frozen keyed index takes its own verb,
+[`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs), which carries
+that assert and allocates the buckets over the very allocator it places the header
+through. A table that keeps **mutating** — a scope's binding table — is built over
+the allocator's raw `allocator-api2` seam instead, and its writer owes the assert at
+the declaration naming its entry types. Either way the destructor forgone would have
+freed only bytes region death frees anyway.
 Cross-references among bumped entries need no drop-order argument at all:
 everything there dies with the region, at once.
 

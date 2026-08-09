@@ -108,7 +108,7 @@ bumped entries are harmless: everything there dies with the region, at once.
 
 **`Copy` is the static proxy for "no destructor to skip".** A bump releases its
 chunks whole and runs nothing, so a `Drop`-bearing entry would silently leak what
-it owns. "`Drop`-free" has no expressible bound, so every placement verb
+it owns. "`Drop`-free" has no expressible bound, so every value-placement verb
 carries `T: Copy` instead — the honest approximation, and the bound that keeps a
 sectioned container `Copy` and free at region teardown.
 
@@ -138,13 +138,15 @@ what closes it, since no caller can supply a foreign-allocator table. A
 general-purpose "place anything glue-free" verb would have left that half open,
 and `ManuallyDrop` would have been an unrestricted bypass of the `Copy` tier — so
 the wrapper stays an implementation detail of this one verb, deref'd away so no
-holder's type mentions it, and the allocator exposes no way to place an arbitrary
-non-`Copy` value.
+holder's type mentions it, and no verb places an arbitrary non-`Copy` value.
 
 The return is a plain `hashbrown` table (`BumpBackedMap`), not a veneer type: the
 freeze is the shared reference, since no mutation is reachable through `&`. An
 embedder that wants a table it keeps *writing* to builds one over the raw
 `Allocator` seam instead and owes its own entry-glue assert at the declaration.
+That seam stays the one place a non-`Copy` value can reach a region's bytes without
+a verb's guard — it is what a collection is constructed over, and the embedder's
+declaration site is what holds the line there.
 
 The embedder's path in is two doors, split by whether the bumped value has
 operands whose reach the product must carry.

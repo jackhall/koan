@@ -193,9 +193,11 @@ impl<'b> BumpAllocator<'b> {
     /// [`ManuallyDrop`](std::mem::ManuallyDrop) header placement is lossless; the wrapper is deref'd
     /// away here, so no holder's type mentions it.
     ///
-    /// Sized to the iterator's lower bound up front so the fill runs without a rehash: a growth
-    /// reallocation would strand the old bucket array in the bump as garbage
-    /// [`Region::bump_capacity`] would then over-report. Duplicate keys resolve last-wins, as
+    /// Sized to the iterator's lower bound up front so the fill runs without a rehash — exactly for
+    /// an iterator whose `size_hint` lower bound is its true length, which every in-tree caller's is;
+    /// a loose hint costs a rehash, not correctness. A growth
+    /// reallocation strands the old bucket array in the bump as garbage
+    /// [`Region::bump_capacity`] then over-reports. Duplicate keys resolve last-wins, as
     /// [`HashMap::insert`] does. The returned shared reference **is** the freeze — no mutation is
     /// reachable through it, which is what distinguishes this from a table an embedder builds over
     /// the raw [`Allocator`] seam and keeps writing to.
