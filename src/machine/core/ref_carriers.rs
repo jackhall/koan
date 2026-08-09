@@ -28,15 +28,16 @@ pub struct ScopeRefFamily;
 /// what covers the module's own home.
 pub struct ModuleRefFamily;
 
-/// `Reattachable` family for a **reference** to a [`Bindings`] table — `&'r Bindings`. The pointee is
-/// lifetime-free, so `'r` names only the borrow; the family exists so a transparent `USING … SCOPE`
+/// `Reattachable` family for a **reference** to a [`Bindings`] table — `&'r Bindings<'r>`.
+/// Layout-invariant by [`ScopeRefFamily`]'s argument: the reference is a thin pointer independent of
+/// `'r`, whatever the table it points at names. The family exists so a transparent `USING … SCOPE`
 /// window can cross a construction brand alongside its parent scope
-/// ([`Scope::open_module_window`](crate::machine::core::Scope)), which a bare `&'a Bindings` cannot — an ambient borrow has
-/// no outlives relation to a `for<'b>` brand.
+/// ([`Scope::open_module_window`](crate::machine::core::Scope)), which a bare `&'a Bindings<'a>`
+/// cannot — an ambient borrow has no outlives relation to a `for<'b>` brand.
 pub struct BindingsReferenceFamily;
 
 reattachable!(
     ScopeRefFamily => &'r Scope<'r>,
     ModuleRefFamily => &'r Module<'r>,
-    BindingsReferenceFamily => &'r Bindings,
+    BindingsReferenceFamily => &'r Bindings<'r>,
 );

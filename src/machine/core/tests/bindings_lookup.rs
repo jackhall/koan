@@ -8,6 +8,7 @@ use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, NameLookup};
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 
 use super::{body_no_op, unit_signature};
@@ -370,6 +371,10 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
 
     // Purging the last claim in a bucket that holds nothing else drops the key.
     bindings.clear_placeholders_for_producer(NodeId(8), &mut crate::machine::WriteGate::for_test());
-    assert!(!bindings.functions().contains_key(&other_key));
-    assert!(bindings.functions().contains_key(&sealed_key));
+    assert!(!bindings
+        .functions()
+        .contains_key(&UntypedKeyProbe(&other_key)));
+    assert!(bindings
+        .functions()
+        .contains_key(&UntypedKeyProbe(&sealed_key)));
 }

@@ -2,6 +2,7 @@ use super::*;
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, run_root_bare, TestRun};
 use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt, Scope};
+use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KExpression, KType, ReturnType, SignatureDraft};
 use crate::machine::model::{KKind, KObject};
 use crate::machine::model::{KLiteral, TypeIdentifier};
@@ -24,7 +25,7 @@ fn find_match<'a>(
     let key = expr.untyped_key();
     let mut current: Option<&Scope<'a>> = Some(scope);
     while let Some(s) = current {
-        let bucket: Vec<_> = match s.bindings().functions().get(&key) {
+        let bucket: Vec<_> = match s.bindings().functions().get(&UntypedKeyProbe(&key)) {
             Some(bucket) => bucket
                 .iter()
                 .filter_map(|slot| slot.sealed())

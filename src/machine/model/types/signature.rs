@@ -72,9 +72,7 @@ hash_key_element!(
 /// foreign trait for a slice; the newtype is the local type that carries the impl. It hashes by
 /// delegating straight to the slice, so it writes byte-for-byte what the stored key writes —
 /// same length prefix, same per-element scheme — which is the whole reason the two forms can share
-/// one bucket table. The stored↔stored probe needs no wrapper: hashbrown's blanket `Equivalent`
-/// already covers a key that `Borrow`s the probe, which a `&[StoredElement]` key does for its own
-/// slice.
+/// one bucket table.
 pub struct UntypedKeyProbe<'k>(pub &'k [UntypedElement]);
 
 impl std::hash::Hash for UntypedKeyProbe<'_> {
@@ -93,6 +91,36 @@ impl<'a> hashbrown::Equivalent<&'a [StoredElement<'a>]> for UntypedKeyProbe<'_> 
                 .all(|(owned, stored)| match (owned, stored) {
                     (UntypedElement::Keyword(a), StoredElement::Keyword(b)) => a == b,
                     (UntypedElement::Slot, StoredElement::Slot) => true,
+                    _ => false,
+                })
+    }
+}
+
+/// A key already stored **somewhere else** — a dispatching node's own bumped run — borrowed for one
+/// probe of a table keyed in another region.
+///
+/// Wrapped for [`UntypedKeyProbe`]'s reason and one more: hashbrown's blanket `Equivalent` would
+/// cover a bare `&[StoredElement]` probe only when its element lifetime is *the table's own*, which
+/// would tie every dispatching node's key to the region of whichever scope it happens to probe.
+/// Key identity is content, not region, and this impl is what says so.
+pub struct StoredKeyProbe<'k, 'e>(pub &'k [StoredElement<'e>]);
+
+impl std::hash::Hash for StoredKeyProbe<'_, '_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl<'a> hashbrown::Equivalent<&'a [StoredElement<'a>]> for StoredKeyProbe<'_, '_> {
+    fn equivalent(&self, key: &&'a [StoredElement<'a>]) -> bool {
+        self.0.len() == key.len()
+            && self
+                .0
+                .iter()
+                .zip(key.iter())
+                .all(|(probe, stored)| match (probe, stored) {
+                    (StoredElement::Keyword(a), StoredElement::Keyword(b)) => a == b,
+                    (StoredElement::Slot, StoredElement::Slot) => true,
                     _ => false,
                 })
     }

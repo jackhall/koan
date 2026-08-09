@@ -181,10 +181,12 @@ impl<'a> Scope<'a> {
             return Err(outside_sig());
         };
         target.assert_open(&name);
-        if slots.borrow().contains_key(&name) {
+        if slots.borrow().contains_key(name.as_str()) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        slots.borrow_mut().insert(name, ktype);
+        slots
+            .borrow_mut()
+            .insert(target.brand().alloc_text(&name), ktype);
         Ok(())
     }
 
@@ -202,7 +204,7 @@ impl<'a> Scope<'a> {
     ) -> Result<(), KError> {
         self.assert_owns_bindings();
         self.bindings()
-            .install_placeholder(name, idx, index, kind, gate)
+            .install_placeholder(&name, idx, index, kind, gate)
     }
 
     /// Error-path companion to both [`Self::install_placeholder`] and
@@ -269,7 +271,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn alloc_module_view(
         outer: &'a Scope<'a>,
         path: String,
-        src: &crate::machine::core::Bindings,
+        src: &'a crate::machine::core::Bindings<'a>,
         type_entries: impl FnOnce(crate::machine::core::ScopeId) -> Vec<(String, KType)>,
     ) -> Result<&'a Scope<'a>, KError> {
         let view = outer.alloc_child_under_module(path, None);

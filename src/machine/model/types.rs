@@ -48,7 +48,7 @@ pub use signature::{
 };
 pub use signature::{
     most_specific_ktype, owned_untyped_key, restore_stored_key, store_untyped_key,
-    StoredDispatchTokenElement, StoredElement, UntypedKeyProbe,
+    StoredDispatchTokenElement, StoredElement, StoredKeyProbe, UntypedKeyProbe,
 };
 pub(crate) use type_digest::{empty_schema_digest, TypeDigest};
 pub use typed_field_list::{

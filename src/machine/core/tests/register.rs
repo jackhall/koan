@@ -7,6 +7,7 @@ use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 
 use super::{body_no_op, unit_signature};
@@ -333,7 +334,7 @@ fn register_function_coexists_with_same_name_value() {
     assert!(scope
         .bindings()
         .functions()
-        .get(&key)
+        .get(&UntypedKeyProbe(&key))
         .map(|b| !b.is_empty())
         .unwrap_or(false));
 }
@@ -372,7 +373,7 @@ fn register_function_coexists_with_same_name_type() {
     assert!(scope
         .bindings()
         .functions()
-        .get(&key)
+        .get(&UntypedKeyProbe(&key))
         .map(|b| !b.is_empty())
         .unwrap_or(false));
 }

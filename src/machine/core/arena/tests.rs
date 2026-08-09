@@ -504,7 +504,7 @@ fn region_union_foreign_pins_release_at_region_death() {
         // The bind-door mint: derive the exact reach into `dest`'s arena and fold the owning bundle
         // into `dest`'s region union. `foreign` is not the dest, so the self rule keeps it.
         let reach = scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&foreign))]);
-        let bindings: Bindings = Bindings::new();
+        let bindings = Bindings::new(scope.brand());
         bindings
             .write_value(
                 "x",
@@ -521,7 +521,10 @@ fn region_union_foreign_pins_release_at_region_death() {
             "the region's union keeps the reached region alive",
         );
 
-        drop(bindings);
+        // A table has no destructor to run at all — its storage is the region's bump — so letting
+        // the binding go out of scope releases nothing, which is the claim.
+        assert!(!std::mem::needs_drop::<Bindings<'_>>());
+        let _ = &bindings;
         assert!(
             weak.upgrade().is_some(),
             "an entry owns nothing, so entry death releases no pin",

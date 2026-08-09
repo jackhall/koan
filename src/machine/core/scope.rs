@@ -1,5 +1,4 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::io::Write;
 use std::rc::{Rc, Weak};
 
@@ -10,7 +9,7 @@ use crate::machine::model::{AnnouncedData, AnnouncedWindow};
 use crate::witnessed::{And, DropFree, Reattachable, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
-use super::bindings::Bindings;
+use super::bindings::{bump_table, Bindings, BumpBackedMap};
 use super::ref_carriers::{BindingsReferenceFamily, ScopeRefFamily};
 use super::scope_id::ScopeId;
 
@@ -79,17 +78,17 @@ pub struct Scope<'a> {
 // read path; inlining the large variant is the deliberate trade.
 #[allow(clippy::large_enum_variant)]
 enum ScopeBindings<'a> {
-    Owned(Bindings),
+    Owned(Bindings<'a>),
     /// The borrowed façade lives in the opened module's child-scope region;
     /// [`Scope::open_module_window`](crate::machine::core::Scope) keeps that region alive by
     /// minting the module's own delivery envelope's coverage into the call-site region before
     /// building the window that borrows into it, so a window and its root are one act over one
     /// operand.
-    Borrowed(&'a Bindings),
+    Borrowed(&'a Bindings<'a>),
 }
 
-impl ScopeBindings<'_> {
-    fn get(&self) -> &Bindings {
+impl<'a> ScopeBindings<'a> {
+    fn get(&self) -> &Bindings<'a> {
         match self {
             ScopeBindings::Owned(b) => b,
             ScopeBindings::Borrowed(b) => b,
@@ -120,9 +119,15 @@ pub enum ScopeKind<'a> {
     /// resolves names in it; no visibility index). The SIG finish projects it into the signature's
     /// stored `SigSchema`, and ATTR over the signature reads a slot's declared type back out of it.
     /// Plain `borrow_mut` inside the single write door is fine: the cell is never held across calls.
+    ///
+    /// The collector is bump-backed like the four durable tables, with its slot names re-homed at
+    /// record time, so its death frees nothing and walks no entry (a `KType` is a `Copy` handle).
+    /// It is **not** wrapped to suppress the map's own vacuous destructor the way
+    /// [`Bindings`] is: this variant carries an owned `name` beside it, so the wrapper would
+    /// remove no drop glue from `Scope` — it would only hide a no-op.
     Sig {
         name: String,
-        slots: RefCell<HashMap<String, KType>>,
+        slots: RefCell<BumpBackedMap<'a, &'a str, KType>>,
     },
     /// A MODULE body (also the per-ascription view minted by `:|`). `group` is `Some` for a `GROUP`
     /// body — a group *is* a module — naming the one [`OperatorGroup`] record its member `OP`
@@ -154,7 +159,7 @@ impl<'a> Scope<'a> {
         Self {
             outer: None,
             root: None,
-            bindings: ScopeBindings::Owned(Bindings::new()),
+            bindings: ScopeBindings::Owned(Bindings::new(brand)),
             out: RefCell::new(None),
             // Region borrow and owning `Weak` both derive from the one run storage.
             brand,
@@ -252,7 +257,7 @@ impl<'a> Scope<'a> {
     fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
         Self::child_inheriting(
             outer,
-            ScopeBindings::Owned(Bindings::new()),
+            ScopeBindings::Owned(Bindings::new(outer.brand)),
             ScopeKind::Anonymous,
         )
     }
@@ -273,7 +278,7 @@ impl<'a> Scope<'a> {
         Scope {
             outer: Some(outer),
             root: outer.root,
-            bindings: ScopeBindings::Owned(Bindings::new()),
+            bindings: ScopeBindings::Owned(Bindings::new(brand)),
             out: RefCell::new(None),
             brand,
             region_owner,
@@ -287,10 +292,10 @@ impl<'a> Scope<'a> {
     fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Self::child_inheriting(
             outer,
-            ScopeBindings::Owned(Bindings::new()),
+            ScopeBindings::Owned(Bindings::new(outer.brand)),
             ScopeKind::Sig {
                 name,
-                slots: RefCell::new(HashMap::new()),
+                slots: RefCell::new(bump_table(outer.brand)),
             },
         )
     }
@@ -306,7 +311,7 @@ impl<'a> Scope<'a> {
     ) -> Scope<'a> {
         Self::child_inheriting(
             outer,
-            ScopeBindings::Owned(Bindings::new()),
+            ScopeBindings::Owned(Bindings::new(outer.brand)),
             ScopeKind::Module {
                 name,
                 group: None,
@@ -327,7 +332,7 @@ impl<'a> Scope<'a> {
     ) -> Scope<'a> {
         Self::child_inheriting(
             outer,
-            ScopeBindings::Owned(Bindings::new()),
+            ScopeBindings::Owned(Bindings::new(outer.brand)),
             ScopeKind::Module {
                 name,
                 group: Some(group),
@@ -374,7 +379,7 @@ impl<'a> Scope<'a> {
     /// `module_bindings`. It is a middle link: the block's own owned scope stacks inside it, so a
     /// read walks block, then window, then `outer`, and no write ever targets the window. `region`
     /// is `outer.region` so block-body allocations outlive the block.
-    fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings) -> Scope<'a> {
+    fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Borrowed(module_bindings),
@@ -511,14 +516,14 @@ impl<'a> Scope<'a> {
     #[cfg(test)]
     pub(crate) fn alloc_transparent_window_for_test(
         &'a self,
-        module_bindings: &'a Bindings,
+        module_bindings: &'a Bindings<'a>,
     ) -> &'a Scope<'a> {
         self.alloc_child_transparent(SealedExtern::<BindingsReferenceFamily>::erase(
             module_bindings,
         ))
     }
 
-    pub fn bindings(&self) -> &Bindings {
+    pub fn bindings(&self) -> &Bindings<'a> {
         self.bindings.get()
     }
 
@@ -589,7 +594,7 @@ impl<'a> Scope<'a> {
             ScopeKind::Sig { slots, .. } => slots
                 .borrow()
                 .iter()
-                .map(|(name, kt)| (name.clone(), *kt))
+                .map(|(name, kt)| (name.to_string(), *kt))
                 .collect(),
             ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Module { .. } => Vec::new(),
         }

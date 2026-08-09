@@ -50,7 +50,7 @@ fn sole_reach_member(sealed: &SealedValue, pin: &Rc<FrameStorage>) -> Rc<FrameSt
 fn data_binding_round_trips_sealed_reach() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings = Bindings::new();
+    let bindings = Bindings::new(region);
     let obj: &KObject = region.alloc_scalar(Scalar::Number(1.0));
     // A synthetic foreign frame the value "reaches" — carried on the seal as its reach.
     let foreign = run_root_storage();
@@ -79,7 +79,7 @@ fn data_binding_round_trips_sealed_reach() {
 fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings = Bindings::new();
+    let bindings = Bindings::new(region);
     let obj: &KObject = region.alloc_scalar(Scalar::Number(1.0));
     let foreign = run_root_storage();
     let (sealed, reach_set) = sealed_reaching(region, obj, &foreign);
@@ -110,7 +110,8 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
 
 #[test]
 fn write_type_inserts_into_types_map() {
-    let bindings: Bindings = Bindings::new();
+    let storage = run_root_storage();
+    let bindings = Bindings::new(storage.brand());
     let kt: KType = KType::NUMBER;
     bindings
         .write_type(
@@ -133,7 +134,8 @@ fn write_type_inserts_into_types_map() {
 
 #[test]
 fn write_type_rejects_collision_with_rebind() {
-    let bindings: Bindings = Bindings::new();
+    let storage = run_root_storage();
+    let bindings = Bindings::new(storage.brand());
     let kt1: KType = KType::NUMBER;
     let kt2: KType = KType::STR;
     bindings
@@ -167,11 +169,12 @@ fn write_type_rejects_collision_with_rebind() {
 
 #[test]
 fn write_type_finalizes_pending_arm_in_place() {
-    let bindings: Bindings = Bindings::new();
+    let storage = run_root_storage();
+    let bindings = Bindings::new(storage.brand());
     let kt: KType = KType::NUMBER;
     bindings
         .install_placeholder(
-            "Bar".to_string(),
+            "Bar",
             NodeId(7),
             BindingIndex::BUILTIN,
             BindKind::Type,
@@ -197,7 +200,8 @@ fn write_type_finalizes_pending_arm_in_place() {
 
 #[test]
 fn write_type_does_not_touch_data_or_functions() {
-    let bindings: Bindings = Bindings::new();
+    let storage = run_root_storage();
+    let bindings = Bindings::new(storage.brand());
     let kt: KType = KType::NUMBER;
     bindings
         .write_type(
@@ -222,7 +226,8 @@ fn write_type_does_not_touch_data_or_functions() {
 /// idempotent arm on the cross-run install and this test would fail.
 #[test]
 fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
-    let bindings: Bindings = Bindings::new();
+    let storage = run_root_storage();
+    let bindings = Bindings::new(storage.brand());
     let first_run = RunId::next();
     let second_run = RunId::next();
     assert_ne!(first_run, second_run, "two runs must mint distinct RunIds");
@@ -298,7 +303,8 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
 /// decides which one it belongs to. A value token may not name a type…
 #[test]
 fn value_token_may_not_bind_type_side() {
-    let bindings: Bindings = Bindings::new();
+    let storage = run_root_storage();
+    let bindings = Bindings::new(storage.brand());
     let kt: KType = KType::NUMBER;
     let error = match bindings.write_type(
         "int_ord",
@@ -324,7 +330,7 @@ fn value_token_may_not_bind_type_side() {
 fn type_token_may_not_bind_value_side() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings = Bindings::new();
+    let bindings = Bindings::new(region);
     let val: &KObject = region.alloc_scalar(Scalar::Number(7.0));
     let error = match bindings.write_value(
         "IntOrd",
@@ -353,10 +359,10 @@ fn type_token_may_not_bind_value_side() {
 fn value_write_finalizes_the_pending_arm_in_place() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings = Bindings::new();
+    let bindings = Bindings::new(region);
     bindings
         .install_placeholder(
-            "x".to_string(),
+            "x",
             NodeId(11),
             BindingIndex::value(2),
             BindKind::Value,
@@ -397,7 +403,8 @@ fn value_write_finalizes_the_pending_arm_in_place() {
 /// drops only the pending arm — the bound identity survives.
 #[test]
 fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
-    let bindings: Bindings = Bindings::new();
+    let storage = run_root_storage();
+    let bindings = Bindings::new(storage.brand());
     bindings
         .write_type(
             "Wrapper",
@@ -409,7 +416,7 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
         .expect("the seal pre-installs the external identity");
     bindings
         .install_placeholder(
-            "Wrapper".to_string(),
+            "Wrapper",
             NodeId(9),
             BindingIndex::BUILTIN,
             BindKind::Type,

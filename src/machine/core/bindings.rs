@@ -24,6 +24,12 @@
 //! There is no borrow order to keep: reads never overlap the single gated write site, so every
 //! verb takes exactly one borrow of the one cell and a cross-map write is atomic under it.
 //!
+//! Every table lives in the scope's own **region bump** — bucket arrays, keys, and the text an
+//! entry carries alike — so dropping a table frees nothing and runs no per-entry glue, and frame
+//! death walks O(scopes) rather than O(entries). [`bump_table`] carries the compile-time proof that
+//! no entry brings drop glue with it; the write verbs re-home what they store through the brand
+//! [`Bindings`] holds. Nothing about the lookup changes: the probe is the same O(1) hash.
+//!
 //! Every entry carries a [`BindingIndex`] naming its installing statement's lexical
 //! position, gated by the strict cutoff `idx < c`, so a forward reference (a
 //! later-positioned binding) is invisible — type binders included. A type entry pairs
@@ -49,18 +55,22 @@
 #[cfg(test)]
 use std::cell::Ref;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 
 use crate::machine::core::carrier_witness::{
     GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
 };
 use crate::machine::core::kfunction::NodeId;
+use crate::machine::core::RegionBrand;
 use crate::machine::core::RunId;
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::DispatchToken;
+use crate::machine::model::{
+    owned_untyped_key, restore_stored_key, store_untyped_key, StoredDispatchTokenElement,
+    StoredElement, StoredKeyProbe, UntypedKeyProbe,
+};
 use crate::machine::model::{KType, UntypedKey};
 use crate::machine::CarrierWitness;
-use crate::witnessed::Sealed;
+use crate::witnessed::{BumpAllocator, Sealed};
 
 use super::kerror::{KError, KErrorKind};
 
@@ -186,14 +196,14 @@ impl TypeSlot {
 /// One slot of a dispatch bucket: a finalized overload, or a sibling FN binder still finalizing
 /// that consumers park on. Both live in the same `Vec` because both answer the same lookup — a
 /// bucket legitimately holds sealed overloads and pending siblings at once.
-pub(crate) enum OverloadSlot {
-    Sealed(FunctionBucketEntry),
+pub(crate) enum OverloadSlot<'a> {
+    Sealed(FunctionBucketEntry<'a>),
     Pending(PendingBinding),
 }
 
-impl OverloadSlot {
+impl<'a> OverloadSlot<'a> {
     /// The finalized overload, or `None` for a still-finalizing sibling.
-    pub(crate) fn sealed(&self) -> Option<&FunctionBucketEntry> {
+    pub(crate) fn sealed(&self) -> Option<&FunctionBucketEntry<'a>> {
         match self {
             OverloadSlot::Sealed(entry) => Some(entry),
             OverloadSlot::Pending(_) => None,
@@ -242,23 +252,26 @@ impl DataEntry {
 /// ([`OverloadSeal`]) where the callable was open. Overloads sharing a bucket sit at different
 /// lexical positions, so each carries its own [`BindingIndex`] and the dispatch picker filters
 /// per-overload.
-pub(crate) struct FunctionBucketEntry {
+pub(crate) struct FunctionBucketEntry<'a> {
     pub(crate) index: BindingIndex,
-    /// The stored form of the duplicate-overload predicate: token equality against an incoming
-    /// callable is `DuplicateOverload`.
-    token: DispatchToken,
-    /// The overload's rendered signature, for the `DuplicateOverload` diagnostic.
-    summary: String,
+    /// The stored form of the duplicate-overload predicate: an incoming callable whose token
+    /// matches this run is `DuplicateOverload`. A bumped run rather than the owned
+    /// [`DispatchToken`], so the entry carries no `Drop` and a bucket's death frees nothing.
+    token: &'a [StoredDispatchTokenElement<'a>],
+    /// The overload's rendered signature, for the `DuplicateOverload` diagnostic — bumped for
+    /// [`Self::token`]'s reason.
+    summary: &'a str,
     pub(crate) sealed: SealedFunction,
 }
 
-impl FunctionBucketEntry {
-    /// A bit-copy of the entry, for the bulk-install snapshot — like [`DataEntry::duplicate`].
+impl<'a> FunctionBucketEntry<'a> {
+    /// A bit-copy of the entry, for the bulk-install snapshot — like [`DataEntry::duplicate`]. The
+    /// bumped run and text copy as the borrows they are; only the seal needs a verb.
     fn duplicate(&self) -> Self {
         FunctionBucketEntry {
             index: self.index,
-            token: self.token.clone(),
-            summary: self.summary.clone(),
+            token: self.token,
+            summary: self.summary,
             sealed: self.sealed.duplicate(),
         }
     }
@@ -274,12 +287,13 @@ impl FunctionBucketEntry {
 /// regions its reach names are held by that region's union bundle, so the entry carries no `Drop`
 /// over it and dies with the region that hosts what it names — a group whose declaring region has
 /// died is unreachable rather than kept alive by a stray refcount.
-pub(crate) struct OperatorEntry {
+pub(crate) struct OperatorEntry<'a> {
     index: BindingIndex,
     /// The registered record's address — the upsert's cheap identity arm.
     address: usize,
-    /// The registered record's rendered mode + member set — the upsert's structural arm.
-    declaration: String,
+    /// The registered record's rendered mode + member set — the upsert's structural arm, bumped so
+    /// the entry carries no `Drop`.
+    declaration: &'a str,
     sealed: SealedOperatorGroup,
 }
 
@@ -398,15 +412,19 @@ impl DeclarationSite {
 /// one probe and finalization overwrites the slot rather than moving between containers. `data`
 /// and `types` park by name (value/type forward references); `functions` parks by full dispatch
 /// bucket key, which keeps `(MAKESET _)` and `(MAKESET _ USING _)` from colliding.
-#[derive(Default)]
-struct Tables {
+///
+/// Every table is a `hashbrown` map over the scope's own region bump ([`BumpBackedMap`]) with
+/// bumped `&'a str` / `&'a [StoredElement]` keys, so a table's death frees nothing and walks no
+/// entry — which is what lets frame teardown cost O(scopes) rather than O(entries). Lookup is the
+/// same O(1) hash probe a std map would run.
+struct Tables<'a> {
     /// Each bound type slot stores its type and its [`DeclarationSite`] — the installing
     /// [`NodeHandle`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
     /// `KType` is a `Copy` handle into the run frame's registry, so a slot carries no reach: a
     /// read copies the handle under the home-frame pin alone, and the same handle names the same
     /// type in every region. A [`TypeSlot`] may carry an in-flight producer beside the bound
     /// identity — see its doc for why the two coexist here and not in `data`.
-    types: HashMap<String, TypeSlot>,
+    types: BumpBackedMap<'a, &'a str, TypeSlot>,
     /// Each bound value slot stores its value fused to its exact reach in one dormant
     /// [`SealedValue`], plus its lexical [`BindingIndex`]. Reads hand out a bit-copy of the seal
     /// ([`Bindings::lookup_value`]) and re-anchor the value only under a pin, so a read replays the
@@ -414,7 +432,7 @@ struct Tables {
     /// `Weak`, and the owning pins live in the region's union bundle rather than here — either a
     /// strong member or a per-entry `Rc` on the scope's own frame would close a
     /// `frame → region → scope → bindings → frame` cycle and leak the region.
-    data: HashMap<String, ValueSlot>,
+    data: BumpBackedMap<'a, &'a str, ValueSlot>,
     /// Each sealed bucket slot stores its callable fused to its reach claim in one dormant
     /// [`SealedFunction`], beside the precomputed data the write path dedupes on
     /// ([`FunctionBucketEntry`]). Written only by the `FN` / `OP` registration doors — an `FN`
@@ -424,7 +442,10 @@ struct Tables {
     /// not finalized sit in the same bucket as [`OverloadSlot::Pending`]; consumers park on the
     /// earliest-index visible one, and a finalize overwrites only its own slot, leaving the other
     /// siblings as wake sources.
-    functions: HashMap<UntypedKey, Vec<OverloadSlot>>,
+    /// Keyed on the **stored** run rather than an owned [`UntypedKey`] so a node dispatching
+    /// through its own bumped key probes without materializing one; an owned key probes the same
+    /// bucket through [`UntypedKeyProbe`].
+    functions: BumpBackedMap<'a, &'a [StoredElement<'a>], Bucket<'a>>,
     /// Per-scope operator registry: a chain's sorted-joined operator probe key → the dormant
     /// [`SealedOperatorGroup`] carrier of the group it resolves to, beside its lexical
     /// [`BindingIndex`] ([`OperatorEntry`] — the `data`/`functions` entry shape). A module installs
@@ -433,7 +454,48 @@ struct Tables {
     /// subset used in one expression resolves in a single hit, a cross-group mix simply misses, and
     /// the whole install allocates nothing past its probe keys. Walked through the scope chain like
     /// every other name (innermost visible wins).
-    operators: HashMap<String, OperatorEntry>,
+    operators: BumpBackedMap<'a, &'a str, OperatorEntry<'a>>,
+}
+
+/// A table whose bucket array lives in the scope's region bump. `hashbrown` rather than
+/// `std::collections::HashMap` for the custom-allocator seam, which std has no stable equivalent
+/// of; the hash function and probe cost are the same either way, since std's map *is* a hashbrown
+/// table.
+pub(in crate::machine::core) type BumpBackedMap<'a, K, V> =
+    hashbrown::HashMap<K, V, hashbrown::DefaultHashBuilder, BumpAllocator<'a>>;
+
+/// One dispatch bucket: the overload slots sharing a key, in a vec whose buffer is bump-backed like
+/// every other table allocation here.
+///
+/// `ManuallyDrop` because the vec has a destructor and running it would be pure waste: its elements
+/// are proven glue-free by [`bump_table`]'s assert, and its buffer is bump memory the region
+/// releases whole. Suppressing it is also what makes `needs_drop::<Bucket>()` false, so the map
+/// holding buckets passes the same assert and its own teardown never walks them. No `unsafe` — the
+/// suppressed destructor had nothing to do.
+type Bucket<'a> = ManuallyDrop<allocator_api2::vec::Vec<OverloadSlot<'a>, BumpAllocator<'a>>>;
+
+/// Build one of a scope's tables over its region bump, **proving at compile time** that its entries
+/// carry no drop glue. The bump runs no destructor, so a `Drop`-bearing key or value would silently
+/// leak whatever it owns; the assert is monomorphization-checked, so a future entry field that
+/// brings glue back is a build error at the declaration that admitted it rather than a leak.
+///
+/// This is where each table's storage choice is stated: all five tables route here, so none has an
+/// unstated exemption.
+pub(in crate::machine::core) fn bump_table<'a, K, V>(
+    brand: RegionBrand<'a>,
+) -> BumpBackedMap<'a, K, V> {
+    const {
+        assert!(
+            !std::mem::needs_drop::<K>() && !std::mem::needs_drop::<V>(),
+            "a bump-backed table's entries must carry no drop glue: the bump runs no destructor",
+        )
+    };
+    hashbrown::HashMap::with_hasher_in(hashbrown::DefaultHashBuilder::default(), brand.allocator())
+}
+
+/// An empty dispatch bucket over the same bump — the `functions` table's value constructor.
+fn bump_bucket(brand: RegionBrand<'_>) -> Bucket<'_> {
+    ManuallyDrop::new(allocator_api2::vec::Vec::new_in(brand.allocator()))
 }
 
 /// One scope's bindings: the four maps under a single [`RefCell`], and nothing else.
@@ -442,14 +504,39 @@ struct Tables {
 /// never overlap a write, so per-map cells bought nothing but a borrow-ordering rule to obey. Every
 /// verb takes exactly one borrow, and a cross-map write — a value insert screened against `types`,
 /// a type insert screened against `data` — is atomic under it.
-pub struct Bindings {
-    tables: RefCell<Tables>,
+///
+/// The brand rides beside the cell because every write re-homes what it stores: a key's text, an
+/// overload's summary and dispatch token all land in the same region the tables' buckets do, so a
+/// table never points at bytes that can die before it.
+pub struct Bindings<'a> {
+    brand: RegionBrand<'a>,
+    /// `ManuallyDrop` for [`Bucket`]'s reason, one level up: a `hashbrown` map has a destructor
+    /// whose only act is to hand its bucket array back to the allocator, which for a bump-backed
+    /// table is a no-op. Suppressing it is what makes [`Bindings`] contribute **zero** drop glue to
+    /// the `Scope` holding it — the assert below is the proof, and it is what a scope skipping its
+    /// own destructor rests on.
+    tables: RefCell<ManuallyDrop<Tables<'a>>>,
 }
 
-impl Bindings {
-    pub fn new() -> Self {
+/// A scope's binding state carries **no drop glue at all** — not an entry walk, not a vacuous free
+/// of a bucket array the bump owns. Stated as a compile-time fact rather than a comment, so a future
+/// entry field or table type that brings a destructor back fails the build here, and so
+/// [`Scope`](crate::machine::core::Scope)'s own remaining `Drop` provably names no binding-table
+/// state.
+const _: () = assert!(!std::mem::needs_drop::<Bindings<'static>>());
+
+impl<'a> Bindings<'a> {
+    /// Empty tables over `brand`'s region. There is no `Default`: a binding table cannot exist
+    /// without the region its storage lives in.
+    pub fn new(brand: RegionBrand<'a>) -> Self {
         Self {
-            tables: RefCell::new(Tables::default()),
+            brand,
+            tables: RefCell::new(ManuallyDrop::new(Tables {
+                types: bump_table(brand),
+                data: bump_table(brand),
+                functions: bump_table(brand),
+                operators: bump_table(brand),
+            })),
         }
     }
 
@@ -532,6 +619,26 @@ impl Bindings {
     /// overloads AND the earliest-index visible pending sibling together, so the scope walk decides
     /// pending-vs-finalized precedence with both in hand.
     pub fn lookup_function(&self, key: &UntypedKey, cutoff: Option<usize>) -> FunctionLookup {
+        self.lookup_function_probe(&UntypedKeyProbe(key), cutoff)
+    }
+
+    /// [`Self::lookup_function`] from a node's **own** bumped key — the dispatch hot path, which
+    /// reads the run the node already carries instead of materializing an owned key per call.
+    pub fn lookup_function_stored(
+        &self,
+        key: &[StoredElement<'_>],
+        cutoff: Option<usize>,
+    ) -> FunctionLookup {
+        self.lookup_function_probe(&StoredKeyProbe(key), cutoff)
+    }
+
+    /// The one bucket read, over whichever key form the caller holds: hashbrown resolves both
+    /// through `Equivalent`, and the two forms hash identically by construction (see
+    /// [`UntypedKeyProbe`]).
+    fn lookup_function_probe<Q>(&self, key: &Q, cutoff: Option<usize>) -> FunctionLookup
+    where
+        Q: std::hash::Hash + hashbrown::Equivalent<&'a [StoredElement<'a>]> + ?Sized,
+    {
         let tables = self.tables.borrow();
         let Some(bucket) = tables.functions.get(key) else {
             return FunctionLookup {
@@ -590,7 +697,7 @@ impl Bindings {
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
-        if let Some(entry) = tables.operators.get(&probe) {
+        if let Some(entry) = tables.operators.get(probe.as_str()) {
             if entry.address == seal.address || entry.declaration == seal.declaration {
                 return Ok(());
             }
@@ -599,12 +706,15 @@ impl Bindings {
                  chaining mode or member set; one scope declares one chaining mode per operator",
             ))));
         }
+        // Key and declaration re-home on the insert alone. A powerset install bumps the declaration
+        // once per subset entry; the byte cost is bounded by the group's own powerset, which is
+        // small, and cross-call sharing would cost an intern table to save it.
         tables.operators.insert(
-            probe,
+            self.brand.alloc_text(&probe),
             OperatorEntry {
                 index,
                 address: seal.address,
-                declaration: seal.declaration.clone(),
+                declaration: self.brand.alloc_text(&seal.declaration),
                 sealed: seal.sealed.duplicate(),
             },
         );
@@ -620,7 +730,7 @@ impl Bindings {
             .borrow()
             .data
             .iter()
-            .filter_map(|(name, slot)| Some((name.clone(), slot.bound()?.sealed.duplicate())))
+            .filter_map(|(name, slot)| Some((name.to_string(), slot.bound()?.sealed.duplicate())))
             .collect()
     }
 
@@ -630,7 +740,7 @@ impl Bindings {
             .borrow()
             .types
             .iter()
-            .filter_map(|(name, slot)| Some((name.clone(), slot.bound()?.0)))
+            .filter_map(|(name, slot)| Some((name.to_string(), slot.bound()?.0)))
             .collect()
     }
 
@@ -650,7 +760,7 @@ impl Bindings {
                     .filter_map(OverloadSlot::sealed)
                     .map(|entry| entry.sealed.duplicate())
                     .collect();
-                (!sealed.is_empty()).then(|| (key.clone(), sealed))
+                (!sealed.is_empty()).then(|| (owned_untyped_key(key), sealed))
             })
             .collect()
     }
@@ -671,6 +781,19 @@ impl Bindings {
     /// [`BindingIndex::BUILTIN`] — a genuine builtin dispatch bucket, distinct from a
     /// user bucket the no-shadow consult must not gate.
     pub fn has_builtin_function(&self, key: &UntypedKey) -> bool {
+        self.has_builtin_function_probe(&UntypedKeyProbe(key))
+    }
+
+    /// [`Self::has_builtin_function`] from a node's own bumped key — the no-shadow consult's hot
+    /// path, paired with [`Self::lookup_function_stored`].
+    pub fn has_builtin_function_stored(&self, key: &[StoredElement<'_>]) -> bool {
+        self.has_builtin_function_probe(&StoredKeyProbe(key))
+    }
+
+    fn has_builtin_function_probe<Q>(&self, key: &Q) -> bool
+    where
+        Q: std::hash::Hash + hashbrown::Equivalent<&'a [StoredElement<'a>]> + ?Sized,
+    {
         self.tables.borrow().functions.get(key).is_some_and(|b| {
             b.iter()
                 .filter_map(OverloadSlot::sealed)
@@ -688,17 +811,19 @@ impl Bindings {
     }
 
     #[cfg(test)]
-    pub(crate) fn data(&self) -> Ref<'_, HashMap<String, ValueSlot>> {
+    pub(crate) fn data(&self) -> Ref<'_, BumpBackedMap<'a, &'a str, ValueSlot>> {
         Ref::map(self.tables.borrow(), |t| &t.data)
     }
 
     #[cfg(test)]
-    pub(crate) fn functions(&self) -> Ref<'_, HashMap<UntypedKey, Vec<OverloadSlot>>> {
+    pub(crate) fn functions(
+        &self,
+    ) -> Ref<'_, BumpBackedMap<'a, &'a [StoredElement<'a>], Bucket<'a>>> {
         Ref::map(self.tables.borrow(), |t| &t.functions)
     }
 
     #[cfg(test)]
-    pub(crate) fn types(&self) -> Ref<'_, HashMap<String, TypeSlot>> {
+    pub(crate) fn types(&self) -> Ref<'_, BumpBackedMap<'a, &'a str, TypeSlot>> {
         Ref::map(self.tables.borrow(), |t| &t.types)
     }
 
@@ -720,11 +845,11 @@ impl Bindings {
         let values = tables
             .data
             .iter()
-            .filter_map(|(n, s)| Some((n.clone(), BindKind::Value, s.pending()?.producer)));
+            .filter_map(|(n, s)| Some((n.to_string(), BindKind::Value, s.pending()?.producer)));
         let types = tables
             .types
             .iter()
-            .filter_map(|(n, s)| Some((n.clone(), BindKind::Type, s.pending()?.producer)));
+            .filter_map(|(n, s)| Some((n.to_string(), BindKind::Type, s.pending()?.producer)));
         values.chain(types).collect()
     }
 
@@ -734,7 +859,7 @@ impl Bindings {
         self.tables
             .borrow()
             .functions
-            .get(bucket)
+            .get(&UntypedKeyProbe(bucket))
             .map(|b| b.iter().filter_map(OverloadSlot::pending).collect())
             .unwrap_or_default()
     }
@@ -806,7 +931,7 @@ impl Bindings {
             None => {
                 tables
                     .types
-                    .insert(name.to_string(), TypeSlot::Bound(kt, site));
+                    .insert(self.brand.alloc_text(name), TypeSlot::Bound(kt, site));
             }
         }
         Ok(())
@@ -828,7 +953,7 @@ impl Bindings {
     /// [`Bindings::lookup_type`], each of which probes only its own table.
     pub fn install_placeholder(
         &self,
-        name: String,
+        name: &str,
         idx: NodeId,
         index: BindingIndex,
         kind: BindKind,
@@ -839,20 +964,27 @@ impl Bindings {
             producer: idx,
             index,
         };
+        let rebind = || {
+            KError::new(KErrorKind::Rebind {
+                name: name.to_string(),
+            })
+        };
         match kind {
-            BindKind::Value => match tables.data.get_mut(&name) {
-                Some(ValueSlot::Bound(_)) => Err(KError::new(KErrorKind::Rebind { name })),
+            BindKind::Value => match tables.data.get_mut(name) {
+                Some(ValueSlot::Bound(_)) => Err(rebind()),
                 Some(ValueSlot::Pending(existing)) if existing.producer == idx => Ok(()),
-                Some(ValueSlot::Pending(_)) => Err(KError::new(KErrorKind::Rebind { name })),
+                Some(ValueSlot::Pending(_)) => Err(rebind()),
                 None => {
-                    tables.data.insert(name, ValueSlot::Pending(claim));
+                    tables
+                        .data
+                        .insert(self.brand.alloc_text(name), ValueSlot::Pending(claim));
                     Ok(())
                 }
             },
-            BindKind::Type => match tables.types.get_mut(&name) {
+            BindKind::Type => match tables.types.get_mut(name) {
                 Some(slot) => match slot.pending() {
                     Some(existing) if existing.producer == idx => Ok(()),
-                    Some(_) => Err(KError::new(KErrorKind::Rebind { name })),
+                    Some(_) => Err(rebind()),
                     None => {
                         let (kt, site) = slot
                             .bound()
@@ -862,7 +994,9 @@ impl Bindings {
                     }
                 },
                 None => {
-                    tables.types.insert(name, TypeSlot::Pending(claim));
+                    tables
+                        .types
+                        .insert(self.brand.alloc_text(name), TypeSlot::Pending(claim));
                     Ok(())
                 }
             },
@@ -890,15 +1024,23 @@ impl Bindings {
         index: BindingIndex,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        self.tables
-            .borrow_mut()
-            .functions
-            .entry(bucket)
-            .or_default()
-            .push(OverloadSlot::Pending(PendingBinding {
-                producer: idx,
-                index,
-            }));
+        let mut tables = self.tables.borrow_mut();
+        let claim = OverloadSlot::Pending(PendingBinding {
+            producer: idx,
+            index,
+        });
+        // Probe-then-insert rather than an `entry` call: the key a miss inserts has to be re-homed
+        // through the brand, which the entry API has no way to defer. The second hash is paid only
+        // on the first claim of a shape.
+        match tables.functions.get_mut(&UntypedKeyProbe(&bucket)) {
+            Some(slots) => slots.push(claim),
+            None => {
+                let key = store_untyped_key(self.brand, &bucket);
+                let mut slots = bump_bucket(self.brand);
+                slots.push(claim);
+                tables.functions.insert(key, slots);
+            }
+        }
         Ok(())
     }
 
@@ -913,40 +1055,54 @@ impl Bindings {
     /// before the replay so re-entrant ascription cannot deadlock.
     pub(crate) fn bulk_install_from(
         &self,
-        src: &Bindings,
+        src: &Bindings<'a>,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         // Duplicate each entry into the snapshot: each seal is a bit-copy naming the source's own
         // minted description, so the replayed entry replays that same claim. The reached regions
         // stay owned by the *source* scope's region union — the replay target's own region must
-        // already outlive it (a bulk install is same-run re-entrant ascription).
+        // already outlive it (a bulk install is same-run re-entrant ascription). The snapshot's
+        // keys are `Copy` borrows into the source's region and outlive the `Ref` they were read
+        // under, so nothing is cloned to release the borrow.
         let (data, functions) = {
             let tables = src.tables.borrow();
-            let data: Vec<(String, DataEntry)> = tables
+            let data: Vec<(&str, DataEntry)> = tables
                 .data
                 .iter()
-                .filter_map(|(k, slot)| Some((k.clone(), slot.bound()?.duplicate())))
+                .filter_map(|(k, slot)| Some((*k, slot.bound()?.duplicate())))
                 .collect();
-            let functions: Vec<(UntypedKey, Vec<OverloadSlot>)> = tables
+            let functions: Vec<(&[StoredElement<'_>], Vec<OverloadSlot<'a>>)> = tables
                 .functions
                 .iter()
                 .filter_map(|(key, bucket)| {
-                    let sealed: Vec<OverloadSlot> = bucket
+                    let sealed: Vec<OverloadSlot<'a>> = bucket
                         .iter()
                         .filter_map(OverloadSlot::sealed)
                         .map(|e| OverloadSlot::Sealed(e.duplicate()))
                         .collect();
-                    (!sealed.is_empty()).then(|| (key.clone(), sealed))
+                    (!sealed.is_empty()).then_some((*key, sealed))
                 })
                 .collect();
             (data, functions)
         };
         for (name, entry) in data {
-            self.write_value(&name, entry.index, entry.sealed, gate)?;
+            self.write_value(name, entry.index, entry.sealed, gate)?;
         }
         let mut tables = self.tables.borrow_mut();
-        for (key, bucket) in functions {
-            tables.functions.entry(key).or_default().extend(bucket);
+        for (key, slots) in functions {
+            // The key is re-homed into *this* table's region: `'a` covers both regions, but the
+            // source's can die first, and a table pointing into a dead region is what re-homing
+            // rules out.
+            match tables.functions.get_mut(key) {
+                Some(bucket) => bucket.extend(slots),
+                None => {
+                    let mut bucket = bump_bucket(self.brand);
+                    bucket.extend(slots);
+                    tables
+                        .functions
+                        .insert(restore_stored_key(self.brand, key), bucket);
+                }
+            }
         }
         Ok(())
     }
@@ -1008,7 +1164,7 @@ impl Bindings {
             }
             None => {
                 tables.data.insert(
-                    name.to_string(),
+                    self.brand.alloc_text(name),
                     ValueSlot::Bound(DataEntry { index, sealed }),
                 );
             }
@@ -1032,21 +1188,33 @@ impl Bindings {
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
-        let bucket = tables.functions.entry(seal.key.clone()).or_default();
+        // A builtin seed, a direct registration and a bulk install all reach a shape no binder
+        // claimed, so the miss arm re-homes the key and seeds an empty bucket; an FN binder's own
+        // claim already created it.
+        if !tables.functions.contains_key(&UntypedKeyProbe(&seal.key)) {
+            let key = store_untyped_key(self.brand, &seal.key);
+            tables.functions.insert(key, bump_bucket(self.brand));
+        }
+        let bucket = tables
+            .functions
+            .get_mut(&UntypedKeyProbe(&seal.key))
+            .expect("the bucket was just seeded if it was missing");
+        // Dedupe against the stored runs where they sit — no allocation to decide it, and the
+        // incoming token is re-homed only once it has passed.
         if let Some(existing) = bucket
             .iter()
             .filter_map(OverloadSlot::sealed)
-            .find(|existing| existing.token == seal.token)
+            .find(|existing| seal.token.matches_stored(existing.token))
         {
             return Err(KError::new(KErrorKind::DuplicateOverload {
                 name: name.to_string(),
-                signature: existing.summary.clone(),
+                signature: existing.summary.to_string(),
             }));
         }
         let entry = FunctionBucketEntry {
             index,
-            token: seal.token,
-            summary: seal.summary,
+            token: seal.token.store_in(self.brand),
+            summary: self.brand.alloc_text(&seal.summary),
             sealed: seal.sealed,
         };
         // The claim this write finalizes, if the binder made one; a builtin seed, a direct
@@ -1072,6 +1240,11 @@ impl Bindings {
     ///
     /// The purge keys on the [`PendingBinding::producer`] each slot already carries; no table's
     /// key participates.
+    ///
+    /// This is the one path that strands bump bytes: a removed key's text and an emptied bucket's
+    /// buffer are abandoned rather than freed. It is bounded by the number of binders that fail —
+    /// every success path overwrites its claim where it sits — so a table's peak occupancy stays
+    /// its final binding count plus that error tail.
     pub fn clear_placeholders_for_producer(&self, producer: NodeId, _gate: &mut WriteGate) {
         let mut tables = self.tables.borrow_mut();
         let claims = |slot: Option<PendingBinding>| slot.is_some_and(|p| p.producer == producer);
@@ -1088,12 +1261,6 @@ impl Bindings {
             bucket.retain(|slot| !claims(slot.pending()));
             !bucket.is_empty()
         });
-    }
-}
-
-impl Default for Bindings {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

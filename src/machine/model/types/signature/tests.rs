@@ -385,10 +385,12 @@ fn a_stored_dispatch_token_matches_what_its_owned_form_does() {
         )
     }
 
-    let tokens: Vec<DispatchToken> = [keyworded(brand, "TAKE", &[KType::NUMBER]),
+    let tokens: Vec<DispatchToken> = [
+        keyworded(brand, "TAKE", &[KType::NUMBER]),
         keyworded(brand, "TAKE", &[KType::ANY]),
         keyworded(brand, "DROP", &[KType::NUMBER]),
-        keyworded(brand, "TAKE", &[KType::NUMBER, KType::NUMBER])]
+        keyworded(brand, "TAKE", &[KType::NUMBER, KType::NUMBER]),
+    ]
     .iter()
     .map(ExpressionSignature::dispatch_token)
     .collect();

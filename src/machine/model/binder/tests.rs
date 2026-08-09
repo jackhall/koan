@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use super::{BinderSpec, StoredBinderKey, BINDER_SPECS};
 use crate::machine::core::{program_storage, ProgramBrand, RegionBrand};
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
-use crate::machine::model::UntypedKey;
+use crate::machine::model::{owned_untyped_key, UntypedKey};
 use crate::parse::parse;
 use crate::source::Spanned;
 
@@ -38,7 +38,7 @@ fn live_buckets() -> HashMap<UntypedKey, LiveBucket> {
             .iter()
             .map(|(key, overloads)| {
                 (
-                    key.clone(),
+                    owned_untyped_key(key),
                     overloads
                         .iter()
                         .filter_map(|slot| slot.sealed())

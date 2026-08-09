@@ -18,7 +18,7 @@ pub use types::{
 };
 pub use types::{
     most_specific_ktype, owned_untyped_key, restore_stored_key, store_untyped_key,
-    StoredDispatchTokenElement, StoredElement, UntypedKeyProbe,
+    StoredDispatchTokenElement, StoredElement, StoredKeyProbe, UntypedKeyProbe,
 };
 pub use values::{
     Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, Scalar, ValueEqualityError,

@@ -25,8 +25,8 @@ use crate::machine::model::{
 };
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    BumpMap, DropFree, Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle,
-    StepContext, StorageOf, StorageProfile, Stored, Witnessed,
+    BumpAllocator, BumpMap, DropFree, Erased, FamilyArena, FoldedPlacement, Reattachable, Region,
+    RegionHandle, StepContext, StorageOf, StorageProfile, Stored, Witnessed,
 };
 
 mod frame;
@@ -167,6 +167,19 @@ impl<'a> RegionBrand<'a> {
         V: Copy,
     {
         self.0.bump_map(entries)
+    }
+
+    /// This brand's region bump as an allocator, for a table that keeps **mutating** after it is
+    /// built — where [`Self::alloc_map`] freezes at construction. A scope's binding tables are the
+    /// users: they gain and overwrite entries for as long as their scope is open, so no
+    /// frozen-at-construction door fits them.
+    ///
+    /// The `Copy` bounds the other doors carry cannot ride the allocator, so what a collection over
+    /// it stores has to prove itself glue-free at its own declaration — see
+    /// [`Bindings`](crate::machine::core::bindings::Bindings), which asserts exactly that where each
+    /// table is built.
+    pub(crate) fn allocator(self) -> BumpAllocator<'a> {
+        self.0.allocator()
     }
 
     /// The witnessed-allocation surface for an owned leaf built fresh inside the brand — the
