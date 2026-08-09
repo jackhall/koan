@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use super::{BinderExtract, BinderSpec, StoredBinderKey, BINDER_SPECS};
+use super::{BinderSpec, StoredBinderKey, BINDER_SPECS};
 use crate::machine::core::{program_storage, ProgramBrand, RegionBrand};
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
 use crate::machine::model::{KType, SignatureElement, UntypedKey};
@@ -133,7 +133,7 @@ fn spec_table_matches_live_registration() {
                 )
             });
 
-        if spec.extractors.is_empty() {
+        if spec.installs_nothing() {
             // A declaration form (VAL): present for completeness, installs nothing, so its bucket
             // must carry no hook.
             assert!(
@@ -164,7 +164,7 @@ fn spec_table_matches_live_registration() {
         if bucket.has_hook {
             let covered = BINDER_SPECS
                 .iter()
-                .any(|spec| !spec.extractors.is_empty() && spec.matches_key(key));
+                .any(|spec| !spec.installs_nothing() && spec.matches_key(key));
             assert!(
                 covered,
                 "hook-bearing bucket {key:?} has no BINDER_SPECS entry with extractors"
@@ -173,18 +173,17 @@ fn spec_table_matches_live_registration() {
     }
 }
 
-/// The `BinderExtract::run` channel splits by shape: `Name` produces a `BinderKey::Name`, `Bucket`
-/// a `BinderKey::Bucket`. Pins that the table's two extractor kinds route to the two install
-/// channels.
+/// Every spec entry that installs anything declares at least one channel, and a `names` entry
+/// carries the bind kind the placeholder is tagged with. Pins that the table's two channels are
+/// the only routes into an install.
 #[test]
-fn extractor_channels_route_to_install_kinds() {
+fn spec_channels_cover_every_installing_entry() {
     for spec in BINDER_SPECS {
-        for extract in spec.extractors {
-            match extract {
-                BinderExtract::Name(..) => {}
-                BinderExtract::Bucket(..) => {}
-            }
+        if spec.installs_nothing() {
+            assert!(spec.names.is_empty() && spec.bucket.is_none());
+            continue;
         }
+        assert!(!spec.names.is_empty() || spec.bucket.is_some());
     }
 }
 
@@ -203,18 +202,15 @@ fn parse_one<'a>(brand: ProgramBrand<'a>, src: &str) -> KExpression<'a> {
 fn names(installs: &[StoredBinderKey<'_>]) -> Vec<String> {
     installs
         .iter()
-        .filter_map(|k| match k {
-            StoredBinderKey::Name(name, _) => Some((*name).to_string()),
-            StoredBinderKey::Bucket(_) => None,
-        })
+        .filter_map(|k| k.name.map(|(name, _)| name.to_string()))
         .collect()
 }
 
 fn bucket_count(installs: &[StoredBinderKey<'_>]) -> usize {
     installs
         .iter()
-        .filter(|k| matches!(k, StoredBinderKey::Bucket(_)))
-        .count()
+        .map(|k| k.buckets.map_or(0, |keys| keys.len()))
+        .sum()
 }
 
 /// A LET whose value slot holds an FN aggregates both the LET name and the FN bucket, because the

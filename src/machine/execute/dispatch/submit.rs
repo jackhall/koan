@@ -98,16 +98,11 @@ impl<'run> KoanRuntime<'run> {
             // koan frame on the stack, the same footing the apply loop writes on.
             let mut gate = WriteGate::for_run_loop();
             for key in installs {
-                match key {
-                    BinderKey::Name(name, kind) => {
-                        let _ = scope.install_placeholder(name, id, bind_index, kind, &mut gate);
-                    }
-                    BinderKey::Bucket(buckets) => {
-                        for bucket in buckets {
-                            let _ =
-                                scope.install_pending_overload(bucket, id, bind_index, &mut gate);
-                        }
-                    }
+                if let Some((name, kind)) = key.name {
+                    let _ = scope.install_placeholder(name, id, bind_index, kind, &mut gate);
+                }
+                for bucket in key.buckets {
+                    let _ = scope.install_pending_overload(bucket, id, bind_index, &mut gate);
                 }
             }
         }

@@ -1,5 +1,5 @@
 //! Binder discovery model: the pure, structural reading of which AST forms introduce a binder,
-//! which name or bucket they declare, and which of their slots carry nested binders forward.
+//! which name and bucket keys they declare, and which of their slots carry nested binders forward.
 //!
 //! Everything here is a pure `&KExpression -> Option<…>` reader plus a static spec table
 //! ([`BINDER_SPECS`]) that is the single source of truth for the binder-introducing forms. The
@@ -48,36 +48,68 @@ pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<&'a str>;
 ///
 /// A bucket key is synthesized rather than read straight out of the parts run, so the extractor
 /// takes the brand that bumps each key into the node's own region.
-pub type BinderBucketFn =
-    for<'a> fn(RegionBrand<'a>, &KExpression<'a>) -> Option<Vec<&'a [StoredElement<'a>]>>;
+pub type BinderBucketFn = for<'a> fn(RegionBrand<'a>, &KExpression<'a>) -> Option<BucketKeys<'a>>;
 
-/// The two install channels a binder may use, mutually exclusive per binder. `Bucket` carries
-/// every key the binder's body registers an overload under — a `UNARY OP` declares two.
-#[derive(Clone, Debug)]
-pub enum BinderKey {
-    Name(String, BindKind),
-    Bucket(Vec<UntypedKey>),
+/// The bucket keys one binder's body registers overloads under: one for `FN` and binary `OP`, two
+/// for `UNARY OP` (the keyword-first list key plus the binary bridge key). Two is the maximum any
+/// declaration form reaches, so the pair is inline and `Copy` — each key is a run bumped into the
+/// node's own region.
+#[derive(Clone, Copy, Debug)]
+pub struct BucketKeys<'a> {
+    pub first: &'a [StoredElement<'a>],
+    pub second: Option<&'a [StoredElement<'a>]>,
 }
 
-/// The stored form of a [`BinderKey`]: every string is a borrow at the node's own lifetime, so a
-/// node's install aggregate is a bumped run rather than an owned Vec.
+impl<'a> BucketKeys<'a> {
+    /// One key, the `FN` / binary-`OP` shape.
+    pub(crate) fn one(first: &'a [StoredElement<'a>]) -> Self {
+        BucketKeys {
+            first,
+            second: None,
+        }
+    }
+
+    /// Both keys in declaration order.
+    pub fn iter(&self) -> impl Iterator<Item = &'a [StoredElement<'a>]> + '_ {
+        std::iter::once(self.first).chain(self.second)
+    }
+
+    pub fn len(&self) -> usize {
+        1 + usize::from(self.second.is_some())
+    }
+}
+
+/// What one statement installs into the enclosing scope: at most one name and at most two bucket
+/// keys (the `LET … = UNARY OP …` maximum, both channels at once). Fixed-size and `Copy` — every
+/// string and key run is a borrow at the node's own lifetime, so the stored form owns no heap.
 #[derive(Clone, Copy, Debug)]
-pub enum StoredBinderKey<'a> {
-    Name(&'a str, BindKind),
-    Bucket(&'a [&'a [StoredElement<'a>]]),
+pub struct StoredBinderKey<'a> {
+    pub name: Option<(&'a str, BindKind)>,
+    pub buckets: Option<BucketKeys<'a>>,
 }
 
 impl<'a> StoredBinderKey<'a> {
-    /// The owned [`BinderKey`] this stands for — materialized where an install path needs a map
-    /// key for the bindings tables.
+    /// The owned [`BinderKey`] this stands for — materialized where an install path needs map keys
+    /// for the bindings tables.
     pub fn to_owned_key(self) -> BinderKey {
-        match self {
-            StoredBinderKey::Name(name, kind) => BinderKey::Name(name.to_string(), kind),
-            StoredBinderKey::Bucket(keys) => {
-                BinderKey::Bucket(keys.iter().copied().map(owned_untyped_key).collect())
-            }
+        BinderKey {
+            name: self.name.map(|(name, kind)| (name.to_string(), kind)),
+            buckets: self
+                .buckets
+                .into_iter()
+                .flat_map(|keys| keys.iter().map(owned_untyped_key).collect::<Vec<_>>())
+                .collect(),
         }
     }
+}
+
+/// Owned twin of [`StoredBinderKey`]: the transient install currency the submission path hands the
+/// bindings tables, whose keys are owned.
+#[derive(Clone, Debug)]
+pub struct BinderKey {
+    pub name: Option<(String, BindKind)>,
+    /// 0..=2 entries, in declaration order.
+    pub buckets: Vec<UntypedKey>,
 }
 
 // ---------- extractors (pure structural readers) ----------
@@ -121,12 +153,12 @@ pub(crate) fn type_decl_binder_name<'a>(expr: &KExpression<'a>) -> Option<&'a st
 ///
 /// Unknown shapes advance silently — the body's full parse surfaces `ShapeError` on real
 /// malformations, so we err toward producing the bucket key for well-formed signatures. An FN
-/// registers exactly one overload, so the returned vector holds one key. Returns `None` only when
-/// the signature slot itself is missing.
+/// registers exactly one overload, so the result names one key. Returns `None` only when the
+/// signature slot itself is missing.
 pub(crate) fn fn_def_binder_bucket<'a>(
     brand: RegionBrand<'a>,
     expr: &KExpression<'a>,
-) -> Option<Vec<&'a [StoredElement<'a>]>> {
+) -> Option<BucketKeys<'a>> {
     let signature_expr = signature_expr_part(expr)?;
     let parts = signature_expr.parts;
     let mut key: Vec<StoredElement<'a>> = Vec::with_capacity(parts.len());
@@ -148,7 +180,7 @@ pub(crate) fn fn_def_binder_bucket<'a>(
             }
         }
     }
-    Some(vec![brand.alloc_slice(&key)])
+    Some(BucketKeys::one(brand.alloc_slice(&key)))
 }
 
 /// True iff the part at `index` is a type ascription — the second half of a `<name> :<Type>` pair,
@@ -235,15 +267,15 @@ fn is_unary_form(expr: &KExpression<'_>) -> bool {
 pub(crate) fn op_def_binder_bucket<'a>(
     brand: RegionBrand<'a>,
     expr: &KExpression<'a>,
-) -> Option<Vec<&'a [StoredElement<'a>]>> {
+) -> Option<BucketKeys<'a>> {
     let sym = symbol_from_parts(expr).ok()?;
     if is_unary_form(expr) {
-        Some(vec![
-            stored_unary_key(brand, sym),
-            stored_binary_key(brand, sym),
-        ])
+        Some(BucketKeys {
+            first: stored_unary_key(brand, sym),
+            second: Some(stored_binary_key(brand, sym)),
+        })
     } else {
-        Some(vec![stored_binary_key(brand, sym)])
+        Some(BucketKeys::one(stored_binary_key(brand, sym)))
     }
 }
 
@@ -294,37 +326,21 @@ impl UntypedElementSpec {
     }
 }
 
-/// One extractor of a [`BinderSpec`]: a name channel (with its bind kind) or a bucket channel.
-pub enum BinderExtract {
-    Name(BinderNameFn, BindKind),
-    Bucket(BinderBucketFn),
-}
-
-impl BinderExtract {
-    fn run<'a>(
-        &self,
-        brand: RegionBrand<'a>,
-        expr: &KExpression<'a>,
-    ) -> Option<StoredBinderKey<'a>> {
-        match self {
-            BinderExtract::Name(extractor, kind) => {
-                extractor(expr).map(|name| StoredBinderKey::Name(name, *kind))
-            }
-            BinderExtract::Bucket(extractor) => {
-                extractor(brand, expr).map(|keys| StoredBinderKey::Bucket(brand.alloc_slice(&keys)))
-            }
-        }
-    }
-}
-
 /// A binder-introducing form: the untyped bucket key it dispatches under, the extractors that read
-/// its declared name/bucket out of the AST, and the chain-slot mask marking which of its slots
-/// carry nested binders forward.
+/// its declared name and bucket keys out of the AST, and the chain-slot mask marking which of its
+/// slots carry nested binders forward.
+///
+/// The two channels are separate fields rather than one extractor list because a combined form
+/// (`LET <name> = FN …`) fills both at once — a name *and* the bucket keys its body registers.
 pub struct BinderSpec {
     /// Full untyped bucket key — ALL keywords in position, never just the lead keyword.
     pub key: &'static [UntypedElementSpec],
-    /// Extractors tried in order; first `Some` wins. Empty for declaration forms (`VAL`).
-    pub extractors: &'static [BinderExtract],
+    /// Name extractors tried in order; first `Some` wins. Empty for the bucket-only and
+    /// declaration forms (`FN`, `OP`, `VAL`).
+    pub names: &'static [(BinderNameFn, BindKind)],
+    /// Bucket-key extractor for a form whose body registers overloads (`FN`, `OP`). `None` for the
+    /// name-only forms.
+    pub bucket: Option<BinderBucketFn>,
     /// Slots whose nested binders join the statement aggregate and whose staged deps are
     /// binder-covered. Derived from the binder overloads' signatures: an `Argument` slot is
     /// `true` iff its ktype != `KType::KEXPRESSION`, ANDed across every binder overload in the
@@ -333,6 +349,13 @@ pub struct BinderSpec {
 }
 
 impl BinderSpec {
+    /// True iff this form declares no install channel at all — the `VAL` declaration form, which
+    /// records into the decl scope's slot collector rather than a binding map.
+    #[cfg(test)]
+    pub fn installs_nothing(&self) -> bool {
+        self.names.is_empty() && self.bucket.is_none()
+    }
+
     /// True iff this spec's key matches the runtime bucket key element-for-element.
     #[cfg(test)]
     pub fn matches_key(&self, key: &UntypedKey) -> bool {
@@ -355,7 +378,6 @@ impl BinderSpec {
     }
 }
 
-use BinderExtract::{Bucket, Name};
 use UntypedElementSpec::{Keyword as Kw, Slot};
 
 /// The single source of truth for the binder-introducing forms. One entry per distinct untyped
@@ -365,34 +387,39 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // LET <name> = <value>: value-name overload then type-alias overload.
     BinderSpec {
         key: &[Kw("LET"), Slot, Kw("="), Slot],
-        extractors: &[
-            Name(identifier_part_binder_name, BindKind::Value),
-            Name(type_part_binder_name, BindKind::Type),
+        names: &[
+            (identifier_part_binder_name, BindKind::Value),
+            (type_part_binder_name, BindKind::Type),
         ],
+        bucket: None,
         chain_slot_mask: &[false, true, false, true],
     },
     // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
     BinderSpec {
         key: &[Kw("TYPE"), Slot],
-        extractors: &[Name(type_decl_binder_name, BindKind::Type)],
+        names: &[(type_decl_binder_name, BindKind::Type)],
+        bucket: None,
         chain_slot_mask: &[false, false],
     },
     // MODULE <name> = <body> (identifier overload; the type-named overload has no hooks).
     BinderSpec {
         key: &[Kw("MODULE"), Slot, Kw("="), Slot],
-        extractors: &[Name(identifier_part_binder_name, BindKind::Value)],
+        names: &[(identifier_part_binder_name, BindKind::Value)],
+        bucket: None,
         chain_slot_mask: &[false, true, false, false],
     },
     // GROUP <name> FOLD LEFT = <body>.
     BinderSpec {
         key: &[Kw("GROUP"), Slot, Kw("FOLD"), Kw("LEFT"), Kw("="), Slot],
-        extractors: &[Name(identifier_part_binder_name, BindKind::Value)],
+        names: &[(identifier_part_binder_name, BindKind::Value)],
+        bucket: None,
         chain_slot_mask: &[false, true, false, false, false, false],
     },
     // GROUP <name> FOLD RIGHT = <body>.
     BinderSpec {
         key: &[Kw("GROUP"), Slot, Kw("FOLD"), Kw("RIGHT"), Kw("="), Slot],
-        extractors: &[Name(identifier_part_binder_name, BindKind::Value)],
+        names: &[(identifier_part_binder_name, BindKind::Value)],
+        bucket: None,
         chain_slot_mask: &[false, true, false, false, false, false],
     },
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT = <body>.
@@ -407,7 +434,8 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Kw("="),
             Slot,
         ],
-        extractors: &[Name(identifier_part_binder_name, BindKind::Value)],
+        names: &[(identifier_part_binder_name, BindKind::Value)],
+        bucket: None,
         chain_slot_mask: &[false, true, false, false, false, false, false, false],
     },
     // GROUP <name> PAIRWISE FOLD <combiner> RIGHT = <body>.
@@ -422,50 +450,58 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Kw("="),
             Slot,
         ],
-        extractors: &[Name(identifier_part_binder_name, BindKind::Value)],
+        names: &[(identifier_part_binder_name, BindKind::Value)],
+        bucket: None,
         chain_slot_mask: &[false, true, false, false, false, false, false, false],
     },
     // SIG <name> = <body>.
     BinderSpec {
         key: &[Kw("SIG"), Slot, Kw("="), Slot],
-        extractors: &[Name(type_part_binder_name, BindKind::Type)],
+        names: &[(type_part_binder_name, BindKind::Type)],
+        bucket: None,
         chain_slot_mask: &[false, true, false, false],
     },
     // UNION <name> = <schema>.
     BinderSpec {
         key: &[Kw("UNION"), Slot, Kw("="), Slot],
-        extractors: &[Name(type_part_binder_name, BindKind::Type)],
+        names: &[(type_part_binder_name, BindKind::Type)],
+        bucket: None,
         chain_slot_mask: &[false, true, false, false],
     },
     // NEWTYPE <name> = <repr> (scalar / sigil / record reprs share the key).
     BinderSpec {
         key: &[Kw("NEWTYPE"), Slot, Kw("="), Slot],
-        extractors: &[Name(type_part_binder_name, BindKind::Type)],
+        names: &[(type_part_binder_name, BindKind::Type)],
+        bucket: None,
         chain_slot_mask: &[false, true, false, true],
     },
     // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` forms).
     BinderSpec {
         key: &[Kw("NEWTYPE"), Slot],
-        extractors: &[Name(type_decl_binder_name, BindKind::Type)],
+        names: &[(type_decl_binder_name, BindKind::Type)],
+        bucket: None,
         chain_slot_mask: &[false, false],
     },
     // RECURSIVE TYPES <name> = <body>.
     BinderSpec {
         key: &[Kw("RECURSIVE"), Kw("TYPES"), Slot, Kw("="), Slot],
-        extractors: &[Name(type_part_binder_name, BindKind::Type)],
+        names: &[(type_part_binder_name, BindKind::Type)],
+        bucket: None,
         chain_slot_mask: &[false, false, true, false, false],
     },
     // FN <signature> -> <return_type> = <body> (three hook-bearing overloads share this key; the
     // anonymous record-schema overload has no hooks).
     BinderSpec {
         key: &[Kw("FN"), Slot, Kw("->"), Slot, Kw("="), Slot],
-        extractors: &[Bucket(fn_def_binder_bucket)],
+        names: &[],
+        bucket: Some(fn_def_binder_bucket),
         chain_slot_mask: &[false, false, false, true, false, false],
     },
     // OP <symbol> OVER <operand> = <body>.
     BinderSpec {
         key: &[Kw("OP"), Slot, Kw("OVER"), Slot, Kw("="), Slot],
-        extractors: &[Bucket(op_def_binder_bucket)],
+        names: &[],
+        bucket: Some(op_def_binder_bucket),
         chain_slot_mask: &[false, false, false, true, false, false],
     },
     // OP <symbol> OVER <operand> -> <return_type> = <body>.
@@ -480,7 +516,8 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Kw("="),
             Slot,
         ],
-        extractors: &[Bucket(op_def_binder_bucket)],
+        names: &[],
+        bucket: Some(op_def_binder_bucket),
         chain_slot_mask: &[false, false, false, true, false, true, false, false],
     },
     // UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
@@ -496,7 +533,8 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Kw("="),
             Slot,
         ],
-        extractors: &[Bucket(op_def_binder_bucket)],
+        names: &[],
+        bucket: Some(op_def_binder_bucket),
         chain_slot_mask: &[false, false, false, false, true, false, true, false, false],
     },
     // VAL <name> <ty> — a declaration form with no install channel and no chain slots. It records
@@ -505,16 +543,18 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // complete.
     BinderSpec {
         key: &[Kw("VAL"), Slot, Slot],
-        extractors: &[],
+        names: &[],
+        bucket: None,
         chain_slot_mask: &[false, false, false],
     },
 ];
 
-/// The binder channel and chain-slot mask for `expression`, if its bucket key matches a
-/// [`BINDER_SPECS`] entry whose extractors read a binder out of the AST. The key is read off the
-/// node's own stored run, and a synthesized bucket key is bumped into `brand`'s region — the
-/// node's, since this runs from the construction door. Returns `None` for a non-binder shape, and
-/// for a declaration form whose extractors install nothing (`VAL`).
+/// What `expression` installs, plus its chain-slot mask, if its bucket key matches a
+/// [`BINDER_SPECS`] entry whose extractors read a binder out of the AST. Both channels are read —
+/// a combined form fills them together. The key is read off the node's own stored run, and a
+/// synthesized bucket key is bumped into `brand`'s region — the node's, since this runs from the
+/// construction door. Returns `None` for a non-binder shape, and for a form whose extractors
+/// install nothing (`VAL`, and the anonymous `FN :{…}` whose signature part names no bucket).
 pub(crate) fn binder_plan_for<'a>(
     brand: RegionBrand<'a>,
     expression: &KExpression<'a>,
@@ -522,11 +562,15 @@ pub(crate) fn binder_plan_for<'a>(
     let spec = BINDER_SPECS
         .iter()
         .find(|spec| spec.matches_stored_key(expression.stored_key()))?;
-    let binder_key = spec
-        .extractors
+    let name = spec
+        .names
         .iter()
-        .find_map(|extract| extract.run(brand, expression))?;
-    Some((binder_key, spec.chain_slot_mask))
+        .find_map(|(extract, kind)| extract(expression).map(|name| (name, *kind)));
+    let buckets = spec.bucket.and_then(|extract| extract(brand, expression));
+    if name.is_none() && buckets.is_none() {
+        return None;
+    }
+    Some((StoredBinderKey { name, buckets }, spec.chain_slot_mask))
 }
 
 #[cfg(test)]
