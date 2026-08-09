@@ -22,7 +22,7 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins wired into the default scope include `LET`, `PRINT`, and `FN`; the nominal-type declarators `UNION`, `NEWTYPE`, and `RECURSIVE TYPES`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators (see [operators](design/operators.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [seed_builtins](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
+The builtins wired into the default scope include `LET`, `PRINT`, and `FN`; the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators (see [operators](design/operators.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [seed_builtins](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
 User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN (args) -> Out)`, `Type`, `Module`, `Signature`, `KExpression`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
@@ -119,8 +119,11 @@ overload-resolution walk returning a `ResolveOutcome`),
 [node.rs](src/machine/model/types/node.rs) (`TypeNode`, one interned type's content —
 the thing a `KType` handle names),
 [recursive_group_window.rs](src/machine/model/types/recursive_group_window.rs) (the
-pre-seal window a co-declared nominal group elaborates against, and the SCC seal that
-interns its members),
+declarator-local pre-seal window a co-declared nominal group elaborates against, and
+the SCC seal that interns its members),
+[declaration_window.rs](src/machine/model/types/declaration_window.rs) (the ambient
+window a module body's announced type declarations elaborate against, plus the two
+views every consult path shares),
 [type_digest.rs](src/machine/model/types/type_digest.rs) (`TypeDigest`, the eager
 content-hash every `KType` compares by),
 [sig_schema.rs](src/machine/model/types/sig_schema.rs) (`SigSchema`, the owned
@@ -170,8 +173,7 @@ src/
 │   ├── record_projection.rs  FROM — `(x y) FROM r` re-tags a record value's carried type to the named fields
 │   ├── nominal_schema.rs     shared Action-harness field-list elaboration for UNION / NEWTYPE record repr
 │   ├── newtype_def.rs        NEWTYPE — scalar repr, the `:{…}` record repr, and the `(Param… AS Name)` constructor-family mint
-│   ├── recursive_types.rs    RECURSIVE TYPES — co-declare a mutually-recursive nominal group
-│   ├── module_def.rs         MODULE
+│   ├── module_def.rs         MODULE — including the body's type-declaration announcement, which co-declares a mutually-recursive nominal group
 │   ├── op_def.rs             OP / UNARY OP — declare a chainable operator over an operand type
 │   ├── group_def.rs          GROUP — a module bundling mutually chainable operators under one reduction mode
 │   ├── sig_def.rs            SIG

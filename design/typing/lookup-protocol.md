@@ -171,10 +171,10 @@ lexical position, so a forward reference is a position error in both languages.
 (The one lookup that precedes the gated walk is the root-first builtin short-circuit —
 see [The immutable root and unshadowable builtins](#the-immutable-root-and-unshadowable-builtins);
 it applies only to `idx == 0` builtins, which a forward reference can never name.)
-Mutual recursion of two or more nominal types is expressed with a `RECURSIVE TYPES`
-block, which scopes its threaded group within strict lexical order rather than
+Mutual recursion of two or more nominal types is expressed by declaring them in one
+module body, whose announcement scopes the co-declared group to that body rather than
 bypassing the cutoff (see
-[user-types.md § `RECURSIVE TYPES`](user-types.md#recursive-types--the-mutual-recursion-construct)).
+[user-types.md § Mutual recursion](user-types.md#mutual-recursion--the-module-body-announcement)).
 
 ## Layer 3 — `KType` predicates
 
@@ -322,10 +322,10 @@ What each topic doc adds beyond this protocol:
   predicates, container parameterization, and the overload-bucket
   visibility filter as it interacts with slot-specificity.
 - [user-types.md](user-types.md) — the registry-interned nominal model
-  (`SetMember` / `Sibling` / `Group`), computed-SCC member identity,
+  (`SetMember` / `Sibling`), computed-SCC member identity,
   nominal-identity install through `Scope::register_type_upsert`, the specificity
   stratification for a concrete member handle vs `OfKind(KKind)` vs `Any`, and the
-  `RECURSIVE TYPES` block for mutually recursive nominals.
+  module-body announcement for mutually recursive nominals.
 - [execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)
   — how forward references park on the pending arms of the `data` / `types` /
   `functions` tables and resume on producer finalize, plus

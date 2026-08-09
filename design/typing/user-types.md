@@ -9,7 +9,7 @@ relation — not its declaration group. A non-recursive type is a singleton
 component; a self-recursive type, an `A ↔ B` pair, or a longer cycle is one
 component of several members.
 
-Three node kinds carry the model:
+Two node kinds carry the model:
 
 - [`TypeNode::SetMember { scc_digest, index, scc_size, name, kind, schema }`](../../src/machine/model/types/node.rs)
   is one sealed member. Its `KType` handle is the `Copy` `(scc_digest, index)` folded
@@ -23,10 +23,6 @@ Three node kinds carry the model:
   index meaningful against the ambient window. It is ordinary interned content, but it
   never appears in a sealed schema, never reaches the predicates, and never rides a
   value; the seal rewrites each one to an absolute member handle.
-- [`TypeNode::Group { members }`](../../src/machine/model/types/node.rs)
-  is the first-class handle to a whole declared group, bound by a `RECURSIVE TYPES`
-  group name. It is inert in value dispatch — it names a group of types, not a value
-  type — and is reserved for value-language cycle construction.
 
 A user `UNION` is not its own member family: it seals one `NewType` member per
 variant and binds the union name to the anonymous
@@ -61,7 +57,10 @@ model.
 
 A member's identity is `(SCC digest, index)` — the content digest of the member's
 own strongly-connected component plus its index in that component's canonical
-(name-order) presentation. The digest is minted at seal from finished content, never
+presentation — bare-name order, with the owning binder (a `UNION`'s name, for a
+variant) as a tiebreak the digest never sees, so a module-hosted variant digests
+identically to its standalone twin and two same-tag variants of different binders
+take stable distinct positions. The digest is minted at seal from finished content, never
 a live walk of the schema, which may be cyclic
 ([recursive_group_window.rs](../../src/machine/model/types/recursive_group_window.rs)).
 The member's `name` and `kind` join the digested content and nothing outside it
@@ -151,15 +150,16 @@ tagged variant value. An unknown variant name in either form is a schema error l
 the union's members. The member handle renders as its member name (`Some`), so
 `:(Maybe Some)` round-trips.
 
-**A schema field can name a sibling variant of the union still under seal** through
-the same qualified sigil (`Node :(Tree Leaf)`): while `Tree` is the binder being
-threaded, the elaborator
-([typed_field_list.rs](../../src/machine/model/types/typed_field_list.rs)) recognizes a
-sigil head naming that binder and folds `(Tree Leaf)` straight to a relative
-`Sibling` reference rather than sub-dispatching — parking would deadlock on the very
-seal awaiting this field — which the window seal
-([recursive_group_window.rs](../../src/machine/model/types/recursive_group_window.rs))
-rewrites to the sibling's absolute member handle like any intra-window reference. A bare
+**A schema field can name a sibling variant of a union still under seal** through
+the same qualified sigil (`Node :(Tree Leaf)`): when `Tree` is a binder of the active
+declaration window, the elaborator
+([typed_field_list.rs](../../src/machine/model/types/typed_field_list.rs)) recognizes
+the sigil head and folds `(Tree Leaf)` straight to that variant's handle rather than
+sub-dispatching — parking would deadlock on the very seal awaiting this field. The
+handle is relative while the window is open, and the seal rewrites it to the sibling's
+absolute member handle like any intra-window reference. Because the window is the
+module body's when the body announced the binder, this reaches across statements: a
+co-declared `NEWTYPE` may type a field by a sibling union's variant pre-seal. A bare
 sibling tag (`Node :Leaf`) stays an unknown-type error: tags are never bare names, even
 in the declaring schema.
 
@@ -247,19 +247,36 @@ valid surface — every tagged value carries a real per-declaration identity.
 
 ## Schemas: members fill their slot at seal
 
-Construction is two-phase. A scope-carried
-[`RecursiveGroupWindow`](../../src/machine/model/types/recursive_group_window.rs) fixes
-the group's membership and each member's `kind` up front and accumulates each member's
-schema as it finalizes. Inside the window a member's schema names its siblings as
+Construction is two-phase. A **declaration window** fixes the group's membership and
+each member's `kind` up front and accumulates each member's schema as it finalizes.
+Inside the window a member's schema names its siblings as
 relative [`Sibling`](../../src/machine/model/types/node.rs) references — ordinary
 interned content, resolved only against the ambient window.
 
-At **seal** the window turns the relative schemas into interned member nodes
-([recursive_group_window.rs](../../src/machine/model/types/recursive_group_window.rs)):
+A window comes in two representations, differing only in who owns it:
+
+- The **ambient** [`AnnouncedWindow`](../../src/machine/model/types/declaration_window.rs)
+  rides a module body's child scope, holding the names that body announced (below).
+  It is `Drop`-free and region-bumped — every field a `Copy` run or a `Cell` of one —
+  so a scope can carry it for free; its members are always `NewType`-schema'd and its
+  member set is fixed at the scan, which is what makes that representation possible.
+- The **declarator-local**
+  [`RecursiveGroupWindow`](../../src/machine/model/types/recursive_group_window.rs) is
+  opened and sealed inside one declaration — a standalone `NEWTYPE` or `UNION`, a
+  generative `:|` mint. It carries `TypeConstructor` schemas and grows by threaded
+  discovery, neither of which the ambient form needs, and it never rides a scope.
+
+Consult paths read either through one borrowed
+[`WindowView`](../../src/machine/model/types/declaration_window.rs); a declarator holds
+its window for the whole declaration as a `DeclWindow`. Both seal through the one pure
+core, [`seal_group`](../../src/machine/model/types/recursive_group_window.rs).
+
+At **seal** the window turns the relative schemas into interned member nodes:
 
 - It extracts each member's sibling references, partitions the members into
   strongly-connected components, and digests each component's condensation bottom-up —
-  members in name order, intra-component references as relative indices, references
+  members in bare-name order (owner as a non-digested tiebreak), intra-component
+  references as relative indices, references
   outside the component folding the referent's finished digest as external content.
 - It then interns each member as a
   [`TypeNode::SetMember`](../../src/machine/model/types/node.rs) with a
@@ -271,47 +288,86 @@ At **seal** the window turns the relative schemas into interned member nodes
   construction, navigation, and matching — there is no projection step, because the
   absolute handles are already in place.
 
-## `RECURSIVE TYPES` — the mutual-recursion construct
+## Mutual recursion — the module-body announcement
 
-A self-recursive type needs no special construct: the binder threads its own name,
-so a back-edge (a field naming the declaring type) lowers to a relative
-`Sibling` reference and seals to the declaring member's own absolute handle in its
-singleton component. Mutual recursion of two or more types *does* need a construct,
-because type names obey strict source order (see
-[elaboration.md](elaboration.md)): in a bare `NEWTYPE A = :{b :B}` / `NEWTYPE B = :{a :A}`
-pair, whichever is written first forward-references the other, a position
-error.
+A self-recursive type needs no construct: the binder threads its own name, so a
+back-edge (a field naming the declaring type) lowers to a relative `Sibling`
+reference and seals to the declaring member's own absolute handle in its singleton
+component. Mutual recursion of two or more types *does* need one, because type names
+obey strict source order (see [elaboration.md](elaboration.md)): in a bare
+`NEWTYPE A = :{b :B}` / `NEWTYPE B = :{a :A}` pair, whichever is written first
+forward-references the other, a position error.
 
-`RECURSIVE TYPES` co-declares the group as one shared set:
+The construct is a **module body**. Before any body statement runs, `MODULE`
+pre-announces the body's top-level type declarations
+([`announce_type_members`](../../src/builtins/module_def.rs)), and that announcement is
+the ambient `AnnouncedWindow` the whole body elaborates against — so the two
+declarations are co-declared members of one window and each cross-reference is a
+`Sibling` back-edge:
 
 ```
-RECURSIVE TYPES Pair = (
-    NEWTYPE A = :{b :B}
-    NEWTYPE B = :{a :A}
+MODULE pair = (
+  NEWTYPE Aa = :{b :Bb}
+  NEWTYPE Bb = :{a :Aa}
 )
 ```
 
-The builtin ([`module_def.rs`](../../src/builtins/module_def.rs)):
+`GROUP` inherits it unchanged — a group *is* a module
+([`group_def.rs`](../../src/builtins/group_def.rs)). Announcement stays a module
+property: the program's own top level announces nothing, so a top-level cycle takes
+the module wrapper and is otherwise an ordinary forward-reference miss.
 
-- discovers each member's `(name, kind)` from the body declarations, opens one
-  shared `RecursiveGroupWindow` announcing that membership, and dispatches the
-  declarations against a child scope carrying the window
-  ([`Scope::child_recursive_group`](../../src/machine/core/scope.rs) /
-  [`nearest_recursive_window`](../../src/machine/core/scope.rs));
-- inside the block every member name is threaded, so a cross-reference lowers to a
-  relative `Sibling` reference against the window rather than minting a standalone
-  type;
-- on the block's dep-finish, guarantees resolution — every member must have filled
-  its window slot, or a forward reference named a name outside the group, raised as a
-  localized shape error at the block boundary. The window then seals: it partitions the
-  members into SCCs and interns each as a `SetMember`. The sealed members mirror into
-  the enclosing scope as member handles (`A`, `B` bind as ordinary type
-  names), and the group name (`Pair`) binds a `TypeNode::Group` handle.
+**What announces.** A statement announces iff its own parse-time binder key matches
+the `NEWTYPE <Name> = _` or `UNION <Name> = _` spec in
+[`BINDER_SPECS`](../../src/machine/model/binder.rs) — the *full* bucket key, every
+keyword pinned in position, so a user overload that merely shares a head keyword
+announces nothing and the constructor-family key `NEWTYPE (<Type> AS <Name>)` is
+excluded structurally. The boundary is the body's top-level statement split, the same
+one `GROUP` reads its operator members off; a declaration nested inside another
+statement's slot, or computed at run time, is not announced and keeps ordinary
+dataflow order. Declaring one name twice is a shape error raised by the scan, before
+any statement runs.
 
-`RECURSIVE TYPES` is the only way to express mutual recursion of two or more
-types; the block scopes its threaded group within strict lexical order, so a
-forward reference is either discharged into the set or a localized error, never a
-placeholder that survives into a sealed type.
+**Union variants are owned members.** A `UNION` announces one member per statically
+scannable variant tag, each tagged with its owning binder. An owned member is never
+bare-name-resolvable and never lands in `bindings.types`: it is reached only through
+its binder (`:Tree`) or through the qualified sigil (`:(Tree Node)`), whose lookup is
+scoped by that binder's own member list — so two binders in one body may own the same
+bare tag. The binder itself is not a member; it denotes the union of the members it
+owns. A standalone `UNION` is the one-binder special case of the same machinery.
+Because variants join the module window's SCC computation, a `UNION` ↔ `NEWTYPE`
+cycle co-seals.
+
+**Announced names are visible body-wide, and what they resolve to depends on who
+asks** ([`resolver.rs`](../../src/machine/model/types/resolver.rs)):
+
+- A **declarator** — the statement building the member's own schema — takes the
+  relative `Sibling` handle (or, for a binder name, the union of its members'
+  siblings). Parking it until the window sealed would deadlock the group on its own
+  producer. A declarator that sub-dispatches part of its schema (a `:(LIST OF Rest)`
+  sigil repr) threads the announced names in as pre-resolved cells first, so the
+  window-less standalone dispatcher never has to answer for them.
+- A **consumer** — an FN signature, a `LET` ascription, any ordinary type position —
+  must never observe a relative handle, which is meaningless outside the window that
+  minted it. It parks on the producers of *every* still-unfilled member (a variant's
+  producer is its owning binder's, since a variant stamps none of its own), so one
+  wake lands after the seal, and then reads the member's **absolute** handle straight
+  off the sealed window. An unfilled member whose producer is gone is a declaration
+  that died: a typed miss, never a park that would never wake.
+
+**The seal fires at the last member's fill**, not at module close, so a parked
+consumer wakes as early as the identities exist. The statement whose fill closes the
+group carries the `types` writes for the whole group — one per standalone member and
+one per binder, variants excluded — at that statement's declaration site. Module close
+then only checks the belt: a window still open there is a scan/dispatch disagreement,
+surfaced as a typed `ShapeError` naming the members that never sealed, never a hang.
+
+Because identity is the SCC and not the declaration group, announcing a whole module
+body is identity-neutral: a co-declared member that references no sibling digests
+independently and unifies with its standalone twin.
+
+The module surface — how the announced members reach a use site — is described in
+[modules.md § Module bodies announce their type declarations](modules.md#module-bodies-announce-their-type-declarations).
 
 ## `NEWTYPE` and the `Wrapped` carrier
 
@@ -331,9 +387,12 @@ selected by the repr part-kind:
   and resolves eagerly to a `KType`, sealing a plain singleton Newtype over it.
 - A **non-record sigil** repr (`= :(LIST OF Elem)`) rides a `:SigiledTypeExpr` slot that
   captures the sigil *raw* — more specific than `OfKind(ProperType)`, so it wins with no
-  admission-rule change. There is no self-reference to thread, so the shared `body`
-  sub-dispatches the captured sigil to a resolved `KType` and seals a plain Newtype
-  over it.
+  admission-rule change. The shared `body` threads the declarator's window names into
+  the captured sigil as pre-resolved cells
+  ([`rewrite_window_refs`](../../src/machine/model/types/typed_field_list.rs)), then
+  sub-dispatches it to a resolved `KType` and seals a plain Newtype over it — the
+  sub-dispatch runs on the window-less standalone dispatcher, so a co-declared
+  reference has to be resolved before the node leaves.
 - A **record** repr (`= :{…}`) rides a distinct `:RecordType` slot — the sibling of
   `:SigiledTypeExpr`, also more specific than `OfKind(ProperType)` — routed to its own
   `body_record_repr` overload. Capturing the field list raw lets the declarator own its
@@ -341,15 +400,15 @@ selected by the repr part-kind:
   ([`Elaborator::with_threaded`](../../src/machine/model/types/resolver.rs)) through
   [`parse_typed_field_list_via_elaborator`](../../src/machine/model/types/typed_field_list.rs),
   so a self-reference (`NEWTYPE Node = :{value :Number, next :Node}`) lowers to a
-  relative `Sibling` reference and seals — through the group window
-  ([recursive_group_window.rs](../../src/machine/model/types/recursive_group_window.rs);
-  a `UNION` additionally maps the union's own name to the join of its variant members,
-  ruling F2) — to the declaring member's own absolute back-edge in its singleton
+  relative `Sibling` reference and seals — through the declaration window
+  ([declaration_window.rs](../../src/machine/model/types/declaration_window.rs); a
+  binder name additionally maps to the join of the variant members it owns) — to the
+  declaring member's own absolute back-edge in its singleton
   component. A `:(LIST OF Self)` field threads the same way, sealing `List` over that
   back-edge, and a nested record field type
   (`:{inner :{owner :Node}}`) elaborates inline through the same walker so it threads
-  too. A `NEWTYPE` member of a `RECURSIVE TYPES` block routes through this path,
-  filling the block's shared window rather than opening its own.
+  too. A `NEWTYPE` announced by its module body routes through this same path, filling
+  the body's ambient window rather than opening its own.
 
 Construction (`Distance(3.0)`, `Bar(Foo(3.0))`) flows through
 [`type_call`](../../src/machine/execute/dispatch/single_poll.rs)'s `Newtype` arm —

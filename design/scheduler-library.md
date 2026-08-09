@@ -314,8 +314,8 @@ picture:
   `Action`: resolve-a-type-or-await-its-producer (with the re-resolve-on-
   wake step inside — [resolve_or_await.rs](../src/builtins/resolve_or_await.rs)),
   schedule-an-aggregate-literal, and mint-a-child-scope-then-await-its-body
-  (dispatch the body block against the child as an `InScope` dep, then run a
-  finish that seals the child first when the caller asks for that —
+  (dispatch the body block against the child as an `InScope` dep, then close the
+  child and run the caller's finish —
   [await_body.rs](../src/builtins/await_body.rs)). A builtin states *which*
   protocol it is, not the protocol's moving parts.
 - **Scope binding folds reaches through carriers.** Binding a value into a

@@ -32,7 +32,6 @@ the link in each section to the relevant chapter.
 | `(<Type> {field = value, ...})`            | Construct a record value.                |
 | `<record>.<field>`                         | Read a field off a `NEWTYPE` record.     |
 | `(<fields>) FROM <record>`                 | Project a record's type to the named fields. |
-| `RECURSIVE TYPES <Name> = ( <decls> )`     | Declare mutually recursive types together. |
 
 ## Control and errors — see [6](06-pattern-matching.md), [9](09-errors.md)
 

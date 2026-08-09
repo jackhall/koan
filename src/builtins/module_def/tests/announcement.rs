@@ -4,7 +4,7 @@
 
 use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
 use crate::machine::model::{AnnouncedData, NodeSchema, TypeDigest, TypeNode, TypeRegistry};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KExpression, KObject, KType};
 use crate::machine::{program_storage, run_root_storage, KErrorKind, Scope};
 
 /// `(scc-digest, scc-size, field-types)` of a sealed record-repr newtype member, read off its
@@ -148,10 +148,49 @@ fn co_declared_types_unify_with_their_standalone_twins() {
     );
 }
 
-/// Only *top-level* statements announce. A same-named declaration nested inside another statement's
-/// slot opens its own singleton window and leaves the announced slot alone.
+/// Only *top-level* statements announce: the scan reads the body's own statement split and never
+/// descends into a statement's slots, so a declaration nested inside one is invisible to it and
+/// keeps ordinary dataflow order.
 #[test]
-fn nested_declaration_is_not_announced() {
+fn only_top_level_statements_announce() {
+    let program = program_storage();
+    let top_level = parse_one(
+        &program,
+        "MODULE t = (\n  NEWTYPE Boxed = Number\n  LET n = 1\n)",
+    );
+    fn body<'a>(statement: &crate::machine::model::KExpression<'a>) -> KExpression<'a> {
+        match statement.parts.last().expect("a body slot").value {
+            crate::machine::model::ExpressionPart::Expression(body) => *body,
+            other => panic!("expected a body slot, got {other:?}"),
+        }
+    }
+    let announced = super::super::announce_type_members(&body(&top_level), "t")
+        .expect("the scan succeeds")
+        .expect("a top-level declaration announces");
+    assert_eq!(
+        announced.members,
+        vec![("Boxed".to_string(), None)],
+        "the top-level NEWTYPE announces; the LET does not",
+    );
+
+    // The same declaration written inside another statement's slot is not the body's own statement,
+    // so the scan announces nothing at all.
+    let nested = parse_one(
+        &program,
+        "MODULE t = (\n  LET n = (NEWTYPE Boxed = Number)\n)",
+    );
+    assert!(
+        super::super::announce_type_members(&body(&nested), "t")
+            .expect("the scan succeeds")
+            .is_none(),
+        "a declaration nested in a statement's slot announces nothing",
+    );
+}
+
+/// Announcing a type perturbs no identity: a co-declared member that references no sibling seals to
+/// the same handle its standalone twin does.
+#[test]
+fn an_announced_member_keeps_its_standalone_identity() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -162,8 +201,6 @@ fn nested_declaration_is_not_announced() {
         .child_scope()
         .resolve_type("Boxed")
         .expect("the announced member binds");
-    // The same declaration standing alone opens a fresh singleton window, which seals to the same
-    // content — announcement perturbs no identity.
     test_run.run("NEWTYPE Boxed = Number");
     assert_eq!(scope.resolve_type("Boxed"), Some(announced));
 }

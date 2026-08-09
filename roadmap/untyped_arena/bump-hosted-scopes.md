@@ -19,8 +19,7 @@ erasure and no retype
 What keeps `Scope` out of the bump is its `Drop`: the binding tables (their own
 item), the per-scope `region_owner: Weak<FrameStorage>` field — a per-scope
 copy of the fact the region already stores as its `host` back-link — the
-root-only `Box<dyn Write>` writer, and the `String` /
-`Rc<RecursiveGroupWindow>` payloads riding `ScopeKind`.
+root-only `Box<dyn Write>` writer, and the `String` payloads riding `ScopeKind`.
 
 **Acceptance criteria.**
 
@@ -72,8 +71,5 @@ root-only `Box<dyn Write>` writer, and the `String` /
 
 - [Bump-backed binding tables](bump-backed-bindings.md) — the tables must shed
   their `Drop` before `Scope` can skip its destructor.
-- [Module bodies announce type groups](../type_language/module-announced-type-groups.md)
-  — retiring `RECURSIVE TYPES` removes the `Rc`-carrying `RecursiveBlock`
-  scope kind.
 
 **Unblocks:** none tracked yet.

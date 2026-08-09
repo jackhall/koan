@@ -32,15 +32,17 @@ seal, the window rewrites every `Sibling` whose name is a member to that member'
 absolute handle in its singleton component. The relative reference
 never survives into a sealed schema and never reaches the predicates.
 
-**`RECURSIVE TYPES` is the mutual-recursion mechanism.** A cycle of two or more
-nominal types has no valid source order, so it is co-declared in a
-`RECURSIVE TYPES Name = (...)` block (see
-[user-types.md § `RECURSIVE TYPES`](user-types.md#recursive-types--the-mutual-recursion-construct)).
-The block announces every member name in one shared group window and scopes it within
-strict lexical order: a cross-reference lowers to a relative `Sibling` and seals to
-the sibling's absolute member handle. Exiting the block guarantees
-every forward reference resolved — a member that never fills is an error at the
-block boundary, so no unresolved forward reference escapes.
+**A module body's announcement is the mutual-recursion mechanism.** A cycle of two or
+more nominal types has no valid source order, so it is co-declared in a module body,
+whose top-level type declarations are announced before any of them runs (see
+[user-types.md § Mutual recursion](user-types.md#mutual-recursion--the-module-body-announcement)).
+The announcement is the body's ambient declaration window: a cross-reference by the
+member's own declarator lowers to a relative `Sibling` and seals to the sibling's
+absolute member handle, and a reference by a plain consumer parks until the window
+seals and then reads the absolute handle. This is the one cross-order type-name
+resolution that survives strict lexical lookup, and it is scoped to the body — a
+member that never fills is a typed error at the module's finish, so no unresolved
+forward reference escapes.
 
 **One canonical runtime type representation.** A type flows raw as a `KType` handle in the
 value channel's `Type` arm ([`Carried::Type`](../../src/machine/model/values/carried.rs)),
@@ -70,8 +72,8 @@ Number` rejects: the Type-classed `Un` token on the first LET's RHS resolves und
 the same `idx < cutoff` chain gate as a value reference, and `Un` is not yet
 visible at `Ty`'s position. A source-order alias (`LET Un = Number; LET Ty = Un`)
 binds normally and writes through `Scope::register_type` to land in
-`bindings.types`. Mutual recursion that genuinely needs a cycle uses a
-`RECURSIVE TYPES` block.
+`bindings.types`. Mutual recursion that genuinely needs a cycle is declared inside a
+module body, whose announcement co-declares the group.
 
 ## Every definition-time site is gated to its binder's position
 
@@ -121,9 +123,11 @@ cross-link this section rather than restating its slice.
 - **Layer 3 — the elaborator** in
   [`resolver.rs`](../../src/machine/model/types/resolver.rs). Resolves a
   *bare-leaf* `TypeName` against the scope into a `KType` handle, carrying the
-  consumer's `LexicalFrame` chain so each candidate is gated by `idx < cutoff`: a
-  threaded binder name (its own, or a `RECURSIVE TYPES` group sibling) turns into
-  a relative `TypeNode::Sibling` reference, an *earlier still-finalizing* binder parks via
+  consumer's `LexicalFrame` chain so each candidate is gated by `idx < cutoff`. The
+  declaration window is consulted before the binding tables, and answers a co-declared
+  name by who is asking: a declarator (its own name, or a co-announced sibling) takes a
+  relative `TypeNode::Sibling` reference, a consumer parks until the window seals and
+  then takes the member's absolute handle. Otherwise an *earlier still-finalizing* binder parks via
   `TypeResolution::Park(producers)`, a later-than-the-consumer binding is a position
   error, and a builtin name falls back to the builtin table through
   [`KType::from_type_identifier`](../../src/machine/model/types/ktype_resolution.rs) —
@@ -386,8 +390,8 @@ would buy only the elaborator walk while owning an invalidation question.
   handle alone, with no stored reach beside it, since a `KType` owns all its content.
   A `Done` passes a **finalize gate** first: every user-type referenced by the
   result must be fully finalized (no type-side placeholder left in the owning scope)
-  or the outcome becomes `Park(producers)`. The walk is top-level only — a
-  `RECURSIVE TYPES` block seals every member together, so a finalized `Foo`
+  or the outcome becomes `Park(producers)`. The walk is top-level only — a declaration
+  window seals every member together, so a finalized `Foo`
   guarantees every user-type embedded in `Foo`'s payload is also finalized.
 
 Consumers that need the scope-resolved identity —

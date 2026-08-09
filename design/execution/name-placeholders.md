@@ -19,10 +19,10 @@ carries the lexical statement index it was registered at, and a consumer at
 chain cutoff `c` sees only bindings with index `i < c`. This is one rule
 across the value and type languages — there is no per-binding exemption.
 Mutual recursion of two or more nominal types, which has no valid source
-order, is co-declared in a `RECURSIVE TYPES` block that scopes its threaded
-group within strict lexical order (see
-[typing/user-types.md](../typing/user-types.md)); a self-recursive type threads
-its own name and needs no block.
+order, is co-declared in a module body, whose top-level type declarations are
+announced before any of them runs and are therefore mutually visible within that body
+(see [typing/user-types.md](../typing/user-types.md)); a self-recursive type threads
+its own name and needs no wrapper.
 
 Every binder is value-style gated (strict `b.idx < c`), so a forward
 reference to a later-sibling `LET`, `NEWTYPE`, `FN`, or any other binder is
@@ -61,7 +61,7 @@ place, so the key is stored once and the claim's bytes are never abandoned; and
 the exclusivity rule each table obeys is a fact of its slot enum.
 
 *Name-keyed binders* (`LET`, `TYPE`, `MODULE`, `GROUP`, `SIG`, `UNION`,
-`NEWTYPE`, `RECURSIVE TYPES`) fill the **name channel** of the
+`NEWTYPE`) fill the **name channel** of the
 [`BinderKey`](../../src/machine/model/binder.rs) — the to-be-bound name the
 matching spec's name extractor pulls structurally out of the expression's parts.
 The
@@ -146,7 +146,7 @@ that will never wake it.
 
 Binder builtins opt in through the `binder: bool` flag they pass to
 [`register_builtin_full`](../../src/builtins.rs) (`LET`, `TYPE`, `MODULE`,
-`GROUP`, `SIG`, `UNION`, `NEWTYPE`, `RECURSIVE TYPES`, `FN`, `OP`); the flag is
+`GROUP`, `SIG`, `UNION`, `NEWTYPE`, `FN`, `OP`); the flag is
 only the classification bit dispatch reads — a binder's literal-name slots are
 declarations, not references, so they must not replay-park on their own
 placeholder — while the name or bucket each installs lives once in the
@@ -155,7 +155,7 @@ form that installs nothing; everything else stays placeholder-free.
 
 A claim's `BindKind` (value or type) picks its destination table, and each
 binder's kind is fixed by the name part its binder-name extractor reads:
-`type_part_binder_name` (SIG / UNION / NEWTYPE / RECURSIVE TYPES) reads a `Type`
+`type_part_binder_name` (SIG / UNION / NEWTYPE) reads a `Type`
 part and tags `BindKind::Type`; `identifier_part_binder_name` (`LET <name> = …`,
 `MODULE`) reads an `Identifier` part and tags `BindKind::Value`. `MODULE` binds a
 value under a value token, so its claim and its write sit on the same ladder — no

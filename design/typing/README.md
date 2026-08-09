@@ -35,10 +35,10 @@ Type-system mechanics:
   resolution memo that amortizes elaboration cost.
 - [user-types.md](user-types.md) — the registry-interned nominal model: a
   member's `SetMember` handle is the per-declaration identity for NEWTYPE, named
-  UNION, MODULE, opaque ascription, and NEWTYPE, with relative `Sibling` references
-  and the `Group` handle. Covers specificity stratification with the
+  UNION, MODULE, opaque ascription, and NEWTYPE, with relative `Sibling` references.
+  Covers specificity stratification with the
   `OfKind(KKind)` family-kind slot, finalize-time type-only install through
-  `Scope::register_type_upsert`, the `RECURSIVE TYPES` block for mutually
+  `Scope::register_type_upsert`, the module-body announcement for mutually
   recursive nominals, and the `NEWTYPE` keyword's `Wrapped` carrier with its
   newtype-over-newtype collapse invariant encoded in the field type.
 - [lookup-protocol.md](lookup-protocol.md) — the three-layer foundation

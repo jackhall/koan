@@ -1,16 +1,15 @@
 # Constructing circular values
 
-The value-language counterpart to `RECURSIVE TYPES`: build a value that refers to
-itself or participates in a reference cycle.
+The value-language counterpart to the type language's mutual recursion: build a value
+that refers to itself or participates in a reference cycle.
 
-**Problem.** A *type* can be cyclic, but a *value* cannot. `RECURSIVE TYPES` co-declares
-a group of mutually-recursive nominals as interned
+**Problem.** A *type* can be cyclic, but a *value* cannot. A module body's
+announcement co-declares a group of mutually-recursive nominals as interned
 [`TypeNode::SetMember`](../../src/machine/model/types/node.rs) nodes in the run-frame
 registry, each member's handle a `Copy` `(SCC digest, index)` and its sibling references
 ordinary cyclic composition edges — the registry does not reclaim by refcount, so a
-cycle in the type graph is not a leak hazard. The whole-group handle
-[`TypeNode::Group`](../../src/machine/model/types/node.rs) exists and is documented as
-"reserved for value-language cycle construction," but it is inert in value dispatch.
+cycle in the type graph is not a leak hazard. The value language has no counterpart at
+all: there is no surface that knots a cycle and no representation that would hold one.
 
 Values are acyclic by construction. A constructor's arguments are already-finished
 values (the constructor path in
@@ -34,8 +33,6 @@ other.
   group.
 - Structural operations over a cyclic value terminate: rendering (`summarize`) and
   equality do not recur unboundedly.
-- `TypeNode::Group`'s "reserved" status is resolved — either consumed by the
-  value-construction surface or retired.
 
 **Directions.**
 
@@ -54,7 +51,7 @@ other.
 
 ## Dependencies
 
-Builds on the shipped `RECURSIVE TYPES` type-cycle machinery (no roadmap prerequisite).
+Builds on the shipped nominal type-cycle machinery (no roadmap prerequisite).
 A constructible cycle forces [value equality](../../design/execution/value-equality.md)
 and the renderer to be cycle-safe; the shipped `value_equal` walk assumes acyclic values,
 so coordinate that neither hangs on a cyclic value.

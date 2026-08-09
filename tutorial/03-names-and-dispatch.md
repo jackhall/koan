@@ -85,8 +85,9 @@ differently:
   order they're written in — mutual recursion just works.
 - **A type can refer to itself.** A union or record type may name itself in its
   own definition (a list whose tail is another list, say). Two *different* types
-  that refer to each other need a [`RECURSIVE TYPES`](08-newtypes.md#mutually-recursive-types)
-  block to be declared together.
+  that refer to each other are declared together inside a
+  [module](08-newtypes.md#mutually-recursive-types), whose body announces its type
+  declarations before it runs them.
 
 ## Token classes
 

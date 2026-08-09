@@ -77,10 +77,6 @@ concrete `KObject` has a `TypeNode` variant:
     interned content, but it never appears in a sealed schema, never reaches the
     predicates, and never rides a value; the seal rewrites each one to an absolute
     member handle.
-  - `Group { members }` — the first-class handle to a whole declared group, bound by
-    a `RECURSIVE TYPES` group name. Members are the declared members in declaration
-    order (a group may span several components, so it is a declaration boundary, not
-    an identity unit); inert in value dispatch.
   A slot that wants "any user-declared type of family X" is an `OfKind(KKind)`
   carrying the nominal family (`OfKind(Newtype)` / `OfKind(TypeConstructor)`).
   Because `OfKind` is type-channel-only, such a slot

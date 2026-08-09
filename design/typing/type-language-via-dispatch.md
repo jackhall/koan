@@ -289,9 +289,8 @@ parallel one per family.
 
 ## Binder install: name-keyed vs bucket-keyed
 
-`LET`, `TYPE`, `MODULE`, `GROUP`, `SIG`, `UNION`, `NEWTYPE`, and
-`RECURSIVE TYPES` register a single name binding and ride the name-keyed
-placeholder channel. A bare `FN` / `OP` registers *overloads* in a function
+`LET`, `TYPE`, `MODULE`, `GROUP`, `SIG`, `UNION`, and `NEWTYPE` register a single
+name binding and ride the name-keyed placeholder channel. A bare `FN` / `OP` registers *overloads* in a function
 bucket and rides the bucket-keyed channel instead; the combined
 `LET <name> = FN/OP …` statement rides both from one binder. Which forms are
 binders — and the name and buckets each declares — is read parse-statically from

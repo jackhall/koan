@@ -220,6 +220,47 @@ region.
 Opaque ascription is the type-abstraction primitive. It replaces the
 newtype-with-private-fields pattern that a trait system would need.
 
+### Module bodies announce their type declarations
+
+Before it runs any body statement, `MODULE` pre-scans the body's **top-level**
+statements for type declarations and announces every name it finds
+([`announce_type_members`](../../src/builtins/module_def.rs)). The announcement rides
+the body's child scope as its ambient declaration window
+([`ScopeKind::Module`](../../src/machine/core/scope.rs)'s `window`), so an announced
+name is visible to every statement of the body regardless of order — which is what
+makes a plain module the construct for mutually-recursive nominals:
+
+```
+MODULE listy = (
+  NEWTYPE Cell = :{head :Number, tail :Rest}
+  NEWTYPE Rest = :{next :(Cell | Null)}
+)
+```
+
+`GROUP` runs the same scan through the same door
+([`group_def.rs`](../../src/builtins/group_def.rs)) — a group *is* a module, so it
+hosts a mutually-recursive group in its body exactly as `MODULE` does.
+
+A statement announces iff its own parse-time binder key is the `NEWTYPE <Name> = _` or
+`UNION <Name> = _` spec, matched on the full bucket key, so a user overload sharing a
+head keyword is excluded. A `UNION` announces one member per variant tag, owned by its
+binder: an owned member never reaches `bindings.types` and is therefore absent from
+`Module::type_members`, since a variant is constructed through its binder
+(`Tree (Node …)`) or named through the qualified sigil (`:(Tree Node)`), never as a
+module member of its own. The whole group's `types` writes land when the last
+announced member fills; a member the body never fills is a typed `ShapeError` at the
+module's finish, not a hang. The type-side mechanics — window representations, the
+consumer/declarator split, the seal — are in
+[user-types.md § Mutual recursion](user-types.md#mutual-recursion--the-module-body-announcement).
+
+Announcement is a *module* property, not a global scan rule: the program's own top
+level announces nothing, so a mutually-recursive group written there is an ordinary
+forward-reference miss and takes the module wrapper.
+
+Announced members are ordinary type members of the finished module, so they reach a
+use site by qualification or through a `USING` window
+([Block-scoped opening](#block-scoped-opening-using--scope) below).
+
 ## First-class modules
 
 The type language is first-class; modules and signatures live there. A
@@ -431,7 +472,10 @@ whole `Bindings` façade is borrowed, so every one of its tables
 is surfaced: `data` (values), `functions` (dispatch overloads), `operators` (the
 per-scope operator registry) and `types`. A module's type members therefore name
 types by bare name inside the block — in sigil type expressions and in dispatch
-slot types — exactly as its value members name values. Opacity is preserved by
+slot types — exactly as its value members name values. This is how a
+mutually-recursive group declared inside a module
+([Module bodies announce their type declarations](#module-bodies-announce-their-type-declarations))
+is constructed at its use site: the members bind bare inside the window. Opacity is preserved by
 what the borrowed table *contains*, not by withholding a table: an opaque view's
 child scope holds only the view's own members (the per-call abstract mints and the
 signature's manifest members seeded at ascription, above), so an abstract member
