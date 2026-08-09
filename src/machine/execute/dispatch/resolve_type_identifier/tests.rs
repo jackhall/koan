@@ -62,22 +62,25 @@ fn resolve_type_expr_user_struct_resolves_after_finalize() {
     assert_eq!(kt, kt2);
 }
 
-/// Pins the walk shape against a regression that skips nested structurals: a relative sibling at
-/// any depth is a dependency the gate must see.
+/// Pins the walk shape against a regression that skips nested structurals: a declared slot at any
+/// depth is a dependency the gate must see.
 #[test]
-fn user_type_refs_yields_nested_siblings_in_order() {
+fn user_type_refs_yields_nested_declared_slots_in_order() {
     let types = crate::machine::model::TypeRegistry::new();
-    let first = types.intern(TypeNode::Sibling(0));
-    let second = types.intern(TypeNode::Sibling(1));
-    // Dict<Sibling(0), List<Sibling(1)>>
-    let kt = types.dict(first, types.list(second));
+    let scope_id = crate::machine::core::ScopeId::next();
+    let abstract_slot = |name: &str| {
+        types.intern(TypeNode::AbstractType {
+            source: scope_id,
+            name: name.to_string(),
+            param_names: Vec::new(),
+            nonce: None,
+        })
+    };
+    // Dict<Aa, List<Bb>>
+    let kt = types.dict(abstract_slot("Aa"), types.list(abstract_slot("Bb")));
     let refs = user_type_refs(kt, &types);
-    match refs.as_slice() {
-        [UserTypeRef::Sibling { index: a }, UserTypeRef::Sibling { index: b }] => {
-            assert_eq!((*a, *b), (0, 1), "siblings come back in walk order");
-        }
-        _ => panic!("expected two sibling refs in order"),
-    }
+    let names: Vec<&str> = refs.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, vec!["Aa", "Bb"], "slots come back in walk order");
 }
 
 /// Member discipline: a sealed member is finished, so it is not a dependency — and the walk must
@@ -86,9 +89,15 @@ fn user_type_refs_yields_nested_siblings_in_order() {
 fn user_type_refs_does_not_recurse_into_a_sealed_member() {
     use crate::machine::model::{RecursiveGroupWindow, RelativeSchema};
     let types = crate::machine::model::TypeRegistry::new();
+    let slot = types.intern(TypeNode::AbstractType {
+        source: crate::machine::core::ScopeId::next(),
+        name: "Carrier".to_string(),
+        param_names: Vec::new(),
+        nonce: None,
+    });
     let sealed = RecursiveGroupWindow::seal_singleton(
         "Chain".into(),
-        RelativeSchema::NewType(types.list(types.intern(TypeNode::Sibling(0)))),
+        RelativeSchema::NewType(types.list(slot)),
         None,
         &types,
     );
@@ -113,7 +122,6 @@ mod bare_leaf_resolution {
     use crate::machine::model::TypeIdentifier;
     use crate::machine::model::TypeRegistry;
     use crate::machine::model::TypeResolution;
-    use crate::machine::model::{KKind, RecursiveGroupWindow, RelativeSchema};
 
     #[test]
     fn builtin_synthesizes_type_carrier() {
@@ -163,8 +171,8 @@ mod bare_leaf_resolution {
 
         let region = run_root_storage();
         let outer = run_root_bare(&region);
-        let window = RecursiveGroupWindow::new(vec![("Node".into(), KKind::NewType)], None);
-        let scope = outer.alloc_child_recursive_group(window.clone());
+        let scope = announced_module(outer, &["Node"]);
+        let window = scope.own_declaration_window().expect("announced");
         // Mark the binder in-flight: the type-side placeholder the finalize gate reads, naming the
         // producer node a consumer parks on.
         scope
@@ -187,19 +195,21 @@ mod bare_leaf_resolution {
         }
 
         // Seal: fill the member and bind the sealed handle where the declarator's finalize would —
-        // the `types` write clears the placeholder with it. The re-resolve now admits.
+        // the `types` write clears the placeholder with it. The re-resolve now admits, off the
+        // sealed window rather than the binding, so it sees the identity regardless of where in the
+        // body the sealing statement sits.
         let sealed = window
-            .fill_member(
+            .fill(
                 0,
-                RelativeSchema::NewType(
-                    types.record(Record::from_pairs([("x".to_string(), KType::NUMBER)])),
-                ),
+                types.record(Record::from_pairs([("x".to_string(), KType::NUMBER)])),
+                scope.brand(),
                 &types,
             )
             .expect("the only member's fill seals the window");
+        let member = sealed.member(0).expect("the sole member");
         crate::machine::core::bindings::WriteOp::Type {
             name: "Node".into(),
-            kt: sealed.members[0],
+            kt: member,
             site: mock_declaration_site(7, 0),
             policy: crate::machine::core::bindings::TypeWritePolicy::UpsertEqual,
             builtin_shadow_guard: true,
@@ -208,7 +218,7 @@ mod bare_leaf_resolution {
         .expect("install the sealed identity");
 
         match scope.resolve_type_identifier(&leaf, None, &types) {
-            TypeResolution::Done(resolved) => assert_eq!(resolved, sealed.members[0]),
+            TypeResolution::Done(resolved) => assert_eq!(resolved, member),
             other => panic!(
                 "expected Done(member) after seal, got {:?}",
                 outcome_tag(&other)
@@ -216,20 +226,18 @@ mod bare_leaf_resolution {
         }
     }
 
-    /// Shadowing: an in-flight declaration of the *same name* in an unrelated window must not
-    /// capture a sibling reference minted against this one. The gate resolves the index against
-    /// the nearest window and then requires the placeholder-holding scope to carry that same
-    /// window, so the inner declaration's own window — which is a different allocation — never
-    /// matches.
+    /// Nearest-window scoping: an in-flight declaration of the *same name* in an enclosing module
+    /// body must not capture a reference elaborated inside a nested one. Only the nearest window is
+    /// consulted, and the producers a consumer parks on are read off the scope carrying *that*
+    /// window — so the outer body's placeholder is never what this reference waits on.
     #[test]
-    fn a_same_named_declaration_in_another_window_does_not_capture() {
+    fn a_same_named_declaration_in_an_outer_body_does_not_capture() {
         use crate::machine::core::NodeId;
 
         let region = run_root_storage();
         let root = run_root_bare(&region);
-        // An outer scope with an in-flight `Node` belonging to its *own* window.
-        let other_window = RecursiveGroupWindow::new(vec![("Node".into(), KKind::NewType)], None);
-        let outer = root.alloc_child_recursive_group(other_window);
+        // An outer module body with an in-flight `Node` of its own.
+        let outer = announced_module(root, &["Node"]);
         outer
             .install_placeholder(
                 "Node".into(),
@@ -240,20 +248,31 @@ mod bare_leaf_resolution {
             )
             .expect("placeholder install");
 
-        // The elaborating scope carries a *different* window that also announces `Node`, with no
+        // The elaborating scope is a *different* module body that also announces `Node`, with no
         // pending marker of its own.
-        let inner_window = RecursiveGroupWindow::new(vec![("Node".into(), KKind::NewType)], None);
-        let inner = outer.alloc_child_recursive_group(inner_window);
+        let inner = announced_module(outer, &["Node"]);
 
         let types = TypeRegistry::new();
         let leaf = TypeIdentifier::leaf("Node");
         match inner.resolve_type_identifier(&leaf, None, &types) {
-            TypeResolution::Done(_) => {}
+            TypeResolution::Unbound(_) => {}
             other => panic!(
                 "the outer same-named declaration must not capture this reference, got {:?}",
                 outcome_tag(&other),
             ),
         }
+    }
+
+    /// A module-body child announcing `members`, for the fixtures above.
+    fn announced_module<'a>(
+        parent: &'a crate::machine::Scope<'a>,
+        members: &[&str],
+    ) -> &'a crate::machine::Scope<'a> {
+        let mut announced = crate::machine::model::AnnouncedData::default();
+        for member in members {
+            announced.announce(member.to_string());
+        }
+        parent.alloc_child_under_module("m".into(), Some(announced))
     }
 
     fn outcome_tag(c: &TypeResolution<KType>) -> &'static str {

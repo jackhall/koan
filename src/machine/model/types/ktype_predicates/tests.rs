@@ -323,7 +323,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let struct_token: KType = record_newtype_member("Point", &types);
     assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(newtype_token)), &types));
     assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(struct_token)), &types));
-    let child = scope.alloc_child_under_module("IntMod".into());
+    let child = scope.alloc_child_under_module("IntMod".into(), None);
     // A module value surfaces its principal signature, interned from its members before the value
     // exists — build it through the same door production does.
     let draft = ModuleDraft::empty();
@@ -833,7 +833,7 @@ fn module_object_ktype_reports_self_sig() {
     // One-member modules built through the production door: the draft carries `Elt`, and the
     // self-sig is derived from it and interned before the value exists.
     let one_member = |name: &str, elt: KType| {
-        let child = scope.alloc_child_under_module(name.into());
+        let child = scope.alloc_child_under_module(name.into(), None);
         let mut draft = ModuleDraft::empty();
         draft.type_members.insert("Elt".into(), elt);
         let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
@@ -880,7 +880,7 @@ fn matches_value_admits_module_object_via_signature_slot() {
     let sig_scope = scope.alloc_child_under_sig("S".into());
     let schema = SigSchema::project_decl(sig_scope, &types);
 
-    let child = scope.alloc_child_under_module("M".into());
+    let child = scope.alloc_child_under_module("M".into(), None);
     let mut draft = ModuleDraft::empty();
     draft.type_members.insert("Type".into(), KType::NUMBER);
     let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));

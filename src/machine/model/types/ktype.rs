@@ -138,16 +138,6 @@ impl KType {
             // (`:Wrapper`) or a per-variant member reached through its union (`:(Maybe Some)`
             // yields the `Some` member, printed as `Some`).
             TypeNode::SetMember { name, .. } => name,
-            TypeNode::Group { members } => {
-                let names: Vec<String> = members
-                    .iter()
-                    .map(|m| match types.node(*m) {
-                        TypeNode::SetMember { name, .. } => name,
-                        _ => m.name(types),
-                    })
-                    .collect();
-                format!("RECURSIVE TYPES ({})", names.join(" "))
-            }
             // A signature names itself by its content: the empty interface is the lattice top
             // `Module`, and any other interface renders its members structurally. There is no
             // declaration label to print — two textually identical `SIG` declarations are one

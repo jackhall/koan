@@ -8,6 +8,7 @@
 //! into the right carrier (`finalize_union` / `finalize_record_newtype`).
 
 use crate::machine::core::bindings::WriteOp;
+use crate::machine::model::DeclWindow;
 use crate::machine::model::KType;
 use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
@@ -23,7 +24,7 @@ use crate::machine::{FieldListDeferral, StepCarried};
 pub(crate) type SchemaFinalize<'a> = fn(
     &FinishCtx<'a, '_>,
     String,
-    std::rc::Rc<crate::machine::model::RecursiveGroupWindow>,
+    &DeclWindow<'a>,
     Vec<(String, KType)>,
     DeclarationSite,
 ) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError>;
@@ -39,7 +40,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
 pub(crate) fn nominal_schema_action<'a>(
     ctx: &BodyCtx<'a, '_>,
     name: String,
-    window: std::rc::Rc<crate::machine::model::RecursiveGroupWindow>,
+    window: DeclWindow<'a>,
     schema_expr: crate::machine::model::KExpression<'a>,
     context: FieldListContext,
     name_kind: FieldNameKind,
@@ -48,22 +49,27 @@ pub(crate) fn nominal_schema_action<'a>(
 ) -> Action<'a> {
     let site = ctx.declaration_site();
     let chain = ctx.chain.clone();
-    // Seed the threaded set with this binder's name so a self-recursive declaration resolves
-    // through the window rather than parking on its own placeholder.
-    let mut elaborator = Elaborator::new(ctx.scope)
-        .with_threaded([name.clone()])
-        .with_window(std::rc::Rc::clone(&window))
-        .with_chain(chain.clone());
-    match parse_typed_field_list_via_elaborator(
-        FieldParts::of(&schema_expr),
-        context,
-        name_kind,
-        &mut elaborator,
-        None,
-        ctx.types,
-    ) {
+    // Seed the threaded set with this binder's name and every other name the window announces, so
+    // a reference to any of them resolves through the window rather than parking on a placeholder
+    // — and, for a sigil field whose body sub-dispatches into the window-less standalone
+    // dispatcher, is pre-resolved to a sibling cell before it leaves.
+    let outcome = {
+        let mut elaborator = Elaborator::new(ctx.scope)
+            .with_threaded(std::iter::once(name.clone()).chain(window.view().threadable_names()))
+            .with_window(window.view())
+            .with_chain(chain.clone());
+        parse_typed_field_list_via_elaborator(
+            FieldParts::of(&schema_expr),
+            context,
+            name_kind,
+            &mut elaborator,
+            None,
+            ctx.types,
+        )
+    };
+    match outcome {
         FieldListOutcome::Done(fields) => {
-            Action::done_writing(finalize(&ctx.finish_ctx(), name, window, fields, site))
+            Action::done_writing(finalize(&ctx.finish_ctx(), name, &window, fields, site))
         }
         FieldListOutcome::Err(msg) => Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
@@ -71,7 +77,9 @@ pub(crate) fn nominal_schema_action<'a>(
             sub_dispatches,
         } => {
             let finish_name = name.clone();
-            let finish_window = std::rc::Rc::clone(&window);
+            let threaded: Vec<String> = std::iter::once(name)
+                .chain(window.view().threadable_names())
+                .collect();
             FieldListDeferral::new(
                 FieldParts::of(&schema_expr),
                 park_producers,
@@ -79,12 +87,13 @@ pub(crate) fn nominal_schema_action<'a>(
                 context,
                 name_kind,
             )
-            .with_threaded([name])
+            .with_threaded(threaded)
             .with_window(window)
             .with_chain(chain)
             .with_error_frame(error_frame)
-            .action(Box::new(move |fctx, fields| {
-                finalize(fctx, finish_name, finish_window, fields, site)
+            .action(Box::new(move |fctx, window, fields| {
+                let window = window.expect("a nominal declarator always carries its window");
+                finalize(fctx, finish_name, window, fields, site)
             }))
         }
     }

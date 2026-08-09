@@ -189,7 +189,6 @@ fn bare_type_name(
         | TypeNode::DeferredReturn(_)
         | TypeNode::Sibling(_)
         | TypeNode::Union { .. }
-        | TypeNode::Group { .. }
         | TypeNode::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {name} must be a bare type name, got `{}`",
             t.render(types),

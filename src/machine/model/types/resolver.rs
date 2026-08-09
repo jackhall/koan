@@ -15,14 +15,15 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
-use crate::machine::core::{LexicalFrame, NameLookup, Scope};
+use crate::machine::core::{DeclarationSite, LexicalFrame, NameLookup, Scope};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::NodeId;
 
+use super::declaration_window::{DeclWindow, WindowView};
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::TypeNode;
-use super::recursive_group_window::{RecursiveGroupWindow, RelativeSchema};
+use super::recursive_group_window::RecursiveGroupWindow;
 use super::registry::TypeRegistry;
 
 #[cfg(test)]
@@ -52,19 +53,37 @@ impl<T> TypeResolution<T> {
     }
 }
 
+/// Who is asking the elaborator for a co-declared name, which decides what a still-open window may
+/// hand back.
+///
+/// A **declarator** is building the schema a member's own identity is computed from: it takes the
+/// relative [`TypeNode::Sibling`] back-edge, which the seal rewrites absolute. Parking it until the
+/// window sealed would deadlock the group on its own producer.
+///
+/// A **consumer** — an FN signature, a LET ascription, any ordinary type position — must never
+/// observe a relative handle: it is meaningless outside the window that minted it and would silently
+/// never match at dispatch. A consumer waits for the seal and then reads the absolute handle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TypeResolutionMode {
+    Consumer,
+    Declarator,
+}
+
 /// Per-elaboration-walk state.
 ///
-/// - `threaded`: binder names currently being elaborated, so a self-reference resolves through the
-///   ambient window instead of parking on its own placeholder.
-/// - `window`: the declarator's own open window, when it owns one. A `RECURSIVE TYPES` block's
-///   window rides the scope chain instead, because it spans several separately dispatched
-///   declarations; this field carries the window of a declarator that opens and seals one within a
-///   single elaboration.
+/// - `threaded`: names currently being elaborated against an open window, so a reference to one
+///   resolves through the window instead of parking on its placeholder. A declarator seeds its own
+///   binder name plus every name its window announces, which is what lets a sub-dispatched sigil
+///   body carry co-declared references as pre-resolved cells.
+/// - `window`: the declaration window this walk elaborates against, when the caller is a
+///   declarator. Setting it is what puts the walk in [`TypeResolutionMode::Declarator`]; every
+///   other walk consults the ambient window the scope chain carries, as a consumer.
 /// - `chain`: the lexical position the bare-leaf resolution is gated against.
 pub struct Elaborator<'b, 'a> {
     pub scope: &'b Scope<'a>,
     pub threaded: HashSet<String>,
-    pub window: Option<Rc<RecursiveGroupWindow>>,
+    window: Option<WindowView<'b, 'a>>,
+    mode: TypeResolutionMode,
     /// Lexical chain the bare-leaf resolution is gated against, so a type declared
     /// lexically later than this elaboration's position is invisible. `None` is the
     /// unfiltered mode (test/builtin scopes with no chain).
@@ -77,6 +96,7 @@ impl<'b, 'a> Elaborator<'b, 'a> {
             scope,
             threaded: HashSet::new(),
             window: None,
+            mode: TypeResolutionMode::Consumer,
             chain: None,
         }
     }
@@ -86,19 +106,24 @@ impl<'b, 'a> Elaborator<'b, 'a> {
         self
     }
 
-    /// Elaborate against `window` — the declarator's own, taking precedence over any window the
-    /// scope chain carries.
-    pub fn with_window(mut self, window: Rc<RecursiveGroupWindow>) -> Self {
+    /// Elaborate against `window` as its **declarator**: the walk builds a member's own schema, so
+    /// a co-declared name lowers to its relative sibling handle. Takes precedence over the ambient
+    /// window the scope chain carries, so a nested same-named declaration cannot hijack an
+    /// announced slot.
+    pub fn with_window(mut self, window: WindowView<'b, 'a>) -> Self {
         self.window = Some(window);
+        self.mode = TypeResolutionMode::Declarator;
         self
     }
 
-    /// The window a co-declared name resolves against: this walk's own, else the nearest one on
-    /// the scope chain (a `RECURSIVE TYPES` block's).
-    pub fn window(&self) -> Option<Rc<RecursiveGroupWindow>> {
-        self.window
-            .clone()
-            .or_else(|| self.scope.nearest_recursive_window())
+    /// The window a co-declared name resolves against: this walk's own, else the ambient one the
+    /// scope chain carries (a module body's announced group).
+    pub fn window(&self) -> Option<WindowView<'_, 'a>> {
+        self.window.or_else(|| {
+            self.scope
+                .nearest_declaration_window()
+                .map(|(_, window)| WindowView::Announced(window))
+        })
     }
 
     /// Gate bare-leaf resolution against `chain`: a type binding lexically later than
@@ -110,49 +135,91 @@ impl<'b, 'a> Elaborator<'b, 'a> {
     }
 }
 
-/// Walk a `TypeIdentifier` against the elaborator's scope. Bare leaves route through the
-/// threaded set first (recursive back-edge), then `resolve_type_with_chain`, then
-/// `resolve_with_chain` for the placeholder path, and finally the builtin-table fallback via
+/// A consumer's wait for a still-open window: park on the producer of every member that has not
+/// filled, so the single wake lands after the seal. Parking on the full set is what makes one wake
+/// enough — a second park after wake is a protocol error, not a longer wait.
+///
+/// A variant carries no placeholder of its own: the `UNION` statement's binder stamps it, so a
+/// variant parks on its owner. An unfilled member whose producer is gone is a declaration that
+/// died; that is a typed miss, never a park that would never wake.
+fn park_until_seal(el: &Elaborator<'_, '_>, view: WindowView<'_, '_>) -> TypeResolution<KType> {
+    let Some((owner, _)) = el.scope.nearest_declaration_window() else {
+        return TypeResolution::Unbound(
+            "a co-declared type name resolved outside the body that announced it".to_string(),
+        );
+    };
+    let mut producers: Vec<NodeId> = Vec::new();
+    for (name, member_owner) in view.unfilled_members() {
+        let declarer = member_owner.unwrap_or(name);
+        match owner.bindings().type_placeholder_producer(&declarer) {
+            Some(node_id) => {
+                if !producers.contains(&node_id) {
+                    producers.push(node_id);
+                }
+            }
+            None => {
+                return TypeResolution::Unbound(format!(
+                    "type `{declarer}` is co-declared in this module body but its declaration \
+                     failed",
+                ))
+            }
+        }
+    }
+    TypeResolution::Park(producers)
+}
+
+/// Walk a `TypeIdentifier` against the elaborator's scope. Bare leaves route through the ambient
+/// declaration window first (the co-declared back-edge), then `resolve_type_with_chain` for bound
+/// names and the placeholder path, and finally the builtin-table fallback via
 /// [`KType::from_type_identifier`] so fixture scopes that skip builtin registration still
 /// resolve builtin names. Parameterized shapes sub-Dispatch through the standalone dispatcher,
 /// not this walk.
+///
+/// The window is consulted **before** the binding tables, sealed or not: a co-declared name takes
+/// the window's answer rather than any outer binding of the same name, and a sealed window answers
+/// with the member's absolute handle directly — the group's own `types` writes all carry the
+/// sealing statement's position, which a consumer earlier in the body would not see through the
+/// lexical chain.
 pub fn elaborate_type_identifier(
     el: &mut Elaborator<'_, '_>,
     t: &TypeIdentifier,
     types: &TypeRegistry,
 ) -> TypeResolution<KType> {
     let name = t.as_str();
-    // The relative-`Sibling` back-edge applies only while the window is open. Once it seals, its
-    // members are bound to their absolute handles, and a member name resolves through the binding
-    // below — returning the sealed identity, not a window-scoped relative index.
-    if let Some(window) = el.window().filter(|w| !w.is_sealed()) {
-        // A bare leaf naming a member of the ambient window is a co-declared sibling (or a
-        // self-reference): it lowers to the relative `Sibling` handle, which the window's seal
-        // rewrites to the member's absolute handle. Checked before `resolve_type_with_chain` so a
-        // co-declared name takes the back-edge rather than any outer binding of the same name —
-        // this is the one cross-order type-name resolution that survives strict lexical lookup.
-        //
-        // Only a binder-less window (a `RECURSIVE TYPES` block or a self-recursive newtype, whose
-        // members are standalone types) resolves a bare member name this way. A `UNION`'s members
-        // are *variants*, not standalone types: a bare `Node :Leaf` is an unknown-type error, and a
-        // sibling variant is reached only through the binder (`:Tree`) or the qualified sigil
-        // `:(Tree Leaf)` (handled in `typed_field_list`).
-        if window.binder().is_none() {
-            if let Some(index) = window.index_of(name) {
-                return TypeResolution::Done(types.intern(TypeNode::Sibling(index)));
+    if let Some(view) = el.window() {
+        // A bare leaf naming a standalone member of the window is a co-declared sibling (or a
+        // self-reference). A `UNION`'s variants are *not* standalone types: a bare `Node :Leaf` is
+        // an unknown-type error, and a sibling variant is reached only through its binder
+        // (`:Tree`) or the qualified sigil `:(Tree Leaf)` (handled in `typed_field_list`).
+        if let Some(index) = view.member_index(name) {
+            return match (view.sealed_member(index), el.mode) {
+                (Some(kt), _) => TypeResolution::Done(kt),
+                (None, TypeResolutionMode::Declarator) => {
+                    TypeResolution::Done(types.intern(TypeNode::Sibling(index)))
+                }
+                (None, TypeResolutionMode::Consumer) => park_until_seal(el, view),
+            };
+        }
+        // A binder names no single member — a `UNION`'s name denotes the union of every variant it
+        // declares (`Node :Tree` inside `UNION Tree = (…)`).
+        if view.binds(name) {
+            return match (view.sealed_binder(name), el.mode) {
+                (Some(kt), _) => TypeResolution::Done(kt),
+                (None, TypeResolutionMode::Declarator) => match view.binder_union(name, types) {
+                    Some(kt) => TypeResolution::Done(kt),
+                    None => TypeResolution::Unbound(format!("unknown type name `{name}`")),
+                },
+                (None, TypeResolutionMode::Consumer) => park_until_seal(el, view),
+            };
+        }
+        // A threaded name the window has not announced yet: a forward reference inside a declarator
+        // that discovers its members as it walks its own schema. Announcing it here keeps the
+        // relative index stable, and the declarator's finalize reports any member left unfilled as
+        // a reference to a type the declaration never made.
+        if !view.is_sealed() && el.threaded.contains(name) {
+            if let Some(kt) = view.sibling(name, KKind::NewType, types) {
+                return TypeResolution::Done(kt);
             }
-        }
-        // The window's own binder names no single member — a `UNION`'s name denotes the union of
-        // every variant it declares (`Node :Tree` inside `UNION Tree = (…)`).
-        if window.binder().as_deref() == Some(name) {
-            return TypeResolution::Done(window.binder_union(types));
-        }
-        // A threaded binder the window has not announced yet: a forward reference inside a
-        // declarator that discovers its members as it walks its own schema. Announcing it here
-        // keeps the relative index stable, and the declarator's finalize reports any member left
-        // unfilled as a reference to a type the declaration never made.
-        if el.threaded.contains(name) {
-            return TypeResolution::Done(window.sibling(name, KKind::NewType, types));
         }
     }
     match el.scope.resolve_type_with_chain(name, el.chain.as_deref()) {
@@ -178,71 +245,93 @@ pub fn elaborate_type_identifier(
 /// Outcome of [`finalize_nominal_member`].
 pub enum SealOutcome {
     /// The member sealed (or was already sealed): the `Copy` handle is its interned member handle,
-    /// ready to wrap in a `Carried::Type`, beside the `types` write installing it under the
-    /// binder's name. The write rides the step outcome — a redeclaration surfaces as the binder's
-    /// error terminal when the run loop applies it.
-    Sealed { kt: KType, write: WriteOp },
+    /// ready to wrap in a `Carried::Type`, beside the `types` writes installing every name the seal
+    /// settles. The writes ride the step outcome — a redeclaration surfaces as the binder's error
+    /// terminal when the run loop applies them.
+    Sealed { kt: KType, writes: Vec<WriteOp> },
     /// The member's schema filled, but its window still holds unfilled members, so no member has
-    /// an identity yet. Only a `RECURSIVE TYPES` block reaches this: the block's own finish is the
-    /// seal barrier, and it binds every member once the last one fills.
+    /// an identity yet. Only a member of an announced module group reaches this: the fill that
+    /// closes the group is the seal barrier, and it installs every member at once.
     Deferred,
     /// A reference named no member of the window — a sealing bug surfaced as a shape error rather
     /// than a dangling reference.
     DanglingRef(String),
 }
 
-/// Fill a nominal type's elaborated schema into its window member and, once the window seals,
-/// install the member's interned handle into `bindings.types[name]`. Three cases collapse here:
+/// Every `types` write a sealed window installs, in one run: one per standalone member and one per
+/// binder, all at the sealing statement's `site`. Variants get none — a variant is reached through
+/// its binder's union node, never by name — which is also why they never reach `Module::type_members`.
 ///
-/// 1. **Block member** — the ambient `RECURSIVE TYPES` window already announces `name`; fill that
-///    slot. Unless this fill is the block's last, the window stays open and the outcome is
-///    [`SealOutcome::Deferred`] — no member has an identity until every member's content is known,
-///    because identity is computed over the whole reference structure.
+/// [`TypeWritePolicy::UpsertEqual`] is what makes a re-entrant finalize of the same declaration
+/// idempotent: it recognizes the re-entry by its installing
+/// [`NodeHandle`](crate::machine::core::NodeHandle) matching the stored entry's, while a genuine
+/// redeclaration installs under a different node and surfaces as `Rebind`.
+pub fn seal_writes(view: WindowView<'_, '_>, site: DeclarationSite) -> Vec<WriteOp> {
+    view.installable()
+        .into_iter()
+        .map(|(name, kt)| WriteOp::Type {
+            name,
+            kt,
+            site,
+            policy: TypeWritePolicy::UpsertEqual,
+            builtin_shadow_guard: true,
+        })
+        .collect()
+}
+
+/// Fill a nominal type's elaborated representation into its window member and, once the window
+/// seals, install every name the seal settles. Three cases collapse here:
+///
+/// 1. **Announced member** — the enclosing module body's ambient window already announces `name`;
+///    fill that slot. Unless this fill is the group's last, the window stays open and the outcome
+///    is [`SealOutcome::Deferred`] — no member has an identity until every member's content is
+///    known, because identity is computed over the whole reference structure.
 /// 2. **Standalone declaration** — no window announces `name`, so `window` is this declarator's
-///    own one-member window (or a fresh one for a declarator that needs no elaboration): filling
-///    its only member seals it, and a self-reference was already interned as `Sibling(0)`.
+///    own one-member window: filling its only member seals it, and a self-reference was already
+///    interned as `Sibling(0)`.
 /// 3. **Already sealed** — a parallel finalize of this same declaration ran first; the window
-///    hands back the same handles, and [`TypeWritePolicy::UpsertEqual`] recognizes the re-entry by
-///    its installing [`NodeHandle`](crate::machine::core::NodeHandle) matching the stored entry's,
-///    so the overwrite is idempotent.
-pub fn finalize_nominal_member(
-    window: &Rc<RecursiveGroupWindow>,
+///    hands back the same handles and the upsert is idempotent.
+pub fn finalize_nominal_member<'a>(
+    window: &DeclWindow<'a>,
     name: &str,
-    build_schema: impl FnOnce(&Rc<RecursiveGroupWindow>) -> RelativeSchema,
-    site: crate::machine::core::DeclarationSite,
+    build_repr: impl FnOnce(WindowView<'_, 'a>) -> KType,
+    site: DeclarationSite,
+    brand: crate::machine::core::RegionBrand<'a>,
     types: &TypeRegistry,
 ) -> SealOutcome {
-    let index = match window.index_of(name) {
+    let index = match window.view().member_index(name) {
         Some(index) => index,
         // The declarator handed a window that does not announce its own binder — a wiring bug, not
         // a user error, but reported as a dangling reference rather than a panic.
         None => return SealOutcome::DanglingRef(name.to_string()),
     };
-    let schema = build_schema(window);
-    let sealed = match window.fill_member(index, schema, types) {
-        Some(sealed) => sealed,
-        None => return SealOutcome::Deferred,
+    let repr = build_repr(window.view());
+    if !window.fill(index, repr, brand, types) {
+        return SealOutcome::Deferred;
+    }
+    let view = window.view();
+    let kt = match view.sealed_member(index) {
+        Some(kt) => kt,
+        None => return SealOutcome::DanglingRef(name.to_string()),
     };
-    // A non-equal existing entry (a redeclaration) surfaces as `Rebind` when the run loop applies
-    // this op, which makes it the binder's error terminal.
     SealOutcome::Sealed {
-        kt: sealed.members[index],
-        write: WriteOp::Type {
-            name: name.to_string(),
-            kt: sealed.members[index],
-            site,
-            policy: TypeWritePolicy::UpsertEqual,
-            builtin_shadow_guard: true,
-        },
+        kt,
+        writes: seal_writes(view, site),
     }
 }
 
-/// The window a declarator named `name` (of family `kind`) elaborates and seals against: the
-/// ambient `RECURSIVE TYPES` window when it announces the name, else a fresh one-member window
-/// this declaration owns outright.
-pub fn declarator_window(scope: &Scope<'_>, name: &str, kind: KKind) -> Rc<RecursiveGroupWindow> {
-    match scope.nearest_recursive_window() {
-        Some(window) if window.holds(name) => window,
-        _ => RecursiveGroupWindow::new(vec![(name.to_string(), kind)], None),
+/// The window a declarator named `name` elaborates and seals against: the ambient window carried by
+/// **this very scope** when it announces the name, else a fresh one-member window this declaration
+/// owns outright.
+///
+/// Self-only, not a chain walk: a same-named declaration nested deeper in the body opens its own
+/// singleton rather than hijacking the announced slot.
+pub fn declarator_window<'a>(scope: &'a Scope<'a>, name: &str) -> DeclWindow<'a> {
+    match scope.own_declaration_window() {
+        Some(window) if window.member_index(name).is_some() => DeclWindow::Ambient(window),
+        _ => DeclWindow::Owned(RecursiveGroupWindow::new(vec![(
+            name.to_string(),
+            KKind::NewType,
+        )])),
     }
 }

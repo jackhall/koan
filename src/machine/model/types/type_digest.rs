@@ -66,7 +66,7 @@ const TAG_SET_LOCAL: u8 = 0x11;
 // relative `Sibling` index against its window, which digests under `TAG_SET_LOCAL`.
 // 0x13 (TAG_UNRESOLVED) is retired — never reuse it.
 const TAG_SET_REF: u8 = 0x14;
-const TAG_RECURSIVE_GROUP: u8 = 0x15;
+// 0x15 (TAG_RECURSIVE_GROUP) is retired — never reuse it.
 const TAG_UNION: u8 = 0x16;
 const TAG_SIGNATURE: u8 = 0x17;
 // 0x18 (TAG_MODULE) is retired — never reuse it.
@@ -141,12 +141,10 @@ fn kkind_tag(k: KKind) -> u8 {
 /// registry stores it under. The tags and the byte order are identity-load-bearing, and the
 /// golden pins hold them fixed.
 ///
-/// Three recipes are not derived from child handles. A [`TypeNode::Sibling`] is its bare index
+/// Two recipes are not derived from child handles. A [`TypeNode::Sibling`] is its bare index
 /// under `TAG_SET_LOCAL`, meaningful only against an ambient window. A [`TypeNode::SetMember`]
 /// is `(component digest, index in component)` — its schema is *not* re-fed here, because the
-/// component digest was computed over exactly that content at seal. A [`TypeNode::Group`] folds
-/// its members' finished handles in declaration order: a group is a declaration boundary that
-/// may span several components, so it has no component digest of its own to name.
+/// component digest was computed over exactly that content at seal.
 pub(crate) fn node_digest(node: &TypeNode) -> TypeDigest {
     match node {
         TypeNode::Number => leaf_digest(TAG_NUMBER),
@@ -180,14 +178,6 @@ pub(crate) fn node_digest(node: &TypeNode) -> TypeDigest {
         TypeNode::SetMember {
             scc_digest, index, ..
         } => member_ref_digest(*scc_digest, *index),
-        TypeNode::Group { members } => {
-            let mut h = DigestHasher::new(TAG_RECURSIVE_GROUP);
-            h.count(members.len());
-            for member in members {
-                h.digest(member.digest());
-            }
-            h.finish()
-        }
     }
 }
 

@@ -89,19 +89,22 @@ times you wrap a value, the representation sits exactly one wrapper deep.
 
 A type may refer to itself directly — a union whose variant payload is the union
 itself, for instance. But two *different* types that refer to each other can't
-be declared one after another, because the first can't name the second before
-it exists. `RECURSIVE TYPES` declares such a group together, so every member is
-in scope for every other:
+be declared one after another at the top level, because the first can't name the
+second before it exists. Declare them inside a module: a module body announces
+its type declarations before it runs any of them, so every one is in scope for
+every other regardless of order.
 
 ```koan
-RECURSIVE TYPES Listy = (
+MODULE listy = (
   NEWTYPE Cell = :{head :Number, tail :Rest}
   NEWTYPE Rest = :{next :(Cell | Null)}
 )
-LET empty = (Rest {next = null})
-LET one = (Cell {head = 1, tail = empty})
-LET chain = (Rest {next = one})
-PRINT chain
+USING listy SCOPE (
+  LET empty = (Rest {next = null})
+  LET one = (Cell {head = 1, tail = empty})
+  LET chain = (Rest {next = one})
+  PRINT chain
+)
 ```
 
 ```text
@@ -109,8 +112,12 @@ Rest({next = Cell({head = 1, tail = Rest({next = null})})})
 ```
 
 Here `Cell` names `Rest` and `Rest` names `Cell` — each definition mentions the
-other. The body holds only type declarations (two `NEWTYPE`s here), one per line,
-each indented under the opening line. The group name (`Listy`) must differ from
-every member name.
+other. Each declaration is one statement of the module body, indented under the
+opening line. `USING listy SCOPE (…)` opens the module so its type names are
+reachable bare; outside such a window they are `listy`'s members.
+
+A mutually recursive group needs the module wrapper. At the program's own top
+level the same two declarations are an ordinary forward reference, and `Rest` is
+an unknown type name where `Cell` names it.
 
 Next: [Errors](09-errors.md).

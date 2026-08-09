@@ -25,8 +25,8 @@ use crate::machine::core::{LexicalFrame, StepAllocator};
 use crate::machine::model::Carried;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
-    FieldNameKind, FieldParts, ResultFeed,
+    parse_typed_field_list_via_elaborator, DeclWindow, Elaborator, FieldListContext,
+    FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
 };
 use crate::machine::model::{KType, Record, TypeRegistry};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
@@ -51,8 +51,9 @@ pub(crate) type BrandCompose<'step> = Box<
 /// [`Action::done_writing`](crate::machine::core::Action::done_writing). Takes the
 /// [`FinishCtx`] the `AwaitContinue` wrapper already holds, for the same reason.
 pub(crate) type FieldListFinalizeAction<'a> = Box<
-    dyn for<'r> FnOnce(
+    dyn for<'r, 'w> FnOnce(
             &FinishCtx<'a, 'r>,
+            Option<&'w DeclWindow<'a>>,
             Vec<(String, KType)>,
         ) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError>
         + 'a,
@@ -69,7 +70,7 @@ struct FieldListRewalk<'step> {
     context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
-    window: Option<std::rc::Rc<crate::machine::model::RecursiveGroupWindow>>,
+    window: Option<DeclWindow<'step>>,
     chain: Option<Rc<LexicalFrame>>,
     error_frame: Option<TraceFrame>,
 }
@@ -83,21 +84,18 @@ impl<'step> FieldListRewalk<'step> {
     /// may arrive at the short borrow of a dep envelope's open guard. `ResultFeed` is always
     /// installed: a `Done`-shaped walk never pops it, and a popped-dry feed hits the loud "fewer
     /// resolved sub-dispatches" error inside the walker.
-    fn run<'b, 'f>(
-        self,
-        scope: &Scope<'b>,
+    fn run<'f>(
+        &self,
+        scope: &Scope<'step>,
         feed: &[Carried<'f>],
         types: &TypeRegistry,
-    ) -> Result<Vec<(String, KType)>, KError>
-    where
-        'step: 'b,
-    {
+    ) -> Result<Vec<(String, KType)>, KError> {
         let mut result_feed = ResultFeed::new(feed);
         let mut elaborator = Elaborator::new(scope)
             .with_threaded(self.threaded.iter().cloned())
             .with_chain(self.chain.clone());
-        if let Some(window) = self.window.clone() {
-            elaborator = elaborator.with_window(window);
+        if let Some(window) = self.window.as_ref() {
+            elaborator = elaborator.with_window(window.view());
         }
         match parse_typed_field_list_via_elaborator(
             self.parts,
@@ -110,7 +108,7 @@ impl<'step> FieldListRewalk<'step> {
             FieldListOutcome::Done(fields) => Ok(fields),
             FieldListOutcome::Err(msg) => {
                 let error = KError::new(KErrorKind::ShapeError(msg));
-                Err(match self.error_frame {
+                Err(match self.error_frame.clone() {
                     Some(frame) => error.with_frame(frame),
                     None => error,
                 })
@@ -156,7 +154,7 @@ pub(crate) struct FieldListDeferral<'a> {
     context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
-    window: Option<std::rc::Rc<crate::machine::model::RecursiveGroupWindow>>,
+    window: Option<DeclWindow<'a>>,
     chain: Option<Rc<LexicalFrame>>,
     error_frame: Option<TraceFrame>,
 }
@@ -194,10 +192,7 @@ impl<'a> FieldListDeferral<'a> {
 
     /// Set the declaration window the first walk minted its sibling handles against, so the re-walk
     /// mints the same indices.
-    pub(crate) fn with_window(
-        mut self,
-        window: std::rc::Rc<crate::machine::model::RecursiveGroupWindow>,
-    ) -> Self {
+    pub(crate) fn with_window(mut self, window: DeclWindow<'a>) -> Self {
         self.window = Some(window);
         self
     }
@@ -302,7 +297,7 @@ impl<'a> FieldListDeferral<'a> {
             Action::done_writing(
                 rewalk
                     .run(fctx.scope, &owned, fctx.types)
-                    .and_then(|fields| finalize(fctx, fields)),
+                    .and_then(|fields| finalize(fctx, rewalk.window.as_ref(), fields)),
             )
         });
         Action::await_deps(deps, finish)
@@ -314,7 +309,7 @@ impl<'a> FieldListDeferral<'a> {
         self,
         compose: BrandCompose<'a>,
     ) -> crate::machine::core::Action<'a> {
-        self.action(Box::new(move |fctx, fields| {
+        self.action(Box::new(move |fctx, _window, fields| {
             // A composed structural type declares no binder, so it writes nothing.
             Ok((
                 fctx.ctx.type_carried(compose(fields, fctx.types)?),

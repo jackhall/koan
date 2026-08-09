@@ -2,8 +2,8 @@
 //! `UNION` (order discarded into a `HashMap<tag, KType>`) and `STRUCT` (order preserved for
 //! positional construction).
 
+use super::declaration_window::WindowView;
 use super::ktype::KType;
-use super::recursive_group_window::RecursiveGroupWindow;
 use super::registry::TypeRegistry;
 use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::ast::{
@@ -16,7 +16,6 @@ use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
 use crate::source::Spanned;
 use std::collections::HashSet;
-use std::rc::Rc;
 
 /// The two nouns a field-list diagnostic needs. `list` names the whole schema, for errors about
 /// the list as a unit ("UNION schema: forward type reference still unresolved…"); `member` names
@@ -253,27 +252,28 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
             // context, so co-declared references are pre-resolved to sibling carriers first
             // (see `rewrite_threaded_self_refs`).
             FieldSlot::AstSigil(boxed) => {
-                // `:(Tree Leaf)` while `Tree` is the binder under seal: a sibling-variant
-                // reference. It cannot sub-dispatch (parking would deadlock on this very
-                // seal's producer), so it lowers straight to the variant's relative `Sibling`
-                // handle against the ambient window.
+                // `:(Tree Leaf)` while `Tree` is a binder of the active window: a sibling-variant
+                // reference. It cannot sub-dispatch (parking would deadlock on this very seal's
+                // producer), so it lowers straight to the variant's handle against the window —
+                // relative while the window is open, absolute once it has sealed.
                 if let [first, second] = boxed.parts {
                     if let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
                         (&first.value, &second.value)
                     {
-                        if elaborator.threaded.contains(head.as_str()) {
-                            let window = elaborator.window().ok_or_else(|| {
-                                format!(
-                                    "{context_list}: `{}` names a co-declared member with no \
-                                     open declaration window",
-                                    tag.render(),
-                                )
-                            })?;
-                            return Ok(window.sibling(
-                                &tag.render(),
-                                crate::machine::model::KKind::NewType,
-                                types,
-                            ));
+                        if let Some(view) = elaborator.window().filter(|v| v.binds(head.as_str())) {
+                            let index = view
+                                .variant_index(head.as_str(), &tag.render())
+                                .ok_or_else(|| {
+                                    format!(
+                                        "{context_list}: `{}` is not a variant of `{}`",
+                                        tag.render(),
+                                        head.as_str(),
+                                    )
+                                })?;
+                            return Ok(match view.sealed_member(index) {
+                                Some(kt) => kt,
+                                None => types.intern(super::node::TypeNode::Sibling(index)),
+                            });
                         }
                     }
                 }
@@ -298,7 +298,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                             boxed,
                             &elaborator.threaded,
                             elaborator.scope,
-                            elaborator.window().as_ref(),
+                            elaborator.window(),
                             types,
                         ));
                         Ok(KType::ANY)
@@ -379,7 +379,7 @@ fn rewrite_threaded_self_refs<'a>(
     inner: &KExpression<'a>,
     threaded: &HashSet<String>,
     scope: &Scope<'a>,
-    window: Option<&Rc<RecursiveGroupWindow>>,
+    window: Option<WindowView<'_, '_>>,
     types: &TypeRegistry,
 ) -> WorkingExpression<'a> {
     let brand = scope.brand();
@@ -392,16 +392,17 @@ fn rewrite_threaded_self_refs<'a>(
         .map(|p| {
             let value = match &p.value {
                 ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
-                    // The sibling handle is minted against the window here, where the window is in
+                    // The member's handle is minted against the window here, where the window is in
                     // hand — the sub-dispatch it crosses into cannot reach one. The cell is a
                     // resident seal in this scope's own region: a type carrier reaching nothing
                     // foreign, so it rests with no coverage to lodge anywhere.
-                    let sibling =
-                        window.sibling(&t.render(), crate::machine::model::KKind::NewType, types);
-                    WorkingPart::Spliced {
-                        cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
-                            Carried::Type(sibling),
-                        ),
+                    match resolve_threaded(window, &t.render(), types) {
+                        Some(handle) => WorkingPart::Spliced {
+                            cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
+                                Carried::Type(handle),
+                            ),
+                        },
+                        None => WorkingPart::Ast(p.value),
                     }
                 }
                 // A nested sigil threads its own self-references and rides as a synthesized node:
@@ -439,6 +440,40 @@ fn rewrite_threaded_self_refs<'a>(
         })
         .collect();
     WorkingExpression::new(brand, parts)
+}
+
+/// Thread `inner`'s co-declared references against `window`, yielding the scheduler node a
+/// declarator sub-dispatches — the door a declarator outside the field-list walker reaches for (a
+/// `NEWTYPE`'s non-record sigil repr). Same act [`rewrite_threaded_self_refs`] performs for a sigil
+/// field type.
+pub fn rewrite_window_refs<'a>(
+    inner: &KExpression<'a>,
+    threaded: &[String],
+    scope: &Scope<'a>,
+    window: WindowView<'_, '_>,
+    types: &TypeRegistry,
+) -> WorkingExpression<'a> {
+    let threaded: HashSet<String> = threaded.iter().cloned().collect();
+    rewrite_threaded_self_refs(inner, &threaded, scope, Some(window), types)
+}
+
+/// The handle a threaded name denotes against `window`: the member's absolute handle once the
+/// window sealed, its relative sibling back-edge while it is open (announced if the window
+/// discovers its members as it walks), and the binder's union for a binder name.
+fn resolve_threaded(window: WindowView<'_, '_>, name: &str, types: &TypeRegistry) -> Option<KType> {
+    if window.binds(name) {
+        return window
+            .sealed_binder(name)
+            .or_else(|| window.binder_union(name, types));
+    }
+    match window.member_index(name) {
+        Some(index) => Some(
+            window
+                .sealed_member(index)
+                .unwrap_or_else(|| types.intern(super::node::TypeNode::Sibling(index))),
+        ),
+        None => window.sibling(name, super::kkind::KKind::NewType, types),
+    }
 }
 
 /// The declared names of a `<name> <slot>` pair list, without elaborating any slot — what a

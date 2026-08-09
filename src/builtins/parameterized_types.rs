@@ -256,14 +256,14 @@ mod tests {
     // lowers to `ConstructorApply(Wrap, {Type = Number})` — `AS` fills the sole parameter.
     #[test]
     fn apply_as_lowers_to_constructor_apply() {
-        use crate::machine::model::{declarator_window, RelativeSchema};
+        use crate::machine::model::{RecursiveGroupWindow, RelativeSchema};
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         // Seal a singleton `Wrap` constructor member through the real declaration window, then
         // bind its absolute handle as a builtin type.
-        let window = declarator_window(scope, "Wrap", KKind::TypeConstructor);
+        let window = RecursiveGroupWindow::new(vec![("Wrap".to_string(), KKind::TypeConstructor)]);
         let sealed = window
             .fill_member(
                 0,

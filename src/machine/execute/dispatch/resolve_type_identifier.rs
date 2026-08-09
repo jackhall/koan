@@ -15,17 +15,12 @@
 //! atomically with the `types` insert when its write op applies. A name carrying a placeholder in
 //! some scope is a binder that has not yet installed its identity there.
 //!
-//! Which scope to probe is decided per reference kind. A nominal member in flight is named by a
-//! relative `Sibling` handle, which is meaningful only against the **declaration window** that
-//! minted it — the nearest one on this scope's chain. A member whose slot that window has already
-//! filled is settled and never in flight: the group installs one identity write for every member at
-//! the seal, so a filled member's placeholder outlives its own finalize. For an unfilled one the
-//! gate resolves the index to a member name, then walks for the scope that both carries that same
-//! window and holds a placeholder naming the producer to park on. Window identity is what the
-//! ptr-equality does here: it stops an unrelated same-named
-//! declaration, which opens its own window, from capturing the reference. A sealed member carries
-//! an absolute handle and no window, so it is never in flight. A SIG-declared or abstract slot is
-//! identified by the declaring scope id its node records.
+//! A co-declared nominal still in flight never reaches this gate at all: the elaborator answers a
+//! consumer's reference to an unsealed announced member with a park of its own
+//! ([`elaborate_type_identifier`](crate::machine::model::elaborate_type_identifier)), and a
+//! declarator's reference stays inside its own window. What is left for the gate is the
+//! **declared** reference — a SIG-declared or abstract slot, identified by the declaring scope id
+//! its node records.
 
 use crate::machine::core::NodeId;
 use crate::machine::core::{LexicalFrame, Scope, ScopeId};
@@ -77,46 +72,14 @@ impl FinalizeGate<'_, '_> {
     /// Producer `NodeId`s the caller must park on; empty iff the gate admits.
     fn pending_producers(&self, kt: KType) -> Vec<NodeId> {
         let mut pending: Vec<NodeId> = Vec::new();
-        for user_ref in user_type_refs(kt, self.types) {
-            let producer = match user_ref {
-                UserTypeRef::Sibling { index } => self.member_producer(index),
-                UserTypeRef::Declared { scope_id, name } => self.declared_producer(scope_id, &name),
-            };
-            if let Some(node_id) = producer {
+        for UserTypeRef { scope_id, name } in user_type_refs(kt, self.types) {
+            if let Some(node_id) = self.declared_producer(scope_id, &name) {
                 if !pending.contains(&node_id) {
                     pending.push(node_id);
                 }
             }
         }
         pending
-    }
-
-    /// The in-flight producer of the member a relative sibling reference names, or `None`.
-    ///
-    /// The index means whatever the **nearest** open window says it means, because that is the
-    /// window the elaborator minted it against. Resolving it there and then requiring the pending
-    /// scope to carry that *same* window is what keeps a same-named in-flight declaration of a
-    /// different type from capturing this reference — an unrelated declaration of the name opens a
-    /// window of its own, which is not this one.
-    fn member_producer(&self, index: usize) -> Option<NodeId> {
-        let window = self.scope.nearest_recursive_window()?;
-        // A filled slot ends the member's flight: its own finalize has run, so the relative handle
-        // this reference holds already denotes settled content. The member's placeholder outlives
-        // that — a group's identity write, and with it the clear, waits for the seal — so for a
-        // sibling the slot is the finer signal, and the placeholder below only names the producer
-        // node to park on.
-        if window.member_is_filled(index) {
-            return None;
-        }
-        let name = window.member_names().into_iter().nth(index)?;
-        self.scope.ancestors().find_map(|s| {
-            let carried = s.nearest_recursive_window()?;
-            if std::rc::Rc::ptr_eq(&carried, &window) {
-                s.bindings().type_placeholder_producer(&name)
-            } else {
-                None
-            }
-        })
     }
 
     /// The in-flight producer of the scope that declared a SIG / abstract slot: find
@@ -127,12 +90,11 @@ impl FinalizeGate<'_, '_> {
     }
 }
 
-/// A top-level user-type reference in a type, as the finalize gate consumes it.
-enum UserTypeRef {
-    /// A still-in-flight nominal member, named relative to the ambient declaration window.
-    Sibling { index: usize },
-    /// An abstract slot, identified by its declaring scope id.
-    Declared { scope_id: ScopeId, name: String },
+/// A top-level user-type reference in a type, as the finalize gate consumes it: an abstract slot,
+/// identified by its declaring scope id.
+struct UserTypeRef {
+    scope_id: ScopeId,
+    name: String,
 }
 
 /// Every top-level [`UserTypeRef`] in `kt`.
@@ -149,8 +111,7 @@ fn user_type_refs(kt: KType, types: &TypeRegistry) -> Vec<UserTypeRef> {
     let mut stack = vec![kt];
     while let Some(handle) = stack.pop() {
         match types.node(handle) {
-            TypeNode::Sibling(index) => found.push(UserTypeRef::Sibling { index }),
-            TypeNode::AbstractType { source, name, .. } => found.push(UserTypeRef::Declared {
+            TypeNode::AbstractType { source, name, .. } => found.push(UserTypeRef {
                 scope_id: source,
                 name,
             }),
@@ -172,7 +133,6 @@ fn user_type_refs(kt: KType, types: &TypeRegistry) -> Vec<UserTypeRef> {
                 stack.push(constructor);
             }
             TypeNode::Union { members } => stack.extend(members.into_iter().rev()),
-            TypeNode::Group { members } => stack.extend(members.into_iter().rev()),
             // Leaves: no nested handle. `DeferredReturn` carries only a hashable surface shadow,
             // and `Sibling` is relative content that never escapes its window.
             _ => {}

@@ -314,8 +314,8 @@ fn sibling_variant_sigil_types_a_field() {
     );
 }
 
-/// A misspelled sibling variant `:(Tree Bogus)` seals against the union's member set via
-/// `index_of` and surfaces the standard unsealed-reference error naming the bad tag.
+/// A misspelled sibling variant `:(Tree Bogus)` is looked up against exactly the member list its
+/// binder owns, so the miss names the bad tag and the binder it was sought under.
 #[test]
 fn sibling_variant_typo_references_unsealed_type() {
     let program = program_storage();
@@ -326,7 +326,7 @@ fn sibling_variant_typo_references_unsealed_type() {
         "UNION Tree = (Leaf :Number Node :(Tree Bogus))",
     );
     assert!(
-        err.contains("UNION `Tree` schema references unsealed type `Bogus`"),
+        err.contains("`Bogus` is not a variant of `Tree`"),
         "a misspelled sibling variant names the bad tag; got {err}",
     );
 }

@@ -233,27 +233,30 @@ fn newtype_constructor_family_install_lets_sibling_resolve() {
     );
 }
 
-/// `RECURSIVE TYPES _ = _`: a later sibling aliases a co-declared member.
+/// A module body's announced group: a later sibling, reached through `USING`, aliases a co-declared
+/// member.
 #[test]
-fn recursive_types_install_lets_sibling_resolve() {
+fn announced_group_install_lets_sibling_resolve() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
         &program,
         &region,
-        "RECURSIVE TYPES Pair = (\n\
+        "MODULE pair = (\n\
         \x20 NEWTYPE Aa = :{b :Bb}\n\
         \x20 NEWTYPE Bb = :{a :Aa}\n\
-         )\n\
-         LET AaAlias = Aa",
+        \x20 LET AaAlias = Aa\n\
+         )",
     );
-    let scope = test_run.scope;
-    let aa = scope.resolve_type("Aa");
-    assert!(aa.is_some(), "RECURSIVE TYPES must bind member `Aa`");
+    let module =
+        crate::builtins::test_support::lookup_module(test_run.scope, "pair", &test_run.types);
+    let members = module.child_scope();
+    let aa = members.resolve_type("Aa");
+    assert!(aa.is_some(), "the announced group must bind member `Aa`");
     assert_eq!(
-        scope.resolve_type("AaAlias"),
+        members.resolve_type("AaAlias"),
         aa,
-        "the member placeholder must let `AaAlias = Aa` resolve",
+        "a consumer of an announced member resolves once the group seals",
     );
 }
 

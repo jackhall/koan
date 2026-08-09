@@ -23,7 +23,6 @@ mod op_def;
 mod parameterized_types;
 mod print;
 mod record_projection;
-mod recursive_types;
 mod resolve_or_await;
 mod result;
 mod sig_def;
@@ -154,7 +153,6 @@ pub(crate) fn seed_builtins<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate
     union::register(scope, types, gate);
     result::register(scope, types, gate);
     newtype_def::register(scope, types, gate);
-    recursive_types::register(scope, types, gate);
     match_case::register(scope, types, gate);
     try_with::register(scope, types, gate);
     using_scope::register(scope, types, gate);

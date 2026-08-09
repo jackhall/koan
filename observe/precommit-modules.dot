@@ -25,7 +25,6 @@ digraph {
     "koan::builtins::parameterized_types::action_bodies" [label="koan::builtins::parameterized_types::action_bodies"];
     "koan::builtins::print" [label="koan::builtins::print"];
     "koan::builtins::record_projection" [label="koan::builtins::record_projection"];
-    "koan::builtins::recursive_types" [label="koan::builtins::recursive_types"];
     "koan::builtins::resolve_or_await" [label="koan::builtins::resolve_or_await"];
     "koan::builtins::result" [label="koan::builtins::result"];
     "koan::builtins::sig_def" [label="koan::builtins::sig_def"];
@@ -101,6 +100,7 @@ digraph {
     "koan::machine::model::binder" [label="koan::machine::model::binder"];
     "koan::machine::model::operators" [label="koan::machine::model::operators"];
     "koan::machine::model::types" [label="koan::machine::model::types"];
+    "koan::machine::model::types::declaration_window" [label="koan::machine::model::types::declaration_window"];
     "koan::machine::model::types::kkind" [label="koan::machine::model::types::kkind"];
     "koan::machine::model::types::ktraits" [label="koan::machine::model::types::ktraits"];
     "koan::machine::model::types::ktype" [label="koan::machine::model::types::ktype"];
@@ -161,7 +161,6 @@ digraph {
     "koan::builtins" -> "koan::builtins::parameterized_types" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::print" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::record_projection" [label="owns", style="solid"];
-    "koan::builtins" -> "koan::builtins::recursive_types" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::resolve_or_await" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::result" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::sig_def" [label="owns", style="solid"];
@@ -241,6 +240,7 @@ digraph {
     "koan::machine::model::ast" -> "koan::machine::model::ast::program" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::shape" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::working" [label="owns", style="solid"];
+    "koan::machine::model::types" -> "koan::machine::model::types::declaration_window" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::kkind" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::ktraits" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::ktype" [label="owns", style="solid"];
@@ -382,12 +382,6 @@ digraph {
     "koan::builtins::record_projection" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::recursive_types" -> "koan::builtins" [label="uses", style="dashed"];
-    "koan::builtins::recursive_types" -> "koan::builtins::await_body" [label="uses", style="dashed"];
-    "koan::builtins::recursive_types" -> "koan::builtins::test_support" [label="uses", style="dashed"];
-    "koan::builtins::recursive_types" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::builtins::recursive_types" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
-    "koan::builtins::recursive_types" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -825,6 +819,12 @@ digraph {
     "koan::machine::model::binder" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::machine::model::types::declaration_window" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
+    "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
+    "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::node" [label="uses", style="dashed"];
+    "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::recursive_group_window" [label="uses", style="dashed"];
+    "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::ktraits" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -888,6 +888,7 @@ digraph {
     "koan::machine::model::types::resolver" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::machine::model::types::resolver" -> "koan::machine::model::types::declaration_window" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::node" [label="uses", style="dashed"];
@@ -922,8 +923,8 @@ digraph {
     "koan::machine::model::types::typed_field_list" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::types::typed_field_list" -> "koan::machine::model::types::declaration_window" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
-    "koan::machine::model::types::typed_field_list" -> "koan::machine::model::types::recursive_group_window" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::types::resolver" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::values" [label="uses", style="dashed"];

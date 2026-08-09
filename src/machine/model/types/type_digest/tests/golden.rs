@@ -129,13 +129,10 @@ fn generative(types: &TypeRegistry) -> KType {
 ///
 /// Returns the member handles in declaration order: `[Odd, Even]`.
 fn recursive_pair(types: &TypeRegistry) -> Vec<KType> {
-    let window = RecursiveGroupWindow::new(
-        vec![
-            ("Odd".into(), KKind::NewType),
-            ("Even".into(), KKind::NewType),
-        ],
-        None,
-    );
+    let window = RecursiveGroupWindow::new(vec![
+        ("Odd".into(), KKind::NewType),
+        ("Even".into(), KKind::NewType),
+    ]);
     window.fill_member(
         0,
         newtype(record(types, vec![("pred", sibling(types, 1))])),

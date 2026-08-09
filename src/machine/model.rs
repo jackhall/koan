@@ -10,10 +10,11 @@ pub use operators::{
 };
 pub use types::TypeRegistry;
 pub use types::{
-    is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, DispatchToken,
-    DispatchTokenElement, ExpressionSignature, KKind, KType, NodeSchema, Parseable, PendingMember,
-    Record, RecursiveGroupWindow, RelativeSchema, ReturnType, SealedGroup, SignatureDraft,
-    SignatureElement, TypeNode, UntypedElement, UntypedKey,
+    is_keyword_token, AnnouncedData, AnnouncedMember, AnnouncedWindow, Argument, DeclWindow,
+    DeferredReturn, DeferredReturnSurface, DispatchToken, DispatchTokenElement,
+    ExpressionSignature, KKind, KType, NodeSchema, Parseable, PendingMember, Record,
+    RecursiveGroupWindow, RelativeSchema, ReturnType, SealedAnnounced, SealedGroup, SignatureDraft,
+    SignatureElement, TypeNode, UntypedElement, UntypedKey, WindowView,
 };
 pub use types::{most_specific_ktype, owned_untyped_key, StoredElement};
 pub use values::{
@@ -24,14 +25,15 @@ pub(crate) use ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass,
     ProgramExpression, TypeIdentifier, WorkingExpression, WorkingPart,
 };
+pub(crate) use binder::{announced_type_declaration, TypeDeclarationSurface};
 pub(crate) use binder::{op_declaration_arity, OpArity};
 pub(crate) use binder::{symbol_from_parts, symbol_from_quote_body, BinderKey, StoredBinderKey};
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};
 pub(crate) use types::{
     constructor_param_names, declarator_window, elaborate_type_identifier, finalize_nominal_member,
-    pair_list_names, parse_typed_field_list_via_elaborator, unsaturated_constructor_message,
-    Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
-    SealOutcome, SigSchema, TypeResolution,
+    pair_list_names, parse_typed_field_list_via_elaborator, rewrite_window_refs, seal_writes,
+    unsaturated_constructor_message, Elaborator, FieldListContext, FieldListOutcome, FieldNameKind,
+    FieldParts, ResultFeed, SealOutcome, SigSchema, TypeResolution,
 };
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
 pub(crate) use types::{sig_subtype, substitute_sig_members, TypeDigest};

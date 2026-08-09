@@ -4,7 +4,7 @@ use crate::machine::model::KObject;
 use crate::machine::model::Record;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
-    constructor_param_names, declarator_window, KKind, KType, RelativeSchema, TypeNode,
+    constructor_param_names, KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeNode,
 };
 use crate::machine::ScopeId;
 use crate::machine::{program_storage, run_root_storage, ProgramStorage};
@@ -271,8 +271,8 @@ fn assert_type_constructor(kt: KType, expected: &[&str], types: &TypeRegistry) -
 }
 
 /// A root-scope-bound `Wrap` TypeConstructor member, sealed through the real declaration window.
-fn wrap_type_constructor(scope: &crate::machine::Scope<'_>, types: &TypeRegistry) -> KType {
-    let window = declarator_window(scope, "Wrap", KKind::TypeConstructor);
+fn wrap_type_constructor(types: &TypeRegistry) -> KType {
+    let window = RecursiveGroupWindow::new(vec![("Wrap".to_string(), KKind::TypeConstructor)]);
     window
         .fill_member(
             0,
@@ -295,7 +295,7 @@ fn fn_return_type_constructor_apply_root_scope() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let wrap = wrap_type_constructor(scope, test_run.types());
+    let wrap = wrap_type_constructor(test_run.types());
     scope.register_builtin_type(
         "Wrap".into(),
         wrap,

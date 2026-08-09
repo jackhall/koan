@@ -114,7 +114,7 @@ pub struct BinderKey {
 
 // ---------- extractors (pure structural readers) ----------
 
-/// Shared [`BinderNameFn`] for typed-binder builtins (SIG / UNION / RECURSIVE TYPES / NEWTYPE):
+/// Shared [`BinderNameFn`] for typed-binder builtins (SIG / UNION / NEWTYPE):
 /// the binder name is `parts[1]`'s `Type(t)` token. A free function (not the
 /// `KExpression::binder_name_from_type_part` method reference) so the signature is higher-ranked
 /// over the expression lifetime, as `BinderNameFn` requires.
@@ -500,13 +500,6 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
     },
-    // RECURSIVE TYPES <name> = <body>.
-    BinderSpec {
-        key: &[Kw("RECURSIVE"), Kw("TYPES"), Slot, Kw("="), Slot],
-        names: &[(type_part_binder_name, BindKind::Type)],
-        bucket: None,
-        surface: BinderSurface::Other,
-    },
     // FN <signature> -> <return_type> = <body> (three hook-bearing overloads share this key; the
     // anonymous record-schema overload has no hooks).
     BinderSpec {
@@ -643,6 +636,35 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         surface: BinderSurface::Other,
     },
 ];
+
+/// The nominal-type declaration surfaces a module body pre-announces, as
+/// [`announced_type_declaration`] classifies them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TypeDeclarationSurface {
+    NewType,
+    Union,
+}
+
+/// What `expression` announces to its module body's declaration window, or `None` if it announces
+/// nothing.
+///
+/// Recognition is by **full bucket key** against the [`BINDER_SPECS`] entries — every keyword
+/// pinned in position — so a user overload that merely shares a head keyword announces nothing, and
+/// the constructor-family key `NEWTYPE <decl>` is excluded structurally rather than by inspecting
+/// what its extractor would return. Only a statement at the body's top level is offered here; a
+/// declaration nested inside another statement's slot keeps ordinary dataflow order.
+pub(crate) fn announced_type_declaration(
+    expression: &KExpression<'_>,
+) -> Option<TypeDeclarationSurface> {
+    let spec = BINDER_SPECS
+        .iter()
+        .find(|spec| spec.matches_stored_key(expression.stored_key()))?;
+    match spec.key {
+        [Kw("NEWTYPE"), Slot, Kw("="), Slot] => Some(TypeDeclarationSurface::NewType),
+        [Kw("UNION"), Slot, Kw("="), Slot] => Some(TypeDeclarationSurface::Union),
+        _ => None,
+    }
+}
 
 /// The arity of the operator declaration `expression` is, or `None` if it is not one. Recognition
 /// is by **full bucket key** against the [`BINDER_SPECS`] entries marked

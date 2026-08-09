@@ -134,13 +134,6 @@ pub enum TypeNode {
         kind: KKind,
         schema: NodeSchema,
     },
-    /// First-class handle to a whole declared group, bound by a `RECURSIVE TYPES` group name.
-    /// Members are the group's declared members in declaration order — a group may span several
-    /// components, so this is a declaration boundary rather than an identity unit. Inert in
-    /// value dispatch: it names a group of types, not a value type.
-    Group {
-        members: Vec<KType>,
-    },
 }
 
 /// A sealed member's schema, over absolute member handles: every sibling reference inside it is

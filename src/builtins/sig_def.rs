@@ -23,7 +23,7 @@ use super::{arg, kw, sig};
 /// that scope into a [`SigSchema`], interns it as a `Signature` type, and installs that handle
 /// into the parent scope.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
-    use super::await_body::{await_body_in_scope, ChildScopeSeal};
+    use super::await_body::await_body_in_scope;
     use crate::machine::{require_bare_type_name, require_kexpression, Action};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG", ctx.types));
@@ -33,24 +33,19 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
     let site = ctx.declaration_site();
     let name_for_finish = name;
-    await_body_in_scope(
-        decl_scope,
-        body_expr,
-        ChildScopeSeal::SealBeforeFinish,
-        move |fctx| {
-            let schema = SigSchema::project_decl(decl_scope, fctx.types);
-            let identity = fctx.types.signature(schema);
-            Action::done(Ok(fctx.ctx.type_carried(identity))).with_effect(
-                crate::machine::core::bindings::WriteOp::Type {
-                    name: name_for_finish,
-                    kt: identity,
-                    site,
-                    policy: crate::machine::core::bindings::TypeWritePolicy::UpsertEqual,
-                    builtin_shadow_guard: true,
-                },
-            )
-        },
-    )
+    await_body_in_scope(decl_scope, body_expr, move |fctx| {
+        let schema = SigSchema::project_decl(decl_scope, fctx.types);
+        let identity = fctx.types.signature(schema);
+        Action::done(Ok(fctx.ctx.type_carried(identity))).with_effect(
+            crate::machine::core::bindings::WriteOp::Type {
+                name: name_for_finish,
+                kt: identity,
+                site,
+                policy: crate::machine::core::bindings::TypeWritePolicy::UpsertEqual,
+                builtin_shadow_guard: true,
+            },
+        )
+    })
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {

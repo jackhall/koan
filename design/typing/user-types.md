@@ -291,7 +291,7 @@ RECURSIVE TYPES Pair = (
 )
 ```
 
-The builtin ([`recursive_types.rs`](../../src/builtins/recursive_types.rs)):
+The builtin ([`module_def.rs`](../../src/builtins/module_def.rs)):
 
 - discovers each member's `(name, kind)` from the body declarations, opens one
   shared `RecursiveGroupWindow` announcing that membership, and dispatches the

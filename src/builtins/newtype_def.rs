@@ -19,14 +19,13 @@ use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::WriteGate;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::{
-    declarator_window, finalize_nominal_member, FieldListContext, FieldNameKind, Record,
-    RecursiveGroupWindow, RelativeSchema, SealOutcome,
+    declarator_window, finalize_nominal_member, DeclWindow, FieldListContext, FieldNameKind,
+    Record, RecursiveGroupWindow, RelativeSchema, SealOutcome,
 };
 use crate::machine::model::{ExpressionPart, KExpression, ProgramExpression};
 use crate::machine::FinishCtx;
@@ -60,12 +59,13 @@ fn finalize_newtype<'a>(
         return Err(KError::new(KErrorKind::ShapeError(message)));
     }
     let scope = fctx.scope;
-    let window = declarator_window(scope, &name, KKind::NewType);
+    let window = declarator_window(scope, &name);
     let outcome = finalize_nominal_member(
         &window,
         &name,
-        |_window| RelativeSchema::NewType(repr),
+        |_window| repr,
         site,
+        scope.brand(),
         fctx.types,
     );
     seal_outcome_into_carrier(fctx, &name, outcome)
@@ -80,7 +80,7 @@ fn finalize_newtype<'a>(
 fn finalize_record_newtype<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: String,
-    window: Rc<RecursiveGroupWindow>,
+    window: &DeclWindow<'a>,
     fields: Vec<(String, KType)>,
     site: DeclarationSite,
 ) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
@@ -90,31 +90,29 @@ fn finalize_record_newtype<'a>(
         )));
     }
     let outcome = finalize_nominal_member(
-        &window,
+        window,
         &name,
-        |_window| {
-            let record = fctx.types.record(Record::from_pairs(fields));
-            RelativeSchema::NewType(record)
-        },
+        |_window| fctx.types.record(Record::from_pairs(fields)),
         site,
+        fctx.scope.brand(),
         fctx.types,
     );
     seal_outcome_into_carrier(fctx, &name, outcome)
 }
 
 /// Map a [`SealOutcome`] into the declarator's per-statement result: the terminal carrier plus the
-/// `types` write that installs the sealed identity. A sealed member crosses as a resident type
-/// carrier. A member whose window has not sealed — only a `RECURSIVE TYPES` block member reaches
-/// this — has no identity yet and writes nothing; the block's own finish binds every member, so
-/// this per-statement result is discarded and a benign `Null` stands in without fabricating a
-/// handle.
+/// `types` writes that install the sealed identities. A sealed member crosses as a resident type
+/// carrier. A member whose window has not sealed — only a member of an announced module group
+/// reaches this — has no identity yet and writes nothing; the statement whose fill closes the group
+/// installs every member at once, so this per-statement result is discarded and a benign `Null`
+/// stands in without fabricating a handle.
 fn seal_outcome_into_carrier<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: &str,
     outcome: SealOutcome,
 ) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
     match outcome {
-        SealOutcome::Sealed { kt, write } => Ok((seal_type_identity(fctx.scope, kt), vec![write])),
+        SealOutcome::Sealed { kt, writes } => Ok((seal_type_identity(fctx.scope, kt), writes)),
         SealOutcome::Deferred => Ok((
             fctx.ctx
                 .alloc_object_scalar(&KObject::Null)
@@ -157,7 +155,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     } else if let Some(repr_kt) = arg_type(ctx.args, "repr") {
         Action::done_writing(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
-        defer_resolved_sigil(ctx.scope.brand(), name, *inner, site)
+        defer_resolved_sigil(ctx.scope, name, *inner, site, ctx.types)
     } else {
         Action::done(Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
@@ -168,20 +166,31 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 /// A non-record sigil repr (`NEWTYPE Stream = :(LIST OF Number)`): re-wrap the captured sigil,
 /// sub-dispatch it, and seal a plain NewType over the resolved `KType` at dep-finish.
 fn defer_resolved_sigil<'a>(
-    brand: crate::machine::core::RegionBrand<'a>,
+    scope: &'a Scope<'a>,
     name: String,
     inner: ProgramExpression<'a>,
     site: DeclarationSite,
+    types: &TypeRegistry,
 ) -> crate::machine::Action<'a> {
-    use crate::builtins::resolve_or_await::dispatch_type_then;
+    use crate::builtins::resolve_or_await::dispatch_working_type_then;
+    use crate::machine::model::rewrite_window_refs;
     use crate::machine::Action;
+    let brand = scope.brand();
     let wrapped = KExpression::new(
         brand,
         vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
             inner.rehost(brand),
         ))],
     );
-    dispatch_type_then(brand, wrapped, "NEWTYPE repr slot", move |fctx, kt| {
+    // The sigil body sub-dispatches through the standalone dispatcher, which carries no window, so
+    // every co-declared name it spells is pre-resolved against the window here — the same act the
+    // field-list walker performs for a sigil field type.
+    let window = declarator_window(scope, &name);
+    let threaded: Vec<String> = std::iter::once(name.clone())
+        .chain(window.view().threadable_names())
+        .collect();
+    let wrapped = rewrite_window_refs(&wrapped, &threaded, scope, window.view(), types);
+    dispatch_working_type_then(wrapped, "NEWTYPE repr slot", move |fctx, kt| {
         Action::done_writing(finalize_newtype(fctx, name, kt, site))
     })
 }
@@ -205,9 +214,9 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
         }
     };
     let error_frame = TraceFrame::bare("<newtype>", format!("NEWTYPE {name}"));
-    // The window a self-reference resolves against: the enclosing `RECURSIVE TYPES` block's when
-    // this NEWTYPE is one of its members, else a fresh one-member window this declaration seals.
-    let window = declarator_window(ctx.scope, &name, KKind::NewType);
+    // The window a self- or sibling reference resolves against: the enclosing module body's when
+    // it announced this name, else a fresh one-member window this declaration seals.
+    let window = declarator_window(ctx.scope, &name);
     nominal_schema_action(
         ctx,
         name,

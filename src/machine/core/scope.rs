@@ -6,7 +6,7 @@ use std::rc::{Rc, Weak};
 use crate::machine::model::KType;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::OperatorGroupFamily;
-use crate::machine::model::RecursiveGroupWindow;
+use crate::machine::model::{AnnouncedData, AnnouncedWindow};
 use crate::witnessed::{And, DropFree, Reattachable, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
@@ -62,7 +62,7 @@ pub struct Scope<'a> {
     /// dispatch on SIG-declared members compares ids rather than scope pointers.
     pub id: ScopeId,
     /// Lexical classification, and with it every per-kind payload — the SIG slot collector, a
-    /// `GROUP` body's operator record, a `RECURSIVE TYPES` block's open window. Every payload is
+    /// `GROUP` body's operator record, a module body's announced type window. Every payload is
     /// reached through the walking accessors below, never off a scope reference directly.
     pub kind: ScopeKind<'a>,
     /// Set once the scope's defining block / frame finishes: no further bind is legal (rebinds are
@@ -131,19 +131,17 @@ pub enum ScopeKind<'a> {
     /// own brand like every other `'a` field and the reader's answer cannot outlive its scope borrow
     /// by construction — no seal, no pin. The registry entries hold that same record as a sealed
     /// carrier, since a binding table is lifetime-free.
+    ///
+    /// `window` is the body's [`AnnouncedWindow`]: `Some` when the pre-scan found top-level
+    /// `NEWTYPE` / `UNION` declarations, whose names are then mutually visible and order-independent
+    /// throughout the body. It rides inline rather than behind a reference — its runs are bumped
+    /// into this scope's own region and the record is `Drop`-free, so the scope allocation hosts it
+    /// for free. Read through [`Scope::nearest_declaration_window`] (a consumer, walking out) and
+    /// [`Scope::own_declaration_window`] (a declarator, this scope only).
     Module {
         name: String,
         group: Option<&'a OperatorGroup<'a>>,
-    },
-    /// A `RECURSIVE TYPES` block body: transparent to the SIG-body gate like `Anonymous`, and
-    /// carrying the open [`RecursiveGroupWindow`] whose members are co-declared and elaborate
-    /// together. The elaborator lowers a bare leaf naming one of its members to that member's
-    /// relative sibling back-edge, so cross-references inside the block resolve regardless of
-    /// lexical order — the block is the one cross-order resolution that survives strict
-    /// source-order type-name lookup. The window rides the scope rather than the registry because
-    /// several can be open at once under the park-capable scheduler.
-    RecursiveBlock {
-        window: Rc<RecursiveGroupWindow>,
+        window: Option<AnnouncedWindow<'a>>,
     },
 }
 
@@ -298,12 +296,22 @@ impl<'a> Scope<'a> {
     }
 
     /// `child_under`, stamped as a MODULE body (also used for the per-ascription view
-    /// minted by `:|`).
-    fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+    /// minted by `:|`). `announced` is the body's type-declaration pre-scan; its runs are bumped
+    /// into this child's own region here, inside the construction door, so the window is live
+    /// before any body statement can reach the scope.
+    fn child_under_module(
+        outer: &'a Scope<'a>,
+        name: String,
+        announced: Option<&AnnouncedData>,
+    ) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
-            ScopeKind::Module { name, group: None },
+            ScopeKind::Module {
+                name,
+                group: None,
+                window: announced.map(|data| AnnouncedWindow::bump(outer.brand(), data)),
+            },
         )
     }
 
@@ -315,6 +323,7 @@ impl<'a> Scope<'a> {
         outer: &'a Scope<'a>,
         name: String,
         group: &'a OperatorGroup<'a>,
+        announced: Option<&AnnouncedData>,
     ) -> Scope<'a> {
         Self::child_inheriting(
             outer,
@@ -322,36 +331,42 @@ impl<'a> Scope<'a> {
             ScopeKind::Module {
                 name,
                 group: Some(group),
+                window: announced.map(|data| AnnouncedWindow::bump(outer.brand(), data)),
             },
         )
     }
 
-    /// Child scope for a `RECURSIVE TYPES` block body: carries the open
-    /// [`RecursiveGroupWindow`] whose members are co-declared. Members dispatch against this
-    /// scope, so the elaborator finds the window (a member name lowers to its sibling handle).
-    /// `outer` is the lexical parent; the sealed members are mirrored up into it at the block's
-    /// dep-finish, which is also the window's seal barrier.
-    fn child_recursive_group(outer: &'a Scope<'a>, window: Rc<RecursiveGroupWindow>) -> Scope<'a> {
-        Self::child_inheriting(
-            outer,
-            ScopeBindings::Owned(Bindings::new()),
-            ScopeKind::RecursiveBlock { window },
-        )
-    }
-
-    /// The open [`RecursiveGroupWindow`] of the nearest enclosing `RECURSIVE TYPES` block, if any.
-    /// The elaborator consults this to decide whether a bare leaf is a co-declared member: only
-    /// the *nearest* window is considered, so a reference to an outer block's member falls through
-    /// to ordinary resolution (that member's sealed handle), not a back-edge into the inner
-    /// window.
-    pub fn nearest_recursive_window(&self) -> Option<Rc<RecursiveGroupWindow>> {
+    /// The nearest enclosing module body that announced type declarations, and its
+    /// [`AnnouncedWindow`]. The elaborator consults this to decide whether a bare leaf names a
+    /// co-declared type: only the *nearest* window is considered, so a reference to an outer
+    /// module's member falls through to ordinary resolution (that member's sealed handle), not a
+    /// back-edge into the inner window. The walk passes through window-less kinds, window-less
+    /// modules included.
+    ///
+    /// The scope comes back beside the window because it is where the group's declaration
+    /// placeholders live — what a consumer parked on the group waits for.
+    pub fn nearest_declaration_window(&self) -> Option<(&Scope<'a>, &AnnouncedWindow<'a>)> {
         self.ancestors().find_map(|s| match &s.kind {
-            ScopeKind::RecursiveBlock { window } => Some(Rc::clone(window)),
+            ScopeKind::Module {
+                window: Some(window),
+                ..
+            } => Some((s, window)),
             ScopeKind::Root
             | ScopeKind::Anonymous
             | ScopeKind::Sig { .. }
-            | ScopeKind::Module { .. } => None,
+            | ScopeKind::Module { window: None, .. } => None,
         })
+    }
+
+    /// This scope's **own** [`AnnouncedWindow`], with no walk — what a declarator consults to
+    /// decide whether it is filling an announced slot. Self-only is deliberate: a same-named
+    /// declaration nested deeper in the body opens its own singleton instead of hijacking the
+    /// announced slot.
+    pub fn own_declaration_window(&self) -> Option<&AnnouncedWindow<'a>> {
+        match &self.kind {
+            ScopeKind::Module { window, .. } => window.as_ref(),
+            _ => None,
+        }
     }
 
     /// Transparent `USING … SCOPE` window scope. `outer` is the call site (the lexical
@@ -443,10 +458,15 @@ impl<'a> Scope<'a> {
     }
 
     /// Allocate a same-region child stamped as a MODULE body (also the per-ascription view `:|`
-    /// mints).
-    pub fn alloc_child_under_module(&'a self, name: String) -> &'a Scope<'a> {
+    /// mints, which announces nothing). `announced` is the body's type-declaration pre-scan, owned
+    /// plain data the door bumps into the child's own region.
+    pub fn alloc_child_under_module(
+        &'a self,
+        name: String,
+        announced: Option<AnnouncedData>,
+    ) -> &'a Scope<'a> {
         Self::alloc_child(self, move |outer_b| {
-            Scope::child_under_module(outer_b, name)
+            Scope::child_under_module(outer_b, name, announced.as_ref())
         })
     }
 
@@ -457,23 +477,15 @@ impl<'a> Scope<'a> {
         &'a self,
         name: String,
         group: &'a OperatorGroup<'a>,
+        announced: Option<AnnouncedData>,
     ) -> &'a Scope<'a> {
         Self::alloc_child_with(
             self,
             SealedExtern::<OperatorGroupFamily>::erase(group),
-            move |outer_b, group_b| Scope::child_under_group(outer_b, name, group_b),
+            move |outer_b, group_b| {
+                Scope::child_under_group(outer_b, name, group_b, announced.as_ref())
+            },
         )
-    }
-
-    /// Allocate a `RECURSIVE TYPES` block body carrying the open [`RecursiveGroupWindow`]. The window
-    /// is heap-owned and lifetime-free, so it captures into the closure rather than crossing it.
-    pub fn alloc_child_recursive_group(
-        &'a self,
-        window: Rc<RecursiveGroupWindow>,
-    ) -> &'a Scope<'a> {
-        Self::alloc_child(self, move |outer_b| {
-            Scope::child_recursive_group(outer_b, window)
-        })
     }
 
     /// Allocate a transparent `USING … SCOPE` child whose bindings are a read-only window onto
@@ -533,15 +545,15 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// The nearest **opaque** scope — `self` or the first `Sig` / `Module` ancestor; `Root`,
-    /// `Anonymous` and `RecursiveBlock` frames are transparent. The single home of the opacity
+    /// The nearest **opaque** scope — `self` or the first `Sig` / `Module` ancestor; `Root` and
+    /// `Anonymous` frames are transparent. The single home of the opacity
     /// classification: the SIG-body gate, the group-context read and the VAL-slot door
     /// ([`Self::write_sig_slot`]) all pivot on which opaque kind this finds, each reading the
     /// result's `kind` rather than re-walking.
     pub(crate) fn nearest_opaque(&self) -> Option<&Scope<'a>> {
         self.ancestors().find(|s| match &s.kind {
             ScopeKind::Sig { .. } | ScopeKind::Module { .. } => true,
-            ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::RecursiveBlock { .. } => false,
+            ScopeKind::Root | ScopeKind::Anonymous => false,
         })
     }
 
@@ -579,10 +591,7 @@ impl<'a> Scope<'a> {
                 .iter()
                 .map(|(name, kt)| (name.clone(), *kt))
                 .collect(),
-            ScopeKind::Root
-            | ScopeKind::Anonymous
-            | ScopeKind::Module { .. }
-            | ScopeKind::RecursiveBlock { .. } => Vec::new(),
+            ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Module { .. } => Vec::new(),
         }
     }
 

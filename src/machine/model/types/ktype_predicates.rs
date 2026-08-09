@@ -417,9 +417,6 @@ impl KType {
             // A sibling reference is meaningful only inside its pre-seal window and never
             // reaches a real argument slot.
             TypeNode::Sibling(_) => false,
-            // A whole-group handle names a group of types, not a value type — it admits no
-            // argument.
-            TypeNode::Group { .. } => false,
             // Confined to a synthesized FN `ret` slot — never a free-standing argument slot.
             TypeNode::DeferredReturn(_) => false,
             // Two carriers satisfy a `ConstructorApply` slot: a first-class meta-type value with
@@ -523,9 +520,6 @@ impl KType {
             // A sibling reference is meaningful only inside its pre-seal window and never
             // reaches a real argument slot.
             TypeNode::Sibling(_) => false,
-            // A whole-group handle names a group of types, not a value type — it admits no
-            // argument; the `RECURSIVE TYPES` group name is a reserved value-language seam.
-            TypeNode::Group { .. } => false,
             // Confined to a synthesized FN `ret` slot — never a free-standing argument slot.
             TypeNode::DeferredReturn(_) => false,
         }

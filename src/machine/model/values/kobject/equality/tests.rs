@@ -239,13 +239,10 @@ fn record_field_value_differs() {
 /// Two singleton newtype members declared together, so distinct handles exist for the
 /// identity check. Returns the `None`-over-`Null` and `Some`-over-`Number` member handles.
 fn two_member(types: &TypeRegistry) -> Vec<KType> {
-    let window = RecursiveGroupWindow::new(
-        vec![
-            ("None".into(), KKind::NewType),
-            ("Some".into(), KKind::NewType),
-        ],
-        None,
-    );
+    let window = RecursiveGroupWindow::new(vec![
+        ("None".into(), KKind::NewType),
+        ("Some".into(), KKind::NewType),
+    ]);
     window.fill_member(0, RelativeSchema::NewType(KType::NULL), types);
     window
         .fill_member(1, RelativeSchema::NewType(KType::NUMBER), types)

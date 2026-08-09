@@ -1,28 +1,32 @@
 use crate::machine::model::KKind;
 use crate::machine::WriteGate;
-use std::rc::Rc;
 
-use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
+use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{pair_list_names, FieldNameKind, RecursiveGroupWindow, RelativeSchema};
+use crate::machine::model::{pair_list_names, seal_writes, FieldNameKind};
+use crate::machine::model::{DeclWindow, RecursiveGroupWindow};
 use crate::machine::FinishCtx;
 use crate::machine::{seal_type_identity, StepCarried};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 
-/// Fill the elaborated variant schema into the declaration window and bind the union name to the
-/// anonymous union of its sealed members. One member per variant (name = tag, [`KKind::NewType`],
-/// schema [`RelativeSchema::NewType`]) in declaration order; the binder's own name already
-/// elaborated to the union of all members (ruling F2) and variant-sibling references to relative
-/// sibling handles, both through the window. `bindings.types[name]` binds the union of the sealed
-/// member handles — type-only, no value-side carrier.
+/// Fill the elaborated variant payloads into the declaration window's owned members and bind the
+/// union name to the anonymous union of the sealed variants. Every variant is one member of the
+/// window (name = tag, [`KKind::NewType`], owner = this binder); the binder's own name already
+/// elaborated to the union of the members it owns, and variant-sibling references to relative
+/// sibling handles, both through the window.
+///
+/// The binder is not itself a member, so this drives the fills directly rather than through
+/// `finalize_nominal_member`. A declaration whose window is announced by the enclosing module body
+/// may still be `Deferred` here: the group seals at its last member's fill, which may be another
+/// statement's, and that statement carries the writes.
 fn finalize_union<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: String,
-    window: Rc<RecursiveGroupWindow>,
+    window: &DeclWindow<'a>,
     fields: Vec<(String, KType)>,
     site: DeclarationSite,
 ) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
@@ -32,10 +36,11 @@ fn finalize_union<'a>(
         )));
     }
     let scope = fctx.scope;
+    let brand = scope.brand();
 
-    let mut sealed = None;
+    let mut sealed = false;
     for (tag, payload) in fields {
-        let index = match window.index_of(&tag) {
+        let index = match window.view().variant_index(&name, &tag) {
             Some(index) => index,
             None => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
@@ -43,34 +48,32 @@ fn finalize_union<'a>(
                 ))))
             }
         };
-        sealed = window.fill_member(index, RelativeSchema::NewType(payload), fctx.types);
+        sealed = window.fill(index, payload, brand, fctx.types);
     }
-    // A window still open here holds a member the pre-scan announced or a reference announced —
-    // either way a variant no declaration filled.
-    let sealed = match sealed {
-        Some(sealed) => sealed,
+    let view = window.view();
+    if !sealed {
+        // The announced group this union belongs to still holds unfilled members, so no member has
+        // an identity yet: the fill that closes the group installs every name at once, and this
+        // per-statement result is discarded. A benign `Null` stands in without fabricating a handle.
+        return Ok((
+            fctx.ctx
+                .alloc_object_scalar(&crate::machine::model::KObject::Null)
+                .expect("Null is a shallow scalar carrier"),
+            Vec::new(),
+        ));
+    }
+    let union_ty = match view.sealed_binder(&name) {
+        Some(kt) => kt,
         None => {
-            let missing = window.unfilled_member_names().join("`, `");
             return Err(KError::new(KErrorKind::ShapeError(format!(
-                "UNION `{name}` schema references unsealed type `{missing}`",
-            ))));
+                "UNION `{name}` did not seal",
+            ))))
         }
     };
-
-    let union_ty = fctx.types.union_of(sealed.members);
     // The union type is a `Copy` handle: cross it as a declared operand and fold the variant
     // carriers' reach onto the placement's witness, rather than capturing it into a fold closure.
-    // The `types` write installing it under the binder name rides the outcome.
-    Ok((
-        seal_type_identity(scope, union_ty),
-        vec![WriteOp::Type {
-            name,
-            kt: union_ty,
-            site,
-            policy: TypeWritePolicy::UpsertEqual,
-            builtin_shadow_guard: true,
-        }],
-    ))
+    // The `types` writes installing every name the seal settles ride the outcome.
+    Ok((seal_type_identity(scope, union_ty), seal_writes(view, site)))
 }
 
 /// Elaborate the variant schema, folding synchronously via [`finalize_union`] or deferring through
@@ -97,10 +100,23 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         Ok(tags) => tags,
         Err(message) => return Action::done(Err(KError::new(KErrorKind::ShapeError(message)))),
     };
-    let window = RecursiveGroupWindow::new(
-        tags.into_iter().map(|tag| (tag, KKind::NewType)).collect(),
-        Some(name.clone()),
-    );
+    // The window this union's variants fill: the enclosing module body's, when it announced this
+    // binder, else one this declaration owns — the one-binder special case of the same machinery.
+    let window = match ctx.scope.own_declaration_window() {
+        Some(ambient) if ambient.binds(&name) => {
+            // The scan read the same statement, so a disagreement is a scan/dispatch wiring bug.
+            if tags
+                .iter()
+                .any(|tag| ambient.variant_index(&name, tag).is_none())
+            {
+                return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "UNION `{name}`: its announced variants differ from its declared ones",
+                )))));
+            }
+            DeclWindow::Ambient(ambient)
+        }
+        _ => DeclWindow::Owned(RecursiveGroupWindow::for_binder(name.clone(), tags)),
+    };
     let error_frame = TraceFrame::bare("<union>", format!("UNION {name} schema"));
     nominal_schema_action(
         ctx,
@@ -307,13 +323,10 @@ mod tests {
         // Each declarator dispatch mints its own window (the union name is the binder, its variants
         // the members), exactly as the `nominal_schema_action` entry point does.
         let make_window = || {
-            RecursiveGroupWindow::new(
-                vec![
-                    ("Some".to_string(), KKind::NewType),
-                    ("None".to_string(), KKind::NewType),
-                ],
-                Some("Maybe".to_string()),
-            )
+            crate::machine::model::DeclWindow::Owned(RecursiveGroupWindow::for_binder(
+                "Maybe".to_string(),
+                vec!["Some".to_string(), "None".to_string()],
+            ))
         };
         // One declaration's identity: both finalize calls simulate a parallel finalize of the
         // same statement, so they share one site.
@@ -322,7 +335,7 @@ mod tests {
         // sealed. The finalize writes nothing itself — the ops it hands back are what install the
         // identity, exactly as the run loop applies them after the declaring step returns.
         let (_, writes) =
-            super::finalize_union(&fctx, "Maybe".into(), make_window(), fields(), site)
+            super::finalize_union(&fctx, "Maybe".into(), &make_window(), fields(), site)
                 .expect("the first finalize seals");
         assert!(scope.bindings().types().get("Maybe").is_none());
         for write in writes {
@@ -340,7 +353,7 @@ mod tests {
         );
         // Second finalize: the sealed window refills to the same handles and the upsert sees the
         // same installing handle, so it overwrites idempotently and returns the bound union type.
-        let second = super::finalize_union(&fctx, "Maybe".into(), make_window(), fields(), site);
+        let second = super::finalize_union(&fctx, "Maybe".into(), &make_window(), fields(), site);
         let is_union = second.map(|(carrier, writes)| {
             for write in writes {
                 write

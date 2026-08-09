@@ -110,13 +110,27 @@ pub(crate) fn dispatch_type_then<'a>(
     slot: &'static str,
     on_resolved: impl for<'r> FnOnce(&FinishCtx<'a, 'r>, KType) -> Action<'a> + 'a,
 ) -> Action<'a> {
+    dispatch_working_type_then(
+        crate::machine::model::WorkingExpression::from_ast(brand, expr),
+        slot,
+        on_resolved,
+    )
+}
+
+/// [`dispatch_type_then`] over a node already in working form — what a declarator hands it once its
+/// co-declared references are threaded in as resolved cells.
+pub(crate) fn dispatch_working_type_then<'a>(
+    expr: crate::machine::model::WorkingExpression<'a>,
+    slot: &'static str,
+    on_resolved: impl for<'r> FnOnce(&FinishCtx<'a, 'r>, KType) -> Action<'a> + 'a,
+) -> Action<'a> {
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let kt = crate::try_action!(expect_type_terminal(&results, 0, slot, fctx.types));
         on_resolved(fctx, kt)
     });
     Action::await_deps(
         Deps::from_owned([OwnedDispatch {
-            expr: crate::machine::model::WorkingExpression::from_ast(brand, expr),
+            expr,
             placement: DepPlacement::OwnScope,
         }]),
         finish,

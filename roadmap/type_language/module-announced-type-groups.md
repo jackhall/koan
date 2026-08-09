@@ -5,7 +5,7 @@ declarations, so any module hosts mutually-recursive nominals.
 
 **Problem.** Mutually-recursive nominal types require the dedicated
 `RECURSIVE TYPES <Name> = (body)` block
-([`recursive_types.rs`](../../src/builtins/recursive_types.rs)): its shallow pre-scan
+([`module_def.rs`](../../src/builtins/module_def.rs)): its shallow pre-scan
 (`discover_members`) announces member names before their declarations elaborate, which
 is what lets cyclic sibling references resolve instead of mutually parking. The block
 duplicates module-shaped machinery for that one feature — module bodies already admit

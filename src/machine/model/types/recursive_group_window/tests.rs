@@ -27,7 +27,6 @@ fn seal(types: &TypeRegistry, members: Vec<(&str, RelativeSchema)>) -> Vec<KType
             .iter()
             .map(|(name, schema)| (name.to_string(), schema.kind()))
             .collect(),
-        None,
     );
     let count = members.len();
     let mut sealed = None;
@@ -291,7 +290,7 @@ fn type_constructor_schema_binds_siblings() {
 #[test]
 fn sibling_announces_an_unseen_name() {
     let types = TypeRegistry::new();
-    let window = RecursiveGroupWindow::new(vec![("Leaf".into(), KKind::NewType)], None);
+    let window = RecursiveGroupWindow::new(vec![("Leaf".into(), KKind::NewType)]);
     assert_eq!(
         window.sibling("Leaf", KKind::NewType, &types),
         sibling(&types, 0)
@@ -302,26 +301,82 @@ fn sibling_announces_an_unseen_name() {
     );
     assert_eq!(window.len(), 2);
     assert_eq!(window.unfilled_member_names(), vec!["Leaf", "Node"]);
-    assert!(window.holds("Node"));
-    assert!(!window.holds("Absent"));
+    assert!(window.member_index("Node").is_some());
+    assert!(window.member_index("Absent").is_none());
 }
 
-/// The binder name of a `UNION` denotes the union of every announced variant, not any one of them.
+/// The binder name of a `UNION` denotes the union of exactly the variants it owns, not any one of
+/// them — and an owned variant answers no bare-name lookup, only the qualified one scoped by its
+/// binder.
 #[test]
-fn binder_union_covers_every_member() {
+fn binder_union_covers_every_owned_member() {
     let types = TypeRegistry::new();
-    let window = RecursiveGroupWindow::new(
-        vec![
-            ("Some".into(), KKind::NewType),
-            ("None".into(), KKind::NewType),
-        ],
-        Some("Maybe".into()),
-    );
-    assert_eq!(window.binder().as_deref(), Some("Maybe"));
+    let window =
+        RecursiveGroupWindow::for_binder("Maybe".into(), vec!["Some".into(), "None".into()]);
+    assert!(window.binds("Maybe"));
     assert_eq!(
-        window.binder_union(&types),
-        types.union_of(vec![sibling(&types, 0), sibling(&types, 1)]),
+        window.binder_union("Maybe", &types),
+        Some(types.union_of(vec![sibling(&types, 0), sibling(&types, 1)])),
     );
+    assert_eq!(window.variant_index("Maybe", "None"), Some(1));
+    assert_eq!(
+        window.member_index("Some"),
+        None,
+        "a variant is owned by its binder, so it answers no bare-name lookup",
+    );
+}
+
+/// The canonical component order sorts on the bare tag with the owning binder as tiebreak, and the
+/// owner never enters the digest — so two same-tag variants under different binders take stable
+/// distinct positions in one component, and a module-hosted variant digests like its standalone
+/// twin.
+#[test]
+fn same_tag_under_two_binders_seals_to_distinct_members() {
+    use super::{seal_group, SealBinderInput, SealMemberInput};
+    let types = TypeRegistry::new();
+    let members = vec![
+        SealMemberInput {
+            name: "Node",
+            owner: Some("Graph"),
+            kind: KKind::NewType,
+            schema: newtype(KType::NUMBER),
+        },
+        SealMemberInput {
+            name: "Node",
+            owner: Some("Tree"),
+            kind: KKind::NewType,
+            schema: newtype(KType::STR),
+        },
+    ];
+    let binders = vec![
+        SealBinderInput {
+            name: "Graph",
+            members: &[0],
+        },
+        SealBinderInput {
+            name: "Tree",
+            members: &[1],
+        },
+    ];
+    let sealed = seal_group(&members, &binders, None, &types);
+    assert_ne!(
+        sealed.members[0], sealed.members[1],
+        "differing payloads digest apart",
+    );
+    assert_eq!(sealed.binder_types.len(), 2);
+    assert_eq!(
+        sealed.binder_type("Graph"),
+        Some(types.union_of(vec![sealed.members[0]])),
+    );
+    // The owner orders but does not digest: `Graph Node` over Number is byte-identical to a
+    // standalone `Node` over Number.
+    let standalone = super::RecursiveGroupWindow::seal_singleton(
+        "Node".into(),
+        newtype(KType::NUMBER),
+        None,
+        &types,
+    );
+    assert_eq!(sealed.members[0], standalone);
 }
 
 /// Tarjan emits a component only after every component it references, which is the order the seal
