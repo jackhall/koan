@@ -25,12 +25,26 @@ use signature::ParamListOutcome;
 pub(crate) fn build_fn_like<'a>(
     ctx: &crate::machine::BodyCtx<'a, '_>,
     builtin: &str,
-    kind: FnKind,
+    kind: FnKind<'a>,
 ) -> crate::machine::Action<'a> {
     use crate::machine::{require_kexpression, Action};
     use finalize::defer;
     use return_type::extract_return_type_raw;
 
+    // The combined form binds a value name, and a SIG body declares members with `VAL` rather than
+    // binding them. Guarded here, ahead of any deferral, so the synchronous and dep-finish paths
+    // are covered once. A bare `FN` names no value binding, so it is unaffected.
+    if let FnKind::Function {
+        bound_name: Some(name),
+    } = kind
+    {
+        if ctx.scope.is_in_sig_body() {
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "inside a SIG body, value slots must use VAL — write `(VAL {name}: <Type>)` \
+                 instead of binding a function",
+            )))));
+        }
+    }
     let signature_expr = crate::try_action!(require_kexpression(ctx.args, builtin, "signature"));
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, builtin, "body"));
@@ -91,7 +105,59 @@ pub(crate) fn build_fn_like<'a>(
 /// a fixed token. The keyword-less `FN :{…}` record-schema form is
 /// [`body_record_schema`].
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
-    build_fn_like(ctx, "FN", FnKind::Function)
+    build_fn_like(ctx, "FN", FnKind::Function { bound_name: None })
+}
+
+/// The `name` slot of a combined `LET <name> = …` statement, as a borrow at the declaring node's
+/// lifetime — an `Identifier` name part arrives as a `KObject::KString` cell, exactly as plain
+/// `LET` reads it. The slot is typed `IDENTIFIER`, so any other shape reaches a sibling overload
+/// rather than this read.
+pub(super) fn combined_bound_name<'a>(
+    args: &crate::machine::model::Record<crate::machine::model::Held<'a>>,
+) -> Result<&'a str, KError> {
+    use crate::machine::model::KObject;
+    match crate::machine::arg_object(args, "name") {
+        Some(KObject::KString(s)) => Ok(s),
+        Some(_) => Err(KError::new(KErrorKind::ShapeError(
+            "LET name must be a bare identifier".to_string(),
+        ))),
+        None => Err(KError::new(KErrorKind::MissingArg("name".to_string()))),
+    }
+}
+
+/// `LET <name> = FN <signature> -> <return> = (<body>)` — one statement whose single binder
+/// installs both channels: the value name and the signature's dispatch bucket. The bound value and
+/// the registered overload are the same `KFunction` (see [`finalize_fn_with_kind`]).
+pub fn body_let_combined<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    let name = crate::try_action!(combined_bound_name(ctx.args));
+    build_fn_like(
+        ctx,
+        "FN",
+        FnKind::Function {
+            bound_name: Some(name),
+        },
+    )
+}
+
+/// `LET <Name> = FN …` — a Type-classified binder over a function. A function is a value, so it
+/// binds under a value-classified identifier; without this overload the shape is a bare dispatch
+/// miss that says nothing about the actual mistake.
+pub fn body_let_combined_type_named<'a>(
+    ctx: &crate::machine::BodyCtx<'a, '_>,
+) -> crate::machine::Action<'a> {
+    use crate::machine::{arg_type, arg_unresolved_type, Action};
+    let name = match arg_unresolved_type(ctx.args, "name") {
+        Some(te) => te.render(),
+        None => match arg_type(ctx.args, "name") {
+            Some(kt) => kt.name(ctx.types),
+            None => return Action::done(Err(KError::new(KErrorKind::MissingArg("name".into())))),
+        },
+    };
+    Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+        "LET binder `{name}` is Type-classified but the bound value is a function (a value); \
+         rebind under a value-classified identifier instead (snake_case, e.g. `{suggestion}`)",
+        suggestion = crate::builtins::let_binding::snake_case_identifier(&name),
+    )))))
 }
 
 /// `-> <identifier>` — a return slot naming a value. Always errors: the slot names a type, and the
@@ -279,6 +345,27 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         )
     };
+    // The combined statement form: `LET <name> = FN <signature> -> <Return> = (<body>)`. One
+    // statement, one binder, both install channels — the value name and the signature's dispatch
+    // bucket. Full-bucket-key matching keeps `[LET, Slot, =, FN, Slot, ->, Slot, =, Slot]` disjoint
+    // from plain `LET` and bare `FN`, so no overload of either is shadowed. The return-carrier and
+    // value-named-return splits mirror the bare form's, one twin each.
+    let combined_sig = |name: KType, signature: KType, return_type: KType| {
+        sig(
+            KType::ANY,
+            vec![
+                kw("LET"),
+                arg("name", name),
+                kw("="),
+                kw("FN"),
+                arg("signature", signature),
+                kw("->"),
+                arg("return_type", return_type),
+                kw("="),
+                arg("body", KType::KEXPRESSION),
+            ],
+        )
+    };
     use crate::builtins::register_builtin_full;
     register_builtin_full(scope, "FN", typeexpr_sig(), body, true, types, gate);
     register_builtin_full(scope, "FN", sigil_sig(), body, true, types, gate);
@@ -296,6 +383,48 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         "FN",
         record_sig(),
         body_record_schema,
+        false,
+        types,
+        gate,
+    );
+    for return_type in [KType::of_kind(KKind::ProperType), KType::SIGILED_TYPE_EXPR] {
+        register_builtin_full(
+            scope,
+            "LET",
+            combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, return_type),
+            body_let_combined,
+            true,
+            types,
+            gate,
+        );
+    }
+    register_builtin_full(
+        scope,
+        "LET",
+        combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, KType::IDENTIFIER),
+        body_value_named_return,
+        true,
+        types,
+        gate,
+    );
+    // A diagnostic overload (`binder: false` — it installs nothing, so no spec-table entry): a
+    // function is a value, and this names the shape that binds one under a Type-classified name.
+    //
+    // There is deliberately no combined overload for the anonymous `FN :{…}` signature. Its
+    // `ProperType` signature slot would make the bucket's pick undecidable until that operand
+    // sub-dispatched, and the re-resolve after an eager-subs round re-reads the statement's own
+    // `name` token — which by then names this very node's placeholder, a self-cycle. The anonymous
+    // form is not a binder anyway, so its flat spelling reports a plain dispatch miss and the
+    // parenthesized value bind `LET f = (FN :{…} -> <Return> = (…))` stays the spelling.
+    register_builtin_full(
+        scope,
+        "LET",
+        combined_sig(
+            KType::of_kind(KKind::ProperType),
+            KType::KEXPRESSION,
+            KType::of_kind(KKind::ProperType),
+        ),
+        body_let_combined_type_named,
         false,
         types,
         gate,

@@ -574,10 +574,7 @@ impl<'a> Scope<'a> {
     /// Infallible, and check-free: the wrapping `KObject::KFunction` is built at the fold brand from
     /// the merge's own operand view, so an ambient-lifetime capture is a compile error at the
     /// closure's signature.
-    pub(crate) fn store_function_object(
-        &self,
-        function: &'a KFunction<'a>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
+    pub(crate) fn store_function_cell(&self, function: &'a KFunction<'a>) -> SealedValue {
         let source = self.seal_resident_delivered(
             self.resident::<KFunctionFamily>(function),
             FrameCoverage::empty(),
@@ -591,7 +588,6 @@ impl<'a> Scope<'a> {
                 },
             )
             .into_cell()
-            .unseal()
     }
 
     /// Seal a resident `Module` value into this scope — the Object-arm module bind

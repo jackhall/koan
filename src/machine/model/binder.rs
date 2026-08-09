@@ -197,8 +197,17 @@ fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> boo
     })
 }
 
+/// The signature slot of an `FN` declaration: the part right after the `FN` keyword. Read by
+/// position relative to that keyword rather than at a fixed index, so the bare form and the
+/// combined `LET <name> = FN …` statement share one extractor. A `RecordType` there is the
+/// anonymous form, which registers no bucket — `None`, and the statement installs nothing on this
+/// channel.
 fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>> {
-    match expr.parts.get(1)?.value {
+    let fn_index = expr
+        .parts
+        .iter()
+        .position(|part| matches!(part.value, ExpressionPart::Keyword("FN")))?;
+    match expr.parts.get(fn_index + 1)?.value {
         ExpressionPart::Expression(inner) => Some(inner.reference()),
         _ => None,
     }
@@ -253,12 +262,13 @@ pub(crate) fn symbol_from_parts<'a>(expr: &KExpression<'a>) -> Result<&'a str, K
     symbol_from_quote_body(quoted)
 }
 
-/// True iff the declaration leads with `UNARY`.
+/// True iff the declaration names `UNARY` — leading, for the bare form, or after the `LET <name> =`
+/// prefix of the combined one. `UNARY` is a reserved symbol ([`RESERVED_SYMBOLS`]), so no operator
+/// name can put the token anywhere else in the run.
 fn is_unary_form(expr: &KExpression<'_>) -> bool {
-    matches!(
-        expr.parts.first().map(|p| p.value),
-        Some(ExpressionPart::Keyword(k)) if k == "UNARY",
-    )
+    expr.parts
+        .iter()
+        .any(|part| matches!(part.value, ExpressionPart::Keyword("UNARY")))
 }
 
 /// Park keys: every bucket this declaration's body registers an overload under, so a later sibling
@@ -536,6 +546,87 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[],
         bucket: Some(op_def_binder_bucket),
         chain_slot_mask: &[false, false, false, false, true, false, true, false, false],
+    },
+    // The combined statement forms: one binder filling both channels — the LET value name and the
+    // bucket key(s) the declaration's body registers under. `LET <name> = UNARY OP …` is the
+    // two-bucket maximum.
+    //
+    // LET <name> = FN <signature> -> <return_type> = <body>.
+    BinderSpec {
+        key: &[
+            Kw("LET"),
+            Slot,
+            Kw("="),
+            Kw("FN"),
+            Slot,
+            Kw("->"),
+            Slot,
+            Kw("="),
+            Slot,
+        ],
+        names: &[(identifier_part_binder_name, BindKind::Value)],
+        bucket: Some(fn_def_binder_bucket),
+        chain_slot_mask: &[false, true, false, false, false, false, true, false, false],
+    },
+    // LET <name> = OP <symbol> OVER <operand> = <body>.
+    BinderSpec {
+        key: &[
+            Kw("LET"),
+            Slot,
+            Kw("="),
+            Kw("OP"),
+            Slot,
+            Kw("OVER"),
+            Slot,
+            Kw("="),
+            Slot,
+        ],
+        names: &[(identifier_part_binder_name, BindKind::Value)],
+        bucket: Some(op_def_binder_bucket),
+        chain_slot_mask: &[false, true, false, false, false, false, true, false, false],
+    },
+    // LET <name> = OP <symbol> OVER <operand> -> <return_type> = <body>.
+    BinderSpec {
+        key: &[
+            Kw("LET"),
+            Slot,
+            Kw("="),
+            Kw("OP"),
+            Slot,
+            Kw("OVER"),
+            Slot,
+            Kw("->"),
+            Slot,
+            Kw("="),
+            Slot,
+        ],
+        names: &[(identifier_part_binder_name, BindKind::Value)],
+        bucket: Some(op_def_binder_bucket),
+        chain_slot_mask: &[
+            false, true, false, false, false, false, true, false, true, false, false,
+        ],
+    },
+    // LET <name> = UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
+    BinderSpec {
+        key: &[
+            Kw("LET"),
+            Slot,
+            Kw("="),
+            Kw("UNARY"),
+            Kw("OP"),
+            Slot,
+            Kw("OVER"),
+            Slot,
+            Kw("->"),
+            Slot,
+            Kw("="),
+            Slot,
+        ],
+        names: &[(identifier_part_binder_name, BindKind::Value)],
+        bucket: Some(op_def_binder_bucket),
+        chain_slot_mask: &[
+            false, true, false, false, false, false, false, true, false, true, false, false,
+        ],
     },
     // VAL <name> <ty> — a declaration form with no install channel and no chain slots. It records
     // into the decl scope's slot collector, not a binding map any name lookup can see, so it

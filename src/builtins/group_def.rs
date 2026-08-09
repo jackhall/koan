@@ -107,29 +107,29 @@ fn reduction_mode<'a>(
     })
 }
 
-/// The group's members: the symbol of every top-level `OP` statement of the unevaluated body block,
-/// deduped in declaration order. Any other statement (a `LET`, an `FN`, the combiner's own `OP`) is
-/// ordinary body content — the scan is structural and reads no value.
+/// The group's members: the symbol of every top-level operator declaration in the unevaluated body
+/// block, deduped in declaration order. Both spellings count — the bare `OP #(…) …` statement and
+/// the combined `LET <name> = OP #(…) …` one, which declares the same operator and additionally
+/// binds it. Any other statement (a plain `LET`, an `FN`) is ordinary body content — the scan is
+/// structural and reads no value.
 ///
 /// A `UNARY OP` is refused here rather than at the member's own dispatch: a unary operator takes the
 /// whole run as one list, so it chains with nothing and can be no group's member.
 fn scan_members(body: &KExpression<'_>, name: &str) -> Result<Vec<String>, KError> {
     let mut members: Vec<String> = Vec::new();
     for statement in body_statement_refs(body) {
-        match (lead_keyword(statement, 0), lead_keyword(statement, 1)) {
-            (Some("UNARY"), Some("OP")) => {
-                return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "`GROUP {name}` declares a `UNARY OP`: a unary operator takes the whole run as \
-                     one list, so it chains with nothing and cannot be a group member",
-                ))))
-            }
-            (Some("OP"), _) => {
-                let symbol = symbol_from_parts(statement)?;
-                if !members.iter().any(|m| m == symbol) {
-                    members.push(symbol.to_string());
-                }
-            }
-            _ => {}
+        let Some(op_index) = declarator_index(statement) else {
+            continue;
+        };
+        if op_index > 0 && lead_keyword(statement, op_index - 1) == Some("UNARY") {
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "`GROUP {name}` declares a `UNARY OP`: a unary operator takes the whole run as \
+                 one list, so it chains with nothing and cannot be a group member",
+            ))));
+        }
+        let symbol = symbol_from_parts(statement)?;
+        if !members.iter().any(|m| m == symbol) {
+            members.push(symbol.to_string());
         }
     }
     if members.is_empty() {
@@ -140,8 +140,18 @@ fn scan_members(body: &KExpression<'_>, name: &str) -> Result<Vec<String>, KErro
     Ok(members)
 }
 
+/// The part index of a statement's `OP` declarator keyword, if it is an operator declaration. Read
+/// by search rather than at index 0, so the bare surface (`OP` leading) and the combined one
+/// (`LET <name> = OP …`) are both seen. `OP` is a reserved symbol, so a top-level `OP` keyword can
+/// only be the declarator.
+fn declarator_index(expr: &KExpression<'_>) -> Option<usize> {
+    expr.parts
+        .iter()
+        .position(|part| matches!(part.value, ExpressionPart::Keyword("OP")))
+}
+
 /// The keyword at part `index` of `expr`, if that part is one — the structural read the member scan
-/// leads with.
+/// leans on.
 fn lead_keyword<'x>(expr: &'x KExpression<'_>, index: usize) -> Option<&'x str> {
     match expr.parts.get(index)?.value {
         ExpressionPart::Keyword(k) => Some(k),

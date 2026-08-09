@@ -30,12 +30,17 @@ use crate::machine::OverloadSeal;
 
 /// How a finalized FN-def is wired into the scope:
 ///
-/// - `Function` — a keyworded FN registers under its lead keyword.
+/// - `Function` — a keyworded FN registers under its lead keyword. `bound_name` is `Some` for the
+///   combined `LET <name> = FN …` statement, which additionally binds the callable under that
+///   value name; the two writes describe one `KFunction` at one `BindingIndex`.
 /// - `Anonymous` — a record-schema binder (`FN :{…}`) has no keyword, so it
 ///   registers nothing; the value it evaluates to is its only handle.
+///
+/// `bound_name` borrows the `name` slot's `KString` off the args record, so the kind carries the
+/// declaring node's lifetime and stays `Copy`.
 #[derive(Clone, Copy)]
-pub(crate) enum FnKind {
-    Function,
+pub(crate) enum FnKind<'a> {
+    Function { bound_name: Option<&'a str> },
     Anonymous,
 }
 
@@ -216,14 +221,15 @@ fn check_value_type_kinds(
 }
 
 /// Build the `KFunction` and, for a keyworded `Function`, register it under its lead
-/// keyword. `Anonymous` skips registration entirely — the value it returns is the
+/// keyword — plus, for the combined form, bind it under the statement's value name.
+/// `Anonymous` skips registration entirely — the value it returns is the
 /// function's only handle.
 pub(crate) fn finalize_fn_with_kind<'a>(
     scope: &'a Scope<'a>,
     elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
-    kind: FnKind,
+    kind: FnKind<'a>,
     bind_index: BindingIndex,
     types: &TypeRegistry,
 ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError> {
@@ -247,35 +253,51 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         KFunction::alloc_captured(scope, draft, Body::UserDefined(body_expr), false, types);
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just allocated
-    // into `scope`'s own region above, which is what `store_function_object`'s merge names as the
+    // into `scope`'s own region above, which is what `store_function_cell`'s merge names as the
     // wrapper's reach — the callable's captured `&Scope` borrows into exactly that region.
     // A keyworded FN's overload registration rides the step outcome: the seal is built here, where
     // the callable is open under its home pin, and the bucket write lands at the run loop's apply.
     let mut writes: Vec<WriteOp> = Vec::new();
-    if !matches!(kind, FnKind::Anonymous) {
-        let name = match name {
-            Some(n) => n,
-            None => {
-                return Err(KError::new(KErrorKind::ShapeError(
-                    "FN signature must contain at least one Keyword (a fixed token to dispatch on)"
-                        .to_string(),
-                )));
-            }
-        };
-        writes.push(WriteOp::Overload {
-            name,
-            index: bind_index,
-            seal: OverloadSeal::of_resident(scope, f),
-            builtin_shadow_guard: true,
-        });
-    }
+    let bound_name = match kind {
+        FnKind::Anonymous => None,
+        FnKind::Function { bound_name } => {
+            let name = match name {
+                Some(n) => n,
+                None => {
+                    return Err(KError::new(KErrorKind::ShapeError(
+                        "FN signature must contain at least one Keyword (a fixed token to dispatch on)"
+                            .to_string(),
+                    )));
+                }
+            };
+            writes.push(WriteOp::Overload {
+                name,
+                index: bind_index,
+                seal: OverloadSeal::of_resident(scope, f),
+                builtin_shadow_guard: true,
+            });
+            bound_name
+        }
+    };
     // The FN value is co-located in its defining scope's region (owned signature / body, a `&Scope`
     // capture), and the captured scope — region-resident under that frame — transitively keeps every
     // foreign region its bindings reach alive through the scope's sealed reach-set. So a fresh FN
     // reaches nothing foreign (its captured scope is home or a home-pinned ancestor): its terminal
     // carrier is built with the empty foreign reach `stored` derived, witnessed by that scope's home
-    // frame alone. `LET f = (FN ...)` still captures the callable via this carrier.
-    Ok((scope.store_function_object(f), writes))
+    // frame alone.
+    let cell = scope.store_function_cell(f);
+    // The combined form's value write duplicates the very cell the terminal carries, at the same
+    // `BindingIndex` the overload write and the submission-time placeholder both stamp — so the
+    // bound name and the registered overload are the one `KFunction` allocated above, not two
+    // builds of the same source.
+    if let Some(bound_name) = bound_name {
+        writes.push(WriteOp::Value {
+            name: bound_name.to_string(),
+            index: bind_index,
+            sealed: cell.duplicate(),
+        });
+    }
+    Ok((cell.unseal(), writes))
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed
@@ -303,7 +325,7 @@ pub(crate) fn defer<'a>(
     signature_expr: KExpression<'a>,
     inputs: DeferredInputs<'a>,
     body_expr: KExpression<'a>,
-    kind: FnKind,
+    kind: FnKind<'a>,
     bind_index: BindingIndex,
 ) -> crate::machine::Action<'a> {
     use crate::machine::model::WorkingExpression;

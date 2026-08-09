@@ -27,6 +27,7 @@
 
 use crate::machine::WriteGate;
 
+use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::bindings::{powerset_probes, WriteOp};
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::CarriedFamily;
@@ -34,7 +35,7 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Held, KType, Record};
-use crate::machine::model::{KKind, SignatureDraft};
+use crate::machine::model::{KKind, SignatureDraft, SignatureElement};
 use crate::machine::BindingIndex;
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
@@ -186,7 +187,7 @@ fn resolve_capture<'a>(
 /// (and any explicit result) type, then synthesize and register the operator's `KFunction`(s). A
 /// type slot naming a still-finalizing type binder — or spelled as a `:(…)` expression that has to
 /// sub-dispatch — defers the whole build to a dep-finish.
-fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
+fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind, bound_name: Option<&'a str>) -> Action<'a> {
     let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", "symbol"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", "body"));
     let has_result = arg_held(ctx.args, "return_type").is_some();
@@ -236,6 +237,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
         in_group: group.is_some(),
         bind_index: ctx.bind_index(),
         program: ctx.program,
+        bound_name,
     };
     if parks.is_empty() && subs.is_empty() {
         let operand = crate::try_action!(done_type(operand_capture, OPERAND_SLOT, ctx.types));
@@ -326,6 +328,9 @@ struct OpPlan<'a> {
     /// The run's program storage capability, carried off the declaring step's [`BodyCtx`]: the
     /// bridge body is a **value-channel** node, so its marked operand arms are mintable only here.
     program: ProgramBrand<'a>,
+    /// `Some` for the combined `LET <name> = OP …` statement, which also binds the operator's
+    /// primary function under that value name — one declaration reaching both install channels.
+    bound_name: Option<&'a str>,
 }
 
 impl<'a> OpPlan<'a> {
@@ -347,13 +352,17 @@ impl<'a> OpPlan<'a> {
             in_group,
             bind_index,
             program,
+            bound_name,
         } = self;
         let mut writes: Vec<WriteOp> = Vec::new();
-        let carrier = match kind {
+        // The cell of the operator's *primary* function — the binary body for a binary operator,
+        // the list body for a unary one. It is the value the declaration evaluates to, and, for the
+        // combined form, the value the bound name reads.
+        let cell = match kind {
             OpKind::Binary => {
                 let elements = vec![arg(LEFT, operand), kw(sym), arg(RIGHT, operand)];
                 let result_type = result.unwrap_or(operand);
-                let (registered, overload) = register_body(
+                let (cell, overload) = register_body(
                     scope,
                     sym,
                     sig(result_type, elements),
@@ -371,7 +380,7 @@ impl<'a> OpPlan<'a> {
                         index: bind_index,
                     });
                 }
-                registered
+                cell
             }
             OpKind::Unary => {
                 let result_type = result.ok_or_else(|| {
@@ -394,7 +403,7 @@ impl<'a> OpPlan<'a> {
                 // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
                 // built, so `in_group` cannot hold here; the door asserts that rather than take
                 // it on trust, since it writes the single-member group unconditionally.
-                let (registered, unary_writes) = register_unary_operator(
+                let (cell, unary_writes) = register_unary_operator(
                     scope,
                     sym,
                     OperatorForm {
@@ -410,10 +419,19 @@ impl<'a> OpPlan<'a> {
                     types,
                 )?;
                 writes.extend(unary_writes);
-                registered
+                cell
             }
         };
-        Ok((carrier, writes))
+        // One `KFunction`, two writes at the same `BindingIndex` the submission-time placeholder
+        // stamps: the bound name and the registered overload are the same operator body.
+        if let Some(bound_name) = bound_name {
+            writes.push(WriteOp::Value {
+                name: bound_name.to_string(),
+                index: bind_index,
+                sealed: cell.duplicate(),
+            });
+        }
+        Ok((cell.unseal(), writes))
     }
 }
 
@@ -449,7 +467,7 @@ pub(super) fn register_unary_operator<'a>(
     in_group: bool,
     bind_index: BindingIndex,
     types: &TypeRegistry,
-) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError> {
+) -> Result<(SealedValue, Vec<WriteOp>), KError> {
     let OperatorForm {
         signature: list_signature,
         body: list_body,
@@ -477,7 +495,7 @@ pub(super) fn register_unary_operator<'a>(
     );
     // The list body first: its function is the operator's primary value, the one an `OP`
     // declaration evaluates to.
-    let (carrier, list_overload) =
+    let (cell, list_overload) =
         register_body(scope, sym, list_signature, list_body, bind_index, types)?;
     let (_, binary_overload) =
         register_body(scope, sym, binary_signature, binary_body, bind_index, types)?;
@@ -488,7 +506,7 @@ pub(super) fn register_unary_operator<'a>(
         seal: GroupSeal::of_resident(scope, record),
         index: bind_index,
     });
-    Ok((carrier, writes))
+    Ok((cell, writes))
 }
 
 /// Allocate one operator body as a `KFunction` capturing `scope`, and describe its bucket write
@@ -508,7 +526,7 @@ fn register_body<'a>(
     body: Body<'a>,
     bind_index: BindingIndex,
     types: &TypeRegistry,
-) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, WriteOp), KError> {
+) -> Result<(SealedValue, WriteOp), KError> {
     let f: &'a KFunction<'a> = KFunction::alloc_captured(scope, signature, body, false, types);
     let write = WriteOp::Overload {
         name: sym.to_string(),
@@ -516,7 +534,7 @@ fn register_body<'a>(
         seal: OverloadSeal::of_resident(scope, f),
         builtin_shadow_guard: false,
     };
-    Ok((scope.store_function_object(f), write))
+    Ok((scope.store_function_cell(f), write))
 }
 
 /// The bridge body `sym [left right]` — a keyword-first call over a two-element list literal, which
@@ -562,11 +580,26 @@ fn op_action<'a>(
 }
 
 fn body_binary<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    build(ctx, OpKind::Binary)
+    build(ctx, OpKind::Binary, None)
 }
 
 fn body_unary<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    build(ctx, OpKind::Unary)
+    build(ctx, OpKind::Unary, None)
+}
+
+/// `LET <name> = OP #(<sym>) OVER <Operand> [-> <Result>] = (<body>)` — one statement whose single
+/// binder installs the value name and the operator's bucket key(s). The bound value is the
+/// operator's primary function, the same one the declaration evaluates to.
+fn body_binary_combined<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    let name = crate::try_action!(crate::builtins::fn_def::combined_bound_name(ctx.args));
+    build(ctx, OpKind::Binary, Some(name))
+}
+
+/// The `UNARY OP` twin of [`body_binary_combined`]; its binder installs two bucket keys — the
+/// keyword-first list key and the binary bridge key.
+fn body_unary_combined<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    let name = crate::try_action!(crate::builtins::fn_def::combined_bound_name(ctx.args));
+    build(ctx, OpKind::Unary, Some(name))
 }
 
 /// `UNARY OP #(<sym>) OVER Operand = (<body>)` — the result segment is mandatory: a unary body
@@ -581,6 +614,16 @@ fn body_unary_missing_result<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     )))))
 }
 
+/// The combined twin of [`body_unary_missing_result`], naming the flat spelling in its suggestion.
+fn body_unary_missing_result_combined<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", "symbol"));
+    let name = crate::builtins::fn_def::combined_bound_name(ctx.args).unwrap_or("op");
+    Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+        "`UNARY OP #({sym})` must declare its result type: \
+         `LET {name} = UNARY OP #({sym}) OVER <Operand> -> <Result> = (…)`",
+    )))))
+}
+
 /// The two carriers a type slot arrives on. `OfKind(ProperType)` takes a bare type token (`OVER
 /// Number`); `SigiledTypeExpr` takes the sigiled form (`OVER :Number`, `OVER :(LIST OF Elt)`) raw,
 /// so the body sub-dispatches it rather than resolving a name that may not be one. Every
@@ -590,77 +633,101 @@ fn type_carriers() -> [KType; 2] {
     [KType::of_kind(KKind::ProperType), KType::SIGILED_TYPE_EXPR]
 }
 
+/// The combined statement form of a declaration surface: `LET <name> =` prefixed to its element
+/// list. Every surface below is built once and registered under both spellings, so the two can
+/// never drift apart. Full-bucket-key matching keeps the combined keys disjoint from plain `LET`
+/// and bare `OP`.
+fn combined<'a>(mut elements: Vec<SignatureElement<'a>>) -> SignatureDraft<'a> {
+    let mut prefixed = vec![kw("LET"), arg("name", KType::IDENTIFIER), kw("=")];
+    prefixed.append(&mut elements);
+    sig(KType::ANY, prefixed)
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     use crate::builtins::register_builtin_full;
 
     // Declared return is `KType::ANY`: an operator declaration evaluates to the function it
     // synthesizes, whose structural type only exists once its signature is known.
     let binary = |operand: KType| {
-        sig(
-            KType::ANY,
-            vec![
-                kw("OP"),
-                arg("symbol", KType::KEXPRESSION),
-                kw("OVER"),
-                arg("operand", operand),
-                kw("="),
-                arg("body", KType::KEXPRESSION),
-            ],
-        )
+        vec![
+            kw("OP"),
+            arg("symbol", KType::KEXPRESSION),
+            kw("OVER"),
+            arg("operand", operand),
+            kw("="),
+            arg("body", KType::KEXPRESSION),
+        ]
     };
     let binary_with_result = |operand: KType, result: KType| {
-        sig(
-            KType::ANY,
-            vec![
-                kw("OP"),
-                arg("symbol", KType::KEXPRESSION),
-                kw("OVER"),
-                arg("operand", operand),
-                kw("->"),
-                arg("return_type", result),
-                kw("="),
-                arg("body", KType::KEXPRESSION),
-            ],
-        )
+        vec![
+            kw("OP"),
+            arg("symbol", KType::KEXPRESSION),
+            kw("OVER"),
+            arg("operand", operand),
+            kw("->"),
+            arg("return_type", result),
+            kw("="),
+            arg("body", KType::KEXPRESSION),
+        ]
     };
     let unary = |operand: KType, result: KType| {
-        sig(
-            KType::ANY,
-            vec![
-                kw("UNARY"),
-                kw("OP"),
-                arg("symbol", KType::KEXPRESSION),
-                kw("OVER"),
-                arg("operand", operand),
-                kw("->"),
-                arg("return_type", result),
-                kw("="),
-                arg("body", KType::KEXPRESSION),
-            ],
-        )
+        vec![
+            kw("UNARY"),
+            kw("OP"),
+            arg("symbol", KType::KEXPRESSION),
+            kw("OVER"),
+            arg("operand", operand),
+            kw("->"),
+            arg("return_type", result),
+            kw("="),
+            arg("body", KType::KEXPRESSION),
+        ]
     };
     let unary_missing_result = |operand: KType| {
-        sig(
-            KType::ANY,
-            vec![
-                kw("UNARY"),
-                kw("OP"),
-                arg("symbol", KType::KEXPRESSION),
-                kw("OVER"),
-                arg("operand", operand),
-                kw("="),
-                arg("body", KType::KEXPRESSION),
-            ],
-        )
+        vec![
+            kw("UNARY"),
+            kw("OP"),
+            arg("symbol", KType::KEXPRESSION),
+            kw("OVER"),
+            arg("operand", operand),
+            kw("="),
+            arg("body", KType::KEXPRESSION),
+        ]
     };
 
     for operand in type_carriers() {
-        register_builtin_full(scope, "OP", binary(operand), body_binary, true, types, gate);
         register_builtin_full(
             scope,
             "OP",
-            unary_missing_result(operand),
+            sig(KType::ANY, binary(operand)),
+            body_binary,
+            true,
+            types,
+            gate,
+        );
+        register_builtin_full(
+            scope,
+            "LET",
+            combined(binary(operand)),
+            body_binary_combined,
+            true,
+            types,
+            gate,
+        );
+        register_builtin_full(
+            scope,
+            "OP",
+            sig(KType::ANY, unary_missing_result(operand)),
             body_unary_missing_result,
+            false,
+            types,
+            gate,
+        );
+        register_builtin_full(
+            scope,
+            "LET",
+            combined(unary_missing_result(operand)),
+            body_unary_missing_result_combined,
             false,
             types,
             gate,
@@ -669,7 +736,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             register_builtin_full(
                 scope,
                 "OP",
-                binary_with_result(operand, result),
+                sig(KType::ANY, binary_with_result(operand, result)),
                 body_binary,
                 true,
                 types,
@@ -677,9 +744,27 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             );
             register_builtin_full(
                 scope,
+                "LET",
+                combined(binary_with_result(operand, result)),
+                body_binary_combined,
+                true,
+                types,
+                gate,
+            );
+            register_builtin_full(
+                scope,
                 "OP",
-                unary(operand, result),
+                sig(KType::ANY, unary(operand, result)),
                 body_unary,
+                true,
+                types,
+                gate,
+            );
+            register_builtin_full(
+                scope,
+                "LET",
+                combined(unary(operand, result)),
+                body_unary_combined,
                 true,
                 types,
                 gate,

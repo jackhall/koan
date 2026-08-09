@@ -378,3 +378,101 @@ fn declaration_evaluates_to_the_operator_function() {
         value.ktype().name(&test_run.types),
     );
 }
+
+// ---------- combined statement forms ----------
+
+/// `LET <name> = OP …` installs both channels from one binder: the operator reduces its runs, and
+/// the bound name holds the operator's function.
+#[test]
+fn combined_binary_form_installs_name_and_operator() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "MODULE m = (\
+           (LET plus = OP #(⊕) OVER Number = (left + right))\
+           (LET reduced = (1 ⊕ 2 ⊕ 3)))",
+    );
+    let reduced = test_run.run_one(parse_one(&program, "m.reduced"));
+    assert!(
+        matches!(reduced, KObject::Number(n) if *n == 6.0),
+        "a three-operand run reduces fold-left through the declared body",
+    );
+    let bound = test_run.run_one(parse_one(&program, "m.plus"));
+    assert!(
+        matches!(bound, KObject::KFunction(..)),
+        "the bound name holds the operator's own function, got {}",
+        bound.summarize(&test_run.types),
+    );
+}
+
+/// The `UNARY OP` twin: its binder installs *two* bucket keys — the keyword-first list key and the
+/// binary bridge — plus the value name, all from one statement.
+#[test]
+fn combined_unary_form_installs_both_bucket_keys() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let types = test_run.types.clone();
+    test_run.run(
+        "MODULE gather = (\
+           (LET collect = UNARY OP #(~) OVER Number -> :(LIST OF Number) = (operands))\
+           (LET chained = (1 ~ 2 ~ 3))\
+           (LET pair = (4 ~ 5)))",
+    );
+    assert_eq!(
+        list_numbers(
+            test_run.run_one(parse_one(&program, "gather.chained")),
+            &types
+        ),
+        vec![1.0, 2.0, 3.0],
+        "the list key registered: an infix run collects into `operands`",
+    );
+    assert_eq!(
+        list_numbers(test_run.run_one(parse_one(&program, "gather.pair")), &types),
+        vec![4.0, 5.0],
+        "the binary bridge key registered: a two-operand run reaches the same body",
+    );
+    let bound = test_run.run_one(parse_one(&program, "gather.collect"));
+    assert!(
+        matches!(bound, KObject::KFunction(..)),
+        "the bound name holds the list body — the operator's primary function",
+    );
+}
+
+/// A pairwise group's member may declare an explicit `-> Result`, and the combined spelling reaches
+/// the same body — the `-> Result` combined twin is registered alongside the bare one.
+#[test]
+fn combined_binary_with_result_declares_inside_a_pairwise_group() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "GROUP num_compare PAIRWISE FOLD #(BOTH) LEFT = (\
+           (LET both = OP #(BOTH) OVER Bool = (left AND right))\
+           (LET before = OP #(≺) OVER Number -> Bool = (left < right))\
+           (LET ordered = (1 ≺ 2 ≺ 3)))",
+    );
+    assert!(
+        matches!(test_run.run_one(parse_one(&program, "num_compare.ordered")), KObject::Bool(b) if *b),
+        "both pairs hold, so the combiner folds them to true",
+    );
+}
+
+/// The missing-result diagnostic names the flat spelling when the declaration is combined.
+#[test]
+fn combined_unary_without_a_result_type_names_the_flat_spelling() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let error = test_run.run_one_err(parse_one(
+        &program,
+        "LET collect = UNARY OP #(~) OVER Number = (operands)",
+    ));
+    assert!(
+        matches!(&error.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("must declare its result type")
+                && msg.contains("LET collect = UNARY OP")),
+        "expected the combined missing-result diagnostic, got {error}",
+    );
+}

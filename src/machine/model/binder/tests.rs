@@ -310,3 +310,46 @@ fn val_installs_nothing() {
     assert!(stmt.binder_plan().is_none());
     assert!(stmt.binder_installs().is_empty());
 }
+
+/// Each combined statement form's own plan fills both channels: the LET value name and the bucket
+/// key(s) the declaration's body registers. `LET … = UNARY OP …` is the two-bucket maximum.
+#[test]
+fn combined_forms_install_both_channels() {
+    let program = program_storage();
+    let brand = program.brand();
+    for (source, buckets) in [
+        (
+            "LET double = FN (DOUBLE n :Number) -> Number = (n * 2)",
+            1usize,
+        ),
+        ("LET plus = OP #(⊕) OVER Number = (left + right)", 1),
+        ("LET near = OP #(≺) OVER Number -> Bool = (left < right)", 1),
+        (
+            "LET collect = UNARY OP #(~) OVER Number -> :(LIST OF Number) = (operands)",
+            2,
+        ),
+    ] {
+        let stmt = parse_one(brand, source);
+        let key = stmt.binder_plan().expect("a combined form is a binder").key;
+        assert_eq!(
+            key.name.map(|(name, _)| name),
+            Some(source.split_whitespace().nth(1).unwrap()),
+            "{source}",
+        );
+        assert_eq!(
+            key.buckets.map_or(0, |keys| keys.len()),
+            buckets,
+            "{source}"
+        );
+    }
+}
+
+/// The anonymous `FN :{…}` signature names no bucket, so a statement carrying it installs only what
+/// its own name channel gives — nothing, for the bare form.
+#[test]
+fn anonymous_fn_installs_nothing() {
+    let program = program_storage();
+    let brand = program.brand();
+    let stmt = parse_one(brand, "FN :{n :Number} -> Number = (n)");
+    assert!(stmt.binder_plan().is_none());
+}

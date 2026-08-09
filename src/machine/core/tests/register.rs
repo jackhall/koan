@@ -202,7 +202,7 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
     scope
         .bind_value_direct(
             "OTHER_NAME".to_string(),
-            crate::witnessed::Sealed::seal(scope.store_function_object(f2)),
+            scope.store_function_cell(f2),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -675,7 +675,7 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
         false,
         &types,
     );
-    let sealed = crate::witnessed::Sealed::seal(scope.store_function_object(f));
+    let sealed = scope.store_function_cell(f);
     scope
         .bind_value_direct(
             "f".to_string(),
