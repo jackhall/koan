@@ -19,14 +19,15 @@
 //! **Built once, then frozen.** A module is assembled complete: construction gathers its members
 //! into an owned [`ModuleDraft`] and derives the self-sig from that draft *before* the value
 //! exists, so the value itself carries a bumped `path`, two build-once frozen bump-backed tables
-//! ([`frozen_table`](crate::machine::core::frozen_table)) and a plain interned self-sig handle.
+//! ([`BumpAllocator::frozen_table`](crate::witnessed::BumpAllocator::frozen_table)) and a plain interned self-sig handle.
 //! `Module` is
 //! therefore `Copy` and `Drop`-free: it rides the region bump and region death frees it as a chunk
 //! ([value-substrates.md § Untyped arenas](../../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
 
 use std::collections::HashMap;
 
-use crate::machine::core::{frozen_table, BumpBackedMap, RegionBrand, Scope, ScopeId};
+use crate::machine::core::{RegionBrand, Scope, ScopeId};
+use crate::witnessed::BumpBackedMap;
 
 use super::super::types::{
     empty_schema_digest, sig_subtype, KType, Relation, SigSchema, TypeDigest, TypeNode,
@@ -111,7 +112,8 @@ impl<'a> Module<'a> {
     }
 
     /// Assemble a module value over `child_scope`, re-homing `path` and every draft key into
-    /// `brand`'s region and freezing both member tables there ([`frozen_table`]). Crate-internal and
+    /// `brand`'s region and freezing both member tables there
+    /// ([`BumpAllocator::frozen_table`](crate::witnessed::BumpAllocator::frozen_table)). Crate-internal and
     /// never a
     /// store: the two doors that place one are [`Self::alloc_at_child_scope`] and the fold brand's
     /// [`FoldingBrand::alloc_module_folded`](crate::machine::core::FoldingBrand), which is how a
@@ -119,7 +121,7 @@ impl<'a> Module<'a> {
     ///
     /// The single `brand` parameter is the residence discipline: path bytes, key bytes and both
     /// bucket arrays land in one region, and it is the destination's — a `String` key would fail
-    /// [`frozen_table`]'s no-drop-glue assert, so the re-home is the only spelling that builds.
+    /// the table verb's no-drop-glue assert, so the re-home is the only spelling that builds.
     pub(crate) fn assemble<'b>(
         brand: RegionBrand<'b>,
         path: &str,
@@ -128,8 +130,7 @@ impl<'a> Module<'a> {
         self_sig: KType,
     ) -> Module<'b> {
         let rehome = |entries: HashMap<String, KType>| {
-            frozen_table(
-                brand.allocator(),
+            brand.allocator().frozen_table(
                 entries
                     .into_iter()
                     .map(|(name, kt)| (brand.allocator().text(&name) as &'b str, kt)),

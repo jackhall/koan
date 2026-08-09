@@ -162,8 +162,9 @@ into the same region with no residence audit at all. Its `T: Copy` bound is what
 keeps it honest — a bump releases its chunks whole and runs no destructor, so
 admitting a `Drop`-bearing entry would silently skip one. A **collection** built
 over the allocator's raw `allocator-api2` seam — a frozen keyed index
-([`frozen_table`](../src/machine/core/arena.rs)), a scope's churning binding table
-— is where that bound stops travelling with the bytes: such a writer proves its
+([`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs)), a scope's
+churning binding table — is where that bound stops travelling with the bytes: such
+a writer proves its
 entries glue-free with a `const { assert!(!needs_drop::<_>()) }` at the
 declaration naming their type, which is the same proof the bound stood for, and
 the destructor it forgoes would have freed only bytes region death frees anyway.

@@ -321,31 +321,6 @@ fn a_stored_value_may_borrow_its_own_region_with_no_residence_audit() {
     assert!(span.with_home_region(|home| ptr::eq(home, dest.region())));
 }
 
-/// A frozen key→value table over a region's bump, the shape an embedder builds when its lookup
-/// wants a hash table rather than a sorted run: buckets over [`BumpAllocator`], header placed
-/// through [`BumpAllocator::place`], handed back as a shared reference so no mutation is reachable.
-///
-/// The `ManuallyDrop` is the per-site declaration that suppressing the table's destructor is
-/// lossless — `Copy` elements leave it nothing to do but free a bucket array that is bump memory the
-/// region releases whole — and it is also what makes the header pass `place`'s no-drop-glue assert.
-/// Sized to the iterator's lower bound so the fill runs without a rehash stranding a bucket array.
-fn frozen_table<'a, K: Copy + Eq + std::hash::Hash, V: Copy>(
-    allocator: BumpAllocator<'a>,
-    entries: impl IntoIterator<Item = (K, V)>,
-) -> &'a HashMap<K, V, DefaultHashBuilder, BumpAllocator<'a>> {
-    let entries = entries.into_iter();
-    let mut table = HashMap::with_capacity_and_hasher_in(
-        entries.size_hint().0,
-        DefaultHashBuilder::default(),
-        allocator,
-    );
-    table.extend(entries);
-    // Bound rather than returned inline: `place` infers `T` from its argument, and the deref
-    // coercion that strips the wrapper happens at the return.
-    let header = allocator.place(std::mem::ManuallyDrop::new(table));
-    header
-}
-
 /// The keyed index shape: a table built and placed in the region's bump, read back by key. Glue-free
 /// elements are the whole admission criterion — nothing here declares a family, a [`Stored`] impl or
 /// an audit, exactly as for the other primitives.
@@ -354,7 +329,9 @@ fn a_bumped_map_indexes_its_entries() {
     let dest = frame();
     let handle = RegionHandle::<BumpProfile>::from_owner(&*dest);
 
-    let index = frozen_table(handle.allocator(), [(10u32, 0usize), (20, 1), (30, 2)]);
+    let index = handle
+        .allocator()
+        .frozen_table([(10u32, 0usize), (20, 1), (30, 2)]);
 
     assert_eq!(index.len(), 3);
     assert!(!index.is_empty());
@@ -375,7 +352,7 @@ fn an_empty_bumped_map_holds_nothing() {
     let dest = frame();
     let handle = RegionHandle::<BumpProfile>::from_owner(&*dest);
 
-    let index = frozen_table(handle.allocator(), Vec::<(u32, usize)>::new());
+    let index = handle.allocator().frozen_table(Vec::<(u32, usize)>::new());
 
     assert!(index.is_empty());
     assert_eq!(index.len(), 0);
@@ -395,7 +372,9 @@ fn a_bumped_map_keys_on_its_own_regions_bytes_and_dies_with_it() {
             .into_iter()
             .map(|name| handle.allocator().text(name))
             .collect();
-        let index = frozen_table(handle.allocator(), names.iter().copied().zip(0usize..));
+        let index = handle
+            .allocator()
+            .frozen_table(names.iter().copied().zip(0usize..));
 
         assert_eq!(index.get(&"beta"), Some(&1));
         assert_eq!(index.len(), 3);
@@ -403,7 +382,7 @@ fn a_bumped_map_keys_on_its_own_regions_bytes_and_dies_with_it() {
     drop(dest);
 }
 
-/// The **mutable** seam, where [`frozen_table`] above is the write-once one: a table built over
+/// The **mutable** seam, where [`BumpAllocator::frozen_table`] is the write-once one: a table built over
 /// [`BumpAllocator`] and then churned — grown past several resizes, overwritten in place, removed
 /// from, retained over — with every bucket array it ever allocates landing in the region's chunks.
 ///

@@ -15,9 +15,8 @@
 //! fold a door re-runs. See
 //! [design/value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach).
 
-use crate::machine::core::BumpBackedMap;
 use crate::machine::core::{FrameReach, FrameStorage};
-use crate::witnessed::{CellRef, Sectioned};
+use crate::witnessed::{BumpBackedMap, CellRef, Sectioned};
 
 use super::{Held, KKey, KObject};
 
@@ -231,7 +230,8 @@ impl<'a> ListSubstrate<'a> {
 /// [`KKey`]. The index is frozen at construction (last-wins dedup happens in the transient
 /// construction map) and never written again; cell order follows the construction map's iteration
 /// order, so entry order is unspecified. The index block is a
-/// [`frozen_table`](crate::machine::core::frozen_table) hosted in the substrate's own region bump:
+/// [`BumpAllocator::frozen_table`](crate::witnessed::BumpAllocator::frozen_table) hosted in the
+/// substrate's own region bump:
 /// its glue-free key and value are what let region death reclaim the buckets by releasing chunks
 /// rather than by running a destructor. Every key's string bytes are region-hosted too, so the table
 /// holds no allocation outside the bump.

@@ -123,18 +123,28 @@ nothing built through one outlives the region whose bytes it holds; where `'b` i
 a rank-2 fold brand, that same lifetime is the confinement, which is why the
 allocator needs no mint privacy of its own to serve as a fold's write surface.
 
-The allocator carries one Copy-relaxed verb, `place`, for a value that is
-glue-free **without** being `Copy`. It trades the bound for a
-monomorphization-time `const { assert!(!needs_drop::<T>()) }`, so a `T` with drop
-glue is a build error at the call that named it. Its intended user is a frozen
-table's header: a `hashbrown` map built over the allocator owns its bucket array,
-so it has a `Drop`, and a `ManuallyDrop` wrapper is what makes it pass the assert.
-That wrapper is a per-site *declaration* that the suppressed destructor had
-nothing to do — true exactly when the table's entries are themselves glue-free
-(the declaration site says so with its own const assert) and its buckets are bump
-memory the region releases whole. The library ships no table veneer of its own;
-an embedder that wants a frozen keyed index builds the table over the allocator
-and places the wrapped header, deref'd away so no holder's type mentions it.
+**A frozen keyed index is a verb, not a relaxation of `value`.** The one stored
+shape that is glue-free without being `Copy` is a table header: a `hashbrown` map
+owns its bucket array, so it has a `Drop`. `frozen_table` is the verb that admits
+it, and it *builds* the table rather than placing one handed in. That is what
+makes the admission safe rather than merely asserted. Suppressing the header's
+destructor is lossless on two conditions — the entries carry no glue, and the
+bucket array is bump memory the region releases whole. The first is checked, by a
+monomorphization-time `const { assert!(!needs_drop::<K>() && !needs_drop::<V>()) }`
+that fires at the declaration naming the entry types. The second *cannot* be
+checked at a placement verb, because a table backed by the global heap and one
+backed by this bump have the same type; building the buckets inside the verb is
+what closes it, since no caller can supply a foreign-allocator table. A
+general-purpose "place anything glue-free" verb would have left that half open,
+and `ManuallyDrop` would have been an unrestricted bypass of the `Copy` tier — so
+the wrapper stays an implementation detail of this one verb, deref'd away so no
+holder's type mentions it, and the allocator exposes no way to place an arbitrary
+non-`Copy` value.
+
+The return is a plain `hashbrown` table (`BumpBackedMap`), not a veneer type: the
+freeze is the shared reference, since no mutation is reachable through `&`. An
+embedder that wants a table it keeps *writing* to builds one over the raw
+`Allocator` seam instead and owes its own entry-glue assert at the declaration.
 
 The embedder's path in is two doors, split by whether the bumped value has
 operands whose reach the product must carry.

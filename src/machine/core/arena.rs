@@ -138,10 +138,11 @@ impl<'a> RegionBrand<'a> {
     /// the destination. No address probe could stand in for either, because the bump keeps no address
     /// table and so cannot say which region a `&str` points into.
     ///
-    /// A **collection** built over the same allocator's raw seam — a scope's binding tables, a frozen
-    /// key→value index ([`frozen_table`]) — is where the `Copy` guard stops travelling with the
-    /// bytes, and proves its entries glue-free with a `const` assert at the declaration that names
-    /// their type instead.
+    /// A value's frozen keyed index takes [`BumpAllocator::frozen_table`], which carries the
+    /// entry-glue proof itself. A table that keeps **mutating** — a scope's binding tables — is built
+    /// over the same allocator's raw seam, which is where the `Copy` guard stops travelling with the
+    /// bytes and the writer restates it with a `const` assert at the declaration naming its entry
+    /// types ([`bump_table`](super::bindings::bump_table)).
     pub(crate) fn allocator(self) -> BumpAllocator<'a> {
         self.0.allocator()
     }
@@ -227,60 +228,6 @@ impl<'a> RegionBrand<'a> {
     ) -> Witnessed<T, CarrierWitness> {
         Witnessed::from_erased(Erased::erase(value), CarrierWitness::new(reach))
     }
-}
-
-/// A table whose bucket array lives in a region's bump. `hashbrown` rather than
-/// `std::collections::HashMap` for the custom-allocator seam, which std has no stable equivalent
-/// of; the hash function and probe cost are the same either way, since std's map *is* a hashbrown
-/// table. Both bump-backed table shapes are this alias: a scope's live binding tables
-/// ([`bump_table`](super::bindings::bump_table)), which keep gaining entries, and the
-/// frozen-at-construction indexes [`frozen_table`] builds.
-pub(crate) type BumpBackedMap<'a, K, V> =
-    hashbrown::HashMap<K, V, hashbrown::DefaultHashBuilder, BumpAllocator<'a>>;
-
-/// Build a **frozen** key→value table over a region's bump and place its header there too — the
-/// shape a value's keyed index takes when a sorted run and a binary search will not do (a module's
-/// member tables, a dict substrate's key→slot index).
-///
-/// The `const` block is the no-drop-glue proof for the entries: the bump runs no destructor, so a
-/// `Drop`-bearing key or value would silently leak whatever it owns, and the assert is
-/// monomorphization-checked, so a future entry field that brings glue back is a build error at the
-/// declaration that admitted it. That proof is also what makes the header's own suppressed
-/// destructor lossless — with glue-free entries a `hashbrown` table's `Drop` has nothing to do but
-/// free a bucket array that is bump memory the region releases whole — which is what the
-/// `ManuallyDrop` wrapper declares and what lets the header through
-/// [`BumpAllocator::place`]. The wrapper is deref'd away here, so no holder's type mentions it.
-///
-/// Sized to the iterator's lower bound up front so the fill runs without a rehash: a growth
-/// reallocation would strand the old bucket array in the bump as garbage the region's capacity
-/// figure would then over-report. Duplicate keys resolve last-wins, as [`HashMap::insert`] does.
-/// The returned shared reference **is** the freeze — no mutation is reachable through it.
-///
-/// [`HashMap::insert`]: hashbrown::HashMap::insert
-pub(crate) fn frozen_table<'a, K, V>(
-    allocator: BumpAllocator<'a>,
-    entries: impl IntoIterator<Item = (K, V)>,
-) -> &'a BumpBackedMap<'a, K, V>
-where
-    K: Eq + std::hash::Hash,
-{
-    const {
-        assert!(
-            !std::mem::needs_drop::<K>() && !std::mem::needs_drop::<V>(),
-            "a bump-hosted table's entries must carry no drop glue: the bump runs no destructor",
-        )
-    };
-    let entries = entries.into_iter();
-    let mut table = BumpBackedMap::with_capacity_and_hasher_in(
-        entries.size_hint().0,
-        hashbrown::DefaultHashBuilder::default(),
-        allocator,
-    );
-    table.extend(entries);
-    // Bound rather than returned inline: `place` infers `T` from its argument, and the deref
-    // coercion that strips the wrapper happens at the return.
-    let header = allocator.place(std::mem::ManuallyDrop::new(table));
-    header
 }
 
 /// The allocation capability inside a reach-folding closure: the enclosing combinator

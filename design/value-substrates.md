@@ -92,7 +92,7 @@ above are aliases of that one wrapper, differing only in `C`, and every `C` is
   names, never of how the literal was written — a record walks and renders name-sorted.
   Equality was already order-blind, so nothing semantic turns on it.
 - **`&'a BumpBackedMap<'a, KKey<'a>, usize>`** — a dict's key→index table, frozen at
-  construction by [`frozen_table`](../src/machine/core/arena.rs). Key counts are
+  construction by [`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs). Key counts are
   unbounded, so a dict does pay for a hash table; it is a `hashbrown` table whose buckets
   are allocated in the region's bump through `allocator-api2`, its glue-free key and
   value asserted where the table is built
@@ -415,10 +415,12 @@ is built over the same allocator's raw `allocator-api2` seam and the trait says
 nothing about destructors. Both table shapes therefore restate the proof as a
 `const { assert!(!needs_drop::<…>()) }` where their own entry types are named: a
 dict's key index and a module's two member tables freeze at construction through
-[`frozen_table`](../src/machine/core/arena.rs), whose header rides `BumpAllocator`'s
-Copy-relaxed `place` verb under a `ManuallyDrop` wrapper declaring the suppressed
-destructor lossless; a scope's binding tables keep **mutating** after they are
-built and hold the same line at their own declaration sites. Deallocation through that seam is a no-op, so it suits a
+[`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs), a verb that
+allocates the buckets over the same allocator it places the header through — so the
+half of the argument no assert can check, that the buckets are *this* bump's, is
+closed by construction rather than by a call-site claim; a scope's binding tables
+keep **mutating** after they are built and hold the same line at their own
+declaration sites. Deallocation through that seam is a no-op, so it suits a
 collection whose churn is bounded — geometric growth and in-place slot reuse — and
 not one that frees in a loop. A family that reintroduced an owning slot would not fail loudly: it would
 read and write correctly and simply never free, which is why the claim is pinned

@@ -36,11 +36,13 @@
 //! where cross-region reach ownership already flows; the door composes *within* the brand.
 
 use std::alloc::Layout;
+use std::hash::Hash;
 use std::ptr;
 use std::ptr::NonNull;
 
 use allocator_api2::alloc::{AllocError, Allocator};
 use bumpalo::Bump;
+use hashbrown::{DefaultHashBuilder, HashMap};
 
 use super::{
     Carrier, DropFree, FoldedPlacement, Opened, PinBundle, PinsRegion, ReachDescription,
@@ -48,8 +50,8 @@ use super::{
 };
 
 /// **The region's bump, as one handle carrying both storage tiers** — the guarded verbs
-/// ([`value`](Self::value), [`slice`](Self::slice), [`text`](Self::text), [`place`](Self::place))
-/// every write-once byte goes through, and the raw [`Allocator`] impl a **mutable** collection is
+/// ([`value`](Self::value), [`slice`](Self::slice), [`text`](Self::text),
+/// [`frozen_table`](Self::frozen_table)) every write-once byte goes through, and the raw [`Allocator`] impl a **mutable** collection is
 /// built over so its backing allocation lands in the region's own chunks instead of the global heap.
 ///
 /// The verbs live here and nowhere else. Every surface that can reach a region's bytes —
@@ -145,8 +147,9 @@ impl<'b> BumpAllocator<'b> {
     /// `T: Copy` is the static proxy for "no destructor to skip": the bump releases its chunks whole
     /// and runs no `Drop`, so a `Drop`-bearing `T` would silently leak its owned contents.
     /// "`Drop`-free" has no expressible bound; `Copy` is the honest approximation, and every family
-    /// queued behind this door satisfies it by construction. A value that is glue-free without being
-    /// `Copy` takes [`place`](Self::place), which trades the bound for a per-site assert.
+    /// queued behind this door satisfies it by construction. The one stored shape that is glue-free
+    /// without being `Copy` — a frozen table's header — has its own verb,
+    /// [`frozen_table`](Self::frozen_table), rather than a relaxation of this one.
     ///
     /// ```compile_fail
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
@@ -175,17 +178,38 @@ impl<'b> BumpAllocator<'b> {
         self.0.alloc_str(text)
     }
 
-    /// [`value`](Self::value) for a `T` that is glue-free **without** being `Copy`, guarded by a
-    /// monomorphization-time assert instead of a bound: a `T` with drop glue is a build error at the
-    /// call that named it.
+    /// Build a **frozen** key→value table over this bump and place its header there too — the shape
+    /// an embedder's keyed index takes when a sorted run and a binary search will not do.
     ///
-    /// The intended user is a frozen table's header — a `hashbrown` map owns its bucket array, so it
-    /// has a `Drop`, and a [`ManuallyDrop`](std::mem::ManuallyDrop) wrapper is what makes it pass
-    /// this assert. That wrapper is a per-site *declaration* that the suppressed destructor had
-    /// nothing to do: it is lossless exactly when the table's elements are themselves glue-free (the
-    /// declaration site says so with its own const assert) and its buckets are bump memory the region
-    /// releases whole. Because that reasoning cannot be checked here, the plain-value verb keeps the
-    /// stricter `Copy` tier and only a caller willing to write the wrapper reaches this one.
+    /// The verb builds the table itself rather than placing one handed in, and that is the point:
+    /// the buckets are allocated over *this* allocator, so the destructor the header forgoes would
+    /// have freed only bump memory the region releases whole. A caller cannot supply a table backed
+    /// by some other allocator, which is the half of the argument no assert could check.
+    ///
+    /// The other half is checked: the `const` block proves the entries carry no drop glue, so the
+    /// suppressed destructor has nothing to do *but* free that bucket array. It monomorphizes per
+    /// `(K, V)`, so an entry type that later grows a `Drop` is a build error at the declaration that
+    /// admitted it rather than a silent leak. Together those are why the internal
+    /// [`ManuallyDrop`](std::mem::ManuallyDrop) header placement is lossless; the wrapper is deref'd
+    /// away here, so no holder's type mentions it.
+    ///
+    /// Sized to the iterator's lower bound up front so the fill runs without a rehash: a growth
+    /// reallocation would strand the old bucket array in the bump as garbage
+    /// [`Region::bump_capacity`] would then over-report. Duplicate keys resolve last-wins, as
+    /// [`HashMap::insert`] does. The returned shared reference **is** the freeze — no mutation is
+    /// reachable through it, which is what distinguishes this from a table an embedder builds over
+    /// the raw [`Allocator`] seam and keeps writing to.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    ///
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// let index = handle.allocator().frozen_table([("width", 0usize), ("height", 1)]);
+    /// assert_eq!(index.get(&"height"), Some(&1));
+    /// assert_eq!(index.len(), 2);
+    /// ```
     ///
     /// ```compile_fail
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
@@ -193,19 +217,46 @@ impl<'b> BumpAllocator<'b> {
     ///
     /// let cart = fresh_cart();
     /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
-    /// // A bare `String` has drop glue — rejected by the const assert, not by a bound.
-    /// let _stored: &String = handle.allocator().place(String::from("leaks"));
+    /// // A `String` value owns a heap buffer the bump would never free — rejected by the assert.
+    /// let _index = handle.allocator().frozen_table([("k", String::from("leaks"))]);
     /// ```
-    pub fn place<T>(self, value: T) -> &'b T {
+    pub fn frozen_table<K, V>(
+        self,
+        entries: impl IntoIterator<Item = (K, V)>,
+    ) -> &'b BumpBackedMap<'b, K, V>
+    where
+        K: Eq + Hash,
+    {
         const {
             assert!(
-                !std::mem::needs_drop::<T>(),
-                "a bump-placed value must carry no drop glue: the bump runs no destructor",
+                !std::mem::needs_drop::<K>() && !std::mem::needs_drop::<V>(),
+                "a bump-hosted table's entries must carry no drop glue: the bump runs no destructor",
             )
         };
-        self.0.alloc(value)
+        let entries = entries.into_iter();
+        let mut table = BumpBackedMap::with_capacity_and_hasher_in(
+            entries.size_hint().0,
+            DefaultHashBuilder::default(),
+            self,
+        );
+        table.extend(entries);
+        // `ManuallyDrop` suppresses the table's own destructor, which the two arguments above make
+        // lossless. Bound rather than returned inline: `alloc` infers its type parameter from the
+        // argument, and the deref coercion that strips the wrapper happens at the return.
+        let header: &'b std::mem::ManuallyDrop<_> =
+            self.0.alloc(std::mem::ManuallyDrop::new(table));
+        header
     }
 }
+
+/// A table whose bucket array lives in a region's bump. `hashbrown` rather than
+/// `std::collections::HashMap` for the custom-allocator seam, which std has no stable equivalent of;
+/// the hash function and probe cost are the same either way, since std's map *is* a hashbrown table.
+///
+/// Both bump-backed table shapes wear this alias: the frozen indexes [`BumpAllocator::frozen_table`]
+/// builds, and a table an embedder builds over the raw [`Allocator`] seam and keeps writing to — the
+/// latter owing its own no-drop-glue assert at the declaration that names its entry types.
+pub type BumpBackedMap<'b, K, V> = HashMap<K, V, DefaultHashBuilder, BumpAllocator<'b>>;
 
 /// The bump door itself, hung on the fold engines' placement capability — see the module docs for the
 /// confinement and no-erasure arguments it rests on.

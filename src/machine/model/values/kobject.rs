@@ -3,7 +3,7 @@ use std::rc::Weak;
 
 use crate::machine::core::KFunction;
 use crate::machine::core::{
-    frozen_table, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
+    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
 };
 use crate::machine::model::ast::{KExpression, ProgramExpression};
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
@@ -787,7 +787,7 @@ fn alloc_dict<'a>(
         entries.push((key.rehomed(door), cells.len()));
         cells.push(cell);
     }
-    let index = frozen_table(door.allocator(), entries);
+    let index = door.allocator().frozen_table(entries);
     let (cells, reach) = section_cells(door, &cells);
     door.alloc_substrate_folded(ContainerSubstrate::new(index, cells, reach))
 }

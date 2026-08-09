@@ -61,7 +61,6 @@ use crate::machine::core::carrier_witness::{
     GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
 };
 use crate::machine::core::kfunction::NodeId;
-use crate::machine::core::BumpBackedMap;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::RunId;
 use crate::machine::model::CarriedFamily;
@@ -71,6 +70,7 @@ use crate::machine::model::{
 };
 use crate::machine::model::{KType, UntypedKey};
 use crate::machine::CarrierWitness;
+use crate::witnessed::BumpBackedMap;
 use crate::witnessed::{BumpAllocator, Sealed};
 
 use super::kerror::{KError, KErrorKind};
