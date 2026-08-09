@@ -14,6 +14,15 @@ use crate::machine::model::KType;
 use crate::machine::model::Scalar;
 use workgraph::scheduler::Sealed;
 
+use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
+use crate::machine::core::kfunction::{Body, KFunction};
+use crate::machine::core::tests::{body_no_op, unit_signature};
+use crate::machine::core::GroupSeal;
+use crate::machine::model::{
+    probe_key, OperatorGroup, ReductionMode, ReturnType, SignatureDraft, SignatureElement,
+    TypeRegistry,
+};
+
 /// Seal `obj` as resident in `region` under a description naming `foreign` — the shape a bind
 /// door produces once its mint has run, assembled here without a `Scope`.
 fn sealed_reaching<'a>(
@@ -436,4 +445,136 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
     bindings.clear_placeholders_for_producer(NodeId(9), &mut crate::machine::WriteGate::for_test());
     assert!(bindings.pending_names().is_empty());
     assert_eq!(bindings.expect_type("Wrapper"), KType::NUMBER);
+}
+
+/// **All five tables past their resize thresholds, in one scope.** Every other test here binds a
+/// handful of names, which never leaves hashbrown's initial capacity — so nothing else exercises a
+/// table that has actually reallocated its bucket array into the bump, nor a purge that empties a
+/// bucket and strands its key, nor a powerset install against a table already holding entries.
+///
+/// Behavioural, not a memory audit: the allocator seam itself is pinned under tree borrows by
+/// workgraph's own slate (`a_bump_backed_table_survives_growth_overwrite_and_removal`), and what
+/// would otherwise be a leak claim here — an entry smuggling drop glue back in — is a compile-time
+/// assert at [`bump_table`] and on [`Bindings`] rather than something a run could observe.
+#[test]
+fn bump_backed_tables_full_churn() {
+    let types = TypeRegistry::new();
+    let region = run_root_storage();
+    {
+        let scope = run_root_bare(&region);
+        let mut gate = crate::machine::WriteGate::for_test();
+
+        // Enough value binds to force several geometric resizes off hashbrown's initial capacity,
+        // with each key's text bumped between the reallocations.
+        for i in 0..96 {
+            let value = scope.brand().alloc_scalar(Scalar::Number(i as f64));
+            scope
+                .bind_resident_for_test(
+                    format!("value_{i}"),
+                    value,
+                    BindingIndex::value(i as usize),
+                    &mut gate,
+                )
+                .expect("a fresh value bind lands");
+        }
+        assert!(scope.bindings().lookup_value("value_95", None).is_some());
+
+        // Type binds resize the second table against the same bump.
+        for i in 0..64 {
+            scope
+                .bindings()
+                .write_type(
+                    &format!("Ty{i}"),
+                    KType::NUMBER,
+                    mock_declaration_site(i, i),
+                    TypeWritePolicy::Insert,
+                    &mut gate,
+                )
+                .expect("a fresh type bind lands");
+        }
+        assert!(scope.bindings().lookup_type("Ty63", None).is_some());
+
+        // A dispatch bucket claimed by two sibling binders, one of which finalizes into its own
+        // pending slot — the in-place overwrite that keeps peak occupancy at the binding count.
+        let f = KFunction::alloc_captured(
+            scope,
+            unit_signature(),
+            Body::Builtin(body_no_op),
+            false,
+            &types,
+        );
+        let sealed_key = f.signature.untyped_key();
+        for producer in [NodeId(7), NodeId(8)] {
+            scope
+                .install_pending_overload(
+                    sealed_key.clone(),
+                    producer,
+                    BindingIndex::value(1),
+                    &mut gate,
+                )
+                .expect("a sibling claim appends");
+        }
+        scope
+            .register_function_direct("FOO".to_string(), f, BindingIndex::value(1), &mut gate)
+            .expect("the seal lands in the claim it finalizes");
+
+        // A second producer's claim on its own bucket, purged so the bucket empties and its key is
+        // removed — the one path that strands bump bytes, exercised so the leak check sees it.
+        let purged_key: UntypedKey = SignatureDraft {
+            return_type: ReturnType::Resolved(KType::ANY),
+            elements: vec![SignatureElement::Keyword("BAR")],
+        }
+        .untyped_key();
+        scope
+            .install_pending_overload(
+                purged_key.clone(),
+                NodeId(9),
+                BindingIndex::value(2),
+                &mut gate,
+            )
+            .expect("the purged binder claims its bucket");
+        scope
+            .bindings()
+            .clear_placeholders_for_producer(NodeId(9), &mut gate);
+        assert!(scope
+            .bindings()
+            .lookup_function(&purged_key, None)
+            .overloads
+            .is_empty());
+        assert_eq!(
+            scope
+                .bindings()
+                .lookup_function(&sealed_key, None)
+                .overloads
+                .len(),
+            1,
+            "the finalized overload survives the sibling purge",
+        );
+
+        // A per-group powerset install: every subset key's text bumped, all pointing at one record.
+        let record = OperatorGroup::alloc(scope.brand(), &["+", "-", "*"], ReductionMode::FoldLeft);
+        for probe in powerset_probes(&["+", "-", "*"]) {
+            scope
+                .register_operator_group_direct(
+                    probe,
+                    GroupSeal::of_resident(scope, record),
+                    BindingIndex::value(3),
+                    &mut gate,
+                )
+                .expect("every subset of one declaration upserts to the same record");
+        }
+        assert!(scope
+            .bindings()
+            .lookup_operator_group(&probe_key(&["*", "+"]), None)
+            .is_some());
+
+        // SIG slot records through a real scope: the fifth table, over the same bump.
+        let sig = scope.alloc_child_under_sig("Shape".to_string());
+        for i in 0..48 {
+            sig.write_sig_slot(format!("slot_{i}"), KType::NUMBER)
+                .expect("a fresh VAL slot records");
+        }
+        assert_eq!(sig.sig_value_slots().len(), 48);
+    }
+    drop(region);
 }

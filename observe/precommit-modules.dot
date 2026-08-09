@@ -479,6 +479,7 @@ digraph {
     "koan::machine::core::arena::step_allocator" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::core::arena::step_allocator" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::core::bindings" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::core::arena" [label="uses", style="dashed"];

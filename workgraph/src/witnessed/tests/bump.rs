@@ -382,12 +382,16 @@ fn a_bumped_map_keys_on_its_own_regions_bytes_and_dies_with_it() {
 /// [`BumpAllocator`] and then churned — grown past several resizes, overwritten in place, removed
 /// from, retained over — with every bucket array it ever allocates landing in the region's chunks.
 ///
-/// Under tree borrows this is the acceptance criterion for handing the raw allocator out: hashbrown
-/// reallocates its buckets through `grow`, which bumpalo may satisfy **in place** when the old
-/// allocation is the newest one out, and the retagging that in-place path performs has to stay sound
-/// against the reads that follow it. Under the leak check it is the second criterion: every
-/// abandoned bucket array is bump memory the region releases whole, so the table's un-run `Drop`
-/// strands nothing.
+/// Under tree borrows this is the acceptance criterion for handing the raw allocator out, and the
+/// two reallocation paths are **both** the point: bumpalo satisfies `grow` in place when the old
+/// allocation is the newest one out of the chunk, and falls back to allocate-copy-abandon when it is
+/// not. The retagging each performs has to stay sound against the reads that follow. A second table
+/// interleaved with the first is what forces the fallback — an embedder's tables share one bump, so
+/// the allocation a table is about to grow is rarely the newest one — and a bumped `&str` between
+/// the inserts stands in for the key text a real embedder re-homes as it writes.
+///
+/// Under the leak check it is the second criterion: every abandoned bucket array is bump memory the
+/// region releases whole, so the tables' un-run `Drop`s strand nothing.
 #[test]
 fn a_bump_backed_table_survives_growth_overwrite_and_removal() {
     let dest = frame();
@@ -396,13 +400,19 @@ fn a_bump_backed_table_survives_growth_overwrite_and_removal() {
         let before = dest.region().bump_capacity();
         let mut table: HashMap<u32, u64, DefaultHashBuilder, BumpAllocator<'_>> =
             HashMap::new_in(handle.allocator());
+        let mut sibling: HashMap<u32, &str, DefaultHashBuilder, BumpAllocator<'_>> =
+            HashMap::new_in(handle.allocator());
 
-        // Enough inserts to force several geometric resizes off hashbrown's initial capacity.
+        // Enough inserts to force several geometric resizes off hashbrown's initial capacity, with
+        // a sibling table and loose bytes taking the chunk's tail in between, so neither table's
+        // bucket array is the newest allocation when it needs to grow.
         for key in 0..512u32 {
             table.insert(key, u64::from(key) * 3);
+            sibling.insert(key, handle.bump_text(&format!("key_{key}")));
         }
         assert_eq!(table.len(), 512);
         assert_eq!(table.get(&511), Some(&1533));
+        assert_eq!(sibling.get(&511), Some(&"key_511"));
 
         // In-place overwrite: the slot is reused, so peak occupancy is unchanged.
         for key in 0..512u32 {

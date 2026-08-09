@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-52 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+53 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -184,6 +184,27 @@ it still owed would be a use-after-free rather than a missing entry.
 - `equal_reach_inputs_cost_one_description_and_one_fold`
 - `a_container_is_copy_and_drop_free`
 - `project_bundles_a_cell_with_exactly_its_run_reach`
+
+**`BumpAllocator` — a mutable collection over the region bump** ([src/witnessed/bump.rs](../src/witnessed/bump.rs))
+— the crate's one `unsafe impl Allocator`. Its methods forward to `&Bump`'s own impl, so its safety
+argument is the delegate's, but what a collection *does* through it is the crate's to answer for and
+is a shape nothing above covers: the side-table group holds references handed out by an append-only
+bump, while this one **reallocates**. `hashbrown` grows its buckets through `grow`, which bumpalo
+satisfies **in place** when the old allocation is the newest one out of the chunk and by
+allocate-copy-abandon when it is not — two different retaggings of a pointer the table keeps reading,
+and a violation of either is silent under the ordinary suite because the abandoned bytes stay mapped
+until region death. The test drives both paths: one table grown past several resizes, overwritten,
+removed from and retained over, with a *second* table and bumped `&str`s interleaved so neither
+table's bucket array is the newest allocation when it needs to grow, plus a vec grown and shrunk
+over the same allocator.
+
+It is a leak claim too, and the one a bump cannot fail loudly on — deallocation is a no-op here, so
+a collection whose elements owned anything would read and write correctly and simply never free.
+Embedders hold that line at their own declarations (koan's binding tables assert
+`!needs_drop` on every key and value where each table is built); this test is the dynamic check that
+the bump-side half — abandoned bucket arrays and vec buffers — is released with the chunks.
+
+- `a_bump_backed_table_survives_growth_overwrite_and_removal`
 
 **The three carrier states and the transform verbs between them**
 ([src/witnessed.rs](../src/witnessed.rs), [src/witnessed/delivered.rs](../src/witnessed/delivered.rs))
