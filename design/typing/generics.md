@@ -12,9 +12,9 @@ A generic function is an FN taking one or more `:Type` parameters and
 returning a module that holds the function specialized to those types:
 
 ```
-LET make_head = (FN (MAKEHEAD Ty :Type) -> Module = (
+LET make_head = FN (MAKEHEAD Ty :Type) -> Module = (
   MODULE built = ((FN (HEAD xs :(LIST OF Ty)) -> Ty = ...))
-))
+)
 ```
 
 Inside the body `Ty` is a bound parameter, so the inner FN is ordinary:

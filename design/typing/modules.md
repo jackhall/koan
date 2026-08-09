@@ -22,7 +22,7 @@ A **structure** (declared with `MODULE`) bundles type definitions, values,
 and functions:
 
 ```
-MODULE int_ord = ((LET Carrier = Number) (LET compare = (FN ...)))
+MODULE int_ord = ((LET Carrier = Number) (LET compare = FN ...))
 ```
 
 A **signature** (declared with `SIG`) is a module type — an interface
@@ -476,6 +476,6 @@ the call-site region so the borrowed window survives both the block and any
 closure that escapes it reading a surfaced member.
 
 A bare `FN` registration writes only the `functions` dispatch bucket, never
-`data`; only the `LET f = (FN …)` capture form also writes `data`. The surfaced
+`data`; only the combined `LET f = FN …` statement also writes `data`. The surfaced
 window therefore carries captured values in `data` and the dispatch surface in
 `functions`, cleanly separated rather than conflated.

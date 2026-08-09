@@ -273,3 +273,26 @@ fn type_token_group_name_errors_with_the_snake_case_respelling() {
         "expected the snake_case respelling diagnostic, got {error}",
     );
 }
+
+/// The member scan reads a *declaration*, not any statement naming the token `OP`. A user `FN`
+/// whose signature spells `OP` as a keyword makes `1 OP 2` an ordinary call, and a group body may
+/// hold one as a top-level statement: the scan skips it and the group's real members stand. The
+/// call is bare rather than bound, so its `OP` keyword sits in the statement's *own* parts run —
+/// which is the only place the scan looks.
+#[test]
+fn a_call_naming_the_op_keyword_is_not_a_member() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "FN (a :Number OP b :Number) -> Number = (a)\n\
+         GROUP vec_ops FOLD LEFT = (\
+           (OP #(⊞) OVER Number = (left + right))\
+           (1 OP 2)\
+           (LET folded = (1 ⊞ 2 ⊞ 3)))",
+    );
+    assert!(
+        matches!(test_run.run_one(parse_one(&program, "vec_ops.folded")), KObject::Number(n) if *n == 6.0),
+        "the `OP`-keyword call is ordinary body content, and the real member still reduces its run",
+    );
+}

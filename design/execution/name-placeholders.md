@@ -36,13 +36,14 @@ hidden, and dispatch falls through to outer scopes. Forward calls from a
 function *body* are unaffected — bodies re-dispatch per call against the
 body's lexical chain, by which point every sibling binder has registered.
 
-The mechanism lives in two install channels, one per binder shape. Which
-channel a binder uses — and the name or bucket it declares — is read
-**parse-statically**: every [`KExpression`](../../src/machine/model/ast.rs)
-caches, beside its `DispatchShape`, the set of binders its subtree installs into
-the enclosing scope ([`binder_installs`](../../src/machine/model/ast.rs), per the
-position rule below). The single source of truth for which AST forms introduce a
-binder, and which name or bucket each declares, is the static
+The mechanism lives in two install channels. Which channels a binder fills — and
+the name and bucket keys it declares — is read **parse-statically**: every
+[`KExpression`](../../src/machine/model/ast.rs) caches, beside its
+`DispatchShape`, what it *itself* installs into the enclosing scope
+([`binder_plan`](../../src/machine/model/ast.rs), per the position rule below) —
+its own spine, never what its slots contain. The single source of truth for which
+AST forms introduce a binder, and which name and buckets each declares, is the
+static
 [`BINDER_SPECS`](../../src/machine/model/binder.rs) table, keyed by untyped
 signature shape and pinned against the live builtin table by a spec⟺registration
 consistency test.
@@ -60,9 +61,10 @@ place, so the key is stored once and the claim's bytes are never abandoned; and
 the exclusivity rule each table obeys is a fact of its slot enum.
 
 *Name-keyed binders* (`LET`, `TYPE`, `MODULE`, `GROUP`, `SIG`, `UNION`,
-`NEWTYPE`, `RECURSIVE TYPES`) declare a
-[`BinderKey::Name`](../../src/machine/model/binder.rs) — the to-be-bound name the
-matching spec's extractor pulls structurally out of the expression's parts. The
+`NEWTYPE`, `RECURSIVE TYPES`) fill the **name channel** of the
+[`BinderKey`](../../src/machine/model/binder.rs) — the to-be-bound name the
+matching spec's name extractor pulls structurally out of the expression's parts.
+The
 claim stamps `producer NodeId` paired with the binder's
 [`BindingIndex { idx }`](../../src/machine/core/bindings.rs) — the lexical
 statement index — into `data[name]` or `types[name]` per the binder's
@@ -87,21 +89,39 @@ different rules:
   (the type write, the claim, the producer-failure sweep) match the arms
   directly.
 
-*Bucket-keyed binders* (`FN`, `OP`) declare a
-[`BinderKey::Bucket`](../../src/machine/model/binder.rs) — every inner-call
-bucket key a call to the to-be-registered overloads would compute. A pending
+*Bucket-keyed binders* (`FN`, `OP`) fill the **bucket channel** — every
+inner-call bucket key a call to the to-be-registered overloads would compute. A
+pending
 overload already keys on the same full `UntypedKey` as the overload it becomes,
 so it lands in the bucket it resolves into: `functions[key]` is a `Vec` of
 [`OverloadSlot`](../../src/machine/core/bindings.rs), each either `Sealed` or
 `Pending`, and a bucket legitimately holds both at once. Keying by the full
 bucket key is what keeps `(MAKESET _)` and `(MAKESET _ USING _)` from colliding.
-A named `FN` / `OP` uses the bucket channel, never the name channel, because
-sibling overloads under one head keyword (e.g. two `FN (PICK xs :A) ...` /
-`FN (PICK xs :B) ...` declarations) must not collide on a single name slot. The
-two channels are mutually exclusive per binder: each binder uses exactly one, and
-the [`BinderKey`](../../src/machine/model/binder.rs) enum
-(`Name(String, BindKind)` vs. `Bucket(Vec<UntypedKey>)`) makes the dichotomy a
-type-level fact rather than a two-Option convention.
+A bare named `FN` / `OP` uses the bucket channel and not the name channel,
+because sibling overloads under one head keyword (e.g. two `FN (PICK xs :A) ...`
+/ `FN (PICK xs :B) ...` declarations) must not collide on a single name slot.
+
+The two channels are two fields of one key, not two alternatives: a
+[`StoredBinderKey`](../../src/machine/model/binder.rs) carries an optional
+`(name, BindKind)` and an optional
+[`BucketKeys`](../../src/machine/model/binder.rs) pair, so one statement may fill
+either channel or both. The **combined statement forms** —
+`LET <name> = FN <signature> -> <Return> = (<body>)` and the
+`LET <name> = OP …` / `LET <name> = UNARY OP …` twins — fill both from a single
+binder: the value name and the bucket key(s) the declaration's body registers
+under. Two bucket keys is the maximum any form reaches (a `UNARY OP` declares the
+keyword-first list key plus the binary bridge key), so the record is fixed-size
+and `Copy`, its strings and key runs bumped into the declaring node's own region
+with nothing heap-owned. The owned twin
+[`BinderKey`](../../src/machine/model/binder.rs) is the transient currency the
+submission path hands the bindings tables.
+
+A combined form's two writes describe **one** `KFunction`: the finalize seals the
+callable once and duplicates that cell into a `WriteOp::Value` beside the
+`WriteOp::Overload`, both at the `BindingIndex` the submission-time claim
+stamped. So the bound name and the registered overload are the same function by
+construction, not two builds of the same source — a closure captured under the
+name observes exactly what a keyworded call to it observes.
 
 The bucket vec is what admits multiple sibling FN binders
 sharing one bucket key: each install appends a distinct pending slot at its
@@ -144,7 +164,7 @@ other kind's claim, because the two live in different tables
 ([`WriteOp::apply`](../../src/machine/core/bindings/ops.rs)). Since the parser
 tags a `Type` part only for a name that classifies as a Type token, and an
 `Identifier` part only for one that does not, the two channels cannot even
-contend for a name. A spec's extractors
+contend for a name. A spec's name extractors
 run in order and the first `Some` wins, so an expression whose name part is of one
 class selects the correctly-classified channel — the value extractor misses a
 `Type` part, and vice versa
@@ -208,17 +228,18 @@ same binding and replayed on the wake.
 
 ### Submission-time binder install and the position rule
 
-Binder discovery is parse-static, so submission does no AST recursion. Every
-node caches [`binder_installs`](../../src/machine/model/ast.rs) — the aggregate
-of every binder its subtree installs into the enclosing scope, computed bottom-up
-in `fill_cache` from the [`BINDER_SPECS`](../../src/machine/model/binder.rs)
-table. The dispatch-layer submission chokepoint
+Binder discovery is parse-static and **per-statement**, so submission does no AST
+recursion. Every node caches
+[`binder_plan`](../../src/machine/model/ast.rs) — what that node itself installs
+into the enclosing scope, read at construction from the
+[`BINDER_SPECS`](../../src/machine/model/binder.rs) table and `None` for a node
+that is not a binder. The dispatch-layer submission chokepoint
 [`KoanRuntime::submit_expression`](../../src/machine/execute/dispatch/submit.rs)
-reads that aggregate **once**, for a statement submission, and stamps each
-entry's claim — a pending arm of `data[name]` / `types[name]`, or a pending slot
-appended to `functions[bucket]` — on the
-dispatching scope — with the enclosing statement's freshly allocated node id and
-`BindingIndex::value(chain.index)` — before the slot is ever popped from the work
+reads that plan **once**, for a statement submission, and stamps its claims — a
+pending arm of `data[name]` / `types[name]` for the name channel, and a pending
+slot appended to `functions[bucket]` for each bucket key — on the dispatching
+scope, with the statement's freshly allocated node id and
+`BindingIndex::value(chain.index)`, before the slot is ever popped from the work
 queues. A later sibling that dispatches before the statement's slot pops finds the
 entry and parks rather than surfacing `UnboundName` / `DispatchFailed`. There is
 exactly one install site, at statement submission; nothing installs at
@@ -227,36 +248,41 @@ scheduler: the scheduler exposes only a generic slot allocator
 (`Scheduler::alloc_node`) and the `Scope::install_*` primitives, so no `NodeWork`
 variant or scheduler code names a `KExpression`.
 
-Because the aggregate is keyed to the enclosing statement, a nested binder's
-placeholder carries the *statement's* node id, not the inner sub-dispatch's — a
-sibling parked on a nested binder wakes when the whole statement completes. A
-top-level binder is unchanged: its own node is the statement.
+A statement's plan is its own spine and nothing else, so the namespace a block
+introduces is legible from its statement keys alone — which is what
+order-independent sibling submission needs. A combined form stamps both channels
+at that one node id and one `BindingIndex`, so a sibling parked on the name and a
+sibling parked on the bucket wake on the same statement.
 
-**The position rule.** A binder may appear only where a parse-static install is
-sound:
+**The position rule.** Binding is a statement-level act. A binder may appear only
+where a parse-static install is sound:
 
 - **statement position** — a top-level line, or a statement of a module / `FN` /
   `GROUP` body (each body statement submits as its own statement);
 - **a lazily-captured body** — a `:KExpression` slot, whose statements install at
-  their own block entry, not in the enclosing aggregate;
-- **another binder's own declaration slot** — the eager value slot of an
-  enclosing binder (`LET f = (FN …)`, `LET z = (LET a = 3)`), staged with the
-  `binder_covered` bit set (in [`keyworded.rs`](../../src/machine/execute/dispatch/keyworded.rs))
-  so the aggregate the enclosing statement already installed covers it;
-- **a redundant single-`Expression` paren wrapper** — `((…))` passes its child's
-  aggregate straight through.
+  their own block entry;
+- and, structurally, **a redundant single-`Expression` paren wrapper** — `((…))`
+  is the same statement, so the submission path reads its child's plan through it.
 
 Every other eagerly-dispatched position — a user-call or builtin argument, an
-operator operand, a list / dict / record literal element, a deferred head — is an
-error. When such a sub-dispatch's cached aggregate is non-empty and the dep was
-not `binder_covered`, `submit_expression` allocates the slot pre-errored with
+operator operand, a list / dict / record literal element, a deferred head, and
+**another binder's own value slot** (`LET f = (FN …)`, `LET z = (LET a = 3)`) —
+is an error. When such a sub-dispatch carries a plan, `submit_expression`
+allocates the slot pre-errored with
 [`KErrorKind::NestedBinder`](../../src/machine/core/kerror.rs): slot-terminal and
 TRY-catchable, it propagates through the dep like any other failed dep. The rule
 covers **every** binder form — name-installing declarations and named `FN` / `OP`
 definitions alike; a named `FN` / `OP` in an eager value position is the same
 error, not a value whose registration silently vanishes. The value route is the
-anonymous `FN :{…}` form (which installs nothing) or a name bound through a legal
-binder chain.
+anonymous `FN :{…}` form, which installs nothing; a definition that must also
+bind a name is one statement in the combined spelling, which the error message
+names when the rejected node registers overloads.
+
+The combined form is a single *statement*, which is not the same as a single
+line: a line ending in `,` continues the statement, while a bare indented
+continuation wraps the remainder in a nested expression — putting the definition
+back in a value slot and re-earning the error. `LET f = ,` then the indented
+`FN …` is one statement; without the comma it is two nodes and an error.
 
 Statement indices are per-`enter_block` call: each call to
 [`KoanRuntime::enter_block`](../../src/machine/execute/runtime/submit.rs) mints

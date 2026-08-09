@@ -188,7 +188,7 @@ destination through a door whose *signature* is the enforcement instead:
   which no value can hold
   ([value-substrates.md § Value-channel AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
 - **A fresh `KFunction` wrapper** takes
-  [`Scope::store_function_object`](../src/machine/core/scope/reach.rs), a merge modelled
+  [`Scope::store_function_cell`](../src/machine/core/scope/reach.rs), a merge modelled
   on the module store fold: the composition mints the callable's home region into the
   product's reach, which is the borrows-home fact the wrapper carries, and the self rule
   strips it from the retained bundle. The claim is exact — a `KFunction`'s only region

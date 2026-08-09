@@ -24,13 +24,13 @@ parameter; generic functions are built this way — see [generics.md](generics.m
   functor-specific state — no flag, no type variant, no binder.
 
 ```
-LET make_set = (FN (MAKESET er :Ordered) -> Module = (
+LET make_set = FN (MAKESET er :Ordered) -> Module = (
   MODULE result = (
     (LET Carrier = ...)
-    (LET insert = (FN (INSERT s :Carrier x :er.Carrier) -> Carrier = ...))
+    (LET insert = FN (INSERT s :Carrier x :er.Carrier) -> Carrier = ...)
     ...
   )
-))
+)
 
 LET int_set = (MAKESET int_ord)
 ```
@@ -49,13 +49,14 @@ given FN is "a functor" is a reading of its return slot, not a property the engi
 A functor binds and applies exactly like any other function.
 
 The binder registers the keyword overload in the dispatch table, so `(MAKESET int_ord)` — the
-ordinary keyworded call convention — is the primary application surface. A
-`LET make_set = (FN …)` additionally binds the function *value* under a snake_case
-(value-class) name in `bindings.data`, reachable through the value-side function-value call
-and its one-record-literal named-args form, `(make_set {er = int_ord})`. `bindings.types`
-holds no callable value: binding a function under a Type-class (capitalized) name is a
-`TypeClassBindingExpectsType` error at the LET site (see
-[elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)), and there is
+ordinary keyworded call convention — is the primary application surface. The combined
+statement form `LET make_set = FN …` additionally binds the same function *value* under a
+snake_case (value-class) name in `bindings.data`, reachable through the value-side
+function-value call and its one-record-literal named-args form, `(make_set {er = int_ord})`.
+`bindings.types` holds no callable value: naming the combined form's binder with a Type-class
+(capitalized) identifier is a `ShapeError` suggesting the snake_case respelling — a function
+is a value (see
+[elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)) — and there is
 no Type-head application surface for a function. Both call surfaces route through
 `apply_callable`'s `Function` arm — the same arm a plain function call takes — and the result
 happens to be a module.
@@ -242,12 +243,11 @@ just nested FNs whose outer return type is the inner function's type,
 written with the `:(FN (params) -> R)` sigil:
 
 ```
-LET make_map = (FN (MAKEMAP er :Ordered)
-                 -> :(FN (vo :Monoid) -> :(Map WITH {Key = er.Carrier})) = (
+LET make_map = FN (MAKEMAP er :Ordered) -> :(FN (vo :Monoid) -> :(Map WITH {Key = er.Carrier})) = (
   FN (MAKEVALS vo :Monoid) -> :(Map WITH {Key = er.Carrier}) = (
     MODULE result = ( ... )
   )
-))
+)
 ```
 
 The inner FN inherits the outer's per-call scope, so `er.Carrier` in its return slot resolves

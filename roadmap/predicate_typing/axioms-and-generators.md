@@ -37,7 +37,7 @@ independent of signatures.
   module's `gen` slot for every free identifier; variable types resolve
   through the surrounding signature scope. The `IMPLIES` combinator
   handles conditional axioms via discard.
-- *Generators live in modules — decided.* A `LET gen = (FN ...)` slot in a
+- *Generators live in modules — decided.* A function-typed `gen` slot in a
   signature body is a structural obligation. Every ascribing module must
   supply a generator for the abstract type. No sidecar generator registry.
   Generators compose through functor application: a functor body builds

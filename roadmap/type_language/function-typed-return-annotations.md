@@ -53,13 +53,11 @@ and fails with `unbound name 'left'`.
   parse-static, so the parser wraps a plain parenthesized part in a binder
   form's type slot as `ExpressionPart::SigiledTypeExpr` (the same
   `Box<KExpression>` payload), making `(…)` ≡ `:(…)` in exactly those slots.
-  The overload table, the derived `chain_slot_mask`, and dispatch stay
-  untouched, and parity with the sigiled form is exact by construction. Needs a
-  per-spec type-slot mask beside `chain_slot_mask` in
+  The overload table and dispatch stay untouched, and parity with the sigiled
+  form is exact by construction. Needs a per-spec type-slot mask in
   [`binder.rs`](../../src/machine/model/binder.rs)'s `BINDER_SPECS`. (The
   dispatch-side alternative — a `KEXPRESSION` type-slot overload — was
-  rejected: it flips the bucket's derived mask entry under the
-  `!= KEXPRESSION` AND-over-binder-overloads rule and grows the overload
+  rejected: it flips the slot's eager/lazy classification and grows the overload
   matrix per carrier combination.)
 - *How the overload-matrix holes are closed — decided.* Collapse the carrier
   dimension with union-typed slots, shipped by the prerequisite

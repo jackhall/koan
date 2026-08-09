@@ -21,7 +21,7 @@ module language itself.
 A function can declare an **implicit module parameter**:
 
 ```
-LET sort = (FN (SORT xs :(LIST OF mo.Carrier) {mo: Ordered}) -> :(LIST OF mo.Carrier) = (...))
+LET sort = FN (SORT xs :(LIST OF mo.Carrier) {mo: Ordered}) -> :(LIST OF mo.Carrier) = (...)
 ```
 
 At a call site `(SORT [3, 1, 2])`, the compiler infers `mo.Carrier = Number`,

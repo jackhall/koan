@@ -20,10 +20,10 @@ PRINT copy
 42
 ```
 
-Statement position — a line of a program, a module or function body — and a
-lazily-captured body are the only places a declaration may appear. A
-declaration anywhere eagerly evaluated (a call argument, a list or dict
-element, an operator operand, another declaration's value slot) is a
+A declaration may appear only at **statement position**: a line of a program, or
+a line of a body that is evaluated later — a function, module, or group body.
+Anywhere that is evaluated eagerly — a call argument, a list or dict element, an
+operator operand, another declaration's value slot — a declaration is a
 structured error:
 
 ```koan

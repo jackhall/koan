@@ -295,6 +295,12 @@ declaration writes decides the *only* way its callable can be reached:
   registration channel. A bare `FN` registration binds no value; it writes a bucket
   entry only.
 
+The combined statement form `LET <name> = FN …` (and its `OP` twins) writes one
+entry in each: a `WriteOp::Value` and a `WriteOp::Overload` over the same sealed
+cell, so the name-callable value and the dispatchable overload are one
+`KFunction`. That is one declaration reaching both channels — not either channel
+writing the other's table.
+
 So the two channels never write each other's table, and the partition is what
 makes the keyworded and by-name lanes disjoint rather than overlapping. Binding a
 callable under a second name creates an ordinary alias readable by that name; it

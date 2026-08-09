@@ -336,6 +336,18 @@ impl UntypedElementSpec {
     }
 }
 
+/// Which declaration surface a spec entry belongs to. Binder discovery itself never branches on
+/// this; it exists so a consumer outside binder discovery can recognize a surface by *full bucket
+/// key* — which is the only structural read that cannot be fooled by a statement merely spelling
+/// one of the surface's keywords. `GROUP`'s member scan is that consumer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BinderSurface {
+    /// `OP #(…) OVER …` / `UNARY OP #(…) OVER …`, bare or in its combined `LET <name> =` spelling.
+    OperatorDef,
+    /// Every other binder-introducing form.
+    Other,
+}
+
 /// A binder-introducing form: the untyped bucket key it dispatches under and the extractors that
 /// read its declared name and bucket keys out of the AST.
 ///
@@ -350,6 +362,8 @@ pub struct BinderSpec {
     /// Bucket-key extractor for a form whose body registers overloads (`FN`, `OP`). `None` for the
     /// name-only forms.
     pub bucket: Option<BinderBucketFn>,
+    /// The declaration surface this key belongs to (see [`BinderSurface`]).
+    pub surface: BinderSurface,
 }
 
 impl BinderSpec {
@@ -396,30 +410,35 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             (type_part_binder_name, BindKind::Type),
         ],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
     BinderSpec {
         key: &[Kw("TYPE"), Slot],
         names: &[(type_decl_binder_name, BindKind::Type)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // MODULE <name> = <body> (identifier overload; the type-named overload has no hooks).
     BinderSpec {
         key: &[Kw("MODULE"), Slot, Kw("="), Slot],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // GROUP <name> FOLD LEFT = <body>.
     BinderSpec {
         key: &[Kw("GROUP"), Slot, Kw("FOLD"), Kw("LEFT"), Kw("="), Slot],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // GROUP <name> FOLD RIGHT = <body>.
     BinderSpec {
         key: &[Kw("GROUP"), Slot, Kw("FOLD"), Kw("RIGHT"), Kw("="), Slot],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT = <body>.
     BinderSpec {
@@ -435,6 +454,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // GROUP <name> PAIRWISE FOLD <combiner> RIGHT = <body>.
     BinderSpec {
@@ -450,36 +470,42 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // SIG <name> = <body>.
     BinderSpec {
         key: &[Kw("SIG"), Slot, Kw("="), Slot],
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // UNION <name> = <schema>.
     BinderSpec {
         key: &[Kw("UNION"), Slot, Kw("="), Slot],
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // NEWTYPE <name> = <repr> (scalar / sigil / record reprs share the key).
     BinderSpec {
         key: &[Kw("NEWTYPE"), Slot, Kw("="), Slot],
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` forms).
     BinderSpec {
         key: &[Kw("NEWTYPE"), Slot],
         names: &[(type_decl_binder_name, BindKind::Type)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // RECURSIVE TYPES <name> = <body>.
     BinderSpec {
         key: &[Kw("RECURSIVE"), Kw("TYPES"), Slot, Kw("="), Slot],
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
+        surface: BinderSurface::Other,
     },
     // FN <signature> -> <return_type> = <body> (three hook-bearing overloads share this key; the
     // anonymous record-schema overload has no hooks).
@@ -487,12 +513,14 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         key: &[Kw("FN"), Slot, Kw("->"), Slot, Kw("="), Slot],
         names: &[],
         bucket: Some(fn_def_binder_bucket),
+        surface: BinderSurface::Other,
     },
     // OP <symbol> OVER <operand> = <body>.
     BinderSpec {
         key: &[Kw("OP"), Slot, Kw("OVER"), Slot, Kw("="), Slot],
         names: &[],
         bucket: Some(op_def_binder_bucket),
+        surface: BinderSurface::OperatorDef,
     },
     // OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -508,6 +536,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[],
         bucket: Some(op_def_binder_bucket),
+        surface: BinderSurface::OperatorDef,
     },
     // UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -524,6 +553,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[],
         bucket: Some(op_def_binder_bucket),
+        surface: BinderSurface::OperatorDef,
     },
     // The combined statement forms: one binder filling both channels — the LET value name and the
     // bucket key(s) the declaration's body registers under. `LET <name> = UNARY OP …` is the
@@ -544,6 +574,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(fn_def_binder_bucket),
+        surface: BinderSurface::Other,
     },
     // LET <name> = OP <symbol> OVER <operand> = <body>.
     BinderSpec {
@@ -560,6 +591,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(op_def_binder_bucket),
+        surface: BinderSurface::OperatorDef,
     },
     // LET <name> = OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -578,6 +610,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(op_def_binder_bucket),
+        surface: BinderSurface::OperatorDef,
     },
     // LET <name> = UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -597,6 +630,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(op_def_binder_bucket),
+        surface: BinderSurface::OperatorDef,
     },
     // VAL <name> <ty> — a declaration form with no install channel. It records
     // into the decl scope's slot collector, not a binding map any name lookup can see, so it
@@ -606,8 +640,36 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         key: &[Kw("VAL"), Slot, Slot],
         names: &[],
         bucket: None,
+        surface: BinderSurface::Other,
     },
 ];
+
+/// The arity of the operator declaration `expression` is, or `None` if it is not one. Recognition
+/// is by **full bucket key** against the [`BINDER_SPECS`] entries marked
+/// [`BinderSurface::OperatorDef`] — every keyword pinned in position — so a statement that merely
+/// spells the `OP` token (a call to a user `FN` whose signature names it as a keyword) is not an
+/// operator declaration, and neither is an `OP` nested inside some other statement's slot. `GROUP`
+/// reads its members' symbols off exactly the statements this admits.
+pub(crate) fn op_declaration_arity(expression: &KExpression<'_>) -> Option<OpArity> {
+    let spec = BINDER_SPECS
+        .iter()
+        .find(|spec| spec.matches_stored_key(expression.stored_key()))?;
+    if spec.surface != BinderSurface::OperatorDef {
+        return None;
+    }
+    Some(if is_unary_form(expression) {
+        OpArity::Unary
+    } else {
+        OpArity::Binary
+    })
+}
+
+/// The two operator-declaration surfaces, as [`op_declaration_arity`] classifies them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OpArity {
+    Binary,
+    Unary,
+}
 
 /// What `expression` installs, if its bucket key matches a [`BINDER_SPECS`] entry whose extractors
 /// read a binder out of the AST. Both channels are read — a combined form fills them together. The

@@ -85,6 +85,32 @@ compose a [`KType`](../src/machine/model/types/ktype.rs) directly.
 
 Because it chains with nothing, a unary operator can be no group's member.
 
+## Operators as values: the combined statement form
+
+An operator declaration evaluates to the function it declares, and prefixing
+`LET <name> =` binds that function under a name in the same statement:
+
+```
+LET plus = OP #(⊕) OVER Number = (<body>)
+LET before = OP #(≺) OVER Number -> Bool = (<body>)
+LET collect = UNARY OP #(~) OVER Number -> :(LIST OF Number) = (<body>)
+```
+
+Every declaration surface above has this twin: both `OP` arities and the
+`UNARY OP` form, over the same operand/result type carriers, built from one
+element list per surface so the two spellings cannot drift
+([op_def.rs](../src/builtins/op_def.rs)). The statement is one binder filling
+both install channels — the value name and the bucket key(s) the declaration
+registers under, two of them for `UNARY OP` — so the operator reduces its runs
+*and* the bound name reaches the same `KFunction` as a first-class value. For a
+unary operator the bound value is the list body, the operator's primary function.
+Binding is a statement-level act, so this is the only spelling that reaches both:
+an `OP` in a plain `LET`'s value slot is a `NestedBinder` error
+([name-placeholders.md § the position rule](execution/name-placeholders.md#submission-time-binder-install-and-the-position-rule)).
+
+A group's member scan reads both spellings, so a combined declaration inside a
+`GROUP` body is an ordinary member.
+
 ## Groups
 
 A `GROUP` **is** a module: it binds a module value under a snake_case name, its
@@ -216,10 +242,10 @@ A group parameterized by a type is an ordinary
 [functor](typing/functors.md) — an `FN` whose body is a `GROUP`:
 
 ```
-LET make_ops = (FN (MAKEOPS Elt :Type) -> Module = (
+LET make_ops = FN (MAKEOPS Elt :Type) -> Module = (
   GROUP result FOLD LEFT = (
     (OP #(+) OVER :(LIST OF Elt) = (…))
-    (OP #(-) OVER :(LIST OF Elt) = (…)))))
+    (OP #(-) OVER :(LIST OF Elt) = (…))))
 ```
 
 Instantiate it at a concrete type (`MAKEOPS Number`) when the member bodies need

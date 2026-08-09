@@ -291,12 +291,14 @@ parallel one per family.
 
 `LET`, `TYPE`, `MODULE`, `GROUP`, `SIG`, `UNION`, `NEWTYPE`, and
 `RECURSIVE TYPES` register a single name binding and ride the name-keyed
-placeholder channel. `FN` and `OP` register *overloads* in a function bucket and
-ride the bucket-keyed channel instead. Which forms are binders — and the name or
-bucket each declares — is read parse-statically from the static
-[`BINDER_SPECS`](../../src/machine/model/binder.rs) table; the two channels are
-reified as [`BinderKey::Name`](../../src/machine/model/binder.rs) and
-`BinderKey::Bucket`, mutually exclusive per binder.
+placeholder channel. A bare `FN` / `OP` registers *overloads* in a function
+bucket and rides the bucket-keyed channel instead; the combined
+`LET <name> = FN/OP …` statement rides both from one binder. Which forms are
+binders — and the name and buckets each declares — is read parse-statically from
+the static [`BINDER_SPECS`](../../src/machine/model/binder.rs) table; the two
+channels are the two fields of one
+[`BinderKey`](../../src/machine/model/binder.rs) record, an optional name and up
+to two bucket keys.
 
 The bucket-keyed channel admits *sibling* overloads under one head
 keyword. Two `FN (PICK xs :A) ...` / `FN (PICK xs :B) ...`

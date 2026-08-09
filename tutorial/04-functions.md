@@ -123,14 +123,32 @@ first definition and everything else falls through to the second.
 
 ## Functions as values
 
+There are three function forms, and which one you write is the choice of how the
+function can be reached:
+
+- **`FN (<signature>) -> <Type> = (<body>)`** — the bare named form above. It
+  registers a shape, so it is reached by writing that shape (`ECHO 21`). It binds
+  no name.
+- **`FN :{<fields>} -> <Type> = (<body>)`** — the anonymous form. No keyword, so
+  no shape is registered; the function is only the value the expression produces,
+  and you bind that value with `LET`.
+- **`LET <name> = FN (<signature>) -> <Type> = (<body>)`** — the combined form.
+  One statement, one definition, reached *both* ways: the shape dispatches and
+  the name holds the same function.
+
+`LET <name> = OP …` (and the `UNARY OP` twin) does the same for operators.
+
 Writing `LET <name> = FN …` as one statement binds a name to the function
-*and* registers its shape — one declaration reaching both. A function bound
+*and* registers its shape — one declaration reaching both. To break it across
+lines, end the line with `,`: a bare indented continuation is read as a nested
+expression, which puts the definition back in a value slot. A function bound
 this way is called with **named arguments**: one record literal
 `{name = value}`, with each argument introduced by its parameter name. Argument
 order is independent of the declaration:
 
 ```koan
-LET pick = FN (a :Str OR b :Str) -> Str = (a)
+LET pick = ,
+  FN (a :Str OR b :Str) -> Str = (a)
 PRINT (pick {a = "first", b = "second"})
 PRINT (pick {b = "second", a = "first"})
 ```
@@ -143,7 +161,8 @@ first
 Leaving out a required name is an error:
 
 ```koan
-LET pick = FN (a :Str OR b :Str) -> Str = (a)
+LET pick = ,
+  FN (a :Str OR b :Str) -> Str = (a)
 pick {a = "only"}
 ```
 

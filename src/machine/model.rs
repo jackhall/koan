@@ -24,8 +24,9 @@ pub(crate) use ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass,
     ProgramExpression, TypeIdentifier, WorkingExpression, WorkingPart,
 };
+pub(crate) use binder::{op_declaration_arity, OpArity};
 pub(crate) use binder::{symbol_from_parts, symbol_from_quote_body, BinderKey, StoredBinderKey};
-pub use binder::{BindKind, BinderBucketFn, BinderNameFn};
+pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};
 pub(crate) use types::{
     constructor_param_names, declarator_window, elaborate_type_identifier, finalize_nominal_member,
     pair_list_names, parse_typed_field_list_via_elaborator, unsaturated_constructor_message,

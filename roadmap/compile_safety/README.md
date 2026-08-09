@@ -76,7 +76,7 @@ by local discipline rather than by construction.
   borrows only its home. The claim is never audited; a
   registration that ever embedded a foreign borrow would under-pin. Candidate:
   derive the empty reach from the composition that placed the callable, the way
-  [`Scope::store_function_object`](../../src/machine/core/scope/reach.rs) derives
+  [`Scope::store_function_cell`](../../src/machine/core/scope/reach.rs) derives
   the `KObject::KFunction` wrapper's, rather than assert it. The type
   channel no longer participates — a `KType` is a `Copy` handle owning all its
   content, so a type binding carries no reach to mint in the first place.

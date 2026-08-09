@@ -82,14 +82,14 @@ unevaluated expression as a value, pass it around, and evaluate it on demand.
 As its parts run is frozen, [`KExpression`](../src/machine/model/ast.rs)
 fills a structural cache: the `untyped_key` (the bucket key dispatch matches on),
 the `DispatchShape`, an optional operator probe, and the binder cache —
-`binder_plan` (is this node itself a binder, and the name or bucket it declares)
-plus `binder_installs` (everything this node's subtree installs into the enclosing
-scope, per the position rule in
-[execution/name-placeholders.md](execution/name-placeholders.md)). All of it is a
+`binder_plan`: is this node itself a binder, and which name and bucket key(s) it
+installs into the enclosing scope, per the position rule in
+[execution/name-placeholders.md](execution/name-placeholders.md). The plan covers
+this node's own spine only; nothing a slot contains joins it. All of it is a
 pure function of expression structure — no scope, no types — so it is computed
 once and read by the dispatch driver on every call of the enclosing function
-rather than re-derived per call. The `binder_installs` aggregate is read once, at
-statement submission, before any splice. The cache is filled at the one
+rather than re-derived per call. The plan is read once, at statement submission,
+before any splice. The cache is filled at the one
 construction chokepoint, `KExpression::build`, which bumps the parts run and
 derives the cache from the frozen slice in the same call — so a node cannot exist
 with a stale or unfilled cache, and nothing mutates a part run afterwards. The

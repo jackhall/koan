@@ -43,9 +43,10 @@ function, not a kind the language tracks.
 
 ## The function is an ordinary value
 
-Because a functor is an ordinary function, `LET` binds it like any other function
-value — under a snake_case (value-class) name — and the value-side call form works
-alongside the keyworded one:
+Because a functor is an ordinary function, the combined
+`LET <name> = FN …` statement binds it like any other function — under a
+snake_case (value-class) name — and the value-side call form works alongside the
+keyworded one:
 
 ```koan
 SIG Ordered = (VAL compare :Number)

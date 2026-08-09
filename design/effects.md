@@ -55,7 +55,7 @@ the dependency at the FN's parameter list; the call site supplies the
 module:
 
 ```
-LET gen = (FN (GEN r :Random) -> Number = (... r ...))
+LET gen = FN (GEN r :Random) -> Number = (... r ...)
 ```
 
 Stage 5's implicit dispatch elides the parameter at call sites where the

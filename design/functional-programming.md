@@ -49,15 +49,16 @@ LET inc = (FN :{x :Number} -> Number = (x))
 LET n = (inc {x = 41})
 ```
 
-A **named** `FN` — the keyworded form above — is a binder, so it may stand only
-at a statement position or in another binder's declaration slot, never inline in
-an eagerly evaluated value position such as a call argument or a list / dict
-element (that is a `NestedBinder` error). The two value routes are the anonymous
-`FN :{…}` form, which installs nothing, or binding the named form through a `LET`
-chain and passing the name:
+A **named** `FN` — the keyworded form above — is a binder, and binding is a
+statement-level act: it may stand only at a statement position or in a
+lazily-captured body, never inline in an eagerly evaluated value position such as
+a call argument, another binder's value slot, or a list / dict element (that is a
+`NestedBinder` error). The two value routes are the anonymous `FN :{…}` form,
+which installs nothing, and the **combined statement form**, which binds the name
+and registers the keyworded shape from one binder:
 
 ```
-LET g = (FN (SHOW x :Number) -> Str = ("hi"))
+LET g = FN (SHOW x :Number) -> Str = ("hi")
 LET greeting = (USE g)
 ```
 

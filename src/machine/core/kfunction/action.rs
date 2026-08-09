@@ -552,10 +552,11 @@ impl<'a> OwnedDispatch<'a> {
     /// Lower into the library dep currency — the crossing the harness (and
     /// the field-list bundle's Outcome finish) makes right before `Await::on`.
     pub fn into_request(self) -> DepRequest<'a> {
+        // A builtin-declared owned dispatch (module/sig/recursive/using bodies) enters a fresh
+        // block via `InScope`, which is a statement position.
         DepRequest::Dispatch {
             expr: self.expr,
             placement: self.placement,
-            // A builtin-declared owned dispatch (module/sig/recursive/using bodies) enters a fresh
         }
     }
 }

@@ -234,11 +234,13 @@ hold. A **Type-class LHS** admits an RHS only if it carries type-language identi
 any value-channel `Type` arm (struct / union / Result / signature identities all flow
 raw as `&KType`). A
 module RHS is refused with the snake_case respelling — a module is a value, and the
-Type-token namespace names what can type a field. A **function** RHS is refused the
-same way: a function is a value whatever it returns, so a module-returning FN binds
-value-side like any other (see
+Type-token namespace names what can type a field. A **function** RHS is refused for
+the same reason: a function is a value whatever it returns, so a module-returning FN
+binds value-side like any other (see
 [functors.md § Application and binding](functors.md#application-and-binding)), and
-`bindings.types` holds no callable. Any other object rejects with
+`bindings.types` holds no callable. The combined statement form is refused at its own
+overload — `LET <Name> = FN …` is a `ShapeError` carrying the snake_case respelling,
+before any definition is built. Any other object rejects with
 `KErrorKind::TypeClassBindingExpectsType`. Every admitted RHS — struct / union /
 Result, and signature —
 routes through `register_type` (type-only): the schema or `&Signature`

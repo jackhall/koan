@@ -30,9 +30,10 @@ registrations). Every new carrier grows the matrices multiplicatively.
 - Registration rejects a union carrier slot whose members are not pairwise
   part-kind-disjoint (`Union` identity is order-blind, so admission must be
   deterministic without member order).
-- Registration rejects a `KEXPRESSION` member inside a union carrier slot, so
-  the `chain_slot_mask` derivation's `!= KEXPRESSION` rule in
-  [`binder.rs`](../../src/machine/model/binder.rs) is unaffected by unions.
+- Registration rejects a `KEXPRESSION` member inside a union carrier slot, so a
+  slot's eager/lazy classification
+  ([`lazy_eager_indices`](../../src/machine/core/kfunction/pick.rs), which keys on
+  the slot's own ktype) stays unambiguous under unions.
 - Unit tests exercise a union carrier slot through strict admission, relaxed
   admission, and slot capture.
 

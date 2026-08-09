@@ -136,12 +136,48 @@ fn spec_table_matches_live_registration() {
 /// the only routes into an install.
 #[test]
 fn spec_channels_cover_every_installing_entry() {
+    let silent: Vec<&[super::UntypedElementSpec]> = BINDER_SPECS
+        .iter()
+        .filter(|spec| spec.installs_nothing())
+        .map(|spec| spec.key)
+        .collect();
+    assert_eq!(
+        silent.len(),
+        1,
+        "`VAL` is the one declaration form with no install channel; a second silent entry means a \
+         binder builtin lost its extractor",
+    );
+    assert!(
+        silent[0]
+            .first()
+            .is_some_and(|element| matches!(element, super::UntypedElementSpec::Keyword("VAL"))),
+        "the silent entry must be `VAL`",
+    );
+}
+
+/// The `OperatorDef` marker agrees with the keys it labels: a spec entry is marked iff its key
+/// names the `OP` declarator keyword. The marker is what `GROUP`'s member scan keys on, so a new
+/// operator surface that forgets it — or a non-operator form that wrongly carries it — fails here
+/// rather than silently changing which body statements a group treats as members.
+#[test]
+fn operator_def_marker_agrees_with_the_keys_it_labels() {
     for spec in BINDER_SPECS {
-        if spec.installs_nothing() {
-            assert!(spec.names.is_empty() && spec.bucket.is_none());
-            continue;
-        }
-        assert!(!spec.names.is_empty() || spec.bucket.is_some());
+        let names_op = spec
+            .key
+            .iter()
+            .any(|element| matches!(element, super::UntypedElementSpec::Keyword("OP")));
+        assert_eq!(
+            spec.surface == super::BinderSurface::OperatorDef,
+            names_op,
+            "spec key {:?} disagrees with its surface marker",
+            spec.key
+                .iter()
+                .map(|e| match e {
+                    super::UntypedElementSpec::Keyword(k) => (*k).to_string(),
+                    super::UntypedElementSpec::Slot => "_".to_string(),
+                })
+                .collect::<Vec<_>>(),
+        );
     }
 }
 
