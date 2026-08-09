@@ -413,7 +413,18 @@ scope and runs on the outer scheduler's main loop after every body statement
 terminalizes. Runs the same stored scope-pointer re-anchor the workgraph slate's born-door group
 pins (see the stored reference-carrier group above) with none of its
 own, exercised end-to-end by every scheduler-driving slate test; its `module_body_dispatch_does_not_dangle`
-program runs under plain `cargo test`. No separate minimal test.
+program runs under plain `cargo test`.
+
+The body's [`AnnouncedWindow`](../src/machine/model/types/declaration_window.rs) rides that same
+child scope inline: its member and binder runs are bumped into the scope's own region at the
+construction door, and each fill replaces the whole fill run with a freshly bumped one, so a
+declaration statement writes a `Cell` holding a `&'a` into the region its own scope lives in and a
+later statement — and the seal, and the `USING` window over the finished module — read it back. The
+test below drives the whole shape end to end: two mutually-recursive members fill from separate
+statements, the last fill seals and bumps the sealed runs, and a `USING` block constructs a value
+whose type is one of the sealed handles.
+
+- `announced_members_construct_through_using`
 
 **`Scheduler::replace` / `NodeStore::reinstall` slot re-anchor** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
 the Replace arm stores the slot's scope as a payload-less `NodeScope::Yoked` marker re-projected

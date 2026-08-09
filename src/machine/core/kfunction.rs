@@ -43,7 +43,7 @@ pub struct KFunction<'a> {
     /// so `captured` keeps `KFunction<'a>` invariant in `'a`.
     captured: &'a Scope<'a>,
     /// True for binder-introducing builtins (LET, VAL, FN, OP, TYPE, MODULE, SIG, UNION, NEWTYPE,
-    /// GROUP, RECURSIVE TYPES). The structural detail of *what* a binder declares — the name or the
+    /// GROUP). The structural detail of *what* a binder declares — the name or the
     /// inner-call bucket key it installs, and which of its slots carry nested binders forward — lives
     /// once in [`crate::machine::model::binder`] (the [`BINDER_SPECS`](crate::machine::model::binder::BINDER_SPECS)
     /// table), keyed by untyped signature shape. This flag is only the classification bit dispatch

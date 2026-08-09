@@ -74,6 +74,12 @@ fn module_mutual_newtype_pair_seals_in_either_order() {
 
 /// A `USING` window over the module surfaces the announced members as bare type names, which is how
 /// a group declared inside a module is constructed at its use site.
+///
+/// Miri audit-slate: exercises the `AnnouncedWindow` the module child scope carries inline —
+/// bumped member and binder runs written at the construction door, a fill run replaced with a
+/// freshly bumped one by each declaration statement, the sealed runs bumped by the statement whose
+/// fill closes the group, and every one of them read back from a later statement and from the
+/// `USING` window over the finished module.
 #[test]
 fn announced_members_construct_through_using() {
     let program = program_storage();

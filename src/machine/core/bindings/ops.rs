@@ -27,7 +27,7 @@ use crate::machine::model::{probe_key, KType};
 
 /// How a [`WriteOp::Type`] meets an existing `types[name]`: `Insert` is strict insert-if-absent (a
 /// present name is a `Rebind`), `UpsertEqual` admits a re-entry of the *same* declaration — the
-/// nominal finalizes, which overwrite a `RECURSIVE TYPES` block's pre-installed identity and
+/// nominal finalizes, which overwrite an announced group's pre-installed identity and
 /// tolerate a parallel finalize of their own slot. Folding the two type writers into one
 /// description site keeps the shared skeleton — cross-kind probe, partition guard, in-place
 /// finalize of the pending arm — in one place.

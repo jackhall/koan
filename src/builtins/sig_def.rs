@@ -3,7 +3,7 @@
 //! [design/typing/modules.md](../../design/typing/modules.md).
 //!
 //! Routes [`await_body_in_scope`](super::await_body::await_body_in_scope) like
-//! `module_def` / `recursive_types`: body statements dispatch against a fresh child scope
+//! `module_def`: body statements dispatch against a fresh child scope
 //! on the outer scheduler, and the finish projects the populated scope into a
 //! [`SigSchema`], interns it as a `Signature` type, and installs that handle into the parent scope.
 //! `VAL <name> :Type` declares a value slot, `TYPE <Name>` declares an abstract type

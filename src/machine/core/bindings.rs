@@ -325,7 +325,7 @@ pub struct FunctionLookup {
 /// Lexical position of a binding's installing statement: a binding at `idx` is visible to a
 /// consumer at cutoff `c` iff `idx < c`. Every binder — value and type alike — gates its
 /// references against its own position, so a forward reference is a position error and
-/// mutual recursion is expressed with a `RECURSIVE TYPES` block. `idx == 0` is the first
+/// mutual recursion is expressed by co-declaring the types in a module body. `idx == 0` is the first
 /// position (FN parameters, MATCH/TRY `it`) and also tags the builtins in the immutable
 /// root — [`BindingIndex::BUILTIN`]; per-block indices restart inside nested blocks (see
 /// [`crate::machine::core::scope::Scope::resolve`] for the predicate).

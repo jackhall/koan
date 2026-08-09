@@ -34,7 +34,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
 /// builds the carrier from the sealed pairs.
 ///
 /// `window` is the declaration window the schema's co-declared references resolve against — the
-/// enclosing `RECURSIVE TYPES` block's when this declaration is one of its members, else one this
+/// enclosing module body's announced one when this declaration is one of its members, else one this
 /// declaration opens and seals itself.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn nominal_schema_action<'a>(

@@ -1,10 +1,14 @@
 //! Scheduler-aware type-name elaboration. Walks a [`TypeIdentifier`] against a [`Scope`], gating
 //! each bare leaf against a [`LexicalFrame`] so a type declared lexically later is invisible
-//! — a forward type reference is a position error, not a silent success. A name announced by the
-//! ambient [`RecursiveGroupWindow`] short-circuits to that member's relative
-//! [`TypeNode::Sibling`] handle, which the window's seal rewrites to an absolute member handle; a
-//! window's own binder name (a `UNION`'s, which names no single member) resolves to the union of
-//! every announced member. A reference to an *earlier* type still finalizing returns
+//! — a forward type reference is a position error, not a silent success.
+//!
+//! A name the ambient declaration window announces is the one exception, and what it resolves to
+//! depends on who is asking ([`TypeResolutionMode`]). For the member's own **declarator** it
+//! short-circuits to that member's relative [`TypeNode::Sibling`] handle, which the window's seal
+//! rewrites absolute; a binder name (a `UNION`'s, which names no single member) resolves to the
+//! union of the members it owns. For a **consumer** it parks until the window seals and then reads
+//! the absolute handle off the sealed window — never the relative one, which is meaningless outside
+//! the window that minted it. A reference to an *earlier* type still finalizing returns
 //! [`TypeResolution::Park`] so the caller re-runs the elaboration on wake.
 //!
 //! Type-name bindings live in [`Scope::bindings`]'s `types` map; consumers go through
@@ -227,7 +231,7 @@ pub fn elaborate_type_identifier(
         // A visible placeholder is an earlier-declared type still finalizing: park on its
         // producer and re-elaborate when it terminalizes. A forward reference is filtered by the
         // chain before reaching here — a position error, not a park. Mutual recursion across the
-        // cut uses a `RECURSIVE TYPES` block, threaded above.
+        // cut co-declares the types in one module body, answered by the window above.
         Some(NameLookup::Parked(id)) => return TypeResolution::Park(vec![id]),
         None => {}
     }

@@ -54,7 +54,7 @@ impl<'run> KoanRuntime<'run> {
 
         // Eager-position binder: pre-error the slot. Slot-terminal (TRY-catchable), propagates
         // through the dep like any failed dep. Every binder form is rejected here — name-installing
-        // declarations (LET, TYPE, MODULE, SIG, UNION, NEWTYPE, GROUP, RECURSIVE TYPES) and named
+        // declarations (LET, TYPE, MODULE, SIG, UNION, NEWTYPE, GROUP) and named
         // `FN` / `OP` definitions alike: an eager sub-dispatch cannot install into the enclosing scope
         // soundly, and a definition whose registration silently vanished would be worse than an error.
         // A value position takes the anonymous form (`FN :{…} -> T = (…)`, which installs nothing);

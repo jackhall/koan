@@ -1,11 +1,11 @@
-//! `RecursiveGroupWindow` — the pre-seal record a group of co-declared nominal types elaborates
-//! against, and the seal that turns it into interned registry content.
+//! `RecursiveGroupWindow` — the declarator-local pre-seal record a group of co-declared nominal
+//! types elaborates against — and [`seal_group`], the pure identity computation both this and the
+//! ambient [`AnnouncedWindow`](super::declaration_window::AnnouncedWindow) reach.
 //!
-//! A window is a scope-carried record, not registry state: it holds the group's announced member
-//! names, each member's schema slot, the generativity nonce, and the declaring binder's name. It
-//! rides the scope chain ([`Scope::nearest_recursive_window`](crate::machine::core::Scope)) so
-//! several windows can be open at once under the park-capable scheduler — which a registry-hosted
-//! stack could not express. Nothing on a window is digestible; nothing on it survives the seal.
+//! A window is a held record, not registry state: it holds the group's announced member names, each
+//! member's owner and schema slot, the generativity nonce, and the declaring binders. Several can
+//! be open at once under the park-capable scheduler — which a registry-hosted stack could not
+//! express. Nothing on a window is digestible; nothing on it survives the seal.
 //!
 //! Inside the window a reference to a co-declared member is a [`TypeNode::Sibling`] handle: a bare
 //! relative index, ordinary interned content, meaningful only against the window that minted it.
@@ -15,10 +15,11 @@
 //!
 //! At the last fill the window seals. Identity is **not** the declared group: it is each member's
 //! strongly-connected component under the sibling-reference relation, presented canonically in
-//! member-name order. [`seal`](RecursiveGroupWindow::fill_member) extracts the reference edges,
-//! runs Tarjan, and digests the condensation in topological order — every component after the
-//! components it references, so a cross-component reference folds the referent's already-finished
-//! handle as ordinary external content while an intra-component one stays relative.
+//! bare-name order (with the owning binder as a tiebreak the digest never sees). [`seal_group`]
+//! extracts the reference edges, runs Tarjan, and digests the condensation in topological order —
+//! every component after the components it references, so a cross-component reference folds the
+//! referent's already-finished handle as ordinary external content while an intra-component one
+//! stays relative.
 //!
 //! The consequences are the point:
 //!

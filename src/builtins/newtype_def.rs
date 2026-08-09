@@ -13,7 +13,7 @@
 //! ([`Elaborator::with_threaded`]): a self-reference (`:{next :Node}`) lowers to a relative
 //! `Sibling` handle against the declaration window and seals to an absolute member handle — the
 //! same shared seal path ([`finalize_nominal_member`]) `UNION` uses, and the path a
-//! `RECURSIVE TYPES` block routes its `NEWTYPE` members through.
+//! `NEWTYPE` announced by its module body routes through.
 
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
@@ -37,9 +37,8 @@ use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. Fills the declaration
-/// window's member with `RelativeSchema::NewType(repr)`; the window is a fresh singleton for a
-/// standalone declaration, or the enclosing `RECURSIVE TYPES` block's window when this NEWTYPE is
-/// one of its members. A standalone declaration's window seals immediately, so identity is the
+/// window's member with `repr`; the window is a fresh singleton for a standalone declaration, or
+/// the enclosing module body's announced window when this NEWTYPE is one of its members. A standalone declaration's window seals immediately, so identity is the
 /// sealed member handle whose `kind` (`NewType`) is what `kind_of` reports; identity never
 /// descends `repr`. The identity is owned data allocated into this scope's own region, so it
 /// seals as a resident type carrier regardless of where `repr` was resolved from.
@@ -75,7 +74,7 @@ fn finalize_newtype<'a>(
 /// `RelativeSchema::NewType` of the interned record type. A self-reference field already carries a
 /// relative `Sibling` handle (the field-list elaboration threads the binder name against the
 /// window), so the window's seal rewrites it to the member's own absolute handle. The window is
-/// the enclosing `RECURSIVE TYPES` block's when this NEWTYPE is one of its members, else a fresh
+/// the enclosing module body's announced one when this NEWTYPE is one of its members, else a fresh
 /// singleton for standalone self-recursion. Shared by the synchronous and dep-finish paths.
 fn finalize_record_newtype<'a>(
     fctx: &FinishCtx<'a, '_>,
