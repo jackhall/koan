@@ -46,7 +46,10 @@ pub use signature::{
     DispatchTokenElement, ExpressionSignature, ReturnType, SignatureDraft, SignatureElement,
     UntypedElement, UntypedKey,
 };
-pub use signature::{most_specific_ktype, owned_untyped_key, StoredElement};
+pub use signature::{
+    most_specific_ktype, owned_untyped_key, restore_stored_key, store_untyped_key,
+    StoredDispatchTokenElement, StoredElement, UntypedKeyProbe,
+};
 pub(crate) use type_digest::{empty_schema_digest, TypeDigest};
 pub use typed_field_list::{
     pair_list_names, parse_typed_field_list_via_elaborator, rewrite_window_refs, FieldListContext,

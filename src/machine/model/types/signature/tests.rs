@@ -1,3 +1,5 @@
+use std::hash::BuildHasher;
+
 use super::*;
 use crate::machine::core::{program_storage, RegionBrand};
 use crate::source::Spanned;
@@ -286,6 +288,117 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
                 a.indistinguishable_from(b),
                 a.dispatch_token() == b.dispatch_token(),
                 "signatures {i} and {j} disagree between the live predicate and the stored token",
+            );
+        }
+    }
+}
+
+/// **The tripwire for the two key forms.** The `functions` table is keyed on stored runs and probed
+/// with owned ones, so if the two hashing schemes ever drift a probe lands in the wrong bucket and
+/// every lookup silently misses — no type error, no panic, just a language that forgets its
+/// functions. Assert the hashes agree directly, under the very hasher the tables use.
+#[test]
+fn owned_and_stored_key_forms_hash_identically() {
+    let program = program_storage();
+    let brand = program.brand().region();
+    let build = hashbrown::DefaultHashBuilder::default();
+
+    for owned in [
+        vec![],
+        vec![UntypedElement::Slot],
+        vec![UntypedElement::Keyword("TAKE".to_string())],
+        vec![
+            UntypedElement::Keyword("MAKESET".to_string()),
+            UntypedElement::Slot,
+            UntypedElement::Keyword("USING".to_string()),
+            UntypedElement::Slot,
+        ],
+        // Prefix-of-another and empty-keyword cases, where a missing length prefix or a missing
+        // arm tag would collide.
+        vec![
+            UntypedElement::Keyword("MAKESET".to_string()),
+            UntypedElement::Slot,
+        ],
+        vec![UntypedElement::Keyword(String::new())],
+    ] {
+        let stored = store_untyped_key(brand, &owned);
+        assert_eq!(
+            build.hash_one(UntypedKeyProbe(&owned)),
+            build.hash_one(stored),
+            "key {owned:?} hashes differently in its owned and stored forms",
+        );
+    }
+}
+
+/// The probe round-trip through a real table: a stored-run-keyed map answers an owned probe, and a
+/// same-shape-but-different-content key misses rather than aliasing.
+#[test]
+fn an_owned_key_probes_a_stored_run_keyed_table() {
+    let program = program_storage();
+    let brand = program.brand().region();
+    let mut table: hashbrown::HashMap<&[StoredElement<'_>], u32> = hashbrown::HashMap::new();
+
+    let take: UntypedKey = vec![
+        UntypedElement::Keyword("TAKE".to_string()),
+        UntypedElement::Slot,
+    ];
+    let drop_key: UntypedKey = vec![
+        UntypedElement::Keyword("DROP".to_string()),
+        UntypedElement::Slot,
+    ];
+    table.insert(store_untyped_key(brand, &take), 7);
+
+    assert_eq!(table.get(&UntypedKeyProbe(&take)), Some(&7));
+    assert_eq!(table.get(&UntypedKeyProbe(&drop_key)), None);
+    // A run stored in another region probes the same entry: the blanket `Equivalent` compares
+    // element-wise, so key identity is content, not address.
+    let elsewhere = program_storage();
+    let restored = restore_stored_key(elsewhere.brand().region(), store_untyped_key(brand, &take));
+    assert_eq!(table.get(&restored), Some(&7));
+    assert_eq!(owned_untyped_key(restored), take);
+}
+
+/// A stored dispatch token decides the duplicate-overload predicate exactly as the owned token
+/// does — the write path compares against the stored run and allocates nothing to do it.
+#[test]
+fn a_stored_dispatch_token_matches_what_its_owned_form_does() {
+    let program = program_storage();
+    let brand = program.brand().region();
+    fn keyworded<'a>(
+        brand: RegionBrand<'a>,
+        keyword: &'a str,
+        slots: &[KType],
+    ) -> ExpressionSignature<'a> {
+        let mut elements = vec![SignatureElement::Keyword(keyword)];
+        elements.extend(slots.iter().map(|kt| {
+            SignatureElement::Argument(Argument {
+                name: "v",
+                ktype: *kt,
+            })
+        }));
+        ExpressionSignature::mint(
+            brand,
+            SignatureDraft {
+                return_type: ReturnType::Resolved(KType::ANY),
+                elements,
+            },
+        )
+    }
+
+    let tokens: Vec<DispatchToken> = [keyworded(brand, "TAKE", &[KType::NUMBER]),
+        keyworded(brand, "TAKE", &[KType::ANY]),
+        keyworded(brand, "DROP", &[KType::NUMBER]),
+        keyworded(brand, "TAKE", &[KType::NUMBER, KType::NUMBER])]
+    .iter()
+    .map(ExpressionSignature::dispatch_token)
+    .collect();
+
+    for (i, a) in tokens.iter().enumerate() {
+        for (j, b) in tokens.iter().enumerate() {
+            assert_eq!(
+                a.matches_stored(b.store_in(brand)),
+                a == b,
+                "tokens {i} and {j} disagree between owned equality and the stored predicate",
             );
         }
     }

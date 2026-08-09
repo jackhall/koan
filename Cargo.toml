@@ -31,6 +31,13 @@ mimalloc = { version = "0.1", default-features = false }
 stable_deref_trait = "1.2.1"
 workgraph = { path = "workgraph" }
 blake3 = "1.8.5"
+# Hash table for the per-scope binding tables, built over workgraph's `BumpAllocator` so a scope's
+# buckets live in its region's bump. Same major as workgraph's, so `DefaultHashBuilder` and the
+# `Equivalent` probes are one trait across the two crates.
+hashbrown = "0.17"
+# The `Allocator` trait `BumpAllocator` implements, and the growable `Vec` a dispatch bucket takes
+# over it — `std::vec::Vec` has no stable custom-allocator seam.
+allocator-api2 = "0.2.21"
 # Persistent HAMT for the type registry's node table. No features: the optional `triomphe`
 # feature swaps the default shared pointer to an atomic one, and the registry is single-threaded
 # per run frame, so it instantiates the map over `archery::RcK` instead.

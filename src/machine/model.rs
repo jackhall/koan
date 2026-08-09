@@ -16,7 +16,10 @@ pub use types::{
     RecursiveGroupWindow, RelativeSchema, ReturnType, SealedAnnounced, SealedGroup, SignatureDraft,
     SignatureElement, TypeNode, UntypedElement, UntypedKey, WindowView,
 };
-pub use types::{most_specific_ktype, owned_untyped_key, StoredElement};
+pub use types::{
+    most_specific_ktype, owned_untyped_key, restore_stored_key, store_untyped_key,
+    StoredDispatchTokenElement, StoredElement, UntypedKeyProbe,
+};
 pub use values::{
     Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, Scalar, ValueEqualityError,
 };

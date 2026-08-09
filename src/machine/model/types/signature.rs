@@ -15,7 +15,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier, Wo
 use super::ktype::KType;
 use super::registry::TypeRegistry;
 
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+#[derive(Eq, PartialEq, Clone, Debug)]
 pub enum UntypedElement {
     Keyword(String),
     Slot,
@@ -23,12 +23,79 @@ pub enum UntypedElement {
 
 /// The stored form of an [`UntypedElement`]: a keyword's text as a borrow at the node's own
 /// lifetime. An expression's bucket key is a run of these, bumped once at construction, so reading
-/// it costs a slice borrow; the owned [`UntypedKey`] the bucket tables are keyed by is materialized
-/// only where a lookup needs one.
-#[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
+/// it costs a slice borrow; the owned [`UntypedKey`] is materialized only where a caller needs to
+/// hand a key onward as plain data.
+#[derive(Eq, PartialEq, Clone, Copy, Debug)]
 pub enum StoredElement<'a> {
     Keyword(&'a str),
     Slot,
+}
+
+/// **The one hashing scheme both key forms write**, spelled out rather than derived on each: the
+/// `functions` table is keyed on stored runs and probed with owned ones, and hashbrown finds
+/// nothing at all if the two disagree by so much as a discriminant width. A derive would tie the
+/// agreement to two independently-derived impls that nothing holds together.
+///
+/// The tag distinguishes the arms; `String` and `&str` hash identically through the same `str`
+/// impl. No length prefix is written here — the slice `Hash` impl both runs route through already
+/// writes one, so the framing is at the run level where it belongs.
+macro_rules! hash_key_element {
+    ($element:ty, $keyword:path, $slot:path) => {
+        impl std::hash::Hash for $element {
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                match self {
+                    $keyword(text) => {
+                        state.write_u8(0);
+                        std::hash::Hash::hash(text.as_ref() as &str, state);
+                    }
+                    $slot => state.write_u8(1),
+                }
+            }
+        }
+    };
+}
+
+hash_key_element!(
+    UntypedElement,
+    UntypedElement::Keyword,
+    UntypedElement::Slot
+);
+hash_key_element!(
+    StoredElement<'_>,
+    StoredElement::Keyword,
+    StoredElement::Slot
+);
+
+/// An owned [`UntypedKey`] borrowed for one probe of a **stored**-run-keyed table.
+///
+/// A wrapper rather than a bare `[UntypedElement]` because the orphan rule forbids implementing a
+/// foreign trait for a slice; the newtype is the local type that carries the impl. It hashes by
+/// delegating straight to the slice, so it writes byte-for-byte what the stored key writes —
+/// same length prefix, same per-element scheme — which is the whole reason the two forms can share
+/// one bucket table. The stored↔stored probe needs no wrapper: hashbrown's blanket `Equivalent`
+/// already covers a key that `Borrow`s the probe, which a `&[StoredElement]` key does for its own
+/// slice.
+pub struct UntypedKeyProbe<'k>(pub &'k [UntypedElement]);
+
+impl std::hash::Hash for UntypedKeyProbe<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl<'a> hashbrown::Equivalent<&'a [StoredElement<'a>]> for UntypedKeyProbe<'_> {
+    fn equivalent(&self, key: &&'a [StoredElement<'a>]) -> bool {
+        self.0.len() == key.len()
+            && self
+                .0
+                .iter()
+                .zip(key.iter())
+                .all(|(owned, stored)| match (owned, stored) {
+                    (UntypedElement::Keyword(a), StoredElement::Keyword(b)) => a == b,
+                    (UntypedElement::Slot, StoredElement::Slot) => true,
+                    _ => false,
+                })
+    }
 }
 
 impl<'a> StoredElement<'a> {
@@ -47,6 +114,37 @@ pub fn owned_untyped_key(stored: &[StoredElement<'_>]) -> UntypedKey {
         .iter()
         .map(|element| element.to_owned_element())
         .collect()
+}
+
+/// Re-home an owned key into `brand`'s region as the stored run a bucket table is keyed on. Each
+/// keyword's bytes are copied, so the key outlives the owned form it was built from and lives
+/// exactly as long as the table holding it.
+pub fn store_untyped_key<'a>(brand: RegionBrand<'a>, key: &UntypedKey) -> &'a [StoredElement<'a>] {
+    let elements: Vec<StoredElement<'a>> = key
+        .iter()
+        .map(|element| match element {
+            UntypedElement::Keyword(text) => StoredElement::Keyword(brand.alloc_text(text)),
+            UntypedElement::Slot => StoredElement::Slot,
+        })
+        .collect();
+    brand.alloc_slice(&elements)
+}
+
+/// [`store_untyped_key`] from a run already stored **somewhere else** — a bulk install replaying a
+/// source scope's dispatch surface, where the target's table must key on the target's own bytes so
+/// it never points into a region that can die first.
+pub fn restore_stored_key<'a>(
+    brand: RegionBrand<'a>,
+    key: &[StoredElement<'_>],
+) -> &'a [StoredElement<'a>] {
+    let elements: Vec<StoredElement<'a>> = key
+        .iter()
+        .map(|element| match element {
+            StoredElement::Keyword(text) => StoredElement::Keyword(brand.alloc_text(text)),
+            StoredElement::Slot => StoredElement::Slot,
+        })
+        .collect();
+    brand.alloc_slice(&elements)
 }
 
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
@@ -74,6 +172,49 @@ pub struct DispatchToken(Vec<DispatchTokenElement>);
 pub enum DispatchTokenElement {
     Keyword(String),
     Slot(KType),
+}
+
+/// The **stored** form of a [`DispatchTokenElement`]: the same two arms with the keyword's text
+/// re-homed into a region. A bucket entry rests on a run of these rather than the owned token, so
+/// the entry carries no drop glue and dropping a table frees nothing.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum StoredDispatchTokenElement<'a> {
+    Keyword(&'a str),
+    Slot(KType),
+}
+
+impl DispatchToken {
+    /// Re-home this token into `brand`'s region as the run a bucket entry stores.
+    pub fn store_in<'a>(&self, brand: RegionBrand<'a>) -> &'a [StoredDispatchTokenElement<'a>] {
+        let elements: Vec<StoredDispatchTokenElement<'a>> = self
+            .0
+            .iter()
+            .map(|element| match element {
+                DispatchTokenElement::Keyword(text) => {
+                    StoredDispatchTokenElement::Keyword(brand.alloc_text(text))
+                }
+                DispatchTokenElement::Slot(kt) => StoredDispatchTokenElement::Slot(*kt),
+            })
+            .collect();
+        brand.alloc_slice(&elements)
+    }
+
+    /// The duplicate-overload predicate against a stored run — element-wise, so the incoming owned
+    /// token is compared where it stands and the write path allocates nothing to decide it.
+    pub fn matches_stored(&self, stored: &[StoredDispatchTokenElement<'_>]) -> bool {
+        self.0.len() == stored.len()
+            && self
+                .0
+                .iter()
+                .zip(stored.iter())
+                .all(|(owned, stored)| match (owned, stored) {
+                    (DispatchTokenElement::Keyword(a), StoredDispatchTokenElement::Keyword(b)) => {
+                        a == b
+                    }
+                    (DispatchTokenElement::Slot(a), StoredDispatchTokenElement::Slot(b)) => a == b,
+                    _ => false,
+                })
+    }
 }
 
 /// True iff `s` classifies as a keyword (fixed token). See
