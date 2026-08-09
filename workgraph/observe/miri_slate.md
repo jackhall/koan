@@ -162,7 +162,7 @@ back under the region's bundle alone.
 **Region side tables — writes through `&self` under live readers**
 ([src/witnessed/region.rs](../src/witnessed/region.rs),
 [src/witnessed/sectioned.rs](../src/witnessed/sectioned.rs)) — `Region::intern_reach_retained`
-inserts into an `elsa::FrozenMap`, and `Region::bump_slice` bumps into a `bumpalo::Bump`, both
+inserts into an `elsa::FrozenMap`, and `BumpAllocator::slice` bumps into a `bumpalo::Bump`, both
 through a shared borrow while every reference a previous call handed out is still live. No `unsafe` of the crate's
 own: the append-stable-address guarantees are the map's and the bump's.
 But it is exactly the interior-mutation-under-a-live-shared-borrow shape tree borrows adjudicates,

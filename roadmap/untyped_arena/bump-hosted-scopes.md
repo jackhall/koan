@@ -58,8 +58,8 @@ time that it contributes no glue at all
 **Directions.**
 
 - *Structural `Drop`-freedom — decided.* Composition over audit: `Scope` is
-  built from `Copy` fields, `Cell`s, and element-`Copy` bump tables (the
-  [`BumpMap`/`BumpAllocator`](../../workgraph/src/witnessed/bump.rs)
+  built from `Copy` fields, `Cell`s, and glue-free bump-backed tables (the
+  [`BumpAllocator`](../../workgraph/src/witnessed/bump.rs)
   no-drop-glue discipline), so the
   forgone destructor would have freed only bump bytes — no unsafe
   "trust me, it's `Drop`-free" marker tier is introduced.

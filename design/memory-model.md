@@ -57,7 +57,8 @@ than ownership trees. The structural edges:
 - `Module` and `Signature` cache their declaration scopes as a plain
   `&'a Scope<'a>` (heap-pinned by the surrounding region chain). Both are bumped
   and so never erased: the field is already at the region's `'a`. A `Module`
-  additionally holds its bumped `path` and its two `BumpMap` member tables, all
+  additionally holds its bumped `path` and its two frozen bump-backed member
+  tables, all
   hosted in that same region.
 
 **Directionality rule.** References go inward freely — a per-call region's
@@ -148,22 +149,26 @@ bumps its value cells, its container substrates, its substrates' index metadata,
 its strings and its expression parts beside them. A value with operands whose reach
 the product must carry reaches the bump through
 [`FoldedPlacement::fold_and_bump`](../workgraph/src/witnessed/bump.rs) or the
-[`bump`](../workgraph/src/witnessed.rs) placement an enclosing fold already holds,
-either of which composes the stored value's reach in the same call; a bytes-only or
-keyed-index allocation reaches it through the handle's own primitives
-(`bump_text` / `bump_value` / `bump_slice` / `bump_map`).
+[`allocator`](../workgraph/src/witnessed.rs) an enclosing fold's placement already
+hands out, either of which composes the stored value's reach in the same call; a
+bytes-only or keyed-index allocation reaches it through the same
+[`BumpAllocator`](../workgraph/src/witnessed/bump.rs) verbs off the handle
+(`allocator().text` / `.value` / `.slice`), which is where those verbs are defined
+once for every surface.
 
 It is the one region storage needing **no** erasure: a bump's own type carries no
 lifetime, so `'a` enters only at the allocation and an entry may hold an `&'a` back
 into the same region with no residence audit at all. Its `T: Copy` bound is what
 keeps it honest — a bump releases its chunks whole and runs no destructor, so
-admitting a `Drop`-bearing entry would silently skip one. The single exception is
-the keyed index door: a [`BumpMap`](../workgraph/src/witnessed/bump.rs) is a
-`hashbrown` table whose buckets are allocated in this same bump through
-`allocator-api2`, so the bound moves onto the table's *elements* and the destructor
-it forgoes would have freed only bytes region death frees anyway. Cross-references
-among bumped entries need no drop-order argument at all: everything there dies with
-the region, at once.
+admitting a `Drop`-bearing entry would silently skip one. A **collection** built
+over the allocator's raw `allocator-api2` seam — a frozen keyed index
+([`frozen_table`](../src/machine/core/arena.rs)), a scope's churning binding table
+— is where that bound stops travelling with the bytes: such a writer proves its
+entries glue-free with a `const { assert!(!needs_drop::<_>()) }` at the
+declaration naming their type, which is the same proof the bound stood for, and
+the destructor it forgoes would have freed only bytes region death frees anyway.
+Cross-references among bumped entries need no drop-order argument at all:
+everything there dies with the region, at once.
 
 The scope-pointer case — `CallFrame`, `Module`, `Signature`, `KFunction`, and a `Scope`'s
 own lexical parent each holding a pointer to a captured, defining, or parent `Scope` — holds that
@@ -415,8 +420,8 @@ copy, and content-digest identity is preserved because the handle *is* the ident
 tables therefore store `KType` by value ([`bindings.rs`](../src/machine/core/bindings.rs)), with no
 reach evidence and no borrow to witness.
 
-A `Drop`-free region-borrowing value — a `KFunction`, a `Module` — takes the plain bump door
-`RegionBrand::alloc_value` alongside those leaves, because it is `Copy` and nothing about it is
+A `Drop`-free region-borrowing value — a `KFunction`, a `Module` — takes the plain bump verb
+`RegionBrand::allocator().value` alongside those leaves, because it is `Copy` and nothing about it is
 erased on the way in; the door derives its brand from the value's own anchoring scope and re-homes
 the value's bytes at that same brand (see below).
 
@@ -490,8 +495,8 @@ not compile. That is the same no-outlives argument the folded sinks rest on, app
 nothing to fold.
 
 `KFunction` and `Module` need no brand at all, because nothing about them is erased on the way in:
-both are `Copy` and store through the plain bump door
-([`RegionBrand::alloc_value`](../workgraph/src/witnessed/region.rs)), so every reference the stored
+both are `Copy` and store through the plain bump verb
+([`BumpAllocator::value`](../workgraph/src/witnessed/bump.rs)), so every reference the stored
 value holds is an ordinary `&'a` the borrow checker already checked against the lifetime the
 destination brand borrows its region for. There is no `'static` round trip to audit and so no
 residence obligation to discharge. What each must still do is put its *own* bytes where its value
@@ -645,7 +650,7 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   fills one frame region with all five substrate shapes — each carrying a bumped string leaf, so
   the region holds re-homed bytes and index metadata as well as cells — plus a run of `KFunction`s
   whose signatures put a bumped element run and synthesized keyword / parameter-name bytes in the
-  same region, plus a run of `Module`s whose paths, member-map keys and `BumpMap` bucket arrays land
+  same region, plus a run of `Module`s whose paths, member-map keys and member-table bucket arrays land
   there too, and drops it with nothing borrowing in. That region death is *deallocation only* is a leak claim rather than a UB claim, and
   the only one a bump cannot fail loudly on: a family that reintroduced an owning slot would still
   read and write correctly and simply never free. Miri's process-exit leak count is the assertion;

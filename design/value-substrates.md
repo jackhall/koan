@@ -91,10 +91,12 @@ above are aliases of that one wrapper, differing only in `C`, and every `C` is
   one allocation rather than a table's two. Field order is therefore a property of the
   names, never of how the literal was written — a record walks and renders name-sorted.
   Equality was already order-blind, so nothing semantic turns on it.
-- **`&'a BumpMap<'a, KKey<'a>, usize>`** — a dict's key→index table. Key counts are
+- **`&'a BumpBackedMap<'a, KKey<'a>, usize>`** — a dict's key→index table, frozen at
+  construction by [`frozen_table`](../src/machine/core/arena.rs). Key counts are
   unbounded, so a dict does pay for a hash table; it is a `hashbrown` table whose buckets
-  are allocated in the region's bump through `allocator-api2`, with `Copy` key and `Copy`
-  value ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)). Iteration order
+  are allocated in the region's bump through `allocator-api2`, its glue-free key and
+  value asserted where the table is built
+  ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)). Iteration order
   stays arbitrary.
 - **`ListLayout` / `PayloadLayout`** — markers, for the two shapes whose index is
   implicit: a list's position *is* its cell index, and a `Tagged` / `Wrapped` payload has
@@ -236,8 +238,8 @@ needs both).
 Every string a value-family slot holds — a `KObject::KString`, a `Tagged`
 discriminant, a `KKey::String` dict key — is a `&'a str` bumped into the
 region the value lives in
-([`RegionBrand::alloc_text`](../src/machine/core/arena.rs), over workgraph's
-[`RegionHandle::bump_text`](../workgraph/src/witnessed/region.rs)). The slot
+([`RegionBrand::allocator`](../src/machine/core/arena.rs), over workgraph's
+[`BumpAllocator::text`](../workgraph/src/witnessed/bump.rs)). The slot
 owns no allocation, so it runs no destructor at region death and the bytes go
 with the bump's chunks; that is what makes the slot `Copy` and `deep_clone` a
 pointer copy for the string arm. There is no interning table: a run-global one
@@ -264,7 +266,7 @@ which is what keeps the relocation's release-exact answer exact. Pinning paths
 by the reach that already names the producer region.
 
 A substrate's **index** is bump-hosted string bytes too — a record's name slice and
-the names in it, a dict's `BumpMap` over re-bumped keys — so the rule reaches it
+the names in it, a dict's frozen table over re-bumped keys — so the rule reaches it
 identically, and the stakes are higher there than for a cell. An index is read
 *before* any cell is: a field lookup binary-searches the names, a key lookup hashes
 and byte-compares. And it is metadata, not a cell, so no run describes it and the
@@ -398,24 +400,25 @@ signature is a bumped run of elements with `&str` names re-homed into the
 function's own region by the one signature constructor
 ([`ExpressionSignature::mint`](../src/machine/model/types/signature.rs)) — and
 the `Module` family, whose path is a bumped `&str` and whose two member tables
-are build-once `BumpMap`s keyed by re-homed `&str`
+are build-once frozen bump-backed tables keyed by re-homed `&str`
 ([`Module::assemble`](../src/machine/model/values/module.rs)). A module is
 assembled complete: its construction gathers members into an owned
 `ModuleDraft` and interns the self-sig *before* the value exists, so the stored
 value is frozen and `Copy` with nothing to mutate after the fact.
 
-`Copy` is what holds a family to that: every bump primitive is `T: Copy`-bounded,
+`Copy` is what holds a family to that: every bump verb on
+[`BumpAllocator`](../workgraph/src/witnessed/bump.rs) — the one handle those verbs
+are defined on, which every brand and placement hands back — is `T: Copy`-bounded,
 because "`Drop`-free" has no expressible bound and `Copy` is the honest static
-proxy. The one primitive whose stored value is not itself `Copy` — the
-[`BumpMap`](../workgraph/src/witnessed/bump.rs) door a dict's key index and a
-module's two member tables take —
-moves the bound onto the table's *elements* and allocates the buckets in the same
-bump, so the destructor it forgoes would have freed only bytes region death frees
-anyway. A table that keeps **mutating** after it is built reaches the same storage
-through [`BumpAllocator`](../workgraph/src/witnessed/bump.rs), the region's bump as
-an `allocator-api2` allocator: the `Copy` bound cannot travel through the trait, so
-the embedder restates it as a `const { assert!(!needs_drop::<…>()) }` where its own
-element types are named. Deallocation through that seam is a no-op, so it suits a
+proxy. A **table** is where that bound stops travelling with the bytes, because it
+is built over the same allocator's raw `allocator-api2` seam and the trait says
+nothing about destructors. Both table shapes therefore restate the proof as a
+`const { assert!(!needs_drop::<…>()) }` where their own entry types are named: a
+dict's key index and a module's two member tables freeze at construction through
+[`frozen_table`](../src/machine/core/arena.rs), whose header rides `BumpAllocator`'s
+Copy-relaxed `place` verb under a `ManuallyDrop` wrapper declaring the suppressed
+destructor lossless; a scope's binding tables keep **mutating** after they are
+built and hold the same line at their own declaration sites. Deallocation through that seam is a no-op, so it suits a
 collection whose churn is bounded — geometric growth and in-place slot reuse — and
 not one that frees in a loop. A family that reintroduced an owning slot would not fail loudly: it would
 read and write correctly and simply never free, which is why the claim is pinned

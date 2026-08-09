@@ -210,7 +210,7 @@ src/
     │   ├── values.rs
     │   └── values/
     │       ├── kobject.rs         runtime value type
-    │       ├── container_substrate.rs  ContainerSubstrate<'a, C> — the index-generic region-resident substrate (sectioned cells + run union + copy cost), Copy and bump-hosted in every arm; C is RecordLayout (a sorted name slice), a dict's &BumpMap, or a list/payload marker
+    │       ├── container_substrate.rs  ContainerSubstrate<'a, C> — the index-generic region-resident substrate (sectioned cells + run union + copy cost), Copy and bump-hosted in every arm; C is RecordLayout (a sorted name slice), a dict's frozen &BumpBackedMap, or a list/payload marker
     │       ├── carried.rs         Carried — the scheduler's value currency (Object | Type)
     │       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
     │       ├── named_pairs.rs     shared (name, value) ordered-list helper

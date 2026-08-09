@@ -216,7 +216,7 @@ variants alone would leave exactly this shape pointer-copied under a release cla
 — the peer of the group above one level up: not a *cell*, but the substrate's own **index metadata**,
 which is bump-hosted and therefore has to be rebuilt at the destination exactly like the cells it
 indexes. A record's index is the sorted name slice `alloc_record` bumps (the slice and every name's
-bytes); a dict's is the `BumpMap` `alloc_dict` freezes over re-bumped keys. Both are read *before*
+bytes); a dict's is the frozen table `alloc_dict` builds over re-bumped keys. Both are read *before*
 any cell is — a field lookup binary-searches the names and a key lookup hashes and byte-compares the
 stored key — so an index that still pointed into a retiring producer is a use-after-free on the way
 in, and a cell-only re-home would leave exactly that. The test builds both in one producer frame — a
@@ -241,7 +241,7 @@ the dynamic check that the proxy is load-bearing in composition. It fills one fr
 five substrate shapes (list, dict, record, `Tagged`, `Wrapped`), each carrying a bumped string leaf
 so the region holds re-homed bytes and index metadata as well as cells, a run of `KFunction`s
 whose signatures put a bumped element run and synthesized keyword / parameter-name bytes in the same
-region, and a run of `Module`s, whose paths, member-map keys and `BumpMap` bucket arrays land there
+region, and a run of `Module`s, whose paths, member-map keys and member-table bucket arrays land there
 too — the map is the shape most likely to smuggle an owning spine back in. It then drops the frame
 with nothing outside borrowing in. Miri's process-exit leak count is the assertion.
 
@@ -538,9 +538,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-09: 547s — 21 tests, 0 leaks, 0 UB
 - 2026-08-09: 523s — 21 tests, 0 leaks, 0 UB
 - 2026-08-09: 545s — 21 tests, 0 leaks, 0 UB
 - 2026-08-06: 924s — 20 tests, 0 leaks, 0 UB
 - 2026-08-06: 882s — 19 tests, 0 leaks, 0 UB
-- 2026-08-05: 815s — 19 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
