@@ -26,8 +26,8 @@
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::model::Part;
-use crate::machine::model::{binary_key, unary_key, FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
+use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode, StoredElement};
 use crate::machine::{KError, KErrorKind, NodeId};
 use crate::scheduler::ResolvedDeps;
 use crate::source::{Span, Spanned};
@@ -404,10 +404,21 @@ fn pending_operator_producers<'b>(
     operators.dedup();
     let mut producers: Vec<NodeId> = Vec::new();
     for operator in operators {
-        for key in [binary_key(operator), unary_key(operator)] {
+        // Both shapes as stack runs over the operator's own borrowed text — a stored probe needs
+        // no allocation at all, where an owned key would clone the symbol twice per scope walk.
+        for key in [
+            [
+                StoredElement::Slot,
+                StoredElement::Keyword(operator),
+                StoredElement::Slot,
+            ]
+            .as_slice(),
+            [StoredElement::Keyword(operator), StoredElement::Slot].as_slice(),
+        ] {
             for scope in s.ancestors() {
                 let cutoff = scope.binding_cutoff(chain);
-                if let Some(producer) = scope.bindings().lookup_function(&key, cutoff).pending {
+                if let Some(producer) = scope.bindings().lookup_function_stored(key, cutoff).pending
+                {
                     if !producers.contains(&producer) {
                         producers.push(producer);
                     }

@@ -100,15 +100,17 @@ impl<'step> Scope<'step> {
     ) -> DispatchOutcome<'step> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
-        let key = expr.untyped_key();
+        // The node's own bumped run, read where it rests: dispatch is the hottest read in the
+        // machine, and materializing an owned key per call would clone every keyword's text.
+        let key = expr.stored_key();
         // Builtin dispatch buckets are unshadowable, so the root bucket is authoritative:
         // consult it directly and short-circuit on a `Terminal` decision. A non-terminal
         // root falls through to the full walk below unchanged, preserving precedence.
         let root = self.root_scope();
-        if root.bindings().has_builtin_function(&key) {
+        if root.bindings().has_builtin_function_stored(key) {
             let lookup = root
                 .bindings()
-                .lookup_function(&key, root.binding_cutoff(chain));
+                .lookup_function_stored(key, root.binding_cutoff(chain));
             if let ScopeDecision::Terminal(outcome) =
                 decide_scope(root, &lookup, expr, bare_outcomes, types)
             {
@@ -121,7 +123,7 @@ impl<'step> Scope<'step> {
         for scope in self.ancestors() {
             let lookup = scope
                 .bindings()
-                .lookup_function(&key, scope.binding_cutoff(chain));
+                .lookup_function_stored(key, scope.binding_cutoff(chain));
             match decide_scope(scope, &lookup, expr, bare_outcomes, types) {
                 ScopeDecision::Terminal(outcome) => return outcome,
                 ScopeDecision::DeadLean(name) => {
