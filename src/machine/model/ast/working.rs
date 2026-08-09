@@ -21,7 +21,8 @@ use super::shape::{
     classify_dispatch_shape, operator_probe_for, stored_untyped_key, DispatchShape, FieldSlot,
     Part, PartClass,
 };
-use super::{BinderPlan, ExpressionPart, KExpression};
+use super::{ExpressionPart, KExpression};
+use crate::machine::model::StoredBinderKey;
 
 /// One slot of a working expression.
 #[derive(Clone, Copy)]
@@ -211,8 +212,8 @@ impl<'a> WorkingPart<'a> {
 ///
 /// Carries the same structural cache a [`KExpression`] does — copied over verbatim when the node is
 /// made from one, since the cache is invariant under splice, and computed outright for a node the
-/// scheduler synthesized. It carries no binder-install aggregate: that is read once at statement
-/// submission, and a statement is always parsed AST.
+/// scheduler synthesized — except the binder plan, which is copied over and never computed here: a
+/// binder is always parsed AST, so a synthesized node carries `None` and installs nothing.
 #[derive(Clone, Copy)]
 pub struct WorkingExpression<'a> {
     pub parts: &'a [Spanned<WorkingPart<'a>>],
@@ -221,7 +222,7 @@ pub struct WorkingExpression<'a> {
     untyped_key: &'a [StoredElement<'a>],
     shape: DispatchShape,
     operator_probe: Option<&'a str>,
-    binder_plan: Option<&'a BinderPlan<'a>>,
+    binder_plan: Option<&'a StoredBinderKey<'a>>,
 }
 
 impl<'a> WorkingExpression<'a> {
@@ -270,7 +271,7 @@ impl<'a> WorkingExpression<'a> {
             untyped_key: ast.stored_key(),
             shape: ast.shape(),
             operator_probe: ast.operator_probe(),
-            binder_plan: ast.binder_plan(),
+            binder_plan: ast.binder_plan_ref(),
         }
     }
 
@@ -301,10 +302,11 @@ impl<'a> WorkingExpression<'a> {
         self.operator_probe
     }
 
-    /// The binder plan of the parsed node this working copy was made from, whose `chain_slot_mask`
-    /// the keyworded walk reads. `None` for a node the scheduler synthesized.
-    pub fn binder_plan(&self) -> Option<&'a BinderPlan<'a>> {
-        self.binder_plan
+    /// What the parsed node this working copy was made from installs when submitted as a
+    /// statement. `None` for a node the scheduler synthesized — a binder is always a parsed
+    /// statement.
+    pub fn binder_plan(&self) -> Option<StoredBinderKey<'a>> {
+        self.binder_plan.copied()
     }
 
     /// The stored bucket key, as a borrow of the run bumped at construction.

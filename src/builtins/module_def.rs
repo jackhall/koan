@@ -361,7 +361,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        test_run.run("MODULE foo = (LET double = (FN (DOUBLE x :Number) -> Number = (x)))");
+        test_run.run("MODULE foo = (LET double = FN (DOUBLE x :Number) -> Number = (x))");
         let foo = lookup_module(scope, "foo", &test_run.types);
         assert!(foo.child_scope().bindings().data().contains_key("double"));
     }

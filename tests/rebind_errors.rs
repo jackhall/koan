@@ -40,7 +40,7 @@ fn same_scope_let_rebind_errors() {
     );
 }
 
-/// `LET x = 1; LET x = (FN ...)` errors with `Rebind`. The function-bucket dedupe runs
+/// `LET x = 1; LET x = FN ...` errors with `Rebind`. The function-bucket dedupe runs
 /// in `bind_value` only when the slot is empty; once `data["x"]` holds a non-function,
 /// any subsequent `LET x = ...` (function or otherwise) collides.
 #[test]
@@ -51,7 +51,7 @@ fn let_function_collides_with_let_value() {
     let results = run_collecting_errors(
         &mut test_run,
         "LET x = 1\n\
-         LET x = (FN (DOUBLE y :Number) -> Number = (y))",
+         LET x = FN (DOUBLE y :Number) -> Number = (y)",
     );
     assert!(results[0].is_ok());
     let err = match &results[1] {

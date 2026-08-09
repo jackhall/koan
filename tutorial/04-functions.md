@@ -123,14 +123,14 @@ first definition and everything else falls through to the second.
 
 ## Functions as values
 
-`FN` returns the function it registered, so you can capture it with `LET` and
-pass it around. A captured function is called with **named arguments**: one
-record literal `{name = value}`, with each argument introduced by its parameter
-name. Argument order is independent of the declaration:
+Writing `LET <name> = FN …` as one statement binds a name to the function
+*and* registers its shape — one declaration reaching both. A function bound
+this way is called with **named arguments**: one record literal
+`{name = value}`, with each argument introduced by its parameter name. Argument
+order is independent of the declaration:
 
 ```koan
-LET pick =
-  FN (a :Str OR b :Str) -> Str = (a)
+LET pick = FN (a :Str OR b :Str) -> Str = (a)
 PRINT (pick {a = "first", b = "second"})
 PRINT (pick {b = "second", a = "first"})
 ```
@@ -143,8 +143,7 @@ first
 Leaving out a required name is an error:
 
 ```koan
-LET pick =
-  FN (a :Str OR b :Str) -> Str = (a)
+LET pick = FN (a :Str OR b :Str) -> Str = (a)
 pick {a = "only"}
 ```
 

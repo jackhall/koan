@@ -402,8 +402,6 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             .map(|operand| DepRequest::Dispatch {
                 expr: WorkingExpression::new(brand, vec![operand]),
                 placement: DepPlacement::OwnScope,
-                // A pairwise operand is an eager position, never a binder's own chain slot.
-                binder_covered: false,
             })
             .collect();
         let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {

@@ -210,7 +210,6 @@ fn apply_named_type_args<'step>(
         .map(|part| DepRequest::Dispatch {
             expr: WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]),
             placement: DepPlacement::OwnScope,
-            binder_covered: false,
         })
         .collect();
     let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {

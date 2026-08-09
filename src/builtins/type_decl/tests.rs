@@ -307,7 +307,7 @@ fn fn_return_type_constructor_apply_root_scope() {
             scope.brand(),
             parse_one(
                 &program,
-                "LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))",
+                "LET pure = FN (PURE a :Number) -> :(Number AS Wrap) = (1)",
             ),
         ),
         scope,

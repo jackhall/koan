@@ -1,5 +1,5 @@
-//! Binder discovery model: the pure, structural reading of which AST forms introduce a binder,
-//! which name and bucket keys they declare, and which of their slots carry nested binders forward.
+//! Binder discovery model: the pure, structural reading of which AST forms introduce a binder and
+//! which name and bucket keys they declare.
 //!
 //! Everything here is a pure `&KExpression -> Option<…>` reader plus a static spec table
 //! ([`BINDER_SPECS`]) that is the single source of truth for the binder-introducing forms. The
@@ -336,9 +336,8 @@ impl UntypedElementSpec {
     }
 }
 
-/// A binder-introducing form: the untyped bucket key it dispatches under, the extractors that read
-/// its declared name and bucket keys out of the AST, and the chain-slot mask marking which of its
-/// slots carry nested binders forward.
+/// A binder-introducing form: the untyped bucket key it dispatches under and the extractors that
+/// read its declared name and bucket keys out of the AST.
 ///
 /// The two channels are separate fields rather than one extractor list because a combined form
 /// (`LET <name> = FN …`) fills both at once — a name *and* the bucket keys its body registers.
@@ -351,11 +350,6 @@ pub struct BinderSpec {
     /// Bucket-key extractor for a form whose body registers overloads (`FN`, `OP`). `None` for the
     /// name-only forms.
     pub bucket: Option<BinderBucketFn>,
-    /// Slots whose nested binders join the statement aggregate and whose staged deps are
-    /// binder-covered. Derived from the binder overloads' signatures: an `Argument` slot is
-    /// `true` iff its ktype != `KType::KEXPRESSION`, ANDed across every binder overload in the
-    /// bucket (keyword positions false). Per-bucket constant.
-    pub chain_slot_mask: &'static [bool],
 }
 
 impl BinderSpec {
@@ -391,8 +385,8 @@ impl BinderSpec {
 use UntypedElementSpec::{Keyword as Kw, Slot};
 
 /// The single source of truth for the binder-introducing forms. One entry per distinct untyped
-/// bucket key; keys, extractors, and masks are pinned against the live builtin registration table
-/// by the spec⟺registration consistency test.
+/// bucket key; keys and extractors are pinned against the live builtin registration table by the
+/// spec⟺registration consistency test.
 pub static BINDER_SPECS: &[BinderSpec] = &[
     // LET <name> = <value>: value-name overload then type-alias overload.
     BinderSpec {
@@ -402,35 +396,30 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             (type_part_binder_name, BindKind::Type),
         ],
         bucket: None,
-        chain_slot_mask: &[false, true, false, true],
     },
     // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
     BinderSpec {
         key: &[Kw("TYPE"), Slot],
         names: &[(type_decl_binder_name, BindKind::Type)],
         bucket: None,
-        chain_slot_mask: &[false, false],
     },
     // MODULE <name> = <body> (identifier overload; the type-named overload has no hooks).
     BinderSpec {
         key: &[Kw("MODULE"), Slot, Kw("="), Slot],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
-        chain_slot_mask: &[false, true, false, false],
     },
     // GROUP <name> FOLD LEFT = <body>.
     BinderSpec {
         key: &[Kw("GROUP"), Slot, Kw("FOLD"), Kw("LEFT"), Kw("="), Slot],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
-        chain_slot_mask: &[false, true, false, false, false, false],
     },
     // GROUP <name> FOLD RIGHT = <body>.
     BinderSpec {
         key: &[Kw("GROUP"), Slot, Kw("FOLD"), Kw("RIGHT"), Kw("="), Slot],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
-        chain_slot_mask: &[false, true, false, false, false, false],
     },
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT = <body>.
     BinderSpec {
@@ -446,7 +435,6 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
-        chain_slot_mask: &[false, true, false, false, false, false, false, false],
     },
     // GROUP <name> PAIRWISE FOLD <combiner> RIGHT = <body>.
     BinderSpec {
@@ -462,42 +450,36 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
-        chain_slot_mask: &[false, true, false, false, false, false, false, false],
     },
     // SIG <name> = <body>.
     BinderSpec {
         key: &[Kw("SIG"), Slot, Kw("="), Slot],
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
-        chain_slot_mask: &[false, true, false, false],
     },
     // UNION <name> = <schema>.
     BinderSpec {
         key: &[Kw("UNION"), Slot, Kw("="), Slot],
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
-        chain_slot_mask: &[false, true, false, false],
     },
     // NEWTYPE <name> = <repr> (scalar / sigil / record reprs share the key).
     BinderSpec {
         key: &[Kw("NEWTYPE"), Slot, Kw("="), Slot],
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
-        chain_slot_mask: &[false, true, false, true],
     },
     // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` forms).
     BinderSpec {
         key: &[Kw("NEWTYPE"), Slot],
         names: &[(type_decl_binder_name, BindKind::Type)],
         bucket: None,
-        chain_slot_mask: &[false, false],
     },
     // RECURSIVE TYPES <name> = <body>.
     BinderSpec {
         key: &[Kw("RECURSIVE"), Kw("TYPES"), Slot, Kw("="), Slot],
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
-        chain_slot_mask: &[false, false, true, false, false],
     },
     // FN <signature> -> <return_type> = <body> (three hook-bearing overloads share this key; the
     // anonymous record-schema overload has no hooks).
@@ -505,14 +487,12 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         key: &[Kw("FN"), Slot, Kw("->"), Slot, Kw("="), Slot],
         names: &[],
         bucket: Some(fn_def_binder_bucket),
-        chain_slot_mask: &[false, false, false, true, false, false],
     },
     // OP <symbol> OVER <operand> = <body>.
     BinderSpec {
         key: &[Kw("OP"), Slot, Kw("OVER"), Slot, Kw("="), Slot],
         names: &[],
         bucket: Some(op_def_binder_bucket),
-        chain_slot_mask: &[false, false, false, true, false, false],
     },
     // OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -528,7 +508,6 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[],
         bucket: Some(op_def_binder_bucket),
-        chain_slot_mask: &[false, false, false, true, false, true, false, false],
     },
     // UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -545,7 +524,6 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[],
         bucket: Some(op_def_binder_bucket),
-        chain_slot_mask: &[false, false, false, false, true, false, true, false, false],
     },
     // The combined statement forms: one binder filling both channels — the LET value name and the
     // bucket key(s) the declaration's body registers under. `LET <name> = UNARY OP …` is the
@@ -566,7 +544,6 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(fn_def_binder_bucket),
-        chain_slot_mask: &[false, true, false, false, false, false, true, false, false],
     },
     // LET <name> = OP <symbol> OVER <operand> = <body>.
     BinderSpec {
@@ -583,7 +560,6 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(op_def_binder_bucket),
-        chain_slot_mask: &[false, true, false, false, false, false, true, false, false],
     },
     // LET <name> = OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -602,9 +578,6 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(op_def_binder_bucket),
-        chain_slot_mask: &[
-            false, true, false, false, false, false, true, false, true, false, false,
-        ],
     },
     // LET <name> = UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -624,11 +597,8 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(op_def_binder_bucket),
-        chain_slot_mask: &[
-            false, true, false, false, false, false, false, true, false, true, false, false,
-        ],
     },
-    // VAL <name> <ty> — a declaration form with no install channel and no chain slots. It records
+    // VAL <name> <ty> — a declaration form with no install channel. It records
     // into the decl scope's slot collector, not a binding map any name lookup can see, so it
     // installs nothing; it appears here so the one-place specification of the declaration forms is
     // complete.
@@ -636,20 +606,19 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         key: &[Kw("VAL"), Slot, Slot],
         names: &[],
         bucket: None,
-        chain_slot_mask: &[false, false, false],
     },
 ];
 
-/// What `expression` installs, plus its chain-slot mask, if its bucket key matches a
-/// [`BINDER_SPECS`] entry whose extractors read a binder out of the AST. Both channels are read —
-/// a combined form fills them together. The key is read off the node's own stored run, and a
-/// synthesized bucket key is bumped into `brand`'s region — the node's, since this runs from the
-/// construction door. Returns `None` for a non-binder shape, and for a form whose extractors
-/// install nothing (`VAL`, and the anonymous `FN :{…}` whose signature part names no bucket).
+/// What `expression` installs, if its bucket key matches a [`BINDER_SPECS`] entry whose extractors
+/// read a binder out of the AST. Both channels are read — a combined form fills them together. The
+/// key is read off the node's own stored run, and a synthesized bucket key is bumped into `brand`'s
+/// region — the node's, since this runs from the construction door. Returns `None` for a non-binder
+/// shape, and for a form whose extractors install nothing (`VAL`, and the anonymous `FN :{…}` whose
+/// signature part names no bucket).
 pub(crate) fn binder_plan_for<'a>(
     brand: RegionBrand<'a>,
     expression: &KExpression<'a>,
-) -> Option<(StoredBinderKey<'a>, &'static [bool])> {
+) -> Option<StoredBinderKey<'a>> {
     let spec = BINDER_SPECS
         .iter()
         .find(|spec| spec.matches_stored_key(expression.stored_key()))?;
@@ -661,7 +630,7 @@ pub(crate) fn binder_plan_for<'a>(
     if name.is_none() && buckets.is_none() {
         return None;
     }
-    Some((StoredBinderKey { name, buckets }, spec.chain_slot_mask))
+    Some(StoredBinderKey { name, buckets })
 }
 
 #[cfg(test)]

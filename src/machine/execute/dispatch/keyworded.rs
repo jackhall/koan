@@ -91,15 +91,7 @@ fn walk_and_invoke<'step>(
     idx: usize,
     park: impl FnOnce(Vec<NodeId>, WorkingExpression<'step>) -> Outcome<'step>,
 ) -> Outcome<'step> {
-    let covered_mask = expr.binder_plan().map(|plan| plan.chain_slot_mask);
-    let walk = match part_walk(
-        ctx,
-        expr.parts,
-        covered_mask,
-        bare_outcomes,
-        &resolved.slots,
-        idx,
-    ) {
+    let walk = match part_walk(ctx, expr.parts, bare_outcomes, &resolved.slots, idx) {
         Ok(w) => w,
         Err(e) => return Outcome::Done(Err(e)),
     };
@@ -268,9 +260,7 @@ fn install_eager_only<'step>(
     // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
     // bare-name slots to pre-resolve here.
     let brand = ctx.current_scope().brand();
-    let covered_mask = expr.binder_plan().map(|plan| plan.chain_slot_mask);
-    let (new_parts, mut staged_subs) = super::stage_all_eager_parts(brand, expr.parts, &[]);
-    mark_covered_subs(&mut staged_subs, covered_mask);
+    let (new_parts, staged_subs) = super::stage_all_eager_parts(brand, expr.parts, &[]);
     debug_assert!(
         !staged_subs.is_empty(),
         "install_eager_only invoked from Deferred arm; \
@@ -279,24 +269,6 @@ fn install_eager_only<'step>(
     let new_expr = expr.respliced(brand, new_parts);
     // The Deferred arm has no pre-pick, so no inline-resolved wrap slots.
     install_eager_subs_track(ctx, new_expr, staged_subs)
-}
-
-/// Mark every staged `Dispatch` at a covered chain-slot index as `binder_covered`, so a binder in a
-/// binder's own eager declaration slot (`LET f = (FN …)`) rides through submission rather than being
-/// rejected as an eager-position nested binder. Indices outside the mask (or all-`false` masks) leave
-/// the deps uncovered. `covered_mask` is the working expression's `binder_plan().chain_slot_mask`.
-fn mark_covered_subs(
-    staged_subs: &mut [(usize, DepRequest<'_>)],
-    covered_mask: Option<&'static [bool]>,
-) {
-    let Some(mask) = covered_mask else { return };
-    for (index, dep) in staged_subs.iter_mut() {
-        if mask.get(*index).copied().unwrap_or(false) {
-            if let DepRequest::Dispatch { binder_covered, .. } = dep {
-                *binder_covered = true;
-            }
-        }
-    }
 }
 
 /// Park on bare-name forward-reference producers. `working_expr` is partly spliced — Resolved wrap
@@ -357,7 +329,6 @@ fn park_walk_producer(
 fn part_walk<'step>(
     ctx: &SchedulerView<'step, '_>,
     parts: &[crate::source::Spanned<crate::machine::model::WorkingPart<'step>>],
-    covered_mask: Option<&'static [bool]>,
     bare_outcomes: &[Option<NameOutcome>],
     slots: &crate::machine::core::ClassifiedSlots,
     idx: usize,
@@ -421,15 +392,7 @@ fn part_walk<'step>(
             .filter(|_| in_eager_filter)
             .map(|a| stage_eager_part(brand, a))
         {
-            Some(Ok(mut dep)) => {
-                // A binder's own eager chain slot (this expr's `binder_plan().chain_slot_mask`) is
-                // covered: the enclosing statement already installed its aggregate, so the nested
-                // binder rides through submission instead of being rejected as an eager position.
-                if covered_mask.is_some_and(|m| m.get(i).copied().unwrap_or(false)) {
-                    if let DepRequest::Dispatch { binder_covered, .. } = &mut dep {
-                        *binder_covered = true;
-                    }
-                }
+            Some(Ok(dep)) => {
                 staged_subs.push((i, dep));
                 new_parts.push(staged_slot_placeholder());
             }

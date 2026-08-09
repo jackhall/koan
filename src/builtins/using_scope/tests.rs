@@ -31,7 +31,7 @@ fn using_surfaces_module_function_for_bare_dispatch() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("MODULE some_module = (LET dbl = (FN (DBL x :Number) -> Number = (x)))");
+    test_run.run("MODULE some_module = (LET dbl = FN (DBL x :Number) -> Number = (x))");
     let result = test_run.run_one(parse_one(&program, "USING some_module SCOPE (DBL 21)"));
     assert!(matches!(result, KObject::Number(n) if *n == 21.0));
 }
@@ -81,7 +81,7 @@ fn using_module_function_resolves_its_own_internals() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
         "MODULE some_module = ((LET secret = 99) \
-                       (LET getit = (FN (GETIT) -> Number = (secret))))",
+                       (LET getit = FN (GETIT) -> Number = (secret)))",
     );
     let result = test_run.run_one(parse_one(&program, "USING some_module SCOPE (GETIT)"));
     assert!(matches!(result, KObject::Number(n) if *n == 99.0));

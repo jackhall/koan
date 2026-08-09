@@ -42,12 +42,15 @@ pub enum KErrorKind {
         reason: String,
     },
     /// A binder-introducing form (LET, FN, OP, TYPE, …) appeared in an eagerly evaluated
-    /// sub-expression — a user-call or builtin argument, an operator operand, a literal element, or a
-    /// deferred head — where a parse-time install aggregate cannot be sound. Slot-terminal and
-    /// TRY-catchable, like [`DispatchFailed`](KErrorKind::DispatchFailed). `expr` is the offending
-    /// sub-expression's rendered form.
+    /// sub-expression — a user-call or builtin argument, an operator operand, a literal element, a
+    /// deferred head, or another binder's declaration slot — where a parse-time install cannot be
+    /// sound. Binding is a statement-level act. Slot-terminal and TRY-catchable, like
+    /// [`DispatchFailed`](KErrorKind::DispatchFailed). `expr` is the offending sub-expression's
+    /// rendered form; `suggest_flat` is Display-only (the TRY-record projection exposes `expr`
+    /// alone) and marks a rejected `FN` / `OP` definition, which has a one-statement spelling.
     NestedBinder {
         expr: String,
+        suggest_flat: bool,
     },
     /// A builtin's structural assumption about an argument's shape didn't hold.
     ShapeError(String),
@@ -316,7 +319,7 @@ impl KErrorKind {
                     ),
                 ],
             ),
-            KErrorKind::NestedBinder { expr } => (
+            KErrorKind::NestedBinder { expr, .. } => (
                 "NestedBinder".to_string(),
                 vec![("expr".to_string(), KObject::KString(brand.alloc_text(expr)))],
             ),
@@ -443,11 +446,22 @@ impl fmt::Display for KErrorKind {
             KErrorKind::DispatchFailed { expr, reason } => {
                 write!(f, "dispatch failed for {expr}: {reason}")
             }
-            KErrorKind::NestedBinder { expr } => write!(
-                f,
-                "binder declaration in an eagerly evaluated sub-expression `{expr}`; a binder must \
-                 be a statement, a body, or nested in another binder's declaration slot"
-            ),
+            KErrorKind::NestedBinder { expr, suggest_flat } => {
+                write!(
+                    f,
+                    "binder declaration in an eagerly evaluated sub-expression `{expr}`; a binder \
+                     must be a statement or a lazily-captured body"
+                )?;
+                if *suggest_flat {
+                    write!(
+                        f,
+                        ". To bind a name and register the definition in one statement, write it \
+                         flat: `LET <name> = FN <signature> -> <Return> = (<body>)`, or the `OP` / \
+                         `UNARY OP` twins"
+                    )?;
+                }
+                Ok(())
+            }
             KErrorKind::ShapeError(reason) => write!(f, "shape error: {reason}"),
             KErrorKind::ParseError {
                 message,

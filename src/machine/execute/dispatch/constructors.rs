@@ -375,7 +375,6 @@ fn launch<'step>(
                 ValueCell::Synthesized(expr) => expr,
             },
             placement: DepPlacement::OwnScope,
-            binder_covered: false,
         })
         .collect();
     let combine_finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {

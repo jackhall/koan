@@ -6,32 +6,32 @@ and how Koan decides what an expression *does*. This chapter covers both.
 ## Binding names with `LET`
 
 `LET <name> = <value>` introduces a name and binds it to a value. The
-expression evaluates to the bound value, so one declaration can chain
-directly inside another declaration's value slot:
+expression evaluates to the bound value, but binding is a *statement-level*
+act: a declaration is one statement, and each statement introduces its own
+names.
 
 ```koan
 LET answer = 42
-LET doubled = (LET copy = answer)
-PRINT doubled
+LET copy = answer
 PRINT copy
 ```
 
 ```text
 42
-42
 ```
 
-Those chain slots — plus statement position (a line of a program, a module or
-function body) — are the only places a declaration may appear. A declaration
-in an eagerly evaluated value position (a call argument, a list or dict
-element, an operator operand) is a structured error:
+Statement position — a line of a program, a module or function body — and a
+lazily-captured body are the only places a declaration may appear. A
+declaration anywhere eagerly evaluated (a call argument, a list or dict
+element, an operator operand, another declaration's value slot) is a
+structured error:
 
 ```koan
 PRINT (LET doubled = 42)
 ```
 
 ```text
-error: binder declaration in an eagerly evaluated sub-expression `LET doubled = 42`; a binder must be a statement, a body, or nested in another binder's declaration slot
+error: binder declaration in an eagerly evaluated sub-expression `LET doubled = 42`; a binder must be a statement or a lazily-captured body
   in PRINT <staged> (<bind>) at <input>:1:1
 ```
 

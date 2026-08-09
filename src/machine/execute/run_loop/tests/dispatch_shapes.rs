@@ -138,7 +138,7 @@ fn function_value_call_named_args_short_circuits() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = (FN (DOUBLE x :Number) -> Number = (x))");
+    test_run.run("LET f = FN (DOUBLE x :Number) -> Number = (x)");
     let expr = parse_one(&program, "f {x = 7}");
     reset_resolve_dispatch_entry_count();
     let result = dispatch_one(&mut test_run, expr);
@@ -164,7 +164,7 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+    test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
     let expr = parse_one(&program, "f {b = 2, a = 1}");
     reset_resolve_dispatch_entry_count();
     let result = dispatch_one(&mut test_run, expr);
@@ -191,7 +191,7 @@ fn function_value_call_named_args_missing_short_circuits() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+    test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
     let expr = parse_one(&program, "f {a = 1}");
     reset_resolve_dispatch_entry_count();
     let types = test_run.types.clone();
@@ -235,7 +235,7 @@ fn fast_lane_fn_callable_via_named_args() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = (FN (DOUBLE x :Number) -> Number = (x))");
+    test_run.run("LET f = FN (DOUBLE x :Number) -> Number = (x)");
     reset_resolve_dispatch_entry_count();
     let result = test_run.run_one(parse_one(&program, "f {x = 7}"));
     assert_eq!(
@@ -255,7 +255,7 @@ fn fast_lane_weaves_internal_keyword() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+    test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
     reset_resolve_dispatch_entry_count();
     let result = test_run.run_one(parse_one(&program, "f {a = 1, b = 2}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
@@ -269,7 +269,7 @@ fn fast_lane_named_args_order_independent() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+    test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
     reset_resolve_dispatch_entry_count();
     let result = test_run.run_one(parse_one(&program, "f {b = 2, a = 1}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
@@ -285,7 +285,7 @@ fn fast_lane_extra_named_arg_dropped() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+    test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
     reset_resolve_dispatch_entry_count();
     let result = test_run.run_one(parse_one(&program, "f {a = 1, b = 2, c = 3}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
@@ -301,7 +301,7 @@ fn fast_lane_legacy_paren_args_rejected() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("LET f = (FN (DOUBLE x :Number) -> Number = (x))");
+    test_run.run("LET f = FN (DOUBLE x :Number) -> Number = (x)");
     reset_resolve_dispatch_entry_count();
     let err = test_run.run_one_err(parse_one(&program, "f (a 1)"));
     assert_eq!(resolve_dispatch_entry_count(), 0);

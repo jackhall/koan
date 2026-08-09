@@ -9,7 +9,7 @@ use crate::machine::{program_storage, run_root_storage};
 const SETUP: &str = "SIG Ordered = (VAL compare :Number)\n\
                      MODULE int_ord = (LET compare = 7)\n\
                      LET make_set = \
-                       (FN (MAKESET er :Ordered) -> Module = (MODULE result = (LET inner = 1)))";
+                       FN (MAKESET er :Ordered) -> Module = (MODULE result = (LET inner = 1))";
 
 #[test]
 fn module_returning_fn_binds_value_side() {

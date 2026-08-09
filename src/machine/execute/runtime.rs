@@ -469,12 +469,9 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         expr: WorkingExpression<'a>,
         placement: DepPlacement<'a>,
-        binder_covered: bool,
     ) -> NodeId {
         match placement {
-            DepPlacement::OwnScope => {
-                self.dispatch_in_own_scope(expr, SubmitContext::SubDispatch { binder_covered })
-            }
+            DepPlacement::OwnScope => self.dispatch_in_own_scope(expr, SubmitContext::SubDispatch),
             DepPlacement::InScope(scope) => self
                 .enter_block(scope.id, vec![expr], scope)
                 .into_iter()
@@ -493,11 +490,7 @@ impl<'run> KoanRuntime<'run> {
         dep: DepRequest<'a>,
     ) -> NodeId {
         match dep {
-            DepRequest::Dispatch {
-                expr,
-                placement,
-                binder_covered,
-            } => self.realize_dispatch(expr, placement, binder_covered),
+            DepRequest::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
             DepRequest::ListLit(items) => self.schedule_list_literal(brand, items),
             DepRequest::DictLit(pairs) => self.schedule_dict_literal(brand, pairs),
             DepRequest::RecordLit(fields) => self.schedule_record_literal(brand, fields),
@@ -514,11 +507,7 @@ impl<'run> KoanRuntime<'run> {
     fn realize_catch_dep<'a>(&mut self, dep: DepRequest<'a>) -> NodeId {
         match dep {
             DepRequest::Existing(id) => id,
-            DepRequest::Dispatch {
-                expr,
-                placement,
-                binder_covered,
-            } => self.realize_dispatch(expr, placement, binder_covered),
+            DepRequest::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
             DepRequest::ListLit(_)
             | DepRequest::DictLit(_)
             | DepRequest::RecordLit(_)

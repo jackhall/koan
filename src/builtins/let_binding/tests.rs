@@ -292,13 +292,15 @@ fn let_type_class_with_plain_function_rejects() {
     let mut test_run = TestRun::silent(&program, &region);
     let err = test_run.run_one_err(parse_one(
         &program,
-        "LET Plain = (FN (PP x :Number) -> Number = (x))",
+        "LET Plain = FN (PP x :Number) -> Number = (x)",
     ));
     match &err.kind {
-        KErrorKind::TypeClassBindingExpectsType { name, .. } => {
-            assert_eq!(name, "Plain", "binder name should surface in diagnostic");
-        }
-        _ => panic!("expected TypeClassBindingExpectsType, got {err}"),
+        KErrorKind::ShapeError(message) => assert!(
+            message.contains("Plain") && message.contains("plain"),
+            "the diagnostic should name the binder and suggest the value-classified \
+             respelling, got {message}",
+        ),
+        _ => panic!("expected the value-classified-respelling diagnostic, got {err}"),
     }
 }
 

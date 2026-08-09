@@ -206,15 +206,12 @@ pub(in crate::machine::execute) fn stage_eager_working_part<'a>(
         WorkingPart::Expression(inner) => Ok(DepRequest::Dispatch {
             expr: *inner,
             placement: DepPlacement::OwnScope,
-            // A synthesized operand is a reduction product, never a nested binder.
-            binder_covered: false,
         }),
         // Rewrap the whole part, as the AST `:{…}` shape does: the record-type wrapper is the
         // handler, so the sub-Dispatch must see a one-part `RecordType`-shaped node, not the body.
         WorkingPart::RecordType(_) => Ok(DepRequest::Dispatch {
             expr: WorkingExpression::new(brand, vec![Spanned::bare(part)]),
             placement: DepPlacement::OwnScope,
-            binder_covered: false,
         }),
         other => Err(other),
     }
@@ -233,8 +230,6 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
             Ok(DepRequest::Dispatch {
                 expr: WorkingExpression::from_ast(brand, *inner),
                 placement: DepPlacement::OwnScope,
-                // Default uncovered; the keyworded walk marks a binder's own chain slots after staging.
-                binder_covered: false,
             })
         }
         Some(EagerShape::TypeExpression) => Ok(DepRequest::Dispatch {
@@ -242,7 +237,6 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
             // builds, equivalent to the destructure-and-rewrap the walks did.
             expr: WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]),
             placement: DepPlacement::OwnScope,
-            binder_covered: false,
         }),
         Some(EagerShape::ListLiteral) => {
             let ExpressionPart::ListLiteral(items) = part else {
@@ -448,8 +442,6 @@ pub(super) fn stage_all_eager_parts<'step>(
                 DepRequest::Dispatch {
                     expr: wrapped,
                     placement: DepPlacement::OwnScope,
-                    // Bare-name value slot: a resolved name, never a nested binder.
-                    binder_covered: false,
                 },
             ));
             new_parts.push(staged_slot_placeholder());

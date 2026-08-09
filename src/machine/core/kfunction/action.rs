@@ -556,8 +556,6 @@ impl<'a> OwnedDispatch<'a> {
             expr: self.expr,
             placement: self.placement,
             // A builtin-declared owned dispatch (module/sig/recursive/using bodies) enters a fresh
-            // block via `InScope`, a statement position — never a binder's own eager chain slot.
-            binder_covered: false,
         }
     }
 }
@@ -579,12 +577,6 @@ pub enum DepRequest<'a> {
     Dispatch {
         expr: WorkingExpression<'a>,
         placement: DepPlacement<'a>,
-        /// True only when this sub-dispatch stages a binder pick's *own* chain slot (a `LET`/`OP`/`FN`
-        /// declaration slot), so the enclosing statement already installed the binder's aggregate and
-        /// the sub-dispatch may carry its own nested binder without the eager-position rejection. Every
-        /// other staged `Dispatch` — user-call arguments, operator operands, literal elements, deferred
-        /// heads — leaves this `false`, so a binder there is a slot-terminal [`KErrorKind::NestedBinder`].
-        binder_covered: bool,
     },
     Existing(NodeId),
     ListLit(&'a [ExpressionPart<'a>]),

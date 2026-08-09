@@ -372,12 +372,7 @@ impl<'step> KoanRuntime<'step> {
                     WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]);
                 Slot::owned(
                     deps,
-                    self.dispatch_in_own_scope(
-                        wrapped,
-                        SubmitContext::SubDispatch {
-                            binder_covered: false,
-                        },
-                    ),
+                    self.dispatch_in_own_scope(wrapped, SubmitContext::SubDispatch {}),
                 )
             }
             ref p @ ExpressionPart::Identifier(_) => {
@@ -433,12 +428,7 @@ impl<'step> KoanRuntime<'step> {
                     WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(*part))]);
                 Slot::owned(
                     deps,
-                    self.dispatch_in_own_scope(
-                        expr,
-                        SubmitContext::SubDispatch {
-                            binder_covered: false,
-                        },
-                    ),
+                    self.dispatch_in_own_scope(expr, SubmitContext::SubDispatch {}),
                 )
             }
         }

@@ -132,8 +132,8 @@ fn let_bound_fn_applied_by_named_args_yields_module() {
     let test_run = run(
         &program,
         &region,
-        "LET apply_it = (FN (APPLYIT x :Number) -> Module = \
-            (MODULE inner = ((LET tag = x))))\n\
+        "LET apply_it = FN (APPLYIT x :Number) -> Module = \
+            (MODULE inner = ((LET tag = x)))\n\
          LET got = (apply_it {x = 5})",
     );
     let scope = test_run.scope;
@@ -196,8 +196,8 @@ fn signature_param_satisfied_via_named_args() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord_base = ((LET compare = 7))\n\
          LET int_ord = (int_ord_base :! Ordered)\n\
-         LET make_set = (FN (MKSET base :Ordered) -> Module = \
-            (MODULE inner = ((LET tag = 0))))\n\
+         LET make_set = FN (MKSET base :Ordered) -> Module = \
+            (MODULE inner = ((LET tag = 0)))\n\
          LET got = (make_set {base = int_ord})",
     );
     let scope = test_run.scope;
@@ -223,8 +223,8 @@ fn signature_param_unsatisfied_via_named_args_errors() {
     let err = run_expect_err(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE plain = ((LET other = 1))\n\
-         LET make_set = (FN (MKSET base :Ordered) -> Module = \
-            (MODULE inner = ((LET tag = 0))))\n\
+         LET make_set = FN (MKSET base :Ordered) -> Module = \
+            (MODULE inner = ((LET tag = 0)))\n\
          LET got = (make_set {base = plain})",
     );
     // Ruling 12: the slot signature renders structurally, so the mismatch names

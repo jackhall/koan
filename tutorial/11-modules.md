@@ -147,8 +147,7 @@ inside the block:
 
 ```koan
 MODULE doubling =
-  LET dbl =
-    FN (DOUBLE x :Number) -> Number = (x)
+  FN (DOUBLE x :Number) -> Number = (x)
 PRINT
   USING doubling SCOPE (DOUBLE 21)
 ```

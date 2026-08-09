@@ -287,7 +287,7 @@ fn monad_program() -> &'static str {
     "NEWTYPE (Type AS Wrapper)\n\
      SIG Monad = ((TYPE (Type AS Wrap)) (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))\n\
      MODULE id_monad = ((LET Wrap = Wrapper) \
-     (LET pure = (FN (PURE x :Number) -> :(Number AS Wrapper) = (Wrapper (x)))))"
+     (LET pure = FN (PURE x :Number) -> :(Number AS Wrapper) = (Wrapper (x))))"
 }
 
 /// `id_monad :| Monad` succeeds: `substitute_sig_members` substitutes the SIG's `Wrap` slot to
@@ -445,7 +445,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     // and the `functions` bucket replay.
     test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE int_ord = ((LET compare = 7) (LET helper = (FN (HELP x :Number) -> Number = (x))))\n\
+         MODULE int_ord = ((LET compare = 7) (LET helper = FN (HELP x :Number) -> Number = (x)))\n\
          LET held = (int_ord :| Ordered)",
     );
     let held = lookup_module(scope, "held", &test_run.types);

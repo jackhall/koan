@@ -50,7 +50,7 @@ alongside the keyworded one:
 ```koan
 SIG Ordered = (VAL compare :Number)
 MODULE int_order = (LET compare = 7)
-LET make_set = (FN (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = (elem.compare))))
+LET make_set = FN (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = (elem.compare)))
 LET a = (MAKESET int_order)
 LET b = (make_set {elem = int_order})
 PRINT a.sample
@@ -68,11 +68,11 @@ Type-class (capitalized) name is an error — a function is a value, not a type:
 
 ```koan
 SIG Ordered = (VAL compare :Number)
-LET MakeSet = (FN (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = 1)))
+LET MakeSet = FN (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = 1))
 ```
 
 ```text
-error: type-class binding `MakeSet` expects a type value, got `:(FN (elem :SIG (compare: Number)) -> Module)`
+error: shape error: LET binder `MakeSet` is Type-classified but the bound value is a function (a value); rebind under a value-classified identifier instead (snake_case, e.g. `make_set`)
 ```
 
 ## Modules in type position: `TYPE OF`

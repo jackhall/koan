@@ -157,7 +157,7 @@ fn fn_signature_with_no_keyword_is_rejected() {
 }
 
 /// `FN` returns the `KObject::KFunction` it just registered, so callers can capture a
-/// callable handle via `LET f = (FN ...)`.
+/// callable handle via `LET f = FN ...`.
 #[test]
 fn fn_def_returns_the_registered_kfunction() {
     let program = program_storage();

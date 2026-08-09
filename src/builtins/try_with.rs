@@ -74,8 +74,6 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 expr_inner,
             ),
             placement: DepPlacement::InScope(body_scope),
-            // The watched body enters a fresh block (`InScope`) — a statement position.
-            binder_covered: false,
         },
         finish,
     )

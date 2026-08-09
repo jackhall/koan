@@ -313,15 +313,6 @@ impl<'a> ExpressionPart<'a> {
     }
 }
 
-/// The parse-time binder plan for a node that is *itself* a binder: the channel it installs
-/// ([`StoredBinderKey`]) and the chain-slot mask marking which of its slots carry nested binders
-/// forward. Cached on [`KExpression`] beside [`DispatchShape`]; `None` for a non-binder node.
-#[derive(Clone, Copy, Debug)]
-pub struct BinderPlan<'a> {
-    pub key: StoredBinderKey<'a>,
-    pub chain_slot_mask: &'static [bool],
-}
-
 /// A parsed Koan expression: an ordered run of [`ExpressionPart`]s borrowed from the storage that
 /// parsed them.
 ///
@@ -329,9 +320,10 @@ pub struct BinderPlan<'a> {
 ///
 /// `untyped_key`, `shape`, and `operator_probe` are a structural cache filled by the construction
 /// doors once the parts run is complete, so the dispatch driver reads the cache rather than
-/// re-deriving on every call of the enclosing function. `binder_plan` and `binder_installs` are the
-/// binder-position cache; a binder is always a parsed statement, so only this node carries them —
-/// the scheduler's [`WorkingExpression`] installs nothing.
+/// re-deriving on every call of the enclosing function. `binder_plan` is the binder-position cache:
+/// what this node installs when it is submitted as a statement, and `None` when it is not itself a
+/// binder. It is per-node only — a statement's namespace is legible from its own spine, never from
+/// what its slots contain.
 ///
 /// Every field is a shared borrow at `'a` or a `Copy` handle, so the node is covariant in `'a`: a
 /// program-storage node flows into shorter-lived code by ordinary subtyping, with no reattach and no
@@ -344,8 +336,7 @@ pub struct KExpression<'a> {
     untyped_key: &'a [StoredElement<'a>],
     shape: DispatchShape,
     operator_probe: Option<&'a str>,
-    binder_plan: Option<&'a BinderPlan<'a>>,
-    binder_installs: &'a [StoredBinderKey<'a>],
+    binder_plan: Option<&'a StoredBinderKey<'a>>,
 }
 
 // Lifetimes do not affect layout, so this retype is a no-op transmute. The witness's `'b: 'w` bound
@@ -378,16 +369,11 @@ impl<'a> KExpression<'a> {
             shape,
             operator_probe: operator_probe_for(brand, parts, shape),
             binder_plan: None,
-            binder_installs: &[],
         };
+        // Bumped behind a reference rather than stored inline: the plan is the widest thing a node
+        // would carry, and `KExpression` is copied on every part walk.
         expression.binder_plan = crate::machine::model::binder::binder_plan_for(brand, &expression)
-            .map(|(key, chain_slot_mask)| {
-                brand.alloc_value(BinderPlan {
-                    key,
-                    chain_slot_mask,
-                })
-            });
-        expression.binder_installs = expression.compute_binder_installs(brand);
+            .map(|key| brand.alloc_value(key));
         expression
     }
 
@@ -400,47 +386,15 @@ impl<'a> KExpression<'a> {
         brand.alloc_value(Self::new(brand, parts))
     }
 
-    /// Aggregate the binder installs of this node's subtree, per the position rule: this node's own
-    /// key (when a binder) plus, transitively, the installs of its chain-slot children and of a
-    /// redundant single-`Expression` paren wrapper. Children are always built before parents (parse
-    /// and every construction door build bottom-up), so each child's cache is already filled and
-    /// this is a plain read. Aggregation never crosses keyword/identifier/type/literal parts,
-    /// quotes, sigils, list/dict/record literals, lazy (`:KExpression`) slots, or block-shaped
-    /// children.
-    fn compute_binder_installs(&self, brand: RegionBrand<'a>) -> &'a [StoredBinderKey<'a>] {
-        let mut installs: Vec<StoredBinderKey<'a>> = Vec::new();
-        if let Some(plan) = self.binder_plan {
-            installs.push(plan.key);
-            for (index, part) in self.parts.iter().enumerate() {
-                if !plan.chain_slot_mask.get(index).copied().unwrap_or(false) {
-                    continue;
-                }
-                if let ExpressionPart::Expression(child) = &part.value {
-                    if !child.is_statement_block() {
-                        installs.extend_from_slice(child.binder_installs);
-                    }
-                }
-            }
-        }
-        // Redundant single-`Expression` paren wrapper (`((…))`) passes its child's aggregate
-        // straight through — a pointer copy, the child's slice already being resident. A binder is
-        // always keyword-led, so this never co-occurs with the binder-plan branch above.
-        if let [only] = self.parts {
-            if let ExpressionPart::Expression(child) = &only.value {
-                return child.binder_installs;
-            }
-        }
-        brand.alloc_slice(&installs)
-    }
-
     /// This node's own binder plan — `Some` iff this node is itself a binder.
-    pub fn binder_plan(&self) -> Option<&'a BinderPlan<'a>> {
-        self.binder_plan
+    pub fn binder_plan(&self) -> Option<StoredBinderKey<'a>> {
+        self.binder_plan.copied()
     }
 
-    /// Everything this node's subtree installs into the enclosing scope (see the field docs).
-    pub fn binder_installs(&self) -> &'a [StoredBinderKey<'a>] {
-        self.binder_installs
+    /// The plan as the bumped borrow it is stored as, for the working copy that carries it through
+    /// a splice unchanged.
+    pub(crate) fn binder_plan_ref(&self) -> Option<&'a StoredBinderKey<'a>> {
+        self.binder_plan
     }
 
     /// True when this expression is a statement block: two or more parts, all of them

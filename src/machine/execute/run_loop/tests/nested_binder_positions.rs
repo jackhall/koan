@@ -1,10 +1,10 @@
-//! The nested-binder position rule, pinned end-to-end: a binder (any expression whose
-//! cached `binder_installs` aggregate is non-empty — name-installing declaration forms
-//! and named `FN` / `OP` definitions alike) may appear at statement position, in a
-//! lazily-captured body, or in another binder's own declaration slot. Every other
-//! eagerly-dispatched position pre-errors the slot with a TRY-catchable
-//! [`KErrorKind::NestedBinder`]. Value positions take the anonymous `FN :{…}` form,
-//! which installs nothing.
+//! The binder position rule, pinned end-to-end: binding is a statement-level act, so a binder (any
+//! expression carrying a `binder_plan` — name-installing declaration forms and named `FN` / `OP`
+//! definitions alike) is legal in exactly two places, statement position and a lazily-captured
+//! body. Every other eagerly-dispatched position — including another binder's own declaration slot
+//! — pre-errors the slot with a TRY-catchable [`KErrorKind::NestedBinder`]. A value position takes
+//! the anonymous `FN :{…}` form, which installs nothing; a definition that must also bind a name is
+//! one statement in the combined `LET <name> = FN …` spelling.
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::core::{program_storage, run_root_storage};
@@ -137,4 +137,57 @@ fn nested_binder_error_is_try_catchable() {
     );
     let bytes = captured.borrow().clone();
     assert_eq!(bytes, b"caught\n");
+}
+
+/// A definition in another binder's declaration slot is an eager position like any other:
+/// `LET f = (FN …)` errors, and the message names the one-statement spelling that does both.
+#[test]
+fn definition_in_a_declaration_slot_suggests_the_flat_spelling() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let err = test_run.run_one_err(parse_one(
+        &program,
+        "LET f = (FN (DOUBLE x :Number) -> Number = (x))",
+    ));
+    let message = format!("{err}");
+    assert!(
+        matches!(&err.kind, KErrorKind::NestedBinder { .. }),
+        "expected NestedBinder for a binder's declaration slot, got {message}",
+    );
+    assert!(
+        message.contains("LET <name> = FN <signature>"),
+        "a rejected definition should name the flat spelling, got {message}",
+    );
+}
+
+/// A plain `LET` in a declaration slot registers no overload, so it has no flat spelling to
+/// suggest: `LET z = (LET a = 3)` errors with the bare position rule.
+#[test]
+fn plain_let_in_a_declaration_slot_gets_the_plain_message() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let err = test_run.run_one_err(parse_one(&program, "LET z = (LET a = 3)"));
+    let message = format!("{err}");
+    assert!(
+        matches!(&err.kind, KErrorKind::NestedBinder { .. }),
+        "expected NestedBinder for a nested LET, got {message}",
+    );
+    assert!(
+        !message.contains("write it flat"),
+        "a plain LET registers nothing, so there is no flat spelling to suggest: {message}",
+    );
+}
+
+/// The combined statement forms are the legal spelling of the same intent, and they are statements
+/// — so the same declarations that error above run when written flat.
+#[test]
+fn the_combined_forms_are_legal_at_statement_position() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("LET double = FN (DOUBLE x :Number) -> Number = (x * 2)");
+    let result = test_run.run_one(parse_one(&program, "DOUBLE 4"));
+    assert!(matches!(result, KObject::Number(n) if *n == 8.0));
 }

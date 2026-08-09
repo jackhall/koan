@@ -1,9 +1,8 @@
-//! After the outer submission of `LET f = (FN (HELPER x :Number) -> Number =
-//! (x))` returns and before any node runs, BOTH the LET's name claim
-//! AND the inner FN's pending slot in bucket `[HELPER, Slot]` must be
-//! installed in the dispatching scope's `bindings`. Otherwise a sibling that
-//! dispatches a call shape matching the still-uninstalled bucket would
-//! hard-error under strict-only admission instead of parking.
+//! The combined statement form installs both channels *atomically*, at submission: after
+//! `LET f = FN (HELPER x :Number) -> Number = (x)` is submitted and before any node runs, BOTH the
+//! name claim on `f` AND the pending slot in bucket `[HELPER, Slot]` must be in the dispatching
+//! scope's `bindings`. Otherwise a sibling dispatching a call shape matching the still-uninstalled
+//! bucket would hard-error under strict-only admission instead of parking.
 
 use super::working_one;
 use crate::builtins::test_support::TestRun;
@@ -11,17 +10,17 @@ use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::UntypedElement;
 
 #[test]
-fn nested_binder_installs_inner_placeholder_at_outer_submission() {
+fn combined_form_installs_both_channels_at_submission() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let expr = working_one(&program, "LET f = (FN (HELPER x :Number) -> Number = (x))");
+    let expr = working_one(&program, "LET f = FN (HELPER x :Number) -> Number = (x)");
     let _id = test_run.runtime.dispatch_in_scope(expr, scope);
     // Read both tables before any `execute()` — installs must land at submission time.
     assert!(
         scope.bindings().pending_value("f").is_some(),
-        "outer LET should claim `f`'s value slot at submission; \
+        "the combined statement should claim `f`'s value slot at submission; \
          pending = {:?}",
         scope.bindings().pending_names(),
     );
@@ -34,7 +33,7 @@ fn nested_binder_installs_inner_placeholder_at_outer_submission() {
             .bindings()
             .pending_overload_entries(&helper_bucket)
             .is_empty(),
-        "inner FN (aggregated into the LET statement's install list) should claim a \
-         pending slot in bucket [HELPER, Slot] at submission",
+        "the combined statement's own binder plan should claim a pending slot in \
+         bucket [HELPER, Slot] at submission",
     );
 }

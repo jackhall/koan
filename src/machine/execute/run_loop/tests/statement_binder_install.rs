@@ -288,13 +288,12 @@ fn op_install_lets_sibling_use_resolve() {
 }
 
 // ---------------------------------------------------------------------------
-// Legal binder chains.
+// Combined statement forms: one binder, both install channels.
 // ---------------------------------------------------------------------------
 
-/// The functor idiom: `LET make_set = (FN (MAKESET …) …)` installs the nested
-/// FN's pending-overload bucket `[MAKESET, Slot]` at the outer statement's
-/// submission, so a later sibling `(MAKESET …)` call parks and resolves when
-/// `make_set` completes.
+/// The functor idiom in its combined spelling: `LET make_set = FN (MAKESET …) …` installs the
+/// statement's own pending-overload bucket `[MAKESET, Slot]` at submission alongside the name, so a
+/// later sibling `(MAKESET …)` call parks and resolves when the statement completes.
 #[test]
 fn functor_chain_sibling_call_parks_then_resolves() {
     let program = program_storage();
@@ -305,12 +304,12 @@ fn functor_chain_sibling_call_parks_then_resolves() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
          LET make_set = \
-            (FN (MAKESET er :Ordered) -> Module = (MODULE result = (LET inner = 1)))\n\
+            FN (MAKESET er :Ordered) -> Module = (MODULE result = (LET inner = 1))\n\
          LET the_set = (MAKESET int_ord)",
     );
     assert!(
         matches!(test_run.scope.lookup("the_set"), Some(KObject::Module(_))),
-        "the nested FN's bucket must install at the outer submission so the \
+        "the combined statement's bucket must install at its submission so the \
          sibling `(MAKESET int_ord)` call resolves to a module; got {:?}",
         test_run
             .scope
@@ -319,11 +318,11 @@ fn functor_chain_sibling_call_parks_then_resolves() {
     );
 }
 
-/// The LET-chain idiom: `LET z = (LET a = 3)` installs the inner LET's name
-/// placeholder `a` with the outer statement's node id, so a later sibling reading
-/// `a` parks and resolves.
+/// A binder in another binder's declaration slot installs nothing: `LET z = (LET a = 3)` is an
+/// eager-position binder, so it errors and `a` never enters the scope. Binding is a statement-level
+/// act, and a statement's own key is the whole truth about what it installs.
 #[test]
-fn let_chain_sibling_reads_inner_binding() {
+fn a_binder_in_a_declaration_slot_installs_nothing() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(
@@ -332,7 +331,14 @@ fn let_chain_sibling_reads_inner_binding() {
         "LET z = (LET a = 3)\n\
          LET use_a = a",
     );
-    assert_eq!(number(&test_run, "use_a"), 3.0);
+    assert!(
+        test_run.scope.lookup("a").is_none(),
+        "the inner LET's name must not reach the enclosing scope",
+    );
+    assert!(
+        test_run.scope.lookup("use_a").is_none(),
+        "the sibling reading `a` must not bind either",
+    );
 }
 
 // ---------------------------------------------------------------------------

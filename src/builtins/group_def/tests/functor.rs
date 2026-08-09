@@ -17,10 +17,10 @@ use crate::machine::{program_storage, run_root_storage};
 const TYPE_PARAMETER_FUNCTOR: &str = "LET xs = [1]\n\
      LET ys = [2]\n\
      LET zs = [3]\n\
-     LET make_ops = (FN (MAKEOPS Elt :Type) -> Module = (\
+     LET make_ops = FN (MAKEOPS Elt :Type) -> Module = (\
        GROUP result FOLD LEFT = (\
          (OP #(+) OVER :(LIST OF Elt) = (left))\
-         (OP #(-) OVER :(LIST OF Elt) = (right)))))\n";
+         (OP #(-) OVER :(LIST OF Elt) = (right))))\n";
 
 /// A functor over a witness module: the member bodies *do* need an operation on the element type, so
 /// the instantiation passes a dictionary — a module satisfying `Additive` — and the `⊕` body calls
@@ -30,14 +30,14 @@ const WITNESS_MODULE_FUNCTOR: &str = "SIG Additive = (\
        (VAL combine :(FN (x :Elt, y :Elt) -> Elt)))\n\
      MODULE sum_additive = (\
        (LET Elt = Number)\
-       (LET combine = (FN (COMBINE x :Number y :Number) -> Number = (x + y))))\n\
+       (LET combine = FN (COMBINE x :Number y :Number) -> Number = (x + y)))\n\
      MODULE product_additive = (\
        (LET Elt = Number)\
-       (LET combine = (FN (COMBINE x :Number y :Number) -> Number = (x * y))))\n\
-     LET make_ops = (FN (MAKEOPS witness :Additive) -> Module = (\
+       (LET combine = FN (COMBINE x :Number y :Number) -> Number = (x * y)))\n\
+     LET make_ops = FN (MAKEOPS witness :Additive) -> Module = (\
        GROUP result FOLD LEFT = (\
          (OP #(⊕) OVER Number = (USING witness SCOPE (COMBINE left right)))\
-         (OP #(⊖) OVER Number = (left - right)))))\n";
+         (OP #(⊖) OVER Number = (left - right))))\n";
 
 /// AC4, type-parameter form: `(MAKEOPS Number)` yields a group module whose `+` and `-` operate over
 /// `:(LIST OF Number)`, and a mixed run inside a `USING` window over it reduces fold-left through

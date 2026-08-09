@@ -169,7 +169,7 @@ impl<'run> KoanRuntime<'run> {
         self.ensure_run_frame(scope);
         let node_scope = self.resolve_node_scope(scope);
         // Every caller (top-level `enter_block`, `dispatch_in_scope`, an `InScope` dep's fresh block)
-        // is a statement position, so a binder installs its aggregate here.
+        // is a statement position, so a binder installs its plan here.
         self.submit_expression(expr, scope, node_scope, chain, SubmitContext::Statement)
     }
 
@@ -193,8 +193,7 @@ impl<'run> KoanRuntime<'run> {
     /// Dispatch `expr` against the executing slot's own scope handle (the `OwnScope` dep placement).
     /// A `YokedChild` slot reuses its erased cart-ancestor pointer; a `Yoked` slot re-projects via
     /// [`Self::dispatch_in_active_frame`]. Both route through [`Self::submit_expression`] as a
-    /// [`SubmitContext::SubDispatch`]: `binder_covered` says whether the staged dep is a binder pick's
-    /// own declaration slot, so a nested binder outside one is rejected.
+    /// [`SubmitContext::SubDispatch`], so a binder staged into an eager slot is rejected.
     pub(in crate::machine::execute) fn dispatch_in_own_scope<'a>(
         &mut self,
         expr: WorkingExpression<'a>,

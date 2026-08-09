@@ -119,7 +119,6 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         DepRequest::Dispatch {
             expr: crate::machine::model::WorkingExpression::from_ast(ctx.scope.brand(), expr_inner),
             placement: DepPlacement::OwnScope,
-            binder_covered: false,
         },
         finish,
     )
