@@ -21,7 +21,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // so the carrier reaches nothing but the region it lives in — the active frame is folded in at
     // finalize/close, not bundled here.
     let carrier = ctx.ctx.alloc_carried_with(&[], |brand, _| {
-        Carried::Object(brand.alloc_object_folded(KObject::KString(brand.alloc_text(&rendered))))
+        Carried::Object(
+            brand.alloc_object_folded(KObject::KString(brand.allocator().text(&rendered))),
+        )
     });
     Action::done(Ok(carrier))
 }

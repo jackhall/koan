@@ -559,7 +559,7 @@ pub fn build_tree<'a>(
                         };
                         stack.push_part(Spanned::at(
                             ExpressionPart::Literal(KLiteral::String(
-                                program.region().alloc_text(literal),
+                                program.region().allocator().text(literal),
                             )),
                             span,
                         ));
@@ -654,21 +654,21 @@ fn peel_part<'a>(brand: ProgramBrand<'a>, part: ExpressionPart<'a>) -> Expressio
         ExpressionPart::ListLiteral(items) => {
             let peeled: Vec<ExpressionPart<'a>> =
                 items.iter().map(|item| peel_part(brand, *item)).collect();
-            ExpressionPart::ListLiteral(brand.region().alloc_slice(&peeled))
+            ExpressionPart::ListLiteral(brand.region().allocator().slice(&peeled))
         }
         ExpressionPart::DictLiteral(pairs) => {
             let peeled: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)> = pairs
                 .iter()
                 .map(|(k, v)| (peel_part(brand, *k), peel_part(brand, *v)))
                 .collect();
-            ExpressionPart::DictLiteral(brand.region().alloc_slice(&peeled))
+            ExpressionPart::DictLiteral(brand.region().allocator().slice(&peeled))
         }
         ExpressionPart::RecordLiteral(pairs) => {
             let peeled: Vec<(&'a str, ExpressionPart<'a>)> = pairs
                 .iter()
                 .map(|(name, v)| (*name, peel_part(brand, *v)))
                 .collect();
-            ExpressionPart::RecordLiteral(brand.region().alloc_slice(&peeled))
+            ExpressionPart::RecordLiteral(brand.region().allocator().slice(&peeled))
         }
         other => other,
     }

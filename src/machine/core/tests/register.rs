@@ -233,8 +233,8 @@ fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
         false,
         &types,
     );
-    let obj1 = scope.brand().alloc_value(KObject::KFunction(f));
-    let obj2 = scope.brand().alloc_value(KObject::KFunction(f));
+    let obj1 = scope.brand().allocator().value(KObject::KFunction(f));
+    let obj2 = scope.brand().allocator().value(KObject::KFunction(f));
     scope
         .bind_resident_for_test(
             "FIRST".to_string(),

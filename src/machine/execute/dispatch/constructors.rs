@@ -507,7 +507,7 @@ fn finish_witnessed<'step>(
                             let mut grown = Vec::with_capacity(fields.len() + 1);
                             grown.extend_from_slice(fields);
                             grown.push(value.object().deep_clone());
-                            (region, placement.bump().slice(&grown))
+                            (region, placement.allocator().slice(&grown))
                         },
                     )
             });

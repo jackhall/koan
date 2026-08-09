@@ -330,7 +330,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
     let module = Module::alloc_at_child_scope("IntMod", child, draft, self_sig);
     // A module is a value: it reaches a slot on the Object channel, and a `:Type` slot refuses it.
-    let module_value = scope.brand().alloc_value(KObject::Module(module));
+    let module_value = scope.brand().allocator().value(KObject::Module(module));
     assert!(!t.accepts_working_part(
         &spliced_part(&region, Carried::Object(module_value)),
         &types

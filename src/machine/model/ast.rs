@@ -40,7 +40,7 @@ pub enum KLiteral<'a> {
 impl<'a> KLiteral<'a> {
     /// The [`KObject`] this literal denotes, built into `brand`'s region: the scalar arms own their
     /// data outright, and a string literal's bytes are bumped into that region
-    /// ([`RegionBrand::alloc_text`]). Generic in `'b` (rather than `'a`) despite [`KObject`] being
+    /// ([`RegionBrand::allocator`]). Generic in `'b` (rather than `'a`) despite [`KObject`] being
     /// invariant in its lifetime — the value is constructible at whatever lifetime the brand
     /// carries, in particular a construction site's fold brand.
     ///
@@ -49,7 +49,7 @@ impl<'a> KLiteral<'a> {
     pub fn to_kobject<'b>(&self, brand: RegionBrand<'b>) -> KObject<'b> {
         match self {
             KLiteral::Number(n) => KObject::Number(*n),
-            KLiteral::String(s) => KObject::KString(brand.alloc_text(s)),
+            KLiteral::String(s) => KObject::KString(brand.allocator().text(s)),
             KLiteral::Boolean(b) => KObject::Bool(*b),
             KLiteral::Null => KObject::Null,
         }
@@ -76,7 +76,7 @@ impl<'a> std::ops::Deref for TypeIdentifier<'a> {
 
 impl<'a> TypeIdentifier<'a> {
     /// Name a leaf type from text already resident at `'a` — a parser token bumped into program
-    /// storage, or a name bumped through [`RegionBrand::alloc_text`] at a construction site.
+    /// storage, or a name bumped through [`RegionBrand::allocator`] at a construction site.
     pub fn leaf(name: &'a str) -> TypeIdentifier<'a> {
         TypeIdentifier(name)
     }
@@ -244,11 +244,13 @@ impl<'a> ExpressionPart<'a> {
     /// bytes there, so the product is dest-resident and holds no allocation of its own.
     pub fn resolve(&self, brand: RegionBrand<'a>) -> KObject<'a> {
         match self {
-            ExpressionPart::Keyword(s) => KObject::KString(brand.alloc_text(s)),
-            ExpressionPart::Identifier(s) => KObject::KString(brand.alloc_text(s)),
-            ExpressionPart::Type(t) => KObject::KString(brand.alloc_text(t.as_str())),
+            ExpressionPart::Keyword(s) => KObject::KString(brand.allocator().text(s)),
+            ExpressionPart::Identifier(s) => KObject::KString(brand.allocator().text(s)),
+            ExpressionPart::Type(t) => KObject::KString(brand.allocator().text(t.as_str())),
             ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
-            ExpressionPart::Literal(KLiteral::String(s)) => KObject::KString(brand.alloc_text(s)),
+            ExpressionPart::Literal(KLiteral::String(s)) => {
+                KObject::KString(brand.allocator().text(s))
+            }
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
             ExpressionPart::Expression(e) => KObject::KExpression(e.expression()),
@@ -291,9 +293,9 @@ impl<'a> ExpressionPart<'a> {
     pub fn resolve_region_pure<'b>(&self, brand: RegionBrand<'b>) -> KObject<'b> {
         match self {
             ExpressionPart::Keyword(s) | ExpressionPart::Identifier(s) => {
-                KObject::KString(brand.alloc_text(s))
+                KObject::KString(brand.allocator().text(s))
             }
-            ExpressionPart::Type(t) => KObject::KString(brand.alloc_text(t.as_str())),
+            ExpressionPart::Type(t) => KObject::KString(brand.allocator().text(t.as_str())),
             ExpressionPart::Literal(lit) => lit.to_kobject(brand),
             // A quote's `KObject::KExpression` is invariant in `'a` with no `'static` rebuild, so it
             // cannot be constructed at the caller's `yoke` brand — the classifier routes a quote to
@@ -358,7 +360,7 @@ impl<'a> KExpression<'a> {
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
-        let parts = brand.alloc_slice(&parts);
+        let parts = brand.allocator().slice(&parts);
         let untyped_key = stored_untyped_key(brand, parts);
         let shape = classify_dispatch_shape(parts);
         let mut expression = KExpression {
@@ -373,7 +375,7 @@ impl<'a> KExpression<'a> {
         // Bumped behind a reference rather than stored inline: the plan is the widest thing a node
         // would carry, and `KExpression` is copied on every part walk.
         expression.binder_plan = crate::machine::model::binder::binder_plan_for(brand, &expression)
-            .map(|key| brand.alloc_value(key));
+            .map(|key| brand.allocator().value(key));
         expression
     }
 
@@ -383,7 +385,7 @@ impl<'a> KExpression<'a> {
         brand: RegionBrand<'a>,
         parts: Vec<Spanned<ExpressionPart<'a>>>,
     ) -> &'a KExpression<'a> {
-        brand.alloc_value(Self::new(brand, parts))
+        brand.allocator().value(Self::new(brand, parts))
     }
 
     /// This node's own binder plan — `Some` iff this node is itself a binder.

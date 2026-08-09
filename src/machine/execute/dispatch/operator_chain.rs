@@ -153,7 +153,7 @@ fn wrap_as_operand<'step>(
 ) -> Spanned<WorkingPart<'step>> {
     let span = acc.span;
     Spanned {
-        value: WorkingPart::Expression(brand.alloc_value(acc)),
+        value: WorkingPart::Expression(brand.allocator().value(acc)),
         span,
     }
 }
@@ -274,7 +274,9 @@ fn reduce_unary<'step>(
         span: operator.span,
     };
     let list_part = Spanned {
-        value: WorkingPart::Ast(ExpressionPart::ListLiteral(brand.alloc_slice(&list_items))),
+        value: WorkingPart::Ast(ExpressionPart::ListLiteral(
+            brand.allocator().slice(&list_items),
+        )),
         span: expr.span,
     };
     become_dispatch(ctx, WorkingExpression::new(brand, vec![kw_part, list_part]))
@@ -337,7 +339,7 @@ pub(super) fn combine<'step>(
         vec![
             wrap_as_operand(brand, left),
             Spanned {
-                value: WorkingPart::Ast(ExpressionPart::Keyword(brand.alloc_text(combiner))),
+                value: WorkingPart::Ast(ExpressionPart::Keyword(brand.allocator().text(combiner))),
                 span,
             },
             wrap_as_operand(brand, right),

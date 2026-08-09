@@ -89,7 +89,7 @@ pub(crate) fn parse_fn_param_list<'a>(
         // parameter-name position denotes a binder, not a type reference.
         let param_name: Option<&'a str> = match parts[i].value {
             ExpressionPart::Identifier(name) => Some(name),
-            ExpressionPart::Type(t) => Some(brand.alloc_text(&t.render())),
+            ExpressionPart::Type(t) => Some(brand.allocator().text(&t.render())),
             _ => None,
         };
         match (param_name, parts[i].value) {

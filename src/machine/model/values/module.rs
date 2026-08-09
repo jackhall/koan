@@ -18,15 +18,15 @@
 //!
 //! **Built once, then frozen.** A module is assembled complete: construction gathers its members
 //! into an owned [`ModuleDraft`] and derives the self-sig from that draft *before* the value
-//! exists, so the value itself carries a bumped `path`, two build-once
-//! [`BumpMap`](crate::witnessed::BumpMap)s and a plain interned self-sig handle. `Module` is
+//! exists, so the value itself carries a bumped `path`, two build-once frozen bump-backed tables
+//! ([`frozen_table`](crate::machine::core::frozen_table)) and a plain interned self-sig handle.
+//! `Module` is
 //! therefore `Copy` and `Drop`-free: it rides the region bump and region death frees it as a chunk
 //! ([value-substrates.md § Untyped arenas](../../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
 
 use std::collections::HashMap;
 
-use crate::machine::core::{RegionBrand, Scope, ScopeId};
-use crate::witnessed::BumpMap;
+use crate::machine::core::{frozen_table, BumpBackedMap, RegionBrand, Scope, ScopeId};
 
 use super::super::types::{
     empty_schema_digest, sig_subtype, KType, Relation, SigSchema, TypeDigest, TypeNode,
@@ -72,10 +72,10 @@ pub struct Module<'a> {
     child_scope_ref: &'a Scope<'a>,
     /// Member name → type, frozen at assembly from [`ModuleDraft::type_members`]. Lookup is by
     /// content, so a shorter-lived `&str` probe reads it.
-    pub type_members: &'a BumpMap<'a, &'a str, KType>,
+    pub type_members: &'a BumpBackedMap<'a, &'a str, KType>,
     /// VAL-slot name → the opaque-ascription tag, frozen at assembly from
     /// [`ModuleDraft::slot_type_tags`]. Empty for unascribed and transparently-ascribed modules.
-    pub slot_type_tags: &'a BumpMap<'a, &'a str, KType>,
+    pub slot_type_tags: &'a BumpBackedMap<'a, &'a str, KType>,
     /// The module's principal signature (self-sig): the handle naming the interned `Signature`
     /// node this module is typed by. Interned from the draft before the value exists, so "every
     /// mint seals" is structural rather than an invariant a read has to check.
@@ -90,8 +90,8 @@ impl<'a> Module<'a> {
     /// The destination is derived from `child_scope`'s own brand rather than passed alongside it, so
     /// pairing a module with a foreign region is unrepresentable. `path` and the draft's keys may
     /// borrow from anywhere — [`Self::assemble`] re-homes every byte at that same brand before the
-    /// value is assembled — and the store is [`RegionBrand::alloc_value`], the plain bump door a
-    /// `Copy` value takes. Nothing is erased and re-anchored on the way in, so no residence audit
+    /// value is assembled — and the store is the plain bump verb a `Copy` value takes,
+    /// [`BumpAllocator::value`](crate::witnessed::BumpAllocator::value). Nothing is erased and re-anchored on the way in, so no residence audit
     /// stands behind this door: every reference the value holds is a plain `&'a` the borrow checker
     /// already checked against the lifetime the destination brand borrows its region for.
     ///
@@ -105,18 +105,21 @@ impl<'a> Module<'a> {
         self_sig: KType,
     ) -> &'a Module<'a> {
         let brand = child_scope.brand();
-        brand.alloc_value(Self::assemble(brand, path, child_scope, draft, self_sig))
+        brand
+            .allocator()
+            .value(Self::assemble(brand, path, child_scope, draft, self_sig))
     }
 
     /// Assemble a module value over `child_scope`, re-homing `path` and every draft key into
-    /// `brand`'s region and freezing both maps as [`BumpMap`]s there. Crate-internal and never a
+    /// `brand`'s region and freezing both member tables there ([`frozen_table`]). Crate-internal and
+    /// never a
     /// store: the two doors that place one are [`Self::alloc_at_child_scope`] and the fold brand's
     /// [`FoldingBrand::alloc_module_folded`](crate::machine::core::FoldingBrand), which is how a
     /// transparent-ascribe view re-tags a foreign child scope.
     ///
     /// The single `brand` parameter is the residence discipline: path bytes, key bytes and both
-    /// bucket arrays land in one region, and it is the destination's — a `String` key cannot enter a
-    /// `BumpMap` (`K: Copy`), so the re-home is the only spelling the compiler admits.
+    /// bucket arrays land in one region, and it is the destination's — a `String` key would fail
+    /// [`frozen_table`]'s no-drop-glue assert, so the re-home is the only spelling that builds.
     pub(crate) fn assemble<'b>(
         brand: RegionBrand<'b>,
         path: &str,
@@ -125,14 +128,15 @@ impl<'a> Module<'a> {
         self_sig: KType,
     ) -> Module<'b> {
         let rehome = |entries: HashMap<String, KType>| {
-            brand.alloc_map(
+            frozen_table(
+                brand.allocator(),
                 entries
                     .into_iter()
-                    .map(|(name, kt)| (brand.alloc_text(&name) as &'b str, kt)),
+                    .map(|(name, kt)| (brand.allocator().text(&name) as &'b str, kt)),
             )
         };
         Module {
-            path: brand.alloc_text(path),
+            path: brand.allocator().text(path),
             child_scope_ref: child_scope,
             type_members: rehome(draft.type_members),
             slot_type_tags: rehome(draft.slot_type_tags),

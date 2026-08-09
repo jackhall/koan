@@ -3,7 +3,7 @@ use std::rc::Weak;
 
 use crate::machine::core::KFunction;
 use crate::machine::core::{
-    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
+    frozen_table, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
 };
 use crate::machine::model::ast::{KExpression, ProgramExpression};
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
@@ -67,14 +67,14 @@ pub(crate) const SEAM_POLICY: SeamPolicy = SeamPolicy::CostDriven;
 ///
 /// `Copy` because every arm is a scalar or a region borrow — the value owns no allocation, so it
 /// runs no `Drop` at region death. That is what lets a cell ride the `T: Copy` bump doors
-/// ([`RegionBrand::alloc_value`](crate::machine::core::RegionBrand::alloc_value)), where the bound
+/// ([`RegionBrand::allocator`](crate::machine::core::RegionBrand::allocator)), where the bound
 /// is the `Drop`-freedom proof. The derived `Clone` is that same shallow copy; **duplicating** a
 /// value — rebuilding its substrates in a destination region — is [`Self::deep_clone`].
 #[derive(Clone, Copy)]
 pub enum KObject<'a> {
     Number(f64),
     /// String value: a region-hosted `&'a str`, bumped into the region the value lives in
-    /// ([`RegionBrand::alloc_text`](crate::machine::core::RegionBrand::alloc_text)). The slot owns
+    /// ([`RegionBrand::allocator`](crate::machine::core::RegionBrand::allocator)). The slot owns
     /// no allocation, so it runs no `Drop` at region death and [`Self::deep_clone`] is a pointer
     /// copy; the bytes are freed as bump chunks with the rest of the region. Every door that claims
     /// a region's *release* re-bumps the bytes at its destination, so a stored string cell is always
@@ -362,7 +362,7 @@ impl<'a> KObject<'a> {
     ) -> KObject<'a> {
         let substrate = alloc_payload(door, value.deep_clone());
         KObject::Tagged {
-            tag: door.alloc_text(tag),
+            tag: door.allocator().text(tag),
             value: substrate,
             identity,
         }
@@ -757,10 +757,10 @@ fn alloc_record<'a>(
     let mut names: Vec<&'a str> = Vec::with_capacity(pairs.len());
     let mut cells: Vec<Held<'a>> = Vec::with_capacity(pairs.len());
     for (name, cell) in pairs {
-        names.push(door.alloc_text(&name));
+        names.push(door.allocator().text(&name));
         cells.push(cell);
     }
-    let names = door.alloc_slice(&names);
+    let names = door.allocator().slice(&names);
     let (cells, reach) = section_cells(door, &cells);
     door.alloc_substrate_folded(ContainerSubstrate::new(
         RecordLayout::new(names),
@@ -787,7 +787,7 @@ fn alloc_dict<'a>(
         entries.push((key.rehomed(door), cells.len()));
         cells.push(cell);
     }
-    let index = door.alloc_map(entries);
+    let index = frozen_table(door.allocator(), entries);
     let (cells, reach) = section_cells(door, &cells);
     door.alloc_substrate_folded(ContainerSubstrate::new(index, cells, reach))
 }
@@ -818,7 +818,7 @@ pub(crate) fn copy_object_into<'b>(
         // Re-bump at the destination: the copy verb claims release of the source region, so the
         // rebuilt string must not keep borrowing bytes that region owns. That is what keeps
         // [`retains_home`]'s `false` for a string exact.
-        KObject::KString(s) => KObject::KString(dest.alloc_text(s)),
+        KObject::KString(s) => KObject::KString(dest.allocator().text(s)),
         KObject::Bool(b) => KObject::Bool(*b),
         KObject::Null => KObject::Null,
         // A pointer copy: the payload's marker puts its parts run in program storage, which the
@@ -855,7 +855,7 @@ pub(crate) fn copy_object_into<'b>(
             value,
             identity,
         } => KObject::Tagged {
-            tag: dest.alloc_text(tag),
+            tag: dest.allocator().text(tag),
             value: alloc_payload(dest, copy_object_into(value.payload(), dest)),
             identity: *identity,
         },

@@ -9,9 +9,10 @@ use crate::machine::model::{AnnouncedData, AnnouncedWindow};
 use crate::witnessed::{And, DropFree, Reattachable, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
-use super::bindings::{bump_table, Bindings, BumpBackedMap};
+use super::bindings::{bump_table, Bindings};
 use super::ref_carriers::{BindingsReferenceFamily, ScopeRefFamily};
 use super::scope_id::ScopeId;
+use super::BumpBackedMap;
 
 mod reach;
 mod registry;

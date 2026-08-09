@@ -53,7 +53,7 @@ impl<'a> KKey<'a> {
     /// scalar arms are owned data and ride verbatim. Called once per key by the dict door.
     pub(crate) fn rehomed<'d>(self, door: SubstrateDoor<'d, '_>) -> KKey<'d> {
         match self {
-            KKey::String(s) => KKey::String(door.alloc_text(s)),
+            KKey::String(s) => KKey::String(door.allocator().text(s)),
             KKey::Number(n) => KKey::Number(n),
             KKey::Bool(b) => KKey::Bool(b),
         }

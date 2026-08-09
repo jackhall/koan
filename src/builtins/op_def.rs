@@ -548,7 +548,7 @@ fn register_body<'a>(
 /// builds in program storage, discharging the mint doors' hosted-under-this-brand obligation.
 fn bridge_body<'a>(program: ProgramBrand<'a>, sym: &str) -> KExpression<'a> {
     let brand = program.region();
-    let sym = brand.alloc_text(sym);
+    let sym = brand.allocator().text(sym);
     let operand = |name: &'a str| {
         ExpressionPart::expression(
             program,
@@ -560,7 +560,7 @@ fn bridge_body<'a>(program: ProgramBrand<'a>, sym: &str) -> KExpression<'a> {
         vec![
             Spanned::bare(ExpressionPart::Keyword(sym)),
             Spanned::bare(ExpressionPart::ListLiteral(
-                brand.alloc_slice(&[operand(LEFT), operand(RIGHT)]),
+                brand.allocator().slice(&[operand(LEFT), operand(RIGHT)]),
             )),
         ],
     )

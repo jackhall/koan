@@ -239,7 +239,7 @@ impl<'a> WorkingExpression<'a> {
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
-        let parts = brand.alloc_slice(&parts);
+        let parts = brand.allocator().slice(&parts);
         let shape = classify_dispatch_shape(parts);
         WorkingExpression {
             parts,
@@ -265,7 +265,7 @@ impl<'a> WorkingExpression<'a> {
             })
             .collect();
         WorkingExpression {
-            parts: brand.alloc_slice(&parts),
+            parts: brand.allocator().slice(&parts),
             span: ast.span,
             file: ast.file,
             untyped_key: ast.stored_key(),
@@ -289,7 +289,7 @@ impl<'a> WorkingExpression<'a> {
         brand: RegionBrand<'a>,
         parts: Vec<Spanned<WorkingPart<'a>>>,
     ) -> &'a WorkingExpression<'a> {
-        brand.alloc_value(Self::new(brand, parts))
+        brand.allocator().value(Self::new(brand, parts))
     }
 
     /// Cached dispatch shape (see [`classify_dispatch_shape`]).

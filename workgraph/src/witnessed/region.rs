@@ -13,8 +13,10 @@
 //! any `Drop`-free value family that names the region's own lifetime. It routes no erasure at all —
 //! the allocator is lifetime-free, so `'a` enters only at the allocating call — which is what lets
 //! a bumped value hold an `&'a` back into its own region with no residence check at all.
-//! The library bumps its own container metadata there ([`bump_slice`](Region::bump_slice) and its
-//! siblings, all crate-private); an embedder reaches it only through the public bump door
+//! Every writer reaches it as a [`BumpAllocator`](super::BumpAllocator), which is where the bump
+//! verbs are defined once: the library's own container metadata through the crate-private
+//! [`allocator`](Region::allocator), an embedder through [`RegionHandle::allocator`] for bare bytes
+//! or through the public bump door
 //! ([`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)), which composes the
 //! stored value's reach in the same call.
 //!
@@ -32,7 +34,6 @@
 //! for how an escaped value's region stays alive.
 
 use std::cell::RefCell;
-use std::hash::Hash;
 use std::marker::PhantomData;
 use std::rc::Weak;
 
@@ -41,7 +42,7 @@ use elsa::FrozenMap;
 use typed_arena::Arena;
 
 use super::{
-    erase_to_static, BumpAllocator, BumpMap, DropFree, FoldedPlacement, PinBundle, PinsRegion,
+    erase_to_static, BumpAllocator, DropFree, FoldedPlacement, PinBundle, PinsRegion,
     ReachDescription, Reattachable, RegionOwner, SealedExtern, StepCoverage, Witness,
 };
 
@@ -154,30 +155,28 @@ pub struct Region<W: StorageProfile> {
     /// a thin reference into it with no `Drop`-order, dangling, or hand-audited-pointer hazard.
     reach_table: FrozenMap<Box<[usize]>, Box<ReachDescription<W::FrameOwner>>>,
     /// The region's **bump**: the storage home for every `Drop`-free value that names the region's
-    /// own lifetime. Two kinds of writer reach it — the library's own container metadata (a
-    /// [`Sectioned`](super::Sectioned) container's run partition and cell index block, through the
-    /// crate-private [`bump_slice`](Self::bump_slice) family) and an embedder converting a
-    /// `Drop`-free value family, which reaches it through one of the two public bump doors and never
-    /// directly: [`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump) when the
-    /// bytes belong to a value whose operands' reach the door must compose,
-    /// [`RegionHandle::bump_text`] when they are bare bytes wanted at the handle's own frame
-    /// lifetime. Bumped rather than arena'd because the allocator itself is lifetime-free, so `'a`
-    /// enters only at the allocating call — which is what lets a bumped value hold an `&'a` back
-    /// into this same region with no erasure and no residence audit. A `typed_arena` cell cannot:
-    /// its type would have to name `'a`, and [`Region`] has no lifetime parameter, which is why a
-    /// [`ReachDescription`] is lifetime-free.
+    /// own lifetime. Every writer reaches it as a [`BumpAllocator`] over this field — the library's
+    /// own container metadata (a [`Sectioned`](super::Sectioned) container's run partition and cell
+    /// index block) through the crate-private [`allocator`](Self::allocator), an embedder through
+    /// whichever door hands it one: [`RegionHandle::allocator`] for bare bytes at the handle's own
+    /// frame lifetime, [`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)
+    /// when the bytes belong to a value whose operands' reach the door must compose. Bumped rather
+    /// than arena'd because the allocator itself is lifetime-free, so `'a` enters only at the
+    /// allocating call — which is what lets a bumped value hold an `&'a` back into this same region
+    /// with no erasure and no residence audit. A `typed_arena` cell cannot: its type would have to
+    /// name `'a`, and [`Region`] has no lifetime parameter, which is why a [`ReachDescription`] is
+    /// lifetime-free.
     ///
     /// A `Bump` runs **no destructor** for what it holds — it releases its chunks whole. That is the
     /// point: everything allocated here costs nothing at region teardown, which is what keeps a
     /// sectioned container `Copy` and `Drop`-free so a frame drop need not walk one. The `T: Copy`
-    /// bound the value, slice and text primitives carry is what statically holds callers to it — a
-    /// `Copy` type has no `Drop` to skip. ("`Drop`-free" itself has no expressible bound; `Copy` is
-    /// the static proxy.) The one primitive whose stored value is not itself `Copy`,
-    /// [`bump_map`](Self::bump_map), moves the bound onto the table's *elements* and allocates the
-    /// buckets in this same bump, so the destructor it forgoes would have freed only bytes region
-    /// death frees anyway — see [`BumpMap`](super::BumpMap). A **mutable** collection reaches the
-    /// same storage through [`allocator`](Self::allocator), which is where the `Copy` bound stops
-    /// travelling with the bytes and the embedder restates it at its own element declaration.
+    /// bound the allocator's value, slice and text verbs carry is what statically holds callers to
+    /// it — a `Copy` type has no `Drop` to skip. ("`Drop`-free" itself has no expressible bound;
+    /// `Copy` is the static proxy.) A **collection** built over the same allocator's raw
+    /// [`Allocator`](allocator_api2::alloc::Allocator) seam is where that bound stops travelling
+    /// with the bytes: a frozen key→value table, a churning binding table. Such a writer proves its
+    /// elements glue-free with a `const { assert!(!needs_drop::<_>()) }` at the declaration site
+    /// that names their type, which is the same proof the bound stood for.
     ///
     /// A cycle among bumped entries is harmless: everything here dies with the region, at once.
     /// Occupancy is one figure for the whole bump ([`bump_capacity`](Self::bump_capacity)) — there
@@ -289,55 +288,13 @@ impl<W: StorageProfile> Region<W> {
         description
     }
 
-    /// Copy `items` into the region's bump and hand back the co-located slice — the slice primitive
-    /// of the bump family below, and the path a [`Sectioned`](super::Sectioned) container's runs and
-    /// cell index block take.
-    ///
-    /// `T: Copy` is load-bearing, not a convenience: the bump never runs a destructor, so admitting
-    /// a `Drop`-bearing `T` would silently skip it. `Copy` rules that out statically. No `unsafe`:
-    /// the `&'a self` borrow is what keeps the chunk alive for the returned slice, exactly as it does
-    /// for [`alloc_resident`](Self::alloc_resident), with no lifetime retype needed at all — the
-    /// bump hands back `T` at whatever lifetime `T` already carried.
-    pub(crate) fn bump_slice<'a, T: Copy>(&'a self, items: &[T]) -> &'a [T] {
-        self.bump.alloc_slice_copy(items)
-    }
-
-    /// [`bump_slice`](Self::bump_slice) for a single `Copy` value — same bump, same `T: Copy`
-    /// rationale, same absence of a lifetime retype. Hands back a **shared** `&'a T`, never the
-    /// `&mut` the bump itself returns: a bumped value is region state a holder names, so no writer
-    /// gets exclusive access to it after the allocating call.
-    pub(crate) fn bump_value<T: Copy>(&self, value: T) -> &T {
-        self.bump.alloc(value)
-    }
-
-    /// [`bump_slice`](Self::bump_slice) for text — a `str` is a `Copy`-element slice with a
-    /// UTF-8 invariant, so it carries no destructor either and needs no bound to say so.
-    pub(crate) fn bump_text<'a>(&'a self, text: &str) -> &'a str {
-        self.bump.alloc_str(text)
-    }
-
-    /// Build a [`BumpMap`] over this region's bump from `entries` and place it there too — the one
-    /// bump primitive whose stored value is not `Copy`, admitted because the `Copy` bound moves onto
-    /// the table's elements and its buckets land in this same bump. [`BumpMap`] carries the argument
-    /// in full.
-    pub(crate) fn bump_map<'a, K, V>(
-        &'a self,
-        entries: impl IntoIterator<Item = (K, V)>,
-    ) -> &'a BumpMap<'a, K, V>
-    where
-        K: Copy + Eq + Hash,
-        V: Copy,
-    {
-        let map = BumpMap::build(&self.bump, entries);
-        self.bump.alloc(map)
-    }
-
-    /// This region's bump as a [`BumpAllocator`] — the seam a **mutable** embedder collection is
-    /// built over, where the [`bump_slice`](Self::bump_slice) family covers only what is written
-    /// once and read thereafter. Bytes taken this way are priced by
-    /// [`bump_capacity`](Self::bump_capacity) like any other, which is what keeps an off-door
-    /// allocation honest; the destructor guard the `Copy`-bounded verbs carry does not transfer, so
-    /// the allocator's own doc states where an embedder has to restate it.
+    /// This region's bump as a [`BumpAllocator`] — the one write surface for its bytes, carrying
+    /// both the `Copy`-guarded verbs and the raw allocator seam a **mutable** collection is built
+    /// over. Crate-private: an embedder reaches the same allocator through
+    /// [`RegionHandle::allocator`], which is the accessor that names a region it is authorized over.
+    /// Bytes taken either way are priced by [`bump_capacity`](Self::bump_capacity), which is what
+    /// keeps an off-verb allocation honest; the allocator's own doc states what a collection over
+    /// the raw seam owes at its declaration site in place of the guard.
     pub(crate) fn allocator(&self) -> BumpAllocator<'_> {
         BumpAllocator::over(&self.bump)
     }
@@ -511,113 +468,37 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         self.region
     }
 
-    /// **Bump `text` into this handle's region** and hand back the co-located `&'a str` — the
-    /// frame-lifetime bytes door, for a `Drop`-free byte run an embedder needs at the handle's own
-    /// lifetime rather than confined to a fold closure.
+    /// **This handle's region's bump as a [`BumpAllocator`](super::BumpAllocator)** — the frame-lifetime
+    /// bytes door, and the whole of it: the guarded `text` / `slice` / `value` verbs for what is
+    /// written once and read thereafter, and the raw allocator seam for a collection that keeps
+    /// mutating after it is built.
     ///
-    /// The sibling of [`BumpPlacement::text`](super::BumpPlacement::text), and deliberately not the
-    /// same door. [`fold_and_bump`](super::FoldedPlacement::fold_and_bump) exists to compose its
-    /// **operands'** reach into the product's carrier, which is why its placement is minted only
-    /// inside that call; bare bytes have no operands and no reach to compose, so there is nothing for
-    /// that machinery to do and nothing a call site could claim wrongly. What is left is an ordinary
-    /// borrow: the returned `&'a str` cannot outlive the `&'a Region` this handle holds, which the
-    /// borrow checker enforces with no audit and no `unsafe`. A value built *around* those bytes is
-    /// gated at its own door — [`alloc_resident`](Self::alloc_resident)'s `'static` bound, or one of
-    /// the two rank-2 brands ([`alloc_resident_born`](Self::alloc_resident_born),
+    /// Deliberately not the same door as
+    /// [`fold_and_bump`](super::FoldedPlacement::fold_and_bump), which exists to compose its
+    /// **operands'** reach into the product's carrier. Bare bytes have no operands and no reach to
+    /// compose, so there is nothing for that machinery to do and nothing a call site could claim
+    /// wrongly. What is left is an ordinary borrow: nothing written through the returned allocator
+    /// can outlive the `&'a Region` this handle holds, which the borrow checker enforces with no
+    /// audit and no `unsafe`. A value built *around* those bytes is gated at its own door —
+    /// [`alloc_resident`](Self::alloc_resident)'s `'static` bound, or one of the two rank-2 brands
+    /// ([`alloc_resident_born`](Self::alloc_resident_born),
     /// [`FoldedPlacement::alloc_resident_folded`](super::FoldedPlacement::alloc_resident_folded)) —
     /// none of which this door touches.
     ///
+    /// The destructor obligation travels on the allocator, not here: the `Copy`-bounded verbs carry
+    /// it statically, and a collection over the raw seam restates it at the declaration site naming
+    /// its element type. [`BumpAllocator`](super::BumpAllocator) carries both arguments.
+    ///
     /// ```
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
     /// use workgraph::witnessed::RegionHandle;
     /// let cart = fresh_cart();
     /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
-    /// let stored: &str = handle.bump_text("hello");
+    /// let stored: &str = handle.allocator().text("hello");
     /// assert_eq!(stored, "hello");
-    /// ```
-    pub fn bump_text(self, text: &str) -> &'a str {
-        self.region.bump_text(text)
-    }
-
-    /// **Bump a `Copy` slice into this handle's region** and hand back the co-located `&'a [T]` —
-    /// the frame-lifetime run door, sibling of [`Self::bump_text`] and of
-    /// [`BumpPlacement::slice`](super::BumpPlacement::slice). The shape an embedder's structural
-    /// storage takes when a run of elements must live at the handle's own lifetime rather than
-    /// confined to a fold closure: an expression's part list, a cached key.
+    /// let run: &[u32] = handle.allocator().slice(&[1, 2, 3]);
+    /// assert_eq!(run, &[1, 2, 3]);
     ///
-    /// `T: Copy` carries the same "no destructor to skip" obligation as
-    /// [`BumpPlacement::value`](super::BumpPlacement::value): the bump releases its chunks whole and
-    /// runs no `Drop`. The reach argument is [`Self::bump_text`]'s verbatim — the elements are bytes
-    /// this door merely relocates, and the returned borrow cannot outlive the `&'a Region` the
-    /// handle holds, so there is no residence claim for a call site to get wrong. An element that
-    /// itself borrows another region is gated where every stored value is: the family audits and the
-    /// rank-2 fold brand, none of which this door touches.
-    ///
-    /// ```
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
-    /// use workgraph::witnessed::RegionHandle;
-    /// let cart = fresh_cart();
-    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
-    /// let stored: &[u32] = handle.bump_slice(&[1, 2, 3]);
-    /// assert_eq!(stored, &[1, 2, 3]);
-    /// ```
-    pub fn bump_slice<T: Copy>(self, items: &[T]) -> &'a [T] {
-        self.region.bump_slice(items)
-    }
-
-    /// **Bump one `Copy` value into this handle's region** and hand back the co-located `&'a T` —
-    /// the single-value peer of [`Self::bump_slice`], for a stored node an embedder reaches by
-    /// reference rather than inline. Same `T: Copy` obligation and same borrow argument.
-    ///
-    /// ```
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
-    /// use workgraph::witnessed::RegionHandle;
-    /// let cart = fresh_cart();
-    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
-    /// let stored: &u32 = handle.bump_value(7u32);
-    /// assert_eq!(*stored, 7);
-    /// ```
-    pub fn bump_value<T: Copy>(self, value: T) -> &'a T {
-        self.region.bump_value(value)
-    }
-
-    /// **Build a keyed index in this handle's region's bump** from `entries` and hand back the
-    /// co-located `&'a BumpMap`— the door an embedder's keyed container reaches for when its lookup
-    /// needs a hash table rather than the sorted slice [`Self::bump_slice`] would host.
-    ///
-    /// Same borrow argument as its sibling primitives: the returned reference cannot outlive the
-    /// `&'a Region` the handle holds, and the table indexes rather than owns, so there is no
-    /// residence claim for a call site to state. The `Copy` obligation moves from the stored value
-    /// to the table's **elements**, which is what makes the table's un-run `Drop` lossless —
-    /// [`BumpMap`](super::BumpMap) carries that argument.
-    ///
-    /// ```
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
-    /// use workgraph::witnessed::RegionHandle;
-    /// let cart = fresh_cart();
-    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
-    /// let index = handle.bump_map([("width", 0usize), ("height", 1usize)]);
-    /// assert_eq!(index.get(&"height"), Some(&1));
-    /// assert_eq!(index.len(), 2);
-    /// ```
-    pub fn bump_map<K, V>(self, entries: impl IntoIterator<Item = (K, V)>) -> &'a BumpMap<'a, K, V>
-    where
-        K: Copy + Eq + Hash,
-        V: Copy,
-    {
-        self.region.bump_map(entries)
-    }
-
-    /// **This handle's region's bump as an allocator** — the door for a collection that keeps
-    /// mutating after it is built, where [`Self::bump_map`] freezes at construction and
-    /// [`Self::bump_slice`] writes once. [`BumpAllocator`](super::BumpAllocator) carries the
-    /// argument for what handing the raw allocator out costs and what the embedder owes in return.
-    ///
-    /// ```
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
-    /// use workgraph::witnessed::RegionHandle;
-    /// let cart = fresh_cart();
-    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
     /// let mut table: hashbrown::HashMap<u32, u32, hashbrown::DefaultHashBuilder, _> =
     ///     hashbrown::HashMap::new_in(handle.allocator());
     /// table.insert(7, 11);

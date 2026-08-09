@@ -151,7 +151,7 @@ fn transfer_unions_element_reach_across_folds() {
             // Copy tier between folds; each fold re-bumps the grown run.
             let mut grown = values.to_vec();
             grown.push(value);
-            (handle, handle.bump_slice(&grown))
+            (handle, handle.allocator().slice(&grown))
         },
     );
     let element_b = reach_element(&dest, &content_b, 2);
@@ -163,7 +163,7 @@ fn transfer_unions_element_reach_across_folds() {
             // Copy tier between folds; each fold re-bumps the grown run.
             let mut grown = values.to_vec();
             grown.push(value);
-            (handle, handle.bump_slice(&grown))
+            (handle, handle.allocator().slice(&grown))
         },
     );
     let pair: Witnessed<PairVals, Carrier<ShapeFrame>> = acc2
@@ -210,7 +210,7 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
             // Copy tier between folds; each fold re-bumps the grown run.
             let mut grown = values.to_vec();
             grown.push(value);
-            (handle, handle.bump_slice(&grown))
+            (handle, handle.allocator().slice(&grown))
         },
     );
     let element_b = reach_element(&reader_b, &content_b, 4);
@@ -222,7 +222,7 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
             // Copy tier between folds; each fold re-bumps the grown run.
             let mut grown = values.to_vec();
             grown.push(value);
-            (handle, handle.bump_slice(&grown))
+            (handle, handle.allocator().slice(&grown))
         },
     );
     let pair: Witnessed<PairVals, Carrier<ShapeFrame>> = acc2
@@ -482,7 +482,7 @@ fn lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle() {
     let declaring = frame();
     let alive = Rc::downgrade(&declaring);
     let handle = RegionHandle::from_owner(&*declaring);
-    let value: &u32 = handle.bump_value(37u32);
+    let value: &u32 = handle.allocator().value(37u32);
     // No sources: the value reaches nothing beyond the region hosting it.
     let reach = handle.mint_retained(&[]);
     let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
@@ -530,7 +530,7 @@ fn delivered_by_value_drop_frees_region_in_call() {
     let host = frame();
     let alive = Rc::downgrade(&host);
     let handle = RegionHandle::from_owner(&*host);
-    let value: &u32 = handle.bump_value(11u32);
+    let value: &u32 = handle.allocator().value(11u32);
     let reach = handle.mint_retained(&[]);
     let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
         Erased::erase(value),

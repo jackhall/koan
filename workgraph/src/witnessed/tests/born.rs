@@ -60,7 +60,7 @@ fn born_root<'a>(frame: &'a Rc<BornFrame>, label: &'static str) -> &'a Node<'a> 
     RegionHandle::from_owner(&**frame).alloc_resident_born::<NodeFamily>(|placement| Node {
         // The only `&Region` reachable at the brand is the placement's own.
         home: placement.handle().region(),
-        label: placement.handle().bump_text(label),
+        label: placement.handle().allocator().text(label),
         parent: None,
         mark: Cell::new(None),
     })
@@ -94,7 +94,10 @@ fn an_earlier_node_reads_back_after_its_siblings_are_stored() {
         let handle = RegionHandle::from_owner(&*dest);
         handle.alloc_resident_born::<NodeFamily>(|placement| Node {
             home: placement.handle().region(),
-            label: placement.handle().bump_text(&format!("sibling-{index}")),
+            label: placement
+                .handle()
+                .allocator()
+                .text(&format!("sibling-{index}")),
             parent: None,
             mark: Cell::new(None),
         });
@@ -112,7 +115,7 @@ fn an_earlier_node_reads_back_after_its_siblings_are_stored() {
 fn the_returned_node_accepts_a_write_at_the_callers_lifetime() {
     let dest = frame();
     let node = born_root(&dest, "root");
-    let text: &str = RegionHandle::from_owner(&*dest).bump_text("marked");
+    let text: &str = RegionHandle::from_owner(&*dest).allocator().text("marked");
 
     node.mark.set(Some(text));
 
@@ -134,7 +137,7 @@ fn the_born_with_door_embeds_a_parent_from_another_region() {
             &parent_frame,
             |placement, parent_at_brand| Node {
                 home: placement.handle().region(),
-                label: placement.handle().bump_text("child"),
+                label: placement.handle().allocator().text("child"),
                 parent: Some(parent_at_brand),
                 mark: Cell::new(None),
             },
@@ -176,7 +179,7 @@ fn the_born_with_door_accepts_the_childs_own_host_as_the_pin() {
                 &child_frame,
                 |placement, parent_at_brand| Node {
                     home: placement.handle().region(),
-                    label: placement.handle().bump_text("child"),
+                    label: placement.handle().allocator().text("child"),
                     parent: Some(parent_at_brand),
                     mark: Cell::new(None),
                 },
@@ -218,7 +221,7 @@ fn an_erased_node_opens_and_survives_a_sibling_store_inside_the_open() {
         assert_eq!(reattached.label, "kept");
         RegionHandle::from_owner(&*dest).alloc_resident_born::<NodeFamily>(|placement| Node {
             home: placement.handle().region(),
-            label: placement.handle().bump_text("sibling"),
+            label: placement.handle().allocator().text("sibling"),
             parent: None,
             mark: Cell::new(None),
         });
@@ -247,7 +250,7 @@ fn a_child_region_dies_before_the_parent_it_borrows() {
                 &parent_frame,
                 |placement, parent_at_brand| Node {
                     home: placement.handle().region(),
-                    label: placement.handle().bump_text("child"),
+                    label: placement.handle().allocator().text("child"),
                     parent: Some(parent_at_brand),
                     mark: Cell::new(None),
                 },
@@ -277,7 +280,7 @@ fn a_chain_of_regions_reads_back_through_every_hop() {
             &root_frame,
             |placement, parent| Node {
                 home: placement.handle().region(),
-                label: placement.handle().bump_text("middle"),
+                label: placement.handle().allocator().text("middle"),
                 parent: Some(parent),
                 mark: Cell::new(None),
             },
@@ -290,7 +293,7 @@ fn a_chain_of_regions_reads_back_through_every_hop() {
             &middle_frame,
             |placement, parent| Node {
                 home: placement.handle().region(),
-                label: placement.handle().bump_text("leaf"),
+                label: placement.handle().allocator().text("leaf"),
                 parent: Some(parent),
                 mark: Cell::new(None),
             },

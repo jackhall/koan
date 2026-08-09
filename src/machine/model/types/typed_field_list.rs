@@ -390,49 +390,42 @@ fn rewrite_threaded_self_refs<'a>(
         .parts
         .iter()
         .map(|p| {
-            let value = match &p.value {
-                ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
-                    // The member's handle is minted against the window here, where the window is in
-                    // hand — the sub-dispatch it crosses into cannot reach one. The cell is a
-                    // resident seal in this scope's own region: a type carrier reaching nothing
-                    // foreign, so it rests with no coverage to lodge anywhere.
-                    match resolve_threaded(window, &t.render(), types) {
-                        Some(handle) => WorkingPart::Spliced {
-                            cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
-                                Carried::Type(handle),
-                            ),
-                        },
-                        None => WorkingPart::Ast(p.value),
+            let value =
+                match &p.value {
+                    ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
+                        // The member's handle is minted against the window here, where the window is in
+                        // hand — the sub-dispatch it crosses into cannot reach one. The cell is a
+                        // resident seal in this scope's own region: a type carrier reaching nothing
+                        // foreign, so it rests with no coverage to lodge anywhere.
+                        match resolve_threaded(window, &t.render(), types) {
+                            Some(handle) => WorkingPart::Spliced {
+                                cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
+                                    Carried::Type(handle),
+                                ),
+                            },
+                            None => WorkingPart::Ast(p.value),
+                        }
                     }
-                }
-                // A nested sigil threads its own self-references and rides as a synthesized node:
-                // its slot dispatches the rewritten body, which is what the sigil wrapper's handler
-                // does with a body it is handed.
-                ExpressionPart::SigiledTypeExpr(body)
-                    if names_threaded_self_ref(body, threaded) =>
-                {
-                    WorkingPart::Expression(brand.alloc_value(rewrite_threaded_self_refs(
-                        body,
-                        threaded,
-                        scope,
-                        Some(window),
-                        types,
-                    )))
-                }
-                // A nested record type threads its own self-references too, and keeps its
-                // record-type slot class: its body is a field list its handler elaborates, so it
-                // cannot ride the transparent sigil arm above.
-                ExpressionPart::RecordType(body) if names_threaded_self_ref(body, threaded) => {
-                    WorkingPart::RecordType(brand.alloc_value(rewrite_threaded_self_refs(
-                        body,
-                        threaded,
-                        scope,
-                        Some(window),
-                        types,
-                    )))
-                }
-                other => WorkingPart::Ast(*other),
-            };
+                    // A nested sigil threads its own self-references and rides as a synthesized node:
+                    // its slot dispatches the rewritten body, which is what the sigil wrapper's handler
+                    // does with a body it is handed.
+                    ExpressionPart::SigiledTypeExpr(body)
+                        if names_threaded_self_ref(body, threaded) =>
+                    {
+                        WorkingPart::Expression(brand.allocator().value(
+                            rewrite_threaded_self_refs(body, threaded, scope, Some(window), types),
+                        ))
+                    }
+                    // A nested record type threads its own self-references too, and keeps its
+                    // record-type slot class: its body is a field list its handler elaborates, so it
+                    // cannot ride the transparent sigil arm above.
+                    ExpressionPart::RecordType(body) if names_threaded_self_ref(body, threaded) => {
+                        WorkingPart::RecordType(brand.allocator().value(
+                            rewrite_threaded_self_refs(body, threaded, scope, Some(window), types),
+                        ))
+                    }
+                    other => WorkingPart::Ast(*other),
+                };
             Spanned {
                 value,
                 span: p.span,

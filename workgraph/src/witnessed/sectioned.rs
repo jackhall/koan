@@ -10,7 +10,8 @@
 //! its `'a`: the cells arrive as `&'a K::At<'a>` (content == borrow == `'a`, so a cell is already
 //! resident where the caller allocated it), each run's description is interned in that region's reach
 //! side table, and the two slices holding the index→cell mapping and the run partition are bumped
-//! into that region ([`Region::bump_slice`]). So one pin covers a projected cell and its reach
+//! into that region ([`BumpAllocator::slice`](super::BumpAllocator::slice)). So one pin covers a
+//! projected cell and its reach
 //! together, and a cycle among them is harmless — the region dies all at once.
 //!
 //! That is what makes a [`Sectioned`] `Copy` and **`Drop`-free**: a frame teardown never walks a
@@ -46,7 +47,8 @@ use super::{
 /// is **exactly** its cells' shared reach. The span's end is the next run's start (or the
 /// container's length for the last run), so a run costs one `usize` and one thin reference.
 ///
-/// `Copy`, hence `Drop`-free — the bound [`Region::bump_slice`] requires, and what keeps a container
+/// `Copy`, hence `Drop`-free — the bound [`BumpAllocator::slice`](super::BumpAllocator::slice)
+/// requires, and what keeps a container
 /// free at region teardown.
 struct Run<'a, F: PinsRegion + 'static> {
     start: usize,
@@ -406,8 +408,8 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
         // Bump both slices into the region: the container becomes `Copy` region state, so a frame
         // teardown releases it with the chunk instead of walking it.
         let sectioned = Sectioned {
-            cells: dest.region().bump_slice(&cells),
-            runs: dest.region().bump_slice(&runs),
+            cells: dest.allocator().slice(&cells),
+            runs: dest.allocator().slice(&runs),
             weight: total_weight,
         };
         (sectioned, value_level)

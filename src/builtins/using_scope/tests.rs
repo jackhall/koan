@@ -9,12 +9,10 @@
 
 mod type_members;
 
-use std::rc::Rc;
-
-use crate::builtins::test_support::{parse_one, per_call_storage, run_root_bare, TestRun};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::{Carried, KObject};
 use crate::machine::KErrorKind;
-use crate::machine::{program_storage, run_root_storage, BindingIndex, FrameCoverage};
+use crate::machine::{program_storage, run_root_storage};
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
@@ -426,8 +424,12 @@ fn using_on_non_module_fails_dispatch() {
 #[cfg(not(any(feature = "seam-force-copy", feature = "seam-force-pin")))]
 #[test]
 fn using_window_value_prices_against_the_module_region_it_lives_in() {
+    use std::rc::Rc;
+
+    use crate::builtins::test_support::{per_call_storage, run_root_bare};
     use crate::machine::core::{FoldingBrand, FrameStorageExt};
     use crate::machine::model::{copy_or_pin, Held, Record, RegionEscape, TypeRegistry};
+    use crate::machine::{BindingIndex, FrameCoverage};
     use crate::witnessed::FoldedPlacement;
 
     let module_storage = per_call_storage();

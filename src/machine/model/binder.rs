@@ -180,7 +180,7 @@ pub(crate) fn fn_def_binder_bucket<'a>(
             }
         }
     }
-    Some(BucketKeys::one(brand.alloc_slice(&key)))
+    Some(BucketKeys::one(brand.allocator().slice(&key)))
 }
 
 /// True iff the part at `index` is a type ascription — the second half of a `<name> :<Type>` pair,
@@ -293,7 +293,7 @@ pub(crate) fn op_def_binder_bucket<'a>(
 /// Slot]` run a reduced binary call computes, bumped into `brand`'s region. Byte-for-byte agreement
 /// with the owned builder is what lets a park edge installed here be found by a later call's key.
 fn stored_binary_key<'a>(brand: RegionBrand<'a>, symbol: &'a str) -> &'a [StoredElement<'a>] {
-    brand.alloc_slice(&[
+    brand.allocator().slice(&[
         StoredElement::Slot,
         StoredElement::Keyword(symbol),
         StoredElement::Slot,
@@ -303,7 +303,9 @@ fn stored_binary_key<'a>(brand: RegionBrand<'a>, symbol: &'a str) -> &'a [Stored
 /// Stored twin of [`unary_key`](crate::machine::model::unary_key): the `[Keyword(sym), Slot]` run a
 /// reduced unary run computes.
 fn stored_unary_key<'a>(brand: RegionBrand<'a>, symbol: &'a str) -> &'a [StoredElement<'a>] {
-    brand.alloc_slice(&[StoredElement::Keyword(symbol), StoredElement::Slot])
+    brand
+        .allocator()
+        .slice(&[StoredElement::Keyword(symbol), StoredElement::Slot])
 }
 
 // ---------- the spec table ----------

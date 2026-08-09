@@ -216,7 +216,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
         .iter()
         .map(|(name, ktype)| {
             SignatureElement::Argument(Argument {
-                name: brand.alloc_text(name),
+                name: brand.allocator().text(name),
                 ktype: *ktype,
             })
         })

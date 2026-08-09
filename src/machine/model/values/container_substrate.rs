@@ -5,7 +5,7 @@
 //! storage too, folded from the same per-cell inputs the reach verdicts arrive in.
 //! [`RecordSubstrate`] (`C = RecordLayout`) is the field substrate behind a record value;
 //! [`ListSubstrate`] (`C = ListLayout`) is the element substrate behind a list value;
-//! [`DictSubstrate`] (`C = &BumpMap<KKey, usize>`) is the entry substrate behind a dict
+//! [`DictSubstrate`] (`C = &BumpBackedMap<KKey, usize>`) is the entry substrate behind a dict
 //! value; [`PayloadSubstrate`] (`C = PayloadLayout`) is the single-cell payload substrate behind a
 //! `Tagged` or `Wrapped` value.
 //!
@@ -15,8 +15,9 @@
 //! fold a door re-runs. See
 //! [design/value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach).
 
+use crate::machine::core::BumpBackedMap;
 use crate::machine::core::{FrameReach, FrameStorage};
-use crate::witnessed::{BumpMap, CellRef, Sectioned};
+use crate::witnessed::{CellRef, Sectioned};
 
 use super::{Held, KKey, KObject};
 
@@ -35,7 +36,7 @@ pub type PartedCell<'a> =
 /// searches the slice and the hit's position *is* the cell index, so a record needs no table.
 ///
 /// `Copy`, and every byte it names is bump-hosted: the slice itself, and each name's own bytes
-/// through [`RegionBrand::alloc_text`](crate::machine::core::RegionBrand::alloc_text). Nothing here
+/// through [`RegionBrand::allocator`](crate::machine::core::RegionBrand::allocator). Nothing here
 /// owns an allocation, so a record's index runs no `Drop` at region death.
 #[derive(Clone, Copy)]
 pub struct RecordLayout<'a> {
@@ -71,7 +72,8 @@ pub struct PayloadLayout;
 /// which stores the substrate and hands back a co-located borrow — the cells, their runs and the
 /// memos ride together.
 ///
-/// `Copy` in every arm — the index is a bump-hosted name slice, a [`BumpMap`] borrow or a marker, the
+/// `Copy` in every arm — the index is a bump-hosted name slice, a frozen bump-backed table borrow
+/// or a marker, the
 /// cells a [`Sectioned`] run pair, the reach an interned borrow — so a substrate owns no allocation
 /// and region death frees its bytes as bump chunks with no `Drop` glue to run.
 #[derive(Clone, Copy)]
@@ -228,11 +230,12 @@ impl<'a> ListSubstrate<'a> {
 /// The entry substrate a dict value borrows — [`ContainerSubstrate`] indexed by the concrete scalar
 /// [`KKey`]. The index is frozen at construction (last-wins dedup happens in the transient
 /// construction map) and never written again; cell order follows the construction map's iteration
-/// order, so entry order is unspecified. The index block is a [`BumpMap`] hosted in the substrate's
-/// own region bump: `Copy` key and `Copy` value are what let region death reclaim its buckets by
-/// releasing chunks rather than by running a destructor. Every key's string bytes are region-hosted
-/// too, so the table holds no allocation outside the bump.
-pub(crate) type DictSubstrate<'a> = ContainerSubstrate<'a, &'a BumpMap<'a, KKey<'a>, usize>>;
+/// order, so entry order is unspecified. The index block is a
+/// [`frozen_table`](crate::machine::core::frozen_table) hosted in the substrate's own region bump:
+/// its glue-free key and value are what let region death reclaim the buckets by releasing chunks
+/// rather than by running a destructor. Every key's string bytes are region-hosted too, so the table
+/// holds no allocation outside the bump.
+pub(crate) type DictSubstrate<'a> = ContainerSubstrate<'a, &'a BumpBackedMap<'a, KKey<'a>, usize>>;
 
 impl<'a> DictSubstrate<'a> {
     /// The cell stored under `key`, or `None` when the dict has no such entry. `key` may borrow

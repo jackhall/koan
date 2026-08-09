@@ -186,7 +186,7 @@ impl<'a> Scope<'a> {
         }
         slots
             .borrow_mut()
-            .insert(target.brand().alloc_text(&name), ktype);
+            .insert(target.brand().allocator().text(&name), ktype);
         Ok(())
     }
 

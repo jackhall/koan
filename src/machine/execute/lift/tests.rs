@@ -342,7 +342,10 @@ fn kfunction_borrow_preserved_verbatim() {
 
     let kf_ref = alloc_local_kf(&source);
     let source_scope = run_root_bare(source.storage());
-    let obj: &KObject = source_scope.brand().alloc_value(KObject::KFunction(kf_ref));
+    let obj: &KObject = source_scope
+        .brand()
+        .allocator()
+        .value(KObject::KFunction(kf_ref));
 
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let relocated = copy_carried(
@@ -576,7 +579,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
                 let mut grown = Vec::with_capacity(cells.len() + 1);
                 grown.extend_from_slice(cells);
                 grown.push(cell);
-                (region, placement.bump().slice(&grown))
+                (region, placement.allocator().slice(&grown))
             },
         )
     });
@@ -672,7 +675,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
                 let mut grown = Vec::with_capacity(cells.len() + 1);
                 grown.extend_from_slice(cells);
                 grown.push(cell);
-                (region, placement.bump().slice(&grown))
+                (region, placement.allocator().slice(&grown))
             },
         )
     });
@@ -857,7 +860,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
             let mut grown = Vec::with_capacity(cells.len() + 1);
             grown.extend_from_slice(cells);
             grown.push(cell);
-            (region, placement.bump().slice(&grown))
+            (region, placement.allocator().slice(&grown))
         },
     );
 

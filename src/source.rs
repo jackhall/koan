@@ -131,7 +131,7 @@ impl Drop for CurrentFileGuard {
 /// the enclosing `KExpression` keeps span as a direct field instead.
 ///
 /// `Copy` for a `Copy` payload, so a run of spanned parts is a `Drop`-free byte run a region's bump
-/// hands back whole ([`RegionHandle::bump_slice`](crate::witnessed::RegionHandle::bump_slice)).
+/// hands back whole ([`BumpAllocator::slice`](crate::witnessed::BumpAllocator::slice)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Spanned<T> {
     pub value: T,

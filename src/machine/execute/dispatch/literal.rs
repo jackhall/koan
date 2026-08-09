@@ -117,7 +117,7 @@ fn fold_cells(
                 let mut grown = Vec::with_capacity(cells.len() + 1);
                 grown.extend_from_slice(cells);
                 grown.push(cell);
-                (region, placement.bump().slice(&grown))
+                (region, placement.allocator().slice(&grown))
             },
         )
     })

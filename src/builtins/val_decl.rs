@@ -48,7 +48,9 @@ fn typeexpr_from_carrier<'a>(
             | TypeNode::OfKind(KKind::AnyType | KKind::Signature | KKind::ProperType)
     );
     if is_leaf_builtin || kt == KType::EMPTY_SIGNATURE {
-        CarrierForm::Leaf(TypeIdentifier::leaf(brand.alloc_text(&kt.name(types))))
+        CarrierForm::Leaf(TypeIdentifier::leaf(
+            brand.allocator().text(&kt.name(types)),
+        ))
     } else {
         CarrierForm::Direct(kt)
     }

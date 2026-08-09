@@ -542,6 +542,7 @@ digraph {
     "koan::machine::core::ref_carriers" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::run_id" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::core::scope" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::ref_carriers" [label="uses", style="dashed"];
@@ -960,7 +961,6 @@ digraph {
     "koan::machine::model::values::kobject::equality" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject::equality" -> "koan::machine::model::values::kobject" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject::equality" -> "koan::source" [label="uses", style="dashed"];
-    "koan::machine::model::values::module" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::values::module" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::model::values::module" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::module" -> "koan::machine::model::types" [label="uses", style="dashed"];

@@ -50,7 +50,7 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
         // [`copy_object_into`]: the copy verb claims release of the source region, so the rebuilt
         // identifier must not keep borrowing bytes that region owns.
         Carried::UnresolvedType(ti) => {
-            Carried::UnresolvedType(TypeIdentifier::leaf(dest.alloc_text(ti.as_str())))
+            Carried::UnresolvedType(TypeIdentifier::leaf(dest.allocator().text(ti.as_str())))
         }
     }
 }
@@ -69,7 +69,7 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
         Carried::Type(t) => Held::Type(t),
         // A cell always rebuilds at the door, so the name's bytes are re-bumped with it.
         Carried::UnresolvedType(ti) => {
-            Held::UnresolvedType(TypeIdentifier::leaf(dest.alloc_text(ti.as_str())))
+            Held::UnresolvedType(TypeIdentifier::leaf(dest.allocator().text(ti.as_str())))
         }
     }
 }

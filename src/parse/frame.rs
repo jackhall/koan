@@ -162,7 +162,7 @@ impl<'a> BracketFrame<'a> {
                     end,
                 };
                 Ok(Spanned::at(
-                    ExpressionPart::ListLiteral(brand.region().alloc_slice(&items)),
+                    ExpressionPart::ListLiteral(brand.region().allocator().slice(&items)),
                     span,
                 ))
             }
@@ -173,10 +173,10 @@ impl<'a> BracketFrame<'a> {
                 };
                 let part = match dict.finish()? {
                     BraceContents::Dict(pairs) => {
-                        ExpressionPart::DictLiteral(brand.region().alloc_slice(&pairs))
+                        ExpressionPart::DictLiteral(brand.region().allocator().slice(&pairs))
                     }
                     BraceContents::Record(fields) => {
-                        ExpressionPart::RecordLiteral(brand.region().alloc_slice(&fields))
+                        ExpressionPart::RecordLiteral(brand.region().allocator().slice(&fields))
                     }
                 };
                 Ok(Spanned::at(part, span))

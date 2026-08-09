@@ -288,7 +288,7 @@ impl<'a> Scope<'a> {
     /// Build an object into this scope's own region through a **zero-dep fold** and hand back the
     /// resident borrow. The door for a value that is region-pure in the sense that matters — every
     /// borrow it carries points into this region — but not `'static`, because a string literal's
-    /// bytes are bumped here ([`RegionBrand::alloc_text`](crate::machine::core::RegionBrand::alloc_text)).
+    /// bytes are bumped here ([`RegionBrand::allocator`](crate::machine::core::RegionBrand::allocator)).
     ///
     /// The fold brand discharges the residence obligation at compile time — an ambient borrow cannot
     /// inhabit `KObject<'b>` — and the product is re-anchored at `'a` through the library's own fused
@@ -342,7 +342,8 @@ impl<'a> Scope<'a> {
             KObject::Bool(b) => Ok(self.fold_resident_object(|_| KObject::Bool(b))),
             KObject::Null => Ok(self.fold_resident_object(|_| KObject::Null)),
             KObject::KString(text) => {
-                Ok(self.fold_resident_object(|brand| KObject::KString(brand.alloc_text(text))))
+                Ok(self
+                    .fold_resident_object(|brand| KObject::KString(brand.allocator().text(text))))
             }
             KObject::KExpression(expression) => Ok(self.brand().alloc_expression(expression)),
             _ => Err(KError::new(crate::machine::KErrorKind::ShapeError(
@@ -398,7 +399,7 @@ impl<'a> Scope<'a> {
             // The name is read at the envelope's own brand, so it is copied here rather than
             // carried out: the product names only this region.
             Carried::UnresolvedType(ti) => Some(AdoptedType::Unlowered(TypeIdentifier::leaf(
-                brand.alloc_text(ti.as_str()),
+                brand.allocator().text(ti.as_str()),
             ))),
             Carried::Object(_) => None,
         });

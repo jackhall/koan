@@ -97,7 +97,7 @@ impl<'a> ProgramExpression<'a> {
     /// stay the program-storage borrows they were) into wherever `brand` allocates. What the
     /// resulting `ProgramNode` promises is unchanged — only the address of the node header moves.
     pub fn rehost(self, brand: RegionBrand<'a>) -> ProgramNode<'a> {
-        ProgramNode(brand.alloc_value(self.0))
+        ProgramNode(brand.allocator().value(self.0))
     }
 }
 
@@ -133,7 +133,7 @@ impl<'a> ProgramBrand<'a> {
 
     /// Bump a marked node into program storage, yielding the reference an arm payload holds.
     pub fn alloc_node(self, expression: ProgramExpression<'a>) -> ProgramNode<'a> {
-        ProgramNode(self.region().alloc_value(expression.0))
+        ProgramNode(self.region().allocator().value(expression.0))
     }
 
     /// Build and bump in one step — the [`ExpressionPart::Expression`] analogue of

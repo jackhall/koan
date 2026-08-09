@@ -27,19 +27,19 @@ fn expr<'a>(brand: ProgramBrand<'a>, parts: Vec<ExpressionPart<'a>>) -> Expressi
     ExpressionPart::expression(brand, parts_of(parts))
 }
 fn list<'a>(brand: ProgramBrand<'a>, items: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
-    ExpressionPart::ListLiteral(brand.region().alloc_slice(&items))
+    ExpressionPart::ListLiteral(brand.region().allocator().slice(&items))
 }
 fn dict<'a>(
     brand: ProgramBrand<'a>,
     pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
 ) -> ExpressionPart<'a> {
-    ExpressionPart::DictLiteral(brand.region().alloc_slice(&pairs))
+    ExpressionPart::DictLiteral(brand.region().allocator().slice(&pairs))
 }
 fn record<'a>(
     brand: ProgramBrand<'a>,
     fields: Vec<(&'a str, ExpressionPart<'a>)>,
 ) -> ExpressionPart<'a> {
-    ExpressionPart::RecordLiteral(brand.region().alloc_slice(&fields))
+    ExpressionPart::RecordLiteral(brand.region().allocator().slice(&fields))
 }
 fn sigil<'a>(brand: ProgramBrand<'a>, parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     ExpressionPart::SigiledTypeExpr(brand.nested_node(parts_of(parts)))

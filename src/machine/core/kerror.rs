@@ -185,7 +185,7 @@ impl KError {
                         }
                         None => base,
                     };
-                    KObject::KString(brand.alloc_text(&rendered))
+                    KObject::KString(brand.allocator().text(&rendered))
                 })
                 .collect(),
             types,
@@ -276,21 +276,33 @@ impl KErrorKind {
             KErrorKind::TypeMismatch { arg, expected, got } => (
                 "TypeMismatch".to_string(),
                 vec![
-                    ("arg".to_string(), KObject::KString(brand.alloc_text(arg))),
+                    (
+                        "arg".to_string(),
+                        KObject::KString(brand.allocator().text(arg)),
+                    ),
                     (
                         "expected".to_string(),
-                        KObject::KString(brand.alloc_text(expected)),
+                        KObject::KString(brand.allocator().text(expected)),
                     ),
-                    ("got".to_string(), KObject::KString(brand.alloc_text(got))),
+                    (
+                        "got".to_string(),
+                        KObject::KString(brand.allocator().text(got)),
+                    ),
                 ],
             ),
             KErrorKind::MissingArg(name) => (
                 "MissingArg".to_string(),
-                vec![("name".to_string(), KObject::KString(brand.alloc_text(name)))],
+                vec![(
+                    "name".to_string(),
+                    KObject::KString(brand.allocator().text(name)),
+                )],
             ),
             KErrorKind::UnboundName(name) => (
                 "UnboundName".to_string(),
-                vec![("name".to_string(), KObject::KString(brand.alloc_text(name)))],
+                vec![(
+                    "name".to_string(),
+                    KObject::KString(brand.allocator().text(name)),
+                )],
             ),
             KErrorKind::ArityMismatch { expected, got } => (
                 "ArityMismatch".to_string(),
@@ -302,7 +314,10 @@ impl KErrorKind {
             KErrorKind::AmbiguousDispatch { expr, candidates } => (
                 "AmbiguousDispatch".to_string(),
                 vec![
-                    ("expr".to_string(), KObject::KString(brand.alloc_text(expr))),
+                    (
+                        "expr".to_string(),
+                        KObject::KString(brand.allocator().text(expr)),
+                    ),
                     (
                         "candidates".to_string(),
                         KObject::Number(*candidates as f64),
@@ -312,22 +327,28 @@ impl KErrorKind {
             KErrorKind::DispatchFailed { expr, reason } => (
                 "DispatchFailed".to_string(),
                 vec![
-                    ("expr".to_string(), KObject::KString(brand.alloc_text(expr))),
+                    (
+                        "expr".to_string(),
+                        KObject::KString(brand.allocator().text(expr)),
+                    ),
                     (
                         "reason".to_string(),
-                        KObject::KString(brand.alloc_text(reason)),
+                        KObject::KString(brand.allocator().text(reason)),
                     ),
                 ],
             ),
             KErrorKind::NestedBinder { expr, .. } => (
                 "NestedBinder".to_string(),
-                vec![("expr".to_string(), KObject::KString(brand.alloc_text(expr)))],
+                vec![(
+                    "expr".to_string(),
+                    KObject::KString(brand.allocator().text(expr)),
+                )],
             ),
             KErrorKind::ShapeError(msg) => (
                 "ShapeError".to_string(),
                 vec![(
                     "message".to_string(),
-                    KObject::KString(brand.alloc_text(msg)),
+                    KObject::KString(brand.allocator().text(msg)),
                 )],
             ),
             KErrorKind::ParseError {
@@ -338,7 +359,7 @@ impl KErrorKind {
                 let mut fields: Vec<(String, KObject<'a>)> = Vec::with_capacity(6);
                 fields.push((
                     "message".to_string(),
-                    KObject::KString(brand.alloc_text(message)),
+                    KObject::KString(brand.allocator().text(message)),
                 ));
                 let (path, line, col_utf16) = match (span, file) {
                     (Some(sp), Some(fid)) => source::with(*fid, |f| {
@@ -364,7 +385,7 @@ impl KErrorKind {
                 ));
                 fields.push((
                     "path".to_string(),
-                    KObject::KString(brand.alloc_text(&path.unwrap_or_default())),
+                    KObject::KString(brand.allocator().text(&path.unwrap_or_default())),
                 ));
                 fields.push((
                     "line".to_string(),
@@ -380,7 +401,7 @@ impl KErrorKind {
                 "User".to_string(),
                 vec![(
                     "message".to_string(),
-                    KObject::KString(brand.alloc_text(msg)),
+                    KObject::KString(brand.allocator().text(msg)),
                 )],
             ),
             KErrorKind::Rebind { .. }
@@ -397,10 +418,13 @@ impl KErrorKind {
                 (
                     name.to_string(),
                     vec![
-                        ("kind".to_string(), KObject::KString(brand.alloc_text(name))),
+                        (
+                            "kind".to_string(),
+                            KObject::KString(brand.allocator().text(name)),
+                        ),
                         (
                             "message".to_string(),
-                            KObject::KString(brand.alloc_text(&format!("{self}"))),
+                            KObject::KString(brand.allocator().text(&format!("{self}"))),
                         ),
                     ],
                 )

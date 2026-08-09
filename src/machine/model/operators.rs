@@ -107,7 +107,7 @@ impl<'a> OperatorGroup<'a> {
         sorted.dedup();
         let hosted: Vec<&'a str> = sorted
             .iter()
-            .map(|member| brand.alloc_text(member))
+            .map(|member| brand.allocator().text(member))
             .collect();
         let mode = match mode {
             ReductionMode::Unary => ReductionMode::Unary,
@@ -117,12 +117,12 @@ impl<'a> OperatorGroup<'a> {
                 combiner,
                 direction,
             } => ReductionMode::Pairwise {
-                combiner: brand.alloc_text(combiner),
+                combiner: brand.allocator().text(combiner),
                 direction,
             },
         };
-        brand.alloc_value(OperatorGroup {
-            members: brand.alloc_slice(&hosted),
+        brand.allocator().value(OperatorGroup {
+            members: brand.allocator().slice(&hosted),
             mode,
         })
     }

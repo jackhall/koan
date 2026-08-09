@@ -1,5 +1,5 @@
 //! The **bump door**: the public path from an embedder's `Drop`-free value family into a
-//! [`Region`]'s byte arena, and the [`BumpPlacement`] capability a constructor writes through.
+//! [`Region`]'s byte arena, and the [`BumpAllocator`] write surface a constructor builds through.
 //!
 //! A value stored here is *not* erased. The bump allocator is lifetime-free, so `'b` enters only at
 //! the allocating call — which is why a bumped value may hold an `&'b` back into the very region it
@@ -11,16 +11,19 @@
 //! Two arguments carry the door, stated here once so the method docs point at them rather than
 //! restating them.
 //!
-//! **Confinement is inherited, not restated.** The door is a method on [`FoldedPlacement`], the fold
-//! engines' unforgeable placement capability, and `'b` is the *enclosing* fold's brand — the same one
-//! [`FoldedPlacement::alloc_resident_folded`] discharges its residence obligation against. A
-//! constructor cannot capture an ambient `&'x` into the value it builds, because `'x` has no outlives
-//! relation to a universally-quantified `'b`; and the door's product, an
-//! [`Opened<'b, …>`](super::Opened), cannot leave the enclosing fold closure for the same reason.
-//! Bare inside the brand, bundled on the way out. A door that minted a *fresh* `for<'b>` brand of its
-//! own could not name that brand in its return type, so its product could never escape the call at
-//! all — and a value built at a fresh brand could not be written into a bump borrowed at the
-//! enclosing one without a lifetime retype, which is exactly the erasure this door exists not to do.
+//! **Confinement is the brand, not the capability's privacy.** The door is a method on
+//! [`FoldedPlacement`], the fold engines' unforgeable placement capability, and `'b` is the
+//! *enclosing* fold's brand — the same one [`FoldedPlacement::alloc_resident_folded`] discharges its
+//! residence obligation against. A constructor cannot capture an ambient `&'x` into the value it
+//! builds, because `'x` has no outlives relation to a universally-quantified `'b`; and the door's
+//! product, an [`Opened<'b, …>`](super::Opened), cannot leave the enclosing fold closure for the
+//! same reason. Bare inside the brand, bundled on the way out. A door that minted a *fresh*
+//! `for<'b>` brand of its own could not name that brand in its return type, so its product could
+//! never escape the call at all — and a value built at a fresh brand could not be written into a
+//! bump borrowed at the enclosing one without a lifetime retype, which is exactly the erasure this
+//! door exists not to do. That the brand alone does the confining is why the write surface handed to
+//! a constructor is the plain [`BumpAllocator`] any handle-holder can mint, rather than a
+//! door-minted type of its own: a mint restriction on top would guard nothing `'b` does not.
 //!
 //! **No erasure, because the operands already live at the door's brand.** Operands arrive as
 //! [`Opened<'b, V, Carrier<F>>`](super::Opened) — their values are *already* `V::At<'b>`, so the door
@@ -33,142 +36,50 @@
 //! where cross-region reach ownership already flows; the door composes *within* the brand.
 
 use std::alloc::Layout;
-use std::hash::Hash;
 use std::ptr;
 use std::ptr::NonNull;
 
 use allocator_api2::alloc::{AllocError, Allocator};
 use bumpalo::Bump;
-use hashbrown::{DefaultHashBuilder, HashMap};
 
 use super::{
     Carrier, DropFree, FoldedPlacement, Opened, PinBundle, PinsRegion, ReachDescription,
-    Reattachable, Region, RegionHandle, RegionOwner, StorageProfile,
+    Reattachable, Region, RegionOwner, StorageProfile,
 };
 
-/// The **byte-placement** capability: the write surface a [`fold_and_bump`](FoldedPlacement::fold_and_bump)
-/// constructor builds its value through. A sibling of [`FoldedPlacement`], minted **only** inside a
-/// door call — which is what makes every bumped byte belong to a value whose reach the door composed,
-/// and why it is a distinct type rather than three more methods on the placement that already exists.
+/// **The region's bump, as one handle carrying both storage tiers** — the guarded verbs
+/// ([`value`](Self::value), [`slice`](Self::slice), [`text`](Self::text), [`place`](Self::place))
+/// every write-once byte goes through, and the raw [`Allocator`] impl a **mutable** collection is
+/// built over so its backing allocation lands in the region's own chunks instead of the global heap.
 ///
-/// Its primitives are std shapes only — a `Copy` value, a `Copy` slice, a `str` — so the door names
-/// no workload type and grows no per-family verb. Each hands back a shared `&'b`, never the `&mut`
-/// the bump itself returns: a bumped value is region state a holder names, not one it owns.
+/// The verbs live here and nowhere else. Every surface that can reach a region's bytes —
+/// [`RegionHandle::allocator`](super::RegionHandle::allocator),
+/// [`FoldedPlacement::allocator`], an embedder's own brand veneer — hands back this one type rather
+/// than restating a verb set of its own, so the `Copy` guard and the rationale behind it are written
+/// once. Their primitives are std shapes only — a `Copy` value, a `Copy` slice, a `str` — so the
+/// door names no workload type and grows no per-family verb, and each hands back a shared `&'b`,
+/// never the `&mut` the bump itself returns: a bumped value is region state a holder names, not one
+/// it owns.
 ///
-/// Like [`FoldedPlacement`], `Copy` is safe (the capability cannot outlive its call — `'b` is
-/// unnameable outside — so duplicating it inside grants nothing new), the private field keeps an
-/// embedder from forging one, and the crate-internal [`mint`](Self::mint) confines minting to the
-/// door.
+/// `Copy`, and the field is private, so those `allocator()` accessors are the only mint and `'b`
+/// stays the region's own brand: nothing built through one can outlive the region whose bytes it
+/// holds. Where `'b` is a rank-2 fold brand, that same lifetime is the confinement — which is why
+/// the allocator needs no mint privacy of its own to serve as a fold's write surface.
 ///
-/// ```compile_fail
-/// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
-/// use workgraph::witnessed::{BumpPlacement, RegionHandle};
-/// let cart = fresh_cart();
-/// let handle = RegionHandle::from_owner(&*cart);
-/// // The field is private outside the crate — a bump placement cannot be forged by construction.
-/// let _p: BumpPlacement<'_, FixtureProfile> = BumpPlacement { handle };
-/// ```
-///
-/// ```compile_fail
-/// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
-/// use workgraph::witnessed::{BumpPlacement, RegionHandle};
-/// let cart = fresh_cart();
-/// let handle = RegionHandle::from_owner(&*cart);
-/// // `mint` is crate-internal — only the bump door mints a placement.
-/// let _p = BumpPlacement::<FixtureProfile>::mint(handle);
-/// ```
-pub struct BumpPlacement<'b, W: StorageProfile> {
-    handle: RegionHandle<'b, W>,
-}
-
-// Manual impls: a derive would bound `W: Clone` / `W: Copy`, which the `Copy` handle field does not
-// need — mirroring [`RegionHandle`]'s and [`FoldedPlacement`]'s own manual `Clone` / `Copy`.
-impl<W: StorageProfile> Clone for BumpPlacement<'_, W> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-impl<W: StorageProfile> Copy for BumpPlacement<'_, W> {}
-
-impl<'b, W: StorageProfile> BumpPlacement<'b, W> {
-    /// Mint a placement over `handle` — crate-internal, so only
-    /// [`fold_and_bump`](FoldedPlacement::fold_and_bump), which has already composed and retained the
-    /// product's reach over that same region, can produce one.
-    pub(crate) fn mint(handle: RegionHandle<'b, W>) -> Self {
-        BumpPlacement { handle }
-    }
-
-    /// Forge a placement for an embedder white-box test that has no enclosing door call to mint one —
-    /// gated off production and out of the external-crate `compile_fail` fixtures, mirroring
-    /// [`FoldedPlacement::forge_for_test`].
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn forge_for_test(handle: RegionHandle<'b, W>) -> Self {
-        BumpPlacement { handle }
-    }
-
-    /// Bump one `Copy` value into the region and hand back the co-located `&'b`.
-    ///
-    /// `T: Copy` is the static proxy for "no destructor to skip": the bump releases its chunks whole
-    /// and runs no `Drop`, so a `Drop`-bearing `T` would silently leak its owned contents. "`Drop`-free"
-    /// has no expressible bound; `Copy` is the honest approximation, and every family queued behind
-    /// this door satisfies it by construction.
-    ///
-    /// ```compile_fail
-    /// use std::rc::Rc;
-    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
-    /// use workgraph::witnessed::StepContext;
-    ///
-    /// static SEVEN: u32 = 7;
-    /// let cart = fresh_cart();
-    /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
-    /// let _ = ctx.alloc_with_handle::<FixtureProfile, RefFamily, RefFamily>(&[], |placement, _views| {
-    ///     placement.fold_and_bump::<RefFamily, RefFamily, RegionCart>(&[], |bump, _operands| {
-    ///         // A `String` owns a heap buffer the bump would never free — rejected by `T: Copy`.
-    ///         let _stored: &String = bump.value(String::from("leaks"));
-    ///         &SEVEN
-    ///     })
-    ///     .value()
-    /// });
-    /// ```
-    pub fn value<T: Copy>(self, value: T) -> &'b T {
-        self.handle.region().bump_value(value)
-    }
-
-    /// Copy a `Copy` slice into the region and hand back the co-located `&'b [T]` — the shape an
-    /// operator group's member block or an expression's part list takes. Same `T: Copy` rationale as
-    /// [`value`](Self::value).
-    pub fn slice<T: Copy>(self, items: &[T]) -> &'b [T] {
-        self.handle.region().bump_slice(items)
-    }
-
-    /// Copy `text` into the region and hand back the co-located `&'b str`. A `str` is a slice of
-    /// `Copy` bytes under a UTF-8 invariant, so it carries no destructor either and needs no bound to
-    /// say so.
-    pub fn text(self, text: &str) -> &'b str {
-        self.handle.region().bump_text(text)
-    }
-}
-
-/// The region's bump as an [`Allocator`] — the seam a **mutable** collection is built over, so its
-/// backing allocation lands in the region's own chunks instead of the global heap.
-///
-/// `Copy`, and the field is private, so [`RegionHandle::allocator`] is the only mint and `'b` stays
-/// the region's own brand: a collection built over one cannot outlive the region whose bytes it
-/// holds. What licenses handing the raw allocator out at all is that a `Bump` releases its chunks
-/// whole and [`Region::bump_capacity`] prices every byte taken through it, counted door or not — so
-/// an off-door allocation is still an honestly-reported one. Deallocation is a **no-op**: a
-/// collection that shrinks or rehashes abandons its old allocation as dead bump bytes, which is why
-/// this seam suits a table whose churn is bounded (geometric growth, in-place slot reuse) and not
-/// one that frees in a loop.
-///
-/// The trait says nothing about destructors, so the `T: Copy` guard the [`BumpPlacement`] verbs
-/// carry cannot ride here — an element stored through a collection over this allocator is never
-/// dropped, and it is the **embedder's own declaration site** that has to hold the line (a
+/// **The two tiers, and why the guard cannot cover both.** What licenses handing the raw allocator
+/// out at all is that a `Bump` releases its chunks whole and [`Region::bump_capacity`] prices every
+/// byte taken through it, counted verb or not — so an off-verb allocation is still an
+/// honestly-reported one. Deallocation is a **no-op**: a collection that shrinks or rehashes
+/// abandons its old allocation as dead bump bytes, which is why that seam suits a table whose churn
+/// is bounded (geometric growth, in-place slot reuse) and not one that frees in a loop. The
+/// [`Allocator`] trait says nothing about destructors, so the `T: Copy` guard the verbs carry cannot
+/// ride there — an element stored through a collection over this allocator is never dropped, and it
+/// is the **embedder's own declaration site** that has to hold the line (a
 /// `const { assert!(!needs_drop::<T>()) }` where the collection's element type is named).
 pub struct BumpAllocator<'b>(&'b Bump);
 
-// Manual impls, for [`BumpPlacement`]'s reason: `Copy` grants nothing new, since the handle names
-// no more than the `&'b Bump` it wraps and `'b` already bounds every use.
+// Manual impls: `Copy` grants nothing new, since the handle names no more than the `&'b Bump` it
+// wraps and `'b` already bounds every use.
 impl Clone for BumpAllocator<'_> {
     fn clone(&self) -> Self {
         *self
@@ -222,76 +133,77 @@ unsafe impl Allocator for BumpAllocator<'_> {
 }
 
 impl<'b> BumpAllocator<'b> {
-    /// Wrap `bump` — crate-internal, so [`RegionHandle::allocator`] is the only way an embedder
+    /// Wrap `bump` — crate-internal, so [`RegionHandle::allocator`](super::RegionHandle::allocator)
+    /// is the only way an embedder
     /// reaches one and no caller can pair the allocator with a bump that is not a region's.
     pub(crate) fn over(bump: &'b Bump) -> Self {
         BumpAllocator(bump)
     }
-}
 
-/// A **key→index table whose buckets live in the region's bump** — the shape an embedder's keyed
-/// container reaches for when a slice and a binary search will not do, minted through
-/// [`RegionHandle::bump_map`].
-///
-/// The map is the one bump-hosted value that is *not* itself `Copy`: a `hashbrown` table owns its
-/// bucket allocation, so it has a `Drop`. That `Drop` is exactly what never runs — the table is
-/// placed in the bump like any other bumped value, and the bump releases its chunks whole. The
-/// `K: Copy` and `V: Copy` bounds are what make forgoing it lossless rather than a leak: with `Copy`
-/// elements the table's destructor has nothing to do *but* free the bucket array, and that array
-/// lives in the very chunks region death releases. Elements owning anything else — a `String` key,
-/// a `Box` value — could not reach this door in the first place.
-///
-/// So the bounds sit where they can be read as the proof: on the type's own inherent impl, covering
-/// construction and every read. There is no `unsafe` and no `ManuallyDrop` sleight of hand; the
-/// table is simply built over a bump-backed allocator and then handed to the bump itself, which is
-/// the same disposition every other bumped value gets.
-///
-/// The surface is **read-only**. A table is frozen at construction because the value it indexes is:
-/// mutation would have to rehash into the bump, stranding the old bucket array as garbage no region
-/// figure could account for honestly. Iteration order is `hashbrown`'s, which is to say arbitrary
-/// and not a promise.
-pub struct BumpMap<'b, K, V> {
-    entries: HashMap<K, V, DefaultHashBuilder, &'b Bump>,
-}
-
-impl<'b, K: Copy + Eq + Hash, V: Copy> BumpMap<'b, K, V> {
-    /// Build the table over `bump` and fill it from `entries` — crate-internal, so
-    /// [`RegionHandle::bump_map`] is the only way in, and every table is therefore both allocated in
-    /// a region's bump and placed there.
+    /// Bump one `Copy` value into the region and hand back the co-located `&'b`.
     ///
-    /// Sized to the iterator's lower bound up front so the fill runs without a rehash: a growth
-    /// reallocation would abandon the old bucket array inside the bump as garbage the region's
-    /// live-byte figure would then over-report. Duplicate keys resolve last-wins, as
-    /// [`HashMap::insert`] does.
-    pub(crate) fn build(bump: &'b Bump, entries: impl IntoIterator<Item = (K, V)>) -> Self {
-        let entries = entries.into_iter();
-        let mut table = HashMap::with_capacity_and_hasher_in(
-            entries.size_hint().0,
-            DefaultHashBuilder::default(),
-            bump,
-        );
-        table.extend(entries);
-        BumpMap { entries: table }
+    /// `T: Copy` is the static proxy for "no destructor to skip": the bump releases its chunks whole
+    /// and runs no `Drop`, so a `Drop`-bearing `T` would silently leak its owned contents.
+    /// "`Drop`-free" has no expressible bound; `Copy` is the honest approximation, and every family
+    /// queued behind this door satisfies it by construction. A value that is glue-free without being
+    /// `Copy` takes [`place`](Self::place), which trades the bound for a per-site assert.
+    ///
+    /// ```compile_fail
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    ///
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// // A `String` owns a heap buffer the bump would never free — rejected by `T: Copy`.
+    /// let _stored: &String = handle.allocator().value(String::from("leaks"));
+    /// ```
+    pub fn value<T: Copy>(self, value: T) -> &'b T {
+        self.0.alloc(value)
     }
 
-    /// The value `key` indexes, or `None`.
-    pub fn get(&self, key: &K) -> Option<&V> {
-        self.entries.get(key)
+    /// Copy a `Copy` slice into the region and hand back the co-located `&'b [T]` — the shape an
+    /// operator group's member block or an expression's part list takes. Same `T: Copy` rationale as
+    /// [`value`](Self::value).
+    pub fn slice<T: Copy>(self, items: &[T]) -> &'b [T] {
+        self.0.alloc_slice_copy(items)
     }
 
-    /// Every `(key, value)` pair, in arbitrary order.
-    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
-        self.entries.iter()
+    /// Copy `text` into the region and hand back the co-located `&'b str`. A `str` is a slice of
+    /// `Copy` bytes under a UTF-8 invariant, so it carries no destructor either and needs no bound to
+    /// say so.
+    pub fn text(self, text: &str) -> &'b str {
+        self.0.alloc_str(text)
     }
 
-    /// How many pairs the table holds.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether the table holds no pairs.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+    /// [`value`](Self::value) for a `T` that is glue-free **without** being `Copy`, guarded by a
+    /// monomorphization-time assert instead of a bound: a `T` with drop glue is a build error at the
+    /// call that named it.
+    ///
+    /// The intended user is a frozen table's header — a `hashbrown` map owns its bucket array, so it
+    /// has a `Drop`, and a [`ManuallyDrop`](std::mem::ManuallyDrop) wrapper is what makes it pass
+    /// this assert. That wrapper is a per-site *declaration* that the suppressed destructor had
+    /// nothing to do: it is lossless exactly when the table's elements are themselves glue-free (the
+    /// declaration site says so with its own const assert) and its buckets are bump memory the region
+    /// releases whole. Because that reasoning cannot be checked here, the plain-value verb keeps the
+    /// stricter `Copy` tier and only a caller willing to write the wrapper reaches this one.
+    ///
+    /// ```compile_fail
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    ///
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// // A bare `String` has drop glue — rejected by the const assert, not by a bound.
+    /// let _stored: &String = handle.allocator().place(String::from("leaks"));
+    /// ```
+    pub fn place<T>(self, value: T) -> &'b T {
+        const {
+            assert!(
+                !std::mem::needs_drop::<T>(),
+                "a bump-placed value must carry no drop glue: the bump runs no destructor",
+            )
+        };
+        self.0.alloc(value)
     }
 }
 
@@ -300,7 +212,8 @@ impl<'b, K: Copy + Eq + Hash, V: Copy> BumpMap<'b, K, V> {
 impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     /// **Fold the operands' reach and bump the bytes, in one verb.** Compose every operand's reach
     /// into this fold's destination region, retain it there, then run `construct` — which builds the
-    /// stored value through a [`BumpPlacement`] and the operands' opened views — and hand back the
+    /// stored value through a [`BumpAllocator`] over that region and the operands' opened views — and
+    /// hand back the
     /// product as one bundled carrier.
     ///
     /// One door, generic over the stored family `K`: a bytes-only allocation (a string literal, a
@@ -320,8 +233,10 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     /// were passed in, so it is neither derivable nor forgeable at the call site. No `unsafe`, and no
     /// lifetime erasure — the operands' values are already at `'b`, and the bump stores them there.
     ///
-    /// The `construct` closure exists to keep [`BumpPlacement`] door-minted and `'b`-confined: an
-    /// embedder cannot hold one outside a door call. Operands are homogeneous in `V` — the same
+    /// The `construct` closure is what ties the write surface to this fold's brand: the
+    /// [`BumpAllocator<'b>`] it receives is over the destination region, and `'b` is unnameable
+    /// outside the call, so neither the allocator nor anything written through it escapes. Operands
+    /// are homogeneous in `V` — the same
     /// limitation [`StepContext::alloc_with`](super::StepContext::alloc_with) carries; heterogeneous
     /// operands compose through the [`And`](super::And) family or nested door calls.
     ///
@@ -403,7 +318,7 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     pub fn fold_and_bump<K, V, F>(
         self,
         operands: &[&Opened<'b, V, Carrier<F>>],
-        construct: impl FnOnce(BumpPlacement<'b, W>, &[V::At<'b>]) -> K::At<'b>,
+        construct: impl FnOnce(BumpAllocator<'b>, &[V::At<'b>]) -> K::At<'b>,
     ) -> Opened<'b, K, Carrier<F>>
     where
         K: Reattachable + DropFree,
@@ -434,7 +349,7 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
         let description = ReachDescription::mint_resident(dest, &source_refs);
 
         let views: Vec<V::At<'b>> = operands.iter().map(|operand| operand.value()).collect();
-        let built = construct(BumpPlacement::mint(dest), &views);
+        let built = construct(dest.allocator(), &views);
         // `Opened::adopted`'s precondition is discharged above: the door retained the pins covering
         // `'b` before handing the value over, so the value↔reach pairing is still library-minted.
         Opened::adopted(built, Carrier::new(description))

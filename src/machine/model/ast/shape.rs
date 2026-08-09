@@ -231,7 +231,7 @@ pub fn operator_probe_for<'a, P: Part<'a>>(
         .collect();
     operators.sort_unstable();
     operators.dedup();
-    Some(brand.alloc_text(&operators.join(" ")))
+    Some(brand.allocator().text(&operators.join(" ")))
 }
 
 /// The stored bucket key: `Keyword` parts contribute their text, every other part a `Slot`. Bumped
@@ -250,5 +250,5 @@ pub fn stored_untyped_key<'a, P: Part<'a>>(
             _ => StoredElement::Slot,
         })
         .collect();
-    brand.alloc_slice(&elements)
+    brand.allocator().slice(&elements)
 }

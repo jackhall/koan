@@ -20,9 +20,13 @@ can mint, already carrying the region's brand as its own lifetime.
 - The `text` / `slice` / `value` verbs are defined once, as methods on
   `BumpAllocator<'b>`, carrying the `T: Copy` bounds that make forgoing the
   destructor lossless.
-- `RegionHandle`, `BumpPlacement`, and `RegionBrand` each expose an
+- `RegionHandle`, `FoldedPlacement`, and `RegionBrand` each expose an
   `allocator()` accessor and no per-verb copies; `Region`'s bump verbs are
   crate-internal at most.
+- `BumpPlacement` is deleted: `fold_and_bump`'s construct closure receives the
+  `BumpAllocator<'b>` directly. The rank-2 fold brand is what confines a
+  fold's write surface; the type's mint privacy guarded only the verbs that
+  now live on the allocator every handle-holder can mint.
 - `BumpMap` and `alloc_map` are deleted: their users build hashbrown tables
   over `BumpAllocator` directly, frozen by usage, with the no-drop-glue
   compile-time assert at each declaration site.
@@ -37,10 +41,13 @@ can mint, already carrying the region's brand as its own lifetime.
 - Verb home — decided. Methods on `BumpAllocator` with `T: Copy` bounds; the
   trait impl itself cannot express the Drop-free guard, so the verbs move rather
   than disappear.
-- Frozen-table replacement — open. Either former `BumpMap` users hold plain
-  hashbrown maps with a shared const-assert construction helper (recommended:
-  no wrapper to maintain), or a thin read-only veneer preserves the
-  frozen-at-construction surface as a type.
+- Frozen-table replacement — decided. Former `BumpMap` users hold plain
+  hashbrown maps built through one shared koan-side `frozen_table` helper
+  carrying the element-type no-drop-glue const assert; no veneer type. The
+  header is placed through a Copy-relaxed `BumpAllocator::place` verb guarded
+  by a monomorphization-time `!needs_drop` assert, which a `ManuallyDrop`
+  wrapper (deref'd away before any holder sees it) satisfies — the same
+  reasoned admission `Bindings`' bucket vec already makes.
 
 ## Dependencies
 

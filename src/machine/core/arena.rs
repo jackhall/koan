@@ -25,7 +25,7 @@ use crate::machine::model::{
 };
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    BumpAllocator, BumpMap, DropFree, Erased, FamilyArena, FoldedPlacement, Reattachable, Region,
+    BumpAllocator, DropFree, Erased, FamilyArena, FoldedPlacement, Reattachable, Region,
     RegionHandle, StepContext, StorageOf, StorageProfile, Stored, Witnessed,
 };
 
@@ -111,73 +111,37 @@ impl<'a> RegionBrand<'a> {
     /// composition names what it borrows instead. The cell lands in the bump, so region death frees it
     /// with the chunks.
     pub fn alloc_scalar(self, scalar: Scalar) -> &'a KObject<'a> {
-        self.alloc_value(scalar.into_object())
+        self.allocator().value(scalar.into_object())
     }
 
-    /// [`Self::alloc_scalar`] for a string: copy the bytes into this region ([`Self::alloc_text`]) and
-    /// store the cell around the co-located borrow. A separate door because a string is exactly the
-    /// leaf whose *representation* is region-hosted even though its meaning is owned — so re-homing
-    /// the bytes is the store, and there is nothing for a caller to get wrong between the two.
+    /// [`Self::alloc_scalar`] for a string: copy the bytes into this region and store the cell around
+    /// the co-located borrow. A separate door because a string is exactly the leaf whose
+    /// *representation* is region-hosted even though its meaning is owned — so re-homing the bytes is
+    /// the store, and there is nothing for a caller to get wrong between the two.
     pub fn alloc_string(self, text: &str) -> &'a KObject<'a> {
-        self.alloc_value(KObject::KString(self.alloc_text(text)))
+        let allocator = self.allocator();
+        allocator.value(KObject::KString(allocator.text(text)))
     }
 
-    /// **Copy `text` into this brand's region** and hand back the co-located `&'a str` — the door
-    /// every string a value family slot holds is born through ([`KObject::KString`], a
-    /// `Tagged` discriminant, a [`KKey::String`](crate::machine::model::KKey) dict key).
+    /// **This brand's region bump as a [`BumpAllocator`]** — the door every byte a value family slot
+    /// holds is born through: a string's characters ([`KObject::KString`], a `Tagged` discriminant, a
+    /// [`KKey::String`](crate::machine::model::KKey) dict key) through `text`, an expression's parts
+    /// or a node's stored bucket key through `slice`, a node a part arm points at through `value`.
+    /// The verbs and their `Copy` guard live on [`BumpAllocator`] itself, so this brand restates
+    /// neither.
     ///
-    /// The bytes land in the region's bump, so they cost region teardown nothing: the bump releases
-    /// its chunks whole and runs no destructor, which is what keeps a string slot `Copy` and the
-    /// value family free of `Drop` glue. The borrow the caller gets back is checked against this
-    /// brand's own `'a`, so no audit and no reach vocabulary enter here — bare bytes reach nothing.
+    /// What the brand adds is *which region*, and that is what a caller has to get right: the bytes
+    /// land in this brand's region, so a value built around them is resident here and nowhere else.
+    /// Storing that value is gated at its own door — [`Self::alloc_string`] re-homes a string's bytes
+    /// itself, so its product is resident by construction; a string already living in another region
+    /// takes [`FoldingBrand::alloc_object_folded`], where the rank-2 brand proves it was bumped at
+    /// the destination. No address probe could stand in for either, because the bump keeps no address
+    /// table and so cannot say which region a `&str` points into.
     ///
-    /// Storing the *value* built around those bytes is gated at its own door. [`Self::alloc_string`]
-    /// re-homes them itself, so its product is resident by construction; a string already living in
-    /// another region takes [`FoldingBrand::alloc_object_folded`], where the rank-2 brand proves it was
-    /// bumped at the destination. No address probe could stand in for either, because the bump keeps no
-    /// address table and so cannot say which region a `&str` points into.
-    pub fn alloc_text(self, text: &str) -> &'a str {
-        self.0.bump_text(text)
-    }
-
-    /// The storage door for a run of `Drop`-free items — an expression's parts, a literal's
-    /// elements, a node's stored bucket key. The bump hands back the whole run as one borrow, so
-    /// region death runs no per-item `Drop` and copying the run to another region is a memcpy.
-    ///
-    /// `T: Copy` is the whole gate: a `Copy` item owns no allocation, so anything it points at is
-    /// already resident wherever it was bumped. What the caller must get right is *which* region —
-    /// the same rule [`Self::alloc_text`] states for a string's bytes.
-    pub fn alloc_slice<T: Copy>(self, items: &[T]) -> &'a [T] {
-        self.0.bump_slice(items)
-    }
-
-    /// The single-value peer of [`Self::alloc_slice`], for a node a part arm points at.
-    pub fn alloc_value<T: Copy>(self, value: T) -> &'a T {
-        self.0.bump_value(value)
-    }
-
-    /// The keyed peer of [`Self::alloc_slice`], for an index whose lookup wants a hash table rather
-    /// than a sorted run and a binary search — a [`DictSubstrate`]'s key→index table is the one such
-    /// index. Buckets and header both land in this brand's region bump, so region death frees the
-    /// table without running its `Drop`; the `Copy` bounds on the key and the value are what make
-    /// that lossless, exactly as they are for a slice's items.
-    pub fn alloc_map<K, V>(self, entries: impl IntoIterator<Item = (K, V)>) -> &'a BumpMap<'a, K, V>
-    where
-        K: Copy + Eq + std::hash::Hash,
-        V: Copy,
-    {
-        self.0.bump_map(entries)
-    }
-
-    /// This brand's region bump as an allocator, for a table that keeps **mutating** after it is
-    /// built — where [`Self::alloc_map`] freezes at construction. A scope's binding tables are the
-    /// users: they gain and overwrite entries for as long as their scope is open, so no
-    /// frozen-at-construction door fits them.
-    ///
-    /// The `Copy` bounds the other doors carry cannot ride the allocator, so what a collection over
-    /// it stores has to prove itself glue-free at its own declaration — see
-    /// [`Bindings`](crate::machine::core::bindings::Bindings), which asserts exactly that where each
-    /// table is built.
+    /// A **collection** built over the same allocator's raw seam — a scope's binding tables, a frozen
+    /// key→value index ([`frozen_table`]) — is where the `Copy` guard stops travelling with the
+    /// bytes, and proves its entries glue-free with a `const` assert at the declaration that names
+    /// their type instead.
     pub(crate) fn allocator(self) -> BumpAllocator<'a> {
         self.0.allocator()
     }
@@ -215,7 +179,7 @@ impl<'a> RegionBrand<'a> {
     /// The cell lands in this brand's own region bump, so its residence is where it was placed,
     /// and it costs region death nothing — an expression's parts are already bump-hosted runs.
     pub(crate) fn alloc_expression(self, expression: ProgramExpression<'a>) -> &'a KObject<'a> {
-        self.alloc_value(KObject::KExpression(expression))
+        self.allocator().value(KObject::KExpression(expression))
     }
 
     /// [`Self::alloc_expression`] bundled as the resident carrier — the quote terminal's one call,
@@ -265,6 +229,60 @@ impl<'a> RegionBrand<'a> {
     }
 }
 
+/// A table whose bucket array lives in a region's bump. `hashbrown` rather than
+/// `std::collections::HashMap` for the custom-allocator seam, which std has no stable equivalent
+/// of; the hash function and probe cost are the same either way, since std's map *is* a hashbrown
+/// table. Both bump-backed table shapes are this alias: a scope's live binding tables
+/// ([`bump_table`](super::bindings::bump_table)), which keep gaining entries, and the
+/// frozen-at-construction indexes [`frozen_table`] builds.
+pub(crate) type BumpBackedMap<'a, K, V> =
+    hashbrown::HashMap<K, V, hashbrown::DefaultHashBuilder, BumpAllocator<'a>>;
+
+/// Build a **frozen** key→value table over a region's bump and place its header there too — the
+/// shape a value's keyed index takes when a sorted run and a binary search will not do (a module's
+/// member tables, a dict substrate's key→slot index).
+///
+/// The `const` block is the no-drop-glue proof for the entries: the bump runs no destructor, so a
+/// `Drop`-bearing key or value would silently leak whatever it owns, and the assert is
+/// monomorphization-checked, so a future entry field that brings glue back is a build error at the
+/// declaration that admitted it. That proof is also what makes the header's own suppressed
+/// destructor lossless — with glue-free entries a `hashbrown` table's `Drop` has nothing to do but
+/// free a bucket array that is bump memory the region releases whole — which is what the
+/// `ManuallyDrop` wrapper declares and what lets the header through
+/// [`BumpAllocator::place`]. The wrapper is deref'd away here, so no holder's type mentions it.
+///
+/// Sized to the iterator's lower bound up front so the fill runs without a rehash: a growth
+/// reallocation would strand the old bucket array in the bump as garbage the region's capacity
+/// figure would then over-report. Duplicate keys resolve last-wins, as [`HashMap::insert`] does.
+/// The returned shared reference **is** the freeze — no mutation is reachable through it.
+///
+/// [`HashMap::insert`]: hashbrown::HashMap::insert
+pub(crate) fn frozen_table<'a, K, V>(
+    allocator: BumpAllocator<'a>,
+    entries: impl IntoIterator<Item = (K, V)>,
+) -> &'a BumpBackedMap<'a, K, V>
+where
+    K: Eq + std::hash::Hash,
+{
+    const {
+        assert!(
+            !std::mem::needs_drop::<K>() && !std::mem::needs_drop::<V>(),
+            "a bump-hosted table's entries must carry no drop glue: the bump runs no destructor",
+        )
+    };
+    let entries = entries.into_iter();
+    let mut table = BumpBackedMap::with_capacity_and_hasher_in(
+        entries.size_hint().0,
+        hashbrown::DefaultHashBuilder::default(),
+        allocator,
+    );
+    table.extend(entries);
+    // Bound rather than returned inline: `place` infers `T` from its argument, and the deref
+    // coercion that strips the wrapper happens at the return.
+    let header = allocator.place(std::mem::ManuallyDrop::new(table));
+    header
+}
+
 /// The allocation capability inside a reach-folding closure: the enclosing combinator
 /// (`transfer_into` / `merge_into` / `project` / [`StepAllocator::alloc_carried_with`])
 /// composes a witness naming every source operand's reach, so a value built *from the closure's
@@ -310,12 +328,12 @@ impl<'a> FoldingBrand<'a> {
     /// with no runtime audit at all.
     ///
     /// The cell lands in the destination's bump, through the fold placement's own
-    /// [`bump`](FoldedPlacement::bump) door: a `KObject` is `Copy`, so region death frees the cell as
-    /// a bump chunk and runs no per-slot glue. The placement is what makes this a *residence* door
-    /// rather than the untargeted [`RegionBrand::alloc_value`] — the brand's `'a` is the fold's own,
-    /// so a value resident somewhere else cannot be written here.
+    /// [`allocator`](FoldedPlacement::allocator): a `KObject` is `Copy`, so region death frees the
+    /// cell as a bump chunk and runs no per-slot glue. The placement is what makes this a *residence*
+    /// door rather than the untargeted [`RegionBrand::allocator`] — the brand's `'a` is the fold's
+    /// own, so a value resident somewhere else cannot be written here.
     pub(crate) fn alloc_object_folded(self, o: KObject<'a>) -> &'a KObject<'a> {
-        self.placement.bump().value(o)
+        self.placement.allocator().value(o)
     }
 
     /// Store a [`Module`] built at this fold's own brand — the door the module store folds
@@ -333,7 +351,7 @@ impl<'a> FoldingBrand<'a> {
     /// [`Module::assemble`](crate::machine::model::Module), so region death frees the whole value as
     /// a chunk and runs no per-slot glue.
     pub(crate) fn alloc_module_folded(self, m: Module<'a>) -> &'a Module<'a> {
-        self.placement.bump().value(m)
+        self.placement.allocator().value(m)
     }
 
     /// Store a container substrate built at this fold's own brand — the container door, generic over
@@ -341,13 +359,14 @@ impl<'a> FoldingBrand<'a> {
     /// fold-brand argument as [`Self::alloc_object_folded`]: `substrate` is typed at the brand
     /// lifetime, so an ambient-lifetime capture is a compile error at this signature, discharging the
     /// store's residence obligation at compile time. A substrate is `Copy` in every arm — its index
-    /// is a bump-hosted name slice or a [`BumpMap`], its cells a [`Sectioned`] run — so it takes the
+    /// is a bump-hosted name slice or a frozen bump-backed table, its cells a [`Sectioned`] run — so
+    /// it takes the
     /// same bump door as [`Self::alloc_object_folded`] and costs region death nothing.
     pub(crate) fn alloc_substrate_folded<C: Copy>(
         self,
         substrate: ContainerSubstrate<'a, C>,
     ) -> &'a ContainerSubstrate<'a, C> {
-        self.placement.bump().value(substrate)
+        self.placement.allocator().value(substrate)
     }
 
     /// Store one container cell at this fold's own brand, handing back the resident `&'a Held<'a>`
@@ -359,7 +378,7 @@ impl<'a> FoldingBrand<'a> {
     /// at, so one pin covers a projected cell and its reach together. A `Held` is `Copy`, so the cell
     /// takes the same bump door as [`Self::alloc_object_folded`].
     pub(crate) fn alloc_cell_folded(self, cell: Held<'a>) -> &'a Held<'a> {
-        self.placement.bump().value(cell)
+        self.placement.allocator().value(cell)
     }
 
     /// This brand as a [`SubstrateDoor`] over `holder` — the coverage the enclosing fold's operand
@@ -472,7 +491,7 @@ pub(crate) trait KoanRegionExt {
     ///
     /// The fold brand rather than a bare [`RegionBrand`] because a region-pure leaf is no longer
     /// necessarily `'static`: a string literal's bytes are bumped into this same region
-    /// ([`RegionBrand::alloc_text`]), so the value is region-self-referential and only
+    /// ([`RegionBrand::allocator`]), so the value is region-self-referential and only
     /// [`alloc_object_folded`](FoldingBrand::alloc_object_folded)'s rank-2 argument admits it. With no
     /// deps the fold composes nothing, so the product's reach is exactly what it was: this region and
     /// no member.

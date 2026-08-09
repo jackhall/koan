@@ -67,7 +67,7 @@ pub(super) fn keyword_expr<'a>(program: &'a ProgramStorage, name: &str) -> Worki
     WorkingExpression::new(
         brand,
         vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Keyword(
-            brand.alloc_text(name),
+            brand.allocator().text(name),
         )))],
     )
 }
@@ -79,9 +79,9 @@ pub(super) fn let_ast<'a>(program: &'a ProgramStorage, name: &str, value: f64) -
     KExpression::new(
         brand,
         vec![
-            Spanned::bare(ExpressionPart::Keyword(brand.alloc_text("LET"))),
-            Spanned::bare(ExpressionPart::Identifier(brand.alloc_text(name))),
-            Spanned::bare(ExpressionPart::Keyword(brand.alloc_text("="))),
+            Spanned::bare(ExpressionPart::Keyword(brand.allocator().text("LET"))),
+            Spanned::bare(ExpressionPart::Identifier(brand.allocator().text(name))),
+            Spanned::bare(ExpressionPart::Keyword(brand.allocator().text("="))),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(value))),
         ],
     )

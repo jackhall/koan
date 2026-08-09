@@ -86,7 +86,7 @@ impl<'a> KFunction<'a> {
     /// program-storage AST part — because [`ExpressionSignature::mint`] re-homes every name at that
     /// same brand before the value is assembled.
     ///
-    /// The store is [`RegionBrand::alloc_value`]: a `KFunction` is `Copy`, so it lands in the region
+    /// The store is the plain bump verb off [`RegionBrand::allocator`]: a `KFunction` is `Copy`, so it lands in the region
     /// bump and region death frees it as a chunk with no destructor pass
     /// ([value-substrates.md § Untyped arenas](../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
     /// Nothing is erased and re-anchored on the way in, so no residence audit stands behind this door:
@@ -102,7 +102,7 @@ impl<'a> KFunction<'a> {
         let brand = captured.brand();
         let signature = ExpressionSignature::mint(brand, draft);
         let value_ktype = function_value_ktype(&signature, types);
-        brand.alloc_value(KFunction {
+        brand.allocator().value(KFunction {
             signature,
             body,
             captured,
@@ -240,7 +240,7 @@ impl<'a> KFunction<'a> {
         for el in self.signature.elements() {
             match el {
                 SignatureElement::Keyword(s) => parts.push(Spanned::bare(WorkingPart::Ast(
-                    ExpressionPart::Keyword(brand.alloc_text(s)),
+                    ExpressionPart::Keyword(brand.allocator().text(s)),
                 ))),
                 SignatureElement::Argument(a) => match pairs.take(a.name) {
                     Some(v) => parts.push(Spanned::bare(WorkingPart::Ast(v))),

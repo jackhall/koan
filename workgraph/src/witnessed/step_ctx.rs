@@ -272,7 +272,7 @@ where
         let mut grown = Vec::with_capacity(views.len() + 1);
         grown.extend_from_slice(views);
         grown.push(view);
-        (region, placement.bump().slice(&grown))
+        (region, placement.allocator().slice(&grown))
     }
 }
 

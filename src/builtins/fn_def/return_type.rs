@@ -136,7 +136,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(name) => {
-            let te = TypeIdentifier::leaf(scope.brand().alloc_text(&name));
+            let te = TypeIdentifier::leaf(scope.brand().allocator().text(&name));
             resolve_at_wake(scope, "FN return-type slot", |s| {
                 s.resolve_type_identifier(&te, None, types)
             })

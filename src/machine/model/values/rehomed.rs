@@ -36,7 +36,9 @@ impl<'a> Rehomed<'a> {
     /// cell's `deep_clone` cost at these same sites before strings moved into the region.
     pub(crate) fn mint(door: SubstrateDoor<'a, '_>, cell: Held<'a>) -> Self {
         Rehomed(match cell {
-            Held::Object(KObject::KString(s)) => Held::Object(KObject::KString(door.alloc_text(s))),
+            Held::Object(KObject::KString(s)) => {
+                Held::Object(KObject::KString(door.allocator().text(s)))
+            }
             other => other,
         })
     }

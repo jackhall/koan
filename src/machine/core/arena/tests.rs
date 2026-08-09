@@ -412,7 +412,7 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
             let mut grown = Vec::with_capacity(cells.len() + 1);
             grown.extend_from_slice(cells);
             grown.push(Held::from_carried(dep));
-            (region, placement.bump().slice(&grown))
+            (region, placement.allocator().slice(&grown))
         },
     );
     let acc2 = dep_b.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
@@ -422,7 +422,7 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
             let mut grown = Vec::with_capacity(cells.len() + 1);
             grown.extend_from_slice(cells);
             grown.push(Held::from_carried(dep));
-            (region, placement.bump().slice(&grown))
+            (region, placement.allocator().slice(&grown))
         },
     );
     // Allocate the list node from the carried dest region; the cells ride borrows into both foreign
@@ -920,7 +920,7 @@ fn raw_expression_seals_through_the_expression_door() {
         program
             .brand()
             .new_expression(vec![Spanned::bare(ExpressionPart::Identifier(
-                brand.alloc_text("x"),
+                brand.allocator().text("x"),
             ))]);
     let carried = scope.brand().alloc_expression_witnessed(expression);
     let parts = carried.inspect_at(Rc::clone(&storage), |c| match c.object() {
@@ -1007,8 +1007,8 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
     let producer_scope = run_root_bare(producer.storage());
     // The bytes land in `producer`'s bump, so the value genuinely borrows into the region the copy
     // below claims to release.
-    let text =
-        producer_scope.fold_resident_object(|brand| KObject::KString(brand.alloc_text("koan")));
+    let text = producer_scope
+        .fold_resident_object(|brand| KObject::KString(brand.allocator().text("koan")));
     let sealed = producer_scope
         .seal_reaching(Carried::Object(text), producer_scope.mint_born_here(false))
         .unseal();
@@ -1037,7 +1037,7 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
 /// each carrying a string leaf so the bump holds re-homed bytes as well as cells and index metadata,
 /// and with a run of **callables**, whose signatures put a bumped element run and re-homed keyword /
 /// parameter-name bytes in the same region, and with **modules**, whose paths, member-map keys and
-/// `BumpMap` bucket arrays land there too. The region is then dropped while nothing outside it holds
+/// member-table bucket arrays land there too. The region is then dropped while nothing outside it holds
 /// a borrow. No slot in any of those shapes has a destructor to run, so the whole teardown is the
 /// bump's chunk free; Miri's process-exit leak check is the assertion. A family that quietly
 /// reintroduced an owning slot — a `Vec` spine, a `String` name, an `Rc` — leaks its buffer here,
@@ -1064,7 +1064,7 @@ fn region_death_frees_every_drop_free_family() {
             KObject::list_of_held(
                 door,
                 &[
-                    Held::Object(KObject::KString(door.alloc_text("first"))),
+                    Held::Object(KObject::KString(door.allocator().text("first"))),
                     Held::Object(KObject::Number(2.0)),
                 ],
                 &types,
@@ -1075,7 +1075,7 @@ fn region_death_frees_every_drop_free_family() {
             let mut map: HashMap<KKey, Held> = HashMap::new();
             map.insert(
                 KKey::String("key"),
-                Held::Object(KObject::KString(door.alloc_text("value"))),
+                Held::Object(KObject::KString(door.allocator().text("value"))),
             );
             KObject::dict_of_held(door, map, &types)
         }),
@@ -1083,18 +1083,18 @@ fn region_death_frees_every_drop_free_family() {
             let door = brand.with_holder(&owned_cells);
             let fields = Record::from_pairs(vec![(
                 "field".to_string(),
-                Held::Object(KObject::KString(door.alloc_text("payload"))),
+                Held::Object(KObject::KString(door.allocator().text("payload"))),
             )]);
             KObject::record_of_held(door, fields, &types)
         }),
         scope.fold_resident_object(|brand| {
             let door = brand.with_holder(&owned_cells);
-            let inner = KObject::KString(door.alloc_text("tagged"));
+            let inner = KObject::KString(door.allocator().text("tagged"));
             KObject::tagged(door, "Tag", &inner, KType::NULL)
         }),
         scope.fold_resident_object(|brand| {
             let door = brand.with_holder(&owned_cells);
-            let inner = KObject::KString(door.alloc_text("wrapped"));
+            let inner = KObject::KString(door.allocator().text("wrapped"));
             KObject::wrapped_hold(door, &inner, KType::NULL)
         }),
     ];
@@ -1114,9 +1114,9 @@ fn region_death_frees_every_drop_free_family() {
             let draft = SignatureDraft {
                 return_type: ReturnType::Resolved(KType::NULL),
                 elements: vec![
-                    SignatureElement::Keyword(brand.alloc_text(&format!("TAKE_{i}"))),
+                    SignatureElement::Keyword(brand.allocator().text(&format!("TAKE_{i}"))),
                     SignatureElement::Argument(Argument {
-                        name: brand.alloc_text(&format!("operand_{i}")),
+                        name: brand.allocator().text(&format!("operand_{i}")),
                         ktype: KType::NUMBER,
                     }),
                 ],
@@ -1138,7 +1138,7 @@ fn region_death_frees_every_drop_free_family() {
     assert_eq!(callables.len(), 4, "every callable is live in the region");
 
     // A module at a child scope of this region, born through its own door: the path bytes, every
-    // member-map key's bytes and both `BumpMap` bucket arrays land in the same bump. Synthesized
+    // member-map key's bytes and both member tables' bucket arrays land in the same bump. Synthesized
     // names again, for the same reason the callables' are.
     let modules: Vec<&Module<'_>> = (0..2)
         .map(|i| {

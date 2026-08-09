@@ -61,6 +61,7 @@ use crate::machine::core::carrier_witness::{
     GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
 };
 use crate::machine::core::kfunction::NodeId;
+use crate::machine::core::BumpBackedMap;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::RunId;
 use crate::machine::model::CarriedFamily;
@@ -457,13 +458,6 @@ struct Tables<'a> {
     operators: BumpBackedMap<'a, &'a str, OperatorEntry<'a>>,
 }
 
-/// A table whose bucket array lives in the scope's region bump. `hashbrown` rather than
-/// `std::collections::HashMap` for the custom-allocator seam, which std has no stable equivalent
-/// of; the hash function and probe cost are the same either way, since std's map *is* a hashbrown
-/// table.
-pub(in crate::machine::core) type BumpBackedMap<'a, K, V> =
-    hashbrown::HashMap<K, V, hashbrown::DefaultHashBuilder, BumpAllocator<'a>>;
-
 /// One dispatch bucket: the overload slots sharing a key, in a vec whose buffer is bump-backed like
 /// every other table allocation here.
 ///
@@ -710,11 +704,11 @@ impl<'a> Bindings<'a> {
         // once per subset entry; the byte cost is bounded by the group's own powerset, which is
         // small, and cross-call sharing would cost an intern table to save it.
         tables.operators.insert(
-            self.brand.alloc_text(&probe),
+            self.brand.allocator().text(&probe),
             OperatorEntry {
                 index,
                 address: seal.address,
-                declaration: self.brand.alloc_text(&seal.declaration),
+                declaration: self.brand.allocator().text(&seal.declaration),
                 sealed: seal.sealed.duplicate(),
             },
         );
@@ -931,7 +925,7 @@ impl<'a> Bindings<'a> {
             None => {
                 tables
                     .types
-                    .insert(self.brand.alloc_text(name), TypeSlot::Bound(kt, site));
+                    .insert(self.brand.allocator().text(name), TypeSlot::Bound(kt, site));
             }
         }
         Ok(())
@@ -977,7 +971,7 @@ impl<'a> Bindings<'a> {
                 None => {
                     tables
                         .data
-                        .insert(self.brand.alloc_text(name), ValueSlot::Pending(claim));
+                        .insert(self.brand.allocator().text(name), ValueSlot::Pending(claim));
                     Ok(())
                 }
             },
@@ -996,7 +990,7 @@ impl<'a> Bindings<'a> {
                 None => {
                     tables
                         .types
-                        .insert(self.brand.alloc_text(name), TypeSlot::Pending(claim));
+                        .insert(self.brand.allocator().text(name), TypeSlot::Pending(claim));
                     Ok(())
                 }
             },
@@ -1173,7 +1167,7 @@ impl<'a> Bindings<'a> {
             }
             None => {
                 tables.data.insert(
-                    self.brand.alloc_text(name),
+                    self.brand.allocator().text(name),
                     ValueSlot::Bound(DataEntry { index, sealed }),
                 );
             }
@@ -1223,7 +1217,7 @@ impl<'a> Bindings<'a> {
         let entry = FunctionBucketEntry {
             index,
             token: seal.token.store_in(self.brand),
-            summary: self.brand.alloc_text(&seal.summary),
+            summary: self.brand.allocator().text(&seal.summary),
             sealed: seal.sealed,
         };
         // The claim this write finalizes, if the binder made one; a builtin seed, a direct

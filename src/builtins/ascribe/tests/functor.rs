@@ -81,7 +81,7 @@ fn functor_application_is_generative() {
 ///
 /// Miri audit-slate: this is the opaque shape of the escaping-module retention discipline. Each view
 /// is born inside its call's own region carrying every byte it names — its path, both member maps'
-/// keys, and their `BumpMap` bucket arrays — and every read below happens after that frame is gone,
+/// keys, and their member tables' bucket arrays — and every read below happens after that frame is gone,
 /// probing each map by content with a `&str` built at the read site rather than the key the draft was
 /// assembled from. A release claim that freed the call's region would free the very storage those
 /// reads walk, which only tree borrows observes: a normal build reads the freed bytes back intact.

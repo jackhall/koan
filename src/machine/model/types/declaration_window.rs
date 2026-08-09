@@ -160,22 +160,22 @@ impl<'a> AnnouncedWindow<'a> {
             .members
             .iter()
             .map(|(name, owner)| AnnouncedMember {
-                name: brand.alloc_text(name),
-                owner: owner.as_deref().map(|o| brand.alloc_text(o)),
+                name: brand.allocator().text(name),
+                owner: owner.as_deref().map(|o| brand.allocator().text(o)),
             })
             .collect();
         let binders: Vec<AnnouncedBinder<'a>> = data
             .binders
             .iter()
             .map(|(name, owned)| AnnouncedBinder {
-                name: brand.alloc_text(name),
-                members: brand.alloc_slice(owned),
+                name: brand.allocator().text(name),
+                members: brand.allocator().slice(owned),
             })
             .collect();
         AnnouncedWindow {
-            members: brand.alloc_slice(&members),
-            binders: brand.alloc_slice(&binders),
-            fills: Cell::new(brand.alloc_slice(&vec![None; data.members.len()])),
+            members: brand.allocator().slice(&members),
+            binders: brand.allocator().slice(&binders),
+            fills: Cell::new(brand.allocator().slice(&vec![None; data.members.len()])),
             sealed: Cell::new(None),
         }
     }
@@ -264,7 +264,7 @@ impl<'a> AnnouncedWindow<'a> {
     ) -> Option<&'a SealedAnnounced<'a>> {
         let mut fills: Vec<Option<KType>> = self.fills.get().to_vec();
         fills[index] = Some(repr);
-        self.fills.set(brand.alloc_slice(&fills));
+        self.fills.set(brand.allocator().slice(&fills));
         if let Some(sealed) = self.sealed.get() {
             return Some(sealed);
         }
@@ -298,9 +298,9 @@ impl<'a> AnnouncedWindow<'a> {
             .zip(self.binders.iter())
             .map(|((_, kt), binder)| (binder.name, *kt))
             .collect();
-        let sealed = brand.alloc_value(SealedAnnounced {
-            members: brand.alloc_slice(&group.members),
-            binder_types: brand.alloc_slice(&binder_types),
+        let sealed = brand.allocator().value(SealedAnnounced {
+            members: brand.allocator().slice(&group.members),
+            binder_types: brand.allocator().slice(&binder_types),
         });
         self.sealed.set(Some(sealed));
         Some(sealed)

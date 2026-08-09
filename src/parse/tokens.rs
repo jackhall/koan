@@ -90,7 +90,9 @@ fn classify_atom<'a>(
         return Ok(part);
     }
     if is_keyword_token(tok) {
-        return Ok(ExpressionPart::Keyword(brand.region().alloc_text(tok)));
+        return Ok(ExpressionPart::Keyword(
+            brand.region().allocator().text(tok),
+        ));
     }
     if is_type_name(tok) {
         if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric()) {
@@ -103,7 +105,7 @@ fn classify_atom<'a>(
             ));
         }
         return Ok(ExpressionPart::Type(TypeIdentifier::leaf(
-            brand.region().alloc_text(tok),
+            brand.region().allocator().text(tok),
         )));
     }
     if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
@@ -128,7 +130,9 @@ fn classify_atom<'a>(
             Some(token_span),
         ));
     }
-    Ok(ExpressionPart::Identifier(brand.region().alloc_text(tok)))
+    Ok(ExpressionPart::Identifier(
+        brand.region().allocator().text(tok),
+    ))
 }
 
 /// The lexical Type-token classifier: first char ASCII-uppercase plus at least one

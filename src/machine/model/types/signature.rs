@@ -151,11 +151,11 @@ pub fn store_untyped_key<'a>(brand: RegionBrand<'a>, key: &UntypedKey) -> &'a [S
     let elements: Vec<StoredElement<'a>> = key
         .iter()
         .map(|element| match element {
-            UntypedElement::Keyword(text) => StoredElement::Keyword(brand.alloc_text(text)),
+            UntypedElement::Keyword(text) => StoredElement::Keyword(brand.allocator().text(text)),
             UntypedElement::Slot => StoredElement::Slot,
         })
         .collect();
-    brand.alloc_slice(&elements)
+    brand.allocator().slice(&elements)
 }
 
 /// [`store_untyped_key`] from a run already stored **somewhere else** — a bulk install replaying a
@@ -168,11 +168,11 @@ pub fn restore_stored_key<'a>(
     let elements: Vec<StoredElement<'a>> = key
         .iter()
         .map(|element| match element {
-            StoredElement::Keyword(text) => StoredElement::Keyword(brand.alloc_text(text)),
+            StoredElement::Keyword(text) => StoredElement::Keyword(brand.allocator().text(text)),
             StoredElement::Slot => StoredElement::Slot,
         })
         .collect();
-    brand.alloc_slice(&elements)
+    brand.allocator().slice(&elements)
 }
 
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
@@ -219,12 +219,12 @@ impl DispatchToken {
             .iter()
             .map(|element| match element {
                 DispatchTokenElement::Keyword(text) => {
-                    StoredDispatchTokenElement::Keyword(brand.alloc_text(text))
+                    StoredDispatchTokenElement::Keyword(brand.allocator().text(text))
                 }
                 DispatchTokenElement::Slot(kt) => StoredDispatchTokenElement::Slot(*kt),
             })
             .collect();
-        brand.alloc_slice(&elements)
+        brand.allocator().slice(&elements)
     }
 
     /// The duplicate-overload predicate against a stored run — element-wise, so the incoming owned
@@ -457,7 +457,7 @@ impl<'a> ExpressionSignature<'a> {
     /// registered token is uppercased so the bucket key matches what dispatch computes from incoming
     /// expressions. TODO(monadic-effects): emit a warning instead of silently rewriting once effects
     /// exist — rejecting would lose the "drop in a builtin without thinking about caps" affordance.
-    /// And every name is **re-homed** through [`RegionBrand::alloc_text`], including a `&'static`
+    /// And every name is **re-homed** through [`RegionBrand::allocator`], including a `&'static`
     /// builtin literal, so "a signature's text lives in the signature's own region" holds with no
     /// exceptions and a draft is free to name text borrowed from anywhere at `'a`.
     pub fn mint(brand: RegionBrand<'a>, draft: SignatureDraft<'a>) -> Self {
@@ -466,17 +466,17 @@ impl<'a> ExpressionSignature<'a> {
             .into_iter()
             .map(|element| match element {
                 SignatureElement::Keyword(s) => {
-                    SignatureElement::Keyword(brand.alloc_text(&normalized_keyword(s)))
+                    SignatureElement::Keyword(brand.allocator().text(&normalized_keyword(s)))
                 }
                 SignatureElement::Argument(argument) => SignatureElement::Argument(Argument {
-                    name: brand.alloc_text(argument.name),
+                    name: brand.allocator().text(argument.name),
                     ktype: argument.ktype,
                 }),
             })
             .collect();
         ExpressionSignature {
             return_type: draft.return_type,
-            elements: brand.alloc_slice(&elements),
+            elements: brand.allocator().slice(&elements),
         }
     }
 

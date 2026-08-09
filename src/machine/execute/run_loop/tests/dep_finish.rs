@@ -39,9 +39,9 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
                 )))
             }
         };
-        let allocated = _sched
-            .current_scope()
-            .fold_resident_object(|brand| KObject::KString(brand.alloc_text(&format!("{a}+{b}"))));
+        let allocated = _sched.current_scope().fold_resident_object(|brand| {
+            KObject::KString(brand.allocator().text(&format!("{a}+{b}")))
+        });
         Outcome::done_resident(_sched.current_scope(), Carried::Object(allocated))
     });
     let mut deps = crate::scheduler::ResolvedDeps::new();
