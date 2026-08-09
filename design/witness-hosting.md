@@ -129,9 +129,12 @@ hold any witness state — the pins live one level down, in the library's region
 - **Binding entries are `Copy` and `Drop`-free.** Both binding tables store one
   `Sealed`-shaped carrier beside a `BindingIndex` —
   `data: name → (BindingIndex, Sealed<CarriedFamily>)` and
-  `functions: key → Vec<(BindingIndex, Sealed<KFunctionFamily>)>` — so a value is
+  `functions: key → [(BindingIndex, Sealed<KFunctionFamily>)]` — so a value is
   never separated from the reach that proves it. An entry owns no pins; its liveness
-  is the region's union bundle.
+  is the region's union bundle. The tables themselves live in the scope's region
+  bump, keys and entry payloads alike, and the `Drop`-freedom is a compile-time
+  assert where each is declared
+  ([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)).
 - **The scope holds no pin state at all.** Binding a value mints its description
   into the scope's region and unions its pins into that **region's** own deduped
   bundle, applying the self rule before insertion. The region carries one pin per

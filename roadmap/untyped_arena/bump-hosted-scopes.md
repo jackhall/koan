@@ -16,10 +16,16 @@ retype. The bump needs none of that: the allocator is lifetime-free, so a
 bumped value is born at `'a` and holds `&'a` into its own region with no
 erasure and no retype
 ([workgraph/src/witnessed/region.rs](../../workgraph/src/witnessed/region.rs)).
-What keeps `Scope` out of the bump is its `Drop`: the binding tables (their own
-item), the per-scope `region_owner: Weak<FrameStorage>` field — a per-scope
-copy of the fact the region already stores as its `host` back-link — the
-root-only `Box<dyn Write>` writer, and the `String` payloads riding `ScopeKind`.
+What keeps `Scope` out of the bump is its remaining `Drop`: the per-scope
+`region_owner: Weak<FrameStorage>` field — a per-scope copy of the fact the
+region already stores as its `host` back-link — the root-only `Box<dyn Write>`
+writer, and the `ScopeKind` payloads, which carry an owned `String` name and, on
+the SIG arm, a bump-backed slot collector whose own map destructor is left to run
+even though it frees nothing. The binding tables themselves are already
+`Drop`-free — every table is a `hashbrown` map over the region's `BumpAllocator`
+with bumped keys and bumped entry payloads, and `Bindings` asserts at compile
+time that it contributes no glue at all
+([src/machine/core/bindings.rs](../../src/machine/core/bindings.rs)).
 
 **Acceptance criteria.**
 
@@ -35,8 +41,9 @@ root-only `Box<dyn Write>` writer, and the `String` payloads riding `ScopeKind`.
   region's own host back-link.
 - The root writer lives beside the run-root storage, not on `Scope`;
   `write_out` reaches it through the region owner.
-- No `ScopeKind` payload owns heap data: kind names are bumped `&str`, the SIG
-  slot collector is a bump-backed table, and no `Rc` rides a kind.
+- No `ScopeKind` payload owns heap data or runs a destructor: kind names are
+  bumped `&str`, the SIG slot collector's vacuous map teardown is suppressed the
+  way `Bindings`' is, and no `Rc` rides a kind.
 - `FamilyArena`, `Stored`, `FamilyList`, `StorageOf`,
   `StorageProfile::Families`, and `alloc_resident`'s typed path are deleted
   from workgraph; `typed-arena` leaves `workgraph/Cargo.toml`.
@@ -52,7 +59,8 @@ root-only `Box<dyn Write>` writer, and the `String` payloads riding `ScopeKind`.
 
 - *Structural `Drop`-freedom — decided.* Composition over audit: `Scope` is
   built from `Copy` fields, `Cell`s, and element-`Copy` bump tables (the
-  [`BumpMap`](../../workgraph/src/witnessed/bump.rs) discipline), so the
+  [`BumpMap`/`BumpAllocator`](../../workgraph/src/witnessed/bump.rs)
+  no-drop-glue discipline), so the
   forgone destructor would have freed only bump bytes — no unsafe
   "trust me, it's `Drop`-free" marker tier is introduced.
 - *Writer home — decided.* The run-root storage side owns the root writer.
@@ -67,9 +75,7 @@ root-only `Box<dyn Write>` writer, and the `String` payloads riding `ScopeKind`.
 
 ## Dependencies
 
-**Requires:**
-
-- [Bump-backed binding tables](bump-backed-bindings.md) — the tables must shed
-  their `Drop` before `Scope` can skip its destructor.
+**Requires:** none — the binding tables already shed their `Drop`
+([src/machine/core/bindings.rs](../../src/machine/core/bindings.rs)).
 
 **Unblocks:** none tracked yet.

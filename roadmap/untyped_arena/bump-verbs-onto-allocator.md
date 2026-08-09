@@ -10,9 +10,10 @@ and koan's `RegionBrand::alloc_text` / `alloc_slice` / `alloc_value`
 `BumpMap` door is duplicated the same way (`Region::bump_map`,
 `RegionHandle::bump_map`, `RegionBrand::alloc_map`). Every layer restates the
 same `T: Copy` bounds and the same doc rationale, and each addition to the verb
-set multiplies across all four. `BumpAllocator` (shipped by the binding-tables
-item) is the natural single home: a `Copy`, brand-confined handle every one of
-those surfaces can mint.
+set multiplies across all four. `BumpAllocator`
+([workgraph/src/witnessed/bump.rs](../../workgraph/src/witnessed/bump.rs)) is the
+natural single home: a `Copy`, brand-confined handle every one of those surfaces
+can mint, already carrying the region's brand as its own lifetime.
 
 **Acceptance criteria.**
 
@@ -33,10 +34,9 @@ those surfaces can mint.
 
 **Directions.**
 
-- Verb home — decided per the fork discussion recorded in
-  [bump-backed-bindings](bump-backed-bindings.md) planning: methods on
-  `BumpAllocator` with `T: Copy` bounds; the trait impl itself cannot express
-  the Drop-free guard, so the verbs move rather than disappear.
+- Verb home — decided. Methods on `BumpAllocator` with `T: Copy` bounds; the
+  trait impl itself cannot express the Drop-free guard, so the verbs move rather
+  than disappear.
 - Frozen-table replacement — open. Either former `BumpMap` users hold plain
   hashbrown maps with a shared const-assert construction helper (recommended:
   no wrapper to maintain), or a thin read-only veneer preserves the
@@ -44,9 +44,8 @@ those surfaces can mint.
 
 ## Dependencies
 
-**Requires:**
-
-- [Bump-backed binding tables](bump-backed-bindings.md) — ships
-  `BumpAllocator` and the no-drop-glue assert discipline this item spreads.
+**Requires:** none — the `BumpAllocator` seam the verbs collapse onto is shipped,
+alongside the no-drop-glue assert discipline this item spreads
+([src/machine/core/bindings.rs](../../src/machine/core/bindings.rs)).
 
 **Unblocks:** none — leaf.

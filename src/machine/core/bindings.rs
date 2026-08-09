@@ -28,7 +28,7 @@
 //! entry carries alike — so dropping a table frees nothing and runs no per-entry glue, and frame
 //! death walks O(scopes) rather than O(entries). [`bump_table`] carries the compile-time proof that
 //! no entry brings drop glue with it; the write verbs re-home what they store through the brand
-//! [`Bindings`] holds. Nothing about the lookup changes: the probe is the same O(1) hash.
+//! [`Bindings`] holds. A lookup is an O(1) hash probe either way — bump-backing costs it nothing.
 //!
 //! Every entry carries a [`BindingIndex`] naming its installing statement's lexical
 //! position, gated by the strict cutoff `idx < c`, so a forward reference (a
@@ -1090,9 +1090,18 @@ impl<'a> Bindings<'a> {
         }
         let mut tables = self.tables.borrow_mut();
         for (key, slots) in functions {
-            // The key is re-homed into *this* table's region: `'a` covers both regions, but the
-            // source's can die first, and a table pointing into a dead region is what re-homing
-            // rules out.
+            // The key is re-homed into *this* table's region, matching the value replay above —
+            // `write_value` re-homes its name through the brand, so both tables end up keyed on
+            // bytes the target owns. It buys no independence from the source region and is not
+            // trying to: everything else a replayed entry carries — the sealed carrier, the
+            // dispatch token, the summary — stays a borrow into the source, which is sound for the
+            // reason stated at the snapshot above, and is why re-homing the key is symmetry rather
+            // than a guard. The relation is held by **retention, not by `'a`**: `'a` covers both
+            // regions and orders neither, but the view module escaping
+            // [`Scope::alloc_module_view`](crate::machine::core::Scope) composes the source
+            // module's reach into its own region, so the source is pinned for as long as the view
+            // is reachable at all. A read of these bytes past the source's death is therefore
+            // unrepresentable rather than merely unobserved.
             match tables.functions.get_mut(key) {
                 Some(bucket) => bucket.extend(slots),
                 None => {

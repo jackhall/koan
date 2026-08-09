@@ -388,10 +388,10 @@ bytes and alignment, with no per-slot type or destructor bookkeeping, which is
 exactly what Drop-freedom licenses. Region death for those bytes is
 deallocation with no per-slot `Drop` glue: free the arena's chunks, done.
 
-The typed residue is **one family** — `Scope`, which owns its bindings — plus
-the region's own bookkeeping (the interned reach side table, the union pin
-bundle). The residue is a holdover, not a design commitment: its retirement is
-tracked in [§ Open work](#open-work). Everything in the value channel is in the
+The typed residue is **one family** — `Scope` itself — plus the region's own
+bookkeeping (the interned reach side table, the union pin bundle). The residue is
+a holdover, not a design commitment: its retirement is tracked in
+[§ Open work](#open-work). Everything in the value channel is in the
 bump: the `KObject` and `Held` cells, all four container substrates, their index
 metadata, the strings, the expression parts — the `KFunction` family, whose
 signature is a bumped run of elements with `&str` names re-homed into the
@@ -411,17 +411,41 @@ proxy. The one primitive whose stored value is not itself `Copy` — the
 module's two member tables take —
 moves the bound onto the table's *elements* and allocates the buckets in the same
 bump, so the destructor it forgoes would have freed only bytes region death frees
-anyway. A family that reintroduced an owning slot would not fail loudly: it would
+anyway. A table that keeps **mutating** after it is built reaches the same storage
+through [`BumpAllocator`](../workgraph/src/witnessed/bump.rs), the region's bump as
+an `allocator-api2` allocator: the `Copy` bound cannot travel through the trait, so
+the embedder restates it as a `const { assert!(!needs_drop::<…>()) }` where its own
+element types are named. Deallocation through that seam is a no-op, so it suits a
+collection whose churn is bounded — geometric growth and in-place slot reuse — and
+not one that frees in a loop. A family that reintroduced an owning slot would not fail loudly: it would
 read and write correctly and simply never free, which is why the claim is pinned
 by a Miri leak test rather than by an assertion
 ([§ Invariants preserved](#invariants-preserved)).
 
-A scope's binding tables are **not** in that residue. Each carrier-holding table —
-`data`, `functions`, and the operator registry — stores an entry that is a
-`BindingIndex` beside a resting `Sealed` carrier, both `Copy` and `Drop`-free:
-the pins keeping the entry's reach alive live one level down, in the region's own
+A scope's binding tables are **not** in that residue: they are in the bump too,
+storage and contents alike
+([`Bindings`](../src/machine/core/bindings.rs)). Each of the five — `types`,
+`data`, `functions`, the operator registry, and a SIG body's slot collector — is a
+`hashbrown` map built over its scope's own `BumpAllocator`, so its bucket array
+lands in the region's chunks; a name key is a bumped `&str`, a dispatch bucket key
+is a bumped run of elements, an overload bucket is a vec over the same allocator,
+and the entry payloads that used to own heap — the overload summary, the operator
+declaration, the dispatch token — are bumped text and bumped `Copy` runs. What
+that buys is stated as a compile-time fact rather than a claim: `Bindings` carries
+no drop glue at all, asserted where it is declared, so dropping a table frees
+nothing, runs no per-entry glue, and frame death walks O(scopes) rather than
+O(entries). Each table's construction door repeats the assert over its own key and
+value types, so an entry field that brought a destructor back would be a build
+error at the declaration that admitted it rather than a silent leak.
+
+The pins keeping an entry's reach alive live one level down, in the region's own
 union bundle, which drops whole at region death
-([reach.md § The pin bundle](../workgraph/design/reach.md#the-pin-bundle)).
+([reach.md § The pin bundle](../workgraph/design/reach.md#the-pin-bundle)) — an
+entry is a `BindingIndex` beside a resting `Sealed` carrier, both `Copy`. Dead
+bump bytes come from two bounded sources: a table's geometric resize abandons its
+old bucket array, and the error-path purge of a failed binder's claims strands the
+keys it removes. Every success path overwrites its claim where it sits, so a
+table's peak occupancy is its final binding count plus that error tail.
 
 Expression parts are not in it either, for the same reason. Both node families —
 the raw AST [`KExpression`](../src/machine/model/ast.rs) and the scheduler's
@@ -514,9 +538,6 @@ left:
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
   — pricing copying-the-survivors-out against transferring-the-region, the
   local decision the cost seam's two numbers already support.
-- [Bump-backed binding tables](../roadmap/untyped_arena/bump-backed-bindings.md)
-  — `allocator-api2` tables with bumped keys and bumped entry payloads make a
-  scope's tables `Drop`-free.
 - [Scopes move into the region bump](../roadmap/untyped_arena/bump-hosted-scopes.md)
   — the last typed family becomes a structurally `Drop`-free bump resident,
   deleting workgraph's typed-storage machinery, the `typed-arena` dependency,
