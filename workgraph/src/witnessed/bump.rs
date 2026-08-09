@@ -32,9 +32,12 @@
 //! enclosing fold engine ([`StepContext::alloc_with`](super::StepContext::alloc_with)), which is
 //! where cross-region reach ownership already flows; the door composes *within* the brand.
 
+use std::alloc::Layout;
 use std::hash::Hash;
 use std::ptr;
+use std::ptr::NonNull;
 
+use allocator_api2::alloc::{AllocError, Allocator};
 use bumpalo::Bump;
 use hashbrown::{DefaultHashBuilder, HashMap};
 
@@ -143,6 +146,86 @@ impl<'b, W: StorageProfile> BumpPlacement<'b, W> {
     /// say so.
     pub fn text(self, text: &str) -> &'b str {
         self.handle.region().bump_text(text)
+    }
+}
+
+/// The region's bump as an [`Allocator`] — the seam a **mutable** collection is built over, so its
+/// backing allocation lands in the region's own chunks instead of the global heap.
+///
+/// `Copy`, and the field is private, so [`RegionHandle::allocator`] is the only mint and `'b` stays
+/// the region's own brand: a collection built over one cannot outlive the region whose bytes it
+/// holds. What licenses handing the raw allocator out at all is that a `Bump` releases its chunks
+/// whole and [`Region::bump_capacity`] prices every byte taken through it, counted door or not — so
+/// an off-door allocation is still an honestly-reported one. Deallocation is a **no-op**: a
+/// collection that shrinks or rehashes abandons its old allocation as dead bump bytes, which is why
+/// this seam suits a table whose churn is bounded (geometric growth, in-place slot reuse) and not
+/// one that frees in a loop.
+///
+/// The trait says nothing about destructors, so the `T: Copy` guard the [`BumpPlacement`] verbs
+/// carry cannot ride here — an element stored through a collection over this allocator is never
+/// dropped, and it is the **embedder's own declaration site** that has to hold the line (a
+/// `const { assert!(!needs_drop::<T>()) }` where the collection's element type is named).
+pub struct BumpAllocator<'b>(&'b Bump);
+
+// Manual impls, for [`BumpPlacement`]'s reason: `Copy` grants nothing new, since the handle names
+// no more than the `&'b Bump` it wraps and `'b` already bounds every use.
+impl Clone for BumpAllocator<'_> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl Copy for BumpAllocator<'_> {}
+
+/// Every method forwards to `&Bump`'s own [`Allocator`] impl rather than leaning on the trait's
+/// defaults: bumpalo's `grow` extends the newest chunk in place when the allocation is the last one
+/// out, which the default (allocate-copy-deallocate) would give up. The safety obligation on each
+/// method is discharged by the delegate, which receives exactly the arguments this one was given.
+unsafe impl Allocator for BumpAllocator<'_> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        Allocator::allocate(&self.0, layout)
+    }
+
+    fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        Allocator::allocate_zeroed(&self.0, layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        Allocator::deallocate(&self.0, ptr, layout)
+    }
+
+    unsafe fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        Allocator::grow(&self.0, ptr, old_layout, new_layout)
+    }
+
+    unsafe fn grow_zeroed(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        Allocator::grow_zeroed(&self.0, ptr, old_layout, new_layout)
+    }
+
+    unsafe fn shrink(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        Allocator::shrink(&self.0, ptr, old_layout, new_layout)
+    }
+}
+
+impl<'b> BumpAllocator<'b> {
+    /// Wrap `bump` — crate-internal, so [`RegionHandle::allocator`] is the only way an embedder
+    /// reaches one and no caller can pair the allocator with a bump that is not a region's.
+    pub(crate) fn over(bump: &'b Bump) -> Self {
+        BumpAllocator(bump)
     }
 }
 

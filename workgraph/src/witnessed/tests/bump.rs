@@ -9,6 +9,9 @@
 use std::ptr;
 use std::rc::Rc;
 
+use allocator_api2::vec::Vec as BumpVec;
+use hashbrown::{DefaultHashBuilder, HashMap};
+
 use super::super::*;
 
 /// The profile the bump slate runs over: **no families at all**. A region still holds its bump, its
@@ -371,6 +374,67 @@ fn a_bumped_map_keys_on_its_own_regions_bytes_and_dies_with_it() {
 
         assert_eq!(index.get(&"beta"), Some(&1));
         assert_eq!(index.len(), 3);
+    }
+    drop(dest);
+}
+
+/// The **mutable** seam, where [`RegionHandle::bump_map`] is the frozen one: a table built over
+/// [`BumpAllocator`] and then churned — grown past several resizes, overwritten in place, removed
+/// from, retained over — with every bucket array it ever allocates landing in the region's chunks.
+///
+/// Under tree borrows this is the acceptance criterion for handing the raw allocator out: hashbrown
+/// reallocates its buckets through `grow`, which bumpalo may satisfy **in place** when the old
+/// allocation is the newest one out, and the retagging that in-place path performs has to stay sound
+/// against the reads that follow it. Under the leak check it is the second criterion: every
+/// abandoned bucket array is bump memory the region releases whole, so the table's un-run `Drop`
+/// strands nothing.
+#[test]
+fn a_bump_backed_table_survives_growth_overwrite_and_removal() {
+    let dest = frame();
+    {
+        let handle = RegionHandle::<BumpProfile>::from_owner(&*dest);
+        let before = dest.region().bump_capacity();
+        let mut table: HashMap<u32, u64, DefaultHashBuilder, BumpAllocator<'_>> =
+            HashMap::new_in(handle.allocator());
+
+        // Enough inserts to force several geometric resizes off hashbrown's initial capacity.
+        for key in 0..512u32 {
+            table.insert(key, u64::from(key) * 3);
+        }
+        assert_eq!(table.len(), 512);
+        assert_eq!(table.get(&511), Some(&1533));
+
+        // In-place overwrite: the slot is reused, so peak occupancy is unchanged.
+        for key in 0..512u32 {
+            table.insert(key, u64::from(key));
+        }
+        assert_eq!(table.get(&511), Some(&511));
+
+        for key in (0..512u32).step_by(2) {
+            assert_eq!(table.remove(&key), Some(u64::from(key)));
+        }
+        table.retain(|key, _| key % 3 != 0);
+        assert!(table.keys().all(|key| key % 2 == 1 && key % 3 != 0));
+        // Re-inserting into the tombstoned slots reuses them rather than growing again.
+        for key in (0..512u32).step_by(2) {
+            table.insert(key, u64::from(key) * 7);
+        }
+        assert_eq!(table.get(&510), Some(&3570));
+
+        // A growable vec over the same allocator: `grow` past several reallocations, then a shrink,
+        // which the bump answers by abandoning bytes rather than returning them.
+        let mut run: BumpVec<u32, BumpAllocator<'_>> = BumpVec::new_in(handle.allocator());
+        run.extend(0..4096u32);
+        assert_eq!(run.iter().copied().sum::<u32>(), (0..4096u32).sum());
+        run.truncate(16);
+        run.shrink_to_fit();
+        assert_eq!(run.len(), 16);
+
+        assert!(
+            dest.region().bump_capacity() > before,
+            "every bucket array and vec buffer the churn allocated is priced by the region's own \
+             capacity figure, with no counted door involved"
+        );
     }
     drop(dest);
 }

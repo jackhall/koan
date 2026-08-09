@@ -36,8 +36,11 @@ bump bytes, capped by geometric growth.
   std map, with the reason stated where it is declared.
 - Lookup stays O(1) hash on the resolve path — no persistent-structure
   substitution.
-- Resize abandonment is the only dead-byte source: pending resolution
-  overwrites in place, so a table's peak occupancy is its final binding count.
+- Dead bump bytes come from two bounded sources only: geometric resize
+  abandonment, and the error-path purge of a failed binder's claims
+  (`clear_placeholders_for_producer`), bounded by failed-binder count. Pending
+  resolution overwrites in place, so a table's peak occupancy is its final
+  binding count.
 - The Miri slate gains coverage for hashbrown-over-bump under tree borrows.
 
 ## Dependencies
@@ -52,3 +55,5 @@ bump bytes, capped by geometric growth.
 
 - [Scopes move into the region bump](bump-hosted-scopes.md) — `Scope` cannot
   skip its destructor until the tables have none.
+- [Bump verbs collapse onto the allocator handle](bump-verbs-onto-allocator.md) —
+  the `BumpAllocator` seam this item ships is that item's single verb home.

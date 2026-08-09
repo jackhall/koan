@@ -41,8 +41,8 @@ use elsa::FrozenMap;
 use typed_arena::Arena;
 
 use super::{
-    erase_to_static, BumpMap, DropFree, FoldedPlacement, PinBundle, PinsRegion, ReachDescription,
-    Reattachable, RegionOwner, SealedExtern, StepCoverage, Witness,
+    erase_to_static, BumpAllocator, BumpMap, DropFree, FoldedPlacement, PinBundle, PinsRegion,
+    ReachDescription, Reattachable, RegionOwner, SealedExtern, StepCoverage, Witness,
 };
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
@@ -175,7 +175,9 @@ pub struct Region<W: StorageProfile> {
     /// the static proxy.) The one primitive whose stored value is not itself `Copy`,
     /// [`bump_map`](Self::bump_map), moves the bound onto the table's *elements* and allocates the
     /// buckets in this same bump, so the destructor it forgoes would have freed only bytes region
-    /// death frees anyway — see [`BumpMap`](super::BumpMap).
+    /// death frees anyway — see [`BumpMap`](super::BumpMap). A **mutable** collection reaches the
+    /// same storage through [`allocator`](Self::allocator), which is where the `Copy` bound stops
+    /// travelling with the bytes and the embedder restates it at its own element declaration.
     ///
     /// A cycle among bumped entries is harmless: everything here dies with the region, at once.
     /// Occupancy is one figure for the whole bump ([`bump_capacity`](Self::bump_capacity)) — there
@@ -328,6 +330,16 @@ impl<W: StorageProfile> Region<W> {
     {
         let map = BumpMap::build(&self.bump, entries);
         self.bump.alloc(map)
+    }
+
+    /// This region's bump as a [`BumpAllocator`] — the seam a **mutable** embedder collection is
+    /// built over, where the [`bump_slice`](Self::bump_slice) family covers only what is written
+    /// once and read thereafter. Bytes taken this way are priced by
+    /// [`bump_capacity`](Self::bump_capacity) like any other, which is what keeps an off-door
+    /// allocation honest; the destructor guard the `Copy`-bounded verbs carry does not transfer, so
+    /// the allocator's own doc states where an embedder has to restate it.
+    pub(crate) fn allocator(&self) -> BumpAllocator<'_> {
+        BumpAllocator::over(&self.bump)
     }
 
     /// The region's bump footprint, in **reserved chunk capacity** (`Bump::allocated_bytes`):
@@ -594,6 +606,25 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         V: Copy,
     {
         self.region.bump_map(entries)
+    }
+
+    /// **This handle's region's bump as an allocator** — the door for a collection that keeps
+    /// mutating after it is built, where [`Self::bump_map`] freezes at construction and
+    /// [`Self::bump_slice`] writes once. [`BumpAllocator`](super::BumpAllocator) carries the
+    /// argument for what handing the raw allocator out costs and what the embedder owes in return.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// let mut table: hashbrown::HashMap<u32, u32, hashbrown::DefaultHashBuilder, _> =
+    ///     hashbrown::HashMap::new_in(handle.allocator());
+    /// table.insert(7, 11);
+    /// assert_eq!(table.get(&7), Some(&11));
+    /// ```
+    pub fn allocator(self) -> BumpAllocator<'a> {
+        self.region.allocator()
     }
 
     /// Fold an owned [`StepCoverage`] into this handle's region's union bundle, retained for the
