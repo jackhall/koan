@@ -1036,9 +1036,14 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
 /// every substrate shape — list, dict, record, and both payload carriers (`Tagged` and `Wrapped`) —
 /// each carrying a string leaf so the bump holds re-homed bytes as well as cells and index metadata,
 /// and with a run of **callables**, whose signatures put a bumped element run and re-homed keyword /
-/// parameter-name bytes in the same region, and with **modules**, whose paths, member-map keys and
-/// member-table bucket arrays land there too. The region is then dropped while nothing outside it holds
-/// a borrow. No slot in any of those shapes has a destructor to run, so the whole teardown is the
+/// parameter-name bytes in the same region, with **modules**, whose paths, member-map keys and
+/// member-table bucket arrays land there too, and with a chain of **scopes**, the one family that
+/// keeps *mutating in place* after it is stored: its five binding tables and its SIG slot collector
+/// grow past their resize thresholds against the same bump while the scope sits resident, so what
+/// dies unfreed if a table's suppressed destructor was load-bearing is a bucket array written long
+/// after the store. That is the leak claim a `Copy` bound cannot state — a scope is not `Copy`, and
+/// only the `!needs_drop` asserts stand between it and a silently-stranded spine. The region is then
+/// dropped while nothing outside it holds a borrow. No slot in any of those shapes has a destructor to run, so the whole teardown is the
 /// bump's chunk free; Miri's process-exit leak check is the assertion. A family that quietly
 /// reintroduced an owning slot — a `Vec` spine, a `String` name, an `Rc` — leaks its buffer here,
 /// because a bump frees its chunks without visiting them. The signature names are synthesized rather
@@ -1160,8 +1165,38 @@ fn region_death_frees_every_drop_free_family() {
         "the member map reads back by content through its re-homed keys",
     );
 
-    // Nothing outside the region borrows into it, so this is the whole of region death: the typed
-    // arena holds none of these families, and the bump frees its chunks without a destructor pass.
+    // A chain of scopes in the same region, each mutating **after** it was bumped: the block child's
+    // value and type tables and the group child's dispatch / operator tables are all pushed past
+    // hashbrown's initial capacity, and the SIG child's slot collector is filled the same way. Every
+    // one of those bucket arrays is a bump allocation made long after the scope itself landed, which
+    // is the shape `Copy` cannot express and only the suppressed-destructor asserts hold in line.
+    let mut gate = crate::machine::WriteGate::for_test();
+    let block = scope.alloc_child_under();
+    for i in 0..96 {
+        let value = block.brand().alloc_scalar(Scalar::Number(i as f64));
+        block
+            .bind_resident_for_test(format!("value_{i}"), value, BindingIndex::value(i), &mut gate)
+            .expect("a fresh value bind lands");
+    }
+    assert!(block.bindings().lookup_value("value_95", None).is_some());
+
+    let sig_child = block.alloc_child_under_sig("Shape");
+    for i in 0..64 {
+        sig_child
+            .write_sig_slot(format!("slot_{i}"), KType::NUMBER)
+            .expect("a fresh VAL slot records");
+    }
+    assert_eq!(sig_child.sig_value_slots().len(), 64);
+
+    // A grandchild whose parent link, root link and region brand are all reads of bumped scopes —
+    // so the walk itself dereferences the chain after every table above has reallocated.
+    let leaf = sig_child.alloc_child_under();
+    assert_eq!(leaf.ancestors().count(), 4);
+    assert!(leaf.bindings().lookup_value("value_95", None).is_none());
+    assert!(block.bindings().lookup_value("value_95", None).is_some());
+
+    // Nothing outside the region borrows into it, so this is the whole of region death: every family
+    // here lives in the bump, which frees its chunks without a destructor pass.
     drop(shapes);
     drop(callables);
     drop(modules);

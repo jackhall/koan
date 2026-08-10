@@ -36,17 +36,17 @@ group just to silence the stale-anchor check.
   modules. Its groups (CallFrame lifetime erasure, the record substrate door, MATCH-Tagged /
   TRY-WITH TCO, per-call frame
   re-anchor, NodeStore reinstall) pin safe-code frame / carrier / region drop-order and reattach
-  disciplines whose backing `unsafe` is the `Region::alloc_resident` retype in `witnessed.rs`. Every
-  `Scope` store reaching that retype rides a born door
-  (`RegionHandle::alloc_resident_born_with`), whose `for<'b>` brand discharges residence at compile
-  time; the `Drop`-free families (`KFunction`, `Module`) take the bump doors, where the destination
-  brand's own lifetime is what borrowck checks — so koan-side `src/` carries no `unsafe` of its own
-  at all.
+  disciplines whose backing `unsafe` is the branded re-anchor in `witnessed.rs`. Every koan family is
+  `Drop`-free and lives in the region's bump: a value whose fields are all at the caller's `'a` —
+  a `KFunction`, a `Module`, a same-region `Scope` — is bumped with no brand and no `unsafe` at all,
+  and the two `Scope` stores embedding a foreign operand ride `RegionHandle::bump_born_with`, whose
+  `for<'b>` brand discharges residence at compile time. Koan-side `src/` carries no `unsafe` of its
+  own at all.
 - `src/machine/core/scope.rs` — `Scope::add` re-entry pins the queue-and-drain
   discipline that keeps `Scope`'s `RefCell<…>` invariant intact when a binding
   is added while a `data` borrow is live.
 - `src/machine/core/kfunction.rs` — `KFunction::captured_scope` is a bare field read of the
-  stored `&'a Scope<'a>` (re-anchored with the holder by the `Region::alloc_resident` retype), so
+  stored `&'a Scope<'a>` (re-anchored with the holder by the branded re-anchor), so
   kfunction.rs carries no `unsafe` of its own. The group pins the captured-scope-survives-
   closure-escape and delivered-carrier reach-fold shapes.
 - `workgraph/src/scheduler/node_store.rs` — the slot-read group pins `read_result_with`'s
@@ -56,8 +56,8 @@ group just to silence the stale-anchor check.
   now `reattachable!`-generated.
 - `src/machine/core/ref_carriers.rs` — pointer-only group: every holder stores its captured /
   defining / parent scope as a plain `&'a Scope<'a>` re-anchored **with the holder as a whole** by
-  the `Region::alloc_resident` retype in `witnessed.rs`, and the shape is pinned library-side by
-  the workgraph slate's born-door group (invariant holder, foreign-region parent, post-store
+  the branded re-anchor in `witnessed.rs`, and the shape is pinned library-side by
+  the workgraph slate's bump-residence group (invariant holder, foreign-region parent, post-store
   interior write). No koan test and no `unsafe` of its own.
 - `src/machine/execute/nodes.rs` — pointer-only group: the `NodeScope::YokedChild`
   erase → open round trip (including a sibling store while the opened reference is live) is pinned
@@ -111,7 +111,7 @@ group just to silence the stale-anchor check.
 ## The slate
 
 19 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
-below are the exact test identifiers; pass them after `--` in the Miri command. A further 52 tests
+below are the exact test identifiers; pass them after `--` in the Miri command. A further 54 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
 whose failure modes live entirely in the library's verbs (the region alloc engine, the envelope
@@ -137,9 +137,9 @@ freshly-minted child; it is built on the first run-lifetime submission, so every
 test below (`try_inside_tco_position_preserves_frame_chain`, `park_and_replay_minimal_program_for_miri`, …) exercises it
 end-to-end — the run scope outlives the frame, so no separate minimal test. A second test pins the
 **born door's own round trip** nested inside that open: a grandchild scope built and stored at the
-frame brand (`Scope::alloc_child_under`, routing `RegionHandle::alloc_resident_born_with`) comes back
-co-located, stays readable while its own brand appends to the same region, and still names its
-parent — the erase-store / re-anchor sequence every `Scope` store now takes. It carries the
+frame brand (`Scope::alloc_child_under`, a plain `BumpAllocator::in_place` at the frame's own `'a`)
+comes back co-located, stays readable while its own brand appends to the same region, and still
+names its parent — the shape every same-region `Scope` store now takes, with no erasure in it. It carries the
 sibling-alloc claim in the same run: the opened child's re-borrow still names the frame's region
 while a sibling pointer allocates into it, so `with_scope`'s `&Scope` and `brand().alloc(…)` are
 pinned coexisting there rather than by a test of their own.
@@ -330,7 +330,7 @@ test below. No separate minimal test.
 **Stored reference-carrier re-anchor** ([src/machine/core/ref_carriers.rs](../src/machine/core/ref_carriers.rs)) — every
 holder stores a captured / defining / parent scope as a plain `&'a Scope<'a>` (`Module::child_scope`,
 `KFunction::captured`, `Scope::outer` / `root`) and re-anchors it **with
-the holder as a whole** when the holder is read out of its region (the `Region::alloc_resident` retype in
+the holder as a whole** when the holder is read out of its region (the branded re-anchor in
 `witnessed.rs`), so the accessors are bare field reads and ref_carriers.rs carries no `unsafe` of its own.
 The construction-time reference is built at `'a` by plain coercion (a same-region child) or at the
 construction door's generative brand (a per-call frame child, `build_frame_child_witnessed`) — there is
@@ -538,9 +538,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-09: 1303s — 21 tests, 0 leaks, 0 UB
 - 2026-08-09: 533s — 21 tests, 0 leaks, 0 UB
 - 2026-08-09: 547s — 21 tests, 0 leaks, 0 UB
 - 2026-08-09: 523s — 21 tests, 0 leaks, 0 UB
 - 2026-08-09: 545s — 21 tests, 0 leaks, 0 UB
-- 2026-08-06: 924s — 20 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

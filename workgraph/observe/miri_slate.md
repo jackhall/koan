@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-53 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+54 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -120,7 +120,7 @@ test's final `Weak` probe gates. The multi-handle mints here also pin `RegionHos
 re-derivation ([src/witnessed/host.rs](../src/witnessed/host.rs)): the minting call re-derives its
 return through a plain `get`, so no caller ever holds the init frame's unique tag — which the next
 foreign handle's interior arena write would disable. The only `unsafe` routed is the shared
-`retype` (`alloc_resident`'s freeze-at-store and the branded re-anchors).
+`retype` (the branded re-anchors).
 
 - `transfer_composes_the_source_home_from_its_pins`
 - `transfer_unions_element_reach_across_folds`
@@ -304,16 +304,21 @@ brand its start cart pins. The `sealed_extern_*` / `sealed_pinned_*` minimal tes
 directly; an embedder's
 own scheduler-driving tests exercise it end-to-end. No separate minimal test here.
 
-**The born doors — build-at-destination store, cross-region operand** ([src/witnessed/region.rs](../src/witnessed/region.rs))
-— `RegionHandle::alloc_resident_born` and `alloc_resident_born_with` fuse construction and store at a
-`for<'b>` brand, so the `unsafe` they route is the shared `retype` (through `erase_to_static` on the
-store side and `SealedExtern::open` on the operand's re-anchor) with none of their own. The slate
+**Bump residence — same-region store, cross-region operand** ([src/witnessed/region.rs](../src/witnessed/region.rs))
+— a value whose every field is already at the caller's `'a` is built there and bumped through
+`BumpAllocator::in_place`, with no brand and no `unsafe` at all; one embedding a *foreign* operand
+takes `RegionHandle::bump_born_with`, which fuses construction and store at a `for<'b>` brand and
+routes the shared `retype` (through `SealedExtern::open` on the operand's re-anchor, and once more
+on the way out to re-anchor the freshly bumped **reference** under the handle's own `&'a` region
+borrow). The slate
 family ([tests/born.rs](../src/witnessed/tests/born.rs)) is deliberately **invariant** in its region
 lifetime — a node naming its own region, an optional parent in *another* region, and a
 `Cell<Option<&'r str>>` — because a covariant stand-in would type-check under a weaker re-anchor and
 prove nothing. The shapes: the stored value's region pointer is the destination's; an earlier store
-reads back after 64 siblings append to the same typed cell (the arena's stable-address guarantee);
-the returned reference accepts an interior-mutable write at the caller's own `'a` *after* the store;
+reads back after 64 siblings append to the same bump (bumpalo's chunk-stability guarantee, across
+the growth 64 siblings force); the returned reference accepts interior-mutable writes at the
+caller's own `'a` *after* the store, with the region then dying on them — the leak claim `Copy`
+cannot state, and the whole reason `in_place` exists;
 a child born in one region embeds a parent resident in another under a pin held for the
 destination's whole life; the same crossing store pinned by the **destination's own host** instead,
 whose `outer` link to the parent is the whole of the operand's liveness once the caller's direct
@@ -323,20 +328,23 @@ ancestor region rides the links; koan's `call_frame_chained_outer_frame_walkable
 production drop order, where a leak or a UAF is what a wrong pin duration looks like); a
 three-region chain reads back through every hop; and a resident node erased to the witness-less
 `SealedExtern` (the lifetime-free slot shape an embedder's scheduler stores) opens at a `for<'b>`
-brand under the frame's own pin with the region growing through the born door *while the opened
-reference is live* — one region under the re-anchored view and a sibling store at once. The
+brand under the frame's own pin with the region growing *while the opened
+reference is live* — one region under the re-anchored view and a sibling store at once. The group also pins the **owner back-link** a resident value derives its frame from in place of a
+`Weak` field of its own: the handle's `host()` upgrades to the very owner that minted it and
+releases with it. The
 negative case is not a runtime rejection at
-all — it is the `compile_fail` doctest on `alloc_resident_born`, where a value built over an ambient
+all — it is the `compile_fail` doctest on `bump_born_with`, where a value built over an ambient
 region fails to coerce to `'b`.
 
-- `the_born_door_stores_a_value_naming_its_own_region`
+- `a_same_region_value_is_bumped_naming_its_own_region`
 - `an_earlier_node_reads_back_after_its_siblings_are_stored`
-- `the_returned_node_accepts_a_write_at_the_callers_lifetime`
-- `the_born_with_door_embeds_a_parent_from_another_region`
-- `the_born_with_door_accepts_the_childs_own_host_as_the_pin`
+- `a_bumped_value_accepts_writes_through_the_shared_reference`
+- `the_crossing_door_embeds_a_parent_from_another_region`
+- `the_crossing_door_accepts_the_childs_own_host_as_the_pin`
 - `a_child_region_dies_before_the_parent_it_borrows`
 - `a_chain_of_regions_reads_back_through_every_hop`
 - `an_erased_node_opens_and_survives_a_sibling_store_inside_the_open`
+- `the_handle_reads_the_regions_own_host_back_link`
 
 **Doctest fixture markers** ([src/witnessed/doctest_fixture.rs](../src/witnessed/doctest_fixture.rs))
 — the `unsafe impl Reattachable` for `RefFamily` / `InvFamily` and `unsafe impl Witness` /
