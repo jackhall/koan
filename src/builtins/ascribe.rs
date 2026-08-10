@@ -25,7 +25,7 @@ use super::{arg, kw, sig};
 /// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
 /// witnessed [`Action::done(Ok)`](Action::Done) carrier ([`Scope::store_module_object`] merges the
 /// resident module reference into that region, composing its reach).
-pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types));
@@ -104,7 +104,9 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
 /// own child scope and returns the retagged view as the Object-arm module value — built at the fold
 /// brand of [`Scope::store_transparent_view`], whose composition pins the (foreign) source module's
 /// child-scope region the view borrows.
-pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_transparent<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types));

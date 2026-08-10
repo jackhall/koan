@@ -63,7 +63,7 @@ fn sched_read_carried<'run>(
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`
 /// (no keywords), which means no koan user surface can call it directly — tests
 /// using it only inspect routing, never the call outcome.
-fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+fn body_identity<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
     match arg_object(ctx.args, "n") {
         Some(obj) => Action::done_resident(
             ctx.scope,

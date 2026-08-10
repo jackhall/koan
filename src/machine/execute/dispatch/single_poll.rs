@@ -28,7 +28,7 @@ use crate::scheduler::Deps;
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
 pub(super) fn bare_identifier<'step, 'b>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     s: &'b Scope<'b>,
     name: &str,
 ) -> Outcome<'step> {
@@ -45,7 +45,7 @@ pub(super) fn bare_identifier<'step, 'b>(
 }
 
 pub(super) fn bare_type_leaf<'step, 'b>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     s: &'b Scope<'b>,
     t: TypeIdentifier<'step>,
 ) -> Outcome<'step> {
@@ -81,7 +81,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
 }
 
 pub(super) fn sigiled_type_expr<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let inner = match expr.parts.first().map(|part| part.value) {
@@ -99,7 +99,7 @@ pub(super) fn sigiled_type_expr<'step>(
 /// through a dep-finish when a field forward-references or sub-dispatches. No type-constructor
 /// builtin is involved — the record type is structural.
 pub(super) fn record_type<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let fields = match expr.parts.first().map(|part| part.value) {
@@ -121,7 +121,7 @@ pub(super) fn record_type<'step>(
 /// literal-shaped expressions. Skips the bucket lookup + builtin call
 /// the Keyworded path would otherwise route through.
 pub(super) fn literal_pass_through<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let only = expr
@@ -205,7 +205,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
 /// recursive/forward type) parks on its producer and re-runs `type_call` on wake. A name
 /// with no producer and no binding is `UnboundName`.
 pub(super) fn type_call<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let head_t = match expr.parts[0].value {

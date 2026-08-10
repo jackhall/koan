@@ -22,7 +22,7 @@ use crate::machine::{KError, KErrorKind};
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
 /// returns the specialized signature handle as a `Carried::Type`.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{arg_held, arg_object, arg_type, Action};
 
     let done_err = |e: KError| Action::done(Err(e));

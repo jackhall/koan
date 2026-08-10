@@ -325,7 +325,7 @@ impl<'a> FieldListDeferral<'a> {
 /// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
 /// through one dep-finish (the field walker's own re-walk handles nested records).
 pub(crate) fn elaborate_record_value<'step, 'view>(
-    view: &SchedulerView<'step, 'view>,
+    view: &SchedulerView<'_, 'step, 'view>,
     fields: FieldParts<'step>,
     chain: Option<Rc<LexicalFrame>>,
 ) -> Outcome<'step> {

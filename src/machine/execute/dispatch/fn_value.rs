@@ -12,7 +12,7 @@ use super::ctx::SchedulerView;
 use super::{park_resume, Outcome, ProducerStanding};
 
 pub(super) fn initial<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let head = match expr.parts[0].value {
@@ -47,7 +47,7 @@ pub(super) fn initial<'step>(
 /// constructor-typed head reaches dispatch through the type channel
 /// (`HeadDeferred`), never here. Anything else is a non-callable `TypeMismatch`.
 fn dispatch_callable_value<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
     delivered: &DeliveredCarried,
 ) -> Outcome<'step> {

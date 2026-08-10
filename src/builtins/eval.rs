@@ -14,7 +14,7 @@ use super::{arg, kw, sig};
 /// `TypeMismatch`.
 ///
 /// The `EVAL` head-keyword is not part of the surface; user code goes through the `$` sigil.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::model::KObject;
     use crate::machine::{arg_object, Action, FramePlacement};
     use crate::machine::{block_tail, BlockBody, BlockScope};

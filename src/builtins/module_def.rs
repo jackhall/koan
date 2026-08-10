@@ -27,7 +27,7 @@ use super::{arg, kw, sig};
 /// The MODULE body: pre-announces the body's top-level type declarations, mints the child scope
 /// carrying that window, and hands it to [`await_module_body`], which dispatches the body block
 /// against it and binds the module **value** into the parent scope's `data`.
-pub fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     use crate::machine::{require_identifier_name, require_kexpression};
 
     let name = crate::try_action!(require_identifier_name(
@@ -193,7 +193,7 @@ pub(super) fn unsealed_announcement_error(child_scope: &Scope<'_>, name: &str) -
 /// The Type-token-named overload (`MODULE IntOrd = …`, `GROUP VecOps FOLD LEFT = …`): a module is a
 /// value, so its name belongs in the value namespace. Registered with no binder hook — it always
 /// errors, so it installs nothing.
-pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     use crate::machine::require_bare_type_name;
     use crate::machine::{KError, KErrorKind};
 

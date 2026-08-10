@@ -111,10 +111,32 @@ impl<'a> Deref for ProgramExpression<'a> {
 /// The mint doors. Every one takes a [`ProgramBrand`], so the storage tier is checked at the call
 /// site rather than argued about afterwards.
 ///
-/// The obligation each door carries: every string and slice reachable from `parts` must already be
-/// allocated under this brand's region. The parser satisfies it structurally — its whole pipeline
-/// runs under a `ProgramBrand` — and the one runtime builder that mints marked arms (`op_def`'s
-/// bridge body) allocates its texts and operand nodes through `self.region()` for the same reason.
+/// No door carries a prose obligation: the parameter types are the tier. `parts` is
+/// `Vec<Spanned<ExpressionPart<'a>>>` at the brand's own `'a`, and the brand is invariant in `'a`,
+/// so a caller cannot shorten it to reach a door with shorter-lived parts. Everything reachable
+/// from `parts` therefore outlives the program-storage borrow — program-hosted, another
+/// eternal-tier region, or `'static`, each of which the eternal rule already prices as reaching
+/// nothing.
+///
+/// A part at a step lifetime cannot reach a door: the brand cannot shorten to `'step`, and the
+/// part cannot lengthen to `'program`. The two-lifetime shape below is what a builtin body sees —
+/// [`BodyCtx`](crate::machine::BodyCtx) supplies `'program: 'step`, never the reverse:
+///
+/// ```compile_fail
+/// use koan::machine::ProgramBrand;
+/// use koan::machine::model::ast::{ExpressionPart, ProgramExpression};
+/// use koan::source::Spanned;
+/// fn mint_step_part<'program: 'step, 'step>(
+///     program: ProgramBrand<'program>,
+///     part: Spanned<ExpressionPart<'step>>,
+/// ) -> ProgramExpression<'step> {
+///     program.new_expression(vec![part])
+/// }
+/// ```
+///
+/// The result is taken at `'step` on purpose, so nothing about the *return* can carry the
+/// rejection: a covariant brand would shorten to `'step`, accept the part, and mint. Only the
+/// brand's invariance refuses it.
 impl<'a> ProgramBrand<'a> {
     /// Spanless mint — [`KExpression::new`] with the tier proof attached.
     pub fn new_expression(self, parts: Vec<Spanned<ExpressionPart<'a>>>) -> ProgramExpression<'a> {

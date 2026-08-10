@@ -24,10 +24,10 @@ fn working<'a>(brand: RegionBrand<'a>, parts: Vec<ExpressionPart<'a>>) -> Workin
     )
 }
 
-fn body_a<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_a<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     Action::done_resident(ctx.scope, Carried::Object(marker(ctx.scope, "a")))
 }
-fn body_b<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_b<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     Action::done_resident(ctx.scope, Carried::Object(marker(ctx.scope, "b")))
 }
 

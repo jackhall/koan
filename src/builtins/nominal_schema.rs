@@ -38,7 +38,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
 /// declaration opens and seals itself.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn nominal_schema_action<'a>(
-    ctx: &BodyCtx<'a, '_>,
+    ctx: &BodyCtx<'_, 'a, '_>,
     name: String,
     window: DeclWindow<'a>,
     schema_expr: crate::machine::model::KExpression<'a>,

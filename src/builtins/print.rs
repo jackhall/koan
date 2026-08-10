@@ -7,7 +7,7 @@ use super::{arg, kw, sig};
 
 /// `PRINT <msg:Any>` — renders the `msg` object cell, writes it plus a newline to the run's
 /// output sink, and returns the rendered string as a `KObject::KString` value.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{arg_held, Action};
     // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) via
     // `Held::summarize`.

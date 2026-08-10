@@ -1175,7 +1175,12 @@ fn region_death_frees_every_drop_free_family() {
     for i in 0..96 {
         let value = block.brand().alloc_scalar(Scalar::Number(i as f64));
         block
-            .bind_resident_for_test(format!("value_{i}"), value, BindingIndex::value(i), &mut gate)
+            .bind_resident_for_test(
+                format!("value_{i}"),
+                value,
+                BindingIndex::value(i),
+                &mut gate,
+            )
             .expect("a fresh value bind lands");
     }
     assert!(block.bindings().lookup_value("value_95", None).is_some());

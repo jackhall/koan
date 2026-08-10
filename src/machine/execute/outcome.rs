@@ -182,7 +182,7 @@ impl<'step> Await<'step> {
 /// finish's own step brand) or its error, plus a read-only view.
 pub(in crate::machine::execute) type CatchFinish<'a> = Box<
     dyn for<'view> FnOnce(
-            &SchedulerView<'a, 'view>,
+            &SchedulerView<'_, 'a, 'view>,
             Result<DeliveredCarried, KError>,
         ) -> Outcome<'a>
         + 'a,
@@ -202,7 +202,7 @@ pub(in crate::machine::execute) use crate::machine::core::DepTerminal;
 /// behavior into the closure so the node itself never branches.
 pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
     dyn for<'view> FnOnce(
-            &SchedulerView<'a, 'view>,
+            &SchedulerView<'_, 'a, 'view>,
             DepResults<'_, Result<DepTerminal, KError>>,
             usize,
         ) -> Outcome<'a>
@@ -248,7 +248,10 @@ fn all_or_first_error<'r>(
 /// shape directly; a [`WitnessedDepFinish`] projects onto it through [`seal_witnessed`] — so
 /// [`short_circuit`] is the single loop that runs either.
 pub(in crate::machine::execute) type TerminalDepFinish<'a> = Box<
-    dyn for<'view> FnOnce(&SchedulerView<'a, 'view>, DepResults<'_, &DepTerminal>) -> Outcome<'a>
+    dyn for<'view> FnOnce(
+            &SchedulerView<'_, 'a, 'view>,
+            DepResults<'_, &DepTerminal>,
+        ) -> Outcome<'a>
         + 'a,
 >;
 
@@ -275,7 +278,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
 /// short-circuits to [`Outcome::Done`].
 pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
     dyn for<'view> FnOnce(
-            &SchedulerView<'a, 'view>,
+            &SchedulerView<'_, 'a, 'view>,
             DepResults<'_, &DepTerminal>,
         ) -> Result<StepCarried<'a>, KError>
         + 'a,

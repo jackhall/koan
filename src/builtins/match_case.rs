@@ -23,7 +23,7 @@ use super::{arg, kw, sig};
 /// triples; the winning arm is dispatched as a tail expression with `it` bound in a
 /// per-MATCH child scope (so the binding can't leak). No admitting arm → `ShapeError`
 /// naming the scrutinee's runtime type; an F1 ambiguity or malformed shape → `ShapeError`.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract};
     use crate::machine::{arg_object, require_kexpression, Action};
 

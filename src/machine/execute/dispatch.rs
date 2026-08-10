@@ -389,7 +389,7 @@ pub(in crate::machine::execute) fn forward_to_producer<'step>(producer: NodeId) 
 /// [`decide_tail`]), so the re-classified step re-deposits the checker rather than dropping it —
 /// this slot holds no contract of its own, so the ambient obligation is the whole winner.
 pub(in crate::machine::execute) fn become_dispatch<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     inner: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     Outcome::Continue {
@@ -465,7 +465,7 @@ pub(super) fn stage_all_eager_parts<'step>(
 /// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
 /// blind to which family it is — every `Wait` wakes through `run_step` uniformly.
 pub(in crate::machine::execute) type ResumeFn<'step> =
-    Box<dyn for<'view> FnOnce(&SchedulerView<'step, 'view>, usize) -> Outcome<'step> + 'step>;
+    Box<dyn for<'view> FnOnce(&SchedulerView<'_, 'step, 'view>, usize) -> Outcome<'step> + 'step>;
 
 // ---------- Cross-shape driver ----------
 
@@ -498,7 +498,7 @@ pub(in crate::machine::execute) fn decide_error<'step>(
     error: KError,
     carrier: String,
 ) -> NodeWork<'step, KoanWorkload> {
-    let continuation = ignore_results(Box::new(move |_view: &SchedulerView<'_, '_>, _idx| {
+    let continuation = ignore_results(Box::new(move |_view: &SchedulerView<'_, '_, '_>, _idx| {
         Outcome::Done(Err(error))
     }));
     NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier))
@@ -509,7 +509,7 @@ pub(in crate::machine::execute) fn decide_error<'step>(
 /// single-producer-park in one poll; a shape that parks returns a `ParkThenContinue` whose resume
 /// closure re-enters [`run_step`], never back through here.
 fn classify_dispatch<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
     idx: usize,
 ) -> Outcome<'step> {

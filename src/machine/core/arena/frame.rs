@@ -5,6 +5,7 @@
 //! The region/brand substrate these build on lives in the parent `arena` module.
 
 use std::cell::{Cell, RefCell};
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{KoanRegion, KoanStorageProfile, RegionBrand};
@@ -64,7 +65,7 @@ pub struct ProgramStorage(Rc<FrameStorage>);
 impl ProgramStorage {
     /// Mint this storage's [`ProgramBrand`] — the only allocation capability the parser accepts.
     pub fn brand(&self) -> ProgramBrand<'_> {
-        ProgramBrand(self.0.brand())
+        ProgramBrand(self.0.brand(), PhantomData)
     }
 }
 
@@ -87,8 +88,14 @@ impl ProgramStorage {
 /// The distinction needs a type because `KExpression` is covariant: a node borrowing a per-call
 /// region coerces to any shorter lifetime, so the borrow checker sees nothing to object to.
 /// Widening through [`ProgramBrand::region`] is free; the reverse does not exist.
+///
+/// The brand is **invariant** in `'a`, so a held brand never shortens either. A door call therefore
+/// pins its `parts` at the storage's own lifetime rather than at whatever shorter lifetime the
+/// caller happens to run at — which is what carries the storage-tier obligation in the parameter
+/// types instead of in prose. The doors' *products* stay covariant, so program-hosted AST still
+/// reaches step code by ordinary subtyping.
 #[derive(Clone, Copy)]
-pub struct ProgramBrand<'a>(RegionBrand<'a>);
+pub struct ProgramBrand<'a>(RegionBrand<'a>, PhantomData<fn(&'a ()) -> &'a ()>);
 
 impl<'a> ProgramBrand<'a> {
     /// The plain allocation capability underneath — for the parser's own `alloc_*` calls, which

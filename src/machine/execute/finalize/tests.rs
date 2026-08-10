@@ -176,7 +176,7 @@ thread_local! {
 /// to a [`Weak`]) into [`FRAME_CENSUS`] and returns the region-pure scalar `1`. Registered inside a
 /// user FN's body, it hands the test a handle to that FN's per-call frame so the run's frame lifetimes
 /// become observable end-to-end.
-fn probe_body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn probe_body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     FRAME_CENSUS.with(|census| census.borrow_mut().push(ctx.scope.region_owner()));
     Action::done_resident(
         ctx.scope,

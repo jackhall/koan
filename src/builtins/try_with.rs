@@ -23,7 +23,7 @@ use super::{arg, kw, sig};
 
 /// Watches `expr`, then a `Catch` finish walks the arms against the `Result`, tail-replacing
 /// into the matched arm under the `-> :T` contract and re-raising on no match.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract};
     use crate::machine::{require_kexpression, Action, CatchContinue, DepPlacement, DepRequest};
 

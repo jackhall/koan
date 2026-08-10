@@ -44,7 +44,7 @@ use super::{
 /// read-only [`SchedulerView`] and returns [`Outcome::Done`]. `idx` is this slot's own node, needed
 /// to classify a park edge's producers.
 pub(in crate::machine::execute) fn run<'step, 'b>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'step>,
     idx: usize,
@@ -167,7 +167,7 @@ fn wrap_as_operand<'step>(
 /// installs). The outermost expression stays a bare 3-part expression — never itself wrapped in
 /// `Expression(..)` — so [`become_dispatch`] re-enters ordinary dispatch on it directly.
 fn reduce_fold_left<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
@@ -203,7 +203,7 @@ fn reduce_fold_left<'step>(
 /// 3-part expression — never itself wrapped in `Expression(..)` — so [`become_dispatch`]
 /// re-enters ordinary dispatch on it directly.
 fn reduce_fold_right<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
@@ -242,7 +242,7 @@ fn reduce_fold_right<'step>(
 /// verbatim: a list literal's own element scheduling resolves a bare name against scope and
 /// dispatches a parenthesized element, so a run's operands need no per-kind rewrite.
 fn reduce_unary<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
@@ -294,7 +294,7 @@ fn reduce_unary<'step>(
 /// staging + finish mechanics (mirrors the shared eager-subs pattern in `ctx.rs`, but splices
 /// into a fresh pair-tree rather than back into the original expression's own slots).
 fn reduce_pairwise<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
     combiner: String,
     direction: FoldDirection,
@@ -359,7 +359,7 @@ pub(super) fn combine<'step>(
 /// under are probed — binary `[Slot, Keyword(sym), Slot]` and unary `[Keyword(sym), Slot]` — since
 /// the chain cannot know the declaration's arity until it lands.
 fn park_on_pending_operators<'step, 'b>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'step>,
     idx: usize,
@@ -396,7 +396,7 @@ fn park_on_pending_operators<'step, 'b>(
 /// Every still-finalizing `OP` declaration visible from `s` that would register one of this
 /// chain's operators, deduped in walk order.
 fn pending_operator_producers<'b>(
-    ctx: &SchedulerView<'_, '_>,
+    ctx: &SchedulerView<'_, '_, '_>,
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'_>,
 ) -> Vec<NodeId> {

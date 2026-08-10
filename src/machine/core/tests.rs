@@ -16,7 +16,7 @@ pub(super) fn unit_signature<'a>() -> SignatureDraft<'a> {
 }
 
 pub(super) fn body_no_op<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     crate::machine::core::kfunction::action::Action::done_resident(
         ctx.scope,

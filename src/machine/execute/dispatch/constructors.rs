@@ -417,7 +417,7 @@ pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: KType) -> S
 /// its own reach rather than an asserted co-location. Type-checks run before the build (read out of
 /// the carrier), so the closure is infallible.
 fn finish_witnessed<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     kind: &CtorKind,
     terminals: DepResults<'_, &DepTerminal>,
 ) -> Result<DeliveredCarried, KError> {

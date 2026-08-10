@@ -41,7 +41,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 
 /// Watches the captured `expr` and recovers into a `Result` carrier
 /// (`Ok(v)` / `Error(KError::to_tagged())`) via a `Catch` finish.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::build_type_operand;
     use crate::machine::core::SubstrateDoor;
     use crate::machine::model::Carried;

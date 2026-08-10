@@ -22,7 +22,7 @@ use super::{arg, kw, sig};
 /// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish projects
 /// that scope into a [`SigSchema`], interns it as a `Signature` type, and installs that handle
 /// into the parent scope.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::await_body::await_body_in_scope;
     use crate::machine::{require_bare_type_name, require_kexpression, Action};
 

@@ -80,7 +80,7 @@ fn cell_carrier(slot: Slot, terminals: DepResults<'_, &DepTerminal>) -> Delivere
 /// materializes the host — the same copied-adoption rule the param binds apply. The final aggregate
 /// shape (`list_of_held` / `dict_of_held` / `record_of_held`) is built by the caller's pinned map.
 fn fold_cells(
-    view: &SchedulerView<'_, '_>,
+    view: &SchedulerView<'_, '_, '_>,
     cells: impl Iterator<Item = DeliveredCarried>,
 ) -> Delivered<AggBuildFamily, CarrierWitness, FrameStorage> {
     let dest_frame = view.dest_frame();

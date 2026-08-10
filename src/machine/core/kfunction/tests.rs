@@ -7,7 +7,7 @@ use crate::machine::model::{Argument, KExpression, KType, ReturnType, SignatureD
 use crate::machine::model::{KKind, KObject};
 use crate::machine::model::{KLiteral, TypeIdentifier};
 
-fn body_any<'a>(ctx: &super::action::BodyCtx<'a, '_>) -> super::action::Action<'a> {
+fn body_any<'a>(ctx: &super::action::BodyCtx<'_, 'a, '_>) -> super::action::Action<'a> {
     super::action::Action::done_resident(
         ctx.scope,
         crate::machine::model::Carried::Object(marker(ctx.scope, "any")),

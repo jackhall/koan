@@ -28,7 +28,7 @@ const MEMBERS_SLOT: &str = "`|` members";
 /// parameterized-type slot shape), so the body reads each member as owned data and composes the
 /// union directly — mirroring `parameterized_types::body_map`. The composite allocates into this
 /// step's own region through the single type door.
-fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
+fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let left = crate::try_action!(require_ktype(ctx.args, "left", ctx.types));
     let right = crate::try_action!(require_ktype(ctx.args, "right", ctx.types));
     Action::done(Ok(ctx
@@ -42,7 +42,7 @@ fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
 /// against scope and parks on a still-finalizing name, a `:(...)` member rides its own
 /// sub-dispatch — so every member kind reaches the body already lowered to a `KType` cell, and the
 /// composite union builds through [`TypeRegistry::union_of`].
-fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
+fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let substrate = match arg_object(ctx.args, "members") {
         Some(KObject::List(substrate, _)) => *substrate,
         _ => {

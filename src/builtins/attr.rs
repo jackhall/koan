@@ -63,7 +63,9 @@ fn read_field_name<'a>(args: &Record<Held<'a>>, types: &TypeRegistry) -> Result<
 /// (Identifier-classed) parameter member access like `elem.compare` inside a functor body reaches
 /// the module through the value arm. The type-side probe serves a name bound to an abstract
 /// identity (a SIG value slot's `VAL zero :Carrier` type), which names no receiver to project off.
-pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_identifier<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
     use crate::machine::{arg_object, Action};
     let s_name = match arg_object(ctx.args, "s") {
         Some(KObject::KString(s)) => (*s).to_string(),
@@ -97,7 +99,7 @@ pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mach
 /// a Type token reaches the same projection. Projects a member off the Type-classed `s`, resolving
 /// an unlowered name carrier through the memoized bridge first. A module lhs rides the value channel
 /// and picks [`body_module`] instead, so `Foo.Carrier` projects off the module value.
-pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{arg_object, arg_type, arg_unresolved_type, Action};
     if let Some(te) = arg_unresolved_type(ctx.args, "s") {
         let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
@@ -137,7 +139,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
 }
 
 /// Reads the `Wrapped` runtime lhs and projects the field through [`access_field`].
-pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{arg_object, Action};
     let target = match arg_object(ctx.args, "s") {
         Some(obj) => obj,
@@ -164,7 +166,7 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine
 }
 
 /// Projects the field off a module lhs riding the value channel's Object arm.
-pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{arg_object, Action};
     let m = match arg_object(ctx.args, "s") {
         Some(KObject::Module(module)) => *module,

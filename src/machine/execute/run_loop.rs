@@ -172,9 +172,10 @@ impl<'run> KoanRuntime<'run> {
         };
         // Open the owned-tier continuation beside the active-scope operand at one rank-2 `for<'b>`
         // brand: the seal carries its own anchor pin, and `combined` witnesses the operand (see the
-        // doc comment for why nothing branded escapes). The `Within` token bounds the brand by
-        // `'run`, which is what lets `rt.program` — a live borrow-checked `ProgramBrand<'run>`, not
-        // a sealed carrier — shorten covariantly to the step brand at the `SchedulerView` build.
+        // doc comment for why nothing branded escapes). The `Within` token's declared `'run: 'b` is
+        // what lets `rt.program` — a live borrow-checked `ProgramBrand<'run>`, not a sealed
+        // carrier — be stored in the view at its own `'program = 'run`, discharging the
+        // `SchedulerView`'s `'program: 'step` bound without shortening the brand.
         sealed_continuation.open(
             scope_carrier,
             &combined,

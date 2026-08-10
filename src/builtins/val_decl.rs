@@ -69,7 +69,7 @@ enum CarrierForm<'a> {
 /// args from `BodyCtx::args`, registers the value slot's declared type directly on a scope, and
 /// returns `Action::Done` for a structural carrier or an `Action::AwaitDeps` (one `OwnScope` type
 /// sub-dispatch) for a leaf that re-resolves against decl_scope.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::dispatch_type_then;
     use crate::machine::{arg_object, arg_type, arg_unresolved_type, Action};
 

@@ -52,7 +52,7 @@ fn cells_equal(
 }
 
 /// Read both operands and compare, or the canonical missing-arg diagnostic.
-fn compare(ctx: &BodyCtx<'_, '_>, op: &str) -> Result<bool, KError> {
+fn compare(ctx: &BodyCtx<'_, '_, '_>, op: &str) -> Result<bool, KError> {
     let left = arg_held(ctx.args, "left")
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("left".to_string())))?;
     let right = arg_held(ctx.args, "right")
@@ -60,7 +60,7 @@ fn compare(ctx: &BodyCtx<'_, '_>, op: &str) -> Result<bool, KError> {
     cells_equal(left, right, op, ctx.types)
 }
 
-pub fn body_eq<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_eq<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let equal = crate::try_action!(compare(ctx, "=="));
     Action::done(Ok(ctx
         .scope
@@ -68,7 +68,7 @@ pub fn body_eq<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         .alloc_scalar_witnessed(Scalar::Bool(equal))))
 }
 
-pub fn body_ne<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_ne<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let equal = crate::try_action!(compare(ctx, "!="));
     Action::done(Ok(ctx
         .scope

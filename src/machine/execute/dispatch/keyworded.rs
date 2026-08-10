@@ -20,7 +20,7 @@ use crate::scheduler::ResolvedDeps;
 /// outcomes install a park (an overload / bare-name producer wait, or eager subs) and re-enter
 /// through a [`park_resume`] closure that re-runs this function on wake.
 pub(super) fn initial<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
     idx: usize,
 ) -> Outcome<'step> {
@@ -84,7 +84,7 @@ pub(super) fn initial<'step>(
 /// so it rides straight into the invoke, which reads each inline-resolved arg's reach off its
 /// spliced cell.
 fn walk_and_invoke<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     resolved: Resolved<'step>,
     expr: WorkingExpression<'step>,
     bare_outcomes: &[Option<NameOutcome>],
@@ -126,7 +126,7 @@ fn walk_and_invoke<'step>(
 /// ([`park_finish`]) — and a `Deferred` outcome is an error here, not another eager-subs round,
 /// so the two resolves cannot ping-pong.
 pub(super) fn finish<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     working_expr: WorkingExpression<'step>,
     idx: usize,
 ) -> Outcome<'step> {
@@ -191,7 +191,7 @@ fn park_finish<'step>(
 /// established chain wraps the re-resolve continuation with the ambient obligation (this slot holds
 /// no contract of its own), so the checker survives the hop.
 pub(super) fn redispatch_continue<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let carrier = working_expr.summarize();
@@ -214,7 +214,7 @@ pub(super) fn redispatch_continue<'step>(
 /// Visibility is widened for `single_poll::type_call`, which reuses this path for
 /// forward-reference type-binder parks.
 pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     producers: Vec<NodeId>,
     expr: WorkingExpression<'step>,
     idx: usize,
@@ -254,7 +254,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
 /// `DispatchOutcome::Deferred` arm: stage every eager part and park
 /// on them, with no speculative function pick captured.
 fn install_eager_only<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
@@ -287,7 +287,7 @@ fn install_bare_name_park<'step>(
 }
 
 fn install_eager_subs_track<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     working_expr: WorkingExpression<'step>,
     staged_subs: Vec<(usize, DepRequest<'step>)>,
 ) -> Outcome<'step> {
@@ -302,7 +302,7 @@ fn install_eager_subs_track<'step>(
 /// walk's cycle-check → `SchedulerDeadlock` → dedup-push ladder lives — called from both the
 /// wrap-slot and ref-name arms of [`part_walk`].
 fn park_walk_producer(
-    ctx: &SchedulerView<'_, '_>,
+    ctx: &SchedulerView<'_, '_, '_>,
     producer: NodeId,
     idx: usize,
     part: &crate::machine::model::ExpressionPart<'_>,
@@ -327,7 +327,7 @@ fn park_walk_producer(
 /// subs. `Err(KError)` surfaces a *slot-terminal* error (cycle /
 /// unbound wrap), not a scheduler-level error.
 fn part_walk<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     parts: &[crate::source::Spanned<crate::machine::model::WorkingPart<'step>>],
     bare_outcomes: &[Option<NameOutcome>],
     slots: &crate::machine::core::ClassifiedSlots,

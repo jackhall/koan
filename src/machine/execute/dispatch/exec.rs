@@ -31,7 +31,7 @@ use crate::scheduler::ResolvedDeps;
 /// carries [`FramePlacement::Inherit`] (it runs in the current frame). The decide handler owns
 /// `picked`, so the builtin-vs-user-fn frame decision is made here, not in the harness.
 pub(super) fn invoke_continue<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
@@ -80,7 +80,7 @@ fn invoke_work<'step>(
 /// Every call reaches here with its value parts already `Spliced`/literal-resolved (the eager-subs
 /// and synchronous bind paths splice them first), so there is no fall-through.
 pub(super) fn invoke<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
@@ -224,7 +224,7 @@ pub(super) fn invoke<'step>(
 /// value-embedding builtin's fold) works off an envelope that survives the call independently of
 /// that region. Once per call, not once per reader.
 fn carriers_from_expr<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     working_expr: &WorkingExpression<'step>,
 ) -> Vec<Option<DeliveredCarried>> {
     working_expr
@@ -264,7 +264,7 @@ fn map_arg_carriers<'e, 'step>(
 /// per-parameter reach carriers (a value-embedding body folds / merges the one it embeds; an
 /// absent entry is region-pure).
 fn run_action_builtin<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     f: crate::machine::core::ActionFn,
     args: Record<crate::machine::model::Held<'step>>,
     arg_carriers: Record<&DeliveredCarried>,
@@ -308,7 +308,7 @@ fn run_action_builtin<'step>(
 /// bare `&'step KObject<'step>` names a lifetime the opened frame scope has no relation to. The
 /// envelope's own coverage is empty, so a literal argument still pins nothing.
 fn extract_carried_args<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     working_expr: &WorkingExpression<'step>,
     arg_carriers: &mut [Option<DeliveredCarried>],
 ) -> Option<Vec<Carried<'step>>> {

@@ -9,7 +9,7 @@ use crate::machine::model::Held;
 use crate::machine::{arg_held, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind};
 
-pub(super) fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let value = match arg_held(ctx.args, "value") {
         Some(Held::Object(o)) => o,
         // The `Any` slot admits both channels, so a type argument reaches the body rather than

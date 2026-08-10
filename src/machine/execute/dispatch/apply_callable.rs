@@ -56,7 +56,7 @@ pub(in crate::machine::execute) enum ResolvedCallable<'step> {
 /// call body; `extract_call_body` admits one `{name = value}` record literal
 /// (`Named`) or one `(value)` paren group (`Positional`).
 pub(in crate::machine::execute) fn apply_callable<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     callable: ResolvedCallable<'step>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
@@ -85,7 +85,7 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
 /// (named is a loud `DispatchFailed`). A SIG's abstract constructor slot is a witness-less kind
 /// and rejects construction by name; any other non-constructible identity is a `TypeMismatch`.
 fn apply_constructor<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     identity: KType,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
@@ -185,7 +185,7 @@ fn apply_constructor<'step>(
 /// the supplied keys against `param_names` and builds the args record in the constructor's declared
 /// order.
 fn apply_named_type_args<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     identity: KType,
     param_names: Vec<String>,
     fields: &[(&'step str, ExpressionPart<'step>)],
@@ -307,7 +307,7 @@ fn quoted_list(names: &[&str]) -> String {
 /// string through the shared `TaggedByTag` path. An unknown variant name in either form is a
 /// schema error listing the union's members.
 fn apply_union_construct<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     members: Vec<KType>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
@@ -402,7 +402,7 @@ fn union_member_names(members: &[KType], types: &TypeRegistry) -> String {
 /// positional body is a loud `DispatchFailed`. Named args reconstruct the exact-arity
 /// positional expression, then eager-resolve the value slots before binding.
 fn apply_function<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     f: OpenedFunction<'step>,
     expr: &WorkingExpression<'step>,
     body: CallBody<'step>,
@@ -429,7 +429,7 @@ fn apply_function<'step>(
 /// in-flight ones as an `AwaitDeps` whose finish binds `picked`. Shared by the
 /// `FunctionValueCall` lane and every head-deferred / type-call function arm.
 pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
     picked: OpenedFunction<'step>,
 ) -> Outcome<'step> {

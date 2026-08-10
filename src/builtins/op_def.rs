@@ -187,7 +187,7 @@ fn resolve_capture<'a>(
 /// (and any explicit result) type, then synthesize and register the operator's `KFunction`(s). A
 /// type slot naming a still-finalizing type binder — or spelled as a `:(…)` expression that has to
 /// sub-dispatch — defers the whole build to a dep-finish.
-fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind, bound_name: Option<&'a str>) -> Action<'a> {
+fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str>) -> Action<'a> {
     let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", "symbol"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", "body"));
     let has_result = arg_held(ctx.args, "return_type").is_some();
@@ -317,7 +317,7 @@ fn check_group_context(
 
 /// Everything the finalize needs that does not come out of the dep results, captured whole into the
 /// dep-finish closure so the deferred and synchronous paths run the same code.
-struct OpPlan<'a> {
+struct OpPlan<'program: 'a, 'a> {
     sym: &'a str,
     kind: OpKind,
     body_expr: KExpression<'a>,
@@ -325,15 +325,16 @@ struct OpPlan<'a> {
     /// writes the function bucket only.
     in_group: bool,
     bind_index: BindingIndex,
-    /// The run's program storage capability, carried off the declaring step's [`BodyCtx`]: the
-    /// bridge body is a **value-channel** node, so its marked operand arms are mintable only here.
-    program: ProgramBrand<'a>,
+    /// The run's program storage capability, carried off the declaring step's [`BodyCtx`] at its
+    /// own `'program`: the bridge body is a **value-channel** node, so its marked operand arms are
+    /// mintable only here, and only against parts that outlive program storage.
+    program: ProgramBrand<'program>,
     /// `Some` for the combined `LET <name> = OP …` statement, which also binds the operator's
     /// primary function under that value name — one declaration reaching both install channels.
     bound_name: Option<&'a str>,
 }
 
-impl<'a> OpPlan<'a> {
+impl<'program: 'a, 'a> OpPlan<'program, 'a> {
     /// Synthesize the operator's `KFunction`(s) and describe the writes they imply — the function
     /// bucket overloads and, outside a group, the size-1 registry entry that makes a run of three or
     /// more operands reduce. Returns the declared function's value beside those writes, which ride
@@ -545,7 +546,8 @@ fn register_body<'a>(
 ///
 /// The one runtime site that mints **value-channel** nodes: the operand wrappers are marked
 /// `Expression` arms, so the whole body — texts, operand nodes, and the node the parts reach —
-/// builds in program storage, discharging the mint doors' hosted-under-this-brand obligation.
+/// builds in program storage. The single `'a` is the brand's own lifetime, which is what the mint
+/// doors take; `sym` arrives as a plain `&str` and is re-allocated through `brand` to reach it.
 fn bridge_body<'a>(program: ProgramBrand<'a>, sym: &str) -> KExpression<'a> {
     let brand = program.region();
     let sym = brand.allocator().text(sym);
@@ -579,25 +581,25 @@ fn op_action<'a>(
     }
 }
 
-fn body_binary<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_binary<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(ctx, OpKind::Binary, None)
 }
 
-fn body_unary<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_unary<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(ctx, OpKind::Unary, None)
 }
 
 /// `LET <name> = OP #(<sym>) OVER <Operand> [-> <Result>] = (<body>)` — one statement whose single
 /// binder installs the value name and the operator's bucket key(s). The bound value is the
 /// operator's primary function, the same one the declaration evaluates to.
-fn body_binary_combined<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_binary_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let name = crate::try_action!(crate::builtins::fn_def::combined_bound_name(ctx.args));
     build(ctx, OpKind::Binary, Some(name))
 }
 
 /// The `UNARY OP` twin of [`body_binary_combined`]; its binder installs two bucket keys — the
 /// keyword-first list key and the binary bridge key.
-fn body_unary_combined<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_unary_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let name = crate::try_action!(crate::builtins::fn_def::combined_bound_name(ctx.args));
     build(ctx, OpKind::Unary, Some(name))
 }
@@ -606,7 +608,7 @@ fn body_unary_combined<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 /// consumes a whole list of operands, so its result type is not its operand type and there is
 /// nothing to default it to. This overload exists only to say so; without it the shape is a bare
 /// dispatch miss.
-fn body_unary_missing_result<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_unary_missing_result<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", "symbol"));
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "`UNARY OP #({sym})` must declare its result type: \
@@ -615,7 +617,7 @@ fn body_unary_missing_result<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 }
 
 /// The combined twin of [`body_unary_missing_result`], naming the flat spelling in its suggestion.
-fn body_unary_missing_result_combined<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_unary_missing_result_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", "symbol"));
     let name = crate::builtins::fn_def::combined_bound_name(ctx.args).unwrap_or("op");
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(

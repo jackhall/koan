@@ -17,22 +17,22 @@ use super::working;
 use crate::machine::{program_storage, run_root_storage};
 use crate::source::Spanned;
 
-fn body_identifier<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+fn body_identifier<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
     Action::done_resident(ctx.scope, Carried::Object(marker(ctx.scope, "identifier")))
 }
-fn body_marker_any<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+fn body_marker_any<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
     Action::done_resident(ctx.scope, Carried::Object(marker(ctx.scope, "any")))
 }
-fn body_inner_any<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+fn body_inner_any<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
     Action::done_resident(ctx.scope, Carried::Object(marker(ctx.scope, "inner_any")))
 }
-fn body_outer_number<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+fn body_outer_number<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
     Action::done_resident(
         ctx.scope,
         Carried::Object(marker(ctx.scope, "outer_number")),
     )
 }
-fn body_lowercase<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+fn body_lowercase<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
     Action::done_resident(ctx.scope, Carried::Object(marker(ctx.scope, "lowercase")))
 }
 

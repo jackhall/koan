@@ -23,7 +23,7 @@ use std::rc::Rc;
 /// against the call-site scope/chain) into the [`ReturnContract::Arm`] both `MATCH` and `TRY`
 /// arms are checked against.
 pub(crate) fn resolve_arm_contract<'a>(
-    ctx: &crate::machine::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     kind: &'static str,
 ) -> Result<ReturnContract, KError> {
     use crate::machine::{arg_type, arg_unresolved_type};

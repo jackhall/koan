@@ -33,7 +33,7 @@ use crate::scheduler::Deps;
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
 /// applied to `parts[1..]` once it resolves.
 pub(in crate::machine::execute) fn initial_expr<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let head = match expr.parts[0].value {
@@ -51,7 +51,7 @@ pub(in crate::machine::execute) fn initial_expr<'step>(
 /// node so the type marker survives the sub-dispatch (mirrors
 /// `stage_all_eager_parts`).
 pub(in crate::machine::execute) fn initial_type<'step>(
-    ctx: &SchedulerView<'step, '_>,
+    ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let head = match expr.parts[0].value {

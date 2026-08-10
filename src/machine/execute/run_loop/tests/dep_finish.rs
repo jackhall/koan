@@ -219,7 +219,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     use crate::machine::model::Carried;
     use crate::machine::model::{KType, SignatureDraft, SignatureElement};
 
-    fn body<'run>(_ctx: &BodyCtx<'run, '_>) -> Action<'run> {
+    fn body<'run>(_ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
         let finish: AwaitContinue<'run> = Box::new(|fctx, _results| {
             let v = fctx.scope.brand().alloc_string("from-combine");
             Action::done_resident(fctx.scope, Carried::Object(v))

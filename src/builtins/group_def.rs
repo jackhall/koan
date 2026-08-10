@@ -67,7 +67,7 @@ enum GroupMode {
 /// child scope through the door that allocates the one shared group record and pre-registers the
 /// member powerset, and finally run the body and bind the module value through the tail `MODULE`
 /// uses ([`super::module_def::await_module_body`]).
-fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
+fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     let name = crate::try_action!(require_identifier_name(
         ctx.args, "name", "GROUP", ctx.types
     ));
@@ -98,7 +98,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
 /// symbol borrows the args here and is re-hosted into the group's own region by
 /// [`OperatorGroup::alloc`](crate::machine::model::OperatorGroup::alloc).
 fn reduction_mode<'a>(
-    ctx: &BodyCtx<'a, '_>,
+    ctx: &BodyCtx<'_, 'a, '_>,
     group_mode: GroupMode,
 ) -> Result<ReductionMode<'a>, KError> {
     Ok(match group_mode {
@@ -146,19 +146,19 @@ fn scan_members(body: &KExpression<'_>, name: &str) -> Result<Vec<String>, KErro
     Ok(members)
 }
 
-fn body_fold_left<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_fold_left<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(ctx, GroupMode::Fold(FoldDirection::Left))
 }
 
-fn body_fold_right<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_fold_right<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(ctx, GroupMode::Fold(FoldDirection::Right))
 }
 
-fn body_pairwise_left<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_pairwise_left<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(ctx, GroupMode::Pairwise(FoldDirection::Left))
 }
 
-fn body_pairwise_right<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+fn body_pairwise_right<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(ctx, GroupMode::Pairwise(FoldDirection::Right))
 }
 

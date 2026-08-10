@@ -28,7 +28,7 @@ use super::{arg, kw, sig};
 /// must be a bare `Identifier` naming a field (never name-resolved). The `record`
 /// operand is typed `:{}`, so dispatch shape-gates the slot to records and the body
 /// reads a guaranteed `KObject::Record` carrier.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{arg_object, require_kexpression, Action};
 
     let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));

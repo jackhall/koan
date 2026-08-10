@@ -42,7 +42,7 @@ use super::{arg, kw, sig};
 /// ordinary `DoneWitnessed` path, not a forwarded dep. The block runs in the owned scope
 /// `open_module_window` returns; the window it is stacked in is named by no chain frame, so its
 /// surfaced members take no cutoff and are visible throughout the block.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{block_tail, BlockBody, BlockScope};
     use crate::machine::{require_kexpression, Action, FramePlacement};
 
@@ -78,7 +78,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 /// Render the `m`-slot diagnostic for an argument the window door refused. Strict admission already
 /// rejects most non-modules against the `:Signature` slot, so this surfaces the shapes that satisfy
 /// an empty signature without being a module.
-fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_>) -> KError {
+fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_, '_>) -> KError {
     use crate::machine::arg_held;
     use crate::machine::model::Held;
 

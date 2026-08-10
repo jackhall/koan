@@ -280,12 +280,14 @@ fn split_working_body<'a>(
 /// ([`super::dispatch::exec::invoke`]), whose `outer` chain pins the callable's home region for the
 /// body's whole life (design/tail-call-optimization.md Lemma 3). `None` on a frameless step, which
 /// carries only an `Arm` contract — a `Copy` handle that reopens nothing.
-fn contract_pin(view: &SchedulerView<'_, '_>) -> Option<Rc<crate::machine::core::FrameStorage>> {
+fn contract_pin(
+    view: &SchedulerView<'_, '_, '_>,
+) -> Option<Rc<crate::machine::core::FrameStorage>> {
     view.current_frame().map(|frame| frame.storage_rc())
 }
 
 pub(in crate::machine::execute) fn run_action<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     action: Action<'step>,
 ) -> Outcome<'step> {
     // The step's binding-table writes travel as outcome data: deposit them into the run-loop-owned

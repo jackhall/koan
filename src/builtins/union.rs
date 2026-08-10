@@ -79,7 +79,7 @@ fn finalize_union<'a>(
 /// Elaborate the variant schema, folding synchronously via [`finalize_union`] or deferring through
 /// the shared `nominal_schema_action` field-list path (threading the binder name and the in-flight
 /// pending guard), then install the sealed union identity over its member handles.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::nominal_schema::nominal_schema_action;
     use crate::machine::model::KObject;
     use crate::machine::{arg_object, require_bare_type_name, Action};

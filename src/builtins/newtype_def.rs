@@ -127,7 +127,7 @@ fn seal_outcome_into_carrier<'a>(
 /// A resolved repr finalizes synchronously; a bare-leaf name resolves against the scope chain,
 /// parks on an in-flight producer (a `DepRequest::Existing` dep-finish), or errors; a raw sigil repr
 /// sub-dispatches via [`defer_resolved_sigil`].
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
     use crate::machine::{arg_object, arg_type, require_bare_type_name, Action};
 
@@ -197,7 +197,9 @@ fn defer_resolved_sigil<'a>(
 /// Body of the record-repr overload `NEWTYPE <name> = :{…}`: elaborate the `:{…}` field list
 /// (threading the binder name + pending guard), folding via [`finalize_record_newtype`] or deferring
 /// through the shared `nominal_schema_action` field-list path.
-pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_record_repr<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
     use super::nominal_schema::nominal_schema_action;
     use crate::machine::{arg_object, require_bare_type_name, Action};
 
@@ -254,7 +256,7 @@ pub(crate) fn mint_type_constructor(
 /// `AS`. Reuses the shared `TYPE` declaration parser. Valid in any scope (top level, MODULE body)
 /// — no SIG-body gate.
 pub fn body_constructor_family<'a>(
-    ctx: &crate::machine::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
     use crate::machine::{require_kexpression, Action};
 

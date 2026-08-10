@@ -41,7 +41,7 @@ fn not_in_sig_body() -> KError {
 /// under `name` out on the outcome. `kt` is owned data (an `AbstractType`) interned in the run
 /// frame's registry, so the handle names the same type in every region.
 fn bind_abstract_member<'a>(
-    ctx: &crate::machine::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     name: String,
     kt: KType,
 ) -> crate::machine::Action<'a> {
@@ -59,7 +59,7 @@ fn bind_abstract_member<'a>(
 }
 
 /// `TYPE <name:ProperType>` — first-order abstract member. Binds `AbstractType { decl scope id, name }`.
-pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{require_bare_type_name, Action};
 
     if !ctx.scope.is_in_sig_body() {
@@ -81,7 +81,7 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::A
 /// `TYPE (<Param>… AS <Name>)` — higher-kinded abstract member (declaration-by-example). Reads
 /// the raw `(Param… AS Name)` expression and binds an `AbstractType` under `Name` carrying the
 /// declared parameter names.
-pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{require_kexpression, Action};
 
     if !ctx.scope.is_in_sig_body() {

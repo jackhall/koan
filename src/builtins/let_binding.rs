@@ -15,7 +15,7 @@ use crate::machine::model::Carried;
 /// `Identifier` and `ProperType`. Same partition logic across both: reads its args from the
 /// `BodyCtx::args` record, writes the binding directly on `ctx.scope` (interior-mutable), and
 /// returns the bound carrier as `Action::Done`.
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::model::Held;
     use crate::machine::{arg_held, arg_object, arg_type, arg_unresolved_type, Action};
 

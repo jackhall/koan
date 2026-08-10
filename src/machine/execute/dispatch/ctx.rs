@@ -80,7 +80,7 @@ pub(in crate::machine::execute) fn current_dest_frame(
 /// scheduler mutably to apply the writes. The borrow contract: a `SchedulerView` lives only for the
 /// decide call and the immutable borrow ends before the harness takes `&mut`, so decide and apply
 /// never overlap.
-pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
+pub(in crate::machine::execute) struct SchedulerView<'program: 'step, 'step, 'view> {
     sched: &'view Scheduler<KoanWorkload>,
     /// Per-step context for the scope/chain reads (`current_scope`, `chain_deref`, `active_chain`,
     /// `current_frame`, `in_contract_chain`), which read it rather than the scheduler.
@@ -120,12 +120,13 @@ pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
     /// The run's program storage capability, minted once per run and carried unchanged across every
     /// step. A builtin body reaches it through [`BodyCtx::program`](crate::machine::BodyCtx); it is
     /// what the one runtime site that synthesizes a **value-channel** node (`OP`'s bridge body)
-    /// builds against. `ProgramBrand` is `Copy` and covariant, so the run-lifetime brand shortens to
-    /// the step lifetime here for free.
-    program: ProgramBrand<'step>,
+    /// builds against. It is carried **unshortened**, at its own `'program`, related to the step
+    /// lifetime only by the struct's `'program: 'step` bound — so a mint door reached through it
+    /// pins its parts at program storage, not at the step.
+    program: ProgramBrand<'program>,
 }
 
-impl<'step, 'view> SchedulerView<'step, 'view> {
+impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::machine::execute) fn new(
         sched: &'view Scheduler<KoanWorkload>,
@@ -135,7 +136,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         node: NodeHandle,
         effects: &'view RefCell<Vec<WriteOp>>,
         coverage: &'view FrameCoverage,
-        program: ProgramBrand<'step>,
+        program: ProgramBrand<'program>,
     ) -> Self {
         Self {
             sched,
@@ -150,7 +151,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     }
 
     /// This run's program storage capability — see the [`program`](Self::program) field.
-    pub(in crate::machine::execute) fn program(&self) -> ProgramBrand<'step> {
+    pub(in crate::machine::execute) fn program(&self) -> ProgramBrand<'program> {
         self.program
     }
 
@@ -474,7 +475,7 @@ const PAIRWISE_HAS_TWO_PAIRS: &str =
 /// [`keyworded::finish`](super::keyworded::finish) — there an element-typed `Spliced(_)` revealed by
 /// a sub surfaces as a slot-terminal `DispatchFailed`. Pure data — no `&mut`.
 fn finish_eager_subs<'step>(
-    view: &SchedulerView<'step, '_>,
+    view: &SchedulerView<'_, 'step, '_>,
     working_expr: WorkingExpression<'step>,
     picked: Option<OpenedFunction<'step>>,
 ) -> Outcome<'step> {

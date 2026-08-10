@@ -64,7 +64,7 @@ mod action_bodies {
     /// LIST / MAP / AS read each embedded arg (`elem` / `k` / `v` / `applied` / `ctor`) as an
     /// owned `KType` and assemble the composite from those values, then allocate it into the
     /// step's own region through the single type door.
-    pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem", ctx.types));
         crate::try_action!(require_proper_type(
             elem,
@@ -75,7 +75,7 @@ mod action_bodies {
         Action::done(Ok(ctx.ctx.type_carried(list)))
     }
 
-    pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    pub(super) fn body_map<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k", ctx.types));
         let v = crate::try_action!(require_ktype(ctx.args, "v", ctx.types));
         crate::try_action!(require_proper_type(k, "the key type of `MAP`", ctx.types));
@@ -84,7 +84,7 @@ mod action_bodies {
         Action::done(Ok(ctx.ctx.type_carried(dict)))
     }
 
-    pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         let applied = crate::try_action!(require_ktype(ctx.args, "applied", ctx.types));
         let ctor = crate::try_action!(require_ktype(ctx.args, "ctor", ctx.types));
         // A declared family and a SIG's abstract constructor slot both name their parameters.
@@ -109,7 +109,7 @@ mod action_bodies {
         Action::done(Ok(ctx.ctx.type_carried(apply)))
     }
 
-    pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    pub(super) fn body_fn<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         build_carrier(ctx, "sig", "ret")
     }
 }
@@ -126,7 +126,7 @@ fn ret_compose<'a>(ret: KType) -> BrandCompose<'a> {
 /// param names like `Ty` are accepted. Resolves synchronously or defers via
 /// [`FieldListDeferral::action_composed`] (no self-reference binder, no pending guard).
 fn build_carrier<'a>(
-    ctx: &crate::machine::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     sig_slot: &str,
     ret_slot: &str,
 ) -> crate::machine::Action<'a> {

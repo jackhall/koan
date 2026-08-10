@@ -23,7 +23,7 @@ use signature::ParamListOutcome;
 /// [`finalize::defer`] (dep-finish). `kind` selects how the finalized function is
 /// wired into the scope; `builtin` (`"FN"`) names the surface in slot errors.
 pub(crate) fn build_fn_like<'a>(
-    ctx: &crate::machine::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     builtin: &str,
     kind: FnKind<'a>,
 ) -> crate::machine::Action<'a> {
@@ -104,7 +104,7 @@ pub(crate) fn build_fn_like<'a>(
 /// `TypeCall` / `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher needs
 /// a fixed token. The keyword-less `FN :{…}` record-schema form is
 /// [`body_record_schema`].
-pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     build_fn_like(ctx, "FN", FnKind::Function { bound_name: None })
 }
 
@@ -128,7 +128,9 @@ pub(super) fn combined_bound_name<'a>(
 /// `LET <name> = FN <signature> -> <return> = (<body>)` — one statement whose single binder
 /// installs both channels: the value name and the signature's dispatch bucket. The bound value and
 /// the registered overload are the same `KFunction` (see [`finalize_fn_with_kind`]).
-pub fn body_let_combined<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_let_combined<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
     let name = crate::try_action!(combined_bound_name(ctx.args));
     build_fn_like(
         ctx,
@@ -143,7 +145,7 @@ pub fn body_let_combined<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::ma
 /// binds under a value-classified identifier; without this overload the shape is a bare dispatch
 /// miss that says nothing about the actual mistake.
 pub fn body_let_combined_type_named<'a>(
-    ctx: &crate::machine::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
     use crate::machine::{arg_type, arg_unresolved_type, Action};
     let name = match arg_unresolved_type(ctx.args, "name") {
@@ -163,7 +165,7 @@ pub fn body_let_combined_type_named<'a>(
 /// `-> <identifier>` — a return slot naming a value. Always errors: the slot names a type, and the
 /// value it most often names is a module-valued parameter, whose type is `:(TYPE OF er)`.
 pub fn body_value_named_return<'a>(
-    ctx: &crate::machine::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
     use crate::machine::{require_identifier_name, Action};
 
@@ -188,7 +190,9 @@ pub fn body_value_named_return<'a>(
 /// resolved record. Each field becomes a keyword-less `Argument`; the function
 /// registers no dispatch keyword (see [`FnKind::Anonymous`]) and is reachable
 /// only through the value it returns.
-pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+pub fn body_record_schema<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
     use crate::machine::{arg_type, require_kexpression, Action};
     use finalize::defer;
     use return_type::extract_return_type_raw;

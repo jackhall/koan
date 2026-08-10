@@ -72,7 +72,7 @@ fn bool_operands(args: &Record<Held<'_>>, types: &TypeRegistry) -> Result<(bool,
     ))
 }
 
-pub fn body_add<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_add<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::done(Ok(ctx
         .scope
@@ -80,7 +80,7 @@ pub fn body_add<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         .alloc_scalar_witnessed(Scalar::Number(left + right))))
 }
 
-pub fn body_sub<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_sub<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::done(Ok(ctx
         .scope
@@ -88,7 +88,7 @@ pub fn body_sub<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         .alloc_scalar_witnessed(Scalar::Number(left - right))))
 }
 
-pub fn body_mul<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_mul<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::done(Ok(ctx
         .scope
@@ -100,7 +100,7 @@ pub fn body_mul<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 /// prior division operator to match, so a zero divisor raises a structured `KError`
 /// (`KErrorKind::User`, the in-language-error landing pad) rather than following IEEE 754's
 /// infinity/NaN convention — no NaN value is ever minted onto a koan `Number`.
-pub fn body_div<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_div<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     if right == 0.0 {
         return Action::done(Err(KError::new(KErrorKind::User(
@@ -113,7 +113,7 @@ pub fn body_div<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         .alloc_scalar_witnessed(Scalar::Number(left / right))))
 }
 
-pub fn body_lt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_lt<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::done(Ok(ctx
         .scope
@@ -121,7 +121,7 @@ pub fn body_lt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         .alloc_scalar_witnessed(Scalar::Bool(left < right))))
 }
 
-pub fn body_le<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_le<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::done(Ok(ctx
         .scope
@@ -129,7 +129,7 @@ pub fn body_le<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         .alloc_scalar_witnessed(Scalar::Bool(left <= right))))
 }
 
-pub fn body_gt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_gt<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::done(Ok(ctx
         .scope
@@ -137,7 +137,7 @@ pub fn body_gt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         .alloc_scalar_witnessed(Scalar::Bool(left > right))))
 }
 
-pub fn body_ge<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_ge<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::done(Ok(ctx
         .scope
@@ -145,7 +145,7 @@ pub fn body_ge<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         .alloc_scalar_witnessed(Scalar::Bool(left >= right))))
 }
 
-pub fn body_and<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+pub fn body_and<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let (left, right) = crate::try_action!(bool_operands(ctx.args, ctx.types));
     Action::done(Ok(ctx
         .scope

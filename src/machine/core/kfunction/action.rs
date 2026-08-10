@@ -216,7 +216,7 @@ pub fn require_kexpression<'a>(
 /// A builtin body: `fn(&BodyCtx) -> Action`. The builtin mutates `BodyCtx.scope` directly (binding
 /// install is a scope write, not an `Action` effect) and returns an `Action` describing the
 /// scheduler continuation.
-pub type ActionFn = for<'a> fn(&BodyCtx<'a, '_>) -> Action<'a>;
+pub type ActionFn = for<'a> fn(&BodyCtx<'_, 'a, '_>) -> Action<'a>;
 
 /// Read-only-ish context a builtin body receives. `scope` is **interior-mutable**: the builtin
 /// binds / registers / allocs on it directly before returning a `Action`. `frame` is a *reference to
@@ -224,7 +224,7 @@ pub type ActionFn = for<'a> fn(&BodyCtx<'a, '_>) -> Action<'a>;
 /// builtins. `chain` is `None` for a top-level binder (`bind_index` → `BindingIndex::BUILTIN`). `args`
 /// is the builtin's bound arguments as a transient owned record, borrowed for the call — never a
 /// `KObject`, never region-allocated; unevaluated args ride as `KObject::KExpression` cells.
-pub struct BodyCtx<'a, 'c> {
+pub struct BodyCtx<'program: 'a, 'a, 'c> {
     pub scope: &'a Scope<'a>,
     pub frame: Option<&'c Rc<CallFrame>>,
     /// The ambient lexical chain (an `Rc`, as `active_chain` hands it out — binders read
@@ -260,10 +260,14 @@ pub struct BodyCtx<'a, 'c> {
     /// body that has to synthesize a node reaching the **value channel** builds it through this
     /// (`OP`'s bridge body is the one such site), since the marker those arms carry is mintable
     /// only here. Everything a body builds merely to dispatch takes [`Self::brand`] instead.
-    pub program: ProgramBrand<'a>,
+    ///
+    /// Minted once per run and carried at its own `'program`, related to the step lifetime only by
+    /// the struct's `'program: 'a` bound: a door reached through this brand pins its parts at
+    /// program storage, so a step-allocated part cannot reach one.
+    pub program: ProgramBrand<'program>,
 }
 
-impl<'a, 'c> BodyCtx<'a, 'c> {
+impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
     /// The lexical position a binding the builtin installs takes: the ambient chain head's index —
     /// this step's own statement position in its block — or [`BindingIndex::BUILTIN`] when there is
     /// no chain (a top-level / direct-body binder, e.g. a test fixture that bypasses the
