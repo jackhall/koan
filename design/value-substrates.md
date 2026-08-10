@@ -383,17 +383,16 @@ transferring-the-region.
 
 ## Untyped arenas: the Drop-free end state
 
-A **storage family** is one stored type's sub-arena inside a region. Families
-split by one rule: a family whose stored (`'static`) form is **Drop-free lives
-in a shared untyped bump arena** — untyped meaning the arena tracks only
-bytes and alignment, with no per-slot type or destructor bookkeeping, which is
-exactly what Drop-freedom licenses. Region death for those bytes is
-deallocation with no per-slot `Drop` glue: free the arena's chunks, done.
+A region's value storage is **one untyped bump arena** — untyped meaning it tracks
+only bytes and alignment, with no per-slot type or destructor bookkeeping, which is
+exactly what `Drop`-freedom licenses. Every value family is `Drop`-free, so every one
+lives there and region death is deallocation with no per-slot `Drop` glue: free the
+arena's chunks, done. Nothing typed remains beside it but the region's own
+bookkeeping (the interned reach side table, the union pin bundle), which is heap data
+hosted next to the bump rather than in it, so the value bytes carry no `Drop`-bearing
+state.
 
-The typed residue is **one family** — `Scope` itself — plus the region's own
-bookkeeping (the interned reach side table, the union pin bundle). The residue is
-a holdover, not a design commitment: its retirement is tracked in
-[§ Open work](#open-work). Everything in the value channel is in the
+Everything in the value channel is in the
 bump: the `KObject` and `Held` cells, all four container substrates, their index
 metadata, the strings, the expression parts — the `KFunction` family, whose
 signature is a bumped run of elements with `&str` names re-homed into the
@@ -405,6 +404,18 @@ are build-once frozen bump-backed tables keyed by re-homed `&str`
 assembled complete: its construction gathers members into an owned
 `ModuleDraft` and interns the self-sig *before* the value exists, so the stored
 value is frozen and `Copy` with nothing to mutate after the fact.
+
+`Scope` is in the bump too, and it is the family that shows where the `Copy` proxy
+runs out. A scope keeps *mutating in place* for its region's whole life — its five
+binding tables grow, its `closed` flag flips, its SIG slot collector fills — so it
+cannot be `Copy`: copying it would fork the state its holders share. It is
+structurally `Drop`-free all the same: every field is `Copy`, a `Cell` of a `Copy`,
+or a bump-backed table whose own vacuous destructor is suppressed. That claim is a
+compile-time assert, not an audited marker — the `reattachable!` declaration in
+[arena.rs](../src/machine/core/arena.rs) carries
+`!needs_drop::<Scope<'static>>()`, and the bump verb that admits it
+([`BumpAllocator::in_place`](../workgraph/src/witnessed/bump.rs)) restates the same
+assert per store. A field that later brings glue back fails the build at both.
 
 `Copy` is what holds a family to that: the value-shaped bump verbs on
 [`BumpAllocator`](../workgraph/src/witnessed/bump.rs) — the one handle those verbs
@@ -428,7 +439,7 @@ read and write correctly and simply never free, which is why the claim is pinned
 by a Miri leak test rather than by an assertion
 ([§ Invariants preserved](#invariants-preserved)).
 
-A scope's binding tables are **not** in that residue: they are in the bump too,
+A scope's binding tables are in the bump as well,
 storage and contents alike
 ([`Bindings`](../src/machine/core/bindings.rs)). Each of the five — `types`,
 `data`, `functions`, the operator registry, and a SIG body's slot collector — is a
@@ -544,10 +555,6 @@ left:
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
   — pricing copying-the-survivors-out against transferring-the-region, the
   local decision the cost seam's two numbers already support.
-- [Scopes move into the region bump](../roadmap/untyped_arena/bump-hosted-scopes.md)
-  — the last typed family becomes a structurally `Drop`-free bump resident,
-  deleting workgraph's typed-storage machinery, the `typed-arena` dependency,
-  and the last storage-side lifetime retype.
 
 The mint doors' tier contract is prose, not a type — a brand shortened to a step
 shares its lifetime with the step's own allocator, so nothing stops a part hosted

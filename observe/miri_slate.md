@@ -110,7 +110,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-19 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+21 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
 below are the exact test identifiers; pass them after `--` in the Miri command. A further 54 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape

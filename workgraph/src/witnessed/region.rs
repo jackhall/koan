@@ -547,8 +547,8 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         // region, hence every chunk it has handed out, for the whole of `'a`. The re-anchor is
         // therefore a shortening onto live, fixed-address backing: `'b` is the region's own storage
         // lifetime and `'a` is bounded by the handle's borrow of it. The result is `&'a K::At<'a>`
-        // (content == borrow == `'a`), the same tight no-free-lifetime shape
-        // the co-located resident shape, so no caller can widen it past the pin.
+        // — content == borrow == `'a`, the tight co-located shape with no free content lifetime, so
+        // no caller can widen it past the pin.
         unsafe { stored.reattach() }
     }
 }

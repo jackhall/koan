@@ -40,77 +40,88 @@ owned-data type whose `'a` is phantom, re-anchored invariantly by a zero-size
 `PhantomData` marker, is layout-invariant and therefore reattachable exactly as a
 genuinely borrowing family is.
 
-### Two doors into a typed cell
+### Two shapes of region-resident store
 
-A `FamilyArena` cell stores `K::At<'static>`, so *what* a store may admit is the whole
-question of residence: a region borrow the erasure discards is one only the store's
-signature can vet.
+A region's value storage is its bump, and the bump is lifetime-free: `'a` enters only at the
+allocating call. So a value whose every field is already at the caller's `'a` — its region
+pointer included — is simply built there and placed, with **no brand, no erasure and no
+`unsafe` at all**. [`BumpAllocator::in_place`](../src/witnessed/bump.rs) is that verb, for a
+value that stays resident and keeps mutating through its interior-mutable fields (the shape
+`Copy` cannot spell, since copying it would fork the shared mutable state). Residence is the
+borrow checker's: the only region reachable through the caller's own handle is the one the
+value lands in.
 
-[`RegionHandle::alloc_resident`](../src/witnessed/region.rs) is the **move-in** door. Its
-bound is `K::At<'static>` — the value carries no region borrow at all, so there is nothing
-to vet and nothing a call site could claim wrongly.
+The one shape that needs more is a value embedding an operand borrowed from *outside* — a
+reference into another region, which the caller holds at an enclosing lifetime the placement's
+brand cannot see. [`RegionHandle::bump_born_with`](../src/witnessed/region.rs) is that door. It
+takes a `for<'b>` construction closure and hands it a `FoldedPlacement` over this handle's own
+region **plus** the operand, both re-anchored to that same `'b` — one `zip`ped `open`, because
+branding the two independently is exactly what an invariant family rejects. The proof is the
+quantifier: `'b` has no outlives relation to any enclosing lifetime, so the only
+`&'b Region<W>` — and hence the only `X<'b>` built over one — the closure body can name is the
+placement's. A captured ambient `&'a Region` does not coerce and does not compile, which makes
+the built value's region pointer the destination's by construction. It is the same no-outlives
+argument [`FoldedPlacement::allocator`](../src/witnessed.rs) rests on, with the operands'
+reach left uncomposed.
 
-[`RegionHandle::alloc_resident_born`](../src/witnessed/region.rs) is the **born** door, for
-a family whose every constructor borrows the region it lands in and so can never meet that
-bound. It takes a `for<'b>` construction closure and hands it a `FoldedPlacement` over this
-handle's own region re-anchored to `'b`, then stores what the closure returns and gives back
-the resident at the handle's `'a`. The proof is the quantifier: `'b` has no outlives relation
-to any enclosing lifetime, so the only `&'b Region<W>` — and hence the only `X<'b>` built over
-one — the closure body can name is the placement's. A captured ambient `&'a Region` does not
-coerce and does not compile, which makes the built value's region pointer the destination's by
-construction. It is the same no-outlives argument
-[`FoldedPlacement::alloc_resident_folded`](../src/witnessed/bump.rs) rests on, for a value
-with no fold to ride.
+What the signature still cannot prove is the operand's own liveness: its pointee may live in
+another region, and the stored value keeps naming it for as long as the destination region
+lives. The `pin` argument is where a caller discharges that, and it is borrowed for `'a` — the
+destination region's own lifetime — so the `Witness` contract covers the stored reference's
+whole life rather than merely the call. That keeps the door a lifetime *shortening*; the
+residual co-location obligation (does this pin in fact cover this operand?) is the one every
+`Witness` already carries, narrowed in duration rather than added to.
 
-`alloc_resident_born_with` is the born door for a value that must embed an operand borrowed
-from *outside* the closure. The operand arrives as a `SealedExtern` and is re-anchored to the
-*same* `'b` as the placement — one `zip`ped `open`, because branding the two independently is
-exactly what an invariant family rejects. What the signature still cannot prove is the
-operand's own liveness: its pointee may live in another region, and the stored value keeps
-naming it for as long as the destination region lives. The `pin` argument is where a caller
-discharges that, and it is borrowed for `'a` — the destination region's own lifetime — so the
-`Witness` contract covers the stored reference's whole life rather than merely the call. That
-keeps the door a lifetime *shortening*; the residual co-location obligation (does this pin in
-fact cover this operand?) is the one every `Witness` already carries, narrowed in duration
-rather than added to.
+The door's one audited step is on the way out: the value is built and bumped at `'b`, and it
+is the resulting **reference** that leaves the brand, erased through the generic
+`ReferenceFamily<K>` and re-anchored to `'a`. That is a shortening onto live backing — the
+pointee sits in a chunk the handle's `&'a Region` borrow pins for all of `'a` — and it routes
+the substrate's single audited reattach rather than a retype of its own. The bumped *value* is
+never erased or retyped at all.
+
+Both doors restate the family's side of the bargain as a monomorphized
+`const { assert!(!needs_drop::<…>()) }`: a bump runs no destructor, so what it hosts must have
+none to run. A field that later grows a `Drop` is a build error at the store that admitted it.
 
 ## The bump allocator
 
-`Region<P>` is the erase-store engine: a set of typed sub-arenas parameterized by
-a storage profile `P`, holding `At<'static>` and handing back an `&'a` tied to
-the caller's input borrow. A workload declares only its family list (`FamilyList`,
-a `(K, Rest)` cons-list) and the library derives and owns the arena bundle from
-it — one `FamilyArena` cell per family, keyed by `Stored::cell` through a
-tuple-field path, so a wrong binding is a compile error rather than a runtime bug.
+`Region<P>` **is** its bump: a region's whole value storage is one `bumpalo::Bump`,
+parameterized by a storage profile `P` that declares only the frame-owner type the
+region's reach descriptions are typed at. There is no per-family cell and no
+storage-policy trait for a workload to implement — a family declares its lifetime
+shape and nothing else. Region death is chunk deallocation: no per-slot destructor
+runs anywhere, which is what makes frame teardown O(1) rather than a walk.
 
-The region keeps the typed-arena Drop discipline — each stored value's `Drop`
-runs, and touches only owned contents, never a lifetime-parameterized reference
-(sub-arenas drop together, so any cross-arena `&` is dead before it could be
-observed). This is what makes a byte-bump allocator that forgoes Drop (`bumpalo`)
-the wrong fit *for the typed families*: their Drop discipline *is* the soundness
-argument, and dropping it would mean re-proving every stored type leak-free by
-hand.
+That rests on every hosted family being `Drop`-free, and the substrate holds that
+line statically rather than by audit: the placement verbs carry `T: Copy`, the two
+non-`Copy` verbs carry a monomorphized `!needs_drop` assert, and a family declared
+through the `reattachable!` default arm carries the same assert at its declaration.
+A family that genuinely owns heap contents takes the `droppable` arm and rests in a
+carrier that runs its glue, never in a region.
 
-Beside those cells a region holds a **bump**, and it is a second storage tier
-rather than a private scratch area: it is the home for any `Drop`-free value
-family — the library's own container metadata (a sectioned container's run
-partition and cell index block, see
-[sectioned-reach.md](sectioned-reach.md)) *and* an embedder's value families,
-which reach it through one door. Two properties define the tier.
+The bump is the home for the library's own container metadata (a sectioned
+container's run partition and cell index block, see
+[sectioned-reach.md](sectioned-reach.md)) *and* an embedder's value families, which
+reach it through the same verbs. Two properties define the tier.
 
 **It routes no erasure.** The allocator's own type carries no lifetime, so `'a`
 enters only at the allocating call. A bumped value may therefore hold an `&'a`
-back into the very region it lives in, with no `erase_to_static`, no `Stored`
-impl and no residence check — the thing a `FamilyArena` cell
-cannot do, because its `K::At<'static>` slot type forces a region-self-referential
-value's borrow through erasure and back through a brand-confined reattach. Cycles among
-bumped entries are harmless: everything there dies with the region, at once.
+back into the very region it lives in, with no `erase_to_static` and no residence
+check — the thing a lifetime-*typed* cell could not do, because its slot type would
+have to name a lifetime `Region` has no parameter for, forcing a
+region-self-referential value's borrow through erasure and back through a
+brand-confined reattach. Cycles among bumped entries are harmless: everything there
+dies with the region, at once.
 
 **`Copy` is the static proxy for "no destructor to skip".** A bump releases its
 chunks whole and runs nothing, so a `Drop`-bearing entry would silently leak what
-it owns. "`Drop`-free" has no expressible bound, so every value-placement verb
-carries `T: Copy` instead — the honest approximation, and the bound that keeps a
-sectioned container `Copy` and free at region teardown.
+it owns. "`Drop`-free" has no expressible bound, so the write-once placement verbs
+carry `T: Copy` instead — the honest approximation, and the bound that keeps a
+sectioned container `Copy` and free at region teardown. The two stored shapes that
+are glue-free without being `Copy` — a frozen table's header, and a value that keeps
+mutating in place through interior mutability — take verbs of their own
+(`frozen_table`, `in_place`) carrying a monomorphized `!needs_drop` assert, rather
+than a relaxation of the `Copy` bound that would admit both and everything else too.
 
 **The verbs are defined once, on the allocator handle.**
 [`BumpAllocator<'b>`](../src/witnessed/bump.rs) is a `Copy`, brand-carrying
@@ -123,10 +134,10 @@ nothing built through one outlives the region whose bytes it holds; where `'b` i
 a rank-2 fold brand, that same lifetime is the confinement, which is why the
 allocator needs no mint privacy of its own to serve as a fold's write surface.
 
-**A frozen keyed index is a verb, not a relaxation of `value`.** The one stored
-shape that is glue-free without being `Copy` is a table header: a `hashbrown` map
-owns its bucket array, so it has a `Drop`. `frozen_table` is the verb that admits
-it, and it *builds* the table rather than placing one handed in. That is what
+**A frozen keyed index is a verb, not a relaxation of `value`.** A table header is
+glue-free without being `Copy`: a `hashbrown` map owns its bucket array, so it has a
+`Drop`. `frozen_table` is the verb that admits it, and it *builds* the table rather
+than placing one handed in. That is what
 makes the admission safe rather than merely asserted. Suppressing the header's
 destructor is lossless on two conditions — the entries carry no glue, and the
 bucket array is bump memory the region releases whole. The first is checked, by a
@@ -134,11 +145,22 @@ monomorphization-time `const { assert!(!needs_drop::<K>() && !needs_drop::<V>())
 that fires at the declaration naming the entry types. The second *cannot* be
 checked at a placement verb, because a table backed by the global heap and one
 backed by this bump have the same type; building the buckets inside the verb is
-what closes it, since no caller can supply a foreign-allocator table. A
-general-purpose "place anything glue-free" verb would have left that half open,
-and `ManuallyDrop` would have been an unrestricted bypass of the `Copy` tier — so
-the wrapper stays an implementation detail of this one verb, deref'd away so no
-holder's type mentions it, and no verb places an arbitrary non-`Copy` value.
+what closes it, since no caller can supply a foreign-allocator table.
+
+**`in_place` is the weaker verb, and deliberately so.** A value that keeps mutating
+after it is stored cannot be `Copy` — copying it would fork the shared state — and
+cannot be built inside a verb the way a frozen table is, because its interior tables
+grow over the region's whole life rather than at one call. `in_place` therefore takes
+the `!needs_drop` proof directly and closes only the first of the two conditions
+above: it knows the value runs no destructor, and *cannot* know that a destructor it
+is not running would have freed only bump bytes. That second half is the caller's,
+discharged structurally rather than by signature — the admitted value's interior
+tables are built over this same allocator, so the region releases them whole. It is
+the one place the tier rests on a declaration site rather than a verb, which is why
+it is a named verb with its own rationale instead of a `Copy` relaxation that would
+admit every glue-free shape and its callers' assumptions with it. The one shape in
+the tree that takes it is a scope: bump-resident, structurally `Drop`-free, and
+mutating through `Cell` / `RefCell` for as long as its region lives.
 
 The return is a plain `hashbrown` table (`BumpBackedMap`), not a veneer type: the
 freeze is the shared reference, since no mutation is reachable through `&`. An
@@ -161,22 +183,21 @@ which carriers were passed in rather than a claim a call site writes. The
 constructor writes through a `BumpAllocator<'b>` over the destination region,
 whose verbs are std shapes only — a `Copy` value, a `Copy` slice, a `str` —
 which is what keeps the library free of any per-workload verb. A fold that already
-holds a placement reaches the same tier directly through
-[`FoldedPlacement::allocator`](../src/witnessed.rs), the `Drop`-free peer of
-`alloc_resident_folded`: it rests on the identical brand argument and grants no
-more, dropping only the `Stored` requirement and with it the erase/re-anchor round
-trip a bump needs no part of.
+holds a placement and has no operand reach left to compose reaches the same tier
+directly through [`FoldedPlacement::allocator`](../src/witnessed.rs): it rests on
+the identical brand argument and grants no more, with no audit and no `Option` —
+the rank-2 brand discharges the residence obligation at compile time.
 
 [`RegionHandle::allocator`](../src/witnessed/region.rs) is the handle-level door,
 for a `Drop`-free value wanted at the handle's own frame lifetime rather than
 confined to a fold closure. It has no operands and no reach to compose, so the fold
 machinery has nothing to do and no call site can claim anything wrongly; what is
 left is an ordinary borrow, the returned `&'a` against the `&'a Region` the handle
-holds, which the borrow checker enforces with no audit and no `unsafe`. Storing a
-value into a *typed* family is gated at its own door — `alloc_resident`'s
-`'static` bound for a value that borrows no region, or one of the two rank-2 brands
-(`alloc_resident_born` / `alloc_resident_born_with` for a value built where it lands,
-`alloc_resident_folded` for one built at a fold) — none of which this door touches. Occupancy is one
+holds, which the borrow checker enforces with no audit and no `unsafe`. A value
+built *around* those bytes that embeds a **foreign** operand is gated at its own
+rank-2 brand (`bump_born_with` for a value built where it lands, `fold_and_bump` for
+one built at a fold); one whose fields are all at this handle's own `'a` needs no
+gate and takes `in_place` directly. Occupancy is one
 whole-region figure,
 [`Region::bump_capacity`](../src/witnessed/region.rs) — the allocator's
 **reserved chunk capacity**, padding and the newest chunk's unused tail
@@ -188,8 +209,8 @@ any other. There is no per-family breakdown, because the copy-versus-pin
 decision reads a region's total against a candidate value's own copy size and
 never needs one.
 
-The allocation *capability* is a distinct type from the region. The engine's
-`alloc_resident` is `pub(crate)`, so a bare `&Region` has no allocation
+The allocation *capability* is a distinct type from the region. The region's own
+`allocator` is `pub(crate)`, so a bare `&Region` has no allocation
 surface at all; the only public minter is
 [`RegionHandle::from_owner`](../src/witnessed/region.rs), gated on the
 unsafe-to-implement `RegionOwner` contract. An embedder that holds a region owner

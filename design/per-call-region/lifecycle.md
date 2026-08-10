@@ -25,7 +25,7 @@ allocation can close a region↔value cycle, so the allocation engine carries no
 
 `FrameStorage` itself carries `outer: Option<Rc<FrameStorage>>`, which chains the parent per-call
 frame's storage when a builtin-built frame's child scope's `outer` points into per-call memory (MATCH
-/ TRY / EVAL). The pin is derived inside `CallFrame::new` from the parent scope's own `region_owner`
+/ TRY / EVAL). The pin is derived inside `CallFrame::new` from the parent scope's own region owner
 ([`Scope::parent_frame_pin`](../../src/machine/core/scope.rs)), never passed by the builtin. This is
 distinct from escaping-value liveness: `outer` keeps a region alive for an *outer-scope lookup* the
 new frame's child scope performs at run time.
@@ -125,13 +125,13 @@ would close a loop.
 
 The allocation engine therefore needs **no cycle gate**. A stored value holds no owning `Rc` back to
 a region, so storing a composite that carries an escaping closure into any region — including the one
-the closure's scope lives in — can never close a region↔value back-edge. The born door that places a
-`Scope` ([memory-model.md § Move-in
-residence](../memory-model.md#move-in-residence)) routes the single
-[`alloc_resident`](../../workgraph/src/witnessed/region.rs) engine, which
-erases the value to `'static`, stores it, and re-anchors the store to `'a` with no redirect step. The
-engine lives generically in the `Region<W>` substrate (`workgraph/src/witnessed/region.rs`), names no Koan type,
-and carries **no `unsafe`** of its own: its erase-store routes the scheduler's audited
-`erase_to_static` and the single audited `retype`. It stays unbypassable by construction — the substrate's
-private `storage` bundle and that single store path mean no `Stored` impl can route around the engine.
+the closure's scope lives in — can never close a region↔value back-edge. Nor is there a store engine
+to route around: a `Scope` lands in the region's bump like every other family
+([memory-model.md § Move-in residence](../memory-model.md#move-in-residence)), built at the
+destination's own `'a` where its fields allow and at a `for<'b>` brand where it embeds a foreign
+operand. The allocator lives generically in the `Region<W>` substrate
+(`workgraph/src/witnessed/region.rs`), names no Koan type, and the only `unsafe` on the path is the
+substrate's single audited `retype`, routed once by the crossing door to re-anchor the freshly
+bumped **reference**. It stays unbypassable by capability rather than by privacy of a store path:
+the region's own `allocator` is `pub(crate)`, so writing requires a `RegionHandle`.
 

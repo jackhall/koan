@@ -68,10 +68,10 @@ are two slices bumped into the destination region, not heap buffers the
 container owns. So a container is region state a holder *names*, and a
 frame teardown releases it with the region rather than walking it — the
 per-value drop work a `Drop`-bearing container would put back on the
-teardown path. A bump rather than the family arena for two reasons: the
-allocator is lifetime-free, so `'a` enters only at the allocation and a
-run may hold an `&'a` back into the same region (a `typed_arena` cell's
-own type would have to name `'a`, which is why a `ReachDescription` is
+teardown path. A bump rather than a lifetime-typed cell for two reasons:
+the allocator is lifetime-free, so `'a` enters only at the allocation and a
+run may hold an `&'a` back into the same region (a typed cell's own type
+would have to name `'a`, which is why a `ReachDescription` is
 lifetime-free instead); and a bump releases its chunks whole, running no
 destructor — which is the point, and why only `Copy` data may go in.
 Reference cycles among region-resident bumped entries are harmless: it

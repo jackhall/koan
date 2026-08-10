@@ -79,8 +79,8 @@ recursive tree-walker can't get cheaply.
   part a pointer copy of parsed AST, never a recursive rebuild. It also acquires a per-call frame for the
   hop — an allocation-light tail hop mints no region at all (the region is
   minted lazily on first allocation), while a hop that genuinely allocates
-  mints a fresh `CallFrame` (one `Rc<CallFrame>` plus its six
-  `typed_arena::Region::new()` pools). See
+  mints a fresh `CallFrame` (one `Rc<CallFrame>` plus its region's first bump
+  chunk). See
   [tail-call-optimization.md § Region liveness by node lifetime](../tail-call-optimization.md#region-liveness-by-node-lifetime).
 - **Per dep-result splice.** O(1) write into `expr.parts`.
 - **Per terminal.** Single `notify_list` drain. The cost scales with

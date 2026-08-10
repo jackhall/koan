@@ -206,15 +206,19 @@ not a residence verdict a caller could turn into an admission.
 
 **No runtime residence check survives either.** A `KFunction`, `Scope`, or `Module` borrows a
 single region (its captured / parent / child scope), and none can carry a region pointer other
-than its destination's. `Scope` — the one still erased for storage — is *born at its destination*:
-the value is constructed and stored in one act inside a `for<'b>` brand over the destination region
-([`RegionHandle::alloc_resident_born`](../workgraph/src/witnessed/region.rs) and its
-crossing-operand sibling `alloc_resident_born_with`). `KFunction` and `Module` are `Copy` and take
-the plain bump door, where nothing is erased and the borrow checker alone holds every embedded
-reference to the lifetime the destination brand borrows its region for; each re-homes its own bytes
+than its destination's. Nothing is erased on the way in: all three land in the destination's bump,
+where the borrow checker alone holds every embedded reference to the lifetime the destination brand
+borrows its region for. `KFunction` and `Module` are `Copy` and take the plain bump verb; a `Scope`
+keeps mutating in place, so it takes
+[`BumpAllocator::in_place`](../workgraph/src/witnessed/bump.rs), whose `!needs_drop` assert stands
+where the `Copy` bound stands for the others. The two stores whose operand lives in *another* region
+— the per-call frame child's lexical parent, the transparent `USING` window's binding table — are
+*born at their destination* instead, constructed and bumped in one act inside a `for<'b>` brand over
+the destination region ([`RegionHandle::bump_born_with`](../workgraph/src/witnessed/region.rs)),
+with only the resulting reference re-anchored on the way out. Each family re-homes its own bytes
 (a signature's element run and names, a module's path and member tables) at that same single brand,
 so splitting a value from its parts across two regions is unstateable. The koan doors —
-[`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its siblings,
+[`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its same-region siblings,
 [`KFunction::alloc_captured`](../src/machine/core/kfunction.rs),
 [`Module::alloc_at_child_scope`](../src/machine/model/values/module.rs) — each derive the
 destination handle from the value's own anchoring scope rather than taking a brand alongside it,

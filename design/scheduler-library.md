@@ -100,16 +100,14 @@ a concept, not a final identifier.
 
 - The scheduling core: slots, dep edges, notify wakeups, work queues,
   splicing and alias resolution ([src/scheduler/](../workgraph/src/scheduler.rs)).
-- **Regions, wholesale**: arenas, region owners, liveness. The generic
+- **Regions, wholesale**: the bump, region owners, liveness. The generic
   region engine ([witnessed/region.rs](../workgraph/src/witnessed/region.rs))
-  is library code, including the per-family storage bundle: a workload
-  declares only its family list (`FamilyList`, a `(K, Rest)` cons-list), and
-  the library derives and owns the arena bundle from it — one `FamilyArena`
-  cell per family, keyed by `Stored::cell` through a tuple-field path so a
-  wrong binding is a compile error rather than a runtime bug. The allocation
-  capability itself is a library type,
-  [`RegionHandle`](../workgraph/src/witnessed/region.rs): the engine's
-  `alloc_resident` is `pub(crate)` to `workgraph`, so a bare
+  is library code, and a region's value storage is its bump and nothing else —
+  a workload declares only the frame-owner type its reach descriptions are
+  typed at (`StorageProfile::FrameOwner`), never a per-family storage policy.
+  The allocation capability itself is a library type,
+  [`RegionHandle`](../workgraph/src/witnessed/region.rs): the region's own
+  `allocator` is `pub(crate)` to `workgraph`, so a bare
   `&Region` has no allocation surface at all — the only public minter is
   `RegionHandle::from_owner`, gated on the (unsafe-to-implement) `RegionOwner`
   contract. [arena.rs](../src/machine/core/arena.rs) holds only Koan's

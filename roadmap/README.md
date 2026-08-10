@@ -55,6 +55,5 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Record-typed parameter list in the FN type constructor](type_language/fn-type-record-parameter-list.md)
 - [Module element-type join](type_language/module-element-type-join.md)
 - [Union-typed carrier slots for builtin signatures](type_language/union-carrier-slots.md)
-- [Scopes move into the region bump](untyped_arena/bump-hosted-scopes.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 

@@ -152,7 +152,7 @@ own itself, and that is the pin the self rule drops.
 
 - Descriptions live in an **append-stable side table owned by the region's
   storage** — ordinary heap data, dropped when the region drops. They are **not**
-  arena-page data, so arena pages carry no `Drop`-bearing reach state. The table
+  bump data, so the region's value bytes carry no `Drop`-bearing reach state. The table
   is append-only in address: a description's `&` stays valid for the region's whole
   life, which is what lets a `Sealed` carrier hold a thin reference to it.
 - A description is **precise**, and the table **interns** it
@@ -169,8 +169,8 @@ own itself, and that is the pin the self rule drops.
   every sharing carrier's claimed reach, and shrinking one would falsify a claim
   some carrier still relies on.
 - The description is **not a storage family**: it is not allocated through the
-  value store path and carries no `Stored`/`Reattachable` bounds. Only values live
-  in arenas; reach metadata lives beside them, in the table.
+  value store path and carries no `Reattachable` bound. Only values live in the
+  region's bump; reach metadata lives beside it, in the table.
 - **Every value has a description**, because that is where its residence is
   recorded. A region-pure value references one whose members are empty — one `Weak`
   host and an empty member list, no heap — and owns no pins, so a region-pure bind

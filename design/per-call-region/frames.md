@@ -49,7 +49,8 @@ whenever the child's `outer` points into per-call memory.
 That pin is **derived**, not threaded by the caller. `CallFrame::new`
 reads it off the parent scope via
 [`Scope::parent_frame_pin`](../../src/machine/core/scope.rs): the parent
-scope's own `region_owner` when the parent lives in a per-call region, or
+scope's own region owner — read off its region's host back-link — when the
+parent lives in a per-call region, or
 no pin when it lives in the run-root region (which outlives the run — a
 root chain plus an escaping value's reach-set pin would close a
 `region → value → frame` cycle). There is no pin parameter for a caller

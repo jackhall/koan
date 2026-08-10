@@ -61,10 +61,10 @@ by local discipline rather than by construction.
   ([arena.rs](../../src/machine/core/arena.rs)) hands any koan crate code the
   raw `RegionHandle`, bypassing every veneer door; eleven reaches exist across
   `src/machine`. Now defanged rather than a live bypass: every route the raw
-  handle exposes is vetted by its own signature — the `'static`-bound
-  `alloc_resident`, the rank-2 `alloc_resident_born` / `alloc_resident_born_with`
-  doors, the `Copy`-bounded bump primitives, and the placement-gated fold door —
-  so the handle can no longer store an unvetted region-borrowing value. It is
+  handle exposes is vetted by its own signature — the `Copy`-bounded bump
+  primitives, the `!needs_drop`-asserted `in_place` / `frozen_table` verbs, the
+  rank-2 `bump_born_with` door, and the placement-gated fold door — so the
+  handle can no longer store an unvetted region-borrowing value. It is
   `pub(crate)`, not on the published workgraph surface. Candidate: confine
   raw-handle access to `machine::core` so the reach is typed shut rather than
   disciplined.

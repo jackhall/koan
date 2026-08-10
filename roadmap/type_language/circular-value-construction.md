@@ -17,8 +17,8 @@ values (the constructor path in
 [`KObject`](../../src/machine/model/values/kobject.rs) only once its parts are done), so
 a field cannot point back at a value that does not yet exist. The storage substrate holds
 that shut from the other side: no stored value owns an `Rc` back to a region — a substrate
-is a borrow and a reach's pins are holder-owned — so the store engine
-([`Region::alloc_resident`](../../workgraph/src/witnessed/region.rs)) needs no cycle gate
+is a borrow and a reach's pins are holder-owned — so the region's allocator
+([`Region`](../../workgraph/src/witnessed/region.rs)) needs no cycle gate
 and offers no way to close one, which is what keeps the refcount-based reclamation the
 memory model assumes leak-free. So `NEWTYPE Node = :{next :Node}` types fine, yet
 no `Node` can be built whose `next` is itself, and two nodes cannot reference each

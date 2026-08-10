@@ -9,9 +9,11 @@
 //! (`ExpressionSignature`, `Argument`, `SignatureElement`) lives in
 //! [`crate::machine::model::types::signature`]. The two are distinct concepts; do not conflate.
 //!
-//! The captured scope is held as a plain `&'a Scope<'a>` and re-anchored to `'a` together with the
-//! rest of the value when the holder is read out of its region (the substrate retype in
-//! [`BumpAllocator::value`](crate::witnessed::BumpAllocator)), exactly as
+//! The captured scope is held as a plain `&'a Scope<'a>`. A `Module` is bumped at the destination's
+//! own `'a` ([`BumpAllocator::value`](crate::witnessed::BumpAllocator)), so the field is already at
+//! the region's lifetime with no retype involved; where the whole value rides a lifetime-free
+//! carrier, the embedded reference re-anchors with it in that carrier's single audited reattach —
+//! exactly as
 //! [`KFunction`](crate::machine::core::KFunction) and
 //! [`Scope::outer`](crate::machine::core::Scope) hold theirs — so `child_scope` is a bare field
 //! read with no per-pointer handle and no `unsafe` of its own.

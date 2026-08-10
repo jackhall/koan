@@ -8,7 +8,7 @@ freed when the call's slot finalizes. Above both sits
 its parsed AST are bumped into: created before the run root and dropped after it, at
 the same **eternal** tier (`PinsRegion::needs_no_pin`), so a value pointing at
 program text names no member any pin bundle has to hold. It stays outside the frame
-lifecycle entirely — no `CallFrame` adopts it, no `Scope` names it as `region_owner`,
+lifecycle entirely — no `CallFrame` adopts it, no `Scope` lives in its region,
 and its only capability in use is the bump its `ProgramBrand` hands parse output and the one runtime
 body that synthesizes a value-channel node
 ([§ Value-channel AST](value-substrates.md#value-channel-ast-the-program-storage-marker)). The target storage model for composite
@@ -18,16 +18,19 @@ pin-versus-copy escape policy — is pinned in
 
 ## Storage shape: a graph of region slots
 
-A `KoanRegion` holds one `typed_arena`-backed sub-arena per stored family, and
-there is exactly **one**: `Scope` — the family *designed* to own things (its
-bindings), running a real `Drop` at region death and so needing a typed slot that
-will run it. Every other value family is `Drop`-free by
-construction and lives in the region's shared bump instead, where death is chunk
+A `KoanRegion`'s value storage is one **bump** and nothing else. Every value
+family is `Drop`-free by construction and lives there, where death is chunk
 deallocation and no per-slot glue runs at all: the `KObject` and `Held` cells, the
 four container substrates (record, list, dict, payload) with their index metadata,
-the `KFunction` and `Module` families, and the strings and expression parts
-already hosted there
+the `KFunction` and `Module` families, `Scope` itself, and the strings and
+expression parts already hosted there
 ([value-substrates.md § Untyped arenas](value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+`Scope`'s `Drop`-freedom is structural rather than audited: every field is `Copy`, a
+`Cell` of a `Copy`, or a bump-backed table whose own vacuous destructor is
+suppressed, and the `reattachable!` declaration in
+[arena.rs](../src/machine/core/arena.rs) states that as a compile-time
+`!needs_drop::<Scope<'static>>()` assert — a field that later brings glue back fails
+the build there.
 A `KType` and a `TypeIdentifier` take neither tier: both are `Copy` handles — an
 interned registry index and a borrow of name bytes already resident where they
 were parsed — so the type channel's carriers hold them by value. Slots have stable
@@ -48,7 +51,8 @@ than ownership trees. The structural edges:
 - `KObject::KFunction(&'a KFunction<'a>)`
   holds a bare value-side reference to a function-region slot and reaches the
   per-call region that owns the function's captured scope only through that
-  reference's scope `region_owner`. It carries no per-value liveness anchor:
+  scope's region owner, read off the region's own host back-link. It carries no
+  per-value liveness anchor:
   the region an escaping closure reaches is pinned by its envelope's
   witness [`FrameSet`](../src/machine/core/arena.rs) bundle while it rides a
   scheduler slot, then minted — description into the consumer region's reach
@@ -73,8 +77,8 @@ reach description when the value is bound (see
 [§ Region lifetime erasure](#region-lifetime-erasure)).
 
 **Why graph rather than tree.** Many-to-one captures and bindings, sibling
-scopes sharing an outer, mutual references between a `Scope` and its
-region's `scopes` sub-arena, and cross-region carrier-witness pins all
+scopes sharing an outer, mutual references between a `Scope` and the
+region's bump it lives in, and cross-region carrier-witness pins all
 break tree shape. Slots are added incrementally as the program runs;
 references can be installed before or after the pointee exists (forward
 declarations, replay-park edges). The frame-chain `Rc` that rides on top of
@@ -112,38 +116,34 @@ protocol sits on top of.
 
 ## Region lifetime erasure
 
-Every sub-arena inside [`KoanRegion`](../src/machine/core/arena.rs) stores
-`T<'static>` rather than `T<'a>` — the `'static` is phantom so `KoanRegion`
-itself carries no lifetime parameter. The erase-store engine lives generically in
-the [`Region<W>`](../workgraph/src/witnessed/region.rs) substrate (`KoanRegion`
-is the Koan instantiation `Region<KoanStorageProfile>`). Every store of a typed family routes one
-[`alloc_resident<K: Stored>`](../workgraph/src/witnessed/region.rs)
-engine: the engine erases the value into its `'static` lifetime family (`At<'static>`)
-for storage and re-anchors the returned `&'a` to the input borrow on the way out. `Scope` — the one
-region-borrowing family that still takes a typed cell — reaches it only through a *born* door,
-which builds the value at the destination's own `for<'b>` brand and stores it in the same act. The
-other region-borrowing families (`KFunction`, `Module`) are `Copy` and take the bump doors, where
-nothing is erased and so nothing is re-anchored
-([§ Move-in residence](#move-in-residence)).
-The store-side erasure
-routes the scheduler's single audited `erase_to_static` — the safe direction of the one
-`retype` primitive (described below) — so the region's store-side and the scheduler's
-read-side share one transmute rather than each carrying its own. Each `Stored` family is a
-`Reattachable` family (`At<'static> == Self`), the GAT both directions key on. It is sound
-because:
+No **value** stored in a [`KoanRegion`](../src/machine/core/arena.rs) is erased at
+all. The region's storage is its bump, and a bump's own type carries no lifetime, so
+`'a` enters only at the allocating call: a value whose fields are already at the
+caller's `'a` — its region back-pointer included — is built there and placed there,
+with no `'static` round trip to audit and so no residence obligation to discharge
+([§ Move-in residence](#move-in-residence)). `KoanRegion` still carries no lifetime
+parameter of its own, and the generic engine still lives in the
+[`Region<W>`](../workgraph/src/witnessed/region.rs) substrate (`KoanRegion` is the
+Koan instantiation `Region<KoanStorageProfile>`), which declares only the
+frame-owner type its reach descriptions are typed at.
+
+What *is* erased is a **reference**: a scope pointer a carrier stores lifetime-free
+across a scheduler slot, and the freshly bumped reference the crossing construction
+door re-anchors on its way out of a `for<'b>` brand. Both route the scheduler's
+single audited `erase_to_static` / `retype` pair (described below) over a
+`Reattachable` family (`At<'static> == Self`), the GAT both directions key on, so
+the region side and the scheduler side share one transmute rather than each carrying
+its own. It is sound because:
 
 - Lifetimes are zero-sized, so `T<'a>` and `T<'static>` have identical layout.
-- The wrapper returns an `&'a` tied to the input borrow; no `'static` reference
-  ever escapes.
-- On drop, no stored value's `Drop` impl follows a lifetime-parameterized
-  reference — auto-derived `Drop` only touches owned contents. Sub-regions
-  drop together at `KoanRegion` drop, so any cross-sub-arena `&` is dead
-  by the time anyone could observe it.
+- The re-anchor returns an `&'a` bounded by a live borrow of the region the pointee
+  was bumped into; no `'static` reference ever escapes.
+- A bump never moves an allocated chunk, so a held `&KoanRegion` keeps every pointee
+  it has handed out at a fixed address for the whole of that borrow.
 
-Beside those three cells a region holds a bump allocator
-([`Region::bump`](../workgraph/src/witnessed/region.rs)) — the storage home for
-every `Drop`-free value that names the region's own lifetime, which is to say every
-value family Koan has. The library bumps its own container metadata there (the
+The bump ([`Region::bump`](../workgraph/src/witnessed/region.rs)) is the storage home
+for every `Drop`-free value that names the region's own lifetime, which is to say
+every value family Koan has. The library bumps its own container metadata there (the
 reach-run partitions and cell index blocks a sectioned container names) and Koan
 bumps its value cells, its container substrates, its substrates' index metadata,
 its strings and its expression parts beside them. A value with operands whose reach
@@ -156,20 +156,22 @@ bytes-only or keyed-index allocation reaches it through the same
 (`allocator().text` / `.value` / `.slice`), which is where those verbs are defined
 once for every surface.
 
-It is the one region storage needing **no** erasure: a bump's own type carries no
-lifetime, so `'a` enters only at the allocation and an entry may hold an `&'a` back
-into the same region with no residence audit at all. Its `T: Copy` bound is what
-keeps it honest — a bump releases its chunks whole and runs no destructor, so
-admitting a `Drop`-bearing entry would silently skip one. A **collection** is where
-that bound stops travelling with the bytes, and a
-`const { assert!(!needs_drop::<_>()) }` over the entry types stands in for it — the
-same proof the bound stood for. A frozen keyed index takes its own verb,
-[`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs), which carries
-that assert and allocates the buckets over the very allocator it places the header
-through. A table that keeps **mutating** — a scope's binding table — is built over
-the allocator's raw `allocator-api2` seam instead, and its writer owes the assert at
-the declaration naming its entry types. Either way the destructor forgone would have
-freed only bytes region death frees anyway.
+An entry may hold an `&'a` back into the same region with no residence audit at all.
+The `T: Copy` bound on the write-once verbs is what keeps that honest — a bump
+releases its chunks whole and runs no destructor, so admitting a `Drop`-bearing entry
+would silently skip one. The shapes that are glue-free without being `Copy` take
+verbs of their own, each carrying a monomorphized
+`const { assert!(!needs_drop::<_>()) }` in place of the bound: a frozen keyed index
+takes [`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs), which
+allocates the buckets over the very allocator it places the header through, and a
+value that keeps *mutating in place* through interior mutability — a `Scope` — takes
+[`BumpAllocator::in_place`](../workgraph/src/witnessed/bump.rs). A **collection** is
+where the bound stops travelling with the bytes: a table that keeps mutating — a
+scope's binding tables, its SIG slot collector — is built over the allocator's raw
+`allocator-api2` seam, wrapped in `ManuallyDrop` so its vacuous teardown is
+suppressed, and its writer owes the entry-glue assert at the declaration naming the
+entry types. Either way the destructor forgone would have freed only bytes region
+death frees anyway.
 Cross-references among bumped entries need no drop-order argument at all:
 everything there dies with the region, at once.
 
@@ -180,11 +182,11 @@ through the [`ScopeRefFamily`](../src/machine/core/ref_carriers.rs) reattach fam
 [`ref_carriers.rs`](../src/machine/core/ref_carriers.rs), with no scope-specialized re-anchor helper — the
 embedded pointer re-anchors with the holder's own whole-value retype.
 
-A typed-cell holder's embedded scope reference re-anchors to the holder's `'a` as part of the
-holder's **own whole-value substrate retype**: when a `Scope` is read out of its region, the embedded
-`&Scope` rides along in that single `Reattachable` retype over the whole value. The bump-hosted
-holders — `KFunction`, `Module`, `Signature` — are never erased in the first place, so their embedded
-reference is already at the region's `'a` with no retype involved at all. Either way
+No holder is erased on the way in, so every embedded scope reference is already at the region's
+`'a` with no retype involved at all — a bumped `Scope`, `KFunction`, `Module` or `Signature` alike.
+Where a re-anchor does happen it is over an **erased reference**, not a value: a scope pointer read
+back out of a lifetime-free carrier, re-anchored in one `Reattachable` retype against the witness
+that pins it. Either way
 `KFunction::captured_scope`, `Module::child_scope`, `Signature::decl_scope`, and a
 `Scope`'s `outer` / `root` are **bare field reads** of an already-`'a` reference, not scope-specialized
 re-hands. The scope / module / function path carries **no `unsafe`** of its own — the only retype it
@@ -357,11 +359,11 @@ read, both deferring every fabrication hazard to the witnessed retype.
 The allocation engine needs **no cycle gate**: a stored value holds no owning `Rc` back to a region —
 a closure / future / module is a bare borrow into its defining region, kept alive by its holder's
 pin bundle rather than an embedded anchor — so storing it where requested can never close an
-allocation back-edge. The one typed family implements the `Stored` trait and routes the
-one [`alloc_resident`](../workgraph/src/witnessed/region.rs) engine, which erases the value to
-`'static`, stores it in the family's sub-arena, and re-anchors the store to `'a`; the engine carries
-no redirect logic. It stays unbypassable by construction: the substrate's `storage` bundle is private
-and the engine's own `store` is the only path to it, so no `Stored` impl can route around it.
+allocation back-edge. Nor is there a store engine to gate: every family lands in the region's bump
+through the same [`BumpAllocator`](../workgraph/src/witnessed/bump.rs) verbs, and the allocation
+*capability* is what stays unbypassable — the region's own `allocator` is `pub(crate)` to workgraph,
+so a bare `&KoanRegion` has no allocation surface and only a `RegionHandle` minted from a region
+owner (or handed out at a `for<'b>` brand) can write.
 
 A [`CallFrame`](../src/machine/core/arena.rs) is a thin shell over a refcounted
 [`FrameStorage`](../src/machine/core/arena.rs): the shell carries a `Rc<FrameStorage>` and an
@@ -451,18 +453,24 @@ itself is *born* at its destination:
   [`bump`](../workgraph/src/witnessed.rs) door: a `KObject`, a `Held` cell, a `Module` and a
   `ContainerSubstrate` are all `Copy`, so the cell lands in the destination's bump and the brand's
   `'a` — the fold's own — is what discharges the residence obligation at compile time.
-- **born** ([`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its siblings,
-  [`build_frame_child_witnessed`](../src/machine/core/arena.rs)) — the same rank-2 argument for a
-  family whose *every* constructor borrows the region it lands in, so it can never meet
-  `alloc_resident`'s `'static` bound and has no fold to ride. The library door
-  ([`RegionHandle::alloc_resident_born`](../workgraph/src/witnessed/region.rs) /
-  `alloc_resident_born_with`) hands the construction closure a `FoldedPlacement` over the destination
-  at a fresh `for<'b>`; the closure builds and the door stores in one act, returning the resident at
-  the handle's own `'a`. An operand the brand cannot derive — the frame child's foreign lexical
-  parent, a `GROUP` record — crosses in as a `SealedExtern` re-anchored to
-  the same `'b`, under a witness pin borrowed for the destination region's `'a`, which is what keeps
-  the door a lifetime *shortening*. Every koan door derives its destination handle from the value's
-  own anchoring scope, so a mis-paired store is unstateable.
+- **born** ([`build_frame_child_witnessed`](../src/machine/core/arena.rs),
+  [`Scope::alloc_child_transparent`](../src/machine/core/scope.rs)) — the same rank-2 argument for
+  the two stores that embed an operand living in *another* region, which no destination brand can
+  derive: the per-call frame child's foreign lexical parent, and the transparent `USING` window's
+  binding table in the opened module's region. The library door
+  ([`RegionHandle::bump_born_with`](../workgraph/src/witnessed/region.rs)) hands the construction
+  closure a `FoldedPlacement` over the destination at a fresh `for<'b>` with the operand
+  re-anchored to that same `'b`; the closure builds and the door bumps in one act, returning the
+  resident at the handle's own `'a`. The operand crosses as a `SealedExtern` under a witness pin
+  borrowed for the destination region's `'a`, which is what keeps the door a lifetime *shortening*.
+  Every koan door derives its destination handle from the value's own anchoring scope, so a
+  mis-paired store is unstateable.
+- **direct** ([`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its same-region
+  siblings, [`Scope::alloc_run_root`](../src/machine/core/scope.rs)) — no brand and no re-anchor at
+  all. Every field the value takes is already at the destination's own `'a`, so it is built there
+  and placed through [`BumpAllocator::in_place`](../workgraph/src/witnessed/bump.rs); residence is
+  the borrow checker's, since the only region reachable through the anchoring scope's brand is the
+  one the value lands in.
 
 Every move-in that lands a value reaching *another* region takes the folded tier — the binding and
 adoption doors ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs),
@@ -487,29 +495,34 @@ No runtime residence check survives. Each of the three region-borrowing families
 region borrow (a `KFunction` its captured scope, a `Scope` its own region, a `Module` its child
 scope), and none of the three can name a region the destination brand did not hand it.
 
-`Scope`, the one still stored in a typed cell, is **born at its destination**: the value is
-constructed inside a `for<'b>` brand over the destination region and stored in the same act, through
-the library's fold-free born door
-([`RegionHandle::alloc_resident_born`](../workgraph/src/witnessed/region.rs), or
-`alloc_resident_born_with` when the value must embed an operand the brand cannot derive). `'b` is
-universally quantified with no outlives relation to any enclosing lifetime, so the only `&'b Region`
-the closure body can name is the placement's own — an ambient region borrow does not coerce and does
-not compile. That is the same no-outlives argument the folded sinks rest on, applied to a family with
-nothing to fold.
+None of the three needs a brand for the ordinary case, because nothing about them is erased on the
+way in. A `KFunction` and a `Module` are `Copy` and store through the plain bump verb
+([`BumpAllocator::value`](../workgraph/src/witnessed/bump.rs)); a `Scope` is not `Copy` — it keeps
+mutating in place through its `Cell` / `RefCell` fields — so it stores through
+[`in_place`](../workgraph/src/witnessed/bump.rs), the glue-free verb whose `!needs_drop` assert
+stands where the `Copy` bound stands for the others. Either way every reference the stored value
+holds is an ordinary `&'a` the borrow checker already checked against the lifetime the destination
+brand borrows its region for: no `'static` round trip to audit and so no residence obligation to
+discharge.
 
-`KFunction` and `Module` need no brand at all, because nothing about them is erased on the way in:
-both are `Copy` and store through the plain bump verb
-([`BumpAllocator::value`](../workgraph/src/witnessed/bump.rs)), so every reference the stored
-value holds is an ordinary `&'a` the borrow checker already checked against the lifetime the
-destination brand borrows its region for. There is no `'static` round trip to audit and so no
-residence obligation to discharge. What each must still do is put its *own* bytes where its value
+The exception is a value embedding an operand from *another* region — the per-call frame child's
+lexical parent, the transparent window's foreign binding table. Those two are **born at their
+destination**: the value is constructed inside a `for<'b>` brand over the destination region and
+bumped in the same act, through
+[`RegionHandle::bump_born_with`](../workgraph/src/witnessed/region.rs). `'b` is universally
+quantified with no outlives relation to any enclosing lifetime, so the only `&'b Region` the closure
+body can name is the placement's own — an ambient region borrow does not coerce and does not compile.
+That is the same no-outlives argument the folded sinks rest on. What leaves the brand is the bumped
+**reference**, re-anchored to the caller's `'a` under the handle's own live region borrow; the value
+itself is never erased. What each must still do is put its *own* bytes where its value
 lands: a `KFunction`'s signature element run and re-homed name text
 ([`ExpressionSignature::mint`](../src/machine/model/types/signature.rs)), a `Module`'s path and both
 member tables ([`Module::assemble`](../src/machine/model/values/module.rs)). Each takes a single
 brand parameter for that re-home, so bumping the parts at one region and the value at another is
 unstateable.
 
-The koan doors ([`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its siblings,
+The koan doors ([`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its same-region
+siblings,
 [`KFunction::alloc_captured`](../src/machine/core/kfunction.rs),
 [`Module::alloc_at_child_scope`](../src/machine/model/values/module.rs)) each derive the destination
 handle from the value's own anchoring scope rather than taking a brand alongside it, so a call site
