@@ -222,16 +222,14 @@ pub(crate) fn with_branded_ref<T: Reattachable, R>(
     f(branded)
 }
 
-/// Proof of being inside a fold combinator's `for<'b>` closure. Minted only by the fold engines
+/// The `E0582` witness a token-form fold closure takes — an input mentioning `'b`, without which
+/// `impl for<'b> FnOnce(..) -> P::At<'b>` is rejected — anchoring the closure's work to the fresh
+/// fold brand. A pure brand marker: no door takes a `FoldToken` as a key — a fold that stores into
+/// its destination carries a [`FoldedPlacement`] instead. Minted only by the fold engines
 /// ([`Witnessed::map`] / [`Delivered::project`](delivered::Delivered::project) /
 /// [`Delivered::transfer_into`](delivered::Delivered::transfer_into) /
 /// [`StepContext::alloc_with`](step_ctx::StepContext::alloc_with)); the private field keeps an
-/// embedder from forging one, and the `'b` brand keeps it from escaping the closure — so a
-/// capability gated on it is usable only at a fresh fold brand.
-///
-/// It doubles as the `E0582` witness the fold closures need — an input mentioning `'b`, without
-/// which `impl for<'b> FnOnce(..) -> P::At<'b>` is rejected — so the same argument that proves
-/// fold-closure residence also anchors the brand.
+/// embedder from forging one, and the `'b` brand keeps it from escaping the closure.
 ///
 /// `Copy` is safe: the token cannot outlive its closure (`'b` is unnameable outside), so
 /// duplicating it inside the closure grants nothing new.
@@ -265,19 +263,6 @@ impl<'b> FoldToken<'b> {
     /// Mint a fold token — crate-internal, so only the fold engines can produce one.
     pub(crate) fn mint() -> Self {
         FoldToken(PhantomData)
-    }
-}
-
-/// A forged fold token for the embedder's white-box tests, gated off production (like
-/// [`region_metrics`]). An embedder unit test that drives a folded-placement hook in isolation —
-/// outside a real fold combinator — sources its token here. Compiled out of production **and** out
-/// of the external-crate `compile_fail` fixtures (which do not enable `test-hooks`), so it never
-/// weakens the confinement the private field enforces.
-#[cfg(any(test, feature = "test-hooks"))]
-impl<'b> FoldToken<'b> {
-    /// Forge a fold token for a test that has no enclosing fold engine to mint one.
-    pub fn forge_for_test() -> Self {
-        FoldToken::mint()
     }
 }
 
@@ -336,8 +321,9 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     }
 
     /// Forge a placement for an embedder white-box test that has no enclosing fold engine to mint
-    /// one — gated off production and out of the external-crate `compile_fail` fixtures, mirroring
-    /// [`FoldToken::forge_for_test`].
+    /// one — gated off production (like [`region_metrics`]) **and** out of the external-crate
+    /// `compile_fail` fixtures (which do not enable `test-hooks`), so it never weakens the
+    /// confinement the private field enforces.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn forge_for_test(handle: RegionHandle<'b, W>) -> Self {
         FoldedPlacement { handle }

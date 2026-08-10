@@ -1,4 +1,4 @@
-//! Targeted Miri coverage for the unsafe sites in this file. Each test pins down a
+//! Targeted Miri coverage for the region doors this module fronts. Each test pins down a
 //! specific aliasing/lifetime shape under tree borrows; logical assertions are minimal
 //! — these tests fail when Miri reports UB, not on values.
 
