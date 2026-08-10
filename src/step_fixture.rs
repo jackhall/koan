@@ -19,7 +19,7 @@ use crate::machine::model::Scalar;
 use crate::machine::run_root_storage;
 
 pub use crate::machine::core::StepAllocator;
-pub use crate::machine::execute::{drive_step_allocator, StepCarried};
+pub use crate::machine::execute::{StepCarried, drive_step_allocator};
 pub use crate::machine::model::KObject;
 
 /// Hand a step-branded carrier to `guard` at a `for<'b>` rank-2 brand — the step tail's confinement

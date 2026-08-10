@@ -14,12 +14,12 @@ use crate::machine::core::carrier_witness::{OpenedFunction, SealedFunction};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::ref_carriers::BindingsReferenceFamily;
 use crate::machine::core::{
-    product_reaches_region, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion,
-    KoanRegionExt, KoanStorageProfile, ModuleRefFamily, ScopeRefFamily,
+    FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt,
+    KoanStorageProfile, ModuleRefFamily, ScopeRefFamily, product_reaches_region,
 };
 use crate::machine::model::{
-    copy_or_pin, relocate_object_into, Carried, CarriedFamily, KObject, KType, Module, ModuleDraft,
-    RegionEscape, TypeIdentifier,
+    Carried, CarriedFamily, KObject, KType, Module, ModuleDraft, RegionEscape, TypeIdentifier,
+    copy_or_pin, relocate_object_into,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, KError, SplicedCell};
 use crate::witnessed::{

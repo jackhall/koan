@@ -8,8 +8,8 @@ use crate::machine::model::{
 use crate::source::{self, FileId, SourceLoc, Span};
 use crate::witnessed::RegionHandleFamily;
 
-use super::{scope_frame, KoanStorageProfile, Scope};
 use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
+use super::{KoanStorageProfile, Scope, scope_frame};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.

@@ -1,9 +1,9 @@
 //! `TYPE OF <value>` — the value's own reported type, surfaced as a type value. General over the
 //! value channel (scalar, container, module, view), and the door a module takes to type position.
 
-use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
-use crate::machine::model::{KObject, KType, TypeNode};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
 
 #[test]

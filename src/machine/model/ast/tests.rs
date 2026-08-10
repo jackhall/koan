@@ -1,11 +1,11 @@
-use crate::machine::core::{program_storage, ProgramBrand};
+use crate::machine::core::{ProgramBrand, program_storage};
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::ast::{
-    classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier,
+    DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier, classify_dispatch_shape,
 };
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
-use crate::machine::model::TypeRegistry;
 use crate::source::Spanned;
 
 fn kw(s: &str) -> ExpressionPart<'_> {

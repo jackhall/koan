@@ -8,16 +8,16 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use super::NodeFinalize;
-use crate::builtins::test_support::{parse_one, run_root_bare, TestRun};
-use crate::machine::core::{
-    program_storage, run_root_storage, CarrierWitness, FrameCoverage, FrameStorage,
-};
+use crate::builtins::test_support::{TestRun, parse_one, run_root_bare};
+use crate::machine::AdoptSeam;
+use crate::machine::CallFrame;
 use crate::machine::core::{Action, BodyCtx};
+use crate::machine::core::{
+    CarrierWitness, FrameCoverage, FrameStorage, program_storage, run_root_storage,
+};
 use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::model::{KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::machine::AdoptSeam;
-use crate::machine::CallFrame;
 use crate::witnessed::Delivered;
 
 /// Build a scalar carrier residing in `producer`'s region whose borrows reach that region exactly

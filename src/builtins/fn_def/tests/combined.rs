@@ -2,7 +2,7 @@
 //! statement whose single binder installs the value name and the signature's dispatch bucket, both
 //! naming the one function it builds.
 
-use crate::builtins::test_support::{fn_is_registered, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, fn_is_registered, parse_one};
 use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
 

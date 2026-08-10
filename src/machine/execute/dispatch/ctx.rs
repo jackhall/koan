@@ -13,12 +13,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::OpenedFunction;
-use crate::machine::core::{scope_frame, DepPlacement};
+use crate::machine::core::bindings::WriteOp;
+use crate::machine::core::{DepPlacement, scope_frame};
 use crate::machine::core::{FrameCoverage, FrameStorage, ProgramBrand, RunWriter, StepAllocator};
-use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::FoldDirection;
+use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{
     CallFrame, DeliveredCarried, KError, LexicalFrame, NameOutcome, NodeHandle, NodeId, Scope,
@@ -31,8 +31,8 @@ use super::super::nodes::NodeScope;
 use super::super::obligation::ReturnObligation;
 use super::super::runtime::KoanWorkload;
 use super::{
-    resolve_bare_carrier, resolve_name_part, Await, BareCarrier, DepRequest, Outcome,
-    ProducerDisposition, ProducerStanding,
+    Await, BareCarrier, DepRequest, Outcome, ProducerDisposition, ProducerStanding,
+    resolve_bare_carrier, resolve_name_part,
 };
 use crate::scheduler::{Deps, Scheduler};
 

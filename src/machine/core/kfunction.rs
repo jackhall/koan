@@ -22,8 +22,8 @@ pub mod pick;
 pub use crate::scheduler::NodeId;
 pub use action::ActionFn;
 pub use body::Body;
-use pick::slot_admits;
 pub use pick::ClassifiedSlots;
+use pick::slot_admits;
 
 /// The captured scope is allocated in the same `KoanRegion` this `KFunction` lives in —
 /// [`Self::alloc_captured`] derives the destination brand from the scope, so the two cannot come

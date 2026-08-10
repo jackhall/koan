@@ -10,13 +10,13 @@
 //! value with no wrapper. This builtin only constructs the union *type* as a first-class type
 //! value.
 
+use crate::machine::WriteGate;
 use crate::machine::model::Held;
 use crate::machine::model::KKind;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::WriteGate;
-use crate::machine::{arg_object, require_ktype, Action};
+use crate::machine::{Action, arg_object, require_ktype};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 
 use super::op_def::OperatorForm;
@@ -48,7 +48,7 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "{MEMBERS_SLOT} slot must be a run of type operands",
-            )))))
+            )))));
         }
     };
     if substrate.is_empty() {
@@ -64,7 +64,7 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "{MEMBERS_SLOT}: every member must be a type, got `{}`",
                     other.summarize(ctx.types),
-                )))))
+                )))));
             }
         }
     }

@@ -1,15 +1,15 @@
-use crate::machine::model::KKind;
 use crate::machine::WriteGate;
+use crate::machine::model::KKind;
 
+use crate::machine::FinishCtx;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{pair_list_names, seal_writes, FieldNameKind};
 use crate::machine::model::{DeclWindow, RecursiveGroupWindow};
-use crate::machine::FinishCtx;
-use crate::machine::{seal_type_identity, StepCarried};
+use crate::machine::model::{FieldNameKind, pair_list_names, seal_writes};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{StepCarried, seal_type_identity};
 
 use super::{arg, kw, sig};
 
@@ -45,7 +45,7 @@ fn finalize_union<'a>(
             None => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "UNION `{name}`: variant `{tag}` is not one of the declared variants",
-                ))))
+                ))));
             }
         };
         sealed = window.fill(index, payload, brand, fctx.types);
@@ -67,7 +67,7 @@ fn finalize_union<'a>(
         None => {
             return Err(KError::new(KErrorKind::ShapeError(format!(
                 "UNION `{name}` did not seal",
-            ))))
+            ))));
         }
     };
     // The union type is a `Copy` handle: cross it as a declared operand and fold the variant
@@ -82,7 +82,7 @@ fn finalize_union<'a>(
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::nominal_schema::nominal_schema_action;
     use crate::machine::model::KObject;
-    use crate::machine::{arg_object, require_bare_type_name, Action};
+    use crate::machine::{Action, arg_object, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "UNION", ctx.types));
     let schema_expr = match arg_object(ctx.args, "schema") {
@@ -90,7 +90,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "UNION schema slot must be a parenthesized dict literal".to_string(),
-            ))))
+            ))));
         }
     };
     // Pre-scan the variant tags so every variant has a stable relative index before any payload
@@ -145,12 +145,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{mock_declaration_site, parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, mock_declaration_site, parse_one};
     use crate::machine::model::Carried;
     use crate::machine::model::KType;
     use crate::machine::model::{KKind, NodeSchema, RecursiveGroupWindow, TypeNode, TypeRegistry};
-    use crate::machine::{program_storage, run_root_storage};
     use crate::machine::{KErrorKind, Scope};
+    use crate::machine::{program_storage, run_root_storage};
 
     /// The newtype repr of union `name`'s `variant` member — each variant is a per-tag newtype
     /// `SetMember`, and its schema's `NewType` repr is the field type.
@@ -168,13 +168,12 @@ mod tests {
                 schema,
                 ..
             } = types.node(member)
+                && member_name == variant
             {
-                if member_name == variant {
-                    return match schema {
-                        NodeSchema::NewType(repr) => repr,
-                        _ => panic!("variant `{variant}` must project a NewType repr"),
-                    };
-                }
+                return match schema {
+                    NodeSchema::NewType(repr) => repr,
+                    _ => panic!("variant `{variant}` must project a NewType repr"),
+                };
             }
         }
         panic!("union `{name}` has no variant `{variant}`");

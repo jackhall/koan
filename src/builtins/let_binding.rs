@@ -1,10 +1,10 @@
+use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KObject, KType};
-use crate::machine::StepCarried;
-use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -17,7 +17,7 @@ use crate::machine::model::Carried;
 /// returns the bound carrier as `Action::Done`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::model::Held;
-    use crate::machine::{arg_held, arg_object, arg_type, arg_unresolved_type, Action};
+    use crate::machine::{Action, arg_held, arg_object, arg_type, arg_unresolved_type};
 
     let done_err = |e: KError| Action::done(Err(e));
     let bind_index = ctx.bind_index();

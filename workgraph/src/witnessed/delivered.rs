@@ -548,7 +548,7 @@ fn relocate_then_compose<'s, T, B, P, F, Pr>(
     B::At<'b>,
     FoldToken<'b>,
 ) -> (P::At<'b>, Carrier<F>, PinBundle<F>)
-       + 's
++ 's
 where
     T: Reattachable,
     B: Reattachable,

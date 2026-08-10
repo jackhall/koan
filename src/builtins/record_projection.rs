@@ -11,8 +11,8 @@
 //! re-tagging the carrier so only one arm admits. See
 //! [design/typing/ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance).
 
-use crate::machine::model::TypeRegistry;
 use crate::machine::WriteGate;
+use crate::machine::model::TypeRegistry;
 
 use crate::machine::model::Carried;
 use crate::machine::model::ExpressionPart;
@@ -29,7 +29,7 @@ use super::{arg, kw, sig};
 /// operand is typed `:{}`, so dispatch shape-gates the slot to records and the body
 /// reads a guaranteed `KObject::Record` carrier.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{arg_object, require_kexpression, Action};
+    use crate::machine::{Action, arg_object, require_kexpression};
 
     let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));
 
@@ -154,7 +154,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
     use crate::machine::model::{KObject, KType, TypeNode};
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;

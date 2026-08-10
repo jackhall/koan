@@ -54,7 +54,7 @@ fn arguments<'sig, 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::{run_root_storage, FrameStorageExt, RegionBrand};
+    use crate::machine::core::{FrameStorageExt, RegionBrand, run_root_storage};
     use crate::machine::model::KObject;
     use crate::machine::model::KType;
     use crate::machine::model::ReturnType;

@@ -24,7 +24,7 @@ use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
 
 use super::super::TerminalDepFinish;
-use super::apply_callable::{apply_callable, ResolvedCallable};
+use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::SchedulerView;
 use super::{Await, DepRequest, Outcome};
 use crate::machine::AdoptSeam;

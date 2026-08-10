@@ -54,7 +54,7 @@
 
 use std::rc::{Rc, Weak};
 
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 
 use super::{
     ComposeWitness, Reattachable, Region, RegionHandle, RegionOwner, StorageProfile, Witness,

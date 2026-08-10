@@ -1,5 +1,5 @@
-use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::core::{program_storage, run_root_storage, KErrorKind};
+use crate::builtins::test_support::{TestRun, parse_one};
+use crate::machine::core::{KErrorKind, program_storage, run_root_storage};
 use crate::machine::model::KObject;
 
 /// The tagged-union value-type check fires when the value-cell resolves to a

@@ -281,10 +281,12 @@ fn a_cell_borrowing_home_keeps_home_in_the_value_level_description() {
         )],
     );
 
-    assert!(container
-        .reach_at(0)
-        .expect("index is covered")
-        .borrows_home());
+    assert!(
+        container
+            .reach_at(0)
+            .expect("index is covered")
+            .borrows_home()
+    );
     assert!(value_reach.borrows_home());
     assert!(members_are(value_reach, &[&dest]));
 }

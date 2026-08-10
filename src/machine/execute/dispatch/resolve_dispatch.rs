@@ -314,10 +314,10 @@ impl OverloadBucket<'_, '_> {
                 continue;
             };
             for lean in leans {
-                if let Lean::Parked(p) = lean {
-                    if !producers.contains(&p) {
-                        producers.push(p);
-                    }
+                if let Lean::Parked(p) = lean
+                    && !producers.contains(&p)
+                {
+                    producers.push(p);
                 }
             }
         }

@@ -28,7 +28,7 @@ use crate::source::Spanned;
 
 use super::ignore_results;
 use super::nodes::{ChainOp, NodeWork};
-use super::obligation::{with_obligation, ReturnObligation};
+use super::obligation::{ReturnObligation, with_obligation};
 use super::runtime::KoanWorkload;
 use crate::machine::core::{BlockEntry, FramePlacement};
 use crate::scheduler::{Deps, ResolvedDeps, Scheduler};
@@ -61,21 +61,21 @@ mod tests;
 
 pub(in crate::machine::execute) use super::outcome::{Await, Continuation, Outcome};
 pub(super) use bare_name::{
-    bare_name_of, resolve_bare_carrier, resolve_name_part, type_channel, BareCarrier, TypeChannel,
+    BareCarrier, TypeChannel, bare_name_of, resolve_bare_carrier, resolve_name_part, type_channel,
 };
 pub(crate) use constructors::{build_type_operand, seal_type_identity};
-pub(in crate::machine::execute) use ctx::{with_node_scope, SchedulerView};
+pub(in crate::machine::execute) use ctx::{SchedulerView, with_node_scope};
 pub(crate) use field_list::{BrandCompose, FieldListDeferral};
+pub use resolve_dispatch::{DispatchOutcome, NameOutcome, Resolved};
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
-pub use resolve_dispatch::{DispatchOutcome, NameOutcome, Resolved};
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
 /// time); re-exported here so dispatch-internal call sites and tests keep the
 /// `dispatch::{DispatchShape, classify_dispatch_shape}` path.
 #[allow(unused_imports)]
-pub(crate) use crate::machine::model::{classify_dispatch_shape, DispatchShape};
+pub(crate) use crate::machine::model::{DispatchShape, classify_dispatch_shape};
 
 /// Consumer-less producer standing: ready → errored → park. Read at a leaf-park
 /// site with no consumer id in scope, where a cycle can never be classified —
@@ -317,14 +317,18 @@ pub(super) fn extract_call_body<'step>(
     expr: &WorkingExpression<'step>,
 ) -> Result<CallBody<'step>, KError> {
     match &expr.parts[1..] {
-        [Spanned {
-            value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
-            ..
-        }] => Ok(CallBody::Named(fields)),
-        [Spanned {
-            value: WorkingPart::Ast(ExpressionPart::Expression(inner)),
-            ..
-        }] => Ok(CallBody::Positional(inner.parts)),
+        [
+            Spanned {
+                value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
+                ..
+            },
+        ] => Ok(CallBody::Named(fields)),
+        [
+            Spanned {
+                value: WorkingPart::Ast(ExpressionPart::Expression(inner)),
+                ..
+            },
+        ] => Ok(CallBody::Positional(inner.parts)),
         _ => Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
             reason: "no matching function".to_string(),

@@ -27,21 +27,21 @@
 
 use crate::machine::WriteGate;
 
-use crate::machine::core::bindings::SealedValue;
-use crate::machine::core::bindings::{powerset_probes, WriteOp};
-use crate::machine::core::ProgramBrand;
-use crate::machine::model::CarriedFamily;
-use crate::machine::model::TypeRegistry;
-use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
-use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{Held, KType, Record};
-use crate::machine::model::{KKind, SignatureDraft, SignatureElement};
 use crate::machine::BindingIndex;
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
+use crate::machine::core::ProgramBrand;
+use crate::machine::core::bindings::SealedValue;
+use crate::machine::core::bindings::{WriteOp, powerset_probes};
+use crate::machine::model::CarriedFamily;
+use crate::machine::model::TypeRegistry;
+use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::{Held, KType, Record};
+use crate::machine::model::{KKind, SignatureDraft, SignatureElement};
+use crate::machine::model::{OperatorGroup, ReductionMode, binary_key, unary_key};
 use crate::machine::{
-    arg_held, require_kexpression, Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal,
-    FinishCtx, OwnedDispatch,
+    Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal, FinishCtx, OwnedDispatch, arg_held,
+    require_kexpression,
 };
 use crate::machine::{Body, CarrierWitness, KError, KErrorKind, NodeId, Scope};
 use crate::scheduler::DepResults;
@@ -49,7 +49,7 @@ use crate::scheduler::Deps;
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
-use super::fn_def::return_type::{classify_return_type, extract_type_slot_raw, ReturnTypeState};
+use super::fn_def::return_type::{ReturnTypeState, classify_return_type, extract_type_slot_raw};
 use super::resolve_or_await::{expect_type_terminal, resolve_at_wake};
 use super::{arg, kw, sig};
 

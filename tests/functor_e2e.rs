@@ -17,10 +17,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::test_support::{lookup_binding, SharedBuf, TestRun};
+use koan::builtins::test_support::{SharedBuf, TestRun, lookup_binding};
 use koan::machine::model::{KObject, SignatureElement, TypeNode};
 use koan::machine::{
-    program_storage, run_root_storage, FrameStorage, KFunction, ProgramStorage, Scope,
+    FrameStorage, KFunction, ProgramStorage, Scope, program_storage, run_root_storage,
 };
 
 /// Run `src` to completion and hand back the whole run — the seeded scope the assertions

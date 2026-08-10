@@ -8,11 +8,11 @@ use crate::machine::{DispatchOutcome, KError, KErrorKind, NameOutcome, NodeId};
 use super::super::ignore_results;
 use super::super::nodes::{ChainOp, NodeWork};
 use super::super::obligation::with_obligation;
-use super::ctx::SchedulerView;
 use super::ProducerDisposition;
+use super::ctx::SchedulerView;
 use super::{
-    bare_name_of, park_resume, propagate_dep_error, stage_eager_part, staged_slot_placeholder,
-    working_frame, BareCarrier, DepRequest, Outcome, PartWalkResult, Resolved,
+    BareCarrier, DepRequest, Outcome, PartWalkResult, Resolved, bare_name_of, park_resume,
+    propagate_dep_error, stage_eager_part, staged_slot_placeholder, working_frame,
 };
 use crate::scheduler::ResolvedDeps;
 
@@ -135,7 +135,7 @@ pub(super) fn finish<'step>(
         Err(e) => {
             return Outcome::Done(Err(
                 e.with_frame(working_frame("<wrap-resolve>", &working_expr))
-            ))
+            ));
         }
     };
     let scope = ctx.current_scope();

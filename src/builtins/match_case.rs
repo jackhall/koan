@@ -1,5 +1,5 @@
-use crate::machine::model::TypeRegistry;
 use crate::machine::WriteGate;
+use crate::machine::model::TypeRegistry;
 
 use crate::machine::model::KKind;
 
@@ -25,7 +25,7 @@ use super::{arg, kw, sig};
 /// naming the scrutinee's runtime type; an F1 ambiguity or malformed shape → `ShapeError`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract};
-    use crate::machine::{arg_object, require_kexpression, Action};
+    use crate::machine::{Action, arg_object, require_kexpression};
 
     // Selection needs only a borrow of the scrutinee — it never stores the reference — so no
     // upfront copy is made.
@@ -34,7 +34,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         None => {
             return Action::done(Err(KError::new(KErrorKind::MissingArg(
                 "value".to_string(),
-            ))))
+            ))));
         }
     };
     let contract = crate::try_action!(resolve_arm_contract(ctx, "MATCH"));
@@ -51,7 +51,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "inexhaustive match = no branch for value of type `{}`",
                 value.ktype().name(ctx.types)
-            )))))
+            )))));
         }
         Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
     };
@@ -63,9 +63,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // enveloped here — the arm binds from one tier either way.
     let scrutinee =
         if !selected.binds_payload && matches!(value, crate::machine::model::KObject::Bool(_)) {
-            crate::try_action!(ctx
-                .scope
-                .deliver_pure_value(&crate::machine::model::KObject::Null))
+            crate::try_action!(
+                ctx.scope
+                    .deliver_pure_value(&crate::machine::model::KObject::Null)
+            )
         } else {
             match ctx.arg_carrier("value") {
                 Some(carrier) => carrier.duplicate(),
@@ -98,19 +99,19 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::machine::KErrorKind;
     use crate::machine::model::KObject;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
 
     fn run_program(source: &str) -> Vec<u8> {
         let program = program_storage();
         let region = run_root_storage();
         let (mut test_run, captured) = TestRun::with_buf(&program, &region);
         test_run.run(source);
-        let bytes = captured.borrow().clone();
-        bytes
+
+        captured.borrow().clone()
     }
 
     #[test]

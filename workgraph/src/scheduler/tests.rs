@@ -14,7 +14,7 @@ use std::rc::Rc;
 use super::nodes::NodeWork;
 use super::{Anchor, ResolvedDeps, Scheduler, Workload};
 use crate::witnessed::doctest_fixture::Cart;
-use crate::witnessed::{reattachable, NoPins, SealedExtern};
+use crate::witnessed::{NoPins, SealedExtern, reattachable};
 
 /// A lifetime-free `Reattachable` family for the trivial test value.
 struct U32Value;

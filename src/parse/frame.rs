@@ -6,9 +6,9 @@
 //! frame and the `#(...)` Quote frame additionally carry `sigil_cursor` so the outer
 //! part's span covers the sigil byte plus the body.
 
+use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::ExpressionPart;
-use crate::machine::KError;
 use crate::source::{self, Span, Spanned};
 
 use super::dict_literal::{BraceContents, DictFrame};

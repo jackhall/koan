@@ -8,7 +8,7 @@ use crate::machine::model::{AnnouncedData, AnnouncedWindow};
 use crate::witnessed::{And, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
-use super::bindings::{bump_table, Bindings};
+use super::bindings::{Bindings, bump_table};
 use super::ref_carriers::{BindingsReferenceFamily, ScopeRefFamily};
 use super::scope_id::ScopeId;
 use crate::witnessed::BumpBackedMap;

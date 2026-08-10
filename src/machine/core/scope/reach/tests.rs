@@ -8,13 +8,13 @@ use std::rc::Rc;
 
 use super::*;
 use crate::builtins::test_support::TestRun;
-use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::Scalar;
+use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::{
     Held, Record, ReturnType, SignatureDraft, SignatureElement, TypeRegistry,
 };
-use crate::machine::{program_storage, run_root_storage};
 use crate::machine::{Body, CallFrame, KFunction};
+use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::FoldedPlacement;
 
 /// A `KFunction` whose captured scope lives in `home`'s region, allocated into `home`'s region — a

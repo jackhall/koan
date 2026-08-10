@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
 use crate::source::Spanned;

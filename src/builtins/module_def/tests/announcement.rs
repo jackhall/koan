@@ -2,10 +2,10 @@
 //! mutually-recursive group declared in a plain `MODULE` seals and every member's name is visible
 //! body-wide regardless of order.
 
-use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
 use crate::machine::model::{AnnouncedData, NodeSchema, TypeDigest, TypeNode, TypeRegistry};
 use crate::machine::model::{KExpression, KObject, KType};
-use crate::machine::{program_storage, run_root_storage, KErrorKind, Scope};
+use crate::machine::{KErrorKind, Scope, program_storage, run_root_storage};
 
 /// `(scc-digest, scc-size, field-types)` of a sealed record-repr newtype member, read off its
 /// `SetMember` identity. The SCC digest and component size witness which members sealed together;

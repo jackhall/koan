@@ -7,12 +7,12 @@
 use std::rc::Rc;
 
 use crate::machine::core::scope_frame;
-use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
+use crate::machine::core::{ScopeId, ScopeRefFamily, assemble_body_chain};
 use crate::machine::model::WorkingExpression;
 use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
 use crate::witnessed::SealedExtern;
 
-use super::super::dispatch::{with_node_scope, SubmitContext};
+use super::super::dispatch::{SubmitContext, with_node_scope};
 
 /// Pointer equality of two scopes (identity, not structural).
 fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
@@ -22,11 +22,11 @@ fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
     )
 }
 
-use super::super::nodes::{NodeScope, NodeWork, SlotFrame};
-use super::super::outcome::dep_error_frame;
 #[cfg(test)]
 use super::super::TerminalDepFinish;
-use super::super::{seal_witnessed, short_circuit, WitnessedDepFinish};
+use super::super::nodes::{NodeScope, NodeWork, SlotFrame};
+use super::super::outcome::dep_error_frame;
+use super::super::{WitnessedDepFinish, seal_witnessed, short_circuit};
 use super::{KoanRuntime, KoanWorkload};
 use crate::scheduler::ResolvedDeps;
 

@@ -11,8 +11,8 @@ use crate::machine::core::{KError, KErrorKind, RegionBrand};
 #[cfg(test)]
 use crate::machine::model::UntypedElement;
 use crate::machine::model::UntypedKey;
-use crate::machine::model::{owned_untyped_key, StoredElement};
 use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{StoredElement, owned_untyped_key};
 use crate::source::Spanned;
 
 /// Whether a binding — committed or an in-flight placeholder — lives in the value

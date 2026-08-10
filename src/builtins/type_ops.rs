@@ -7,12 +7,12 @@
 mod type_of;
 mod with;
 
+use crate::machine::Scope;
+use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::model::TypeRegistry;
-use crate::machine::Scope;
-use crate::machine::WriteGate;
 
 use super::{arg, kw, sig};
 

@@ -1,7 +1,7 @@
 use super::*;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::values::KKey;
-use crate::machine::model::TypeRegistry;
 use std::collections::HashMap;
 
 /// A singleton newtype member handle named `name` over `repr`.
@@ -15,7 +15,7 @@ fn newtype_singleton(name: &str, repr: KType, types: &TypeRegistry) -> KType {
 /// `door`'s borrow of `storage` lives in the same frame it was minted in, never crossing a return.
 macro_rules! container_door {
     ($storage:ident, $door:ident) => {
-        use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+        use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
         use crate::witnessed::FoldedPlacement;
         let $storage = run_root_storage();
         let owned_cells = crate::machine::core::FrameCoverage::empty();

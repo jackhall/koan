@@ -20,7 +20,7 @@ use super::node::TypeNode;
 use super::record::Record;
 use super::registry::TypeRegistry;
 use super::sig_schema::SigSchema;
-use super::type_digest::{empty_schema_digest, TypeDigest};
+use super::type_digest::{TypeDigest, empty_schema_digest};
 
 /// A handle to one interned type: the content digest of its [`TypeNode`], and nothing else.
 ///
@@ -229,7 +229,7 @@ fn render_sig_schema(schema: &SigSchema, types: &TypeRegistry) -> String {
 /// a `Formatter`-only signature cannot reach, and the digest is the whole identity anyway.
 impl std::fmt::Debug for KType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "KType(0x{:032x})", self.0 .0)
+        write!(f, "KType(0x{:032x})", self.0.0)
     }
 }
 

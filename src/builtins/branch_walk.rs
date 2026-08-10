@@ -9,13 +9,13 @@
 //! enforce on their result.
 
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{most_specific_ktype, TypeResolution};
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
+use crate::machine::model::{TypeResolution, most_specific_ktype};
 
-use crate::machine::model::{Carried, CarriedFamily, KObject, KType};
 use crate::machine::DeliveredCarried;
 use crate::machine::LexicalFrame;
 use crate::machine::ReturnContract;
+use crate::machine::model::{Carried, CarriedFamily, KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 use std::rc::Rc;
 
@@ -39,7 +39,7 @@ pub(crate) fn resolve_arm_contract<'a>(
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "{kind} return type `{}` is not a known type",
                     te.render()
-                ))))
+                ))));
             }
         }
     } else {
@@ -48,7 +48,7 @@ pub(crate) fn resolve_arm_contract<'a>(
             None => {
                 return Err(KError::new(KErrorKind::MissingArg(
                     "return_type".to_string(),
-                )))
+                )));
             }
         }
     };
@@ -103,8 +103,8 @@ pub(crate) fn arm_tail<'a>(
     types: &TypeRegistry,
 ) -> crate::machine::Action<'a> {
     use crate::machine::FramePlacement;
-    use crate::machine::{block_tail, BlockBody, BlockScope, BlockSeed};
     use crate::machine::{BindingIndex, CallFrame};
+    use crate::machine::{BlockBody, BlockScope, BlockSeed, block_tail};
     let frame: Rc<CallFrame> = CallFrame::new(root);
     let seed: BlockSeed<'a> = Box::new(move |child, _types: &TypeRegistry, gate| {
         // Fused copy + bind of `it` at idx 0 in the fresh arm frame: one structural copy made

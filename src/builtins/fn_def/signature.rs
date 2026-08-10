@@ -1,11 +1,11 @@
 //! Signature parsing for the `FN` builtin.
 
+use crate::machine::NodeId;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::{Argument, SignatureElement};
+use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::NodeId;
 use crate::source::Spanned;
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface

@@ -9,14 +9,14 @@
 //! narrow candidate buckets so user-defined overloads of short connector words
 //! like `OF` don't pay a bucket-walk cost on every dispatched parameterized type.
 
+use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
-    FieldNameKind, FieldParts,
+    Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts,
+    parse_typed_field_list_via_elaborator,
 };
 use crate::machine::model::{KType, Record};
-use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -56,7 +56,7 @@ fn require_proper_type(
 mod action_bodies {
     use super::{build_carrier, require_proper_type};
     use crate::machine::model::constructor_param_names;
-    use crate::machine::{require_ktype, Action, BodyCtx};
+    use crate::machine::{Action, BodyCtx, require_ktype};
 
     use crate::machine::model::Record;
     use crate::machine::{KError, KErrorKind};
@@ -130,7 +130,7 @@ fn build_carrier<'a>(
     sig_slot: &str,
     ret_slot: &str,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{require_kexpression, require_ktype, Action};
+    use crate::machine::{Action, require_kexpression, require_ktype};
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
     let ret = crate::try_action!(require_ktype(ctx.args, ret_slot, ctx.types));
     crate::try_action!(require_proper_type(
@@ -236,11 +236,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::machine::KErrorKind;
     use crate::machine::model::{KKind, KType, Record, TypeNode};
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
 
     #[test]
     fn list_of_number_lowers_to_list_number() {

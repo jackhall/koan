@@ -1,6 +1,6 @@
 //! `WITH` sharing constraints on functor parameters and return types.
 
-use crate::builtins::test_support::{lookup_fn, lookup_module, parse_one, spliced_part, TestRun};
+use crate::builtins::test_support::{TestRun, lookup_fn, lookup_module, parse_one, spliced_part};
 use crate::machine::model::Carried;
 use crate::machine::{program_storage, run_root_storage};
 

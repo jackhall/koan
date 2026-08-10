@@ -6,7 +6,7 @@
 //! [design/typing/modules.md](../../../design/typing/modules.md)).
 
 use crate::machine::model::Held;
-use crate::machine::{arg_held, Action, BodyCtx};
+use crate::machine::{Action, BodyCtx, arg_held};
 use crate::machine::{KError, KErrorKind};
 
 pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
@@ -18,13 +18,13 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`TYPE OF` takes a value; `{}` is already a type",
                 t.name(ctx.types),
-            )))))
+            )))));
         }
         Some(Held::UnresolvedType(ti)) => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`TYPE OF` takes a value; `{}` is already a type",
                 ti.render(),
-            )))))
+            )))));
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("value".into())))),
     };

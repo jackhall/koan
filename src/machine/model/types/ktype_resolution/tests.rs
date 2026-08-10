@@ -1,6 +1,6 @@
 use super::*;
-use crate::machine::model::types::Record;
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::types::Record;
 
 fn leaf(n: &str) -> TypeIdentifier<'_> {
     TypeIdentifier::leaf(n)

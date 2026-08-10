@@ -17,13 +17,13 @@
 //! `bindings.types` entry a manifest `LET` member does — value slots (`VAL`) live in the
 //! decl scope's own slot collector, a separate storage channel `bindings.types` never sees.
 
+use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
 use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::StepCarried;
-use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -60,7 +60,7 @@ fn bind_abstract_member<'a>(
 
 /// `TYPE <name:ProperType>` — first-order abstract member. Binds `AbstractType { decl scope id, name }`.
 pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{require_bare_type_name, Action};
+    use crate::machine::{Action, require_bare_type_name};
 
     if !ctx.scope.is_in_sig_body() {
         return Action::done(Err(not_in_sig_body()));
@@ -82,7 +82,7 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machin
 /// the raw `(Param… AS Name)` expression and binds an `AbstractType` under `Name` carrying the
 /// declared parameter names.
 pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{require_kexpression, Action};
+    use crate::machine::{Action, require_kexpression};
 
     if !ctx.scope.is_in_sig_body() {
         return Action::done(Err(not_in_sig_body()));

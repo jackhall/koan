@@ -4,14 +4,14 @@
 //! wraps the outcome in the prelude [`Result`](super::result) carrier as
 //! either `Ok(v)` or `Error(KError::to_tagged())`.
 
-use crate::machine::model::TypeRegistry;
 use crate::machine::WriteGate;
+use crate::machine::model::TypeRegistry;
 use std::rc::Rc;
 
-use crate::machine::kerror_ktype;
-use crate::machine::model::{KObject, KType, Record};
 use crate::machine::Scope;
 use crate::machine::StepCarried;
+use crate::machine::kerror_ktype;
+use crate::machine::model::{KObject, KType, Record};
 
 use super::{arg, kw, sig};
 
@@ -42,13 +42,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 /// Watches the captured `expr` and recovers into a `Result` carrier
 /// (`Ok(v)` / `Error(KError::to_tagged())`) via a `Catch` finish.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::FoldingBrand;
+    use crate::machine::RegionTypeFamily;
     use crate::machine::build_type_operand;
     use crate::machine::core::SubstrateDoor;
     use crate::machine::model::Carried;
     use crate::machine::model::CarriedFamily;
-    use crate::machine::FoldingBrand;
-    use crate::machine::RegionTypeFamily;
-    use crate::machine::{require_kexpression, Action, CatchContinue, DepPlacement, DepRequest};
+    use crate::machine::{Action, CatchContinue, DepPlacement, DepRequest, require_kexpression};
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.

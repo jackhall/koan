@@ -1,13 +1,13 @@
 //! `OP` surface tests: the declaration forms, what each registers, the shadowing/type-gating
 //! semantics against the builtin operators, and the errors the surface rejects.
 
-use crate::builtins::test_support::{binds_module, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, binds_module, parse_one};
+use crate::machine::KErrorKind;
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
-use crate::machine::KErrorKind;
 
 /// The numbers of a `KObject::List`, for the unary tests that collect a run into one list.
 fn list_numbers(object: &KObject<'_>, types: &TypeRegistry) -> Vec<f64> {

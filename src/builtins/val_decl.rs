@@ -14,12 +14,12 @@
 //!
 //! [`Held::UnresolvedType`]: crate::machine::model::Held::UnresolvedType
 
-use crate::machine::core::RegionBrand;
-use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{KKind, KObject, KType, TypeNode, TypeRegistry};
 use crate::machine::FinishCtx;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
+use crate::machine::core::RegionBrand;
+use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::{KKind, KObject, KType, TypeNode, TypeRegistry};
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
@@ -71,7 +71,7 @@ enum CarrierForm<'a> {
 /// sub-dispatch) for a leaf that re-resolves against decl_scope.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::dispatch_type_then;
-    use crate::machine::{arg_object, arg_type, arg_unresolved_type, Action};
+    use crate::machine::{Action, arg_object, arg_type, arg_unresolved_type};
 
     let done_err = |e: KError| Action::done(Err(e));
 

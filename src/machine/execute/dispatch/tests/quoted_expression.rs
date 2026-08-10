@@ -12,8 +12,8 @@ fn run_program(source: &str) -> Vec<u8> {
     let region = run_root_storage();
     let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     test_run.run(source);
-    let bytes = captured.borrow().clone();
-    bytes
+
+    captured.borrow().clone()
 }
 
 /// A single quoted part classifies `LiteralPassThrough`, so the expression's value *is* the

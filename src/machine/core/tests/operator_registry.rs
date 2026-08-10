@@ -12,12 +12,12 @@
 
 use std::rc::Rc;
 
-use crate::builtins::test_support::{run_root_bare, TestRun};
-use crate::machine::core::{
-    program_storage, run_root_storage, BindingIndex, CallFrame, GroupSeal, Scope,
-};
-use crate::machine::model::{probe_key, OperatorGroup, ReductionMode};
+use crate::builtins::test_support::{TestRun, run_root_bare};
 use crate::machine::DeliveredOperatorGroup;
+use crate::machine::core::{
+    BindingIndex, CallFrame, GroupSeal, Scope, program_storage, run_root_storage,
+};
+use crate::machine::model::{OperatorGroup, ReductionMode, probe_key};
 
 /// The declaration door a fixture takes: host the record in `scope`'s own region and seal it, which
 /// is what every registry entry for this declaration then holds a bit-copy of.
@@ -112,9 +112,11 @@ fn cross_group_probe_misses() {
         .unwrap();
     // A chain mixing `+` with an operator from a different (unregistered) group
     // produces the probe "+ |", which nothing registered — a clean miss.
-    assert!(scope
-        .resolve_operator_group_delivered("+ |", None)
-        .is_none());
+    assert!(
+        scope
+            .resolve_operator_group_delivered("+ |", None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -170,15 +172,19 @@ fn visibility_cutoff_hides_later_sibling_registration() {
         )
         .unwrap();
     // A consumer at cutoff 3 can't see a registration at index 5.
-    assert!(scope
-        .bindings()
-        .lookup_operator_group("+", Some(3))
-        .is_none());
+    assert!(
+        scope
+            .bindings()
+            .lookup_operator_group("+", Some(3))
+            .is_none()
+    );
     // A consumer at cutoff 9 can.
-    assert!(scope
-        .bindings()
-        .lookup_operator_group("+", Some(9))
-        .is_some());
+    assert!(
+        scope
+            .bindings()
+            .lookup_operator_group("+", Some(9))
+            .is_some()
+    );
 }
 
 #[test]
@@ -279,10 +285,12 @@ fn re_registering_an_equal_record_is_a_no_op() {
         .expect("an equal mode + member set is the same declaration");
 
     // The first registration's index stands, so the entry stays visible where it was declared.
-    assert!(scope
-        .bindings()
-        .lookup_operator_group("+", Some(2))
-        .is_some());
+    assert!(
+        scope
+            .bindings()
+            .lookup_operator_group("+", Some(2))
+            .is_some()
+    );
 }
 
 /// Upsert: the same probe under a different chaining mode is a conflict — one scope declares one
@@ -486,9 +494,11 @@ fn nearest_group_context_stops_at_a_plain_module() {
 
     // An anonymous frame inside the body (a block, a per-call scope) is transparent.
     let block = group_scope.alloc_child_under();
-    assert!(block
-        .nearest_group_context()
-        .is_some_and(|g| std::ptr::eq(g, group)));
+    assert!(
+        block
+            .nearest_group_context()
+            .is_some_and(|g| std::ptr::eq(g, group))
+    );
 
     // A plain module declared inside the group body is not a group.
     let nested_module = group_scope.alloc_child_under_module("inner", None);

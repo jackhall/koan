@@ -32,8 +32,8 @@ use crate::machine::core::{RegionBrand, Scope, ScopeId};
 use crate::witnessed::BumpBackedMap;
 
 use super::super::types::{
-    empty_schema_digest, sig_subtype, KType, Relation, SigSchema, TypeDigest, TypeNode,
-    TypeRegistry,
+    KType, Relation, SigSchema, TypeDigest, TypeNode, TypeRegistry, empty_schema_digest,
+    sig_subtype,
 };
 
 /// The owned members a module is assembled from — gathered by a construction site before the value

@@ -21,14 +21,14 @@ mod runtime;
 mod step_carried;
 
 pub(in crate::machine::execute) use outcome::{
-    catch_continuation, ignore_results, seal_witnessed, short_circuit, CatchFinish,
-    ContinuationFamily, TerminalDepFinish, WitnessedDepFinish,
+    CatchFinish, ContinuationFamily, TerminalDepFinish, WitnessedDepFinish, catch_continuation,
+    ignore_results, seal_witnessed, short_circuit,
 };
 pub(crate) use runtime::seed_run_root;
-pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
-pub use step_carried::{drive_step_allocator, StepCarried};
+pub use runtime::{KoanRuntime, interpret, interpret_with_writer, interpret_with_writer_path};
+pub use step_carried::{StepCarried, drive_step_allocator};
 
 pub(crate) use dispatch::{
-    build_type_operand, seal_type_identity, BrandCompose, FieldListDeferral,
+    BrandCompose, FieldListDeferral, build_type_operand, seal_type_identity,
 };
 pub(crate) use dispatch::{DispatchOutcome, NameOutcome};

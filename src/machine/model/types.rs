@@ -32,26 +32,26 @@ pub use recursive_group_window::{
 pub(crate) use registry::Relation;
 pub use registry::TypeRegistry;
 pub use resolver::{
-    declarator_window, elaborate_type_identifier, finalize_nominal_member, seal_writes, Elaborator,
-    SealOutcome, TypeResolution,
+    Elaborator, SealOutcome, TypeResolution, declarator_window, elaborate_type_identifier,
+    finalize_nominal_member, seal_writes,
 };
 pub use sig_schema::{
-    constructor_param_names, sig_subtype, substitute_sig_members, unsaturated_constructor_message,
-    SigSchema,
+    SigSchema, constructor_param_names, sig_subtype, substitute_sig_members,
+    unsaturated_constructor_message,
 };
 #[allow(unused_imports)]
 pub use signature::Specificity;
 pub use signature::{
-    is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, DispatchToken,
-    DispatchTokenElement, ExpressionSignature, ReturnType, SignatureDraft, SignatureElement,
-    UntypedElement, UntypedKey,
+    Argument, DeferredReturn, DeferredReturnSurface, DispatchToken, DispatchTokenElement,
+    ExpressionSignature, ReturnType, SignatureDraft, SignatureElement, UntypedElement, UntypedKey,
+    is_keyword_token,
 };
 pub use signature::{
-    most_specific_ktype, owned_untyped_key, restore_stored_key, store_untyped_key,
     StoredDispatchTokenElement, StoredElement, StoredKeyProbe, UntypedKeyProbe,
+    most_specific_ktype, owned_untyped_key, restore_stored_key, store_untyped_key,
 };
-pub(crate) use type_digest::{empty_schema_digest, TypeDigest};
+pub(crate) use type_digest::{TypeDigest, empty_schema_digest};
 pub use typed_field_list::{
-    pair_list_names, parse_typed_field_list_via_elaborator, rewrite_window_refs, FieldListContext,
-    FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
+    FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed, pair_list_names,
+    parse_typed_field_list_via_elaborator, rewrite_window_refs,
 };

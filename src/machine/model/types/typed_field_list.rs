@@ -5,15 +5,15 @@
 use super::declaration_window::WindowView;
 use super::ktype::KType;
 use super::registry::TypeRegistry;
-use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
+use super::resolver::{Elaborator, TypeResolution, elaborate_type_identifier};
+use crate::machine::model::Record;
 use crate::machine::model::ast::{
     ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,
 };
 use crate::machine::model::values::Carried;
-use crate::machine::model::Record;
 use crate::machine::{NodeId, Scope};
-use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
+use crate::parse::parse_pair_list;
 use crate::source::Spanned;
 use std::collections::HashSet;
 
@@ -195,36 +195,35 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
             // that reads it back run against the same cart — so the read stands under that scope's
             // own region owner. What it yields is region-free either way: a `KType` is an interned
             // registry handle borrowing nothing.
-            FieldSlot::Resolved(cell) => elaborator.scope.read_spliced(&cell, |carried| match carried
-            {
-                Carried::Type(kt) => checked(kt),
-                other => Err(format!(
+            FieldSlot::Resolved(cell) => {
+                elaborator
+                    .scope
+                    .read_spliced(&cell, |carried| match carried {
+                        Carried::Type(kt) => checked(kt),
+                        other => Err(format!(
+                            "{context_list} type for `{}` resolved to non-type value `{}`",
+                            name,
+                            other.summarize(types),
+                        )),
+                    })
+            }
+            // A sigil body whose co-declared references are already threaded dispatches as it
+            // stands — the rewrite that produced it did what this arm's `Ast` peer does below.
+            FieldSlot::ThreadedSigil(body) => match results.as_mut().and_then(|feed| feed.pop()) {
+                Some(Carried::Type(kt)) => checked(kt),
+                Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => Err(format!(
                     "{context_list} type for `{}` resolved to non-type value `{}`",
                     name,
                     other.summarize(types),
                 )),
-            }),
-            // A sigil body whose co-declared references are already threaded dispatches as it
-            // stands — the rewrite that produced it did what this arm's `Ast` peer does below.
-            FieldSlot::ThreadedSigil(body) => {
-                match results.as_mut().and_then(|feed| feed.pop()) {
-                    Some(Carried::Type(kt)) => checked(kt),
-                    Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
-                        Err(format!(
-                            "{context_list} type for `{}` resolved to non-type value `{}`",
-                            name,
-                            other.summarize(types),
-                        ))
-                    }
-                    None if results.is_some() => Err(format!(
-                        "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
-                    )),
-                    None => {
-                        sub_dispatches.push(*body);
-                        Ok(KType::ANY)
-                    }
+                None if results.is_some() => Err(format!(
+                    "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
+                )),
+                None => {
+                    sub_dispatches.push(*body);
+                    Ok(KType::ANY)
                 }
-            }
+            },
             // A threaded record body elaborates inline exactly as its `Ast` peer does, and for the
             // same reason: a record type is folded here, never sub-Dispatched as a whole.
             FieldSlot::ThreadedRecord(body) => {
@@ -256,26 +255,24 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                 // reference. It cannot sub-dispatch (parking would deadlock on this very seal's
                 // producer), so it lowers straight to the variant's handle against the window —
                 // relative while the window is open, absolute once it has sealed.
-                if let [first, second] = boxed.parts {
-                    if let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
+                if let [first, second] = boxed.parts
+                    && let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
                         (&first.value, &second.value)
-                    {
-                        if let Some(view) = elaborator.window().filter(|v| v.binds(head.as_str())) {
-                            let index = view
-                                .variant_index(head.as_str(), &tag.render())
-                                .ok_or_else(|| {
-                                    format!(
-                                        "{context_list}: `{}` is not a variant of `{}`",
-                                        tag.render(),
-                                        head.as_str(),
-                                    )
-                                })?;
-                            return Ok(match view.sealed_member(index) {
-                                Some(kt) => kt,
-                                None => types.intern(super::node::TypeNode::Sibling(index)),
-                            });
-                        }
-                    }
+                    && let Some(view) = elaborator.window().filter(|v| v.binds(head.as_str()))
+                {
+                    let index = view
+                        .variant_index(head.as_str(), &tag.render())
+                        .ok_or_else(|| {
+                            format!(
+                                "{context_list}: `{}` is not a variant of `{}`",
+                                tag.render(),
+                                head.as_str(),
+                            )
+                        })?;
+                    return Ok(match view.sealed_member(index) {
+                        Some(kt) => kt,
+                        None => types.intern(super::node::TypeNode::Sibling(index)),
+                    });
                 }
                 match results.as_mut().and_then(|feed| feed.pop()) {
                     // Re-walk: the `Type`-arm is the single guard rejecting a sub that

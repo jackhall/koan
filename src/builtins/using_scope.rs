@@ -31,9 +31,9 @@
 //! frame, which pins the folded region. A module whose region the call site
 //! already holds folds an empty member set — the library's self rule strips it.
 
+use crate::machine::WriteGate;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -43,8 +43,8 @@ use super::{arg, kw, sig};
 /// `open_module_window` returns; the window it is stacked in is named by no chain frame, so its
 /// surfaced members take no cutoff and are visible throughout the block.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{block_tail, BlockBody, BlockScope};
-    use crate::machine::{require_kexpression, Action, FramePlacement};
+    use crate::machine::{Action, FramePlacement, require_kexpression};
+    use crate::machine::{BlockBody, BlockScope, block_tail};
 
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
     // `m` is a value slot of a non-name-literal type, so its part is spliced before the call on

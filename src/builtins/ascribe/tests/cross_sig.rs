@@ -2,9 +2,9 @@
 //! comparable when one structurally `sig_subtype`s the other. See
 //! [design/typing/modules.md](../../../../design/typing/modules.md).
 
-use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
-use crate::machine::model::KObject;
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
 
 /// `SIG Wide` requires everything `SIG Base` does, plus more (`Wide` strictly `sig_subtype`s

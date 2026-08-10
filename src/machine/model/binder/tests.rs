@@ -3,10 +3,10 @@
 
 use std::collections::HashMap;
 
-use super::{BinderSpec, StoredBinderKey, BINDER_SPECS};
-use crate::machine::core::{program_storage, ProgramBrand, RegionBrand};
+use super::{BINDER_SPECS, BinderSpec, StoredBinderKey};
+use crate::machine::core::{ProgramBrand, RegionBrand, program_storage};
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
-use crate::machine::model::{owned_untyped_key, UntypedKey};
+use crate::machine::model::{UntypedKey, owned_untyped_key};
 use crate::parse::parse;
 use crate::source::Spanned;
 

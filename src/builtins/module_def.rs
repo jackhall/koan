@@ -6,18 +6,18 @@
 //! [`await_module_body`] is the body-dispatch-and-bind tail, shared with `GROUP`
 //! ([`super::group_def`]) — a group *is* a module, so it differs only in the child scope it mints.
 
+use crate::machine::BindingIndex;
+use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::body_statement_refs;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{announced_type_declaration, TypeDeclarationSurface};
-use crate::machine::model::{pair_list_names, AnnouncedData, FieldNameKind};
+use crate::machine::model::{AnnouncedData, FieldNameKind, pair_list_names};
 use crate::machine::model::{KKind, SigSchema};
 use crate::machine::model::{Module, ModuleDraft};
-use crate::machine::BindingIndex;
-use crate::machine::StepCarried;
-use crate::machine::WriteGate;
+use crate::machine::model::{TypeDeclarationSurface, announced_type_declaration};
 use crate::machine::{Action, BodyCtx};
 use crate::machine::{KError, KErrorKind};
 use crate::machine::{NameLookup, Scope};

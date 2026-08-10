@@ -18,7 +18,7 @@ use crate::machine::{
 };
 
 use super::super::runtime::KoanWorkload;
-use super::{producer_standing, ProducerStanding};
+use super::{ProducerStanding, producer_standing};
 use crate::machine::model::Carried;
 use crate::scheduler::Scheduler;
 

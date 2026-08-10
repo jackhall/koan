@@ -9,6 +9,9 @@
 //! The keyworded and anonymous FN binders ride the same path, selected by the
 //! [`FnKind`] threaded through `finalize_fn_with_kind` / `defer`.
 
+use crate::machine::Action;
+use crate::machine::KFunction;
+use crate::machine::StepCarried;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
@@ -16,16 +19,13 @@ use crate::machine::model::KExpression;
 use crate::machine::model::KType;
 use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
 use crate::machine::model::{SignatureDraft, SignatureElement};
-use crate::machine::Action;
-use crate::machine::KFunction;
-use crate::machine::StepCarried;
 use crate::machine::{BindingIndex, Body, CarrierWitness, KError, KErrorKind, NodeId, Scope};
 use crate::witnessed::Witnessed;
 
 use super::return_type::{
-    make_capture, resolve_capture_at_finish, ReturnTypeCapture, ReturnTypeState,
+    ReturnTypeCapture, ReturnTypeState, make_capture, resolve_capture_at_finish,
 };
-use super::signature::{parse_fn_param_list, ParamListOutcome};
+use super::signature::{ParamListOutcome, parse_fn_param_list};
 use crate::machine::OverloadSeal;
 
 /// How a finalized FN-def is wired into the scope:
@@ -202,20 +202,20 @@ fn check_value_type_kinds(
 ) -> Result<(), KError> {
     use crate::machine::model::unsaturated_constructor_message;
     for element in elements {
-        if let SignatureElement::Argument(argument) = element {
-            if let Some(message) = unsaturated_constructor_message(
+        if let SignatureElement::Argument(argument) = element
+            && let Some(message) = unsaturated_constructor_message(
                 argument.ktype,
                 &format!("the type of FN parameter `{}`", argument.name),
                 types,
-            ) {
-                return Err(KError::new(KErrorKind::ShapeError(message)));
-            }
-        }
-    }
-    if let ReturnType::Resolved(kt) = return_type {
-        if let Some(message) = unsaturated_constructor_message(*kt, "the FN return type", types) {
+            )
+        {
             return Err(KError::new(KErrorKind::ShapeError(message)));
         }
+    }
+    if let ReturnType::Resolved(kt) = return_type
+        && let Some(message) = unsaturated_constructor_message(*kt, "the FN return type", types)
+    {
+        return Err(KError::new(KErrorKind::ShapeError(message)));
     }
     Ok(())
 }
@@ -375,7 +375,7 @@ pub(crate) fn defer<'a>(
                         "FN signature slot at part-index {slot_idx} expected a type expression, \
                          got a {} value",
                         other.ktype(fctx.types).name(fctx.types),
-                    )))))
+                    )))));
                 }
             }
         }
@@ -394,13 +394,13 @@ pub(crate) fn defer<'a>(
                 ) {
                     ParamListOutcome::Done(es) => es,
                     ParamListOutcome::Err(msg) => {
-                        return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))))
+                        return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))));
                     }
                     ParamListOutcome::Pending { .. } => {
                         return Action::done(Err(KError::new(KErrorKind::ShapeError(
                             "FN signature elaboration still pending after dep-finish wake"
                                 .to_string(),
-                        ))))
+                        ))));
                     }
                 }
             }

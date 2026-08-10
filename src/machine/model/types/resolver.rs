@@ -18,10 +18,10 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use crate::machine::NodeId;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::core::{DeclarationSite, LexicalFrame, NameLookup, Scope};
 use crate::machine::model::ast::TypeIdentifier;
-use crate::machine::NodeId;
 
 use super::declaration_window::{DeclWindow, WindowView};
 use super::kkind::KKind;
@@ -165,7 +165,7 @@ fn park_until_seal(el: &Elaborator<'_, '_>, view: WindowView<'_, '_>) -> TypeRes
                 return TypeResolution::Unbound(format!(
                     "type `{declarer}` is co-declared in this module body but its declaration \
                      failed",
-                ))
+                ));
             }
         }
     }
@@ -220,10 +220,11 @@ pub fn elaborate_type_identifier(
         // that discovers its members as it walks its own schema. Announcing it here keeps the
         // relative index stable, and the declarator's finalize reports any member left unfilled as
         // a reference to a type the declaration never made.
-        if !view.is_sealed() && el.threaded.contains(name) {
-            if let Some(kt) = view.sibling(name, KKind::NewType, types) {
-                return TypeResolution::Done(kt);
-            }
+        if !view.is_sealed()
+            && el.threaded.contains(name)
+            && let Some(kt) = view.sibling(name, KKind::NewType, types)
+        {
+            return TypeResolution::Done(kt);
         }
     }
     match el.scope.resolve_type_with_chain(name, el.chain.as_deref()) {

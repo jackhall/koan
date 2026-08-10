@@ -2,7 +2,7 @@
 //! dispatch time. A module argument binds value-side (`bindings.data`), so the body reads it back
 //! as the Object-arm module value and projects members off it.
 
-use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
 use crate::machine::model::{KObject, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
 

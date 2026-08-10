@@ -1,9 +1,9 @@
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
+use crate::machine::KErrorKind;
 use crate::machine::model::{KKind, NodeSchema, TypeNode};
 use crate::machine::model::{KObject, KType, TypeRegistry};
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
-use crate::machine::KErrorKind;
 
 /// Assert `identity` names a `SetMember` whose name is `expected`.
 fn assert_member_named(types: &TypeRegistry, identity: KType, expected: &str) {

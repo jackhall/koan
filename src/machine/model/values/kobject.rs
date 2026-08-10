@@ -10,7 +10,7 @@ use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegis
 use crate::witnessed::{CellInput, CellReach, Sectioned};
 
 use super::container_substrate::{
-    held_copy_cost, HeldCells, ListLayout, PayloadLayout, RecordLayout,
+    HeldCells, ListLayout, PayloadLayout, RecordLayout, held_copy_cost,
 };
 use super::rehomed::Rehomed;
 use super::{

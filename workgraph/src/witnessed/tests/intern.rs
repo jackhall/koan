@@ -182,12 +182,14 @@ fn hit_is_proof_the_region_already_pins() {
         weak_a.upgrade().is_some(),
         "an intern hit skipped the fold because the region already held the pin"
     );
-    assert!(hit.pins_region(
-        weak_a
-            .upgrade()
-            .expect("the region's retention keeps the member alive")
-            .region()
-    ));
+    assert!(
+        hit.pins_region(
+            weak_a
+                .upgrade()
+                .expect("the region's retention keeps the member alive")
+                .region()
+        )
+    );
 }
 
 /// The empty description is a **per-region** interned singleton: every region-pure value in one

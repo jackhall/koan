@@ -12,12 +12,12 @@
 
 use std::collections::HashMap;
 
-use super::super::{empty_schema_digest, schema_content_digest, TypeDigest};
+use super::super::{TypeDigest, empty_schema_digest, schema_content_digest};
 use crate::machine::core::ScopeId;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::types::{
     KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode,
 };
-use crate::machine::model::TypeRegistry;
 
 #[track_caller]
 fn assert_pinned(label: &str, actual: TypeDigest, expected: u128) {

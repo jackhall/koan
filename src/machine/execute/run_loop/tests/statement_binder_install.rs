@@ -13,8 +13,8 @@
 use std::rc::Rc;
 
 use super::working_all;
-use crate::builtins::test_support::{binds_module, TestRun};
-use crate::machine::core::{program_storage, run_root_storage, FrameStorage, ProgramStorage};
+use crate::builtins::test_support::{TestRun, binds_module};
+use crate::machine::core::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 use crate::machine::model::{KObject, KType};
 
 /// Run `source` as one top-level block (source-order index gating) and hand back

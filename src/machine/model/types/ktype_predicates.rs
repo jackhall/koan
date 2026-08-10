@@ -12,13 +12,13 @@ use super::ktype::KType;
 use super::node::TypeNode;
 use super::record::Record;
 use super::registry::{Relation, TypeRegistry};
-use super::sig_schema::{sig_subtype, SigSchema};
+use super::sig_schema::{SigSchema, sig_subtype};
 use super::signature::{ExpressionSignature, SignatureElement};
-use super::type_digest::{empty_schema_digest, TypeDigest};
+use super::type_digest::{TypeDigest, empty_schema_digest};
+use crate::machine::SplicedCell;
 use crate::machine::core::read_resting;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, WorkingPart};
 use crate::machine::model::values::{Carried, Held, KObject};
-use crate::machine::SplicedCell;
 
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
 /// slot: the two constructors are the same type, the two argument records name the same

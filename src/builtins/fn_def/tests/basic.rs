@@ -1,6 +1,6 @@
 //! Basic FN registration, dispatch, and parameter binding.
 
-use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn, parse_one};
 use crate::machine::model::{KObject, SignatureElement};
 use crate::machine::{program_storage, run_root_storage};
 

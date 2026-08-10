@@ -1,13 +1,13 @@
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+use crate::machine::BindingIndex;
+use crate::machine::NameOutcome;
+use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use crate::machine::execute::dispatch::{
-    producer_disposition, resolve_name_part, ProducerDisposition,
+    ProducerDisposition, producer_disposition, resolve_name_part,
 };
 use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
-use crate::machine::BindingIndex;
-use crate::machine::NameOutcome;
 use crate::source::Spanned;
 
 #[test]

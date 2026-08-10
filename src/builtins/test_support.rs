@@ -9,6 +9,12 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
+#[cfg(test)]
+#[cfg(test)]
+use crate::machine::KFunction;
+use crate::machine::KoanRuntime;
+#[cfg(test)]
+use crate::machine::SealedFunction;
 use crate::machine::core::{ProgramBrand, ProgramStorage, RegionBrand};
 #[cfg(test)]
 use crate::machine::model::Carried;
@@ -19,12 +25,6 @@ use crate::machine::model::Module;
 use crate::machine::model::TypeRegistry;
 #[cfg(test)]
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
-#[cfg(test)]
-#[cfg(test)]
-use crate::machine::KFunction;
-use crate::machine::KoanRuntime;
-#[cfg(test)]
-use crate::machine::SealedFunction;
 use crate::machine::{AdoptSeam, FrameStorage, KError, NameLookup, Scope};
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};

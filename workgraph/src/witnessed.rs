@@ -42,7 +42,7 @@ pub use reach::{PinsRegion, ReachDescription, StepCoverage};
 mod host;
 pub use host::RegionHost;
 #[cfg(any(test, feature = "test-hooks"))]
-pub use host::{region_metrics, reset_region_metrics, RegionMetrics};
+pub use host::{RegionMetrics, region_metrics, reset_region_metrics};
 
 mod carrier;
 pub use carrier::{Carrier, HasRegionHandle};

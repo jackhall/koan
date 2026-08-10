@@ -1,15 +1,15 @@
 //! The slot-step bracket restores the ambient values on unwind, not just on return.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use crate::builtins::test_support::TestRun;
+use crate::machine::LexicalFrame;
 use crate::machine::core::run_root_storage;
-use crate::machine::core::{program_storage, ReturnContract};
+use crate::machine::core::{ReturnContract, program_storage};
 use crate::machine::execute::nodes::{NodePayload, NodeScope};
 use crate::machine::execute::obligation::ReturnObligation;
 use crate::machine::model::KType;
-use crate::machine::LexicalFrame;
 
 /// A trivial declared-return obligation the bracket tests deposit to stand in for the old
 /// `in_contract_chain` bool: any obligation makes `in_contract_chain()` read `true` inside the step.

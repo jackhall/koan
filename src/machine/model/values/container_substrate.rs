@@ -206,7 +206,7 @@ impl<'a> RecordSubstrate<'a> {
     }
 
     /// The fields in name order, as `(name, cell)` pairs.
-    pub fn fields(&self) -> impl Iterator<Item = (&'a str, &'a Held<'a>)> {
+    pub fn fields(&self) -> impl Iterator<Item = (&'a str, &'a Held<'a>)> + use<'a> {
         self.index()
             .names
             .iter()

@@ -10,11 +10,11 @@
 //! member, and `LET <Name> = <Type>` declares a manifest type member. The ascription
 //! operators (`:|` / `:!`) read the stored schema at ascription time.
 
+use crate::machine::Scope;
+use crate::machine::WriteGate;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KKind, SigSchema};
-use crate::machine::Scope;
-use crate::machine::WriteGate;
 
 use super::{arg, kw, sig};
 
@@ -24,7 +24,7 @@ use super::{arg, kw, sig};
 /// into the parent scope.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::await_body::await_body_in_scope;
-    use crate::machine::{require_bare_type_name, require_kexpression, Action};
+    use crate::machine::{Action, require_bare_type_name, require_kexpression};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG", ctx.types));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", "body"));
@@ -63,10 +63,10 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
 
     #[test]
     fn binder_name_extracts_sig_name() {

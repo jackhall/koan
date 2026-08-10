@@ -22,21 +22,21 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::{DepPlacement, OpenedFunction};
-use crate::machine::model::{constructor_param_names, Carried, Record};
+use crate::machine::model::{Carried, Record, constructor_param_names};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KType, NodeSchema, TypeNode, TypeRegistry};
 use crate::machine::{KError, KErrorKind};
 use crate::scheduler::Deps;
 use crate::source::Spanned;
 
-use super::super::outcome::dep_error_frame;
 use super::super::TerminalDepFinish;
+use super::super::outcome::dep_error_frame;
 use super::ctx::SchedulerView;
-use super::{
-    body_shape_err, constructors, extract_call_body, stage_all_eager_parts, CallBody, NAMED_ONLY,
-    POSITIONAL_ONLY,
-};
 use super::{Await, DepRequest, Outcome};
+use super::{
+    CallBody, NAMED_ONLY, POSITIONAL_ONLY, body_shape_err, constructors, extract_call_body,
+    stage_all_eager_parts,
+};
 
 #[cfg(test)]
 mod tests;
@@ -99,29 +99,29 @@ fn apply_constructor<'step>(
     // non-empty schema) or a SIG's abstract constructor slot — with a record-literal body binds
     // each of the family's parameters to a type. It precedes every construction arm: the two
     // surfaces are disjoint, and the record body is a type-argument list here, not a value.
-    if let Some(param_names) = constructor_param_names(identity, ctx.types()) {
-        if let Some(
-            [Spanned {
-                value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
-                ..
-            }],
+    if let Some(param_names) = constructor_param_names(identity, ctx.types())
+        && let Some(
+            [
+                Spanned {
+                    value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
+                    ..
+                },
+            ],
         ) = expr.parts.get(1..)
-        {
-            return apply_named_type_args(ctx, identity, param_names, fields);
-        }
+    {
+        return apply_named_type_args(ctx, identity, param_names, fields);
     }
     // A SIG's abstract constructor slot names a kind; it has no representation to build values
     // over. Its first-order sibling carries no parameters and falls to the generic mismatch.
     if let TypeNode::AbstractType {
         name, param_names, ..
     } = ctx.types().node(identity)
+        && !param_names.is_empty()
     {
-        if !param_names.is_empty() {
-            return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                "`{name}` is an abstract constructor slot declared by TYPE; only a \
+        return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+            "`{name}` is an abstract constructor slot declared by TYPE; only a \
                  NEWTYPE-declared constructor can construct values"
-            )))));
-        }
+        )))));
     }
     let TypeNode::SetMember { schema, name, .. } = ctx.types().node(identity) else {
         return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
@@ -135,10 +135,12 @@ fn apply_constructor<'step>(
         // other trailing expression is wrapped as a single positional value.
         NodeSchema::NewType(_) => match expr.parts.get(1..) {
             Some(
-                [Spanned {
-                    value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
-                    ..
-                }],
+                [
+                    Spanned {
+                        value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
+                        ..
+                    },
+                ],
             ) => constructors::dispatch_construct_record_newtype(brand, identity, fields),
             _ => constructors::dispatch_construct_newtype(brand, identity, &expr.parts[1..]),
         },
@@ -313,10 +315,12 @@ fn apply_union_construct<'step>(
 ) -> Outcome<'step> {
     // Bare variant-tag token with no payload (`Maybe Some`) names the variant *type*, reached
     // through its union — yielded as a first-class type value.
-    if let [Spanned {
-        value: WorkingPart::Ast(ExpressionPart::Type(t)),
-        ..
-    }] = &expr.parts[1..]
+    if let [
+        Spanned {
+            value: WorkingPart::Ast(ExpressionPart::Type(t)),
+            ..
+        },
+    ] = &expr.parts[1..]
     {
         let name = t.render();
         return match union_member(&members, &name, ctx.types()) {

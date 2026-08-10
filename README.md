@@ -4,7 +4,7 @@ A functional, graph-based language with a metaprogrammable expression syntax and
 
 ## Build
 
-Standard Cargo project, edition 2021.
+Standard Cargo project, edition 2024.
 
 ```sh
 cargo build           # debug build

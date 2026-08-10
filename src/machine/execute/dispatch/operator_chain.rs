@@ -34,7 +34,7 @@ use crate::source::{Span, Spanned};
 
 use super::ctx::SchedulerView;
 use super::{
-    become_dispatch, park_resume, propagate_dep_error, working_frame, Outcome, ProducerDisposition,
+    Outcome, ProducerDisposition, become_dispatch, park_resume, propagate_dep_error, working_frame,
 };
 
 /// The probe is `Some` for every `OperatorChain` (the classifier guarantees it), so a
@@ -420,10 +420,9 @@ fn pending_operator_producers<'b>(
             for scope in s.ancestors() {
                 let cutoff = scope.binding_cutoff(chain);
                 if let Some(producer) = scope.bindings().lookup_function_stored(key, cutoff).pending
+                    && !producers.contains(&producer)
                 {
-                    if !producers.contains(&producer) {
-                        producers.push(producer);
-                    }
+                    producers.push(producer);
                 }
             }
         }

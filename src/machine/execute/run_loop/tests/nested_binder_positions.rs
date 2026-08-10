@@ -6,10 +6,10 @@
 //! the anonymous `FN :{…}` form, which installs nothing; a definition that must also bind a name is
 //! one statement in the combined `LET <name> = FN …` spelling.
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
+use crate::machine::KErrorKind;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
-use crate::machine::KErrorKind;
 
 /// Assert `err` is `NestedBinder`, with a readable failure otherwise.
 fn assert_nested_binder(err: crate::machine::KError, position: &str) {

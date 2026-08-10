@@ -12,8 +12,8 @@
 //!
 //! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
-use crate::machine::model::types::{KKind, KType, TypeRegistry};
 use crate::machine::model::TypeIdentifier;
+use crate::machine::model::types::{KKind, KType, TypeRegistry};
 use crate::witnessed::reattachable;
 
 use super::KObject;

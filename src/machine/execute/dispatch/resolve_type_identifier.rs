@@ -38,7 +38,7 @@ impl<'step> Scope<'step> {
         chain: Option<std::rc::Rc<LexicalFrame>>,
         types: &TypeRegistry,
     ) -> TypeResolution<KType> {
-        use crate::machine::model::{elaborate_type_identifier, Elaborator};
+        use crate::machine::model::{Elaborator, elaborate_type_identifier};
         let mut elaborator = Elaborator::new(self).with_chain(chain);
         // A referenced type still in flight demotes this `Done` to a `Park`; `Park` /
         // `Unbound` forward unchanged.
@@ -73,10 +73,10 @@ impl FinalizeGate<'_, '_> {
     fn pending_producers(&self, kt: KType) -> Vec<NodeId> {
         let mut pending: Vec<NodeId> = Vec::new();
         for UserTypeRef { scope_id, name } in user_type_refs(kt, self.types) {
-            if let Some(node_id) = self.declared_producer(scope_id, &name) {
-                if !pending.contains(&node_id) {
-                    pending.push(node_id);
-                }
+            if let Some(node_id) = self.declared_producer(scope_id, &name)
+                && !pending.contains(&node_id)
+            {
+                pending.push(node_id);
             }
         }
         pending

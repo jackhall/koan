@@ -3,7 +3,7 @@
 use super::super::{BindingIndex, DeclarationSite, NameLookup};
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::{run_root_storage, FrameStorageExt};
+use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
@@ -331,12 +331,14 @@ fn register_function_coexists_with_same_name_value() {
         .expect("bare FN registration must not collide with a same-name value");
     assert!(matches!(scope.lookup("FOO"), Some(KObject::Number(n)) if *n == 1.0));
     let key = f.signature.untyped_key();
-    assert!(scope
-        .bindings()
-        .functions()
-        .get(&UntypedKeyProbe(&key))
-        .map(|b| !b.is_empty())
-        .unwrap_or(false));
+    assert!(
+        scope
+            .bindings()
+            .functions()
+            .get(&UntypedKeyProbe(&key))
+            .map(|b| !b.is_empty())
+            .unwrap_or(false)
+    );
 }
 
 /// The cross-kind exclusion guards the value/type partition, but a bare FN binds
@@ -370,12 +372,14 @@ fn register_function_coexists_with_same_name_type() {
         .expect("bare FN registration must not collide with a same-name type");
     assert!(scope.bindings().types().get("Foo").is_some());
     let key = f.signature.untyped_key();
-    assert!(scope
-        .bindings()
-        .functions()
-        .get(&UntypedKeyProbe(&key))
-        .map(|b| !b.is_empty())
-        .unwrap_or(false));
+    assert!(
+        scope
+            .bindings()
+            .functions()
+            .get(&UntypedKeyProbe(&key))
+            .map(|b| !b.is_empty())
+            .unwrap_or(false)
+    );
 }
 
 /// `lookup_member` (the one classified ATTR lookup) yields exactly one result per name: a
@@ -585,9 +589,11 @@ fn visibility_self_index_hidden_under_strict_less_than() {
         .unwrap();
     // Cutoff equal to producer idx (e.g. `LET x = x`): `3 < 3` is false.
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
-    assert!(scope
-        .resolve_with_chain("self_idx", Some(&consumer))
-        .is_none());
+    assert!(
+        scope
+            .resolve_with_chain("self_idx", Some(&consumer))
+            .is_none()
+    );
 }
 
 #[test]
@@ -627,13 +633,17 @@ fn visibility_type_side_gate_mirrors_value_side() {
         &mut crate::machine::WriteGate::for_test(),
     );
     let consumer_before: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
-    assert!(scope
-        .resolve_type_with_chain("TyLate", Some(&consumer_before))
-        .is_none());
+    assert!(
+        scope
+            .resolve_type_with_chain("TyLate", Some(&consumer_before))
+            .is_none()
+    );
     let consumer_after: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 9);
-    assert!(scope
-        .resolve_type_with_chain("TyLate", Some(&consumer_after))
-        .is_some());
+    assert!(
+        scope
+            .resolve_type_with_chain("TyLate", Some(&consumer_after))
+            .is_some()
+    );
 }
 
 /// Partition strictness at a SIG decl scope: `child_under_sig` mints an ordinary `Bindings`

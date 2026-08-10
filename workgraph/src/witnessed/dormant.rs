@@ -25,7 +25,7 @@
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
-use super::{erase_to_static, retype, DropFree, Reattachable, SealedExtern, Witness};
+use super::{DropFree, Reattachable, SealedExtern, Witness, erase_to_static, retype};
 
 /// The glue-free dormant slot: a one-field union holding a lifetime-erased value.
 ///

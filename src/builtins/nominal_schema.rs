@@ -11,8 +11,8 @@ use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::DeclWindow;
 use crate::machine::model::KType;
 use crate::machine::model::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
-    FieldNameKind, FieldParts,
+    Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts,
+    parse_typed_field_list_via_elaborator,
 };
 use crate::machine::{Action, BodyCtx, FinishCtx};
 use crate::machine::{DeclarationSite, KError, KErrorKind, TraceFrame};

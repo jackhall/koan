@@ -3,14 +3,14 @@
 //! view records per-call abstract identities and re-expresses SIG-declared value slots against
 //! them; a transparent view records the source's concrete types.
 
-use crate::builtins::test_support::{binds_module, lookup_module, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, binds_module, lookup_module, parse_one};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Module;
 use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
-use crate::machine::{program_storage, run_root_storage};
 use crate::machine::{KErrorKind, Scope};
+use crate::machine::{program_storage, run_root_storage};
 
 fn module_named<'a>(scope: &'a Scope<'a>, name: &str, types: &TypeRegistry) -> &'a Module<'a> {
     lookup_module(scope, name, types)

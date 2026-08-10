@@ -12,17 +12,17 @@ use crate::machine::{
     TraceFrame,
 };
 use crate::source::Spanned;
-use crate::witnessed::{reattachable, Delivered, RegionHandle};
+use crate::witnessed::{Delivered, RegionHandle, reattachable};
 
 use super::super::lift::{cell_still_borrows, copy_held_from_carried};
 use super::super::outcome::DepTerminal;
-use super::super::run_loop::{dest_brand, DestHandleFamily};
+use super::super::run_loop::{DestHandleFamily, dest_brand};
 use super::super::runtime::KoanRuntime;
 use super::super::{StepCarried, WitnessedDepFinish};
-use super::ctx::{current_dest_frame, with_current_node_scope, SchedulerView};
-use super::stage_eager_part;
 use super::SubmitContext;
-use super::{resolve_bare_carrier, BareCarrier};
+use super::ctx::{SchedulerView, current_dest_frame, with_current_node_scope};
+use super::stage_eager_part;
+use super::{BareCarrier, resolve_bare_carrier};
 use crate::scheduler::{DepResults, ResolvedDeps};
 
 /// Build-time accumulator family for an aggregate fold: the destination region plus the cells folded

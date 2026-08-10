@@ -13,8 +13,8 @@ mod golden;
 
 use super::*;
 use crate::machine::core::ScopeId;
-use crate::machine::model::types::{KType, Record, TypeNode};
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::types::{KType, Record, TypeNode};
 
 fn record(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
     types.record(Record::from_pairs(

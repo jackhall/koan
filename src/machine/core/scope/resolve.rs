@@ -8,8 +8,8 @@
 #[cfg(test)]
 use super::AdoptSeam;
 use super::Scope;
-use crate::machine::core::bindings::NameLookup;
 use crate::machine::core::LexicalFrame;
+use crate::machine::core::bindings::NameLookup;
 #[cfg(test)]
 use crate::machine::model::KObject;
 use crate::machine::model::KType;

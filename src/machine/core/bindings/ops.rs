@@ -23,7 +23,7 @@
 use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
-use crate::machine::model::{probe_key, KType};
+use crate::machine::model::{KType, probe_key};
 
 /// How a [`WriteOp::Type`] meets an existing `types[name]`: `Insert` is strict insert-if-absent (a
 /// present name is a `Rebind`), `UpsertEqual` admits a re-entry of the *same* declaration — the

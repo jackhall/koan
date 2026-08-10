@@ -24,7 +24,7 @@ use crate::machine::{
     RegionTypeFamily,
 };
 use crate::source::Spanned;
-use crate::witnessed::{reattachable, Delivered, RegionHandle};
+use crate::witnessed::{Delivered, RegionHandle, reattachable};
 
 use super::super::outcome::DepTerminal;
 use super::super::{StepCarried, WitnessedDepFinish};
@@ -135,10 +135,12 @@ fn single_value_cell<'step>(
     brand: RegionBrand<'step>,
     mut value_parts: &[Spanned<ExpressionPart<'step>>],
 ) -> Result<ValueCell<'step>, KError> {
-    if let [Spanned {
-        value: ExpressionPart::Expression(inner),
-        ..
-    }] = value_parts
+    if let [
+        Spanned {
+            value: ExpressionPart::Expression(inner),
+            ..
+        },
+    ] = value_parts
     {
         value_parts = inner.parts;
     }

@@ -1,6 +1,6 @@
+use crate::machine::WriteGate;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -8,7 +8,7 @@ use super::{arg, kw, sig};
 /// `PRINT <msg:Any>` — renders the `msg` object cell, writes it plus a newline to the run's
 /// output sink, and returns the rendered string as a `KObject::KString` value.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{arg_held, Action};
+    use crate::machine::{Action, arg_held};
     // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) via
     // `Held::summarize`.
     let rendered = match arg_held(ctx.args, "msg") {

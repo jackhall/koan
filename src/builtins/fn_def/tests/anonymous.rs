@@ -5,9 +5,9 @@
 //! bound by `LET` or dropped into a function-typed slot, and called by record
 //! (`f {x = 1}`).
 
-use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::model::KObject;
+use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
 
 use super::capture_program_output;

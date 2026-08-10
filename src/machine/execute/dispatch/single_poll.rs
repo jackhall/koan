@@ -13,15 +13,15 @@ use crate::machine::model::FieldParts;
 use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
 
-use super::super::lift::relocate_seam;
-use super::super::run_loop::dest_brand;
 use super::super::StepCarried;
 use super::super::WitnessedDepFinish;
-use super::apply_callable::{apply_callable, ResolvedCallable};
+use super::super::lift::relocate_seam;
+use super::super::run_loop::dest_brand;
+use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::SchedulerView;
 use super::{
-    become_dispatch, forward_to_producer, park_resume, type_channel, Await, DepRequest, Outcome,
-    ProducerStanding, TypeChannel,
+    Await, DepRequest, Outcome, ProducerStanding, TypeChannel, become_dispatch,
+    forward_to_producer, park_resume, type_channel,
 };
 use crate::scheduler::Deps;
 
@@ -172,7 +172,9 @@ pub(super) fn literal_pass_through<'step>(
         WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)) => {
             park_on_literal(DepRequest::RecordLit(fields))
         }
-        _ => unreachable!("LiteralPassThrough classifier only routes Literal/Spliced/Expression/ListLiteral/DictLiteral/RecordLiteral"),
+        _ => unreachable!(
+            "LiteralPassThrough classifier only routes Literal/Spliced/Expression/ListLiteral/DictLiteral/RecordLiteral"
+        ),
     }
 }
 

@@ -5,7 +5,7 @@
 
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, NameLookup};
+use crate::machine::core::{BindingIndex, FrameStorageExt, NameLookup, run_root_storage};
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::UntypedKeyProbe;
@@ -81,10 +81,12 @@ fn lookup_value_placeholder_filtered_same_as_value() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    assert!(scope
-        .bindings()
-        .lookup_value("placeholder", Some(3))
-        .is_none());
+    assert!(
+        scope
+            .bindings()
+            .lookup_value("placeholder", Some(3))
+            .is_none()
+    );
     match scope.bindings().lookup_value("placeholder", Some(9)) {
         Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId(2)),
         _ => panic!("placeholder must be visible past its install index"),
@@ -371,10 +373,14 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
 
     // Purging the last claim in a bucket that holds nothing else drops the key.
     bindings.clear_placeholders_for_producer(NodeId(8), &mut crate::machine::WriteGate::for_test());
-    assert!(!bindings
-        .functions()
-        .contains_key(&UntypedKeyProbe(&other_key)));
-    assert!(bindings
-        .functions()
-        .contains_key(&UntypedKeyProbe(&sealed_key)));
+    assert!(
+        !bindings
+            .functions()
+            .contains_key(&UntypedKeyProbe(&other_key))
+    );
+    assert!(
+        bindings
+            .functions()
+            .contains_key(&UntypedKeyProbe(&sealed_key))
+    );
 }

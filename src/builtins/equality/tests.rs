@@ -2,11 +2,11 @@
 //! The comparability gate's intransitivity, nominal identity, the function/module ban, and the
 //! `(TYPE OF m) ==` interface idiom all exercise the real dispatch path here.
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
+use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
-use crate::machine::KErrorKind;
 
 fn eval_bool(source_setup: &str, probe: &str) -> bool {
     let program = program_storage();

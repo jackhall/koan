@@ -15,9 +15,9 @@
 
 use std::rc::Rc;
 
-use koan::builtins::test_support::{lookup_binding, TestRun};
+use koan::builtins::test_support::{TestRun, lookup_binding};
 use koan::machine::model::{KKind, KObject, KType, NodeSchema, TypeNode, TypeRegistry};
-use koan::machine::{program_storage, run_root_storage, FrameStorage, ProgramStorage, Scope};
+use koan::machine::{FrameStorage, ProgramStorage, Scope, program_storage, run_root_storage};
 
 /// Run `src` to completion and hand back the whole run — the seeded scope tests assert
 /// bindings on, plus the run frame's registry that type names render against.
@@ -161,8 +161,8 @@ fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
         &region,
         "SIG Holder = ((VAL gen :(FN () -> Number)))",
     );
-    let gen = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "gen");
-    match test_run.types.node(gen) {
+    let r#gen = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "gen");
+    match test_run.types.node(r#gen) {
         TypeNode::KFunction { params, ret } => {
             assert!(params.is_empty());
             assert_eq!(ret, KType::NUMBER);

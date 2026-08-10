@@ -1,9 +1,9 @@
 //! Functor integration: module-typed parameters, signature-bound dispatch,
 //! per-call generativity.
 
-use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
-use crate::machine::model::{KObject, KType, TypeNode};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
 use crate::parse::parse;
 

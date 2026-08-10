@@ -8,7 +8,7 @@
 //! - A loop-carried aggregate correctly crosses a tail hop (Lemma 2 — the retiring region
 //!   outlives the adoption that reads it).
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};

@@ -9,10 +9,10 @@
 //!
 //! [`unsaturated_constructor_message`]: crate::machine::model::unsaturated_constructor_message
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
+use crate::machine::KErrorKind;
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
-use crate::machine::KErrorKind;
 
 /// Two families the whole file declares against: `Wrapper` over one parameter and `Pair` over
 /// two, both concrete (`NEWTYPE`-declared) constructors.

@@ -4,11 +4,11 @@
 //! deferred-return re-elaboration path's agnosticism to builtin-vs-nominal
 //! carriers.
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::model::KExpression;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{program_storage, run_root_storage};
 use crate::machine::{KError, KErrorKind};
+use crate::machine::{program_storage, run_root_storage};
 
 /// Tolerates the error surfacing either from `KoanRuntime::execute()` (resolve
 /// rejects at admission) or from `read_result_with` (auto-wrap committed and bind

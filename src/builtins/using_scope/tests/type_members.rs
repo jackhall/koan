@@ -5,9 +5,9 @@
 //! keywords); dispatch keywords (`SHOW`, `PAINT`, `TAKES`, `NAMEOF`) stay all-uppercase, and never
 //! a lone capital — a single uppercase letter classifies as neither keyword nor type name.
 
-use crate::builtins::test_support::{extract_terminal, parse_one, TestRun};
-use crate::machine::model::{Carried, KObject};
+use crate::builtins::test_support::{TestRun, extract_terminal, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::{program_storage, run_root_storage};
 
 /// A plain module's `UNION` member types a dispatch slot inside the block: the window borrows the

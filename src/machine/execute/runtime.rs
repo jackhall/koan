@@ -34,12 +34,12 @@ use super::dispatch::{BodyPlacement, DepRequest, SchedulerView, SubmitContext};
 use super::finalize::check_spliced_return;
 use super::lift::relocate_seam;
 use super::nodes::{ChainOp, NodeStep, NodeWork};
-use super::obligation::{with_obligation, ReturnObligation};
-use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
+use super::obligation::{ReturnObligation, with_obligation};
+use super::outcome::{Await, Continuation, Outcome, TerminalDepFinish, dep_error_frame};
 use super::run_loop::DestHandleFamily;
 use super::{
-    catch_continuation, ignore_results, seal_witnessed, short_circuit, CatchFinish,
-    ContinuationFamily,
+    CatchFinish, ContinuationFamily, catch_continuation, ignore_results, seal_witnessed,
+    short_circuit,
 };
 use crate::machine::model::CarriedFamily;
 use crate::scheduler::{Deps, ResolvedDeps, Scheduler, Workload};
@@ -379,12 +379,12 @@ pub(in crate::machine::execute) fn run_action<'step>(
                                         "FN deferred return-type expression produced a non-type {} value",
                                         other.ktype().name(view.types()),
                                     ),
-                                ))))
+                                ))));
                             }
                             Carried::UnresolvedType(ti) => {
                                 return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
                                     ti.render(),
-                                ))))
+                                ))));
                             }
                         };
                         // The resolved type is a `Copy` handle, so the contract carries it directly
@@ -549,10 +549,10 @@ impl<'run> KoanRuntime<'run> {
     /// takes no further binds and its reach-set seals. A `Yoked` sub-expression slot owns no frame
     /// (its `owner` never names this slot), so its `Done` is a no-op here.
     fn close_owned_scope(&self, idx: usize) {
-        if let Some(frame) = self.ambient.active_frame_ref() {
-            if frame.owner() == Some(NodeId(idx)) {
-                frame.with_scope(|s| s.close());
-            }
+        if let Some(frame) = self.ambient.active_frame_ref()
+            && frame.owner() == Some(NodeId(idx))
+        {
+            frame.with_scope(|s| s.close());
         }
     }
 

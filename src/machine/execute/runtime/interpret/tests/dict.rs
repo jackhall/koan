@@ -4,10 +4,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::*;
-use crate::machine::model::values::DictSubstrate;
-use crate::machine::model::KObject;
-use crate::machine::model::{Held, KKey};
 use crate::machine::KErrorKind;
+use crate::machine::model::KObject;
+use crate::machine::model::values::DictSubstrate;
+use crate::machine::model::{Held, KKey};
 
 use super::run;
 use crate::machine::program_storage;
@@ -159,8 +159,8 @@ fn sub_expression_as_value_evaluates_eagerly() {
 /// A `LET` in a dict-literal value is an eager value position — `NestedBinder` error.
 #[test]
 fn dict_value_let_is_a_nested_binder_error() {
-    use crate::machine::execute::interpret_with_writer;
     use crate::machine::KErrorKind;
+    use crate::machine::execute::interpret_with_writer;
     let result = interpret_with_writer(r#"LET d = {"a": (LET y = 7)}"#, Box::new(std::io::sink()));
     match result {
         Err(e) => assert!(

@@ -21,8 +21,8 @@ use crate::machine::model::{
     DeferredReturn, KType, Record, ReturnType, TypeRegistry, TypeResolution,
 };
 
-use super::body::{body_statement_refs, Body};
 use super::KFunction;
+use super::body::{Body, body_statement_refs};
 
 /// A body's execution context: the per-call `region` it runs in. Owned (an `Rc`), so it carries no
 /// lifetime; the body re-projects its scope from the region on demand.
@@ -154,7 +154,7 @@ where
         Body::Builtin(_) => {
             return ExecOutcome::Errored(KError::new(crate::machine::KErrorKind::User(
                 "run_user_fn called on an action builtin body".to_string(),
-            )))
+            )));
         }
     };
     match func.signature.return_type() {

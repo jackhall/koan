@@ -1,8 +1,8 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
-use crate::builtins::test_support::{binds_module, lookup_module, parse_one, TestRun};
-use crate::machine::model::{KObject, KType, TypeNode};
+use crate::builtins::test_support::{TestRun, binds_module, lookup_module, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
 use crate::parse::parse;
 

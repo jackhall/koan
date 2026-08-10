@@ -8,7 +8,7 @@
 //! run root), and the call's result makes the run root retain the per-call owner — a two-region ring
 //! that only the eternal rule (`PinBundle::without_eternal`) cuts.
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::{region_metrics, reset_region_metrics};

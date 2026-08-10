@@ -1,10 +1,10 @@
 //! `dispatch` arm of `machine::core` tests.
 
-use super::super::{program_storage, run_root_storage, FrameStorageExt, Scope};
+use super::super::{FrameStorageExt, Scope, program_storage, run_root_storage};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
-use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::RegionBrand;
+use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::model::Carried;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
@@ -287,8 +287,8 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
 #[test]
 fn pending_overload_parks_only_on_exact_bucket_match() {
     let types = TypeRegistry::new();
-    use crate::machine::model::{UntypedElement, UntypedKey};
     use crate::machine::NodeId;
+    use crate::machine::model::{UntypedElement, UntypedKey};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let bucket_single: UntypedKey = vec![
@@ -499,8 +499,8 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
 #[test]
 fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let types = TypeRegistry::new();
-    use crate::machine::core::kfunction::{Body, KFunction};
     use crate::machine::NodeId;
+    use crate::machine::core::kfunction::{Body, KFunction};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     // Finalized `(PICK <number>)` user overload that strictly Picks. Registered at a
@@ -617,8 +617,8 @@ fn scope_install_pending<'a>(
 #[test]
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let types = TypeRegistry::new();
-    use crate::machine::model::{UntypedElement, UntypedKey};
     use crate::machine::NodeId;
+    use crate::machine::model::{UntypedElement, UntypedKey};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let bucket: UntypedKey = vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];

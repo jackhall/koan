@@ -387,7 +387,7 @@ impl<W: Workload> DepGraph<W> {
     /// Drains the slot's edges (so a repeat free is a no-op) and yields only
     /// `Owned` children; `Notify` edges are dropped so the reclaim walk
     /// cannot transit into the producer's subtree.
-    pub(super) fn owned_children(&mut self, idx: usize) -> impl Iterator<Item = NodeId> {
+    pub(super) fn owned_children(&mut self, idx: usize) -> impl Iterator<Item = NodeId> + use<W> {
         let edges = std::mem::take(&mut self.rows[idx].edges);
         edges.into_iter().filter_map(|e| match e {
             DepEdge::Owned(id) => Some(id),

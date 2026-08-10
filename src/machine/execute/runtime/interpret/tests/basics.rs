@@ -83,8 +83,8 @@ fn match_unmatched_branch_skips_let_side_effect() {
 /// must be a statement, a body, or nested in another binder's declaration slot.
 #[test]
 fn nested_let_in_print_argument_is_a_nested_binder_error() {
-    use crate::machine::execute::interpret_with_writer;
     use crate::machine::KErrorKind;
+    use crate::machine::execute::interpret_with_writer;
     let result = interpret_with_writer(
         r#"(PRINT (LET msg = "hello world!"))"#,
         Box::new(std::io::sink()),
@@ -146,8 +146,8 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
 /// stamped upstream, so the empty-container rule rejects it.
 #[test]
 fn let_binds_an_empty_list_literal_errors() {
-    use crate::machine::execute::interpret_with_writer;
     use crate::machine::KErrorKind;
+    use crate::machine::execute::interpret_with_writer;
     let result = interpret_with_writer("LET xs = []\n", Box::new(std::io::sink()));
     match result {
         Err(e) => assert!(
@@ -179,8 +179,8 @@ fn list_literal_with_subexpression_element_evaluates_eagerly() {
 /// A `LET` in a list-literal element is an eager value position — `NestedBinder` error.
 #[test]
 fn list_literal_let_element_is_a_nested_binder_error() {
-    use crate::machine::execute::interpret_with_writer;
     use crate::machine::KErrorKind;
+    use crate::machine::execute::interpret_with_writer;
     let result = interpret_with_writer("LET xs = [1 (LET y = 7) 3]\n", Box::new(std::io::sink()));
     match result {
         Err(e) => assert!(

@@ -7,9 +7,9 @@
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, NameLookup, NodeId};
 
-use super::apply_callable::{apply_callable, ResolvedCallable};
+use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::SchedulerView;
-use super::{park_resume, Outcome, ProducerStanding};
+use super::{Outcome, ProducerStanding, park_resume};
 
 pub(super) fn initial<'step>(
     ctx: &SchedulerView<'_, 'step, '_>,

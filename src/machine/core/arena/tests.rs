@@ -3,20 +3,20 @@
 //! — these tests fail when Miri reports UB, not on values.
 
 use super::*;
-use crate::builtins::test_support::{per_call_storage, run_root_bare, TestRun};
+use crate::builtins::test_support::{TestRun, per_call_storage, run_root_bare};
+use crate::machine::BindingIndex;
+use crate::machine::CarrierWitness;
+use crate::machine::DeliveredCarried;
 use crate::machine::core::Bindings;
 use crate::machine::core::{Action, Body, KFunction};
-use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::model::Scalar;
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::{Argument, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::model::{Module, ModuleDraft, SigSchema};
-use crate::machine::BindingIndex;
-use crate::machine::CarrierWitness;
-use crate::machine::DeliveredCarried;
 use crate::witnessed::{Delivered, FoldedPlacement, RegionHost, Sealed, WitnessRegion, Witnessed};
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameReach`
@@ -724,14 +724,18 @@ fn mint_composes_exact_members() {
     ]);
 
     assert_eq!(minted.members().len(), 2, "exact members — no coarsening");
-    assert!(minted
-        .members()
-        .iter()
-        .any(|m| std::ptr::eq(m.region(), a.region())));
-    assert!(minted
-        .members()
-        .iter()
-        .any(|m| std::ptr::eq(m.region(), b.region())));
+    assert!(
+        minted
+            .members()
+            .iter()
+            .any(|m| std::ptr::eq(m.region(), a.region()))
+    );
+    assert!(
+        minted
+            .members()
+            .iter()
+            .any(|m| std::ptr::eq(m.region(), b.region()))
+    );
 }
 
 /// The self rule: a source naming the destination's own region stays an **exact member** of the

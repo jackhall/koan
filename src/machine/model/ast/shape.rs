@@ -7,9 +7,9 @@
 //! ([`PartClass`]) and the readers below are written once against that vocabulary, so a shape rule
 //! is stated in exactly one place.
 
+use crate::machine::SplicedCell;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::StoredElement;
-use crate::machine::SplicedCell;
 use crate::source::Spanned;
 
 use super::working::WorkingExpression;

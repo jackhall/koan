@@ -10,11 +10,11 @@
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
 use super::run_loop::DestHandleFamily;
-use crate::machine::core::{product_reaches_region, KoanRegion, KoanStorageProfile};
 use crate::machine::core::{FoldingBrand, SubstrateDoor};
+use crate::machine::core::{KoanRegion, KoanStorageProfile, product_reaches_region};
 use crate::machine::model::{
-    copy_or_pin, relocate_object_into, Carried, CarriedFamily, Held, KObject, RegionEscape,
-    TypeIdentifier,
+    Carried, CarriedFamily, Held, KObject, RegionEscape, TypeIdentifier, copy_or_pin,
+    relocate_object_into,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, FrameStorage};
 use crate::witnessed::{Delivered, RegionHandle};

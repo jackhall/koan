@@ -7,15 +7,15 @@
 //! compatible). Each view is born carrying its own self-sig, derived from the members its
 //! construction gathered before the view module exists.
 
-use crate::machine::model::KType;
-use crate::machine::model::TypeRegistry;
-use crate::machine::model::{
-    sig_subtype, substitute_sig_members, KKind, RecursiveGroupWindow, RelativeSchema, SigSchema,
-    TypeNode,
-};
-use crate::machine::model::{Held, KObject, Module, ModuleDraft, Record};
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
+use crate::machine::model::KType;
+use crate::machine::model::TypeRegistry;
+use crate::machine::model::{Held, KObject, Module, ModuleDraft, Record};
+use crate::machine::model::{
+    KKind, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode, sig_subtype,
+    substitute_sig_members,
+};
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 use std::collections::HashMap;
 
@@ -67,10 +67,10 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
 
     let mut tags: Vec<(String, KType)> = Vec::new();
     for (slot_name, kt) in &s_schema.value_slots {
-        if let TypeNode::AbstractType { name: member, .. } = ctx.types.node(*kt) {
-            if let Some(per_call) = draft.type_members.get(&member) {
-                tags.push((slot_name.clone(), *per_call));
-            }
+        if let TypeNode::AbstractType { name: member, .. } = ctx.types.node(*kt)
+            && let Some(per_call) = draft.type_members.get(&member)
+        {
+            tags.push((slot_name.clone(), *per_call));
         }
     }
     for (slot_name, tag) in tags {

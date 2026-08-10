@@ -332,7 +332,7 @@ fn binder_union_covers_every_owned_member() {
 /// twin.
 #[test]
 fn same_tag_under_two_binders_seals_to_distinct_members() {
-    use super::{seal_group, SealBinderInput, SealMemberInput};
+    use super::{SealBinderInput, SealMemberInput, seal_group};
     let types = TypeRegistry::new();
     let members = vec![
         SealMemberInput {

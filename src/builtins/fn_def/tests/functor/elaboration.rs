@@ -1,6 +1,6 @@
 //! Scope-aware type elaboration of FN signatures: signature-bound params, LET→FN ordering, type-value bindings.
 
-use crate::builtins::test_support::{fn_is_registered, lookup_fn, TestRun};
+use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn};
 use crate::machine::{program_storage, run_root_storage};
 
 /// `LET MyList = :(LIST OF Number)` writes the elaborated `KType::list(Number)`
@@ -26,7 +26,7 @@ fn list_of_let_binding_is_ktype_value() {
 fn elaborator_lowers_ktype_value_binding() {
     use crate::machine::model::KType;
     use crate::machine::model::TypeIdentifier;
-    use crate::machine::model::{elaborate_type_identifier, Elaborator, TypeResolution};
+    use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -63,7 +63,10 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     };
     let f = lookup_fn(scope, "USE_ORD");
     match f.signature.elements() {
-        [SignatureElement::Keyword(kw), SignatureElement::Argument(Argument { name, ktype })] => {
+        [
+            SignatureElement::Keyword(kw),
+            SignatureElement::Argument(Argument { name, ktype }),
+        ] => {
             assert_eq!(*kw, "USE_ORD");
             assert_eq!(*name, "er");
             match test_run.types.node(*ktype) {

@@ -116,10 +116,10 @@ fn statement_binder_plan(expr: &WorkingExpression<'_>) -> Option<BinderKey> {
     // A redundant single-`Expression` paren wrapper (`((…))`) is the same statement, so it reads
     // its child's plan straight through. A binder is always keyword-led, so this never co-occurs
     // with the plan branch below.
-    if let [only] = expr.parts {
-        if let WorkingPart::Ast(ExpressionPart::Expression(child)) = only.value {
-            return child.binder_plan().map(|key| key.to_owned_key());
-        }
+    if let [only] = expr.parts
+        && let WorkingPart::Ast(ExpressionPart::Expression(child)) = only.value
+    {
+        return child.binder_plan().map(|key| key.to_owned_key());
     }
     expr.binder_plan().map(|key| key.to_owned_key())
 }

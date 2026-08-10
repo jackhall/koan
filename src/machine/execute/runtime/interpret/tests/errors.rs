@@ -1,8 +1,8 @@
 //! `errors` interpret/execute integration tests.
 
 use super::*;
-use crate::machine::execute::interpret_with_writer_path;
 use crate::machine::KErrorKind;
+use crate::machine::execute::interpret_with_writer_path;
 
 #[test]
 fn unbound_name_at_top_level_returns_error() {

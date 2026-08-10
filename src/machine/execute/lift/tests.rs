@@ -6,12 +6,13 @@
 //! set at the `transfer_into` layer, not here.
 
 use super::*;
-use crate::builtins::test_support::{run_root_bare, TestRun};
+use crate::builtins::test_support::{TestRun, run_root_bare};
+use crate::machine::CallFrame;
 use crate::machine::core::{
-    program_storage, run_root_storage, FoldingBrand, FrameCoverage, KoanRegion, KoanRegionExt,
-    KoanStorageProfile,
+    FoldingBrand, FrameCoverage, KoanRegion, KoanRegionExt, KoanStorageProfile, program_storage,
+    run_root_storage,
 };
-use crate::machine::execute::run_loop::{dest_brand, DestHandleFamily};
+use crate::machine::execute::run_loop::{DestHandleFamily, dest_brand};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::Held;
 use crate::machine::model::KType;
@@ -19,15 +20,14 @@ use crate::machine::model::Record;
 use crate::machine::model::Scalar;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
-use crate::machine::CallFrame;
-use crate::witnessed::{reattachable, Delivered, FoldedPlacement, RegionHandle};
+use crate::witnessed::{Delivered, FoldedPlacement, RegionHandle, reattachable};
 use std::rc::Rc;
 
 /// A `KFunction` allocated into `home`'s region (its captured scope lives there), for the
 /// borrow-preservation tests. The body is never run.
 fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFunction<'run> {
-    use crate::machine::model::{ReturnType, SignatureDraft, SignatureElement};
     use crate::machine::Body;
+    use crate::machine::model::{ReturnType, SignatureDraft, SignatureElement};
     // The captured scope and the function both land in `home`'s region, so the `&KFunction` comes back
     // at `home`'s own lifetime with nothing retyped. Mirrors a closure capturing its defining scope.
     let types = crate::machine::model::TypeRegistry::new();
@@ -425,7 +425,10 @@ fn type_recursive_member_relocates_and_navigates() {
                     ),
                     _ => panic!("expected a record repr, got {}", repr.name(&types)),
                 },
-                _ => panic!("expected a navigable NewType member, got {}", out.name(&types)),
+                _ => panic!(
+                    "expected a navigable NewType member, got {}",
+                    out.name(&types)
+                ),
             }
         }
         Carried::UnresolvedType(ti) => {

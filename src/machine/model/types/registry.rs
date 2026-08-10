@@ -30,7 +30,7 @@ use super::ktype::KType;
 use super::node::TypeNode;
 use super::record::Record;
 use super::sig_schema::SigSchema;
-use super::type_digest::{self, schema_content_digest, TypeDigest};
+use super::type_digest::{self, TypeDigest, schema_content_digest};
 
 /// The node table's hasher. A [`TypeDigest`] is the low 128 bits of a BLAKE3 hash, so it is
 /// already uniformly distributed and re-hashing it would only cost cycles: keep the low 64 bits

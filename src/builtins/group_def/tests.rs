@@ -5,10 +5,10 @@
 
 mod functor;
 
-use crate::builtins::test_support::{binds_module, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, binds_module, parse_one};
+use crate::machine::KErrorKind;
 use crate::machine::model::Held;
 use crate::machine::model::{KObject, TypeRegistry};
-use crate::machine::KErrorKind;
 use crate::machine::{program_storage, run_root_storage};
 
 /// The numbers of a `KObject::List` — the member bodies below return one of their two list

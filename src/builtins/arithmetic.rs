@@ -20,11 +20,11 @@
 
 use crate::machine::WriteGate;
 
-use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
-use crate::machine::model::{Held, KObject, KType, Record, TypeRegistry};
 use crate::machine::BindingIndex;
 use crate::machine::GroupSeal;
-use crate::machine::{arg_object, Action, BodyCtx};
+use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::model::{Held, KObject, KType, Record, TypeRegistry};
+use crate::machine::{Action, BodyCtx, arg_object};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};

@@ -476,7 +476,7 @@ pub fn sig_subtype(
                     name: name.clone(),
                     got: got.render(types),
                     expected: fixed.render(types),
-                }))
+                }));
             }
             None => {
                 // An abstract `sub` member supplies no witness for a manifest requirement.

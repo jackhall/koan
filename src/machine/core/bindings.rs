@@ -57,19 +57,19 @@ use std::cell::Ref;
 use std::cell::RefCell;
 use std::mem::ManuallyDrop;
 
+use crate::machine::CarrierWitness;
+use crate::machine::core::RegionBrand;
+use crate::machine::core::RunId;
 use crate::machine::core::carrier_witness::{
     GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
 };
 use crate::machine::core::kfunction::NodeId;
-use crate::machine::core::RegionBrand;
-use crate::machine::core::RunId;
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::{
-    owned_untyped_key, restore_stored_key, store_untyped_key, StoredDispatchTokenElement,
-    StoredElement, StoredKeyProbe, UntypedKeyProbe,
-};
 use crate::machine::model::{KType, UntypedKey};
-use crate::machine::CarrierWitness;
+use crate::machine::model::{
+    StoredDispatchTokenElement, StoredElement, StoredKeyProbe, UntypedKeyProbe, owned_untyped_key,
+    restore_stored_key, store_untyped_key,
+};
 use crate::witnessed::BumpBackedMap;
 use crate::witnessed::{BumpAllocator, Sealed};
 
@@ -79,7 +79,7 @@ mod gate;
 mod ops;
 
 pub use gate::WriteGate;
-pub(crate) use ops::{powerset_probes, TypeWritePolicy, WriteOp};
+pub(crate) use ops::{TypeWritePolicy, WriteOp, powerset_probes};
 
 /// A value binding's dormant carrier: the bound value fused to the exact reach description minted
 /// for it at bind time. The entry owns no pins — the binding scope's **region** owns the one deduped
@@ -568,10 +568,10 @@ impl<'a> Bindings<'a> {
     pub fn lookup_type(&self, name: &str, cutoff: Option<usize>) -> Option<NameLookup<KType>> {
         let tables = self.tables.borrow();
         let slot = tables.types.get(name)?;
-        if let Some((kt, site)) = slot.bound() {
-            if Self::visible(site.index, cutoff) {
-                return Some(NameLookup::Bound(kt));
-            }
+        if let Some((kt, site)) = slot.bound()
+            && Self::visible(site.index, cutoff)
+        {
+            return Some(NameLookup::Bound(kt));
         }
         slot.pending()
             .filter(|p| Self::visible(p.index, cutoff))
@@ -587,15 +587,15 @@ impl<'a> Bindings<'a> {
     /// pending arm never surfaces here.
     pub fn lookup_member(&self, name: &str, cutoff: Option<usize>) -> Option<MemberResolution> {
         let tables = self.tables.borrow();
-        if let Some(entry) = tables.data.get(name).and_then(ValueSlot::bound) {
-            if Self::visible(entry.index, cutoff) {
-                return Some(MemberResolution::Value(entry.sealed.duplicate()));
-            }
+        if let Some(entry) = tables.data.get(name).and_then(ValueSlot::bound)
+            && Self::visible(entry.index, cutoff)
+        {
+            return Some(MemberResolution::Value(entry.sealed.duplicate()));
         }
-        if let Some((kt, site)) = tables.types.get(name).and_then(TypeSlot::bound) {
-            if Self::visible(site.index, cutoff) {
-                return Some(MemberResolution::Type { kt });
-            }
+        if let Some((kt, site)) = tables.types.get(name).and_then(TypeSlot::bound)
+            && Self::visible(site.index, cutoff)
+        {
+            return Some(MemberResolution::Type { kt });
         }
         None
     }

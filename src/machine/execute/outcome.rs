@@ -14,10 +14,10 @@
 //!   another outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
+use crate::machine::DeliveredCarried;
 use crate::machine::core::{BlockEntry, FramePlacement};
 #[cfg(test)]
 use crate::machine::model::Carried;
-use crate::machine::DeliveredCarried;
 
 #[cfg(test)]
 use crate::machine::Scope;
@@ -25,10 +25,10 @@ use crate::machine::{KError, NodeId, TraceFrame};
 use crate::scheduler::{DepResults, Deps};
 use crate::witnessed::reattachable;
 
-use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
+use super::StepCarried;
+use super::dispatch::{DepRequest, ResumeFn, SchedulerView, propagate_dep_error};
 use super::nodes::{ChainOp, NodeWork};
 use super::runtime::KoanWorkload;
-use super::StepCarried;
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
 /// returns. See the module docs for the taxonomy.

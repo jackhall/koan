@@ -92,7 +92,8 @@ impl Copy for BumpAllocator<'_> {}
 /// Every method forwards to `&Bump`'s own [`Allocator`] impl rather than leaning on the trait's
 /// defaults: bumpalo's `grow` extends the newest chunk in place when the allocation is the last one
 /// out, which the default (allocate-copy-deallocate) would give up. The safety obligation on each
-/// method is discharged by the delegate, which receives exactly the arguments this one was given.
+/// method is discharged by the delegate, which receives exactly the arguments this one was given —
+/// so every inner `unsafe` block below re-states that one obligation rather than adding its own.
 unsafe impl Allocator for BumpAllocator<'_> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         Allocator::allocate(&self.0, layout)
@@ -103,7 +104,8 @@ unsafe impl Allocator for BumpAllocator<'_> {
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        Allocator::deallocate(&self.0, ptr, layout)
+        // SAFETY: `ptr`/`layout` reach the delegate exactly as this method received them.
+        unsafe { Allocator::deallocate(&self.0, ptr, layout) }
     }
 
     unsafe fn grow(
@@ -112,7 +114,8 @@ unsafe impl Allocator for BumpAllocator<'_> {
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        Allocator::grow(&self.0, ptr, old_layout, new_layout)
+        // SAFETY: as in `deallocate` — the arguments are forwarded unchanged.
+        unsafe { Allocator::grow(&self.0, ptr, old_layout, new_layout) }
     }
 
     unsafe fn grow_zeroed(
@@ -121,7 +124,8 @@ unsafe impl Allocator for BumpAllocator<'_> {
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        Allocator::grow_zeroed(&self.0, ptr, old_layout, new_layout)
+        // SAFETY: as in `deallocate` — the arguments are forwarded unchanged.
+        unsafe { Allocator::grow_zeroed(&self.0, ptr, old_layout, new_layout) }
     }
 
     unsafe fn shrink(
@@ -130,7 +134,8 @@ unsafe impl Allocator for BumpAllocator<'_> {
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        Allocator::shrink(&self.0, ptr, old_layout, new_layout)
+        // SAFETY: as in `deallocate` — the arguments are forwarded unchanged.
+        unsafe { Allocator::shrink(&self.0, ptr, old_layout, new_layout) }
     }
 }
 

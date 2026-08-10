@@ -1,6 +1,6 @@
 //! Return-type expressions that reference earlier parameters (`p.T`, bare param name, `sig WITH {S = p.T}`), resolved per-call.
 
-use crate::builtins::test_support::{binds_module, lookup_fn, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, binds_module, lookup_fn, parse_one};
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::region_metrics;

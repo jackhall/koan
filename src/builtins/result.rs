@@ -13,12 +13,12 @@
 //! constructor's identity and never descends its arguments, so every `:(Result …)` resolves
 //! to the one identity.
 
-use crate::machine::model::TypeRegistry;
 use crate::machine::WriteGate;
+use crate::machine::model::TypeRegistry;
 use std::collections::HashMap;
 
-use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema};
 use crate::machine::Scope;
+use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema};
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
     let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);

@@ -9,9 +9,9 @@
 
 use std::rc::Rc;
 
-use koan::builtins::test_support::{lookup_binding, TestRun};
+use koan::builtins::test_support::{TestRun, lookup_binding};
 use koan::machine::model::KObject;
-use koan::machine::{program_storage, run_root_storage, FrameStorage, ProgramStorage};
+use koan::machine::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 
 /// Scaffolding: spin up a fresh run inside `region`, run `source` end-to-end through the
 /// scheduler, and hand back the whole run so tests can assert on the root scope's bindings
@@ -349,8 +349,8 @@ fn producer_error_propagates_to_parked_consumer() {
 /// `would_create_cycle`; the gate now intercepts the self-reference earlier.)
 #[test]
 fn self_referential_binding_is_unbound() {
-    use koan::machine::interpret_with_writer;
     use koan::machine::KErrorKind;
+    use koan::machine::interpret_with_writer;
     let err = interpret_with_writer("LET x = x", Box::new(std::io::sink()))
         .expect_err("self-reference should error");
     assert!(

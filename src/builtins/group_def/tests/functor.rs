@@ -6,9 +6,9 @@
 //! that module surfaces its operators. No group is chosen for a run by its operand type.
 
 use super::list_numbers;
-use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::model::KObject;
+use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
 
 /// A functor over a bare `:Type` parameter: the member bodies need no operation on `Elt`, so the

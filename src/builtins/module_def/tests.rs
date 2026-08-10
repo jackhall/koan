@@ -3,7 +3,7 @@
 
 mod announcement;
 
-use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
 use crate::machine::model::KObject;
 use crate::machine::model::SigSchema;
 use crate::machine::model::{Module, ModuleDraft};

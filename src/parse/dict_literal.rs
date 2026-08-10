@@ -5,9 +5,9 @@
 //! delegate to `accept_colon`, `accept_equals`, `accept_comma`, and `finish`; multi-part
 //! keys/values collapse into a sub-expression via `single_or_wrapped`.
 
+use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::ExpressionPart;
-use crate::machine::KError;
 use crate::source::Spanned;
 
 pub(super) struct DictFrame<'a> {
@@ -33,8 +33,7 @@ pub(super) enum BraceContents<'a> {
     Record(Vec<(&'a str, ExpressionPart<'a>)>),
 }
 
-const MIXED_DELIMITERS: &str =
-    "mixed `:` and `=` in a brace literal: use `=` for every field (record) \
+const MIXED_DELIMITERS: &str = "mixed `:` and `=` in a brace literal: use `=` for every field (record) \
      or `:` for every entry (dict)";
 
 enum DictPairState<'a> {

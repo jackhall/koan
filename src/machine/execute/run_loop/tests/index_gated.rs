@@ -7,8 +7,8 @@
 use std::rc::Rc;
 
 use super::working_all;
-use crate::builtins::test_support::{lookup_module, TestRun};
-use crate::machine::core::{program_storage, run_root_storage, FrameStorage, ProgramStorage};
+use crate::builtins::test_support::{TestRun, lookup_module};
+use crate::machine::core::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind};
 

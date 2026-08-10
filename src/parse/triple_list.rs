@@ -81,7 +81,7 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::{program_storage, RegionBrand};
+    use crate::machine::core::{RegionBrand, program_storage};
     use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
     use crate::source::Spanned;
 

@@ -1,9 +1,9 @@
 //! Branch coverage for the FN-def `body()` routing matrix and `ReturnTypeCapture`
 //! variants on the dep-finish path, plus the Stage B param-name scan utility arms.
 
-use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, TestRun};
-use crate::machine::model::{KType, ReturnType};
+use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::{KType, ReturnType};
 use crate::machine::{program_storage, run_root_storage};
 
 /// Parens-form return type carrying a bare lowercase identifier matching a parameter

@@ -23,7 +23,7 @@ use crate::machine::{KError, KErrorKind};
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
 /// returns the specialized signature handle as a `Carried::Type`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{arg_held, arg_object, arg_type, Action};
+    use crate::machine::{Action, arg_held, arg_object, arg_type};
 
     let done_err = |e: KError| Action::done(Err(e));
     let mismatch = |got: String| {
@@ -37,7 +37,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Some(kt) => kt,
         None => match arg_held(ctx.args, "sig") {
             Some(Held::Object(object)) => {
-                return done_err(mismatch(object.ktype().name(ctx.types)))
+                return done_err(mismatch(object.ktype().name(ctx.types)));
             }
             _ => return done_err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
         },
@@ -121,7 +121,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
     use crate::machine::model::{KType, TypeNode};
     use crate::machine::{program_storage, run_root_storage};
 

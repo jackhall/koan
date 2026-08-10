@@ -2,11 +2,11 @@
 //! no chain, no group, no reducer. `1 + (2 * 3)` exercises only the existing eager-subs
 //! nesting (the parenthesized operand stages as its own sub-dispatch) plus these bodies.
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
+use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
-use crate::machine::KErrorKind;
 
 #[test]
 fn add_dispatches_to_number() {
@@ -202,7 +202,8 @@ fn pairwise_shared_middle_operand_evaluates_exactly_once() {
     assert!(matches!(result, KObject::Bool(true)));
     let bytes = captured.borrow().clone();
     assert_eq!(
-        bytes, b"2\n",
+        bytes,
+        b"2\n",
         "the shared middle operand must dispatch exactly once (printing \"2\" exactly once); got {:?}",
         String::from_utf8_lossy(&bytes)
     );

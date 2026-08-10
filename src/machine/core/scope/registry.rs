@@ -18,6 +18,7 @@
 //! Split out of the parent `scope` module.
 
 use super::{Scope, ScopeKind};
+use crate::machine::DeliveredCarried;
 use crate::machine::core::bindings::powerset_probes;
 use crate::machine::core::bindings::{
     BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
@@ -25,7 +26,6 @@ use crate::machine::core::bindings::{
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
 use crate::machine::model::{Carried, KObject, KType, OperatorGroup, ReductionMode};
-use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
     /// Spike guard: a bind after [`Self::close`] means the scope's defining block finished yet a

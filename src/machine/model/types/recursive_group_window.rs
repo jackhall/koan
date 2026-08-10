@@ -48,7 +48,7 @@ use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
 use super::registry::TypeRegistry;
-use super::type_digest::{component_digest, member_ref_digest, ComponentMember, TypeDigest};
+use super::type_digest::{ComponentMember, TypeDigest, component_digest, member_ref_digest};
 
 /// A member's schema while its window is open: the same shape as [`NodeSchema`], but its handles
 /// may name a [`TypeNode::Sibling`] — a relative reference resolved only against this window.

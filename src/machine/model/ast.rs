@@ -21,8 +21,8 @@ pub mod working;
 
 pub use program::{ProgramExpression, ProgramNode};
 pub use shape::{
-    classify_dispatch_shape, operator_probe_for, stored_untyped_key, DispatchShape, FieldSlot,
-    Part, PartClass,
+    DispatchShape, FieldSlot, Part, PartClass, classify_dispatch_shape, operator_probe_for,
+    stored_untyped_key,
 };
 pub use working::{WorkingExpression, WorkingPart};
 

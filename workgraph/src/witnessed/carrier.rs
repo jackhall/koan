@@ -270,7 +270,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::witnessed::{reattachable, Sealed};
+    use crate::witnessed::{Sealed, reattachable};
 
     struct TestProfile;
 

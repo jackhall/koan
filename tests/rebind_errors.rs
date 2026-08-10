@@ -6,9 +6,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::test_support::{lookup_binding, SharedBuf, TestRun};
+use koan::builtins::test_support::{SharedBuf, TestRun, lookup_binding};
 use koan::machine::model::KObject;
-use koan::machine::{program_storage, run_root_storage, KError, KErrorKind};
+use koan::machine::{KError, KErrorKind, program_storage, run_root_storage};
 
 fn run_collecting_errors(test_run: &mut TestRun<'_>, source: &str) -> Vec<Result<(), KError>> {
     let scope = test_run.scope;

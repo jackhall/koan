@@ -41,9 +41,9 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
 #[test]
 fn let_t_cycle_errors() {
     use crate::builtins::test_support::TestRun;
+    use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
     use crate::parse::parse;
     let program = program_storage();
     let region = run_root_storage();
@@ -79,9 +79,9 @@ fn let_t_cycle_errors() {
 /// so removing either primitive variant from the allowlist regresses here.
 #[test]
 fn let_type_class_with_non_type_value_errors() {
+    use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
     use crate::parse::parse;
     for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
         let program = program_storage();
@@ -181,9 +181,9 @@ fn let_identifier_lhs_with_non_type_still_binds() {
 /// before the type-class allowlist — regression guard for ordering.
 #[test]
 fn let_parameterized_type_lhs_still_shape_errors() {
+    use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
     use crate::parse::parse;
     let program = program_storage();
     let region = run_root_storage();
@@ -248,10 +248,10 @@ fn let_aliases_struct_preserves_type_identity() {
 /// `LET Carrier = Number` and module-alias forms keep working inside SIG bodies.
 #[test]
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -283,10 +283,10 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
 /// holds a callable.
 #[test]
 fn let_type_class_with_plain_function_rejects() {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -373,10 +373,10 @@ fn let_type_class_signature_alias_preserves_identity() {
 /// spelling for one — whatever RHS produced it. The diagnostic names the snake_case respelling.
 #[test]
 fn let_type_class_lhs_with_module_rhs_rejects() {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -405,10 +405,10 @@ fn let_type_class_lhs_with_module_rhs_rejects() {
 /// `KType::Signature` on separate arms.
 #[test]
 fn let_value_class_lhs_with_signature_rhs_rejects() {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -429,7 +429,7 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
 /// other object value. The cross-kind exclusion means exactly one map holds the name.
 #[test]
 fn let_value_class_with_module_rhs_binds_value_side() {
-    use crate::builtins::test_support::{binds_module, TestRun};
+    use crate::builtins::test_support::{TestRun, binds_module};
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
     let program = program_storage();

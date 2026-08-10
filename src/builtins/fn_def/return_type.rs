@@ -2,13 +2,13 @@
 //! dep-finish boundary → resolution at finish time.
 
 use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake, unbound_error};
+use crate::machine::DepTerminal;
+use crate::machine::LexicalFrame;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeferredReturn, ReturnType};
 use crate::machine::model::{Held, KExpression, Record, TypeIdentifier};
 use crate::machine::model::{KObject, KType};
-use crate::machine::DepTerminal;
-use crate::machine::LexicalFrame;
 use crate::machine::{KError, KErrorKind, NodeId, Scope};
 use crate::scheduler::DepResults;
 use std::rc::Rc;

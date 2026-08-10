@@ -1,5 +1,5 @@
-use crate::machine::model::TypeRegistry;
 use crate::machine::WriteGate;
+use crate::machine::model::TypeRegistry;
 use std::rc::Rc;
 
 use crate::machine::model::KType;
@@ -16,8 +16,8 @@ use super::{arg, kw, sig};
 /// The `EVAL` head-keyword is not part of the surface; user code goes through the `$` sigil.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::model::KObject;
-    use crate::machine::{arg_object, Action, FramePlacement};
-    use crate::machine::{block_tail, BlockBody, BlockScope};
+    use crate::machine::{Action, FramePlacement, arg_object};
+    use crate::machine::{BlockBody, BlockScope, block_tail};
     use crate::machine::{KError, KErrorKind};
     let inner = match arg_object(ctx.args, "expr") {
         Some(KObject::KExpression(e)) => e.node(),
@@ -26,7 +26,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 arg: "expr".to_string(),
                 expected: "KExpression".to_string(),
                 got: other.ktype().name(ctx.types),
-            })))
+            })));
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
     };
@@ -53,18 +53,18 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
 
     fn run_program(source: &str) -> Vec<u8> {
         let program = program_storage();
         let region = run_root_storage();
         let (mut test_run, captured) = TestRun::with_buf(&program, &region);
         test_run.run(source);
-        let bytes = captured.borrow().clone();
-        bytes
+
+        captured.borrow().clone()
     }
 
     #[test]

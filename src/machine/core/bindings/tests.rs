@@ -6,21 +6,21 @@ use std::rc::Rc;
 
 use super::*;
 use crate::machine::core::arena::RegionBrand;
-use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
+use crate::machine::core::arena::{FrameStorageExt, run_root_storage};
 use crate::machine::core::{FrameCoverage, FrameReach, FrameStorage};
-use crate::machine::model::values::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Scalar;
+use crate::machine::model::values::Carried;
 use workgraph::scheduler::Sealed;
 
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
+use crate::machine::core::GroupSeal;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::tests::{body_no_op, unit_signature};
-use crate::machine::core::GroupSeal;
 use crate::machine::model::{
-    probe_key, OperatorGroup, ReductionMode, ReturnType, SignatureDraft, SignatureElement,
-    TypeRegistry,
+    OperatorGroup, ReductionMode, ReturnType, SignatureDraft, SignatureElement, TypeRegistry,
+    probe_key,
 };
 
 /// Seal `obj` as resident in `region` under a description naming `foreign` — the shape a bind
@@ -536,11 +536,13 @@ fn bump_backed_tables_full_churn() {
         scope
             .bindings()
             .clear_placeholders_for_producer(NodeId(9), &mut gate);
-        assert!(scope
-            .bindings()
-            .lookup_function(&purged_key, None)
-            .overloads
-            .is_empty());
+        assert!(
+            scope
+                .bindings()
+                .lookup_function(&purged_key, None)
+                .overloads
+                .is_empty()
+        );
         assert_eq!(
             scope
                 .bindings()
@@ -563,10 +565,12 @@ fn bump_backed_tables_full_churn() {
                 )
                 .expect("every subset of one declaration upserts to the same record");
         }
-        assert!(scope
-            .bindings()
-            .lookup_operator_group(&probe_key(&["*", "+"]), None)
-            .is_some());
+        assert!(
+            scope
+                .bindings()
+                .lookup_operator_group(&probe_key(&["*", "+"]), None)
+                .is_some()
+        );
 
         // SIG slot records through a real scope: the fifth table, over the same bump.
         let sig = scope.alloc_child_under_sig("Shape");

@@ -115,10 +115,10 @@ impl<P: StorageProfile> RegionHost<P> {
     pub fn pins_region(&self, region: *const Region<P>) -> bool {
         let mut node = self;
         loop {
-            if let Some(minted) = node.minted() {
-                if std::ptr::eq(minted, region) {
-                    return true;
-                }
+            if let Some(minted) = node.minted()
+                && std::ptr::eq(minted, region)
+            {
+                return true;
             }
             match &node.outer {
                 Some(outer) => node = outer,

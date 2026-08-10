@@ -19,11 +19,11 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeIdentifier};
 use crate::machine::model::is_keyword_token;
-use crate::machine::KError;
-use crate::parse::operators::{find_suffix, is_atom_terminator, SuffixOp};
+use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{Span, Spanned};
 
 static FLOAT: LazyLock<Regex> =
@@ -66,10 +66,10 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
         "false" => return Some(ExpressionPart::Literal(KLiteral::Boolean(false))),
         _ => {}
     }
-    if FLOAT.is_match(tok) {
-        if let Ok(n) = tok.parse::<f64>() {
-            return Some(ExpressionPart::Literal(KLiteral::Number(n)));
-        }
+    if FLOAT.is_match(tok)
+        && let Ok(n) = tok.parse::<f64>()
+    {
+        return Some(ExpressionPart::Literal(KLiteral::Number(n)));
     }
     None
 }

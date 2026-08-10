@@ -3,17 +3,17 @@ mod param_refs;
 pub(crate) mod return_type;
 pub(crate) mod signature;
 
+use crate::machine::WriteGate;
 use crate::machine::model::Elaborator;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, SignatureElement};
-use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 
-use finalize::{classify, finalize_fn_with_kind, fn_action, FnKind, FnPlan, ParamListResult};
+use finalize::{FnKind, FnPlan, ParamListResult, classify, finalize_fn_with_kind, fn_action};
 use return_type::classify_return_type;
 use signature::ParamListOutcome;
 
@@ -27,7 +27,7 @@ pub(crate) fn build_fn_like<'a>(
     builtin: &str,
     kind: FnKind<'a>,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{require_kexpression, Action};
+    use crate::machine::{Action, require_kexpression};
     use finalize::defer;
     use return_type::extract_return_type_raw;
 
@@ -37,13 +37,12 @@ pub(crate) fn build_fn_like<'a>(
     if let FnKind::Function {
         bound_name: Some(name),
     } = kind
+        && ctx.scope.is_in_sig_body()
     {
-        if ctx.scope.is_in_sig_body() {
-            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-                "inside a SIG body, value slots must use VAL — write `(VAL {name}: <Type>)` \
+        return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+            "inside a SIG body, value slots must use VAL — write `(VAL {name}: <Type>)` \
                  instead of binding a function",
-            )))));
-        }
+        )))));
     }
     let signature_expr = crate::try_action!(require_kexpression(ctx.args, builtin, "signature"));
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
@@ -62,7 +61,7 @@ pub(crate) fn build_fn_like<'a>(
         match signature::parse_fn_param_list(&signature_expr, &mut elaborator, ctx.types, None) {
             ParamListOutcome::Done(es) => ParamListResult::Done(es),
             ParamListOutcome::Err(msg) => {
-                return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))))
+                return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))));
             }
             ParamListOutcome::Pending {
                 park_producers,
@@ -147,7 +146,7 @@ pub fn body_let_combined<'a>(
 pub fn body_let_combined_type_named<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{arg_type, arg_unresolved_type, Action};
+    use crate::machine::{Action, arg_type, arg_unresolved_type};
     let name = match arg_unresolved_type(ctx.args, "name") {
         Some(te) => te.render(),
         None => match arg_type(ctx.args, "name") {
@@ -167,7 +166,7 @@ pub fn body_let_combined_type_named<'a>(
 pub fn body_value_named_return<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{require_identifier_name, Action};
+    use crate::machine::{Action, require_identifier_name};
 
     let name = crate::try_action!(require_identifier_name(
         ctx.args,
@@ -193,7 +192,7 @@ pub fn body_value_named_return<'a>(
 pub fn body_record_schema<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{arg_type, require_kexpression, Action};
+    use crate::machine::{Action, arg_type, require_kexpression};
     use finalize::defer;
     use return_type::extract_return_type_raw;
 
@@ -204,13 +203,13 @@ pub fn body_record_schema<'a>(
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
                     kt.name(ctx.types),
-                )))))
+                )))));
             }
         },
         None => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "anonymous FN signature slot must be a record schema `:{…}`".to_string(),
-            ))))
+            ))));
         }
     };
     // The schema's field names are owned by the resolved record type, so each is bumped into the

@@ -1,8 +1,8 @@
 //! combine, defer_to, and tail-call slot reuse.
 
 use super::super::super::outcome::Outcome;
-use crate::builtins::test_support::{resident_carrier, TestRun};
-use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+use crate::builtins::test_support::{TestRun, resident_carrier};
+use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use crate::machine::model::ReturnType;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, KObject};
@@ -28,7 +28,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
             _ => {
                 return Outcome::Done(Err(crate::machine::KError::new(
                     crate::machine::KErrorKind::ShapeError("a not number".into()),
-                )))
+                )));
             }
         };
         let b = match terminals.owned(1).delivered.open_at().value() {
@@ -36,7 +36,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
             _ => {
                 return Outcome::Done(Err(crate::machine::KError::new(
                     crate::machine::KErrorKind::ShapeError("b not number".into()),
-                )))
+                )));
             }
         };
         let allocated = _sched.current_scope().fold_resident_object(|brand| {
@@ -49,12 +49,14 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     deps.own(dep_b);
     let dep_finish_id = runtime.add_dep_finish(deps, scope, finish);
     runtime.execute().unwrap();
-    assert!(runtime
-        .read_result_with(
-            dep_finish_id,
-            |v| matches!(v.object(), KObject::KString(s) if *s == "7+11")
-        )
-        .expect("value"));
+    assert!(
+        runtime
+            .read_result_with(
+                dep_finish_id,
+                |v| matches!(v.object(), KObject::KString(s) if *s == "7+11")
+            )
+            .expect("value")
+    );
 }
 
 #[test]
@@ -202,12 +204,14 @@ fn retention_hold_foreign_bundle_releases_at_pull_zero() {
         weak.upgrade().is_none(),
         "the hold's foreign bundle releases at pull-count zero, alongside the owner",
     );
-    assert!(runtime
-        .read_result_with(dep_finish_id, |v| matches!(
-            v.object(),
-            KObject::Number(n) if *n == 42.0
-        ))
-        .expect("the finish delivered the pulled value"),);
+    assert!(
+        runtime
+            .read_result_with(dep_finish_id, |v| matches!(
+                v.object(),
+                KObject::Number(n) if *n == 42.0
+            ))
+            .expect("the finish delivered the pulled value"),
+    );
 }
 
 #[test]
@@ -276,12 +280,14 @@ fn tail_call_reuses_node_slot_in_place() {
 
     runtime.execute().unwrap();
 
-    assert!(runtime
-        .read_result_with(
-            id,
-            |v| matches!(v.object(), KObject::KString(s) if *s == "hi")
-        )
-        .expect("value"));
+    assert!(
+        runtime
+            .read_result_with(
+                id,
+                |v| matches!(v.object(), KObject::KString(s) if *s == "hi")
+            )
+            .expect("value")
+    );
     assert_eq!(
         runtime.len(),
         1,

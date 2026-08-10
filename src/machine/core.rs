@@ -17,33 +17,33 @@ mod scope_id;
 mod tests;
 
 pub use arena::{
-    program_storage, run_root_storage, CallFrame, FoldingBrand, FrameCoverage, FrameReach,
-    FrameStorage, KoanRegion, ProgramBrand, ProgramStorage, RegionBrand, RegionTypeFamily,
-    RunWriter, StepAllocator, SubstrateDoor,
+    CallFrame, FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, ProgramBrand,
+    ProgramStorage, RegionBrand, RegionTypeFamily, RunWriter, StepAllocator, SubstrateDoor,
+    program_storage, run_root_storage,
 };
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile};
 pub use bindings::{
     BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
     NodeHandle, WriteGate,
 };
-pub(crate) use carrier_witness::{product_reaches_region, read_resting, GroupSeal, OverloadSeal};
 pub use carrier_witness::{
     CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, OpenedFunction, SealedFunction,
     SealedOperatorGroup, SplicedCell,
 };
+pub(crate) use carrier_witness::{GroupSeal, OverloadSeal, product_reaches_region, read_resting};
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub(crate) use kfunction::action::{
+    Action, ActionKind, AwaitContinue, BlockEntry, BodyCtx, BodyPlacement, CatchContinue,
+    DepPlacement, DepRequest, DepTerminal, FinishCtx, FramePlacement, OwnedDispatch, TailContract,
     arg_held, arg_object, arg_type, arg_unresolved_type, require_bare_type_name,
-    require_identifier_name, require_kexpression, require_ktype, scope_frame, Action, ActionKind,
-    AwaitContinue, BlockEntry, BodyCtx, BodyPlacement, CatchContinue, DepPlacement, DepRequest,
-    DepTerminal, FinishCtx, FramePlacement, OwnedDispatch, TailContract,
+    require_identifier_name, require_kexpression, require_ktype, scope_frame,
 };
-pub(crate) use kfunction::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
-pub(crate) use kfunction::body::{body_statement_refs, split_body_statements, ReturnContract};
-pub(crate) use kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
+pub(crate) use kfunction::block_tail::{BlockBody, BlockScope, BlockSeed, block_tail};
+pub(crate) use kfunction::body::{ReturnContract, body_statement_refs, split_body_statements};
+pub(crate) use kfunction::exec::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
 pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction, NodeId};
-pub use lexical_frame::{assemble_body_chain, LexicalFrame};
+pub use lexical_frame::{LexicalFrame, assemble_body_chain};
 pub use ref_carriers::{ModuleRefFamily, ScopeRefFamily};
 pub use run_id::RunId;
 pub(crate) use scope::AdoptSeam;

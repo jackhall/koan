@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use super::runtime::KoanWorkload;
 use crate::machine::core::ReturnContract;
-use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
+use crate::machine::core::{ScopeId, ScopeRefFamily, assemble_body_chain};
 use crate::machine::{CallFrame, KError, LexicalFrame, NodeId};
 use crate::witnessed::SealedExtern;
 

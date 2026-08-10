@@ -12,7 +12,7 @@
 use std::rc::Rc;
 
 use koan::builtins::test_support::TestRun;
-use koan::machine::{program_storage, run_root_storage, FrameStorage, ProgramStorage};
+use koan::machine::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 
 /// Run `src` to completion, returning everything it PRINTed.
 fn run_capture(program: &ProgramStorage, region: &Rc<FrameStorage>, src: &str) -> String {

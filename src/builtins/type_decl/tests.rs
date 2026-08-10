@@ -1,13 +1,13 @@
-use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
+use crate::machine::ScopeId;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::KObject;
 use crate::machine::model::Record;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
-    constructor_param_names, KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeNode,
+    KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeNode, constructor_param_names,
 };
-use crate::machine::ScopeId;
-use crate::machine::{program_storage, run_root_storage, ProgramStorage};
+use crate::machine::{ProgramStorage, program_storage, run_root_storage};
 
 /// Resolve a SIG-declared type member's stored `KType` out of the signature's schema —
 /// abstract members (`TYPE`) and manifest members (`LET`) both live there, classified by

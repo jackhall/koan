@@ -10,18 +10,18 @@
 
 use super::super::ignore_results;
 use super::super::nodes::{ChainOp, NodeWork};
-use super::super::obligation::{with_obligation, ReturnObligation};
+use super::super::obligation::{ReturnObligation, with_obligation};
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanWorkload;
 use super::SchedulerView;
+use crate::machine::AdoptSeam;
 use crate::machine::core::ReturnContract;
-use crate::machine::core::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, KFunction, OpenedFunction};
+use crate::machine::core::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{Record, SignatureElement};
-use crate::machine::AdoptSeam;
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
 use crate::scheduler::ResolvedDeps;
 
@@ -115,7 +115,7 @@ pub(super) fn invoke<'step>(
         None => {
             return Outcome::Done(Err(KError::new(KErrorKind::User(
                 "exec: a call argument was not a resolved value at the bind site".to_string(),
-            ))))
+            ))));
         }
     };
 

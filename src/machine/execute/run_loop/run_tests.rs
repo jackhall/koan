@@ -1,11 +1,11 @@
 //! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
 //! replay-park routing in `classify_dispatch` (see
 //! [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)).
-use crate::builtins::test_support::binds_module;
 use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::binds_module;
+use crate::machine::KErrorKind;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::{KObject, KType};
-use crate::machine::KErrorKind;
 
 use super::tests::{working_all as parse_all, working_one as parse_one};
 
@@ -22,12 +22,14 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     runtime.execute().unwrap();
     let id = runtime.dispatch_in_scope(parse_one(&program, "(x)"), scope);
     runtime.execute().unwrap();
-    assert!(runtime
-        .read_result_with(
-            id,
-            |v| matches!(v.object(), KObject::Number(n) if *n == 42.0)
-        )
-        .expect("value"));
+    assert!(
+        runtime
+            .read_result_with(
+                id,
+                |v| matches!(v.object(), KObject::Number(n) if *n == 42.0)
+            )
+            .expect("value")
+    );
 }
 
 /// Index-gated LET visibility — see [design/execution/README.md § Dispatch-time

@@ -220,7 +220,9 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
 
     /// The runs, as `(span, reach)` pairs in ascending order — the container-level query an
     /// embedder's contains-borrows / borrows-home memos fold over instead of walking cells.
-    pub fn runs(&self) -> impl Iterator<Item = (Range<usize>, &'a ReachDescription<F>)> + 'a {
+    pub fn runs(
+        &self,
+    ) -> impl Iterator<Item = (Range<usize>, &'a ReachDescription<F>)> + 'a + use<'a, K, F> {
         let (cells, runs) = (self.cells, self.runs);
         runs.iter().enumerate().map(move |(position, run)| {
             let end = runs

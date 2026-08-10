@@ -1,7 +1,7 @@
 //! `free` / node-reclamation invariants.
 
-use crate::builtins::test_support::{resident_carrier, TestRun};
-use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+use crate::builtins::test_support::{TestRun, resident_carrier};
+use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use crate::machine::model::Scalar;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, KObject};

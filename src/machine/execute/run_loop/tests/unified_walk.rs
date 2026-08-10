@@ -6,8 +6,8 @@
 
 use super::working_all;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::KErrorKind;
+use crate::machine::core::{program_storage, run_root_storage};
 
 /// Self-reference `LET Ty = Ty`: the consumer sees its own placeholder as
 /// hidden under index-gating (same idx, LET binders aren't nominal), so the

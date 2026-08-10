@@ -7,12 +7,12 @@
 //! observable: over `10 % 4 % 1 % 0` the three pairs are `14`, `5`, `1`, which fold left to
 //! `(14 - 5) - 1` = 8 and right to `14 - (5 - 1)` = 10.
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
+use crate::machine::BindingIndex;
+use crate::machine::GroupSeal;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
-use crate::machine::BindingIndex;
-use crate::machine::GroupSeal;
 
 /// Registers the `%` pairwise group in the given mode, the `%` pair body (a sum), and the `MINUS`
 /// combiner the pair results fold through — declared with `OP`, the surface that gives a combiner

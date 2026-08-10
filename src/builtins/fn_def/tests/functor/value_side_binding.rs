@@ -2,7 +2,7 @@
 //! snake_case name in `bindings.data`, is applied by the ordinary keyworded call convention, and
 //! its `ktype()` is `KType::KFunction`. `bindings.types` holds no callable value.
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::model::{KObject, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
 

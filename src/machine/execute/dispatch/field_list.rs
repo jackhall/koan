@@ -25,16 +25,16 @@ use crate::machine::core::{LexicalFrame, StepAllocator};
 use crate::machine::model::Carried;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{
-    parse_typed_field_list_via_elaborator, DeclWindow, Elaborator, FieldListContext,
-    FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
+    DeclWindow, Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts,
+    ResultFeed, parse_typed_field_list_via_elaborator,
 };
 use crate::machine::model::{KType, Record, TypeRegistry};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::scheduler::Deps;
 
-use super::super::outcome::{dep_error_frame, Await, Outcome};
 use super::super::StepCarried;
 use super::super::TerminalDepFinish;
+use super::super::outcome::{Await, Outcome, dep_error_frame};
 use super::DepRequest;
 use super::OwnedDispatch;
 use super::SchedulerView;

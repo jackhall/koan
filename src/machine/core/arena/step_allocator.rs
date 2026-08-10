@@ -7,11 +7,11 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{FoldingBrand, FrameStorage, KoanStorageProfile, RegionBrand};
-use crate::machine::core::kfunction::action::scope_frame;
+use crate::machine::DeliveredCarried;
 use crate::machine::core::Scope;
+use crate::machine::core::kfunction::action::scope_frame;
 use crate::machine::execute::StepCarried;
 use crate::machine::model::{Carried, CarriedFamily, KObject, KType};
-use crate::machine::DeliveredCarried;
 use crate::witnessed::{Reattachable, StepContext};
 
 /// The step-branded construction context: the library [`StepContext`] over the step's destination

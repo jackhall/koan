@@ -5,7 +5,7 @@
 //! [`design/memory-model.md`](../../../../../design/memory-model.md).
 use super::*;
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use std::ptr;
 /// The child-scope borrow a module carries reads back co-located after the door's round trip, and
 /// keeps reading back once a sibling allocation has appended to the same region.

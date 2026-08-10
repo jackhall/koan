@@ -18,7 +18,7 @@ use crate::machine::{
 use crate::witnessed::{Delivered, RegionHandleFamily};
 
 use super::dispatch::SchedulerView;
-use super::finalize::{finalize_error, NodeFinalize};
+use super::finalize::{NodeFinalize, finalize_error};
 use super::nodes::{ChainOp, NodePayload, NodeScope, NodeStep, StoredWork};
 use super::outcome::{DepTerminal, Outcome};
 use super::runtime::{KoanRuntime, KoanWorkload};

@@ -13,8 +13,8 @@
 
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Position-independent identity for a [`Scope`](super::Scope). Equality is by
 /// the `(session, idx)` pair, minted once at construction time.
@@ -90,11 +90,7 @@ fn session_id() -> u64 {
         let mut h = RandomState::new().build_hasher();
         h.write_u8(0);
         let v = h.finish();
-        if v == 0 {
-            1
-        } else {
-            v
-        }
+        if v == 0 { 1 } else { v }
     })
 }
 

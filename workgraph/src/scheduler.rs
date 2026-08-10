@@ -22,7 +22,7 @@ use std::rc::Rc;
 
 use dep_graph::DepGraph;
 use node_store::NodeStore;
-use nodes::{seal_work, NodeWork, StoredWork};
+use nodes::{NodeWork, StoredWork, seal_work};
 use work_queues::WorkQueues;
 
 mod alloc;

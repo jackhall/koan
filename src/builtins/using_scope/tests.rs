@@ -9,9 +9,9 @@
 
 mod type_members;
 
-use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::model::{Carried, KObject};
+use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::{program_storage, run_root_storage};
 
 #[test]
@@ -428,7 +428,7 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
 
     use crate::builtins::test_support::{per_call_storage, run_root_bare};
     use crate::machine::core::{FoldingBrand, FrameStorageExt};
-    use crate::machine::model::{copy_or_pin, Held, Record, RegionEscape, TypeRegistry};
+    use crate::machine::model::{Held, Record, RegionEscape, TypeRegistry, copy_or_pin};
     use crate::machine::{BindingIndex, FrameCoverage};
     use crate::witnessed::FoldedPlacement;
 

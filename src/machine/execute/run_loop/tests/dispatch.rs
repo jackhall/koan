@@ -207,10 +207,12 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let mut runtime = KoanRuntime::new(program.brand(), Box::new(std::io::sink()));
     let id = runtime.dispatch_in_scope(working(&program, expr), scope);
     runtime.execute().unwrap();
-    assert!(runtime
-        .read_result_with(
-            id,
-            |v| matches!(v.object(), KObject::KString(s) if *s == "lowercase")
-        )
-        .expect("value"));
+    assert!(
+        runtime
+            .read_result_with(
+                id,
+                |v| matches!(v.object(), KObject::KString(s) if *s == "lowercase")
+            )
+            .expect("value")
+    );
 }

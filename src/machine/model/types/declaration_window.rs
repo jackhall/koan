@@ -35,7 +35,7 @@ use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::TypeNode;
 use super::recursive_group_window::{
-    seal_group, RecursiveGroupWindow, RelativeSchema, SealBinderInput, SealMemberInput,
+    RecursiveGroupWindow, RelativeSchema, SealBinderInput, SealMemberInput, seal_group,
 };
 use super::registry::TypeRegistry;
 

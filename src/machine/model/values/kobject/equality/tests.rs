@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::program_storage;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{KKind, KType, Record, RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::values::{Held, KKey, KObject, ValueEqualityError};
-use crate::machine::model::TypeRegistry;
 use crate::source::Spanned;
 
 fn num<'a>(n: f64) -> KObject<'a> {
@@ -27,7 +27,7 @@ fn newtype_singleton(name: &str, repr: KType, types: &TypeRegistry) -> KType {
 /// a return.
 macro_rules! container_door {
     ($storage:ident, $door:ident) => {
-        use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+        use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
         use crate::witnessed::FoldedPlacement;
         let $storage = run_root_storage();
         let owned_cells = crate::machine::core::FrameCoverage::empty();
@@ -395,9 +395,9 @@ fn a_function<'a>(
     scope: &'a crate::machine::Scope<'a>,
     types: &TypeRegistry,
 ) -> KObject<'a> {
+    use crate::machine::KFunction;
     use crate::machine::core::{Body, FrameStorageExt};
     use crate::machine::model::types::{ReturnType, SignatureDraft};
-    use crate::machine::KFunction;
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: Vec::new(),
@@ -492,8 +492,8 @@ fn length_mismatch_short_circuits_before_banned_cell() {
 fn module_operand_is_error() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::run_root_storage;
-    use crate::machine::model::values::{Module, ModuleDraft};
     use crate::machine::model::SigSchema;
+    use crate::machine::model::values::{Module, ModuleDraft};
     let program = program_storage();
     let storage = run_root_storage();
     let test_run = TestRun::silent(&program, &storage);

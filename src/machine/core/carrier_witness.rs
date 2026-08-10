@@ -4,8 +4,8 @@
 //! [workgraph/design/reach.md § The carrier states](../../../workgraph/design/reach.md#the-carrier-states).
 
 use crate::machine::model::{
-    retains_home, Carried, CarriedFamily, DispatchToken, KObject, OperatorGroup,
-    OperatorGroupFamily, UntypedKey,
+    Carried, CarriedFamily, DispatchToken, KObject, OperatorGroup, OperatorGroupFamily, UntypedKey,
+    retains_home,
 };
 
 use super::arena::{FrameStorage, KoanRegion};

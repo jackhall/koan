@@ -16,16 +16,16 @@ use std::collections::HashMap;
 
 use std::rc::Rc;
 
+use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
-use crate::machine::KError;
-use crate::parse::quotes::{mask_quotes, JUMP_MARK, LEN_SEP, LITERAL_MARK};
+use crate::parse::quotes::{JUMP_MARK, LEN_SEP, LITERAL_MARK, mask_quotes};
 use crate::parse::whitespace::collapse_whitespace;
 use crate::source::{self, CurrentFileGuard, FileId, SourceFile, Span, Spanned};
 
 use super::dict_literal::DictFrame;
-use super::frame::{close_paren_to_part, BracketFrame};
-use super::parse_stack::{close_collection, flush_token, open_collection, ParseStack};
+use super::frame::{BracketFrame, close_paren_to_part};
+use super::parse_stack::{ParseStack, close_collection, flush_token, open_collection};
 
 /// Width of the UTF-8 codepoint whose leading byte is `b`. Defaults to 1 on a
 /// malformed continuation byte so corrupt input terminates rather than spinning.
@@ -233,13 +233,13 @@ pub fn build_tree<'a>(
             .peek_char()
             .ok_or_else(|| KError::parse("malformed UTF-8 in masked stream", None))?;
 
-        if let Some((s, _)) = pending_sigil {
-            if c != '(' {
-                return Err(KError::parse(
-                    format!("expected '(' after '{s}', found '{c}'"),
-                    None,
-                ));
-            }
+        if let Some((s, _)) = pending_sigil
+            && c != '('
+        {
+            return Err(KError::parse(
+                format!("expected '(' after '{s}', found '{c}'"),
+                None,
+            ));
         }
 
         match c {
@@ -611,10 +611,12 @@ fn peel_redundant<'a>(
     let outer_span = expression.span;
     let outer_file = expression.file;
     let mut survivor = expression;
-    while let [Spanned {
-        value: ExpressionPart::Expression(inner),
-        ..
-    }] = survivor.parts
+    while let [
+        Spanned {
+            value: ExpressionPart::Expression(inner),
+            ..
+        },
+    ] = survivor.parts
     {
         survivor = **inner;
     }

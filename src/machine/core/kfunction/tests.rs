@@ -1,7 +1,7 @@
 use super::*;
 use crate::builtins::register_builtin;
-use crate::builtins::test_support::{marker, run_root_bare, TestRun};
-use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt, Scope};
+use crate::builtins::test_support::{TestRun, marker, run_root_bare};
+use crate::machine::core::{FrameStorageExt, Scope, program_storage, run_root_storage};
 use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KExpression, KType, ReturnType, SignatureDraft};
 use crate::machine::model::{KKind, KObject};

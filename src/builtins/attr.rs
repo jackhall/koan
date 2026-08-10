@@ -12,14 +12,14 @@
 //! resolves the overloads: an `Identifier` lhs wins `body_identifier`, a module / type-token lhs
 //! wins its own slot, and only a bare runtime value falls through to [`body_newtype`].
 
+use crate::machine::StepAllocator;
+use crate::machine::StepCarried;
+use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, Module};
 use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, Record, TypeNode};
-use crate::machine::StepAllocator;
-use crate::machine::StepCarried;
-use crate::machine::WriteGate;
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
 use super::{arg, kw, sig};
@@ -66,7 +66,7 @@ fn read_field_name<'a>(args: &Record<Held<'a>>, types: &TypeRegistry) -> Result<
 pub fn body_identifier<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{arg_object, Action};
+    use crate::machine::{Action, arg_object};
     let s_name = match arg_object(ctx.args, "s") {
         Some(KObject::KString(s)) => (*s).to_string(),
         Some(other) => {
@@ -85,10 +85,10 @@ pub fn body_identifier<'a>(
     if let Some(lhs) = ctx.scope.lookup_value_delivered(&s_name) {
         return route(access_field(&ctx.ctx, &field_name, &lhs, ctx.types));
     }
-    if let Some(kt) = ctx.scope.resolve_type(&s_name) {
-        if let TypeNode::AbstractType { name, .. } = ctx.types.node(kt) {
-            return Action::done(Err(abstract_type_has_no_members(&name)));
-        }
+    if let Some(kt) = ctx.scope.resolve_type(&s_name)
+        && let TypeNode::AbstractType { name, .. } = ctx.types.node(kt)
+    {
+        return Action::done(Err(abstract_type_has_no_members(&name)));
     }
     Action::done(Err(KError::new(KErrorKind::UnboundName(s_name))))
 }
@@ -100,7 +100,7 @@ pub fn body_identifier<'a>(
 /// an unlowered name carrier through the memoized bridge first. A module lhs rides the value channel
 /// and picks [`body_module`] instead, so `Foo.Carrier` projects off the module value.
 pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{arg_object, arg_type, arg_unresolved_type, Action};
+    use crate::machine::{Action, arg_object, arg_type, arg_unresolved_type};
     if let Some(te) = arg_unresolved_type(ctx.args, "s") {
         let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
         return match ctx.scope.resolve_type_identifier(te, None, ctx.types) {
@@ -140,7 +140,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
 
 /// Reads the `Wrapped` runtime lhs and projects the field through [`access_field`].
 pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{arg_object, Action};
+    use crate::machine::{Action, arg_object};
     let target = match arg_object(ctx.args, "s") {
         Some(obj) => obj,
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
@@ -167,7 +167,7 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
 
 /// Projects the field off a module lhs riding the value channel's Object arm.
 pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{arg_object, Action};
+    use crate::machine::{Action, arg_object};
     let m = match arg_object(ctx.args, "s") {
         Some(KObject::Module(module)) => *module,
         Some(other) => {
@@ -518,12 +518,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::machine::KErrorKind;
     use crate::machine::model::KObject;
     use crate::machine::model::KType;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
-    use crate::machine::KErrorKind;
 
     #[test]
     fn attr_reads_field_from_named_struct() {

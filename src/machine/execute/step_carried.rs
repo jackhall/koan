@@ -16,9 +16,9 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::machine::core::{run_root_storage, FrameCoverage, FrameStorage, StepAllocator};
-use crate::machine::model::CarriedFamily;
 use crate::machine::CarrierWitness;
+use crate::machine::core::{FrameCoverage, FrameStorage, StepAllocator, run_root_storage};
+use crate::machine::model::CarriedFamily;
 use crate::witnessed::{Delivered, DropFree, Reattachable, Witnessed};
 
 /// A value carrier confined to the scheduler step that built it. The brand lifetime `'step` is the
@@ -148,7 +148,7 @@ pub fn drive_step_allocator(guard: impl for<'b> FnOnce(StepAllocator<'b>)) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{FrameStorageExt, run_root_storage};
     use crate::machine::model::KObject;
     use crate::machine::model::Scalar;
 

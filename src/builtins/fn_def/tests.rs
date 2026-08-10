@@ -34,6 +34,6 @@ pub(super) fn capture_program_output(source: &str) -> Vec<u8> {
     let region = run_root_storage();
     let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     test_run.run(source);
-    let bytes = captured.borrow().clone();
-    bytes
+
+    captured.borrow().clone()
 }

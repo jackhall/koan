@@ -81,22 +81,22 @@ pub fn mask_quotes(input: &str) -> (Vec<u8>, HashMap<usize, String>) {
         }
         prev = c;
     }
-    if let Some((_, content_start)) = quote {
-        if !content.is_empty() {
-            let orig_byte_len = input.len() - content_start;
-            out.push(LITERAL_MARK);
-            out.extend_from_slice(next_index.to_string().as_bytes());
-            out.push(LEN_SEP);
-            out.extend_from_slice(orig_byte_len.to_string().as_bytes());
-            dict.insert(next_index, content);
-        }
+    if let Some((_, content_start)) = quote
+        && !content.is_empty()
+    {
+        let orig_byte_len = input.len() - content_start;
+        out.push(LITERAL_MARK);
+        out.extend_from_slice(next_index.to_string().as_bytes());
+        out.push(LEN_SEP);
+        out.extend_from_slice(orig_byte_len.to_string().as_bytes());
+        dict.insert(next_index, content);
     }
     (out, dict)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{mask_quotes, JUMP_MARK, LEN_SEP, LITERAL_MARK};
+    use super::{JUMP_MARK, LEN_SEP, LITERAL_MARK, mask_quotes};
     use std::collections::HashMap;
 
     fn lit(idx: usize, len: usize) -> Vec<u8> {

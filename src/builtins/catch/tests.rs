@@ -2,7 +2,7 @@
 //! non-short-circuiting in a binding position, nesting, and frame-chain preservation in
 //! TCO position.
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::model::{KObject, TypeNode};
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
@@ -12,8 +12,8 @@ fn run_program(source: &str) -> Vec<u8> {
     let region = run_root_storage();
     let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     test_run.run(source);
-    let bytes = captured.borrow().clone();
-    bytes
+
+    captured.borrow().clone()
 }
 
 #[test]

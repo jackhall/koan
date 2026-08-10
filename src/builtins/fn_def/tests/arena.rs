@@ -1,6 +1,6 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
-use crate::builtins::test_support::{parse_one, TestRun};
+use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::core::KoanRegionExt;
 use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::region_metrics;

@@ -1,12 +1,12 @@
 use super::*;
 use crate::builtins::test_support::spliced_part;
 use crate::machine::core::SubstrateDoor;
-use crate::machine::model::ast::{ExpressionPart, WorkingPart};
-use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::Carried;
 use crate::machine::model::ModuleDraft;
 use crate::machine::model::Record;
 use crate::machine::model::Scalar;
+use crate::machine::model::ast::{ExpressionPart, WorkingPart};
+use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 
 /// Mint the zero-dep fold door a `Tagged`/`Wrapped` test value needs, over a fresh root region, as
 /// two `let` bindings in the caller's own scope (mirrors the `kobject` test macro). `forge_for_test`
@@ -14,7 +14,7 @@ use crate::machine::model::Scalar;
 /// borrow of `storage` in the same frame.
 macro_rules! container_door {
     ($storage:ident, $door:ident) => {
-        use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+        use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
         use crate::witnessed::FoldedPlacement;
         let $storage = run_root_storage();
         let owned_cells = crate::machine::core::FrameCoverage::empty();
@@ -188,7 +188,7 @@ fn record_disjoint_fields_incomparable() {
 #[test]
 fn accepts_carried_matches_spliced_delegation() {
     let types = TypeRegistry::new();
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{FrameStorageExt, run_root_storage};
     let storage = run_root_storage();
     let region = storage.brand();
     let n: &KObject<'_> = region.alloc_scalar(Scalar::Number(7.0));
@@ -261,7 +261,7 @@ fn spliced_cell_classifies_by_opening() {
 #[test]
 fn record_value_admission_and_matches() {
     let types = TypeRegistry::new();
-    use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+    use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
     use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
     let region = storage.brand();
@@ -282,7 +282,9 @@ fn record_value_admission_and_matches() {
     assert!(narrow.matches_value(value, &types));
 
     let mismatch = record_ty(&types, vec![("x", KType::STR)]);
-    assert!(!mismatch.accepts_working_part(&spliced_part(&storage, Carried::Object(value)), &types));
+    assert!(
+        !mismatch.accepts_working_part(&spliced_part(&storage, Carried::Object(value)), &types)
+    );
     assert!(!mismatch.matches_value(value, &types));
 
     let extra = record_ty(&types, vec![("x", KType::NUMBER), ("q", KType::BOOL)]);
@@ -301,7 +303,7 @@ fn record_value_admission_and_matches() {
 #[test]
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use crate::builtins::test_support::TestRun;
-    use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
+    use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
     use crate::machine::model::values::Module;
     let program = program_storage();
     let region = run_root_storage();
@@ -339,8 +341,10 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let kt_sig: KType = types.signature(SigSchema::project_decl(sig_scope, &types));
     // A signature is a type value: the `:Type` lattice top admits it; the proper tier does not.
     assert!(t.accepts_working_part(&spliced_part(&region, Carried::Type(kt_sig)), &types));
-    assert!(!KType::of_kind(KKind::ProperType)
-        .accepts_working_part(&spliced_part(&region, Carried::Type(kt_sig)), &types));
+    assert!(
+        !KType::of_kind(KKind::ProperType)
+            .accepts_working_part(&spliced_part(&region, Carried::Type(kt_sig)), &types)
+    );
     let n: &KObject<'_> = region.brand().alloc_scalar(Scalar::Number(7.0));
     let s: &KObject<'_> = region.brand().alloc_string("hi");
     assert!(!t.accepts_working_part(&spliced_part(&region, Carried::Object(n)), &types));
@@ -352,10 +356,14 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
 #[test]
 fn of_kind_signature_more_specific_than_any_type() {
     let types = TypeRegistry::new();
-    assert!(KType::of_kind(KKind::Signature)
-        .is_more_specific_than(KType::of_kind(KKind::AnyType), &types));
-    assert!(!KType::of_kind(KKind::AnyType)
-        .is_more_specific_than(KType::of_kind(KKind::Signature), &types));
+    assert!(
+        KType::of_kind(KKind::Signature)
+            .is_more_specific_than(KType::of_kind(KKind::AnyType), &types)
+    );
+    assert!(
+        !KType::of_kind(KKind::AnyType)
+            .is_more_specific_than(KType::of_kind(KKind::Signature), &types)
+    );
 }
 
 /// `OfKind` is type-channel-only: a nominal-kind slot classifies a *type value* by its
@@ -365,7 +373,7 @@ fn of_kind_signature_more_specific_than_any_type() {
 #[test]
 fn of_kind_nominal_is_type_channel_only() {
     let types = TypeRegistry::new();
-    use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+    use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
     use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
     let region = storage.brand();
@@ -379,8 +387,10 @@ fn of_kind_nominal_is_type_channel_only() {
     assert!(
         newtype_ty.accepts_working_part(&spliced_part(&storage, Carried::Type(newtype_tv)), &types)
     );
-    assert!(KType::of_kind(KKind::ProperType)
-        .accepts_working_part(&spliced_part(&storage, Carried::Type(newtype_tv)), &types));
+    assert!(
+        KType::of_kind(KKind::ProperType)
+            .accepts_working_part(&spliced_part(&storage, Carried::Type(newtype_tv)), &types)
+    );
 
     // A `TypeConstructor` type value is the wrong family — declined.
     let ctor_tv = RecursiveGroupWindow::seal_singleton(
@@ -751,7 +761,7 @@ fn deferred_return_surface_eq_and_hash() {
 #[test]
 fn union_admits_member_typed_value() {
     let types = TypeRegistry::new();
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::core::{FrameStorageExt, run_root_storage};
     let storage = run_root_storage();
     let region = storage.brand();
     let n: &KObject<'_> = region.alloc_scalar(Scalar::Number(7.0));
@@ -771,7 +781,7 @@ fn union_admits_member_typed_value() {
 #[test]
 fn union_honors_memoized_list_element_type() {
     let types = TypeRegistry::new();
-    use crate::machine::core::{run_root_storage, FoldingBrand, FrameStorageExt};
+    use crate::machine::core::{FoldingBrand, FrameStorageExt, run_root_storage};
     use crate::witnessed::FoldedPlacement;
     let storage = run_root_storage();
     let owned_cells = crate::machine::core::FrameCoverage::empty();
@@ -821,8 +831,8 @@ fn union_specificity_ordering() {
 fn module_object_ktype_reports_self_sig() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::{program_storage, run_root_storage};
-    use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
+    use crate::machine::model::values::Module;
 
     let program = program_storage();
     let region = run_root_storage();
@@ -867,8 +877,8 @@ fn module_object_ktype_reports_self_sig() {
 fn matches_value_admits_module_object_via_signature_slot() {
     use crate::builtins::test_support::TestRun;
     use crate::machine::core::{program_storage, run_root_storage};
-    use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
+    use crate::machine::model::values::Module;
 
     let program = program_storage();
     let region = run_root_storage();
@@ -910,7 +920,7 @@ fn matches_value_admits_module_object_via_signature_slot() {
 /// collapse into one type and there would be no ordering to test.
 #[test]
 fn specificity_self_sig_refines_declared_and_empty() {
-    use crate::builtins::test_support::{lookup_module, TestRun};
+    use crate::builtins::test_support::{TestRun, lookup_module};
     use crate::machine::model::KObject;
     use crate::machine::{program_storage, run_root_storage};
     let program = program_storage();
@@ -948,7 +958,7 @@ fn specificity_self_sig_refines_declared_and_empty() {
 /// self-sig type equals the declared signature by digest, not merely by mutual satisfaction.
 #[test]
 fn self_sig_type_equals_member_free_declared_sig() {
-    use crate::builtins::test_support::{lookup_module, TestRun};
+    use crate::builtins::test_support::{TestRun, lookup_module};
     use crate::machine::model::KObject;
     use crate::machine::{program_storage, run_root_storage};
     let program = program_storage();
@@ -979,7 +989,7 @@ fn self_sig_type_equals_member_free_declared_sig() {
 /// through the manifest member to the same slot type the module's binding derives.
 #[test]
 fn self_sig_type_equals_fully_manifest_declared_sig() {
-    use crate::builtins::test_support::{lookup_module, TestRun};
+    use crate::builtins::test_support::{TestRun, lookup_module};
     use crate::machine::model::KObject;
     use crate::machine::{program_storage, run_root_storage};
     let program = program_storage();
@@ -1010,7 +1020,7 @@ fn self_sig_type_equals_fully_manifest_declared_sig() {
 /// digest-equal yet verdict-divergent across modules, breaking digest-is-identity.
 #[test]
 fn self_sig_stays_distinct_from_and_refines_abstract_sig() {
-    use crate::builtins::test_support::{lookup_module, TestRun};
+    use crate::builtins::test_support::{TestRun, lookup_module};
     use crate::machine::model::KObject;
     use crate::machine::{program_storage, run_root_storage};
     let program = program_storage();

@@ -15,22 +15,22 @@
 //! same shared seal path ([`finalize_nominal_member`]) `UNION` uses, and the path a
 //! `NEWTYPE` announced by its module body routes through.
 
+use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
-use crate::machine::WriteGate;
 use std::collections::HashMap;
 
+use crate::machine::FinishCtx;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::{
-    declarator_window, finalize_nominal_member, DeclWindow, FieldListContext, FieldNameKind,
-    Record, RecursiveGroupWindow, RelativeSchema, SealOutcome,
+    DeclWindow, FieldListContext, FieldNameKind, Record, RecursiveGroupWindow, RelativeSchema,
+    SealOutcome, declarator_window, finalize_nominal_member,
 };
 use crate::machine::model::{ExpressionPart, KExpression, ProgramExpression};
-use crate::machine::FinishCtx;
-use crate::machine::{seal_type_identity, StepCarried};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{StepCarried, seal_type_identity};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
@@ -129,7 +129,7 @@ fn seal_outcome_into_carrier<'a>(
 /// sub-dispatches via [`defer_resolved_sigil`].
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
-    use crate::machine::{arg_object, arg_type, require_bare_type_name, Action};
+    use crate::machine::{Action, arg_object, arg_type, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(
         ctx.args, "name", "NEWTYPE", ctx.types
@@ -172,8 +172,8 @@ fn defer_resolved_sigil<'a>(
     types: &TypeRegistry,
 ) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::dispatch_working_type_then;
-    use crate::machine::model::rewrite_window_refs;
     use crate::machine::Action;
+    use crate::machine::model::rewrite_window_refs;
     let brand = scope.brand();
     let wrapped = KExpression::new(
         brand,
@@ -201,7 +201,7 @@ pub fn body_record_repr<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
     use super::nominal_schema::nominal_schema_action;
-    use crate::machine::{arg_object, require_bare_type_name, Action};
+    use crate::machine::{Action, arg_object, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(
         ctx.args, "name", "NEWTYPE", ctx.types
@@ -211,7 +211,7 @@ pub fn body_record_repr<'a>(
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "NEWTYPE record repr slot must be a record type `:{…}`".to_string(),
-            ))))
+            ))));
         }
     };
     let error_frame = TraceFrame::bare("<newtype>", format!("NEWTYPE {name}"));
@@ -258,7 +258,7 @@ pub(crate) fn mint_type_constructor(
 pub fn body_constructor_family<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{require_kexpression, Action};
+    use crate::machine::{Action, require_kexpression};
 
     let decl = match require_kexpression(ctx.args, "NEWTYPE", "decl") {
         Ok(decl) => decl,
@@ -353,7 +353,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 #[cfg(test)]
 mod tests {
 
-    use crate::builtins::test_support::{binds_module, parse_one, TestRun};
+    use crate::builtins::test_support::{TestRun, binds_module, parse_one};
     use crate::machine::model::{KKind, NodeSchema, TypeNode, TypeRegistry};
     use crate::machine::model::{KObject, KType, Record};
     use crate::machine::program_storage;
@@ -678,10 +678,12 @@ mod tests {
             ),
             _ => panic!("expected `inner` to be a record type, got {inner_ty:?}"),
         }
-        assert!(scope
-            .bindings()
-            .type_placeholder_producer("Outer")
-            .is_none());
+        assert!(
+            scope
+                .bindings()
+                .type_placeholder_producer("Outer")
+                .is_none()
+        );
     }
 
     /// A `:{…}` nested inside a *sub-dispatched* sigil — the one field-list position whose body

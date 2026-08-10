@@ -5,8 +5,8 @@
 //! close-before-capture ordering — so a caller states only its declaration-specific finish. Pattern
 //! precedent: [`resolve_or_await`](super::resolve_or_await).
 
-use crate::machine::model::KExpression;
 use crate::machine::Scope;
+use crate::machine::model::KExpression;
 use crate::machine::{Action, AwaitContinue, DepPlacement, FinishCtx, OwnedDispatch};
 use crate::scheduler::Deps;
 

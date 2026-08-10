@@ -1,7 +1,7 @@
 use std::hash::BuildHasher;
 
 use super::*;
-use crate::machine::core::{program_storage, RegionBrand};
+use crate::machine::core::{RegionBrand, program_storage};
 use crate::source::Spanned;
 
 // `KType` leaf constants replace the retired enum variants (`KType::NUMBER` etc.); these tests

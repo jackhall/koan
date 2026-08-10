@@ -4,11 +4,11 @@
 use std::rc::Rc;
 
 use crate::builtins::test_support::{mock_declaration_site, per_call_storage, run_root_bare};
-use crate::machine::core::{run_root_storage, FrameCoverage};
+use crate::machine::AdoptSeam;
+use crate::machine::core::{FrameCoverage, run_root_storage};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
 use crate::machine::model::Scalar;
-use crate::machine::AdoptSeam;
 use crate::machine::{BindingIndex, DeclarationSite};
 
 #[test]

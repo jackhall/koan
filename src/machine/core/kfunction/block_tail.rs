@@ -7,13 +7,13 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::bindings::WriteGate;
+use crate::machine::Scope;
 use crate::machine::core::RegionBrand;
+use crate::machine::core::bindings::WriteGate;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KExpression, WorkingExpression};
-use crate::machine::Scope;
-use crate::machine::{split_body_statements, ReturnContract};
 use crate::machine::{Action, BlockEntry, FramePlacement, TailContract};
+use crate::machine::{ReturnContract, split_body_statements};
 
 /// How the body maps onto the tail.
 pub(crate) enum BlockBody<'a> {

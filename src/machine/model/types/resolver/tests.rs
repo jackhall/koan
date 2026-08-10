@@ -1,10 +1,10 @@
 use super::*;
-use crate::builtins::test_support::{mock_declaration_site, TestRun};
-use crate::machine::core::{program_storage, run_root_storage, FrameStorageExt};
-use crate::machine::model::ast::TypeIdentifier;
-use crate::machine::model::values::Carried;
+use crate::builtins::test_support::{TestRun, mock_declaration_site};
+use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use crate::machine::model::Record;
 use crate::machine::model::Scalar;
+use crate::machine::model::ast::TypeIdentifier;
+use crate::machine::model::values::Carried;
 use crate::machine::model::{AnnouncedData, RelativeSchema};
 use crate::machine::{BindingIndex, DeclarationSite};
 

@@ -33,8 +33,8 @@ mod step_allocator;
 
 pub(crate) use frame::FrameStorageExt;
 pub use frame::{
-    program_storage, run_root_storage, CallFrame, FrameCoverage, FrameReach, FrameStorage,
-    ProgramBrand, ProgramStorage, RunWriter,
+    CallFrame, FrameCoverage, FrameReach, FrameStorage, ProgramBrand, ProgramStorage, RunWriter,
+    program_storage, run_root_storage,
 };
 pub use step_allocator::StepAllocator;
 

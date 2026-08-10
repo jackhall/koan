@@ -9,10 +9,10 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{KoanRegion, KoanStorageProfile, RegionBrand};
-use crate::machine::core::kfunction::NodeId;
-use crate::machine::core::{scope_frame, Scope, ScopeId, ScopeRefFamily};
-use crate::machine::model::types::TypeRegistry;
 use crate::machine::CarrierWitness;
+use crate::machine::core::kfunction::NodeId;
+use crate::machine::core::{Scope, ScopeId, ScopeRefFamily, scope_frame};
+use crate::machine::model::types::TypeRegistry;
 use crate::witnessed::{
     Delivered, ReachDescription, RegionHandle, RegionHost, Sealed, SealedExtern, StepCoverage,
 };

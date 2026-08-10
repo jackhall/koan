@@ -133,7 +133,7 @@ impl<'a> OperatorGroup<'a> {
     }
 
     /// Every member operator keyword, in sorted order.
-    pub fn member_operators(&self) -> impl Iterator<Item = &'a str> {
+    pub fn member_operators(&self) -> impl Iterator<Item = &'a str> + use<'a> {
         self.members.iter().copied()
     }
 

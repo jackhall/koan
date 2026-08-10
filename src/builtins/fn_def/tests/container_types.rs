@@ -1,9 +1,9 @@
 //! Parameterized container types in FN parameter and return slots:
 //! `List<T>`, `Dict<K, V>`, `Function<…>`, plus specificity tournaments.
 
-use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::model::KType;
+use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::KType;
 use crate::machine::{program_storage, run_root_storage};
 
 use super::capture_program_output;

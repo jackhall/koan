@@ -245,12 +245,14 @@ fn abstract_hk_refused_by_proper_type_by_wrong_arity_and_by_abstract_fo() {
 fn manifest_equal_passes_unequal_and_missing_fail() {
     let types = TypeRegistry::new();
     let sup = schema(None, vec![], vec![("Tag", KType::NUMBER)], vec![]);
-    assert!(check(
-        &schema(None, vec![], vec![("Tag", KType::NUMBER)], vec![]),
-        &sup,
-        &types
-    )
-    .is_ok());
+    assert!(
+        check(
+            &schema(None, vec![], vec![("Tag", KType::NUMBER)], vec![]),
+            &sup,
+            &types
+        )
+        .is_ok()
+    );
     assert!(matches!(
         check(
             &schema(None, vec![], vec![("Tag", KType::STR)], vec![]),
@@ -323,12 +325,14 @@ fn value_slot_covariant_depth() {
 fn value_slot_equal_passes_missing_fails() {
     let types = TypeRegistry::new();
     let sup = schema(None, vec![], vec![], vec![("v", KType::NUMBER)]);
-    assert!(check(
-        &schema(None, vec![], vec![], vec![("v", KType::NUMBER)]),
-        &sup,
-        &types
-    )
-    .is_ok());
+    assert!(
+        check(
+            &schema(None, vec![], vec![], vec![("v", KType::NUMBER)]),
+            &sup,
+            &types
+        )
+        .is_ok()
+    );
     assert!(matches!(
         check(&schema(None, vec![], vec![], vec![]), &sup, &types),
         Err(SigSubtypeFailure::MissingValueSlot { .. })

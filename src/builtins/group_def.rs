@@ -36,16 +36,16 @@
 //!
 //! Surface design: [design/operators.md](../../design/operators.md).
 
-use crate::machine::model::TypeRegistry;
 use crate::machine::WriteGate;
+use crate::machine::model::TypeRegistry;
 
 use crate::machine::body_statement_refs;
 use crate::machine::model::KExpression;
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
-use crate::machine::model::{op_declaration_arity, OpArity};
 use crate::machine::model::{FoldDirection, ReductionMode};
-use crate::machine::{require_identifier_name, require_kexpression, Action, BodyCtx};
+use crate::machine::model::{OpArity, op_declaration_arity};
+use crate::machine::{Action, BodyCtx, require_identifier_name, require_kexpression};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::op_def::{symbol_from_parts, symbol_from_slot};
@@ -128,7 +128,7 @@ fn scan_members(body: &KExpression<'_>, name: &str) -> Result<Vec<String>, KErro
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "`GROUP {name}` declares a `UNARY OP`: a unary operator takes the whole run \
                      as one list, so it chains with nothing and cannot be a group member",
-                ))))
+                ))));
             }
             Some(OpArity::Binary) => {
                 let symbol = symbol_from_parts(statement)?;
