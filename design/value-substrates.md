@@ -499,13 +499,16 @@ That fact is a type, [`ProgramExpression` / `ProgramNode`](../src/machine/model/
 — `Copy` newtypes whose fields are private to their module, so the only way to
 obtain one is a mint door taking a
 [`ProgramBrand`](../src/machine/core/arena/frame.rs) or an accessor on a value
-that already carries the proof. A door mints at the brand it is handed, so a
-`ProgramBrand` shortened to a per-call step mints at that step's lifetime, which
-is what lets step code read program-hosted AST without a copy. The door's
-contract is the tier: every string and slice reachable from `parts` is
-allocated under that brand's region, which the parser discharges structurally —
-its whole pipeline runs under a `ProgramBrand` — and the one runtime minter
-discharges by allocating its texts and operand nodes through the same brand.
+that already carries the proof. The door's contract is its **parameter type**,
+not a promise: `ProgramBrand<'a>` is invariant in `'a`, so a held brand never
+shortens, and a door's `parts` are therefore taken at program storage's own
+lifetime. Everything reachable from them outlives that borrow — program-hosted,
+another eternal-tier region, or `'static`, each of which the eternal rule
+already prices as reaching nothing — and a part allocated at a per-call step
+lifetime is a compile error at the call rather than a discipline the caller
+keeps. Step code still reads program-hosted AST with no copy, because it is the
+doors' *products* that are covariant: a `ProgramExpression<'program>` coerces
+into a `KObject<'step>` cell and a `KExpression` into step borrows.
 `KObject::KExpression` takes a
 `ProgramExpression`, and the four expression-holding
 [`ExpressionPart`](../src/machine/model/ast.rs) arms (`Expression`,
@@ -555,11 +558,3 @@ left:
 - [Region evacuation at frame death](../roadmap/untyped_arena/region-evacuation.md)
   — pricing copying-the-survivors-out against transferring-the-region, the
   local decision the cost seam's two numbers already support.
-
-The mint doors' tier contract is prose, not a type — a brand shortened to a step
-shares its lifetime with the step's own allocator, so nothing stops a part hosted
-at the step from being handed to a door:
-
-- [Eternal storage as its own lifetime](../roadmap/compile_safety/eternal-tier-lifetime.md)
-  — keeping the program-storage lifetime distinct from the step's, so the parts a
-  door accepts are checked rather than promised.

@@ -262,13 +262,17 @@ nothing branded crosses the step boundary.
   dispatch decide reads `&Scope<'b>` from the one brand (and the consumer `dest`
   region is the opened scope's own `region`, derived inside it) rather than
   re-anchoring a free `&Scope<'step>` up the dispatcher stack.
-- **The run's program brand** enters by subtyping rather than by channel. The step
-  `open` bounds its brand above with a
-  [`Within<'b, 'run>`](../workgraph/src/witnessed/dormant.rs) token, so the
-  covariant [`ProgramBrand<'run>`](../src/machine/core/arena/frame.rs) the runtime
-  holds shortens to `'b` where the step's `SchedulerView` is built. It needs no
-  seal, no re-anchor and no pin: it is a live borrow the compiler proves, and its
-  region is eternal-tier, which every pin bundle filters out anyway.
+- **The run's program brand** enters by the brand bound rather than by channel.
+  The step `open` bounds its brand above with a
+  [`Within<'b, 'run>`](../workgraph/src/witnessed/dormant.rs) token whose declared
+  `'run: 'b` the `for<'b>` instantiation discharges, which is what lets the
+  [`ProgramBrand<'run>`](../src/machine/core/arena/frame.rs) the runtime holds be
+  stored **unshortened** in the step's `SchedulerView`: that struct keeps
+  `'program` distinct from `'step`, related only by its own `'program: 'step`
+  bound, and the token discharges it. The brand is invariant, so it could not
+  shorten in any case. It needs no seal, no re-anchor and no pin: it is a live
+  borrow the compiler proves, and its region is eternal-tier, which every pin
+  bundle filters out anyway.
 - **Frame-side reads** fold onto `open` the same way: a frame's own child scope
   opens at a `for<'b>` brand through
   [`CallFrame::with_scope`](../src/machine/core/arena.rs) — the `&mut self` submit /

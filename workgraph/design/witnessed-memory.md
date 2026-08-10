@@ -383,8 +383,10 @@ be instantiated at `'static` behind the caller's back. This is
 `Scope<'scope, 'env: 'scope>` argument type), and it is the channel for an
 **ambient capability** the embedder holds as a live borrow-checked reference for
 all of `'outer`: a covariant value of that kind shortens to the brand by ordinary
-subtyping inside the closure, needing no seal, no re-anchor and no pin, because
-its liveness is the borrow checker's rather than the witness system's. A value
+subtyping inside the closure, and an invariant one rides at `'outer` inside a
+brand-scoped struct that declares the same `'outer: 'b` bound the token
+discharges. Either way it needs no seal, no re-anchor and no pin, because its
+liveness is the borrow checker's rather than the witness system's. A value
 whose lifetime *was* erased still enters through the sealed operand. The
 anti-escape guarantee is untouched — the bound points one way, so nothing
 `'b`-branded gains a route into the result or into `'outer`-typed storage, and an

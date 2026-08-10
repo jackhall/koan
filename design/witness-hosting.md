@@ -43,13 +43,19 @@ call chain.
 The library's eternal rule keeps a member out of a region's union bundle when its
 owner declares
 [`PinsRegion::needs_no_pin`](../workgraph/src/witnessed/reach.rs). Koan's eternal
-tier is the **run root**: `RegionHost::is_run_root` answers `true` for the storage
-`interpret_with_writer_path` holds for the program's whole run.
+tier is the **run root**: [`RegionHost::is_eternal`](../workgraph/src/witnessed/host.rs)
+answers `true` for the storage `interpret_with_writer_path` holds for the program's
+whole run.
 
 The rule's correctness obligation is a drop-order one — answering `true` asserts the
 storage stays live and fixed-address for at least as long as any region that could
 retain it. Koan discharges it by construction: the run-root `Rc<FrameStorage>` is
 created before the runtime and dropped after it, so every per-call region dies first.
+The tier is a stamp, not a check — `RegionHost::fresh_eternal` is the sole constructor
+that sets it, and it answers a question about *pin bundles* (which regions a bundle
+must cover), not about what a borrow may reach. The reach question is closed
+lifetime-side instead, by the program brand's invariance
+([value-substrates.md § Value-channel AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
 
 The ring the rule cuts is concrete. A per-call region adopting a run-root-resident
 module argument takes an owning `Rc` on the run-root host, while the run-root region

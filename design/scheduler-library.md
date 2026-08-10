@@ -53,8 +53,9 @@ a concept, not a final identifier.
   step open bounds its brand from above with a
   [`Within<'b, 'outer>`](../workgraph/src/witnessed/dormant.rs) token, so an
   embedder capability held as a live borrow for the whole run — Koan's
-  `ProgramBrand` is the one in use — shortens *into* the step brand by ordinary
-  subtyping without becoming a carrier
+  `ProgramBrand` is the one in use — reaches step code at `'outer` without
+  becoming a carrier: the token's declared `'outer: 'b` discharges the
+  `'outer: 'b` bound the step-side struct holding it declares
   ([witnessed-memory.md](../workgraph/design/witnessed-memory.md)).
 - **Carrier** — a stored value bundled with its witness (`Witnessed`), or
   its storable, reopenable form (`Sealed`). A carrier is born at the

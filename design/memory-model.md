@@ -296,10 +296,13 @@ rank-2 `for<'b>` brand standing in for the step lifetime, witnessed by the seal'
 pin plus the step's owned pins, so the whole tail nests inside the brand and carries no loose
 witness-borrow reattach. That brand is **bounded above by `'run`**: the open hands its closure a
 [`Within<'b, 'run>`](../workgraph/src/witnessed/dormant.rs) token whose declared `'run: 'b` the
-`for<'b>` instantiation discharges, which is what lets the run's covariant
+`for<'b>` instantiation discharges, which is what lets the run's
 [`ProgramBrand<'run>`](../src/machine/core/arena/frame.rs) — a live borrow, not a sealed carrier —
-shorten to the step brand by ordinary subtyping where the step's
-[`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) is built, so program storage reaches a
+be stored unshortened where the step's
+[`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) is built: the view keeps `'program`
+distinct from the step lifetime, related only by its own `'program: 'step` bound, and the token is
+what discharges that bound. The brand is invariant, so no shortening is available to it; what
+reaches step code instead is the covariance of what it *mints*. Program storage therefore reaches a
 builtin body with no carrier, no pin and no `unsafe`
 ([witnessed-memory.md](../workgraph/design/witnessed-memory.md)). The
 consumer-pull lift and the `Outcome::Forward` ready pull re-anchor their reads at a *node* lifetime,
