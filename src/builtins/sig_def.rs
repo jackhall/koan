@@ -29,7 +29,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG", ctx.types));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", "body"));
 
-    let decl_scope = ctx.scope.alloc_child_under_sig(name.clone());
+    let decl_scope = ctx.scope.alloc_child_under_sig(&name);
 
     let site = ctx.declaration_site();
     let name_for_finish = name;

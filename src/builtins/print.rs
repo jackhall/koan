@@ -5,8 +5,8 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 
-/// `PRINT <msg:Any>` — renders the `msg` object cell, writes it plus a newline to
-/// `ctx.scope`'s nearest `out`, and returns the rendered string as a `KObject::KString` value.
+/// `PRINT <msg:Any>` — renders the `msg` object cell, writes it plus a newline to the run's
+/// output sink, and returns the rendered string as a `KObject::KString` value.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{arg_held, Action};
     // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) via
@@ -16,7 +16,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
     };
     let line = format!("{rendered}\n");
-    ctx.scope.write_out(line.as_bytes());
+    ctx.out.write_out(line.as_bytes());
     // The rendered bytes are bumped into this step's own destination region through a zero-dep fold,
     // so the carrier reaches nothing but the region it lives in — the active frame is folded in at
     // finalize/close, not bundled here.

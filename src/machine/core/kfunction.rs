@@ -28,7 +28,7 @@ pub use pick::ClassifiedSlots;
 /// The captured scope is allocated in the same `KoanRegion` this `KFunction` lives in —
 /// [`Self::alloc_captured`] derives the destination brand from the scope, so the two cannot come
 /// apart. Every field is `Copy` and `Drop`-free, which is what puts the value in the region bump
-/// rather than a typed arena.
+/// rather than a lifetime-typed cell.
 #[derive(Clone, Copy)]
 pub struct KFunction<'a> {
     pub signature: ExpressionSignature<'a>,

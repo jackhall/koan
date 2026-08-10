@@ -274,7 +274,7 @@ impl<'a> Scope<'a> {
         src: &'a crate::machine::core::Bindings<'a>,
         type_entries: impl FnOnce(crate::machine::core::ScopeId) -> Vec<(String, KType)>,
     ) -> Result<&'a Scope<'a>, KError> {
-        let view = outer.alloc_child_under_module(path, None);
+        let view = outer.alloc_child_under_module(&path, None);
         view.bindings()
             .bulk_install_from(src, &mut WriteGate::for_unpublished_scope())?;
         // A view's type member is installed by the ascription, not by a declaration statement
@@ -312,7 +312,7 @@ impl<'a> Scope<'a> {
     ) -> Result<&'a Scope<'a>, KError> {
         let record = OperatorGroup::alloc(outer.brand(), members, mode);
         let seal = GroupSeal::of_resident(outer, record);
-        let child = outer.alloc_child_under_group(name, record, announced);
+        let child = outer.alloc_child_under_group(&name, record, announced);
         child.register_group_under_all_subsets_direct(
             members,
             seal,

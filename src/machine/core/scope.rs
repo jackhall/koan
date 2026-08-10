@@ -1,12 +1,11 @@
 use std::cell::{Cell, RefCell};
-use std::io::Write;
+use std::mem::ManuallyDrop;
 use std::rc::{Rc, Weak};
 
 use crate::machine::model::KType;
 use crate::machine::model::OperatorGroup;
-use crate::machine::model::OperatorGroupFamily;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
-use crate::witnessed::{And, DropFree, Reattachable, RegionHandle, SealedExtern};
+use crate::witnessed::{And, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
 use super::bindings::{bump_table, Bindings};
@@ -20,8 +19,15 @@ mod resolve;
 
 pub(crate) use reach::AdoptSeam;
 
-/// Lexical environment. Only the root scope holds a writer in `out`; child scopes
-/// have `None` and `write_out` walks `outer` to find one.
+/// Lexical environment, resident in its region's **bump**.
+///
+/// Every field is `Copy`, a [`Cell`] of a `Copy`, or a bump-backed table whose own destructor is
+/// suppressed and whose elements are proved glue-free where they are named — so a `Scope` carries
+/// **no drop glue at all**, which is what lets it live in a bump that runs no destructor. The
+/// `reattachable!` declaration in
+/// [`arena`](crate::machine::core::arena) states that as a compile-time assert; the bump doors
+/// ([`BumpAllocator::in_place`](crate::witnessed::BumpAllocator::in_place),
+/// [`RegionHandle::bump_born_with`]) restate it at each store.
 ///
 /// All mutable binding state lives in the embedded [`Bindings`] façade
 /// (interior-mutable `RefCell`s), so a `&'a Scope<'a>` is shareable across scheduler
@@ -41,7 +47,6 @@ pub struct Scope<'a> {
     /// construction door ([`child_for_frame_witnessed`](Self::child_for_frame_witnessed)).
     root: Option<&'a Scope<'a>>,
     bindings: ScopeBindings<'a>,
-    pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     /// The region this scope lives in, held as its [`RegionBrand`] allocation capability — minted at
     /// region-open and inherited by same-region children. Allocation sites reach it through
     /// [`Self::brand`]; identity compares read the bare region through [`Self::region`]. Storing the
@@ -50,14 +55,6 @@ pub struct Scope<'a> {
     /// `RegionHandle`, whose only public minter is `RegionHandle::from_owner` and whose field and `new`
     /// are crate-private to `workgraph` — so nothing can turn the bare `region()` back into a brand.
     brand: RegionBrand<'a>,
-    /// Owning-on-upgrade handle to the [`FrameStorage`] whose region this scope lives in. Read via
-    /// [`Self::region_owner`] to recover a captured function's / module's region owner without
-    /// walking any frame chain. A [`Weak`] because the storage owns the region owns this scope — an
-    /// `Rc` back-edge would leak; upgrades whenever the region is live. Set at construction: a
-    /// region-boundary scope ([`Self::run_root`], [`Self::child_for_frame_witnessed`]) takes its
-    /// frame's storage, a same-region child inherits its parent's; empty (`Weak::new()`) for a test
-    /// scope built outside any `FrameStorage`.
-    region_owner: Weak<FrameStorage>,
     /// Position-independent origin id, recorded on an `AbstractType` node's `source` so
     /// dispatch on SIG-declared members compares ids rather than scope pointers.
     pub id: ScopeId,
@@ -123,12 +120,14 @@ pub enum ScopeKind<'a> {
     ///
     /// The collector is bump-backed like the four durable tables, with its slot names re-homed at
     /// record time, so its death frees nothing and walks no entry (a `KType` is a `Copy` handle).
-    /// It is **not** wrapped to suppress the map's own vacuous destructor the way
-    /// [`Bindings`] is: this variant carries an owned `name` beside it, so the wrapper would
-    /// remove no drop glue from `Scope` — it would only hide a no-op.
+    /// It is wrapped exactly as [`Bindings`]' tables are: `ManuallyDrop` suppresses the map's own
+    /// destructor, whose only act would be handing a bump-owned bucket array back to an allocator
+    /// that frees nothing — and suppressing it is what makes this variant, and with it `Scope`,
+    /// contribute no drop glue at all. The element proof the wrapper would otherwise swallow is
+    /// stated below.
     Sig {
-        name: String,
-        slots: RefCell<BumpBackedMap<'a, &'a str, KType>>,
+        name: &'a str,
+        slots: RefCell<ManuallyDrop<BumpBackedMap<'a, &'a str, KType>>>,
     },
     /// A MODULE body (also the per-ascription view minted by `:|`). `group` is `Some` for a `GROUP`
     /// body — a group *is* a module — naming the one [`OperatorGroup`] record its member `OP`
@@ -145,26 +144,28 @@ pub enum ScopeKind<'a> {
     /// for free. Read through [`Scope::nearest_declaration_window`] (a consumer, walking out) and
     /// [`Scope::own_declaration_window`] (a declarator, this scope only).
     Module {
-        name: String,
+        name: &'a str,
         group: Option<&'a OperatorGroup<'a>>,
         window: Option<AnnouncedWindow<'a>>,
     },
 }
 
+/// The slot collector's element proof, stated against the entry types directly — `needs_drop` is
+/// false for *any* `ManuallyDrop<U>`, so the wrapper that suppresses the map's teardown also makes
+/// the table's own entry assert say nothing about what it holds. A key is a bumped `&str` and a
+/// value a `Copy` [`KType`] handle today; a variant that later brings a destructor back fails the
+/// build here rather than leaking silently. The same statement [`Bindings`] makes for its buckets.
+const _: () = assert!(!std::mem::needs_drop::<KType>());
+
 impl<'a> Scope<'a> {
-    /// The run-global root, built at the brand its own region hands the born door. `out` is installed
-    /// after the store rather than passed in: a `Box<dyn Write + 'a>` names the caller's lifetime,
-    /// which cannot coerce to the door's `'b` — and nothing reads the writer between the store and
-    /// the install, since the root is unpublished until this returns.
-    fn run_root(brand: RegionBrand<'a>, region_owner: Weak<FrameStorage>) -> Self {
+    /// The run-global root. Every field is already at the run region's own `'a`, so it is built
+    /// there directly — no brand, no crossing operand, nothing to re-anchor.
+    fn run_root(brand: RegionBrand<'a>) -> Self {
         Self {
             outer: None,
             root: None,
             bindings: ScopeBindings::Owned(Bindings::new(brand)),
-            out: RefCell::new(None),
-            // Region borrow and owning `Weak` both derive from the one run storage.
             brand,
-            region_owner,
             id: ScopeId::next(),
             kind: ScopeKind::Root,
             closed: Cell::new(false),
@@ -181,16 +182,19 @@ impl<'a> Scope<'a> {
     /// is a bug, while `None` reports the eternal-tier **policy**.
     pub(crate) fn parent_frame_pin(&self) -> Option<Rc<FrameStorage>> {
         let owner = self
-            .region_owner
+            .region_owner()
             .upgrade()
             .expect("a live scope reference implies a live region owner");
         (!owner.is_eternal()).then_some(owner)
     }
 
-    /// The [`FrameStorage`] (cloned `Weak`) whose region this scope lives in — see [`Self::brand`]'s
-    /// sibling field. Upgrades to the owning `Rc` whenever the region is live.
+    /// The [`FrameStorage`] (a cloned `Weak`) whose region this scope lives in — read off the
+    /// **region's own** host back-link rather than a copy carried here. A region is born naming its
+    /// owner (`Rc::new_cyclic`), so the derivation is total and no constructor can wire it wrong;
+    /// the link stays `Weak` because the storage owns the region owns this scope, and an `Rc`
+    /// back-edge would leak. Upgrades whenever the region is live.
     pub(crate) fn region_owner(&self) -> Weak<FrameStorage> {
-        self.region_owner.clone()
+        self.brand.handle().host()
     }
 
     /// The bare region this scope lives in — for identity compares (`ptr::eq`, region-pointer
@@ -228,13 +232,12 @@ impl<'a> Scope<'a> {
         child
     }
 
-    /// Shared skeleton for a **same-region** child of `outer`: inherits `outer`'s region, its
-    /// `region_owner`, and its `root` handle, and takes a fresh id. The five public same-region
-    /// constructors below differ only in what they pass here — the binding storage and the kind
-    /// stamp (which carries its own payload) — so the inherit-from-`outer` field set lives in one
-    /// place. (The two cross-region constructors, [`Self::run_root`] and
-    /// [`Self::child_for_frame_witnessed`], do not route this: they set `root`/`region`/
-    /// `region_owner` from a fresh frame, not from `outer`.)
+    /// Shared skeleton for a **same-region** child of `outer`: inherits `outer`'s region brand and
+    /// its `root` handle, and takes a fresh id. The five public same-region constructors below
+    /// differ only in what they pass here — the binding storage and the kind stamp (which carries
+    /// its own payload) — so the inherit-from-`outer` field set lives in one place. (The two
+    /// cross-region constructors, [`Self::run_root`] and [`Self::child_for_frame_witnessed`], do not
+    /// route this: they take their region from a fresh frame, not from `outer`.)
     fn child_inheriting(
         outer: &'a Scope<'a>,
         bindings: ScopeBindings<'a>,
@@ -244,9 +247,7 @@ impl<'a> Scope<'a> {
             outer: Some(outer),
             root: outer.root,
             bindings,
-            out: RefCell::new(None),
             brand: outer.brand,
-            region_owner: outer.region_owner.clone(),
             id: ScopeId::next(),
             kind,
             closed: Cell::new(false),
@@ -274,15 +275,12 @@ impl<'a> Scope<'a> {
     pub(crate) fn child_for_frame_witnessed(
         outer: &'a Scope<'a>,
         brand: RegionBrand<'a>,
-        region_owner: Weak<FrameStorage>,
     ) -> Scope<'a> {
         Scope {
             outer: Some(outer),
             root: outer.root,
             bindings: ScopeBindings::Owned(Bindings::new(brand)),
-            out: RefCell::new(None),
             brand,
-            region_owner,
             id: ScopeId::next(),
             kind: ScopeKind::Anonymous,
             closed: Cell::new(false),
@@ -290,13 +288,13 @@ impl<'a> Scope<'a> {
     }
 
     /// `child_under`, stamped as a SIG decl_scope with an empty VAL slot collector.
-    fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+    fn child_under_sig(outer: &'a Scope<'a>, name: &'a str) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new(outer.brand)),
             ScopeKind::Sig {
                 name,
-                slots: RefCell::new(bump_table(outer.brand)),
+                slots: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
             },
         )
     }
@@ -307,7 +305,7 @@ impl<'a> Scope<'a> {
     /// before any body statement can reach the scope.
     fn child_under_module(
         outer: &'a Scope<'a>,
-        name: String,
+        name: &'a str,
         announced: Option<&AnnouncedData>,
     ) -> Scope<'a> {
         Self::child_inheriting(
@@ -327,7 +325,7 @@ impl<'a> Scope<'a> {
     /// [`Self::nearest_group_context`] hands back to the `OP` declarations inside.
     fn child_under_group(
         outer: &'a Scope<'a>,
-        name: String,
+        name: &'a str,
         group: &'a OperatorGroup<'a>,
         announced: Option<&AnnouncedData>,
     ) -> Scope<'a> {
@@ -388,115 +386,81 @@ impl<'a> Scope<'a> {
         )
     }
 
-    /// The **born-door skeleton for a same-region child**: build `outer`'s child inside a `for<'b>`
-    /// brand over the region `outer` itself lives in, and store it in the same act
-    /// ([`RegionHandle::alloc_resident_born_with`]). The destination is derived from `outer`'s own
-    /// brand rather than passed alongside it, so pairing a scope with a foreign region is
-    /// unrepresentable — which is what discharges residence here.
-    ///
-    /// `outer` crosses into the closure as the door's operand, so the child couples to it at the
-    /// brand's own `'b` and `Scope`'s invariance is honoured by construction. Everything the
-    /// constructors inherit — the region brand, the region owner, the `root` handle — comes off that
-    /// branded parent, so the child's region pointer is the destination's. The pin is `outer`'s
-    /// region, held for the whole of `'a`: a same-region operand needs no other liveness.
-    fn alloc_child(
-        outer: &'a Scope<'a>,
-        build: impl for<'b> FnOnce(&'b Scope<'b>) -> Scope<'b>,
-    ) -> &'a Scope<'a> {
-        outer
-            .brand()
-            .handle()
-            .alloc_resident_born_with::<Scope<'static>, ScopeRefFamily, _>(
-                SealedExtern::<ScopeRefFamily>::erase(outer),
-                outer.region(),
-                |_placement, outer_b| build(outer_b),
-            )
+    /// Bump a **same-region** child into the region `outer` already lives in. There is no brand and
+    /// nothing to re-anchor: every field the constructors inherit — the region brand, the `root`
+    /// handle, the parent link — comes off `outer` at its own `'a`, so the child is built at `'a`
+    /// and stored at `'a`. Residence is the borrow checker's: the only region reachable through
+    /// `outer.brand()` is the one `outer` lives in, so pairing a scope with a foreign region is
+    /// unrepresentable here.
+    fn bump_child(outer: &'a Scope<'a>, child: Scope<'a>) -> &'a Scope<'a> {
+        outer.brand().allocator().in_place(child)
     }
 
-    /// [`Self::alloc_child`] for a constructor taking a **second** borrowed operand — a `GROUP`
-    /// record, a module's binding table. It zips onto the parent so both re-anchor at one `'b`;
-    /// branding them independently is exactly what invariance rejects.
-    fn alloc_child_with<Op: Reattachable + DropFree>(
-        outer: &'a Scope<'a>,
-        operand: SealedExtern<Op>,
-        build: impl for<'b> FnOnce(&'b Scope<'b>, Op::At<'b>) -> Scope<'b>,
-    ) -> &'a Scope<'a> {
-        outer
-            .brand()
-            .handle()
-            .alloc_resident_born_with::<Scope<'static>, And<ScopeRefFamily, Op>, _>(
-                SealedExtern::<ScopeRefFamily>::erase(outer).zip(operand),
-                outer.region(),
-                |_placement, (outer_b, operand_b)| build(outer_b, operand_b),
-            )
-    }
-
-    /// Allocate the **run-global root** into `storage`'s region and hand back the resident scope. The
-    /// one scope with no parent to cross, so it takes the operand-free born door; `out` is installed
-    /// after the store (see [`Self::run_root`]).
-    pub fn alloc_run_root(
-        storage: &'a Rc<FrameStorage>,
-        out: Box<dyn Write + 'a>,
-    ) -> &'a Scope<'a> {
-        let region_owner = Rc::downgrade(storage);
-        let root = RegionHandle::from_owner(&**storage).alloc_resident_born::<Scope<'static>>(
-            |placement| Scope::run_root(RegionBrand(placement.handle()), region_owner),
-        );
-        *root.out.borrow_mut() = Some(out);
-        root
+    /// Allocate the **run-global root** into `storage`'s region and hand back the resident scope.
+    /// Built directly at `'a` like every same-region child — the run root has no parent to cross and
+    /// nothing foreign to embed, so it needs no door at all.
+    pub fn alloc_run_root(storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
+        let brand = RegionBrand(RegionHandle::from_owner(&**storage));
+        brand.allocator().in_place(Scope::run_root(brand))
     }
 
     /// Allocate the mutable run scope — the direct child of the run-global root — into the root's own
     /// region. Unlike [`Self::alloc_child_under`] this stamps `root` to `run_root` itself, because
     /// the run-global root carries no `root` of its own.
     pub fn alloc_run_child(&'a self) -> &'a Scope<'a> {
-        Self::alloc_child(self, |root_b| Scope::run_child(root_b))
+        Self::bump_child(self, Scope::run_child(self))
     }
 
     /// Allocate an anonymous same-region child of `self` — the plain block / body scope.
     pub fn alloc_child_under(&'a self) -> &'a Scope<'a> {
-        Self::alloc_child(self, |outer_b| Scope::child_under(outer_b))
+        Self::bump_child(self, Scope::child_under(self))
     }
 
     /// Allocate a same-region child stamped as a SIG decl_scope with an empty VAL slot collector.
-    pub fn alloc_child_under_sig(&'a self, name: String) -> &'a Scope<'a> {
-        Self::alloc_child(self, move |outer_b| Scope::child_under_sig(outer_b, name))
+    /// `name` is re-homed into this scope's own region, so the kind owns no heap of its own.
+    pub fn alloc_child_under_sig(&'a self, name: &str) -> &'a Scope<'a> {
+        let name = self.brand().allocator().text(name);
+        Self::bump_child(self, Scope::child_under_sig(self, name))
     }
 
     /// Allocate a same-region child stamped as a MODULE body (also the per-ascription view `:|`
     /// mints, which announces nothing). `announced` is the body's type-declaration pre-scan, owned
-    /// plain data the door bumps into the child's own region.
+    /// plain data whose runs are bumped into the child's own region here; `name` is re-homed the
+    /// same way.
     pub fn alloc_child_under_module(
         &'a self,
-        name: String,
+        name: &str,
         announced: Option<AnnouncedData>,
     ) -> &'a Scope<'a> {
-        Self::alloc_child(self, move |outer_b| {
-            Scope::child_under_module(outer_b, name, announced.as_ref())
-        })
+        let name = self.brand().allocator().text(name);
+        Self::bump_child(
+            self,
+            Scope::child_under_module(self, name, announced.as_ref()),
+        )
     }
 
     /// Allocate a `GROUP` body: a MODULE-kinded child carrying the [`OperatorGroup`] record its `OP`
-    /// declarations belong to. The record is same-region with the scope, so it crosses the brand as
-    /// the door's second operand.
+    /// declarations belong to. The record is same-region with the scope — it arrives as a plain
+    /// `&'a` — so this needs no crossing either.
     pub fn alloc_child_under_group(
         &'a self,
-        name: String,
+        name: &str,
         group: &'a OperatorGroup<'a>,
         announced: Option<AnnouncedData>,
     ) -> &'a Scope<'a> {
-        Self::alloc_child_with(
+        let name = self.brand().allocator().text(name);
+        Self::bump_child(
             self,
-            SealedExtern::<OperatorGroupFamily>::erase(group),
-            move |outer_b, group_b| {
-                Scope::child_under_group(outer_b, name, group_b, announced.as_ref())
-            },
+            Scope::child_under_group(self, name, group, announced.as_ref()),
         )
     }
 
     /// Allocate a transparent `USING … SCOPE` child whose bindings are a read-only window onto
-    /// `module_bindings`. The table lives in the opened module's own region, so it arrives already
-    /// erased and crosses the brand as the door's second operand.
+    /// `module_bindings`. The table lives in the **opened module's own region**, so this is one of
+    /// the two scope stores with a genuinely foreign operand: it takes the bump's crossing door,
+    /// which re-anchors the table to the same `'b` the parent crosses at (branding them
+    /// independently is exactly what `Scope`'s invariance rejects). The pin is this scope's own
+    /// region.
     ///
     /// Cluster-private: a bare window states no claim on the region its table lives in, so the only
     /// caller outside the test fixture below is `Scope::open_module_window`, which reads the table
@@ -505,9 +469,13 @@ impl<'a> Scope<'a> {
         &'a self,
         module_bindings: SealedExtern<BindingsReferenceFamily>,
     ) -> &'a Scope<'a> {
-        Self::alloc_child_with(self, module_bindings, |outer_b, bindings_b| {
-            Scope::child_transparent(outer_b, bindings_b)
-        })
+        self.brand()
+            .handle()
+            .bump_born_with::<Scope<'static>, And<ScopeRefFamily, BindingsReferenceFamily>, _>(
+                SealedExtern::<ScopeRefFamily>::erase(self).zip(module_bindings),
+                self.region(),
+                |_placement, (outer_b, bindings_b)| Scope::child_transparent(outer_b, bindings_b),
+            )
     }
 
     /// Test fixture: a transparent window onto a bare scope's binding table, for a suite that builds
@@ -598,17 +566,6 @@ impl<'a> Scope<'a> {
                 .map(|(name, kt)| (name.to_string(), *kt))
                 .collect(),
             ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Module { .. } => Vec::new(),
-        }
-    }
-
-    /// Write `bytes` to the nearest writer up the `outer` chain. Writer errors are
-    /// silently dropped.
-    pub fn write_out(&self, bytes: &[u8]) {
-        for scope in self.ancestors() {
-            if let Some(w) = scope.out.borrow_mut().as_mut() {
-                let _ = w.write_all(bytes);
-                return;
-            }
         }
     }
 }

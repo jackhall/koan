@@ -66,10 +66,17 @@ impl<'run> KoanRuntime<'run> {
     /// on `has_run_frame`); the scheduler owns the minted frame's lifecycle.
     pub(crate) fn ensure_run_frame<'a>(&mut self, scope: &'a Scope<'a>) {
         if !self.has_run_frame() {
-            // Adopting the run-root scope's `region_owner` storage makes the run frame's region the
+            // Adopting the run-root scope's own region owner makes the run frame's region the
             // run-root region, so top-level FN owners resolve.
             let run_storage = scope_frame(scope);
-            self.set_run_frame(CallFrame::adopting(scope, run_storage));
+            // The writer moves onto the frame it belongs to. A lazily-established run frame — a
+            // dispatch that reached here before any entry point mint — gets the sink, which is
+            // what a run with no caller-supplied writer already meant.
+            let out = self
+                .writer
+                .take()
+                .unwrap_or_else(|| Box::new(std::io::sink()));
+            self.set_run_frame(CallFrame::adopting(scope, run_storage, out));
         }
     }
 

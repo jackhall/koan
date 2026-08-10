@@ -223,8 +223,8 @@ pub(in crate::machine::execute) struct ContinuationFamily;
 // `NodeContinuation<'r>` is one type generic only in `'r` (a boxed trait object); its fat-pointer
 // layout is identical for every `'r`, so the shared `reattachable!` macro discharges the obligation.
 // The `droppable` arm: a boxed `FnOnce` owns its captures, so this family certifies no `DropFree` and
-// rests only on the owned tier, which runs that glue. It is koan's sole `droppable`-arm *carrier*
-// family; the other three (`core/arena.rs`) are arena-`Stored`-only and rest in no carrier.
+// rests only on the owned tier, which runs that glue. It is koan's sole `droppable`-arm family —
+// every other koan family is `Drop`-free and rests in the Copy tier.
 reattachable!(droppable ContinuationFamily => NodeContinuation<'r>);
 
 /// Walk the resolved dep results in delivery order, short-circuiting on the first errored dep (its

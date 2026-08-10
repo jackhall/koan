@@ -11,7 +11,8 @@ use super::body::ReturnContract;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::carrier_witness::SealedFunction;
 use crate::machine::core::{
-    CallFrame, FrameStorage, LexicalFrame, ProgramBrand, RegionBrand, Scope, StepAllocator,
+    CallFrame, FrameStorage, LexicalFrame, ProgramBrand, RegionBrand, RunWriter, Scope,
+    StepAllocator,
 };
 use crate::machine::execute::StepCarried;
 #[cfg(test)]
@@ -46,8 +47,8 @@ macro_rules! try_action {
 
 /// The `Rc<FrameStorage>` that owns `scope`'s region — the witness a value built into that region is
 /// `yoke`d under (the object-family construction inversion: a region-resident object is born bundled
-/// with its frame as its reach). The scope's `region_owner` is `Weak` — an in-region value holds no
-/// owning `Rc` back to its frame — and upgrades for as long as the scope can run: a **producing**
+/// with its frame as its reach). The link a scope derives its owner through is `Weak` — an in-region
+/// value holds no owning `Rc` back to its frame — and upgrades for as long as the scope can run: a **producing**
 /// scope during its own step (the producing node holds the frame); a **consumer/current** scope
 /// during a step (the slot's cart — or a cart ancestor via the `FrameStorage.outer` chain, for a
 /// `YokedChild` overlay scope — is held by the step machinery for the whole step); or the **run
@@ -251,6 +252,10 @@ pub struct BodyCtx<'a, 'c> {
     /// registry is owned by the run frame and outlives the call, so the body forwards the borrow
     /// rather than sharing ownership.
     pub types: &'c TypeRegistry,
+    /// The run's output sink, borrowed from the scheduler view at the call — the same channel and
+    /// the same run-frame owner as [`Self::types`]. `PRINT` is its only consumer; every other body
+    /// leaves it untouched.
+    pub out: &'c RunWriter,
     /// The run's program storage allocation capability, threaded down from the scheduler view. A
     /// body that has to synthesize a node reaching the **value channel** builds it through this
     /// (`OP`'s bridge body is the one such site), since the marker those arms carry is mintable

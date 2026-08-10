@@ -275,7 +275,6 @@ mod tests {
     struct TestProfile;
 
     impl StorageProfile for TestProfile {
-        type Families = ();
         type FrameOwner = TestFrame;
     }
 

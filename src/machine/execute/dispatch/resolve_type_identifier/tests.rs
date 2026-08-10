@@ -272,7 +272,7 @@ mod bare_leaf_resolution {
         for member in members {
             announced.announce(member.to_string());
         }
-        parent.alloc_child_under_module("m".into(), Some(announced))
+        parent.alloc_child_under_module("m", Some(announced))
     }
 
     fn outcome_tag(c: &TypeResolution<KType>) -> &'static str {

@@ -318,7 +318,7 @@ pub enum Specificity {
 /// A callable's call shape at rest: a bumped run of elements plus a `return_type`. Every field is
 /// `Copy` and `Drop`-free — the keyword and parameter-name text is `&'a str` bumped into the
 /// signature's own region — which is what lets a `KFunction` live in the region bump rather than a
-/// typed arena ([value-substrates.md § Untyped arenas](../../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
+/// lifetime-typed cell ([value-substrates.md § Untyped arenas](../../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
 ///
 /// `'a` names both the elements run and `return_type`'s `Deferred` arm, which captures a live
 /// [`KExpression`] for per-call re-elaboration.

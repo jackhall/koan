@@ -7,12 +7,12 @@ use std::rc::Rc;
 
 use super::super::*;
 
-/// The library-only profile the sectioned slate runs over: `u32` cells, resident in a region and
-/// handed to the door as the `&'a CellFamily::At<'a>` references it takes.
+/// The library-only profile the sectioned slate runs over. It declares only its frame-owner type;
+/// the `u32` cells live in the region's bump and reach the door as the `&'a CellFamily::At<'a>`
+/// references it takes.
 struct SectionProfile;
 
 impl StorageProfile for SectionProfile {
-    type Families = (CellFamily, ());
     type FrameOwner = RegionHost<SectionProfile>;
 }
 
@@ -26,19 +26,13 @@ reattachable! {
     CellFamily => u32,
 }
 
-impl Stored<SectionProfile> for CellFamily {
-    fn cell(storage: &StorageOf<SectionProfile>) -> &FamilyArena<Self> {
-        &storage.0
-    }
-}
-
 fn frame() -> Rc<SectionFrame> {
     RegionHost::fresh(None)
 }
 
 /// Store `v` in `frame`'s region and hand back the co-located cell reference the door takes.
 fn store(frame: &Rc<SectionFrame>, v: u32) -> &u32 {
-    RegionHandle::from_owner(&**frame).alloc_resident::<CellFamily>(v)
+    RegionHandle::from_owner(&**frame).allocator().value(v)
 }
 
 /// The reach counters' movement across `body`. A delta rather than a [`reset_region_metrics`]

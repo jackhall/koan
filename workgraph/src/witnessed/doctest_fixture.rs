@@ -8,8 +8,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::{
-    DropFree, FamilyArena, PinBundle, PinsRegion, Reattachable, Region, RegionOwner, SealedExtern,
-    StorageOf, StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
+    DropFree, PinBundle, PinsRegion, Reattachable, Region, RegionOwner, SealedExtern,
+    StorageProfile, Witness, WitnessRegion, Witnessed,
 };
 
 /// A shared-reference carrier family: `&'r u32`.
@@ -21,10 +21,8 @@ unsafe impl Reattachable for RefFamily {
 // A shared reference needs no drop.
 impl DropFree for RefFamily {}
 
-/// A text carrier family: `&'r str` — the shape a bump-stored string takes. It has **no**
-/// [`Stored`] impl on purpose: the bump door
-/// ([`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)) needs none, which is
-/// what its doctests demonstrate.
+/// A text carrier family: `&'r str` — the shape a bump-stored string takes. It carries no storage
+/// policy of its own, because the bump needs none: a family declares only its lifetime shape.
 pub struct StrFamily;
 // SAFETY: `&'r str` is one type generic only in `'r` (a fat pointer, layout-invariant).
 unsafe impl Reattachable for StrFamily {
@@ -99,8 +97,8 @@ pub struct HomedRef<'r> {
 }
 
 /// A homed-reference carrier family: [`HomedRef`], the simplest shape whose residence is readable
-/// off the stored value — [`RegionHandle::alloc_resident_born`](super::RegionHandle)'s doctests build one at the brand
-/// and its `compile_fail` twin tries to build one over an ambient region instead.
+/// off the stored value — [`RegionHandle::bump_born_with`](super::RegionHandle)'s doctests build one
+/// at the brand and its `compile_fail` twin tries to build one over an ambient region instead.
 pub struct HomedRefFamily;
 // SAFETY: `HomedRef<'r>` is one type generic only in `'r`, a pair of thin pointers whose layout is
 // identical for every choice of `'r`.
@@ -110,22 +108,11 @@ unsafe impl Reattachable for HomedRefFamily {
 // A pair of thin pointers needs no drop.
 impl DropFree for HomedRefFamily {}
 
-/// Profile for the region/handle doctests: the reference family, the witness-set family the fold
-/// verbs mint into, and the homed-reference family the checked-store doctests audit against.
+/// Profile for the region/handle doctests. It declares only its frame-owner type: a region's value
+/// storage is its bump, which is untyped, so the families above need no entry here.
 pub struct FixtureProfile;
 impl StorageProfile for FixtureProfile {
-    type Families = (RefFamily, (HomedRefFamily, ()));
     type FrameOwner = RegionCart;
-}
-impl Stored<FixtureProfile> for RefFamily {
-    fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
-        &storage.0
-    }
-}
-impl Stored<FixtureProfile> for HomedRefFamily {
-    fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
-        &storage.1 .0
-    }
 }
 
 /// A fresh region owner for the fixture profile, built through `Rc::new_cyclic` so its region is

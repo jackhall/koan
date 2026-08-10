@@ -22,7 +22,7 @@ fn announced_module<'a>(
     for member in members {
         announced.announce(member.to_string());
     }
-    parent.alloc_child_under_module("m".into(), Some(announced))
+    parent.alloc_child_under_module("m", Some(announced))
 }
 
 /// A Type token cannot name a value — the binding maps enforce the token-class partition — so a

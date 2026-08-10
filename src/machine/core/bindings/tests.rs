@@ -569,7 +569,7 @@ fn bump_backed_tables_full_churn() {
             .is_some());
 
         // SIG slot records through a real scope: the fifth table, over the same bump.
-        let sig = scope.alloc_child_under_sig("Shape".to_string());
+        let sig = scope.alloc_child_under_sig("Shape");
         for i in 0..48 {
             sig.write_sig_slot(format!("slot_{i}"), KType::NUMBER)
                 .expect("a fresh VAL slot records");

@@ -3,17 +3,17 @@
 //!
 //! A value stored here is *not* erased. The bump allocator is lifetime-free, so `'b` enters only at
 //! the allocating call — which is why a bumped value may hold an `&'b` back into the very region it
-//! lives in with no [`erase_to_static`](super::erase_to_static), no
-//! [`Stored`](super::Stored) impl, and no residence check. The typed
-//! [`FamilyArena`](super::FamilyArena) cells cannot do that: their slot type is `K::At<'static>`, so
-//! a region-self-referential value reaching one has to have its borrow erased and vetted back.
+//! lives in with no [`erase_to_static`](super::erase_to_static), no storage policy of its own, and
+//! no residence check. A lifetime-*typed* cell could not do that: its slot type would have to name
+//! a lifetime a [`Region`] has no parameter for, so a region-self-referential value reaching one
+//! would have to have its borrow erased and vetted back.
 //!
 //! Two arguments carry the door, stated here once so the method docs point at them rather than
 //! restating them.
 //!
 //! **Confinement is the brand, not the capability's privacy.** The door is a method on
 //! [`FoldedPlacement`], the fold engines' unforgeable placement capability, and `'b` is the
-//! *enclosing* fold's brand — the same one [`FoldedPlacement::alloc_resident_folded`] discharges its
+//! *enclosing* fold's brand — the same one [`FoldedPlacement::allocator`] discharges its
 //! residence obligation against. A constructor cannot capture an ambient `&'x` into the value it
 //! builds, because `'x` has no outlives relation to a universally-quantified `'b`; and the door's
 //! product, an [`Opened<'b, …>`](super::Opened), cannot leave the enclosing fold closure for the
@@ -359,7 +359,7 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     ///             .value()
     ///     });
     /// assert_eq!(built.open(|text| text.to_owned()), "hello");
-    /// // `StrFamily` has no `Stored` impl at all: the bump needs none.
+    /// // `StrFamily` declares only its lifetime shape: the bump needs no storage policy.
     /// ```
     ///
     /// ```

@@ -265,7 +265,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     // outer SIG's error is a combine-propagated shape error and doesn't carry
     // the inner diagnostic text.
 
-    let sig_scope = scope.alloc_child_under_sig("SyntheticForTest".to_string());
+    let sig_scope = scope.alloc_child_under_sig("SyntheticForTest");
     let err = test_run.run_one_err_in(sig_scope, parse_one(&program, "LET compare = 0"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {

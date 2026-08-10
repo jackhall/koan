@@ -283,6 +283,7 @@ fn run_action_builtin<'step>(
             node: view.node_handle(),
             ctx: view.step_ctx(),
             types: view.types(),
+            out: view.out(),
             program: view.program(),
         };
         f(&body_ctx)

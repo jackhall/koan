@@ -19,7 +19,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let types = test_run.types.clone();
     // An empty signature: every module bare-satisfies it, so the pins alone gate. Declared
     // directly rather than through `SIG`, which has no empty-body surface form.
-    let sig_scope = scope.alloc_child_under_sig("Ordered".into());
+    let sig_scope = scope.alloc_child_under_sig("Ordered");
     let schema = SigSchema::project_decl(sig_scope, &types);
 
     // `no_elem_pin` binds no `Elem` member, so the `{Elem = Number}` pin finds nothing to agree

@@ -56,8 +56,8 @@ pub fn interpret_with_writer_path(
     // and an escaping value bound at top level retains its per-call region on this run-root frame (the
     // drain below).
     let run_storage = run_root_storage();
-    let (root, top) = unseeded_scopes(&run_storage, out);
-    let mut runtime = KoanRuntime::new(program.brand());
+    let (root, top) = unseeded_scopes(&run_storage);
+    let mut runtime = KoanRuntime::new(program.brand(), out);
     // The run frame adopts `top`: `run_program` dispatches top-level statements against it, and
     // `resolve_node_scope` requires pointer-equality between the run frame's scope and the
     // dispatch target. Establishing it before seeding means the builtins are registered against

@@ -261,7 +261,7 @@ fn unfilled_announced_member_is_a_typed_error() {
     let scope = test_run.scope;
     let mut announced = AnnouncedData::default();
     announced.announce("Ghost".to_string());
-    let child = scope.alloc_child_under_module("ghosted".into(), Some(announced));
+    let child = scope.alloc_child_under_module("ghosted", Some(announced));
     assert!(
         super::super::unsealed_announcement_error(scope, "ghosted").is_none(),
         "a window-less scope owes nothing",

@@ -14,13 +14,11 @@ use std::rc::Rc;
 
 use super::super::*;
 
-/// The library-only storage profile the shape slate runs over: owned `u32` content plus the
-/// minted reach sets. `RefValFamily` and the fold families are carrier-only (never stored), so
-/// they need no cell.
+/// The library-only storage profile the shape slate runs over. It declares only its frame-owner
+/// type: values live in the region's bump, which is untyped.
 struct ShapeProfile;
 
 impl StorageProfile for ShapeProfile {
-    type Families = (ValFamily, ());
     type FrameOwner = ShapeFrame;
 }
 
@@ -45,19 +43,13 @@ reattachable! {
     PairVals => (&'r u32, &'r u32),
 }
 
-impl Stored<ShapeProfile> for ValFamily {
-    fn cell(storage: &StorageOf<ShapeProfile>) -> &FamilyArena<Self> {
-        &storage.0
-    }
-}
-
 fn frame() -> Rc<ShapeFrame> {
     RegionHost::fresh(None)
 }
 
 /// Store `v` into `frame`'s region and hand back the co-located borrow.
 fn store_val(frame: &Rc<ShapeFrame>, v: u32) -> &u32 {
-    RegionHandle::from_owner(&**frame).alloc_resident::<ValFamily>(v)
+    RegionHandle::from_owner(&**frame).allocator().value(v)
 }
 
 /// A destination accumulator born through the step context: the dest frame's own handle under the
@@ -572,7 +564,7 @@ fn a_regions_union_pins_what_its_own_members_reach() {
     // into `child`'s union.
     let child_handle = RegionHandle::from_owner(&*child);
     let _member_reach = child_handle.mint_retained(&[&StepCoverage::of(Rc::clone(&foreign))]);
-    let value: &u32 = child_handle.alloc_resident::<ValFamily>(5);
+    let value: &u32 = child_handle.allocator().value(5u32);
 
     // The outer value, hosted a region up, describing `child` and nothing else.
     let parent = frame();
@@ -633,7 +625,7 @@ fn lift_reads_a_description_hosted_under_a_transitive_root() {
     // The value rests in `module`'s region under a description hosted in that same arena, naming
     // `foreign` — whose owning bundle the mint folds into `module`'s union.
     let module_handle = RegionHandle::from_owner(&*module);
-    let value: &u32 = module_handle.alloc_resident::<ValFamily>(19);
+    let value: &u32 = module_handle.allocator().value(19u32);
     let reach = module_handle.mint_retained(&[&StepCoverage::of(Rc::clone(&foreign))]);
     let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
         Erased::erase(value),
@@ -848,8 +840,12 @@ fn open_adopted_reads_at_the_destination_lifetime_after_the_producer_drops() {
 #[test]
 fn project_refamilies_under_the_envelopes_own_pins() {
     let producer = frame();
-    let pair = RegionHandle::from_owner(&*producer).alloc_resident::<ValFamily>(31);
-    let second = RegionHandle::from_owner(&*producer).alloc_resident::<ValFamily>(37);
+    let pair = RegionHandle::from_owner(&*producer)
+        .allocator()
+        .value(31u32);
+    let second = RegionHandle::from_owner(&*producer)
+        .allocator()
+        .value(37u32);
     let element: Delivered<PairVals, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
         Witnessed::resident_in::<ShapeProfile>((pair, second), &producer),
         Rc::clone(&producer),

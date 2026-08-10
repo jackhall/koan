@@ -27,7 +27,8 @@ pub use core::{
 };
 pub(crate) use core::{
     AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, KoanRegion,
-    LexicalFrame, MemberResolution, NameLookup, NodeHandle, RegionTypeFamily, RunId, TraceFrame,
+    LexicalFrame, MemberResolution, NameLookup, NodeHandle, RegionTypeFamily, RunId, RunWriter,
+    TraceFrame,
 };
 pub(crate) use execute::seed_run_root;
 pub(crate) use execute::{

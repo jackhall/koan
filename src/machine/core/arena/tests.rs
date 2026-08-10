@@ -838,23 +838,23 @@ fn mint_reads_back_under_pin() {
     assert_eq!(regions, vec![a.region() as *const _]);
 }
 
-/// A mint lands in the destination's reach **side table**, never its family arena pages — so the
-/// counted `alloc_count()` (the value families) is untouched. Reach descriptions are `Drop`-bearing
-/// heap data hosted beside the arena, not in it (the storage-move invariant).
+/// A mint lands in the destination's reach **side table**, never its value storage — so the
+/// region's bump, which is where every value now lives, is untouched. Reach descriptions are
+/// `Drop`-bearing heap data hosted beside the bump, not in it (the storage-move invariant).
 #[test]
-fn mint_leaves_arena_pages_untouched() {
+fn mint_leaves_value_storage_untouched() {
     let a = run_root_storage();
     let c = run_root_storage();
 
-    let before = c.region().alloc_count();
+    let before = c.region().bump_capacity();
     let _minted = c
         .brand()
         .handle()
         .mint_retained(&[&FrameCoverage::of(Rc::clone(&a))]);
     assert_eq!(
-        c.region().alloc_count(),
+        c.region().bump_capacity(),
         before,
-        "a minted reach set lives in the side table, not a counted value-family arena"
+        "a minted reach set lives in the side table, not the region's value storage"
     );
 }
 
@@ -1142,7 +1142,7 @@ fn region_death_frees_every_drop_free_family() {
     // names again, for the same reason the callables' are.
     let modules: Vec<&Module<'_>> = (0..2)
         .map(|i| {
-            let child = scope.alloc_child_under_module(format!("member_module_{i}"), None);
+            let child = scope.alloc_child_under_module(&format!("member_module_{i}"), None);
             let mut draft = ModuleDraft::empty();
             draft
                 .type_members

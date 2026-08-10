@@ -42,7 +42,6 @@ reattachable!(NodeRefFamily => &'r Node<'r>);
 struct BornProfile;
 
 impl StorageProfile for BornProfile {
-    type Families = ();
     type FrameOwner = RegionHost<BornProfile>;
 }
 

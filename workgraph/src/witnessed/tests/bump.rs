@@ -1,6 +1,6 @@
 //! The bump-door slate: what [`FoldedPlacement::fold_and_bump`] composes, what it retains, and what
 //! it costs in bytes — over a library-only profile with an **empty family list**, which is the
-//! acceptance criterion made observable. Nothing here declares a [`Stored`] impl or any residence
+//! acceptance criterion made observable. Nothing here declares a storage policy or any residence
 //! check, yet a value holding an `&'b` back into its own region stores fine.
 //!
 //! Reach counts are read as deltas off the thread-local [`RegionMetrics`], scoped so a test's setup
@@ -19,7 +19,6 @@ use super::super::*;
 struct BumpProfile;
 
 impl StorageProfile for BumpProfile {
-    type Families = ();
     type FrameOwner = RegionHost<BumpProfile>;
 }
 
@@ -28,7 +27,7 @@ type BumpFrame = RegionHost<BumpProfile>;
 /// The operand / product family: text living in a region's bump.
 struct WordFamily;
 
-/// A value that holds an `&'r` **back into its own region** — the shape the typed cells cannot store
+/// A value that holds an `&'r` **back into its own region** — the shape a lifetime-typed cell cannot store
 /// without erasing the borrow and auditing it back, and the bump stores with neither.
 struct SpanFamily;
 
@@ -322,7 +321,7 @@ fn a_stored_value_may_borrow_its_own_region_with_no_residence_audit() {
 }
 
 /// The keyed index shape: a table built and placed in the region's bump, read back by key. Glue-free
-/// elements are the whole admission criterion — nothing here declares a family, a [`Stored`] impl or
+/// elements are the whole admission criterion — nothing here declares a family, a storage policy or
 /// an audit, exactly as for the other primitives.
 #[test]
 fn a_bumped_map_indexes_its_entries() {
@@ -453,10 +452,10 @@ fn a_bump_backed_table_survives_growth_overwrite_and_removal() {
     drop(dest);
 }
 
-/// [`FoldedPlacement::bump`] — the `Copy`-family peer of `alloc_resident_folded` — writes to the
-/// same destination the typed door would, with no [`Stored`] impl and no erase/re-anchor round trip.
+/// [`FoldedPlacement::allocator`] writes to the destination the enclosing fold composed its witness
+/// over, with no storage policy and no erase/re-anchor round trip.
 /// A value written through it may hold an `&'b` back into that very region, which is the whole point
-/// of the bump: the typed cells cannot, because their slot type is `K::At<'static>`.
+/// of the bump: a lifetime-typed cell cannot, because its slot type would have to name `'r`.
 #[test]
 fn a_fold_allocator_writes_a_self_referential_value_into_its_own_destination() {
     let dest = frame();

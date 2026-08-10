@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::model::types::TypeRegistry;
-use crate::machine::CallFrame;
+use crate::machine::{CallFrame, RunWriter};
 
 use super::nodes::NodePayload;
 use super::obligation::ReturnObligation;
@@ -90,6 +90,15 @@ impl AmbientContext {
             .as_ref()
             .and_then(|frame| frame.type_registry())
             .expect("run frame (and its type registry) established before any step")
+    }
+
+    /// The run's output sink, owned by the run frame exactly as the type registry is, and reached
+    /// the same way. `PRINT` is its only consumer, through [`BodyCtx::out`](crate::machine::BodyCtx).
+    pub(in crate::machine::execute) fn writer(&self) -> &RunWriter {
+        self.run_frame
+            .as_ref()
+            .and_then(|frame| frame.writer())
+            .expect("run frame (and its writer) established before any step")
     }
 
     /// Whether the executing slot carries a declared-return obligation — i.e. it is a tail call

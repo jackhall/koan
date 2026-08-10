@@ -33,9 +33,7 @@ use std::rc::Rc;
 use stable_deref_trait::StableDeref;
 
 mod region;
-pub use region::{
-    FamilyArena, Region, RegionHandle, RegionHandleFamily, StorageOf, StorageProfile, Stored,
-};
+pub use region::{Region, RegionHandle, RegionHandleFamily, StorageProfile};
 
 mod reach;
 pub(crate) use reach::PinBundle;
@@ -287,7 +285,7 @@ impl<'b> FoldToken<'b> {
 /// audit — the fold-door counterpart of [`FoldToken`]. It privately wraps the destination
 /// [`RegionHandle`] and is minted only by a fold engine that has composed the closure result's
 /// witness over exactly that region, so a value the closure builds from the fold's operands is
-/// covered by the result witness. [`Self::alloc_resident_folded`] therefore discharges the store's
+/// covered by the result witness. [`Self::allocator`] therefore discharges the store's
 /// residence obligation at compile time, with **no runtime check** at all.
 ///
 /// Like [`FoldToken`], `Copy` is safe (the placement cannot outlive its closure — `'b` is
@@ -351,31 +349,18 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
         self.handle
     }
 
-    /// Store a value built at this fold's own brand into the destination region — **no audit, no
-    /// `Option`**.
+    /// **The [`BumpAllocator`] over this fold's destination** — the store for a value the closure
+    /// builds at this fold's own brand, with **no audit and no `Option`**.
     ///
-    /// Sound by the rank-2 fold brand: the only inhabitants of `K::At<'b>` are the fold's declared
-    /// operand views, the brand's own allocations, and owned `'static` data, all named by the
-    /// witness the minting engine composes over this placement's own region. An ambient-lifetime
-    /// capture is a compile error at this signature (`'b` has no outlives relation to any enclosing
-    /// lifetime), so the always-true audit is discharged by the type. The private field plus
-    /// crate-internal [`mint`](Self::mint) make the destination inseparable from that proof.
-    pub fn alloc_resident_folded<K: Stored<W>>(self, value: K::At<'b>) -> &'b K::At<'b> {
-        self.handle.region().alloc_resident::<K>(value)
-    }
-
-    /// The [`BumpAllocator`] over this fold's destination — the `Drop`-free peer of
-    /// [`alloc_resident_folded`](Self::alloc_resident_folded), for a family whose `Copy` bound already
-    /// says region death owes it no destructor.
-    ///
-    /// It rests on the identical argument, and grants no more: a value written through the returned
-    /// allocator is typed at this same brand `'b`, so its only inhabitants are the fold's operand
-    /// views, the brand's own allocations, and owned data — all named by the witness the minting
-    /// engine composed over this region. What it drops relative to the typed door is the
-    /// [`Stored`] requirement and with it the erase/re-anchor round trip, which a bump needs no part
-    /// of. [`fold_and_bump`](Self::fold_and_bump) remains the door for
-    /// the other case — where the *operands'* reach still has to be composed and retained before the
-    /// value depending on them exists.
+    /// Sound by the rank-2 fold brand: the only inhabitants of a type at `'b` are the fold's
+    /// declared operand views, the brand's own allocations, and owned `'static` data, all named by
+    /// the witness the minting engine composes over this placement's own region. An
+    /// ambient-lifetime capture is a compile error at that brand (`'b` has no outlives relation to
+    /// any enclosing lifetime), so the always-true residence audit is discharged by the type. The
+    /// private field plus crate-internal [`mint`](Self::mint) make the destination inseparable from
+    /// that proof. [`fold_and_bump`](Self::fold_and_bump) remains the door for the other case —
+    /// where the *operands'* reach still has to be composed and retained before the value depending
+    /// on them exists.
     pub fn allocator(self) -> BumpAllocator<'b> {
         self.handle.allocator()
     }

@@ -35,7 +35,7 @@ pub fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
     let announced = crate::try_action!(announce_type_members(&body_expr, &name));
-    let child_scope = ctx.scope.alloc_child_under_module(name.clone(), announced);
+    let child_scope = ctx.scope.alloc_child_under_module(&name, announced);
     await_module_body(child_scope, name, body_expr, ctx.bind_index())
 }
 

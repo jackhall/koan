@@ -15,7 +15,6 @@ use super::super::*;
 struct InternProfile;
 
 impl StorageProfile for InternProfile {
-    type Families = ();
     type FrameOwner = RegionHost<InternProfile>;
 }
 

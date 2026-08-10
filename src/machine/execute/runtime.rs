@@ -87,15 +87,24 @@ pub struct KoanRuntime<'run> {
     /// value-erased (`Scheduler<KoanWorkload>`), so without this the run lifetime would live only in
     /// the harness's own method signatures.
     pub(in crate::machine::execute) program: ProgramBrand<'run>,
+    /// The run's output sink, held only until [`ensure_run_frame`](Self::ensure_run_frame) mints
+    /// the run frame and moves it onto that frame — the writer's real home, beside the run's
+    /// [`TypeRegistry`](crate::machine::model::TypeRegistry). It waits here rather than being
+    /// passed at the mint because the mint is lazy: a dispatch into the run scope establishes the
+    /// frame if nothing has yet, and that call site has no writer to supply.
+    pub(in crate::machine::execute) writer: Option<Box<dyn std::io::Write>>,
 }
 
 impl<'run> KoanRuntime<'run> {
-    pub fn new(program: ProgramBrand<'run>) -> Self {
+    /// `out` is where this run's `PRINT` output goes; it lands on the run frame the first
+    /// submission establishes.
+    pub fn new(program: ProgramBrand<'run>, out: Box<dyn std::io::Write>) -> Self {
         Self {
             sched: Scheduler::new(),
             ambient: super::ambient::AmbientContext::default(),
             run: RunId::next(),
             program,
+            writer: Some(out),
         }
     }
 

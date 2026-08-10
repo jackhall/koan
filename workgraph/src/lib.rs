@@ -38,7 +38,7 @@
 //! - The lifetime family contract: [`witnessed::Reattachable`] and the
 //!   [`witnessed::reattachable`] macro that discharges its `unsafe` obligation once per family.
 //! - The generic region engine: [`witnessed::Region`], [`witnessed::StorageProfile`],
-//!   [`witnessed::Stored`] (an embedder's storage-policy extension point).
+//!   [`witnessed::StorageProfile`] (an embedder's storage declaration).
 //! - Combinators: [`witnessed::seal_option`], and the `And` / `OptionOf` families the `zip` /
 //!   `seal_option` combinators seal.
 //! - [`witnessed::doctest_fixture`] — a fixture crate for the `compile_fail` soundness guards;

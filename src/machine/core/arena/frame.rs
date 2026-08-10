@@ -4,7 +4,7 @@
 //! the [`CallFrame`] shell over a refcounted `FrameStorage` that holds the per-call child [`Scope`].
 //! The region/brand substrate these build on lives in the parent `arena` module.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use super::{KoanRegion, KoanStorageProfile, RegionBrand};
@@ -31,8 +31,8 @@ pub type FrameStorage = RegionHost<KoanStorageProfile>;
 /// The run-root storage: a fresh run region with no `outer` link, stamped at the eternal tier
 /// ([`RegionHost::is_eternal`]) so anything holding it can tell the run region from a per-call one.
 /// Held by `run_program` (and the test harness) so the run-root scope's region has an owning Rc;
-/// [`CallFrame::adopting`] reuses it as the run frame's storage and the run-root scope records a
-/// `Weak` to it as its `region_owner`. Public: it is the one Koan-side entry point a caller
+/// [`CallFrame::adopting`] reuses it as the run frame's storage, and the run-root scope reads it
+/// back as its region owner through the region's own host back-link. Public: it is the one Koan-side entry point a caller
 /// (production or an integration test) uses to obtain run-root storage — it mints nothing itself,
 /// only building the library's `RegionHost` shell whose region lazily mints on first allocation.
 pub fn run_root_storage() -> Rc<FrameStorage> {
@@ -48,7 +48,7 @@ pub fn run_root_storage() -> Rc<FrameStorage> {
 /// makes an expression whose parts live only here reach nothing: [`RegionHost::is_eternal`] drives
 /// `needs_no_pin`, and the eternal rule filters such a member out of every pin bundle and reach
 /// description with no special case anywhere. It never enters the frame lifecycle or the scheduler:
-/// no `CallFrame` adopts it, no `Scope` names it as `region_owner`, and its only capability in use is
+/// no `CallFrame` adopts it, no `Scope` lives in its region, and its only capability in use is
 /// the bump its [`brand`](ProgramStorage::brand) hands parse output.
 pub fn program_storage() -> ProgramStorage {
     ProgramStorage(RegionHost::fresh_eternal())
@@ -115,6 +115,31 @@ impl FrameStorageExt for FrameStorage {
     }
 }
 
+/// **The run's output sink** — where `PRINT` writes. One per run, owned by the run [`CallFrame`]
+/// beside the run's [`TypeRegistry`] and reached the same way: through the execution context, never
+/// off a scope. `RefCell` because writing is a `&self` act on a value the whole run shares, and
+/// nothing holds the borrow across a call.
+///
+/// Write errors are dropped: `PRINT` is a statement with no error channel, so there is nothing for a
+/// caller to do with one. This is a stopgap — see
+/// [monadic side effects](../../../../roadmap/libraries/monadic-side-effects.md), which replaces
+/// direct writer plumbing with an effect the language expresses.
+pub struct RunWriter(RefCell<Box<dyn std::io::Write>>);
+
+impl RunWriter {
+    /// Wrap the caller-supplied sink. `'static` is what every entry point already passes — stdout, a
+    /// sink, an `Rc`-shared buffer — and it is what lets the writer rest on a frame that names no
+    /// region.
+    pub fn new(out: Box<dyn std::io::Write>) -> Self {
+        RunWriter(RefCell::new(out))
+    }
+
+    /// Write `bytes` to the run's sink, dropping any write error.
+    pub fn write_out(&self, bytes: &[u8]) {
+        let _ = self.0.borrow_mut().write_all(bytes);
+    }
+}
+
 /// The non-owning reach description backing carrier witnesses: names the regions a carrier's value
 /// reaches, hosted in the value's home region's side table and referenced (never owned) by the
 /// carrier. See [`ReachDescription`] for the shared mechanism (membership queries, the self rule);
@@ -134,7 +159,7 @@ pub type FrameCoverage = StepCoverage<FrameStorage>;
 /// [`SealedExtern<ScopeRefFamily>`] the [`CallFrame`] holds — the construction door that re-anchors the
 /// longer-lived lexical parent into the fresh region, with no retype outside the witnessed substrate.
 ///
-/// The child is *born* at the destination: [`RegionHandle::alloc_resident_born_with`] hands the
+/// The child is *born* at the destination: [`RegionHandle::bump_born_with`] hands the
 /// construction closure a placement over the fresh region at a `for<'b>` brand, with the foreign
 /// parent (as [`ScopeRefFamily`]) re-anchored to that same `'b`. The real invariant `Scope<'b>` is
 /// built coupling the two (its `root` falling out as `outer.root`) and stored in the same act, so
@@ -149,7 +174,7 @@ pub type FrameCoverage = StepCoverage<FrameStorage>;
 /// `FrameStorage`'s own `outer` `Rc` chain, the pin this call hands the door: a structural invariant
 /// this construction door alone upholds by always chaining `storage`'s `outer` to the same frame that
 /// owns the parent's region. That chain is **derived**, not asserted — [`CallFrame::new`] computes it
-/// from the parent scope's own `region_owner` ([`Scope::parent_frame_pin`]), and root-region parents
+/// from the parent scope's own region owner ([`Scope::parent_frame_pin`]), and root-region parents
 /// chain nothing. A fresh-tail hop's parent is the callee closure's captured scope, so the same chain
 /// keeps that captured (possibly per-call) region alive across the hop that retires the caller.
 ///
@@ -161,12 +186,11 @@ pub(crate) fn build_frame_child_witnessed<'p>(
     storage: &Rc<FrameStorage>,
 ) -> Sealed<ScopeRefFamily, CarrierWitness> {
     let handle = RegionHandle::from_owner(&**storage);
-    let region_owner = Rc::downgrade(storage);
-    let live = handle.alloc_resident_born_with::<Scope<'static>, ScopeRefFamily, _>(
+    let live = handle.bump_born_with::<Scope<'static>, ScopeRefFamily, _>(
         SealedExtern::<ScopeRefFamily>::erase(outer),
         storage,
         |placement, outer_b| {
-            Scope::child_for_frame_witnessed(outer_b, RegionBrand(placement.handle()), region_owner)
+            Scope::child_for_frame_witnessed(outer_b, RegionBrand(placement.handle()))
         },
     );
     Sealed::seal(RegionBrand(handle).seal_resident::<ScopeRefFamily>(live))
@@ -210,6 +234,10 @@ pub struct CallFrame {
     /// frames reach it through the execution context rather than owning one, so a verdict recorded
     /// anywhere in the run is visible everywhere in it; the map drops when the run frame does.
     type_registry: Option<Rc<TypeRegistry>>,
+    /// The run's output sink, `Some` only on the run frame ([`Self::adopting`]) — the same home and
+    /// the same reach path as [`type_registry`](Self::type_registry): per-call frames own none and
+    /// `PRINT` reaches this one through the execution context.
+    writer: Option<RunWriter>,
 }
 
 impl CallFrame {
@@ -252,6 +280,7 @@ impl CallFrame {
             non_dying: false,
             owner: Cell::new(None),
             type_registry: None,
+            writer: None,
         })
     }
 
@@ -267,7 +296,15 @@ impl CallFrame {
     /// resolves to this frame's storage. The adopted run scope's borrow is erased into
     /// `scope_carrier` exactly as every per-call child scope is — the fabrication hazard is deferred
     /// to the witness-bounded re-attach.
-    pub fn adopting<'a>(scope: &'a Scope<'a>, run_storage: Rc<FrameStorage>) -> Rc<CallFrame> {
+    ///
+    /// `out` is the run's output sink, taken here for the same reason the type registry is minted
+    /// here: both are run-lifetime state with exactly one home, and this is the one frame that has
+    /// one.
+    pub fn adopting<'a>(
+        scope: &'a Scope<'a>,
+        run_storage: Rc<FrameStorage>,
+        out: Box<dyn std::io::Write>,
+    ) -> Rc<CallFrame> {
         debug_assert!(
             std::ptr::eq(run_storage.region(), scope.region() as *const KoanRegion),
             "adopting run_storage must own the run-root scope's region"
@@ -285,6 +322,7 @@ impl CallFrame {
             non_dying: true,
             owner: Cell::new(None),
             type_registry: Some(Rc::new(TypeRegistry::new())),
+            writer: Some(RunWriter::new(out)),
         })
     }
 
@@ -293,6 +331,12 @@ impl CallFrame {
     /// predicates.
     pub(crate) fn type_registry(&self) -> Option<&Rc<TypeRegistry>> {
         self.type_registry.as_ref()
+    }
+
+    /// The run's output sink — `Some` only on the run frame, read the same way the registry is
+    /// (`AmbientContext::writer`), and handed to a builtin body as `BodyCtx::out`.
+    pub(crate) fn writer(&self) -> Option<&RunWriter> {
+        self.writer.as_ref()
     }
 
     /// True only for the scheduler-owned run frame (see [`Self::adopting`]). The Done boundary
@@ -400,7 +444,7 @@ impl CallFrame {
         body: crate::machine::core::Body<'f>,
         types: &TypeRegistry,
     ) -> &'f crate::machine::core::KFunction<'f> {
-        let captured = Scope::alloc_run_root(frame.storage(), Box::new(std::io::sink()));
+        let captured = Scope::alloc_run_root(frame.storage());
         crate::machine::core::KFunction::alloc_captured(captured, signature, body, false, types)
     }
 }

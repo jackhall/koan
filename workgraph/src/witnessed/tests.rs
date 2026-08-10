@@ -560,7 +560,6 @@ fn seal_option_none_opens_to_none() {
 struct StepProfile;
 
 impl StorageProfile for StepProfile {
-    type Families = ();
     type FrameOwner = StepFrame;
 }
 

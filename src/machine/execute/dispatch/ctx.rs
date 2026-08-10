@@ -16,7 +16,7 @@ use std::rc::Rc;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::{scope_frame, DepPlacement};
-use crate::machine::core::{FrameCoverage, FrameStorage, ProgramBrand, StepAllocator};
+use crate::machine::core::{FrameCoverage, FrameStorage, ProgramBrand, RunWriter, StepAllocator};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::FoldDirection;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
@@ -193,6 +193,12 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     /// predicates take it as their final parameter.
     pub(in crate::machine::execute) fn types(&self) -> &TypeRegistry {
         self.ambient.type_registry()
+    }
+
+    /// The run's output sink, read through the ambient context's run frame — the same channel and
+    /// the same owner as [`Self::types`]. `PRINT` is the only body that takes it.
+    pub(in crate::machine::execute) fn out(&self) -> &RunWriter {
+        self.ambient.writer()
     }
 
     pub(super) fn chain_deref(&self) -> Option<&LexicalFrame> {

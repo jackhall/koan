@@ -65,7 +65,7 @@ impl<F: PinsRegion + 'static> Copy for Run<'_, F> {}
 
 /// [`Reattachable`] family for a **reference to** a cell of family `K` — the erased form
 /// [`Sectioned::project`] seals. `At<'r>` is `&'r K::At<'r>`: content == borrow == `'r`, the tight
-/// no-free-lifetime shape [`Region::alloc_resident`] hands back, so a re-anchored projection cannot
+/// no-free-lifetime shape a region's own allocation hands back, so a re-anchored projection cannot
 /// be widened past its pin.
 ///
 /// Being a reference is what makes the projection cheap and universally openable: it is `Copy`
@@ -253,8 +253,8 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     ///
     /// let cart = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
-    /// // `alloc_resident` hands back `&'a RefFamily::At<'a>` — a cell reference, resident.
-    /// let cell: &&u32 = handle.alloc_resident::<RefFamily>(&7);
+    /// // The bump hands back a co-located `&'a RefFamily::At<'a>` — a cell reference, resident.
+    /// let cell: &&u32 = handle.allocator().value(&7u32);
     /// let (container, _) = Sectioned::<RefFamily, _>::build(
     ///     handle,
     ///     vec![CellInput { payload: cell, reach: CellReach::Owned, weight: 1 }],
@@ -273,8 +273,8 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     ///
     /// let cart = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
-    /// // `alloc_resident` hands back `&'a RefFamily::At<'a>` — a cell reference, resident.
-    /// let cell: &&u32 = handle.alloc_resident::<RefFamily>(&7);
+    /// // The bump hands back a co-located `&'a RefFamily::At<'a>` — a cell reference, resident.
+    /// let cell: &&u32 = handle.allocator().value(&7u32);
     /// let (container, _) = Sectioned::<RefFamily, _>::build(
     ///     handle,
     ///     vec![CellInput { payload: cell, reach: CellReach::Owned, weight: 1 }],
@@ -292,8 +292,8 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     ///
     /// let cart = fresh_cart();
     /// let handle = RegionHandle::from_owner(&*cart);
-    /// // `alloc_resident` hands back `&'a RefFamily::At<'a>` — a cell reference, resident.
-    /// let cell: &&u32 = handle.alloc_resident::<RefFamily>(&7);
+    /// // The bump hands back a co-located `&'a RefFamily::At<'a>` — a cell reference, resident.
+    /// let cell: &&u32 = handle.allocator().value(&7u32);
     /// let (container, _) = Sectioned::<RefFamily, _>::build(
     ///     handle,
     ///     vec![CellInput { payload: cell, reach: CellReach::Owned, weight: 1 }],
@@ -319,7 +319,7 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     /// Each input cell arrives already resident as `&'a K::At<'a>`, tying it to the same `'a` the
     /// destination handle carries — so whatever pin keeps `dest`'s region alive covers both a
     /// projected cell and its run description. Cell *storage* is the embedder's: it allocates its
-    /// cell block through its own [`Stored`](super::Stored) family and hands the resident borrows
+    /// cell block through the region's bump and hands the resident borrows
     /// in, rather than workgraph re-declaring a cell family it has no other use for.
     ///
     /// Per input, the mint source is the verdict read literally: nothing for

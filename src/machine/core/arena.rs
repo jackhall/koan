@@ -1,11 +1,10 @@
 //! The Koan instantiation of the generic [`Region`](crate::witnessed::Region)
-//! storage substrate: `KoanRegion = Region<KoanStorageProfile>`, the per-family
-//! [`Stored`](crate::witnessed::Stored) impls (which library-owned cell a family lands in), and
-//! the Koan-typed `alloc_*` wrappers. `CallFrame`
+//! storage substrate: `KoanRegion = Region<KoanStorageProfile>` and the Koan-typed `alloc_*`
+//! wrappers over the region's bump. `CallFrame`
 //! — the per-call frame shell over a refcounted `FrameStorage` (the `KoanRegion` plus the ancestor
 //! chain), holding the child `Scope` — also lives here.
 //!
-//! The generic erase-store engine lives in [`crate::witnessed::region`]; this file supplies the
+//! The generic region engine lives in [`crate::witnessed::region`]; this file supplies the
 //! Koan policy it runs.
 //!
 //! See [per-call-region/README.md](../../../design/per-call-region/README.md) for the carrier
@@ -25,8 +24,8 @@ use crate::machine::model::{
 };
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    BumpAllocator, DropFree, Erased, FamilyArena, FoldedPlacement, Reattachable, Region,
-    RegionHandle, StepContext, StorageOf, StorageProfile, Stored, Witnessed,
+    BumpAllocator, DropFree, Erased, FoldedPlacement, Reattachable, Region, RegionHandle,
+    StepContext, StorageProfile, Witnessed,
 };
 
 mod frame;
@@ -35,29 +34,26 @@ mod step_allocator;
 pub(crate) use frame::FrameStorageExt;
 pub use frame::{
     program_storage, run_root_storage, CallFrame, FrameCoverage, FrameReach, FrameStorage,
-    ProgramBrand, ProgramStorage,
+    ProgramBrand, ProgramStorage, RunWriter,
 };
 pub use step_allocator::StepAllocator;
 
-/// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
-/// [`FamilyArena`] cell per family.
+/// The Koan workload's storage declaration — the frame-owner type its reach descriptions name, and
+/// nothing else.
 ///
-/// **Exactly the one family designed to own things.** A `Scope` owns its bindings — it runs a real
-/// `Drop` at region death and so needs a typed cell that will run it. Every other value family is
-/// `Drop`-free by construction (`Copy`, checked at the bump doors) and lives in the region's bump
-/// instead, where death is chunk deallocation and no per-slot glue runs at all — a `KFunction`
-/// among them, its signature elements a bumped run of `&str`, and a `Module`, its path and member
-/// tables bump-hosted. See
+/// **Every Koan value family is `Drop`-free, so every one lives in the region's bump**, where death
+/// is chunk deallocation and no per-slot glue runs at all: a `KFunction` with its signature elements
+/// a bumped run of `&str`, a `Module` with its path and member tables bump-hosted, and a
+/// [`Scope`] with its binding tables built over the same allocator and its own destructor
+/// structurally absent. See
 /// [value-substrates.md § Untyped arenas](../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
 ///
-/// A [`TypeIdentifier`](crate::machine::model::TypeIdentifier) and a [`KType`] need no cell either:
-/// both are `Copy` handles — a borrow of a name already resident where it was parsed, and an interned
-/// registry index — so the type channel's carriers hold them by value.
+/// A [`TypeIdentifier`](crate::machine::model::TypeIdentifier) and a [`KType`] need no storage at
+/// all: both are `Copy` handles — a borrow of a name already resident where it was parsed, and an
+/// interned registry index — so the type channel's carriers hold them by value.
 pub struct KoanStorageProfile;
 
 impl StorageProfile for KoanStorageProfile {
-    type Families = (Scope<'static>, ());
-
     /// Reach descriptions live in the region's side table, typed at the per-call frame owner.
     type FrameOwner = FrameStorage;
 }
@@ -302,7 +298,7 @@ impl<'a> FoldingBrand<'a> {
     }
 
     /// Store a container substrate built at this fold's own brand — the container door, generic over
-    /// the substrate payload family `K` (its `'static` [`Stored`] form). Sound by the same rank-2
+    /// the substrate payload family `C`. Sound by the same rank-2
     /// fold-brand argument as [`Self::alloc_object_folded`]: `substrate` is typed at the brand
     /// lifetime, so an ambient-lifetime capture is a compile error at this signature, discharging the
     /// store's residence obligation at compile time. A substrate is `Copy` in every arm — its index
@@ -383,17 +379,16 @@ impl SubstrateDoor<'_, '_> {
 // shared `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its
 // docs).
 //
-// The one arena-stored family owns heap contents (a scope's bindings), so it takes the `droppable`
-// arm: it emits no `DropFree`, which is exactly the claim that keeps it off the Copy tier's
-// glue-free dormant slot. A scope never rests in a carrier — the region arena is its owner and runs
-// its drop — so the arm costs it nothing.
+// The default arm's `!needs_drop` backstop is where `Scope`'s structural `Drop`-freedom is proved:
+// every field is `Copy`, a `Cell` of a `Copy`, or a bump-backed table whose own destructor is
+// suppressed, so the assert compiling *is* the claim that the bump — which runs no destructor —
+// loses nothing by hosting one. A field that later brings glue back fails the build here.
+// `Held` is a `Copy` cell handle for the same reason, which the aggregate folds' bumped cell slices
+// depend on.
 reattachable! {
-    droppable
     Scope<'static> => Scope<'r>,
+    Held<'static> => Held<'r>,
 }
-// `Held` is a `Copy` cell handle with no drop glue, so it stays on the default arm and remains
-// eligible for the Copy tier — which the aggregate folds' bumped cell slices depend on.
-reattachable!(Held<'static> => Held<'r>);
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
 /// type-channel identity (a `SetMember` / declared type) that must cross the build brand. A
@@ -405,19 +400,6 @@ reattachable!(Held<'static> => Held<'r>);
 /// pointer and a `Copy` `KType` handle, representation independent of `'r`.
 pub struct RegionTypeFamily;
 reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, KType));
-
-// Per-family `Stored` policy: which sub-arena the one droppy family lands in. A scope carries no
-// self-targeting `Rc<FrameStorage>` — it is reached as a bare borrow into its defining region, kept
-// alive by its carrier's witness set rather than an owned anchor — so no allocation can self-cycle
-// and the engine needs no cycle gate. It records no address either: residence is answered entirely
-// by the construction door's brand — a born door builds the value at its destination and a fold
-// placement at the fold's — never by a runtime probe or a side table.
-
-impl Stored<KoanStorageProfile> for Scope<'static> {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.0
-    }
-}
 
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
@@ -469,11 +451,10 @@ pub(crate) trait KoanRegionExt {
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>;
 
-    /// Total bytes allocated in this region: each Koan family's live count weighted by the flat size
-    /// of its stored `'static` form, plus the region's **reserved bump capacity**
-    /// ([`Region::bump_capacity`]) — the chunks holding the string bytes a value family slot holds
-    /// and the library's own sectioned-container metadata, which a pin retains whole just as surely
-    /// as it retains an arena cell. Prices the host region only, not the
+    /// Total bytes allocated in this region: its **reserved bump capacity**
+    /// ([`Region::bump_capacity`]), which is the whole of it — every Koan value lives in the bump,
+    /// alongside the string bytes a value slot holds and the library's own sectioned-container
+    /// metadata, and a pin retains those chunks whole. Prices the host region only, not the
     /// `outer` chain its `Rc<FrameStorage>` also retains (a documented approximation): the cost-copy
     /// seam reads this as the denominator of the payoff ratio, where the host's own footprint is the
     /// relevant scale. `#[allow(dead_code)]` because trait methods, unlike inherent ones, are checked
@@ -521,27 +502,7 @@ impl KoanRegionExt for KoanRegion {
     }
 
     fn allocated_total(&self) -> u64 {
-        fn weigh<K: Stored<KoanStorageProfile>>(region: &KoanRegion) -> u64 {
-            region.family_len::<K>() as u64 * std::mem::size_of::<K>() as u64
-        }
-        weigh::<Scope<'static>>(self) + self.bump_capacity() as u64
-    }
-}
-
-/// Test-only allocation counting over the generic [`Region`] — an extension trait for the same
-/// reason as [`KoanRegionExt`].
-#[cfg(test)]
-pub(crate) trait KoanRegionTestExt {
-    /// Total number of values stored in the typed sub-arena. It says nothing about the `Drop`-free
-    /// families: those live in the bump, which reports reserved capacity
-    /// ([`Region::bump_capacity`]) rather than values.
-    fn alloc_count(&self) -> usize;
-}
-
-#[cfg(test)]
-impl KoanRegionTestExt for KoanRegion {
-    fn alloc_count(&self) -> usize {
-        self.family_len::<Scope<'static>>()
+        self.bump_capacity() as u64
     }
 }
 

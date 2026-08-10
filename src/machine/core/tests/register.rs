@@ -643,7 +643,7 @@ fn visibility_type_side_gate_mirrors_value_side() {
 fn sig_scope_bindings_reject_value_token_type_write() {
     let region = run_root_storage();
     let outer = run_root_bare(&region);
-    let sig_scope = outer.alloc_child_under_sig("S".to_string());
+    let sig_scope = outer.alloc_child_under_sig("S");
     let kt: KType = KType::NUMBER;
     let error = match sig_scope.bindings().write_type(
         "compare",

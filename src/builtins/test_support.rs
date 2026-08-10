@@ -77,10 +77,10 @@ impl<'a> TestRun<'a> {
     pub fn new(
         program: &'a ProgramStorage,
         run_storage: &'a Rc<FrameStorage>,
-        out: Box<dyn Write + 'a>,
+        out: Box<dyn Write>,
     ) -> Self {
-        let (root, child) = unseeded_scopes(run_storage, out);
-        let mut runtime = KoanRuntime::new(program.brand());
+        let (root, child) = unseeded_scopes(run_storage);
+        let mut runtime = KoanRuntime::new(program.brand(), out);
         // The run frame adopts `child`, exactly as `interpret` does: dispatch targets it, and the
         // frame it mints carries the registry seeding needs.
         runtime.ensure_run_frame(child);
@@ -170,7 +170,7 @@ impl Write for SharedBuf {
 }
 
 /// Run-root scope with no builtins registered, for tests that exercise scope machinery
-/// directly. Built inside `run_storage` like every run root, so its `region_owner` resolves —
+/// directly. Built inside `run_storage` like every run root, so its region owner resolves —
 /// tests that drive dispatch (establishing a run frame via `ensure_run_frame`) work the same as
 /// pure scope-machinery tests that never reach the escape path.
 /// A **per-call**-tier storage with no ancestor — the fixture stand-in for another call's frame
@@ -184,7 +184,7 @@ pub(crate) fn per_call_storage() -> Rc<FrameStorage> {
 
 #[cfg(test)]
 pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
-    Scope::alloc_run_root(run_storage, Box::new(std::io::sink()))
+    Scope::alloc_run_root(run_storage)
 }
 
 /// Parse a source string expected to contain exactly one top-level expression into `program`,
