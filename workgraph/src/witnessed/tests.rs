@@ -27,7 +27,8 @@ mod sectioned;
 /// occupancy reader, and a region-self-referential store with no residence audit.
 mod bump;
 
-/// The born-door slate: what [`RegionHandle::alloc_resident_born`] and its crossing-operand sibling
+/// The bump-residence slate: what a same-region value bumped through
+/// [`BumpAllocator::in_place`] and a crossing one built through [`RegionHandle::bump_born_with`]
 /// store, over an invariant family that names its own region and a parent in another one.
 mod born;
 

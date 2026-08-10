@@ -42,8 +42,9 @@ use elsa::FrozenMap;
 use typed_arena::Arena;
 
 use super::{
-    erase_to_static, BumpAllocator, DropFree, FoldedPlacement, PinBundle, PinsRegion,
-    ReachDescription, Reattachable, RegionOwner, SealedExtern, StepCoverage, Witness,
+    erase_to_static, BumpAllocator, DropFree, Erased, FoldedPlacement, PinBundle, PinsRegion,
+    ReachDescription, Reattachable, ReferenceFamily, RegionOwner, SealedExtern, StepCoverage,
+    Witness,
 };
 
 /// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
@@ -468,6 +469,18 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         self.region
     }
 
+    /// **This region's owner, named weakly** — the back-link an owner established at construction
+    /// (`Rc::new_cyclic`), so a value resident here reads the frame that owns it off the region
+    /// rather than carrying a copy of the same `Weak` in a field of its own.
+    ///
+    /// On the handle rather than on a bare `&Region`: a handle holder already has the region's full
+    /// allocation capability, so handing it the owner grants nothing new — where a bare `&Region`
+    /// gaining an upgradeable owner path would reopen the mint route [`Self::from_owner`] closes
+    /// (upgrade the `Weak`, mint a handle off the owner).
+    pub fn host(self) -> Weak<W::FrameOwner> {
+        self.region.host()
+    }
+
     /// **This handle's region's bump as a [`BumpAllocator`](super::BumpAllocator)** — the frame-lifetime
     /// bytes door, and the whole of it: the guarded `text` / `slice` / `value` verbs for what is
     /// written once and read thereafter, and the raw allocator seam for a collection that keeps
@@ -705,6 +718,123 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
             let value = build(FoldedPlacement::mint(handle_b), operand_b);
             self.region.alloc_resident::<K>(value)
         })
+    }
+
+    /// **Build a region-borrowing value from a crossing operand and bump it here** — the born door
+    /// for a `Drop`-free family, and the bump's answer to
+    /// [`alloc_resident_born_with`](Self::alloc_resident_born_with). Same brand, same operand
+    /// crossing, same pin obligation; what drops out is the store-side erasure, because the bump is
+    /// lifetime-free and the value lands at the brand it was built at.
+    ///
+    /// `build` runs under a `for<'b>` quantifier and receives a [`FoldedPlacement`] over *this*
+    /// handle's region plus `operand` re-anchored to that same `'b` — one [`zip`](SealedExtern::zip)ped
+    /// open, so an invariant family is well typed at the brand. That quantifier is the residence
+    /// proof and it is a compile one: `'b` has no outlives relation to any enclosing lifetime, so
+    /// the only `&'b Region<W>` a closure body can name is the placement's. `pin` discharges the
+    /// operand's own liveness exactly as it does at the typed door: borrowed for `'a`, the
+    /// destination region's lifetime, so it covers the stored reference's whole life rather than
+    /// merely the call.
+    ///
+    /// The `const` assert is the family's side of the bargain, restated at the door the acceptance
+    /// runs through: a bump-hosted family runs **no destructor**, so it must have none to run. It
+    /// monomorphizes per family, so a field that later grows a `Drop` is a build error here.
+    ///
+    /// There is no operand-free twin. A value with nothing foreign to embed needs no brand at all:
+    /// its fields are already at the caller's `'a`, so it is built there and bumped through
+    /// [`allocator().in_place`](super::BumpAllocator::in_place) directly.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, seal_extern, HomedRef, HomedRefFamily, RefFamily};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let source = fresh_cart();
+    /// let cart = fresh_cart();
+    /// // A value resident in another region, which the built value will embed.
+    /// let borrowed: &u32 = RegionHandle::from_owner(&*source).allocator().value(7u32);
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// // `source` is held for the whole of the destination's life, so it pins what the operand names.
+    /// let stored: &HomedRef<'_> = handle.bump_born_with::<HomedRefFamily, RefFamily, _>(
+    ///     seal_extern::<RefFamily>(borrowed),
+    ///     &source,
+    ///     |placement, operand| HomedRef { home: placement.handle().region(), value: operand },
+    /// );
+    /// assert_eq!(*stored.value, 7);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // The residence proof, negatively: a value whose region pointer derives from an *ambient*
+    /// // region cannot be returned from the closure — `elsewhere`'s `&Region` is at an enclosing
+    /// // lifetime, which has no outlives relation to the universally quantified `'b`.
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, seal_extern, HomedRef, HomedRefFamily, RefFamily};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let source = fresh_cart();
+    /// let cart = fresh_cart();
+    /// let elsewhere = fresh_cart();
+    /// let borrowed: &u32 = RegionHandle::from_owner(&*source).allocator().value(7u32);
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// let _ = handle.bump_born_with::<HomedRefFamily, RefFamily, _>(
+    ///     seal_extern::<RefFamily>(borrowed),
+    ///     &source,
+    ///     |_placement, operand| HomedRef { home: &elsewhere.0, value: operand },
+    /// );
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // Nothing built at the brand leaves it except the door's own product: a branded allocation
+    /// // assigned to an enclosing binding is rejected by `for<'b>`.
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, seal_extern, HomedRef, HomedRefFamily, RefFamily};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let source = fresh_cart();
+    /// let cart = fresh_cart();
+    /// let borrowed: &u32 = RegionHandle::from_owner(&*source).allocator().value(7u32);
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// let mut escaped: Option<&u32> = None;
+    /// let _ = handle.bump_born_with::<HomedRefFamily, RefFamily, _>(
+    ///     seal_extern::<RefFamily>(borrowed),
+    ///     &source,
+    ///     |placement, operand| {
+    ///         escaped = Some(placement.handle().allocator().value(1u32));
+    ///         HomedRef { home: placement.handle().region(), value: operand }
+    ///     },
+    /// );
+    /// println!("{}", escaped.unwrap());
+    /// ```
+    pub fn bump_born_with<K, Op, P>(
+        self,
+        operand: SealedExtern<Op>,
+        pin: &'a P,
+        build: impl for<'b> FnOnce(FoldedPlacement<'b, W>, Op::At<'b>) -> K::At<'b>,
+    ) -> &'a K::At<'a>
+    where
+        K: Reattachable,
+        Op: Reattachable + DropFree,
+        P: Witness,
+        W: 'static,
+    {
+        const {
+            assert!(
+                !std::mem::needs_drop::<K::At<'static>>(),
+                "a bump-hosted family must carry no drop glue: the bump runs no destructor",
+            )
+        };
+        let handle = SealedExtern::<RegionHandleFamily<W>>::erase(self);
+        // The *reference* the bump hands back is what leaves the brand: a `&'b K::At<'b>` cannot be
+        // named outside the closure, so it is erased on the way out and re-anchored below. The value
+        // itself never is — it is built at `'b` and stored at `'b`, which is the whole point of
+        // bumping rather than storing to a `'static`-slotted cell.
+        let stored: Erased<ReferenceFamily<K>> =
+            handle.zip(operand).open(pin, |(handle_b, operand_b)| {
+                let placement = FoldedPlacement::mint(handle_b);
+                let value = build(placement, operand_b);
+                Erased::erase(placement.allocator().in_place(value))
+            });
+        // SAFETY: the pointee was bumped into `self.region` inside the closure above — the placement's
+        // allocator is over this handle's own region — and the `&'a Region` this handle holds pins the
+        // region, hence every chunk it has handed out, for the whole of `'a`. The re-anchor is
+        // therefore a shortening onto live, fixed-address backing: `'b` is the region's own storage
+        // lifetime and `'a` is bounded by the handle's borrow of it. The result is `&'a K::At<'a>`
+        // (content == borrow == `'a`), the same tight no-free-lifetime shape
+        // [`Region::alloc_resident`] returns, so no caller can widen it past the pin.
+        unsafe { stored.reattach() }
     }
 }
 

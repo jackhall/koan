@@ -30,8 +30,10 @@ time that it contributes no glue at all
 **Acceptance criteria.**
 
 - `Scope` is allocated into its region's bump at the caller's `'a` directly:
-  no `erase_to_static` call and no `Scope<'static>` ⇄ `Scope<'a>` storage
-  retype exists in either crate.
+  no `Scope` **value** is erased to `'static` or storage-retyped in either
+  crate. (The erased scope *reference* in sealed carriers, and the born door's
+  exit re-anchor of one, are the substrate's normal reference discipline and
+  remain.)
 - `Scope`'s `Drop`-freedom is structural: every field is `Copy`, a `Cell` of a
   `Copy`, or a bump-backed table whose elements are held to those same bounds —
   no audited marker trait admits a `Drop`-bearing field, and the bump door that
@@ -39,8 +41,9 @@ time that it contributes no glue at all
 - The `region_owner: Weak<FrameStorage>` field is deleted;
   `Scope::parent_frame_pin` and `Scope::region_owner` derive the owner from the
   region's own host back-link.
-- The root writer lives beside the run-root storage, not on `Scope`;
-  `write_out` reaches it through the region owner.
+- `Scope` carries no writer: the run writer rides the run `CallFrame` beside
+  the run's type registry, and `PRINT` reaches it through the execution
+  context.
 - No `ScopeKind` payload owns heap data or runs a destructor: kind names are
   bumped `&str`, the SIG slot collector's vacuous map teardown is suppressed the
   way `Bindings`' is, and no `Rc` rides a kind.
@@ -63,17 +66,26 @@ time that it contributes no glue at all
   no-drop-glue discipline), so the
   forgone destructor would have freed only bump bytes — no unsafe
   "trust me, it's `Drop`-free" marker tier is introduced.
-- *Writer home — decided.* The run-root storage side owns the root writer.
-  `FrameStorage` is a library alias (`RegionHost<KoanStorageProfile>`), so the
-  attachment is koan-side — see the open bullet.
-- *Writer attachment — open.* A koan wrapper over the run-root
-  `Rc<FrameStorage>` versus a workload-supplied slot on the storage profile.
-- *Scope's bump door — open.* Generalize the existing born-with shape
-  (`alloc_resident_born_with`'s `for<'b>` brand plus crossing operand) onto the
-  bump, versus a scope-specific door. Recommended: generalize — the crossing
-  machinery already exists and the erase step is the only part that drops out.
+- *Writer home — decided.* Context-carried, koan-only: the writer rides the
+  run `CallFrame` exactly as the run's type registry does, threaded to `PRINT`
+  through the execution context. Workgraph is not involved — the writer is a
+  stopgap (see the note under Dependencies) and the library gains no slot for
+  it.
+- *Scope's bump door — decided.* Generalize the born-with shape onto the bump:
+  one `RegionHandle::bump_born_with` (crossing-operand form only) whose bound
+  is a monomorphization-checked `!needs_drop` assert and whose exit re-anchors
+  the freshly bumped *reference* under the `&'a` region borrow through the
+  substrate's single audited reattach. Its only callers are the per-call frame
+  child and the transparent `USING` window; every same-region child and the
+  run root are built directly at `'a` and stored through a new glue-free
+  non-`Copy` allocator verb, `BumpAllocator::in_place`.
 
 ## Dependencies
+
+The `PRINT` writer this item relocates is itself a stopgap until
+[monadic side effects](../libraries/monadic-side-effects.md) replace direct
+writer plumbing — not a dependency edge in either direction; this item only
+moves the writer, it does not change how output is expressed.
 
 **Requires:** none — the binding tables already shed their `Drop`
 ([src/machine/core/bindings.rs](../../src/machine/core/bindings.rs)).

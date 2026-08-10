@@ -1553,3 +1553,24 @@ unsafe impl<T: Reattachable> Reattachable for OptionOf<T> {
 /// An `Option` of a drop-free erased form is drop-free — the `DropFree` certification through the
 /// inner family, so an optional operand rests in the Copy tier exactly when its payload does.
 impl<T: DropFree> DropFree for OptionOf<T> {}
+
+/// A **shared reference to** a carrier family — `&'r T::At<'r>`, the co-located shape a region
+/// allocation hands back. It is what lets a door erase the *reference* it just bumped without a
+/// family declaration per stored family: the bump door
+/// ([`RegionHandle::bump_born_with`]) builds its value at a fold brand and re-anchors the reference
+/// out through this family, and an embedder whose carrier is `&'r Scope<'r>` names it instead of
+/// declaring a reference family of its own beside every value family.
+///
+/// Note the two lifetimes move together: `At<'r>` is `&'r T::At<'r>` (borrow == content), the tight
+/// shape with no free content lifetime a holder could widen past its pin.
+pub struct ReferenceFamily<T>(PhantomData<T>);
+
+// SAFETY: `&'r T::At<'r>` is a thin/fat pointer whose layout is identical for every choice of `'r`
+// when `T` is layout-invariant — the `Reattachable` contract, discharged through the inner family.
+unsafe impl<T: Reattachable> Reattachable for ReferenceFamily<T> {
+    type At<'r> = &'r T::At<'r>;
+}
+
+/// A shared reference needs no drop, whatever it points at — so a reference family rests in the
+/// Copy tier even where its pointee family does not.
+impl<T> DropFree for ReferenceFamily<T> {}

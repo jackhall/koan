@@ -147,9 +147,10 @@ impl<'b> BumpAllocator<'b> {
     /// `T: Copy` is the static proxy for "no destructor to skip": the bump releases its chunks whole
     /// and runs no `Drop`, so a `Drop`-bearing `T` would silently leak its owned contents.
     /// "`Drop`-free" has no expressible bound; `Copy` is the honest approximation, and every family
-    /// queued behind this door satisfies it by construction. The one stored shape that is glue-free
-    /// without being `Copy` — a frozen table's header — has its own verb,
-    /// [`frozen_table`](Self::frozen_table), rather than a relaxation of this one.
+    /// queued behind this door satisfies it by construction. The stored shapes that are glue-free
+    /// without being `Copy` — a frozen table's header, a value that keeps mutating through interior
+    /// mutability — have verbs of their own ([`frozen_table`](Self::frozen_table),
+    /// [`in_place`](Self::in_place)) rather than a relaxation of this one.
     ///
     /// ```compile_fail
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
@@ -161,6 +162,54 @@ impl<'b> BumpAllocator<'b> {
     /// let _stored: &String = handle.allocator().value(String::from("leaks"));
     /// ```
     pub fn value<T: Copy>(self, value: T) -> &'b T {
+        self.0.alloc(value)
+    }
+
+    /// Bump a value that **stays resident and keeps mutating in place**, and hand back the
+    /// co-located `&'b` its holders name it through — the glue-free verb for the shape `Copy` cannot
+    /// spell. A value whose fields are `Copy`, `Cell`s of `Copy`, and tables built over this same
+    /// allocator carries no drop glue, but interior mutability rules `Copy` out: copying it would
+    /// fork the mutable state its holders share. This verb takes the proof directly instead.
+    ///
+    /// The `const` block is that proof, and it is the same one
+    /// [`frozen_table`](Self::frozen_table) carries: it monomorphizes per `T`, so a field that later
+    /// grows a `Drop` is a build error at the call that admitted it rather than a silent leak. What
+    /// the assert cannot state — that a suppressed destructor would have freed only bump bytes — is
+    /// structural here for the same reason it is there: the interior tables are built over this
+    /// allocator, so the region releases them whole.
+    ///
+    /// Shared `&'b`, never the `&mut` the bump itself returns: a bumped value is region state a
+    /// holder names, not one it owns, so every write goes through the value's own interior-mutable
+    /// fields.
+    ///
+    /// ```
+    /// use std::cell::Cell;
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    ///
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// let counter: &Cell<u32> = handle.allocator().in_place(Cell::new(0));
+    /// counter.set(counter.get() + 1);
+    /// assert_eq!(counter.get(), 1);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
+    /// use workgraph::witnessed::RegionHandle;
+    ///
+    /// let cart = fresh_cart();
+    /// let handle: RegionHandle<'_, FixtureProfile> = RegionHandle::from_owner(&*cart);
+    /// // A `String` owns a heap buffer the bump would never free — rejected by the assert.
+    /// let _stored: &String = handle.allocator().in_place(String::from("leaks"));
+    /// ```
+    pub fn in_place<T>(self, value: T) -> &'b T {
+        const {
+            assert!(
+                !std::mem::needs_drop::<T>(),
+                "a bump-hosted value must carry no drop glue: the bump runs no destructor",
+            )
+        };
         self.0.alloc(value)
     }
 
