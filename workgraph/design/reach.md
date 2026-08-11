@@ -353,7 +353,9 @@ as any region that could retain it.
 Acyclicity of the region ownership graph therefore rests on three rules: the self
 rule (no owned self-edge), the eternal rule (no owned edge into eternal storage),
 and the embedder's own obligation that a region owner's chain strong-owns only a
-**strictly older** ancestor — a DAG, never a back-edge.
+**strictly older** ancestor — a DAG, never a back-edge. A ring the three rules do
+not cut is expressible in safe code and is reported, not prevented
+(§ Debug audits).
 
 ## Threading: how pins reach each holder
 
@@ -418,6 +420,57 @@ region by any channel, so a `Delivered`'s home member, the producer's retention
 hold, and the value's residence region are one and the same region. A carrier whose
 home member does not name its value's residence cannot be built.
 
+## Debug audits
+
+Both audits below observe the **over-pinning** direction — a region held alive
+longer than the values reaching it need. Every other check in the model catches
+under-pinning, where a description names less than the value borrows; over-pinning
+breaks no invariant and so passes every one of them silently. Both are diagnostic:
+they record and return, changing nothing about what is retained, and a release
+build compiles neither of them.
+
+**The pin-ring detector.** The self and eternal rules cut the two ring shapes that
+arise by construction (§ The eternal rule). What is left — two regions' union
+bundles each holding an owner that pins the other — is expressible in safe code,
+defeats the refcount-driven free, and is caught only by a leak audit at process
+exit. The detector runs *online*, inside
+[`Region::retain_reach`](../src/witnessed/region.rs), because a mutual pin is by
+construction unreachable from any live root once the external references drop —
+that disconnection **is** the leak — so a walk started later can never find it, and
+a registry of live regions is exactly the global state this library refuses. The
+retention fold is also the one moment both ends are in hand, which gives exact
+blame for free.
+
+The graph walked has two edge kinds, both of which transmit liveness: *retention*
+(a region's union bundle owns an `Rc` on a member) and *chain* (an owner pins its
+own region and every ancestor's). A ring exists iff, from a member about to be
+retained into region R, the transitive closure of those edges reaches an owner that
+pins R. The walk expands the chain edges through
+[`PinsRegion::for_each_pinned_region`](../src/witnessed/reach.rs), the trait's one
+debug-only method: it enumerates the regions `pins_region` answers `true` for, must
+not **mint** a region while surveying (peek, never force), and must not
+**under-report**, since an omitted region is an edge the detector cannot follow.
+That is why it has no default body — a silently-empty default would make every
+un-implementing owner a blind spot rather than a compile error. No soundness rests
+on it, which is why it is compiled only under `debug_assertions`.
+
+The report surface is `PinCycleReport { retainer, path }` plus
+`pin_cycle_reports()` / `reset_pin_cycle_reports()`, thread-local and reset-scoped
+like the region metrics, and gated the same way as the detector — so any debug
+build of an embedder has it with no feature wiring. Identities are `Rc::as_ptr`
+addresses rather than references: a report outlives the walk, and a ring by
+definition holds its own members alive, so the identities stay meaningful for as
+long as the leak they describe. The eternal rule is applied *before* the walk, so
+what the detector sees is the retention that actually lands.
+
+**Reach tightness is the embedder's audit**, because only the embedder can say what
+its values actually reference. The library's contribution is the white-box reader
+[`StepCoverage::members`](../src/witnessed/reach.rs), under the same `test-hooks`
+gate as `PinBundle::members`: read-only, adding no pin arithmetic to the narrowed
+surface the type exists to be, and enough to compare what a fold *pinned* against
+what its product embeds. Koan's use of it is
+[memory-model.md § Debug region audits](../../design/memory-model.md#debug-region-audits).
+
 ## The library boundary
 
 - **Library-owned:** the description and pin-bundle types; the three carrier states
@@ -436,8 +489,9 @@ home member does not name its value's residence cannot be built.
   carrier states). A workload's only reach-derivation door is the mint, which
   performs its own retention.
 - **Workload-supplied:** the region-owner type `F` with its `PinsRegion`
-  subsumption hook and its `needs_no_pin` eternal-tier answer, and the retention
-  predicate at relocation sites — policy inputs, never pins.
+  subsumption hook, its `needs_no_pin` eternal-tier answer and — in a debug build
+  only — its `for_each_pinned_region` enumeration (§ Debug audits), and the
+  retention predicate at relocation sites — policy inputs, never pins.
 
 The **retention predicate** is how an embedder's copy-versus-pin choice reaches the
 pin arithmetic. A relocation verb does not accept a claim about what the product

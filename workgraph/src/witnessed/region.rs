@@ -18,7 +18,8 @@
 //! is expressible — two regions' union bundles holding each other's owners — and the self and
 //! eternal rules cut the two shapes that arise by construction. A debug-build detector
 //! ([`Region::retain_reach`]) reports whatever is left, online at the fold that closes the ring; it
-//! is diagnostic and compiles out of a release build entirely.
+//! is diagnostic and compiles out of a release build entirely
+//! ([design/reach.md § Debug audits](../../design/reach.md#debug-audits)).
 //!
 //! The Koan instantiation (`KoanRegion = Region<KoanStorageProfile>`) lives in the embedder's arena
 //! module (Koan's `machine::core::arena`). See

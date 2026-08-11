@@ -578,6 +578,51 @@ Both arms ride a grouped `NodePayload` (scope handle + lexical chain) *inside* t
 slot-storage scope handle and the seed-side `with_scope` re-anchor are documented in
 [per-call-region/scope-handles.md § Slot-table scope handle](per-call-region/scope-handles.md#slot-table-scope-handle).
 
+### Debug region audits
+
+Every rule above closes the **under-pinning** direction: a value naming storage
+nothing keeps alive is unwritable. The other direction — a region pinned for longer
+than any value reaching it needs — breaks no invariant, so it passes every one of
+those checks silently. Two debug-only audits observe it. Both record and return:
+neither changes what is retained, neither panics, and a release build compiles
+neither.
+
+The **pin-ring detector** is the library's, run at every region-lifetime retention
+in any debug build, with the report surface re-exported from
+[`witnessed`](../workgraph/src/witnessed.rs)
+([reach.md § Debug audits](../workgraph/design/reach.md#debug-audits)). Koan needs
+no wiring for it: `FrameStorage` is the library's `RegionHost`, so the walk's
+ancestor enumeration is the same `outer` chain
+[`pins_region`](../src/machine/core/arena/frame.rs) already answers over.
+
+The **reach-tightness report** ([`reach_audit.rs`](../src/machine/core/reach_audit.rs))
+is Koan's, and compiles only under `cfg(any(test, feature = "region-audit"))` —
+`cargo run --features region-audit -- <program>` for an instrumented interpreter
+run, whose findings [`main.rs`](../src/main.rs) prints to stderr afterwards. It
+instruments one door, the fold chokepoint
+[`StepAllocator::alloc_carried_with`](../src/machine/core/arena/step_allocator.rs),
+and asks whether each declared operand actually reached the product.
+
+Its ground truth is **address intersection, not stored reach**. Asking a value what
+it borrows (`still_borrows`, a substrate's reach union) reads back what the folds
+under audit declared — circular. The fold's own moment is not: inside the brand,
+the addresses reachable from each operand view and from the product are collected,
+and an operand *contributed* exactly when the two sets intersect. Only `usize`
+addresses leave the brand, so the comparison runs outside it. A contributing
+operand justifies its whole coverage — granularity is per operand, since a fold
+embedding any part of an operand has no way to disclaim the rest of what that
+operand reaches — and a description member justified by no contributor, and neither
+the product's home nor eternal, is flagged. Pointer equality suffices for the
+justification scan because a mint folds its sources' *exact* `Rc` members and
+subsumption only ever drops members
+([reach.md § Composition](../workgraph/design/reach.md#composition-minting-a-description-and-retaining-its-pins)).
+
+What it does not see bounds how a clean run should be read: the direct
+`merge_into` / `transfer_into` fold sites are not instrumented, and the address
+walk records a `KFunction`'s or `Module`'s captured-scope pointer without
+descending into that scope's binding tables, so a product embedding a value
+reachable only through a captured binding reads as non-contributing.
+
 ## Binding writes ride the step outcome
 
 A builtin body never mutates a published scope's binding tables. It builds its value under the
@@ -708,7 +753,23 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   residence and the scope it borrows are different regions — is read back after its minting frame
   dies. A release claim derived from the borrowed child scope would free the storage those reads
   walk, which only tree borrows observes.
+- The over-pinning audits ([§ Debug region audits](#debug-region-audits)) are
+  observed by their own slates rather than trusted:
+  [`over_fold_is_flagged`](../src/machine/core/reach_audit/tests.rs) drives a fold
+  whose product embeds only its first operand through the real chokepoint door and
+  reads back one flag naming the second operand's home, with three sibling tests
+  fixing what must *not* flag (a tight fold, a co-homed non-contributor, a rebuilt
+  scalar); [`mutual_pin_is_reported`](../workgraph/src/witnessed/tests/pin_cycles.rs)
+  and its chain-mediated sibling build real rings — a genuine leak, so each test
+  dismantles the ring it built — against two negatives that must stay silent.
 - The audit slate runs cycle-free across every unsafe site in the runtime
   under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit
   leaks, signing off the memory model as it stands today. The canonical
   slate list lives in [observe/miri_slate.md](../observe/miri_slate.md).
+
+## Open work
+
+- [Tightness-audit coverage](../roadmap/compile_safety/tightness-audit-coverage.md)
+  — the two blind spots named under [§ Debug region audits](#debug-region-audits):
+  the uninstrumented relocation verbs, and the address walk's stop at a captured
+  scope's boundary.

@@ -19,9 +19,12 @@
 //! No region is minted and no address table is kept.
 //!
 //! Compiled only under `cfg(any(test, feature = "region-audit"))`: a release build carries neither
-//! the walker, the comparison, nor the log. See
-//! [workgraph/design/reach.md](../../../workgraph/design/reach.md) for the reach model the audit
-//! reads.
+//! the walker, the comparison, nor the log. Its place among the memory model's checks is
+//! [memory-model.md § Debug region audits](../../../design/memory-model.md#debug-region-audits);
+//! the reach model it reads is
+//! [reach.md](../../../workgraph/design/reach.md), whose
+//! [§ Debug audits](../../../workgraph/design/reach.md#debug-audits) covers the library-side pin-ring
+//! detector this audit's over-pin direction pairs with.
 
 use std::cell::RefCell;
 use std::collections::HashSet;

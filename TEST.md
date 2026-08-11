@@ -1,11 +1,13 @@
 # Testing and linting Koan
 
-Three layers, each with a distinct job:
+Four layers, each with a distinct job:
 
 1. **`cargo test`** — every unit test in the crate, run on every push and PR.
 2. **`cargo clippy` / `cargo fmt`** — lints and formatting.
 3. **The Miri audit slate** — targeted memory-safety coverage for every unsafe
    site in the runtime, run under tree borrows.
+4. **The region debug audits** — debug-only over-pinning diagnostics over a real
+   program run, reported and never enforced.
 
 ## Unit tests
 
@@ -108,3 +110,21 @@ before trusting a clean result — exit code 0 alone is not sufficient, since
 The canonical slate — test names grouped by the unsafe site each pins down,
 the policy for adding tests, and the runtime baseline (five most-recent full-
 slate runs) all live in [`observe/miri_slate.md`](observe/miri_slate.md).
+
+## Region debug audits
+
+Two diagnostics report **over-pinning** — a region kept alive longer than the
+values reaching it need, which every other check passes silently because it
+breaks no invariant. Both are compiled out of a release build, and both only
+record: neither panics, and neither changes what is retained
+([design/memory-model.md § Debug region audits](design/memory-model.md#debug-region-audits)).
+
+```sh
+cargo run -- program.koan                       # debug build: pin rings reported
+cargo run --features region-audit -- program.koan   # also reports over-folds
+```
+
+Findings print to stderr after the run. The pin-ring detector needs no feature —
+any debug build has it — while the reach-tightness report is `region-audit`'s.
+Silence means the run detected nothing, which is the expected result; a report is
+a real finding worth chasing.
