@@ -369,10 +369,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 // owner; `tag` is a Copy handle sealed resident via `Scope::resident`. Both
                 // carriers union into the wrapped result's witness via `alloc_carried_with`.
                 let obj_carrier = module_scope.lift_resident(sealed);
-                let tag_carrier = module_scope.seal_resident_delivered(
-                    module_scope.resident(Carried::Type(tag)),
-                    crate::machine::core::FrameCoverage::empty(),
-                );
+                let tag_carrier = module_scope.deliver_resident(Carried::Type(tag));
                 let ctx = StepAllocator::for_scope(module_scope);
                 // The peel keeps the member's payload verbatim, so a payload substrate that stays
                 // in the module's region rides as the payload cell's own stored run; the member

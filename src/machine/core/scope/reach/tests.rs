@@ -15,7 +15,7 @@ use crate::machine::model::{
 };
 use crate::machine::{Body, CallFrame, KFunction};
 use crate::machine::{program_storage, run_root_storage};
-use crate::witnessed::FoldedPlacement;
+use crate::witnessed::{Delivered, FoldedPlacement, Sealed};
 
 /// A `KFunction` whose captured scope lives in `home`'s region, allocated into `home`'s region — a
 /// borrow leaf pointing at `home`, the shape a closure capturing its own defining frame takes.
@@ -102,8 +102,7 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
     // The record lives in the producer's region and borrows into it, so its description is hosted
     // there with home as an ordinary member — what the producer's own birth mint would have stamped.
     let sealed = producer.seal_born_here(Carried::Object(record), true);
-    let dep: DeliveredCarried =
-        Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+    let dep: DeliveredCarried = Delivered::lift(Sealed::seal(sealed), producer.storage_rc());
 
     let bound_seal = consumer
         .adopt_for_binding(&dep, |carried| Ok(carried.object()))

@@ -18,7 +18,7 @@ use crate::machine::core::{
 use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::model::{KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::witnessed::Delivered;
+use crate::witnessed::{Delivered, Sealed};
 
 /// Build a scalar carrier residing in `producer`'s region whose borrows reach that region exactly
 /// when `borrows_into_home` — the exact carrier a resident-value read hands to finalize. The
@@ -58,7 +58,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, false);
-    let delivered = Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty());
+    let delivered = Delivered::lift(Sealed::seal(carrier), producer.storage_rc());
     assert!(
         !delivered.open_at().has_reach_members(),
         "a region-pure scalar's reach names nothing — the carrier itself pins nothing, so \
@@ -108,7 +108,7 @@ fn delivery_envelope_foreign_bundle_releases_at_envelope_drop() {
     let weak = Rc::downgrade(&foreign);
 
     let (carrier, _producer_weak) = resident_scalar(&producer, false);
-    let envelope = Delivered::seal(
+    let envelope = Delivered::seal_for_test(
         carrier,
         producer.storage_rc(),
         FrameCoverage::of(Rc::clone(&foreign)),
@@ -138,7 +138,7 @@ fn home_borrowing_value_keeps_its_home_membership_and_rides_retention() {
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, true);
-    let delivered = Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty());
+    let delivered = Delivered::lift(Sealed::seal(carrier), producer.storage_rc());
     assert!(
         delivered.open_at().borrows_home(),
         "home is an ordinary member of the value's own description"
@@ -367,7 +367,7 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
     let cell = test_run
         .runtime
         .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty()),
+            Delivered::lift(Sealed::seal(carrier), producer.storage_rc()),
             &producer.storage_rc(),
             None,
         )
@@ -421,7 +421,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let storage = producer.storage_rc();
     let count_before = Rc::strong_count(&storage);
 
-    let delivered = Delivered::seal(carrier, producer.storage_rc(), FrameCoverage::empty());
+    let delivered = Delivered::lift(Sealed::seal(carrier), producer.storage_rc());
     assert_eq!(
         Rc::strong_count(&storage),
         count_before + 1,

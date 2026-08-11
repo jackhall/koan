@@ -20,8 +20,7 @@ use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{
-    CarrierWitness, DeliveredCarried, FrameCoverage, KError, KErrorKind, KoanRegion,
-    RegionTypeFamily,
+    CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, RegionTypeFamily,
 };
 use crate::source::Spanned;
 use crate::witnessed::{Delivered, RegionHandle, reattachable};
@@ -397,10 +396,7 @@ pub(crate) fn build_type_operand(
     dest_frame: Rc<FrameStorage>,
     identity: KType,
 ) -> Delivered<RegionTypeFamily, CarrierWitness, FrameStorage> {
-    let operand = KoanRegion::yoke_branded::<RegionTypeFamily, _>(Rc::clone(&dest_frame), |b| {
-        (b.handle(), identity)
-    });
-    Delivered::seal(operand, dest_frame, FrameCoverage::empty())
+    KoanRegion::yoke_branded::<RegionTypeFamily, _>(dest_frame, |b| (b.handle(), identity))
 }
 
 /// Seal a declaration's nominal identity as a `Carried::Type` terminal. A `KType` is a `Copy`
@@ -487,13 +483,9 @@ fn finish_witnessed<'step>(
             // `transfer_into` composes into it directly — the accumulated coverage rides the
             // envelope rather than being threaded beside it. A bare handle plus an empty slice
             // reaches nothing, so the seed's coverage is empty.
-            let acc0 = Delivered::seal(
-                KoanRegion::yoke_branded::<RecordFieldsFamily, _>(
-                    Rc::clone(&dest_frame),
-                    |region| (region.handle(), &[][..]),
-                ),
+            let acc0 = KoanRegion::yoke_branded::<RecordFieldsFamily, _>(
                 Rc::clone(&dest_frame),
-                FrameCoverage::empty(),
+                |region| (region.handle(), &[][..]),
             );
             let fields = terminals.iter().fold(acc0, |acc, term| {
                 term.delivered

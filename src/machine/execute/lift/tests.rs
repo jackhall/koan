@@ -9,8 +9,7 @@ use super::*;
 use crate::builtins::test_support::{TestRun, run_root_bare};
 use crate::machine::CallFrame;
 use crate::machine::core::{
-    FoldingBrand, FrameCoverage, KoanRegion, KoanRegionExt, KoanStorageProfile, program_storage,
-    run_root_storage,
+    FoldingBrand, KoanRegion, KoanRegionExt, KoanStorageProfile, program_storage, run_root_storage,
 };
 use crate::machine::execute::run_loop::{DestHandleFamily, dest_brand};
 use crate::machine::model::CarriedFamily;
@@ -20,7 +19,7 @@ use crate::machine::model::Record;
 use crate::machine::model::Scalar;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
-use crate::witnessed::{Delivered, FoldedPlacement, RegionHandle, reattachable};
+use crate::witnessed::{Delivered, FoldedPlacement, RegionHandle, Sealed, reattachable};
 use std::rc::Rc;
 
 /// A `KFunction` allocated into `home`'s region (its captured scope lives there), for the
@@ -468,13 +467,9 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
     // `fold_cells`'s seed: a bare handle on the destination region plus an empty cell slice, homed
     // in the destination frame. A handle and an empty slice reach nothing, so the seed's own
     // coverage is empty — every member the product ends up with comes from the birth mint.
-    let acc = Delivered::seal(
-        KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-            (region.handle(), &[][..])
-        }),
-        Rc::clone(&dest_storage),
-        FrameCoverage::empty(),
-    );
+    let acc = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+        (region.handle(), &[][..])
+    });
 
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let born: DeliveredCarried = acc
@@ -538,13 +533,9 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
     let dest_storage = dest_frame.storage_rc();
 
     let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
-    let acc0 = Delivered::seal(
-        KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-            (region.handle(), &[][..])
-        }),
-        Rc::clone(&dest_storage),
-        FrameCoverage::empty(),
-    );
+    let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+        (region.handle(), &[][..])
+    });
     let acc_final = (0..DEPTH).fold(acc0, |acc, i| {
         let producer: Rc<CallFrame> = CallFrame::new(scope);
         let owned_cells = crate::machine::core::FrameCoverage::empty();
@@ -564,8 +555,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
         // decides release vs. retain below; the claim only matters if the source is retained.
         let sealed = producer.seal_born_here(Carried::Object(obj), true);
         let owned_cells = crate::machine::core::FrameCoverage::empty();
-        let dep: DeliveredCarried =
-            Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+        let dep: DeliveredCarried = Delivered::lift(Sealed::seal(sealed), producer.storage_rc());
         producers.push(producer);
         dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
             acc,
@@ -634,13 +624,9 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
 
     let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
     let mut expected_ids = Vec::with_capacity(DEPTH);
-    let acc0 = Delivered::seal(
-        KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-            (region.handle(), &[][..])
-        }),
-        Rc::clone(&dest_storage),
-        FrameCoverage::empty(),
-    );
+    let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+        (region.handle(), &[][..])
+    });
     let acc_final = (0..DEPTH).fold(acc0, |acc, _| {
         let producer: Rc<CallFrame> = CallFrame::new(scope);
         let obj = alloc_home_closure_record(&producer, &types);
@@ -656,8 +642,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         // rebuilt cell and finds the closure leaf, so the producer is retained either way.
         let sealed = producer.seal_born_here(Carried::Object(obj), true);
         let owned_cells = crate::machine::core::FrameCoverage::empty();
-        let dep: DeliveredCarried =
-            Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+        let dep: DeliveredCarried = Delivered::lift(Sealed::seal(sealed), producer.storage_rc());
         producers.push(producer);
         dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
             acc,
@@ -745,7 +730,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
             // ordinary member of the description the birth mint stamps.
             let sealed = producer.seal_born_here(Carried::Object(obj), true);
             let dep: DeliveredCarried =
-                Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+                Delivered::lift(Sealed::seal(sealed), producer.storage_rc());
             assert!(
                 matches!(seam_verb(&dep), RegionEscape::Pin),
                 "a priceable home-borrowing record must select the Pin verb at the value-level seam"
@@ -805,13 +790,9 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
     let types = TypeRegistry::new();
     let dest_storage = dest_frame.storage_rc();
 
-    let acc = Delivered::seal(
-        KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-            (region.handle(), &[][..])
-        }),
-        Rc::clone(&dest_storage),
-        FrameCoverage::empty(),
-    );
+    let acc = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+        (region.handle(), &[][..])
+    });
 
     let producer: Rc<CallFrame> = CallFrame::new(scope);
     let born_cells = crate::machine::core::FrameCoverage::empty();
@@ -833,8 +814,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
     );
     let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
     let sealed = producer.seal_born_here(Carried::Object(obj), true);
-    let dep: DeliveredCarried =
-        Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+    let dep: DeliveredCarried = Delivered::lift(Sealed::seal(sealed), producer.storage_rc());
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let acc_final = dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
         acc,

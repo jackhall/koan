@@ -101,7 +101,7 @@ impl<'a> Scope<'a> {
     ///
     /// - **Type carrier** (`CarriedFamily`, a `KType`): a `KType` is owned data, so the read pins no
     ///   foreign region and travels under the home-frame pin alone (the envelope host
-    ///   [`Self::seal_resident_delivered`] pairs); the `Copy` handle rides in place, never re-cloned
+    ///   [`Self::deliver_resident`] adds); the `Copy` handle rides in place, never re-cloned
     ///   into the region.
     /// - **Callable** (`KFunctionFamily`): the `FN` / `OP` registration doors. `FN` allocates the
     ///   callable into the very scope it captures, so it reaches nothing beyond the region it lives
@@ -262,27 +262,26 @@ impl<'a> Scope<'a> {
         Delivered::lift(sealed, self.home())
     }
 
-    /// Seal a resident carrier — a value already living in this scope's own region — into a
-    /// [`DeliveredCarried`] envelope pinned by this scope's own region owner. The resident twin of
-    /// the scheduler's [`dep_delivered`](crate::scheduler::Scheduler::dep_delivered): the pin is the
-    /// home frame the caller reads the value under (`region_owner().upgrade()`, the same owner
-    /// [`resident_value_carrier`](Self::resident_value_carrier) folds into the witness), so a spliced
-    /// resident cell travels self-covering by its own witness *and* pinned by its home, identical in
-    /// shape to a delivered dep — there is no `pin: None` resident special case at the splice sites.
+    /// [`Self::resident`] handed out as a delivery envelope — the same value, the same member-less
+    /// description, now pinned by this scope's own region owner. The resident twin of the
+    /// scheduler's [`dep_delivered`](crate::scheduler::Scheduler::dep_delivered): a spliced resident
+    /// cell travels self-covering by its own witness *and* pinned by its home, identical in shape to
+    /// a delivered dep — there is no `pin: None` resident special case at the splice sites.
     ///
-    /// Generic over the carrier's family so a **destination operand** seals the same way a value
-    /// does: a relocation's dest is a bare region handle living in this scope's own region, and the
-    /// composition verbs take their destination as an envelope, so it is sealed here rather than
-    /// paired with an asserted host at the call site.
-    pub(crate) fn seal_resident_delivered<T: Reattachable + DropFree>(
+    /// Takes the value alone. The description's residence, the seal and the home pin all come off
+    /// the library door on this scope's own region handle
+    /// ([`RegionHandle::deliver_resident`](crate::witnessed::RegionHandle::deliver_resident)), so
+    /// there is no home to pass and no coverage to assemble: a value reaching nothing beyond the
+    /// region it lives in is covered by that region alone.
+    ///
+    /// Generic over the carrier's family so a **destination operand** travels the way a value does:
+    /// a relocation's dest is a bare region handle living in this scope's own region, and the
+    /// composition verbs take their destination as an envelope.
+    pub(crate) fn deliver_resident<'v: 'a, T: Reattachable + DropFree>(
         &self,
-        witnessed: Witnessed<T, CarrierWitness>,
-        coverage: FrameCoverage,
+        value: T::At<'v>,
     ) -> Delivered<T, CarrierWitness, FrameStorage> {
-        // The resident carrier's owned foreign reach — a clone of the binding entry's coverage,
-        // threaded from the read — travels with the envelope, so the reached regions are owned
-        // across transit rather than re-derived from the carrier's description.
-        Delivered::seal(witnessed, self.home(), coverage)
+        self.brand().deliver_resident(value)
     }
 
     /// Build an object into this scope's own region through a **zero-dep fold** and hand back the
@@ -298,12 +297,11 @@ impl<'a> Scope<'a> {
         &self,
         build: impl for<'b> FnOnce(FoldingBrand<'b>) -> KObject<'b>,
     ) -> &'a KObject<'a> {
-        let built = KoanRegion::fold_witnessed(self.home(), |brand| {
+        KoanRegion::fold_witnessed(self.home(), |brand| {
             Carried::Object(brand.alloc_object_folded(build(brand)))
-        });
-        self.seal_resident_delivered(built, FrameCoverage::empty())
-            .adopt_into(self.brand().handle())
-            .object()
+        })
+        .adopt_into(self.brand().handle())
+        .object()
     }
 
     /// Envelope a value already living in this scope's own region and reaching nothing — the
@@ -314,10 +312,7 @@ impl<'a> Scope<'a> {
     /// cannot cross that signature, while an envelope crosses as the witnessed shortening every
     /// other delivered value takes.
     pub(crate) fn deliver_resident_object(&self, object: &'a KObject<'a>) -> DeliveredCarried {
-        self.seal_resident_delivered(
-            self.resident::<CarriedFamily>(Carried::Object(object)),
-            FrameCoverage::empty(),
-        )
+        self.deliver_resident::<CarriedFamily>(Carried::Object(object))
     }
 
     /// Place a **carrier-less** argument's value in this scope's own region. The shape is the
@@ -577,10 +572,7 @@ impl<'a> Scope<'a> {
     fn dest_operand(
         &self,
     ) -> Delivered<RegionHandleFamily<KoanStorageProfile>, CarrierWitness, FrameStorage> {
-        self.seal_resident_delivered(
-            self.resident::<RegionHandleFamily<KoanStorageProfile>>(self.brand().handle()),
-            FrameCoverage::empty(),
-        )
+        self.deliver_resident::<RegionHandleFamily<KoanStorageProfile>>(self.brand().handle())
     }
 
     /// Wrap a resident `KFunction` in its `KObject` carrier — the store every `FN` / `OP`
@@ -600,10 +592,7 @@ impl<'a> Scope<'a> {
     /// the merge's own operand view, so an ambient-lifetime capture is a compile error at the
     /// closure's signature.
     pub(crate) fn store_function_cell(&self, function: &'a KFunction<'a>) -> SealedValue {
-        let source = self.seal_resident_delivered(
-            self.resident::<KFunctionFamily>(function),
-            FrameCoverage::empty(),
-        );
+        let source = self.deliver_resident::<KFunctionFamily>(function);
         source
             .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 self.dest_operand(),
@@ -636,10 +625,7 @@ impl<'a> Scope<'a> {
     /// closure's signature.
     pub(crate) fn store_module_object(&self, module: &'a Module<'a>) -> SealedValue {
         let child = module.child_scope();
-        let source = child.seal_resident_delivered(
-            child.resident::<ModuleRefFamily>(module),
-            FrameCoverage::empty(),
-        );
+        let source = child.deliver_resident::<ModuleRefFamily>(module);
         source
             .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 self.dest_operand(),
@@ -722,10 +708,7 @@ impl<'a> Scope<'a> {
         source_child: &'a Scope<'a>,
         self_sig: impl for<'b> FnOnce(&'b Scope<'b>) -> KType,
     ) -> SealedValue {
-        let source = source_child.seal_resident_delivered(
-            source_child.resident::<ScopeRefFamily>(source_child),
-            FrameCoverage::empty(),
-        );
+        let source = source_child.deliver_resident::<ScopeRefFamily>(source_child);
         source
             .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 self.dest_operand(),

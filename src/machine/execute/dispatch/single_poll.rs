@@ -138,7 +138,7 @@ pub(super) fn literal_pass_through<'step>(
             let carrier = KoanRegion::fold_witnessed(frame, move |brand| {
                 Carried::Object(brand.alloc_object_folded(lit.to_kobject(*brand)))
             });
-            Outcome::Done(Ok(StepCarried::born(carrier)))
+            Outcome::Done(Ok(StepCarried::born_delivered(carrier)))
         }
         // A spliced cell already *is* the producer's own carrier — recover it directly with `unseal`
         // rather than re-wrapping the read-back value under a freshly-asserted witness. Strictly

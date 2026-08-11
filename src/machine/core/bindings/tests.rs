@@ -43,7 +43,7 @@ fn sealed_reaching<'a>(
 /// The sole member of the description a bound entry's seal carries. The reach is readable only
 /// under a pin, so the caller's own hold on the hosting frame opens the seal.
 fn sole_reach_member(sealed: &SealedValue, pin: &Rc<FrameStorage>) -> Rc<FrameStorage> {
-    sealed.open_at(pin).with_reach(|reach| {
+    sealed.open_at(pin).with_reach_for_test(|reach| {
         let members = reach.members();
         match members.as_slice() {
             [only] => Rc::clone(only),
@@ -102,7 +102,9 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
         .expect("value bind should succeed");
 
     let read = |label: &str| match bindings.lookup_value("x", None) {
-        Some(NameLookup::Bound(hit)) => hit.open_at(&storage).with_reach(|reach| reach as *const _),
+        Some(NameLookup::Bound(hit)) => hit
+            .open_at(&storage)
+            .with_reach_for_test(|reach| reach as *const _),
         _ => panic!("expected a bound value hit for {label}"),
     };
     let (first, second) = (read("first"), read("second"));

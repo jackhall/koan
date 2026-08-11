@@ -109,15 +109,15 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// ```
     /// use std::rc::Rc;
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
-    /// use workgraph::witnessed::{Carrier, Delivered, StepContext, StepCoverage, Witnessed};
+    /// use workgraph::witnessed::{Carrier, Sealed, StepContext, Witnessed};
     ///
     /// static SEVEN: u32 = 7;
     /// let cart = fresh_cart();
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
     /// let w: Witnessed<RefFamily, Carrier<RegionCart>> =
     ///     ctx.alloc::<FixtureProfile, RefFamily>(|_handle| &SEVEN);
-    /// let sealed = Delivered::seal(w, Rc::clone(&cart), StepCoverage::empty());
-    /// assert_eq!(sealed.open(|r| *r), 7);
+    /// // The carrier pins nothing, so a read names its coverage: the frame it was yoked into.
+    /// assert_eq!(Sealed::seal(w).open_with(&cart, |r| *r), 7);
     /// ```
     ///
     /// ```compile_fail
@@ -160,15 +160,12 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// ```
     /// use std::rc::Rc;
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
-    /// use workgraph::witnessed::{Carrier, Delivered, StepContext, StepCoverage, Witnessed};
+    /// use workgraph::witnessed::{Carrier, Delivered, RegionHandle, StepContext};
     ///
     /// static TEN: u32 = 10;
     /// let dep_cart = fresh_cart();
-    /// let dep: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = Delivered::seal(
-    ///     Witnessed::<RefFamily, Carrier<RegionCart>>::resident_in::<FixtureProfile>(&TEN, &dep_cart),
-    ///     Rc::clone(&dep_cart),
-    ///     StepCoverage::empty(),
-    /// );
+    /// let dep: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> =
+    ///     RegionHandle::<FixtureProfile>::from_owner(&*dep_cart).deliver_resident::<RefFamily>(&TEN);
     ///
     /// let cart = fresh_cart();
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
@@ -180,15 +177,12 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// ```compile_fail
     /// use std::rc::Rc;
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
-    /// use workgraph::witnessed::{Carrier, Delivered, StepContext, StepCoverage, Witnessed};
+    /// use workgraph::witnessed::{Carrier, Delivered, RegionHandle, StepContext};
     ///
     /// static TEN: u32 = 10;
     /// let dep_cart = fresh_cart();
-    /// let dep: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = Delivered::seal(
-    ///     Witnessed::<RefFamily, Carrier<RegionCart>>::resident_in::<FixtureProfile>(&TEN, &dep_cart),
-    ///     Rc::clone(&dep_cart),
-    ///     StepCoverage::empty(),
-    /// );
+    /// let dep: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> =
+    ///     RegionHandle::<FixtureProfile>::from_owner(&*dep_cart).deliver_resident::<RefFamily>(&TEN);
     ///
     /// let cart = fresh_cart();
     /// let ctx: StepContext<RegionCart> = StepContext::new(cart);

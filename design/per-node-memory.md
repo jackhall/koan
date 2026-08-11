@@ -125,12 +125,16 @@ for a module self-sig (`KType::Signature { sig: SelfOf(m), .. }`) too — its
 `SelfOf` names the module structurally, not by region pointer.
 
 **No site pairs an already-built value with a separately-asserted witness.** The
-region-pure carrier is built by
-[`Witnessed::resident_in`](../workgraph/src/witnessed/carrier.rs), which mints a
-description hosted in the named home region with **no members** — the value records
-where it lives even though its borrows reach nothing — so it cannot pair a value
-with a *wrong* witness, only with the empty reach a region-pure value genuinely
-has. That emptiness is sound as a within-step transient, the producing frame folded
+region-pure carrier is built at the region's own handle
+([`RegionHandle::seal_reaching`](../workgraph/src/witnessed/region.rs) under a
+`mint_retained(&[])` description, and its delivered twin
+[`RegionHandle::deliver_resident`](../workgraph/src/witnessed/region.rs)), which
+mints a description hosted in that same region with **no members** — the value
+records where it lives even though its borrows reach nothing. The residence, the
+seal and (for the delivered form) the envelope's home pin all come off one handle,
+so no call site pairs a value with a witness some other value derived; the
+`'v: 'a` bound is the residence check, rejecting a borrow that does not outlive the
+region handle. That emptiness is sound as a within-step transient, the producing frame folded
 in at close ([`reseal_under`](../workgraph/src/witnessed.rs)) before the carrier is
 stored. The transient is **typed**, not merely disciplined: the step doors return
 the carrier wrapped as a

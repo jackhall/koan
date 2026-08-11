@@ -255,11 +255,15 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     /// Pair a sealed carrier with the owner of the region its value lives in and the owned
     /// `PinBundle` pinning every other region it reaches, unioning the two into the envelope's
     /// single member set. `home` is the pin the transit needs — the residence itself is already the
-    /// host of the carrier's description. The caller supplies it and the owned bundle threaded from
-    /// the mint, never re-derived from the carrier: the scheduler's retention hold (which carries
-    /// `owner` + `reach` as one unit) for a delivered dep, or the region owner + the entry's pins
-    /// for a resident seal — so the pairing is co-located by construction.
-    pub fn hosted(cell: Sealed<T, Carrier<F>>, home: Rc<F>, reach: StepCoverage<F>) -> Self {
+    /// host of the carrier's description.
+    ///
+    /// **Crate-private**, because it takes the two as separate arguments and checks neither against
+    /// the other. Every caller holds them as one unit already: the scheduler's retention hold
+    /// (`owner` + `reach` in one record) for a delivered dep, a composition's freshly minted product
+    /// and the destination residence it was minted into, or [`RegionHandle::deliver_resident`] /
+    /// [`RegionHandle::deliver_yoked`], which read both off one handle. An embedder reaches the
+    /// envelope through those, never through this.
+    pub(crate) fn hosted(cell: Sealed<T, Carrier<F>>, home: Rc<F>, reach: StepCoverage<F>) -> Self {
         let pins = StepCoverage(PinBundle::union(&PinBundle::singleton(home), &reach.0));
         Delivered { cell, pins }
     }
@@ -300,17 +304,33 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         Delivered { cell, pins }
     }
 
-    /// Seal a live [`Witnessed`] carrier into a delivery envelope pinned by `home` and the owned
-    /// `PinBundle` `reach` — the resident / Done-arm seal veneer's library half. Bundles the
-    /// born-witnessed carrier with the region owner the caller already holds and the owned bundle
-    /// threaded in (the binding entry's pins, the Done-arm carrier's pins), so a resident value
-    /// travels as an envelope pinned by its home frame, identical in shape to a delivered dep.
-    pub fn seal(witnessed: Witnessed<T, Carrier<F>>, home: Rc<F>, reach: StepCoverage<F>) -> Self {
+    /// [`Self::hosted`] taking a live [`Witnessed`] carrier rather than a sealed one — it seals on
+    /// the way in. Crate-private for the same reason, and reached from the same places: the
+    /// accumulator seed a fold yokes over its own frame, and the handle doors an embedder uses.
+    pub(crate) fn seal(
+        witnessed: Witnessed<T, Carrier<F>>,
+        home: Rc<F>,
+        reach: StepCoverage<F>,
+    ) -> Self {
         let pins = StepCoverage(PinBundle::union(&PinBundle::singleton(home), &reach.0));
         Delivered {
             cell: Sealed::seal(witnessed),
             pins,
         }
+    }
+
+    /// [`Self::seal`] handed out for white-box assertion — for a suite that needs an envelope whose
+    /// owned coverage is *exactly* what it names, with no mint and no composition standing behind
+    /// it. That is what lets a test make the envelope's bundle the sole owner of a region and watch
+    /// the region die with it; every production envelope's coverage comes from a mint, a lift or a
+    /// composition, each of which retains what it names somewhere else too.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn seal_for_test(
+        witnessed: Witnessed<T, Carrier<F>>,
+        home: Rc<F>,
+        reach: StepCoverage<F>,
+    ) -> Self {
+        Self::seal(witnessed, home, reach)
     }
 
     /// Copy-free adoption: mints this envelope's reach — home included, as an ordinary member —

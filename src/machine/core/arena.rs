@@ -12,7 +12,7 @@
 //! [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
-use crate::machine::CarrierWitness;
+use crate::machine::{CarrierWitness, DeliveredCarried};
 use std::rc::Rc;
 
 use crate::machine::execute::StepCarried;
@@ -24,8 +24,8 @@ use crate::machine::model::{
 };
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    BumpAllocator, DropFree, FoldedPlacement, Reattachable, Region, RegionHandle, StepContext,
-    StorageProfile, Witnessed,
+    BumpAllocator, Delivered, DropFree, FoldedPlacement, Reattachable, Region, RegionHandle,
+    StepContext, StorageProfile, Witnessed,
 };
 
 mod frame;
@@ -227,6 +227,17 @@ impl<'a> RegionBrand<'a> {
         reach: &'a FrameReach,
     ) -> Witnessed<T, CarrierWitness> {
         self.0.seal_reaching(value, reach)
+    }
+
+    /// [`Self::seal_resident`] handed out as a delivery envelope pinned by this region's own owner —
+    /// the delivered twin, forwarded to the library door on the same handle. One door mints the
+    /// description, seals the value under it and reads the home pin off the region, so nothing here
+    /// pairs a value with a residence or a pin it did not derive.
+    pub(crate) fn deliver_resident<'v: 'a, T: Reattachable + DropFree>(
+        self,
+        value: T::At<'v>,
+    ) -> Delivered<T, CarrierWitness, FrameStorage> {
+        self.0.deliver_resident(value)
     }
 }
 
@@ -439,7 +450,7 @@ pub(crate) trait KoanRegionExt {
     fn fold_witnessed(
         owner: Rc<FrameStorage>,
         build: impl for<'b> FnOnce(FoldingBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness>;
+    ) -> DeliveredCarried;
 
     /// `yoke` a value of **any** carrier family into `owner`'s region, handing the build closure a
     /// per-construction [`RegionBrand`] (confined to the `for<'b>` brand) so it allocates through the
@@ -451,7 +462,7 @@ pub(crate) trait KoanRegionExt {
     fn yoke_branded<T: Reattachable + DropFree, F>(
         owner: Rc<FrameStorage>,
         build: F,
-    ) -> Witnessed<T, CarrierWitness>
+    ) -> Delivered<T, CarrierWitness, FrameStorage>
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>;
 
@@ -471,40 +482,31 @@ impl KoanRegionExt for KoanRegion {
     fn fold_witnessed(
         owner: Rc<FrameStorage>,
         build: impl for<'b> FnOnce(FoldingBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
+    ) -> DeliveredCarried {
         // A zero-dep fold: the engine composes no operand reach, so the envelope it hands back is
-        // homed in `owner`'s own region with empty coverage — the same claim `yoke_branded`'s
-        // reference-only re-bundle makes, reached through the fold door instead. Resting it in that
-        // same region retains nothing (the self rule strips the one member), so the returned carrier
-        // is exactly the region-pure one the door promises.
-        let handle = RegionHandle::from_owner(&*owner);
-        StepContext::new(Rc::clone(&owner))
-            .alloc_with::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
-                &[],
-                |placement, _views| build(FoldingBrand::in_fold_closure(placement)),
-            )
-            .rest_into(handle)
-            .unseal()
+        // homed in `owner`'s own region and covers nothing beyond it — the same claim
+        // `yoke_branded` makes, reached through the fold door instead.
+        StepContext::new(owner).alloc_with::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
+            &[],
+            |placement, _views| build(FoldingBrand::in_fold_closure(placement)),
+        )
     }
 
     fn yoke_branded<T: Reattachable + DropFree, F>(
         owner: Rc<FrameStorage>,
         build: F,
-    ) -> Witnessed<T, CarrierWitness>
+    ) -> Delivered<T, CarrierWitness, FrameStorage>
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>,
     {
-        // `yoke_handle` into `owner`'s own region under the single-owner `Rc<FrameStorage>` witness
-        // ([`WitnessRegion`](crate::witnessed::WitnessRegion)) — the brand proves the built value
-        // is region-derived — then
-        // [`into_reference_only`](Witnessed::into_reference_only) re-bundles under a reference-only
-        // carrier hosted in that same region with no members: the value's reach is exactly its own
-        // region, and its liveness is external (the active frame during the step, the scheduler's
-        // retention hold once finalized). Turbofish `T` at the yoke: inference does not drive
-        // `yoke`'s `T` from the return type early enough to check `build`'s `-> T::At<'b>` bound, so
-        // it sees `<_ as Reattachable>::At` and fails to match the projection.
-        Witnessed::<T, Rc<FrameStorage>>::yoke_handle(owner, |handle| build(RegionBrand(handle)))
-            .into_reference_only::<KoanStorageProfile>()
+        // The library's born-delivered door over `owner`'s own region: the yoke brand proves the
+        // built value is region-derived, and the envelope's home pin is that same region's owner —
+        // one `Rc`, so the value is born under the pin it travels under. The product's reach is
+        // exactly its own region, and its liveness is the envelope's until it rests or finalizes.
+        // Turbofish `T`: inference does not drive it from the return type early enough to check
+        // `build`'s `-> T::At<'b>` bound, so it sees `<_ as Reattachable>::At` and fails to match
+        // the projection.
+        RegionHandle::from_owner(&*owner).deliver_yoked::<T>(|handle| build(RegionBrand(handle)))
     }
 
     fn allocated_total(&self) -> u64 {

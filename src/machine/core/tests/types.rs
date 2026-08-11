@@ -75,18 +75,13 @@ fn resolve_type_inner_scope_shadows_outer() {
 #[test]
 fn retaining_adopt_reanchors_the_same_value_copy_free() {
     use crate::machine::model::{Carried, KObject};
-    use crate::witnessed::Delivered;
-
     let storage = run_root_storage();
     let producer = run_root_bare(&storage);
     // A value resident in the producer scope's region, sealed as its own delivery envelope pinned
     // by the frame that owns that region.
     let obj: &KObject = producer.brand().alloc_scalar(Scalar::Number(42.0));
-    let cell = Delivered::hosted(
-        producer.seal_resident(Carried::Object(obj)),
-        std::rc::Rc::clone(&storage),
-        crate::machine::core::FrameCoverage::empty(),
-    );
+    let cell =
+        producer.deliver_resident::<crate::machine::model::CarriedFamily>(Carried::Object(obj));
 
     // A separate (open) consumer scope adopts the carrier.
     let consumer = producer.alloc_child_under();
@@ -153,7 +148,7 @@ fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
     let stored = parent.store_module_object(module);
 
     let opened = stored.open_at(&parent_storage);
-    let members: Vec<*const KoanRegion> = opened.with_reach(|reach| {
+    let members: Vec<*const KoanRegion> = opened.with_reach_for_test(|reach| {
         reach
             .members()
             .iter()

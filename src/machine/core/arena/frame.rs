@@ -14,7 +14,7 @@ use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::{Scope, ScopeId, ScopeRefFamily, scope_frame};
 use crate::machine::model::types::TypeRegistry;
 use crate::witnessed::{
-    Delivered, ReachDescription, RegionHandle, RegionHost, Sealed, SealedExtern, StepCoverage,
+    Delivered, ReachDescription, RegionHandle, RegionHost, SealedExtern, StepCoverage,
 };
 
 /// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
@@ -185,13 +185,14 @@ pub type FrameCoverage = StepCoverage<FrameStorage>;
 /// chain nothing. A fresh-tail hop's parent is the callee closure's captured scope, so the same chain
 /// keeps that captured (possibly per-call) region alive across the hop that retires the caller.
 ///
-/// The child scope lives in `storage`'s own region, so it seals under a description hosted there with
-/// no members — its liveness is the frame storage, paired with it as the envelope host by the
-/// [`CallFrame`] constructor.
+/// The child scope lives in `storage`'s own region, so it comes back **enveloped** under a
+/// description hosted there with no members and pinned by that same storage — one door reads the
+/// home off the region the child was born in, so the [`CallFrame`] that holds the envelope takes it
+/// whole rather than pairing a carrier with a host.
 pub(crate) fn build_frame_child_witnessed<'p>(
     outer: &'p Scope<'p>,
     storage: &Rc<FrameStorage>,
-) -> Sealed<ScopeRefFamily, CarrierWitness> {
+) -> Delivered<ScopeRefFamily, CarrierWitness, FrameStorage> {
     let handle = RegionHandle::from_owner(&**storage);
     let live = handle.bump_born_with::<Scope<'static>, ScopeRefFamily, _>(
         SealedExtern::<ScopeRefFamily>::erase(outer),
@@ -200,7 +201,7 @@ pub(crate) fn build_frame_child_witnessed<'p>(
             Scope::child_for_frame_witnessed(outer_b, RegionBrand(placement.handle()))
         },
     );
-    Sealed::seal(RegionBrand(handle).seal_resident::<ScopeRefFamily>(live))
+    handle.deliver_resident::<ScopeRefFamily>(live)
 }
 
 /// One user-fn call's allocation frame: a thin shell over a refcounted [`FrameStorage`]. `Rc`-pinned
@@ -277,12 +278,12 @@ impl CallFrame {
         // borrow of `storage` ends here (the carrier holds a `&'static` reference, not a borrow of
         // `storage`), so `storage` moves into the shell below; the `KoanRegion` stays at a fixed heap
         // address behind the Rc, keeping the erased reference valid.
-        let scope_carrier = build_frame_child_witnessed(outer, &storage);
+        // The child scope seals under a description hosted in this storage's own region with no
+        // members — its cross-region borrow into the parent rides `FrameStorage`'s own `outer` `Rc`
+        // chain, not the reach system — so the envelope covers that storage and nothing else.
+        let envelope = build_frame_child_witnessed(outer, &storage);
         Rc::new(CallFrame {
-            // The child scope seals under a description hosted in this storage's own region with no
-            // members — its cross-region borrow into the parent rides `FrameStorage`'s own `outer`
-            // `Rc` chain, not the reach system — so the envelope's foreign bundle is empty.
-            envelope: Delivered::hosted(scope_carrier, Rc::clone(&storage), FrameCoverage::empty()),
+            envelope,
             storage,
             non_dying: false,
             owner: Cell::new(None),
@@ -297,35 +298,24 @@ impl CallFrame {
     /// (Yoked) at every depth — top level included. Marked `non_dying` so the Done boundary skips
     /// the (pointless) self-lift of top-level results.
     ///
-    /// `run_storage` is the `Rc<FrameStorage>` that owns the run region — the same storage `scope`
-    /// (the run root) lives in. Adopting it (rather than minting an empty region) makes this frame's
-    /// `region()` equal the run-root region, so a top-level-defined FN's captured-region owner
-    /// resolves to this frame's storage. The adopted run scope's borrow is erased into
-    /// `scope_carrier` exactly as every per-call child scope is — the fabrication hazard is deferred
-    /// to the witness-bounded re-attach.
+    /// The storage this frame adopts is **derived** from `scope`, not taken: the run root's own
+    /// region owner is by definition the storage that owns the run region, so this frame's
+    /// `region()` equals the run-root region and a top-level-defined FN's captured-region owner
+    /// resolves to it. There is no second storage argument to disagree with `scope`. The adopted run
+    /// scope's borrow is erased into the envelope exactly as every per-call child scope's is — the
+    /// fabrication hazard is deferred to the witness-bounded re-attach.
     ///
     /// `out` is the run's output sink, taken here for the same reason the type registry is minted
     /// here: both are run-lifetime state with exactly one home, and this is the one frame that has
     /// one.
-    pub fn adopting<'a>(
-        scope: &'a Scope<'a>,
-        run_storage: Rc<FrameStorage>,
-        out: Box<dyn std::io::Write>,
-    ) -> Rc<CallFrame> {
-        debug_assert!(
-            std::ptr::eq(run_storage.region(), scope.region() as *const KoanRegion),
-            "adopting run_storage must own the run-root scope's region"
-        );
-        let scope_carrier = Sealed::seal(scope.brand().seal_resident::<ScopeRefFamily>(scope));
+    pub fn adopting<'a>(scope: &'a Scope<'a>, out: Box<dyn std::io::Write>) -> Rc<CallFrame> {
+        // The run scope lives in the run region and reaches nothing beyond it, so the envelope
+        // covers that one region — read off the scope's own handle, which is also where the
+        // adopted storage comes from.
+        let envelope = scope.deliver_resident::<ScopeRefFamily>(scope);
         Rc::new(CallFrame {
-            // The run scope lives in the run region (empty reach), so the envelope's foreign bundle
-            // is empty.
-            envelope: Delivered::hosted(
-                scope_carrier,
-                Rc::clone(&run_storage),
-                FrameCoverage::empty(),
-            ),
-            storage: run_storage,
+            envelope,
+            storage: scope_frame(scope),
             non_dying: true,
             owner: Cell::new(None),
             type_registry: Some(Rc::new(TypeRegistry::new())),

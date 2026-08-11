@@ -1,8 +1,7 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::machine::core::{
-    FoldingBrand, FrameCoverage, KoanRegionExt, KoanStorageProfile, RegionBrand, SubstrateDoor,
+    FoldingBrand, KoanRegionExt, KoanStorageProfile, RegionBrand, SubstrateDoor,
 };
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
@@ -88,13 +87,9 @@ fn fold_cells(
     // cell's transfer composes into it directly and the accumulated coverage rides the envelope
     // rather than being threaded beside it. A bare handle plus an empty slice reaches nothing, so
     // the seed's coverage is empty.
-    let acc0 = Delivered::seal(
-        KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
-            (region.handle(), &[][..])
-        }),
-        dest_frame,
-        FrameCoverage::empty(),
-    );
+    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame, |region| {
+        (region.handle(), &[][..])
+    });
     cells.fold(acc0, |acc, cell| {
         // The cell rebuilds through the container door, so its own cells' stored reach is read at
         // that door; this envelope's coverage is the holder-rule proof for any part of it that stays
@@ -385,11 +380,9 @@ impl<'step> KoanRuntime<'step> {
                 // that frame as its reach rather than resolved at the ambient lifetime and bundled
                 // under an asserted witness. The cell then folds uniformly with the dep cells.
                 let frame = current_dest_frame(&self.ambient);
-                let carrier = KoanRegion::fold_witnessed(Rc::clone(&frame), move |brand| {
+                Slot::Static(KoanRegion::fold_witnessed(frame, move |brand| {
                     Carried::Object(brand.alloc_object_folded(other.resolve_region_pure(*brand)))
-                });
-                // A region-pure static literal reaches nothing foreign, so it seals empty.
-                Slot::Static(Delivered::seal(carrier, frame, FrameCoverage::empty()))
+                }))
             }
         }
     }

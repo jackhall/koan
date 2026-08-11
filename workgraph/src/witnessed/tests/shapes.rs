@@ -98,11 +98,9 @@ fn reach_element(
 #[test]
 fn transfer_composes_the_source_home_from_its_pins() {
     let producer = frame();
-    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 7), &producer),
-        Rc::clone(&producer),
-        StepCoverage::empty(),
-    );
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer)
+            .deliver_resident(store_val(&producer, 7));
     let dest = frame();
     let merged = element
         .transfer_into_token::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
@@ -189,11 +187,9 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
         Rc::clone(&dest),
         StepCoverage::empty(),
     );
-    let element_a: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&producer_a, 3), &producer_a),
-        Rc::clone(&producer_a),
-        StepCoverage::empty(),
-    );
+    let element_a: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer_a)
+            .deliver_resident(store_val(&producer_a, 3));
     let acc1 = element_a.transfer_into_token::<PairAcc, PairAcc, ShapeProfile>(
         acc0,
         |_product, _region| true,
@@ -273,11 +269,9 @@ fn copied_transfer_pins_the_producer_when_the_product_still_borrows() {
 fn copied_transfer_releases_the_producer_when_nothing_borrows_it() {
     let producer = frame();
     let weak = Rc::downgrade(&producer);
-    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 9), &producer),
-        Rc::clone(&producer),
-        StepCoverage::empty(),
-    );
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer)
+            .deliver_resident(store_val(&producer, 9));
     let dest = frame();
     let copied = element
         .transfer_into_token::<RegionHandleFamily<ShapeProfile>, ValFamily, ShapeProfile>(
@@ -385,11 +379,9 @@ fn mint_keeps_home_in_the_description_but_not_the_bundle() {
 fn restamp_in_place_keeps_home_in_the_description_but_pins_nothing_on_itself() {
     let producer = frame();
     let weak = Rc::downgrade(&producer);
-    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 17), &producer),
-        Rc::clone(&producer),
-        StepCoverage::empty(),
-    );
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer)
+            .deliver_resident(store_val(&producer, 17));
 
     let restamped = element.restamp_in_place::<RefValFamily, ShapeProfile>(
         &producer,
@@ -669,11 +661,9 @@ fn lift_reads_a_description_hosted_under_a_transitive_root() {
 #[test]
 fn adopt_settles_resident_value_into_dest() {
     let producer = frame();
-    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 7), &producer),
-        Rc::clone(&producer),
-        StepCoverage::empty(),
-    );
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer)
+            .deliver_resident(store_val(&producer, 7));
     let dest = frame();
     let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = element
         .open_adopted(RegionHandle::from_owner(&*dest))
@@ -695,11 +685,9 @@ fn adopt_settles_resident_value_into_dest() {
 fn region_retention_folds_into_one_deduped_bundle() {
     let outer = frame();
     let producer = RegionHost::fresh(Some(Rc::clone(&outer)));
-    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 13), &producer),
-        Rc::clone(&producer),
-        StepCoverage::empty(),
-    );
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer)
+            .deliver_resident(store_val(&producer, 13));
     let dest = frame();
     let handle = RegionHandle::from_owner(&*dest);
 
@@ -740,11 +728,9 @@ fn region_retention_folds_into_one_deduped_bundle() {
 #[test]
 fn transform_verb_round_trip_preserves_liveness() {
     let producer = frame();
-    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 11), &producer),
-        Rc::clone(&producer),
-        StepCoverage::empty(),
-    );
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer)
+            .deliver_resident(store_val(&producer, 11));
     let dest = frame();
 
     // Delivered → Sealed: at rest in `dest`'s table, its pins retained by `dest`'s own region.
@@ -784,11 +770,9 @@ fn an_unhosted_pair_pins_its_whole_reach_until_it_is_hosted() {
     let reached = frame();
     // A value living in `producer`'s region whose borrow reaches `reached`: the merge mints both
     // regions into the product's description, homed in `producer`.
-    let far: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&reached, 29), &reached),
-        Rc::clone(&reached),
-        StepCoverage::empty(),
-    );
+    let far: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*reached)
+            .deliver_resident(store_val(&reached, 29));
     let home: Delivered<RegionHandleFamily<ShapeProfile>, Carrier<ShapeFrame>, ShapeFrame> =
         Delivered::seal(
             Witnessed::<RegionHandleFamily<ShapeProfile>, Rc<ShapeFrame>>::yoke_handle(
@@ -827,11 +811,9 @@ fn an_unhosted_pair_pins_its_whole_reach_until_it_is_hosted() {
 #[test]
 fn alloc_with_folds_dep_reach_before_result_read() {
     let dep_frame = frame();
-    let dep: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&dep_frame, 3), &dep_frame),
-        Rc::clone(&dep_frame),
-        StepCoverage::empty(),
-    );
+    let dep: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*dep_frame)
+            .deliver_resident(store_val(&dep_frame, 3));
     let own = frame();
     let ctx: StepContext<ShapeFrame> = StepContext::new(Rc::clone(&own));
     let built = ctx.alloc_with_in_region::<RefValFamily, RefValFamily, ShapeProfile>(
@@ -852,11 +834,9 @@ fn alloc_with_folds_dep_reach_before_result_read() {
 #[test]
 fn open_adopted_reads_at_the_destination_lifetime_after_the_producer_drops() {
     let producer = frame();
-    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 23), &producer),
-        Rc::clone(&producer),
-        StepCoverage::empty(),
-    );
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer)
+            .deliver_resident(store_val(&producer, 23));
     let dest = frame();
 
     let opened = element.open_adopted(RegionHandle::from_owner(&*dest));
@@ -893,11 +873,8 @@ fn project_refamilies_under_the_envelopes_own_pins() {
     let second = RegionHandle::from_owner(&*producer)
         .allocator()
         .value(37u32);
-    let element: Delivered<PairVals, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>((pair, second), &producer),
-        Rc::clone(&producer),
-        StepCoverage::empty(),
-    );
+    let element: Delivered<PairVals, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer).deliver_resident((pair, second));
 
     let projected: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
         element.project::<RefValFamily>(|(left, _right), _token| left);
@@ -963,11 +940,9 @@ const _: () = assert!(
 #[test]
 fn rest_in_lodges_coverage_for_the_destination_regions_life() {
     let producer = frame();
-    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 41), &producer),
-        Rc::clone(&producer),
-        StepCoverage::empty(),
-    );
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer)
+            .deliver_resident(store_val(&producer, 41));
     let dest = frame();
 
     let cell: Sealed<RefValFamily, Carrier<ShapeFrame>> =
@@ -999,11 +974,9 @@ fn rest_in_lodges_coverage_for_the_destination_regions_life() {
 #[test]
 fn a_resting_cell_copies_as_plain_data() {
     let producer = frame();
-    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
-        Witnessed::resident_in::<ShapeProfile>(store_val(&producer, 47), &producer),
-        Rc::clone(&producer),
-        StepCoverage::empty(),
-    );
+    let element: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
+        RegionHandle::<ShapeProfile>::from_owner(&*producer)
+            .deliver_resident(store_val(&producer, 47));
     let dest = frame();
     let part = RestingPart(element.rest_in(RegionHandle::from_owner(&*dest)));
 

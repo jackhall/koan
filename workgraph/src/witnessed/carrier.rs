@@ -36,7 +36,7 @@ use std::rc::Rc;
 
 use super::{
     Delivered, DropFree, Erased, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable,
-    Region, RegionHandle, RegionOwner, StorageProfile, Witness, Witnessed,
+    Region, RegionHandle, RegionOwner, StorageProfile, Witness,
 };
 // `with_branded_ref` re-anchors the erased reach reference: for the `Sealed → Delivered` lift's
 // description-to-bundle upgrade ([`Carrier::upgrade_bundle`]) and for the membership queries the
@@ -187,31 +187,6 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     }
 }
 
-impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
-    /// Bundle a **region-pure** value under a carrier hosted in `home`'s own region — the
-    /// reference-only counterpart of [`Witnessed::resident`](super::Witnessed::resident), which a
-    /// [`Carrier`] cannot use because there is no default carrier to name a residence with. Mints a
-    /// description with empty members (the value's borrows reach nothing) whose host is `home`, so
-    /// the value records where it lives even though it reaches nowhere. The mint composes no source,
-    /// so its retention folds an empty bundle — the degenerate end of the resident mint.
-    ///
-    /// The obligation it carries is exactly
-    /// [`Witnessed::resident`](super::Witnessed::resident)'s: that `value`'s reach is genuinely
-    /// empty and it genuinely lives in `home`'s region. A value that references another region takes
-    /// the [`yoke`](super::Witnessed::yoke) / merge path instead.
-    pub fn resident_in<P>(value: T::At<'_>, home: &Rc<F>) -> Self
-    where
-        P: StorageProfile<FrameOwner = F> + 'static,
-        F: RegionOwner<Region = Region<P>>,
-    {
-        let carrier = Carrier::new(ReachDescription::mint_resident(
-            RegionHandle::from_owner(&**home),
-            &[],
-        ));
-        Witnessed::from_erased(Erased::erase(value), carrier)
-    }
-}
-
 /// The membership and residence queries, on the **in-use** carrier state: an [`Opened`] borrows at
 /// `'b` under the pin that was presented to open it, and that borrow is exactly the coverage
 /// re-anchoring the erased reach reference requires — so these need no `pin` argument, and there is
@@ -235,6 +210,13 @@ impl<'b, T: Reattachable + DropFree, F: PinsRegion + 'static> Opened<'b, T, Carr
         self.with_reach(|reach| !reach.is_empty())
     }
 
+    /// Whether the value reaches any region that **can die** — a member whose storage is not
+    /// eternal ([`PinsRegion::needs_no_pin`]). The question a relocation policy asks: a value whose
+    /// whole reach is eternal storage outlives every per-call frame already.
+    pub fn pins_beyond_eternal(&self) -> bool {
+        self.with_reach(ReachDescription::pins_beyond_eternal)
+    }
+
     /// Run `f` against the region the value **lives in** — its residence, stamped as the
     /// description's host at the mint that froze it into that region's side table.
     pub fn with_home_region<R>(&self, f: impl FnOnce(&F::Region) -> R) -> R {
@@ -242,9 +224,22 @@ impl<'b, T: Reattachable + DropFree, F: PinsRegion + 'static> Opened<'b, T, Carr
     }
 
     /// Read the reach description this open's carrier references, re-anchored under the open's own
-    /// `'b` pin borrow.
-    pub fn with_reach<R>(&self, f: impl FnOnce(&ReachDescription<F>) -> R) -> R {
+    /// `'b` pin borrow — the core the predicates above are written in terms of. Library-internal:
+    /// reach is a question an embedder *asks*, never a record it holds, so the shipped surface is
+    /// the verdicts and not the description.
+    pub(in crate::witnessed) fn with_reach<R>(
+        &self,
+        f: impl FnOnce(&ReachDescription<F>) -> R,
+    ) -> R {
         self.witness().with_reach_impl(f)
+    }
+
+    /// [`Self::with_reach`] handed out for white-box assertion — the suites that check a member set
+    /// element by element, or that two reads of one binding name the *same* description by pointer.
+    /// Neither is a verdict a predicate could stand in for, and neither is embedder vocabulary.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn with_reach_for_test<R>(&self, f: impl FnOnce(&ReachDescription<F>) -> R) -> R {
+        self.with_reach(f)
     }
 
     /// **The relocation seam.** Re-seal this open and lift it into a delivery envelope owning its

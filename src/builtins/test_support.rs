@@ -31,7 +31,7 @@ use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
 use crate::parse::parse;
 use crate::scheduler::NodeId;
 #[cfg(test)]
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::{RegionHandle, Sealed};
 
 use super::unseeded_scopes;
 
@@ -461,21 +461,22 @@ pub(crate) fn resident_carrier(scope: &Scope<'_>) -> crate::machine::CarrierWitn
 
 /// Seal a resolved value into a region-pure `WorkingPart::Spliced` cell — the test-side peer of
 /// the scheduler's splice, so a classification test can build the exact carrier a real splice rests
-/// on the working expression. `Witnessed::resident_in` asserts the empty reach: the value borrows
-/// only caller-held test data, not a foreign region.
+/// on the working expression. It goes through the production resident door on `host`'s own region
+/// handle, so the empty reach is what the mint stamps rather than what a call site asserts.
 ///
 /// `host` is the storage the description is minted into, and it must outlive every read of the
 /// returned part: a resting cell owns no pin, so `host` plays the role the region a real splice
-/// rests into plays in production. Borrowed at `'a` so that is a compile error rather than a rule —
-/// every call site already passes the storage its `Carried` was allocated into, which is exactly
-/// what production does.
+/// rests into plays in production. Borrowed at `'a`, which is also the residence check — the door
+/// takes a value borrowing for at least the handle's own lifetime, so a `Carried` from anywhere
+/// shorter-lived than `host` does not compile.
 #[cfg(test)]
 pub(crate) fn spliced_part<'a>(
     host: &'a Rc<FrameStorage>,
     c: Carried<'a>,
 ) -> crate::machine::model::WorkingPart<'a> {
+    let brand = RegionBrand(RegionHandle::from_owner(&**host));
     crate::machine::model::WorkingPart::Spliced {
-        cell: Sealed::seal(Witnessed::resident_in(c, host)),
+        cell: Sealed::seal(brand.seal_resident::<crate::machine::model::CarriedFamily>(c)),
     }
 }
 

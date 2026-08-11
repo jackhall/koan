@@ -592,11 +592,11 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// primitive and its visibility is what holds the assertion in. Every carrier an embedder can
     /// reach is born co-located through a door that derives one side from the other — via
     /// [`yoke`](Self::yoke) (sourced from the witness's region), [`resident`](Self::resident) (a
-    /// region-pure value under the empty witness) or its reference-only twin
-    /// [`resident_in`](Witnessed::resident_in),
-    /// [`RegionHandle::seal_reaching`](region::RegionHandle::seal_reaching) (value and description
-    /// off the same handle), or the envelope merge (folding two co-located carriers) — so no
-    /// embedder site pairs an arbitrary value with an arbitrary witness.
+    /// region-pure value under the empty witness),
+    /// [`RegionHandle::seal_reaching`](region::RegionHandle::seal_reaching) and its delivered twin
+    /// [`RegionHandle::deliver_resident`](region::RegionHandle::deliver_resident) (value, description
+    /// and home pin all off the same handle), or the envelope merge (folding two co-located
+    /// carriers) — so no embedder site pairs an arbitrary value with an arbitrary witness.
     pub(crate) fn from_erased(value: Erased<T>, witness: W) -> Self {
         Witnessed { value, witness }
     }
@@ -609,9 +609,9 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// return a witnessed carrier without an open-ended co-location assertion.
     ///
     /// A reference-only [`Carrier`] has no default — a carrier names the region its value lives in,
-    /// and no default can name one — so it takes the sibling
-    /// [`resident_in`](Witnessed::resident_in), which mints the empty-member description under the
-    /// home owner it is handed.
+    /// and no default can name one — so it takes
+    /// [`RegionHandle::seal_reaching`](region::RegionHandle::seal_reaching) under a
+    /// `mint_retained(&[])` description, which names that residence off the handle itself.
     ///
     /// Because the default witness pins nothing, the carrier depends on an **external pin** for every
     /// read: the active frame pins its region during the producing step, and once stored on a node the

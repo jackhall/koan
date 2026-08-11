@@ -618,16 +618,10 @@ fn step_context_alloc_with_mints_dep_homes_and_preserves_dep_order() {
     let own = step_frame();
     let dep_a = step_frame();
     let dep_b = step_frame();
-    let delivered_a: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
-        Witnessed::<RefFamily, Carrier<StepFrame>>::resident_in::<StepProfile>(&ONE, &dep_a),
-        Rc::clone(&dep_a),
-        StepCoverage::empty(),
-    );
-    let delivered_b: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
-        Witnessed::<RefFamily, Carrier<StepFrame>>::resident_in::<StepProfile>(&TWO, &dep_b),
-        Rc::clone(&dep_b),
-        StepCoverage::empty(),
-    );
+    let delivered_a: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> =
+        RegionHandle::<StepProfile>::from_owner(&*dep_a).deliver_resident(&ONE);
+    let delivered_b: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> =
+        RegionHandle::<StepProfile>::from_owner(&*dep_b).deliver_resident(&TWO);
 
     let ctx: StepContext<StepFrame> = StepContext::new(Rc::clone(&own));
     let built = ctx.alloc_with_in_region::<RefFamily, RefFamily, StepProfile>(

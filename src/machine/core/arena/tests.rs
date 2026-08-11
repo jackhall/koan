@@ -17,7 +17,7 @@ use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::{Argument, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::model::{Module, ModuleDraft, SigSchema};
-use crate::witnessed::{Delivered, FoldedPlacement, RegionHost, Sealed, WitnessRegion, Witnessed};
+use crate::witnessed::{Delivered, FoldedPlacement, RegionHost, Sealed, WitnessRegion};
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameReach`
 /// subsumption walks. Region escape is irrelevant to the `outer`-chain test, so a plain region.
@@ -331,13 +331,13 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
 #[test]
 fn fold_witnessed_yokes_a_reference_only_value() {
     let frame = run_root_storage();
-    let w: Witnessed<CarriedFamily, CarrierWitness> =
-        KoanRegion::fold_witnessed(Rc::clone(&frame), |region| {
-            Carried::Object(region.alloc_object_folded(KObject::Number(7.0)))
-        });
+    let delivered: DeliveredCarried = KoanRegion::fold_witnessed(Rc::clone(&frame), |region| {
+        Carried::Object(region.alloc_object_folded(KObject::Number(7.0)))
+    });
     // The held `frame` (the retention stand-in) is the pin every read below names — the reach
-    // query included, since re-anchoring the description reference needs the same coverage.
-    let sealed = Sealed::seal(w);
+    // query included, since re-anchoring the description reference needs the same coverage. The
+    // envelope rests here, which is what strips its own home from what the region retains.
+    let sealed = delivered.rest_into(frame.brand().handle());
     assert!(
         !sealed.open_at(&frame).has_reach_members(),
         "born reference-only: empty reach",
@@ -376,31 +376,20 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
     // this consumer aggregates.
     let frame_a = run_root_storage();
     let frame_b = run_root_storage();
-    let dep_a: DeliveredCarried = Delivered::seal(
-        KoanRegion::fold_witnessed(Rc::clone(&frame_a), |r| {
-            Carried::Object(r.alloc_object_folded(KObject::Number(1.0)))
-        }),
-        Rc::clone(&frame_a),
-        FrameCoverage::empty(),
-    );
-    let dep_b: DeliveredCarried = Delivered::seal(
-        KoanRegion::fold_witnessed(Rc::clone(&frame_b), |r| {
-            Carried::Object(r.alloc_object_folded(KObject::Number(2.0)))
-        }),
-        Rc::clone(&frame_b),
-        FrameCoverage::empty(),
-    );
+    let dep_a: DeliveredCarried = KoanRegion::fold_witnessed(Rc::clone(&frame_a), |r| {
+        Carried::Object(r.alloc_object_folded(KObject::Number(1.0)))
+    });
+    let dep_b: DeliveredCarried = KoanRegion::fold_witnessed(Rc::clone(&frame_b), |r| {
+        Carried::Object(r.alloc_object_folded(KObject::Number(2.0)))
+    });
     // The consumer's own frame: the region the finished list node lands in.
     let dest_frame = run_root_storage();
     let types = TypeRegistry::new();
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
-    let acc0: Delivered<AggBuildFamily, CarrierWitness, FrameStorage> = Delivered::seal(
+    let acc0: Delivered<AggBuildFamily, CarrierWitness, FrameStorage> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
             (region.handle(), &[][..])
-        }),
-        Rc::clone(&dest_frame),
-        FrameCoverage::empty(),
-    );
+        });
     // Fold each dep in: bind its re-anchored carrier into the cells (a list element borrows into the
     // foreign region exactly as a surviving closure rides its bare borrow); the accumulated envelope
     // covers the union. `transfer_into` borrows the dep's seal (does not consume it — other
@@ -577,11 +566,9 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
         KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
     };
-    let dep: DeliveredCarried = Delivered::seal(
-        producer_frame.brand().seal_resident(Carried::Object(obj)),
-        producer_frame.storage_rc(),
-        FrameCoverage::empty(),
-    );
+    let dep: DeliveredCarried = producer_frame
+        .brand()
+        .deliver_resident::<CarriedFamily>(Carried::Object(obj));
 
     // Consumer: a different frame — FROM's own step surface, narrowing to just `{x}`.
     let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
@@ -648,11 +635,9 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
         KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
     };
-    let envelope: DeliveredCarried = Delivered::seal(
-        producer_frame.brand().seal_resident(Carried::Object(obj)),
-        producer_frame.storage_rc(),
-        FrameCoverage::empty(),
-    );
+    let envelope: DeliveredCarried = producer_frame
+        .brand()
+        .deliver_resident::<CarriedFamily>(Carried::Object(obj));
 
     // The declared type the return re-stamps to — a distinct handle for the same record shape.
     let declared = types.record(Record::from_pairs([("a".to_string(), KType::NUMBER)]));
@@ -944,22 +929,21 @@ fn raw_expression_seals_through_the_expression_door() {
 fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
     let frame = run_root_storage();
     let types = TypeRegistry::new();
-    let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
+    let acc0: Delivered<AggBuildFamily, CarrierWitness, FrameStorage> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&frame), |region| {
             (region.handle(), &[][..])
         });
     // The door is forged over the operand's own head handle (test-only: a production `project`
     // closure gets a bare `FoldToken` and so can only select), which is why the store lands in the
     // envelope's home region — exactly what the assertion below reads back.
-    let stored = Delivered::seal(acc0, Rc::clone(&frame), FrameCoverage::empty())
-        .project::<CarriedFamily>(|(region, _cells), _token| {
-            let owned_cells = crate::machine::core::FrameCoverage::empty();
-            let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
-                .with_holder(&owned_cells);
-            let fields =
-                Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
-            Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, &types)))
-        });
+    let stored = acc0.project::<CarriedFamily>(|(region, _cells), _token| {
+        let owned_cells = crate::machine::core::FrameCoverage::empty();
+        let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
+            .with_holder(&owned_cells);
+        let fields =
+            Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
+        Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, &types)))
+    });
     let homed = stored.open_ref(|c| match c.object() {
         KObject::Record(substrate, _) => substrate.homed_in(frame.region()),
         other => panic!("expected a Record, got {}", other.ktype().name(&types)),
@@ -1018,8 +1002,7 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
     let sealed = producer_scope
         .seal_reaching(Carried::Object(text), producer_scope.mint_born_here(false))
         .unseal();
-    let dep: DeliveredCarried =
-        Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
+    let dep: DeliveredCarried = producer_scope.lift_resident(Sealed::seal(sealed));
 
     let bound = consumer
         .adopt_for_binding(&dep, |carried| Ok(carried.object()))

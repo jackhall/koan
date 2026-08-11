@@ -25,15 +25,15 @@
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::rc::Weak;
+use std::rc::{Rc, Weak};
 
 use bumpalo::Bump;
 use elsa::FrozenMap;
 
 use super::{
-    BumpAllocator, Carrier, DropFree, Erased, FoldedPlacement, PinBundle, PinsRegion,
-    ReachDescription, Reattachable, ReferenceFamily, RegionOwner, SealedExtern, StepCoverage,
-    Witness, Witnessed,
+    BumpAllocator, Carrier, Delivered, DropFree, Erased, FoldedPlacement, PinBundle, PinsRegion,
+    ReachDescription, Reattachable, ReferenceFamily, RegionOwner, Sealed, SealedExtern,
+    StepCoverage, Witness, Witnessed,
 };
 
 /// A workload's storage declaration: the frame-owner type a [`Region`]'s reach descriptions name.
@@ -461,6 +461,69 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         reach: &'a ReachDescription<W::FrameOwner>,
     ) -> Witnessed<T, Carrier<W::FrameOwner>> {
         Witnessed::from_erased(Erased::erase(value), Carrier::new(reach))
+    }
+
+    /// This region's owner as an owned pin, upgraded off the back-link [`Self::host`] names.
+    /// Infallible while a handle exists: a handle borrows the region, a live region *is* live
+    /// storage inside its owner, so the owner cannot have dropped.
+    fn home_pin(self) -> Rc<W::FrameOwner> {
+        self.host()
+            .upgrade()
+            .expect("a region handle borrows live storage, so its owner is live")
+    }
+
+    /// **Envelope a value that already lives in this region and reaches nothing** — the delivery
+    /// twin of [`seal_reaching`](Self::seal_reaching)`(value, mint_retained(&[]))`, for a resident
+    /// value handed onward to a consumer that takes an envelope.
+    ///
+    /// Takes the value and nothing else. The description's residence, the seal, and the home pin the
+    /// envelope travels under all come off *this* handle — the pin is this region's own owner, read
+    /// through the back-link [`Self::host`] names — so there is no second argument for a caller to
+    /// pair wrongly, and no owned coverage to assemble: a value reaching nothing beyond the region it
+    /// lives in is covered by its home alone. `'v: 'a` is the residence check, exactly as at
+    /// [`seal_reaching`](Self::seal_reaching): a borrow that does not outlive this handle cannot be
+    /// sealed under it.
+    ///
+    /// A value whose borrows *do* reach elsewhere never arrives here: it reaches an envelope as a
+    /// composition's product, which mints its reach at the destination and owns it, or as the
+    /// [`lift`](Delivered::lift) of a carrier whose description already names it.
+    pub fn deliver_resident<'v: 'a, T: Reattachable + DropFree>(
+        self,
+        value: T::At<'v>,
+    ) -> Delivered<T, Carrier<W::FrameOwner>, W::FrameOwner>
+    where
+        W::FrameOwner: RegionOwner<Region = Region<W>>,
+    {
+        let home = self.home_pin();
+        let cell = Sealed::seal(self.seal_reaching::<T>(value, self.mint_retained(&[])));
+        Delivered::hosted(cell, home, StepCoverage::empty())
+    }
+
+    /// **Build a value inside this region and hand back its envelope** — the born-witnessed door for
+    /// a construction whose product is region-pure: `build` runs under a `for<'b>` quantifier and
+    /// receives a handle on this same region, so the only references it can return are region-derived
+    /// or owned, and the product's reach is exactly this region.
+    ///
+    /// The delivery twin of [`Self::deliver_resident`] for a value that does not pre-exist, and the
+    /// same one-door claim: the yoke witness and the envelope's home pin are one `Rc` on this
+    /// region's own owner, so the value is *born* under the pin it travels under. Coverage is empty
+    /// by construction — nothing the brand admits reaches another region.
+    ///
+    /// A construction that embeds a **foreign** operand composes that operand's reach instead, at
+    /// [`bump_born_with`](Self::bump_born_with) or the fold doors
+    /// ([`StepContext::alloc_with`](super::StepContext::alloc_with)).
+    pub fn deliver_yoked<T: Reattachable + DropFree>(
+        self,
+        build: impl for<'b> FnOnce(RegionHandle<'b, W>) -> T::At<'b>,
+    ) -> Delivered<T, Carrier<W::FrameOwner>, W::FrameOwner>
+    where
+        W: 'static,
+        W::FrameOwner: RegionOwner<Region = Region<W>>,
+    {
+        let home = self.home_pin();
+        let born = Witnessed::<T, Rc<W::FrameOwner>>::yoke_handle(Rc::clone(&home), build)
+            .into_reference_only::<W>();
+        Delivered::hosted(Sealed::seal(born), home, StepCoverage::empty())
     }
 
     /// **Build a region-borrowing value from a crossing operand and bump it here** — the born door,

@@ -12,7 +12,6 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::{KError, KErrorKind, Scope, WriteGate};
 use crate::parse::{parse, parse_with_path};
-use crate::witnessed::ReachDescription;
 
 /// The run-root seeding door. The run-global root is unreachable by any node until the program
 /// starts, so the builtin registration is a construction-time write: this mints the
@@ -93,11 +92,10 @@ impl<'run> KoanRuntime<'run> {
         // releases; a root whose whole reach is eternal storage — the run region itself — and an
         // errored terminal need no re-home, because nothing they name dies with a per-call frame.
         for &id in &top_level {
-            let reaches_per_call = self.sched.dep_delivered(id).is_ok_and(|delivered| {
-                delivered
-                    .open_at()
-                    .with_reach(ReachDescription::pins_beyond_eternal)
-            });
+            let reaches_per_call = self
+                .sched
+                .dep_delivered(id)
+                .is_ok_and(|delivered| delivered.open_at().pins_beyond_eternal());
             if reaches_per_call {
                 // The dest rides an empty-set `resident`: the run region outlives everything and is
                 // externally pinned, and yoking the run-root frame here would re-form a reference
@@ -109,10 +107,7 @@ impl<'run> KoanRuntime<'run> {
                 // is the mint, not these pins.
                 if let Ok(delivered) = self.relocate_terminal(
                     id,
-                    root.seal_resident_delivered(
-                        root.resident::<DestHandleFamily>(root.brand().handle()),
-                        crate::machine::core::FrameCoverage::empty(),
-                    ),
+                    root.deliver_resident::<DestHandleFamily>(root.brand().handle()),
                 ) {
                     self.sched.rehome_terminal(id, Ok(delivered));
                 }

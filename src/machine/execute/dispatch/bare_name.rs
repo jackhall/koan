@@ -88,10 +88,9 @@ pub(in crate::machine::execute) fn resolve_bare_carrier(
         ExpressionPart::Type(t) => match type_channel(scope, t, chain.cloned(), types) {
             // A `KType` is a `Copy` registry handle — no foreign reach — so the resident type
             // carrier seals under an empty foreign bundle.
-            TypeChannel::Done(kt) => Ok(BareCarrier::Sealed(scope.seal_resident_delivered(
-                scope.resident(Carried::Type(kt)),
-                crate::machine::core::FrameCoverage::empty(),
-            ))),
+            TypeChannel::Done(kt) => Ok(BareCarrier::Sealed(
+                scope.deliver_resident(Carried::Type(kt)),
+            )),
             TypeChannel::Parked(producer) => screen(scheduler, producer, t.render()),
             TypeChannel::Unbound(n) => Ok(BareCarrier::Unbound(n)),
         },
@@ -147,10 +146,9 @@ pub(in crate::machine::execute) fn resolve_name_part(
         Some(t) => match type_channel(scope, t, active_chain.cloned(), types) {
             // A `KType` is a `Copy` registry handle with no reach, so the admission cache carries
             // it in the same envelope currency under an empty foreign bundle.
-            TypeChannel::Done(kt) => Ok(NameOutcome::Resolved(scope.seal_resident_delivered(
-                scope.resident(Carried::Type(kt)),
-                crate::machine::core::FrameCoverage::empty(),
-            ))),
+            TypeChannel::Done(kt) => Ok(NameOutcome::Resolved(
+                scope.deliver_resident(Carried::Type(kt)),
+            )),
             TypeChannel::Unbound(n) => Ok(NameOutcome::Unbound(n)),
             TypeChannel::Parked(producer) => screen_outcome(scheduler, producer, name),
         },

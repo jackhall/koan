@@ -45,9 +45,7 @@ pub(in crate::machine::execute) type DestHandleFamily = RegionHandleFamily<KoanS
 pub(in crate::machine::execute) fn dest_brand(
     dest_frame: Rc<FrameStorage>,
 ) -> Delivered<DestHandleFamily, CarrierWitness, FrameStorage> {
-    let handle =
-        KoanRegion::yoke_branded::<DestHandleFamily, _>(Rc::clone(&dest_frame), |b| b.handle());
-    Delivered::seal(handle, dest_frame, FrameCoverage::empty())
+    KoanRegion::yoke_branded::<DestHandleFamily, _>(dest_frame, |b| b.handle())
 }
 
 impl<'run> KoanRuntime<'run> {
@@ -294,10 +292,9 @@ impl<'run> KoanRuntime<'run> {
                         // an `Err`.
                         let dest = match frame {
                             Some(_) => dest_brand(Rc::clone(anchor.owner())),
-                            None => scope.seal_resident_delivered(
-                                scope.resident::<DestHandleFamily>(scope.brand().handle()),
-                                FrameCoverage::empty(),
-                            ),
+                            None => {
+                                scope.deliver_resident::<DestHandleFamily>(scope.brand().handle())
+                            }
                         };
                         // The relocation's product envelope crosses back whole; the retention hold
                         // seeds from its own coverage, so no pull re-derives the reach.

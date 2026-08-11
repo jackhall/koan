@@ -222,10 +222,8 @@ impl KError {
         let frame = scope_frame(scope);
         // The seed is a bare region handle living in this scope's own region — it borrows nothing,
         // so it seals resident under an empty foreign bundle.
-        let seed = scope.seal_resident_delivered(
-            scope.resident::<RegionHandleFamily<KoanStorageProfile>>(scope.brand().handle()),
-            crate::machine::core::FrameCoverage::empty(),
-        );
+        let seed = scope
+            .deliver_resident::<RegionHandleFamily<KoanStorageProfile>>(scope.brand().handle());
         seed.restamp_in_place::<CarriedFamily, KoanStorageProfile>(
             &frame,
             |_handle, _dest, placement| {
