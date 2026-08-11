@@ -238,7 +238,6 @@ src/
     │   ├── kfunction.rs   KFunction, Body — body shapes plus the dispatch-to-execute bridge
     │   └── kfunction/
     │       ├── body.rs              Body / ReturnContract
-    │       ├── bind_by_name.rs      bind a user call's resolved args to params by name
     │       ├── exec.rs              run_user_fn — innermost body executor; returns a scheduler-unaware ExecOutcome
     │       ├── action.rs            Action — the scheduler-aware currency a builtin returns: the WriteOp effects it decided plus its ActionKind continuation (types only)
     │       ├── block_tail.rs        the one "run a block, return the tail" constructor — the sole Action::Tail site, configured by EVAL / MATCH / TRY arms / USING

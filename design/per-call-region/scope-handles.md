@@ -68,7 +68,11 @@ value takes. The bind then **relocates** the value into the opened scope's own r
 the destination brand, which is where the caller lifetime is dropped — so the value lands at the
 brand and the seed fabricates no free `&'a`. A region-pure argument (a literal) is enveloped at the
 call site through [`Scope::deliver_pure_value`](../../src/machine/core/scope/reach.rs) before it
-gets here, so there is one seed tier rather than two. The deferred-return-type elaboration takes the same `with_scope` read
+gets here, so there is one seed tier rather than two. The envelope is also the *whole* argument
+currency: `run_user_fn` takes one record of envelopes keyed by parameter name — not a record of
+values beside a record of envelopes — so an argument that reaches the bind without one is not a
+state the signature can express, and the bind's own relocation is the only copy an argument takes on
+its way in. The deferred-return-type elaboration takes the same `with_scope` read
 and re-homes its elaborated `KType` into the captured-scope region inside the open. The whole
 re-anchor carries no `unsafe` of its own — only the substrate's single retype.
 Arm and body statements then dispatch through the framed scheduler write primitives

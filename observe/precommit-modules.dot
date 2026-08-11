@@ -51,7 +51,6 @@ digraph {
     "koan::machine::core::kerror" [label="koan::machine::core::kerror"];
     "koan::machine::core::kfunction" [label="koan::machine::core::kfunction"];
     "koan::machine::core::kfunction::action" [label="koan::machine::core::kfunction::action"];
-    "koan::machine::core::kfunction::bind_by_name" [label="koan::machine::core::kfunction::bind_by_name"];
     "koan::machine::core::kfunction::block_tail" [label="koan::machine::core::kfunction::block_tail"];
     "koan::machine::core::kfunction::body" [label="koan::machine::core::kfunction::body"];
     "koan::machine::core::kfunction::exec" [label="koan::machine::core::kfunction::exec"];
@@ -197,7 +196,6 @@ digraph {
     "koan::machine::core::bindings" -> "koan::machine::core::bindings::gate" [label="owns", style="solid"];
     "koan::machine::core::bindings" -> "koan::machine::core::bindings::ops" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::action" [label="owns", style="solid"];
-    "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::bind_by_name" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::block_tail" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::body" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::exec" [label="owns", style="solid"];
@@ -515,10 +513,6 @@ digraph {
     "koan::machine::core::kfunction::action" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::source" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction::bind_by_name" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine::core::bindings" [label="uses", style="dashed"];

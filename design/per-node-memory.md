@@ -203,9 +203,10 @@ entry stores.
 The bind sites adopt the bound value's full delivered carrier across both channels:
 a [`let`](../src/builtins/let_binding.rs) adopts its bound value's carrier (an
 object RHS or a resolved-type RHS alike), a user-fn arg bind adopts each argument
-carrier — object and type — into the *per-call* scope
-([`exec::invoke`](../src/machine/execute/dispatch/exec.rs), the scope the parameters
-bind on), and [`USING`](../src/builtins/using_scope.rs)'s transparent window adopts
+carrier — object and type — into the *per-call* scope at the frame bind itself
+([`run_user_fn`](../src/machine/core/kfunction/exec.rs), the scope the parameters
+bind on, reading each argument off the one envelope it was delivered in), and
+[`USING`](../src/builtins/using_scope.rs)'s transparent window adopts
 the opened module's carrier into the call-site scope it borrows into. A multi-region
 value (a list of closures, a closure over several closures, a module reaching a
 functor-result region) thus keeps *every* region it reaches alive for the life of

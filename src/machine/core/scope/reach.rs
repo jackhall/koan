@@ -373,19 +373,57 @@ impl<'a> Scope<'a> {
 
     /// Adopt a delivered carrier into this scope for **consumption** — the door whose product is a
     /// live [`Carried`] the caller goes on to use (a bare-name read, a head-callable, a spliced
-    /// argument, a call's argument delivery). `seam` selects the policy
-    /// ([`adopt_disposition`] is the single home of the rules); this door then runs the mechanism
-    /// the chooser named.
+    /// argument). `seam` selects the policy ([`adopt_disposition`] is the single home of the rules);
+    /// this door then runs the mechanism the chooser named.
     ///
-    /// The **type channel** never reaches the chooser: a `KType` is a lifetime-free handle and a
-    /// `TypeIdentifier` is a bare surface name, so the envelope is opened and its content copied out
-    /// — the handle by value, the name's bytes bumped into this scope's own region. That is a copy
-    /// for every seam — the result borrows only this region, so no reach is minted and the
-    /// producer's region is not pinned.
+    /// The **type channel** never reaches the chooser ([`Self::adopt_type_channel`]): its content is
+    /// copied out for every seam, so no reach is minted and the producer's region is not pinned.
     ///
     /// Where [`seal_resident`](Self::seal_resident) seals a value already living **in** this
     /// region, adoption is the consumption verb for a carrier produced **elsewhere**.
     pub(crate) fn adopt_carried(&self, cell: &DeliveredCarried, seam: AdoptSeam) -> Carried<'a> {
+        if let Some(copied) = self.adopt_type_channel(cell) {
+            return copied;
+        }
+        let disposition = cell.open(|live| adopt_disposition(cell, live.object(), &seam));
+        match disposition {
+            // The whole envelope is adopted in place through the library's fused mint-and-retain
+            // door: nothing is copied, so there is nothing to relocate.
+            AdoptDisposition::Pin => cell.adopt_into(self.brand().handle()),
+            AdoptDisposition::Relocate => self.adopt_copied(cell),
+        }
+    }
+
+    /// Adopt a delivered carrier into this scope by **copy**: the relocation lands the value in this
+    /// scope's own region under the fold brand and its composition retains the copy's reach here for
+    /// the region's life; adopting the product envelope re-anchors it at `'a` through the library's
+    /// own fused mint-and-retain door, so no re-box is needed to recover the reference. The
+    /// producer's region is not part of the copy's residence — the copy carries its own release-exact
+    /// reach — so the source envelope's hold is **released** when the caller drops it. Released, not
+    /// discarded: the copy retains everything it still reaches.
+    fn adopt_copied(&self, cell: &DeliveredCarried) -> Carried<'a> {
+        self.relocate_delivered(cell, |carried| Ok(carried.object()), RegionEscape::Copy)
+            .expect("a whole-value adoption's copy is infallible")
+            .adopt_into(self.brand().handle())
+    }
+
+    /// Test affordance: [`Self::adopt_copied`] as a door of its own, for the harness terminal
+    /// extractor — which needs the copy (a scalar terminal must not keep its producer frame alive)
+    /// with no binding entry to hold the seal. `#[cfg(test)]`-gated because production has no
+    /// copying consumption seam: a call's arguments are copied by the frame bind itself, off the
+    /// envelope they were delivered in, so nothing re-homes a delivered value ahead of the door that
+    /// binds it.
+    #[cfg(test)]
+    pub(crate) fn adopt_copied_for_test(&self, cell: &DeliveredCarried) -> Carried<'a> {
+        self.adopt_type_channel(cell)
+            .unwrap_or_else(|| self.adopt_copied(cell))
+    }
+
+    /// The type channel's adoption, `None` for an object envelope: a `KType` is a lifetime-free
+    /// handle and a `TypeIdentifier` is a bare surface name, so the envelope is opened and its
+    /// content copied out — the handle by value, the name's bytes bumped into this scope's own
+    /// region. The product borrows only this region, so no reach is minted.
+    fn adopt_type_channel(&self, cell: &DeliveredCarried) -> Option<Carried<'a>> {
         /// The content copied out of a type-channel envelope: a `Copy` `KType` handle, or an
         /// unlowered surface name whose bytes are re-bumped into this scope's region.
         enum AdoptedType<'t> {
@@ -394,7 +432,7 @@ impl<'a> Scope<'a> {
         }
 
         let brand = self.brand();
-        let copied_type = cell.open(|live| match live {
+        let copied = cell.open(|live| match live {
             Carried::Type(kt) => Some(AdoptedType::Lowered(kt)),
             // The name is read at the envelope's own brand, so it is copied here rather than
             // carried out: the product names only this region.
@@ -403,26 +441,10 @@ impl<'a> Scope<'a> {
             ))),
             Carried::Object(_) => None,
         });
-        match copied_type {
-            Some(AdoptedType::Lowered(handle)) => return Carried::Type(handle),
-            Some(AdoptedType::Unlowered(ti)) => return Carried::UnresolvedType(ti),
-            None => {}
-        }
-
-        let disposition = cell.open(|live| adopt_disposition(cell, live.object(), &seam));
-        match disposition {
-            // The whole envelope is adopted in place through the library's fused mint-and-retain
-            // door: nothing is copied, so there is nothing to relocate.
-            AdoptDisposition::Pin => cell.adopt_into(self.brand().handle()),
-            AdoptDisposition::Relocate => {
-                // The relocation lands the value in this scope's own region under the fold brand and
-                // its composition retains the copy's reach here for the region's life; adopting the
-                // product envelope re-anchors it at `'a` through the library's own fused
-                // mint-and-retain door, so no re-box is needed to recover the reference.
-                self.relocate_delivered(cell, |carried| Ok(carried.object()), RegionEscape::Copy)
-                    .expect("a whole-value adoption's copy is infallible")
-                    .adopt_into(self.brand().handle())
-            }
+        match copied {
+            Some(AdoptedType::Lowered(handle)) => Some(Carried::Type(handle)),
+            Some(AdoptedType::Unlowered(ti)) => Some(Carried::UnresolvedType(ti)),
+            None => None,
         }
     }
 
@@ -730,17 +752,12 @@ impl<'a> Scope<'a> {
 /// step as its carrier rather than as a relocated copy (a bare-name read, the head-deferred
 /// callable, a spliced argument).
 ///
-/// [`ReHome`](Self::ReHome) means the caller re-homes the value anyway and holds no lasting reach,
-/// so substrate carriers must copy: a tail loop's O(1) region turnover cannot afford pinning the
-/// producer (argument delivery). The producer's region is not part of the copy's residence — the
-/// copy carries its own release-exact reach — so the source envelope's hold is **released** when
-/// the caller drops it. Released, not discarded: the copy retains everything it still reaches.
-///
 /// [`Binding`](Self::Binding) additionally admits the record cost chooser. It is minted only by
 /// [`Scope::adopt_for_binding`] — [`BindSeam`]'s field is private to this module, so no caller
-/// outside it can select cost-driven record pinning.
+/// outside it can select cost-driven record pinning. A copying seam has no other user: a call's
+/// arguments are copied by the frame bind itself, off the envelope they were delivered in, so
+/// nothing re-homes a delivered value ahead of the door that binds it.
 pub(crate) enum AdoptSeam {
-    ReHome,
     Retaining,
     Binding(BindSeam),
 }
@@ -780,8 +797,8 @@ enum AdoptDisposition {
 /// - [`AdoptSeam::Retaining`] pins every object, substrate or not. The adopting scope's region union
 ///   holds the minted reach, so the value can stay put; that is what lets a spliced argument or a
 ///   head-deferred callable survive its producing step as its carrier rather than as a copy.
-/// - [`AdoptSeam::ReHome`] copies every object.
-/// - [`AdoptSeam::Binding`] copies too, except that a top-level record routes the cost chooser.
+/// - [`AdoptSeam::Binding`] copies every object, except that a top-level record routes the cost
+///   chooser.
 ///
 /// The shape rules behind that table:
 ///
@@ -807,7 +824,6 @@ fn adopt_disposition(
 ) -> AdoptDisposition {
     match seam {
         AdoptSeam::Retaining => AdoptDisposition::Pin,
-        AdoptSeam::ReHome => AdoptDisposition::Relocate,
         AdoptSeam::Binding(_) if !projected.needs_destination_door() => AdoptDisposition::Relocate,
         AdoptSeam::Binding(_) => cell
             .open_at()

@@ -72,50 +72,42 @@ pub enum PerCallReturn {
 /// `invoke` for a user-defined function: bind `args` into `ctx`'s scope, then describe the body as an
 /// [`ExecOutcome`] — `Tail` of the non-tail statements + the last, or `DeferredExprTail` for a
 /// first-call deferred-`Expression` return. `ctx` is borrowed so the caller retains it. `args` is the
-/// argument record from [`super::bind_by_name`] (resolved values keyed by parameter name).
+/// call's arguments as **delivery envelopes** keyed by parameter name, the dispatcher's single re-key
+/// of the carriers it lifted off the call expression (`map_arg_carriers`). One record, not a value
+/// record beside an envelope record: the envelope already carries the [`Carried`] it delivers, so an
+/// argument with no envelope is not a state the bind can be handed.
 ///
 /// Pure wrt the scheduler: it mutates only `ctx`'s own scope (param binds) and, for a deferred `Type`
 /// return, elaborates the return type inline against that scope. `in_contract_chain` true means this
 /// is a subsequent tail call whose contract keep-first would discard, so it skips resolving its return
 /// type. Body statements are borrowed (`'ast`).
-pub fn run_user_fn<'ast, 'step>(
+pub fn run_user_fn<'ast>(
     func: &'ast KFunction<'ast>,
-    args: Record<Carried<'step>>,
-    arg_carriers: &Record<&DeliveredCarried>,
+    args: &Record<&DeliveredCarried>,
     ctx: &ExecFrame,
     in_contract_chain: bool,
     types: &TypeRegistry,
-) -> ExecOutcome<'ast>
-where
-    'ast: 'step,
-{
-    // Bind each parameter into the frame's own scope through the value/type doors. An object is
-    // deep-copied into the frame region under the reach its own delivered arg carrier mints
-    // (`bind_delivered`) — every value argument arrives with one, a region-pure literal included,
-    // because the frame scope opens at a `for<'b>` brand a bare caller reference cannot cross. A
-    // type is owned data, so it crosses by clone and lands in the frame region through the single
-    // storage door (`register_type_delivered`), pinning nothing. Built at the frame brand so nothing
-    // fabricates a free `&'a`.
+) -> ExecOutcome<'ast> {
+    // Bind each parameter into the frame's own scope through the value/type doors, off the one
+    // envelope the argument arrived in. An object is deep-copied into the frame region under the
+    // reach its own delivered carrier mints (`bind_delivered`) — every value argument arrives with
+    // an envelope, a region-pure literal included, because the frame scope opens at a `for<'b>`
+    // brand a bare caller reference cannot cross. A type is owned data, so it crosses by clone and
+    // lands in the frame region through the single storage door (`register_type_direct`), pinning
+    // nothing. Built at the frame brand so nothing fabricates a free `&'a`.
     let bind = ctx.region.with_scope(|child| -> Result<(), KError> {
         // The frame's own scope: minted for this call and not yet published, so the parameter binds
         // take the construction door rather than riding a step outcome.
         let gate = &mut crate::machine::core::bindings::WriteGate::for_unpublished_scope();
-        for (name, carried) in args.iter() {
-            let carrier = arg_carriers.get(name).copied();
-            match *carried {
+        for (name, delivered) in args.iter() {
+            match arg_channel(delivered) {
                 // The projection is identity — the whole delivered value binds. The copy is a deep
                 // clone into the frame region, so the carrier's residence-only host is not part of
                 // its reach (a tail call's retiring frame must not ride this binding).
-                Carried::Object(_) => {
-                    let cell = carrier.ok_or_else(|| {
-                        KError::new(KErrorKind::ShapeError(format!(
-                            "internal: argument `{name}` reached the frame bind with no delivery \
-                             envelope"
-                        )))
-                    })?;
+                ArgChannel::Value => {
                     child.bind_delivered_direct(
                         name.clone(),
-                        cell,
+                        delivered,
                         BindingIndex::value(0),
                         |c| Ok(c.object()),
                         gate,
@@ -124,10 +116,11 @@ where
                 // Type-denoting params (a `:Signature`-kind slot, a type alias) register a type, not a
                 // value binding. The arg is already a resolved type; the door clones it into the
                 // frame region. A *module* argument is a value and takes the Object arm above.
-                Carried::Type(kt) => {
-                    // A type-denoting FN parameter is a per-call frame-scope binding, not a
-                    // declaration statement subject to same-declaration checks, so it takes the
-                    // born-with-the-scope site.
+                //
+                // A type-denoting FN parameter is a per-call frame-scope binding, not a declaration
+                // statement subject to same-declaration checks, so it takes the born-with-the-scope
+                // site.
+                ArgChannel::Type(kt) => {
                     child.register_type_direct(
                         name.clone(),
                         kt,
@@ -137,8 +130,8 @@ where
                 }
                 // Dispatch resolves every type-denoting argument before the call, so a name that
                 // is still unlowered here names nothing bindable.
-                Carried::UnresolvedType(ti) => {
-                    return Err(KError::new(KErrorKind::UnboundName(ti.render())));
+                ArgChannel::Unresolved(rendered) => {
+                    return Err(KError::new(KErrorKind::UnboundName(rendered)));
                 }
             }
         }
@@ -224,6 +217,26 @@ where
             }
         }
     }
+}
+
+/// Which door an argument's envelope binds through, read once under the envelope's own pin. Every
+/// arm's payload is pin-free — a `Copy` [`KType`] handle, a rendered name — so the classification
+/// outlives the open and the bind runs outside it.
+enum ArgChannel {
+    Value,
+    Type(KType),
+    Unresolved(String),
+}
+
+/// Classify a delivered argument's channel. The value arm carries nothing: the bind reads the object
+/// back out of the same envelope through the binding door, which is what relocates it into the frame
+/// region.
+fn arg_channel(delivered: &DeliveredCarried) -> ArgChannel {
+    delivered.open(|live| match live {
+        Carried::Object(_) => ArgChannel::Value,
+        Carried::Type(kt) => ArgChannel::Type(kt),
+        Carried::UnresolvedType(ti) => ArgChannel::Unresolved(ti.render()),
+    })
 }
 
 /// Split a body into its leading (non-tail) statements and the terminal `tail` whose value is the

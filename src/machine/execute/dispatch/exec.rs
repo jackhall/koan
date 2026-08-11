@@ -14,12 +14,10 @@ use super::super::obligation::{ReturnObligation, with_obligation};
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanWorkload;
 use super::SchedulerView;
-use crate::machine::AdoptSeam;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, KFunction, OpenedFunction};
 use crate::machine::core::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
-use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{Record, SignatureElement};
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
@@ -86,7 +84,7 @@ pub(super) fn invoke<'step>(
 ) -> Outcome<'step> {
     // Per-argument reach carriers, read back off the spliced cells (value and reach as one unit). A
     // literal arg is region-pure and contributes no cell — on the user-defined lane below,
-    // `extract_carried_args` fills its slot with the empty-coverage envelope it resolves the literal
+    // `deliver_value_args` fills its slot with the empty-coverage envelope it resolves the literal
     // into, so every value argument the frame bind sees is delivered.
     let mut arg_carriers = carriers_from_expr(view, &working_expr);
     let function = picked.value();
@@ -108,31 +106,19 @@ pub(super) fn invoke<'step>(
         return Outcome::Done(Err(e));
     }
 
-    let args = match extract_carried_args(view, &working_expr, &mut arg_carriers) {
-        Some(args) => args,
-        // Unreachable by construction (the bind sites resolve value parts to `Spliced`/literal
-        // first); surface a diagnostic rather than silently mis-bind if that ever breaks.
-        None => {
-            return Outcome::Done(Err(KError::new(KErrorKind::User(
-                "exec: a call argument was not a resolved value at the bind site".to_string(),
-            ))));
-        }
-    };
-
-    let bound = match function.bind_by_name(args) {
-        Ok(record) => record,
-        Err(e) => return Outcome::Done(Err(e)),
-    };
+    if let Err(e) = deliver_value_args(view, &working_expr, &mut arg_carriers) {
+        return Outcome::Done(Err(e));
+    }
 
     // The per-call frame the producer's `Continue` (`FreshTail`) already minted and installed
     // as the slot's cart — `invoke` runs against it, so read it from the view rather than a param.
     let frame = view
         .current_frame()
         .expect("a user-fn invoke runs against the Continue-installed per-call cart");
-    // Re-key onto parameter names so `run_user_fn` stores each binding's reach from its own carrier,
-    // keyed to match `bound`. `extract_carried_args` already folded every delivered arg's reach into
-    // this same per-call scope (through `adopt_carried`), so every foreign region an argument borrows
-    // into is pinned for the call's life — no separate deposit here.
+    // The single re-key onto parameter names: one walk of the signature over the slot-indexed
+    // carriers, producing the argument record `run_user_fn` binds from. Each envelope's relocation
+    // at the bind door mints that binding's reach in this same per-call region, so every foreign
+    // region an argument borrows into is pinned for the call's life — no separate deposit here.
     let named_carriers = map_arg_carriers(function, &arg_carriers);
     let exec_frame = ExecFrame {
         region: frame.clone(),
@@ -142,7 +128,6 @@ pub(super) fn invoke<'step>(
     let in_chain = view.in_contract_chain();
     match run_user_fn(
         function,
-        bound,
         &named_carriers,
         &exec_frame,
         in_chain,
@@ -237,12 +222,13 @@ fn carriers_from_expr<'step>(
         .collect()
 }
 
-/// Re-key the slot-indexed arg carriers onto their parameter names. A committed call's parts line up
-/// 1:1 with `picked`'s signature elements (`validate_call_args` enforces it), so the element at a
-/// carrier's slot names its parameter. A `None` entry is read as "no foreign reach" and contributes
-/// no record field — the shape a region-pure arg takes on the builtin lane, where nothing binds at a
-/// `for<'b>` brand. A user-defined call fills every value slot ([`extract_carried_args`]), so no
-/// entry it re-keys is `None`.
+/// Re-key the slot-indexed arg carriers onto their parameter names — the **one** walk of the
+/// signature over the carriers on either lane. A committed call's parts line up 1:1 with `picked`'s
+/// signature elements (`validate_call_args` enforces it), so the element at a carrier's slot names
+/// its parameter. A `None` entry is read as "no foreign reach" and contributes no record field — the
+/// shape a region-pure arg takes on the builtin lane, where nothing binds at a `for<'b>` brand. A
+/// user-defined call fills every value slot ([`deliver_value_args`]), so the record this returns
+/// there holds one envelope per parameter and is the whole argument currency the frame bind reads.
 fn map_arg_carriers<'e, 'step>(
     picked: &KFunction<'step>,
     arg_carriers: &'e [Option<DeliveredCarried>],
@@ -293,71 +279,58 @@ fn run_action_builtin<'step>(
     super::super::runtime::run_action(view, action)
 }
 
-/// Extract the call's resolved value arguments from `working_expr`'s parts, in order: a `Spliced`
-/// part contributes its carried value, a literal resolves into the run region, keyword parts
-/// contribute nothing. `arg_carriers` is `carriers_from_expr`'s part-parallel lift of this same
-/// expression, so a `Spliced` part always pairs with `Some`. Returns `None` for any other value
-/// part, and for the pairing that construction rules out — both unreachable (the bind sites resolve
-/// value parts first; the two lists come from one walk of one expression), which the caller surfaces
-/// as a diagnostic rather than a panic.
+/// Deliver the call's value arguments: after this, every value part of `working_expr` has a delivery
+/// envelope in its own slot of `arg_carriers`, which is what the frame bind takes. A `Spliced` part
+/// already holds the one [`carriers_from_expr`] lifted for it — the cells rest in the *dispatching*
+/// step's region, whose shell a framed tail hop has retired, so that lift runs under the step's own
+/// coverage and is paid once per call, not once per reader. The two resolving arms **fill their own
+/// slot**: the value is placed in the call scope's region and enveloped there
+/// ([`Scope::deliver_resident_object`]) — `view.current_scope()` *is* the call scope (the run loop
+/// opens each step's scope from the Continue-installed cart), so the fold never lands in the caller's
+/// scope. The envelope's own coverage is empty, so a literal argument still pins nothing.
 ///
-/// The two resolving arms **fill their own slot** in `arg_carriers`: the value is placed in the call
-/// scope's region and enveloped there ([`Scope::deliver_resident_object`]), so every value argument
-/// of a user-defined call reaches the frame bind as a delivery envelope. That is what the bind's
-/// `for<'b>` brand admits ([`CallFrame::with_scope`](crate::machine::CallFrame::with_scope)) — a
-/// bare `&'step KObject<'step>` names a lifetime the opened frame scope has no relation to. The
-/// envelope's own coverage is empty, so a literal argument still pins nothing.
-fn extract_carried_args<'step>(
+/// The envelope is what the bind's `for<'b>` brand admits
+/// ([`CallFrame::with_scope`](crate::machine::CallFrame::with_scope)) — a bare `&'step
+/// KObject<'step>` names a lifetime the opened frame scope has no relation to. Keyword parts
+/// contribute nothing. Any other value part is unreachable (the bind sites resolve value parts to
+/// `Spliced`/literal first) and surfaces as a diagnostic rather than a silent mis-bind.
+fn deliver_value_args<'step>(
     view: &SchedulerView<'_, 'step, '_>,
     working_expr: &WorkingExpression<'step>,
     arg_carriers: &mut [Option<DeliveredCarried>],
-) -> Option<Vec<Carried<'step>>> {
-    let mut args = Vec::new();
+) -> Result<(), KError> {
     for (part, lifted) in working_expr.parts.iter().zip(arg_carriers.iter_mut()) {
-        match (&part.value, &*lifted) {
-            (WorkingPart::Ast(ExpressionPart::Keyword(_)), _) => {}
-            // Adopt the spliced cell into the call scope — an object by structural copy (the copy's
-            // reach folds in; a residence-only producer host is released with the working
-            // expression, so a tail call's retiring region does not chain into the fresh frame's
-            // arena), a type copy-free with its host pinned. `view.current_scope()` *is* the call
-            // scope (the run loop opens each step's scope from the Continue-installed cart), so the
-            // fold never lands in the caller's scope.
-            //
-            // The envelope is the one [`carriers_from_expr`] already lifted for this part — the cells
-            // rest in the *dispatching* step's region, whose shell a framed tail hop has retired, so
-            // the lift runs under the step's own coverage and is paid once per call, not once per
-            // reader. The two lists are index-parallel, so the `Some` arm is the only shape a
-            // `Spliced` part can take; a bare `Spliced` falls through to the diagnostic below.
-            (WorkingPart::Spliced { .. }, Some(delivered)) => {
-                args.push(
-                    view.current_scope()
-                        .adopt_carried(delivered, AdoptSeam::ReHome),
-                );
-            }
-            // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
-            // the args as a `'step` `Carried`. A string literal bumps its bytes here, so the value
-            // is region-pure but not `'static` and takes the zero-dep fold door.
-            (WorkingPart::Ast(ExpressionPart::Literal(lit)), _) => {
+        match &part.value {
+            WorkingPart::Ast(ExpressionPart::Keyword(_)) => {}
+            // Already delivered: the bind relocates the value into the frame region off this very
+            // envelope, so there is nothing to adopt here on the way.
+            WorkingPart::Spliced { .. } => {}
+            // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it
+            // reaches the bind as a delivered `'step` value. A string literal bumps its bytes here,
+            // so the value is region-pure but not `'static` and takes the zero-dep fold door.
+            WorkingPart::Ast(ExpressionPart::Literal(lit)) => {
                 let object = view
                     .current_scope()
                     .fold_resident_object(|brand| lit.to_kobject(*brand));
                 *lifted = Some(view.current_scope().deliver_resident_object(object));
-                args.push(Carried::Object(object));
             }
             // A `#(...)` quote's `KObject::KExpression` body is data, but the value it rides in is
             // invariant in its region lifetime with no `'static` rebuild and no fold-brand
             // construction, so it takes the expression door — whose signature is what proves the
             // cell reaches nothing outside the region it is bumped into.
-            (WorkingPart::Ast(ExpressionPart::QuotedExpression(body)), _) => {
+            WorkingPart::Ast(ExpressionPart::QuotedExpression(body)) => {
                 let object = view
                     .current_scope()
                     .brand()
                     .alloc_expression(body.expression());
                 *lifted = Some(view.current_scope().deliver_resident_object(object));
-                args.push(Carried::Object(object));
             }
-            _ => return None,
+            _ => {
+                return Err(KError::new(KErrorKind::User(
+                    "exec: a call argument was not a resolved value at the bind site".to_string(),
+                )));
+            }
         }
     }
-    Some(args)
+    Ok(())
 }

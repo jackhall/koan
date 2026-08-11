@@ -13,7 +13,6 @@ use crate::machine::model::{Held, NamedPairs};
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
 /// `machine::execute::runtime::run_action`.
 pub mod action;
-pub mod bind_by_name;
 pub mod block_tail;
 pub mod body;
 pub mod exec;
@@ -136,9 +135,11 @@ impl<'a> KFunction<'a> {
 
     /// Validate a positional call's `parts` against this signature: arity, keyword spellings, and
     /// each argument's type ([`slot_admits`]). Shared by [`Self::bind_args`] and the `exec`
-    /// executor — the latter binds via `bind_by_name` (a pure rename that trusts the picker), so for
-    /// a uniquely-picked call (admitted shape-only by dispatch) this is where a non-satisfying typed
-    /// argument becomes a hard `TypeMismatch` rather than slipping through.
+    /// executor — the latter re-keys the call's delivery envelopes onto parameter names by slot
+    /// (`map_arg_carriers`, a pure rename that trusts the picker), so for a uniquely-picked call
+    /// (admitted shape-only by dispatch) this is where a non-satisfying typed argument becomes a
+    /// hard `TypeMismatch` rather than slipping through. It is also what makes that re-key a
+    /// 1:1 slot walk: parts and signature elements have equal length and matching shapes.
     pub(crate) fn validate_call_args(
         &'a self,
         parts: &[Spanned<WorkingPart<'a>>],
@@ -187,14 +188,14 @@ impl<'a> KFunction<'a> {
     /// resolved sub-result out of its cell and lowers a raw `Type` / `SigiledTypeExpr` /
     /// `RecordType` part into the matching [`Held`] arm.
     ///
-    /// This is the builtin counterpart to [`Self::bind_by_name`] (the user-defined-call binder).
-    /// The two hold *different currencies for a reason*: this binder produces owned `Held` cells
-    /// because a builtin receives raw argument parts that `resolve_for` resolves into fresh values;
-    /// `bind_by_name` produces borrowed `Record<Carried>` because a user-defined call arrives with
-    /// its value parts already resolved into `Carried` by dispatch, so it is a trusted rename of
-    /// existing region values. `scope` is the call scope: `resolve_for` adopts a spliced **cell**
-    /// into it before owning the value, so an owned type that still borrows the producer region
-    /// stays pinned.
+    /// This is the builtin counterpart to the user-defined-call binder (`map_arg_carriers`, in the
+    /// dispatcher's `exec` lane). The two hold *different currencies for a reason*: this binder
+    /// produces owned `Held` cells because a builtin receives raw argument parts that `resolve_for`
+    /// resolves into fresh values; the user-defined lane re-keys the call's **delivery envelopes**
+    /// onto parameter names, because a user-defined call arrives with its value parts already
+    /// delivered by dispatch and the frame bind relocates each one through its own envelope. `scope`
+    /// is the call scope: `resolve_for` adopts a spliced **cell** into it before owning the value,
+    /// so an owned type that still borrows the producer region stays pinned.
     pub fn bind_args(
         &'a self,
         parts: &[Spanned<WorkingPart<'a>>],

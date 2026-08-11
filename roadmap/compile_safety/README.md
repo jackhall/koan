@@ -28,9 +28,9 @@ Known holes in the memory abstraction — ways koan-implementation Rust with no
 `unsafe` block can still under-pin a region (dangle) or over-pin one
 (leak / retention). The hotspot map below covers every hole; a row whose hole
 links to a roadmap item is promoted, and that item owns the problem statement
-and fix. The prose entries after the map are the not-yet-promoted candidates,
-recorded so they aren't lost; a closing subsection records surface debt —
-cleanup candidates with no reachable fault, which the map does not carry. **To start one, first promote it into its own
+and fix. A hole recorded after the map as prose rather than as a map row is a
+not-yet-promoted candidate, kept there so it isn't lost. **To start one, first
+promote it into its own
 `roadmap/compile_safety/<item>.md` file** with `**Problem.**` /
 `**Acceptance criteria.**` / `## Dependencies` sections (see the documentation
 skill's "When adding a new roadmap item"), then replace its prose entry here
@@ -55,28 +55,3 @@ by local discipline rather than by construction.
 | [Raw-handle reach](raw-handle-confinement.md) | under-pin | `pub(crate)` `RegionBrand::handle()` hands koan code the raw `RegionHandle`, bypassing the veneer ([arena.rs](../../src/machine/core/arena.rs)); workgraph's `pub` `RegionHandle::from_owner` and `FoldedPlacement::handle()` mint the same handle outside the brand door | 18 production reaches across `src/machine` — 11 inside `machine::core`, 7 outside |
 | [Region-purity by fiat](derived-function-reach.md) | under-pin | the empty-member description `OverloadSeal::of_resident` / `GroupSeal::of_resident` ([carrier_witness.rs](../../src/machine/core/carrier_witness.rs)) mint via `RegionBrand::seal_resident` ([arena.rs](../../src/machine/core/arena.rs)), on a structural claim never audited | 3 production `OverloadSeal` seals (keyworded `FN`, `OP`, the builtin seeds via `register_function_direct`) and 4 `GroupSeal` seals, plus test fixtures |
 | [Carrier reach co-location](carrier-pin-witness.md) | under-pin | [`Carrier`](../../workgraph/src/witnessed/carrier.rs) erases its reach reference, and the open doors bound their pin as `Pin: Witness` — a bare marker `NoPins` satisfies — then discard the argument, so co-location with the value rests on discipline, not the type | every `Sealed::open_at` / lift reader |
-
-### Surface debt (not fault-capable)
-
-- **Runtime guard for a structural invariant.** `run_user_fn`
-  ([exec.rs](../../src/machine/core/kfunction/exec.rs)) takes its arguments as a
-  `Record<Carried>` beside a separate `Record<&DeliveredCarried>` of envelopes,
-  so a value argument whose envelope is missing is representable and the bind
-  arm rejects it with an internal diagnostic. Nothing can reach that arm:
-  `extract_carried_args`
-  ([dispatch/exec.rs](../../src/machine/execute/dispatch/exec.rs)) fills every
-  value slot, literals and quotes included, because the frame scope opens at a
-  `for<'b>` brand no bare reference crosses. The debt is that the two records
-  are held parallel rather than paired, so the invariant rests on both walks
-  staying in step. Candidate: collapse the pair — the envelope is
-  `Delivered<CarriedFamily, …>`, so it already carries the `Carried` it
-  delivers; `run_user_fn`'s `Object` arm discards its `Carried` payload and
-  binds from the envelope anyway, and the `Type` handle is a `Copy` value
-  readable off the envelope's inner `Carried`. Taking the one envelope record
-  makes the missing-envelope state unrepresentable, deletes the check, and
-  folds `bind_by_name`'s positional walk into the one re-key
-  (`map_arg_carriers`) — two walks of the same signature over the same slice
-  become one. The action-builtin lane
-  ([action.rs](../../src/machine/core/kfunction/action.rs)) holds the same
-  parallel pair but its slots are legitimately optional and it never reaches
-  `run_user_fn`, so it is unaffected.

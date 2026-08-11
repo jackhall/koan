@@ -131,21 +131,20 @@ impl<'a> TestRun<'a> {
 /// Extract a top-level terminal at the scope lifetime `'a`. The terminal is opened at a rank-2 brand
 /// and its value **copied out** into `scope`'s region through the brand — a deep clone re-homed at
 /// `'a` (the same copy a witnessed transfer's fold runs across a dep edge), so nothing branded
-/// escapes the open. A returned closure / module's deep clone preserves the bare
-/// borrow into its per-call region, so (like the production drain) fold the slot's witness onto
-/// `scope`'s reach-set: the caller drops the scheduler right after this returns, and `scope` outlives
-/// it, so its reach-set keeps every region the result reaches alive. Test-only — production code reads
-/// inside the open without a fixed escape lifetime.
+/// escapes the open and a region-pure terminal leaves its producer frame free to die. A returned
+/// closure / module's deep clone preserves the bare borrow into its per-call region, so (like the
+/// production drain) the copy's own reach is minted into `scope`'s region: the caller drops the
+/// scheduler right after this returns, and `scope` outlives it, so its reach-set keeps every region
+/// the result still reaches alive. Test-only — production code reads inside the open without a fixed
+/// escape lifetime.
 #[cfg(test)]
 pub(crate) fn extract_terminal<'a>(
     runtime: &KoanRuntime<'a>,
     scope: &'a Scope<'a>,
     id: NodeId,
 ) -> Carried<'a> {
-    // The extraction copies the value into `scope`'s region, so the copied-adoption rule applies:
-    // the producer frame materializes into the surviving arena only when the copy's borrows
-    // genuinely reach it (a returned closure / module), never for a residence-only scalar. The
-    // witness and its retained host travel together as the delivery envelope.
+    // The witness and its retained host travel together as the delivery envelope, so the adoption
+    // has both of the value's region facts to work from.
     let delivered = runtime
         .dep_delivered(id)
         .expect("terminal should be a value, not an error");
@@ -153,7 +152,7 @@ pub(crate) fn extract_terminal<'a>(
     // substrate carrier, a bare string — is totally rebuilt into `scope`'s region through the seam
     // copy verb, every other object's top node is cloned at the fold brand, a type crosses by
     // handle / clone.
-    scope.adopt_carried(&delivered, crate::machine::AdoptSeam::ReHome)
+    scope.adopt_copied_for_test(&delivered)
 }
 
 /// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read it back.
