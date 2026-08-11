@@ -69,7 +69,7 @@ unsafe impl PinsRegion for Cart {
 }
 
 /// Build a bundle-witnessed carrier over a cart: yoked from the cart's own region (so the value is
-/// provably region-derived), then re-bundled under the singleton [`PinBundle`] that pins the same
+/// provably region-derived), then re-bundled under the singleton `PinBundle` that pins the same
 /// cart. Fixture-only: the doctests for the set-witnessed merge/transfer verbs need one, and the
 /// crate-internal witness-retype they route is not part of the module's real surface.
 pub fn set_witnessed(cart: std::rc::Rc<Cart>) -> Witnessed<RefFamily, PinBundle<Cart>> {

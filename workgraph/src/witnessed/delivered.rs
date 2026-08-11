@@ -43,7 +43,7 @@ use super::{
     RegionOwner, Sealed, SealedExtern, StepCoverage, StorageProfile, Witnessed,
 };
 
-/// A sealed carrier paired with the owned [`PinBundle`] that pins every region its value reaches —
+/// A sealed carrier paired with the owned `PinBundle` that pins every region its value reaches —
 /// the value's home region among them, as an ordinary member. `T` is the carrier's value family,
 /// `W` its reach witness, `F` the workload's frame-owner type. The carrier's reach description is
 /// non-owning; the envelope's bundle is the ownership that keeps the value's whole reach alive
@@ -234,7 +234,7 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
     }
 
     /// Duplicate the envelope: [`duplicate`](Sealed::duplicate) the sealed carrier (bit-copy value +
-    /// witness clone) and clone the owned [`PinBundle`], leaving the source intact — the producer
+    /// witness clone) and clone the owned `PinBundle`, leaving the source intact — the producer
     /// keeps its terminal for other consumers, and every pinned region (home among them) gains one
     /// `Rc` clone, dropped when this duplicate's consumer is done.
     pub fn duplicate(&self) -> Self
@@ -253,7 +253,7 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
 /// holder that owns the value's pins, so it is what a mint folds and what covers every read here.
 impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
     /// Pair a sealed carrier with the owner of the region its value lives in and the owned
-    /// [`PinBundle`] pinning every other region it reaches, unioning the two into the envelope's
+    /// `PinBundle` pinning every other region it reaches, unioning the two into the envelope's
     /// single member set. `home` is the pin the transit needs — the residence itself is already the
     /// host of the carrier's description. The caller supplies it and the owned bundle threaded from
     /// the mint, never re-derived from the carrier: the scheduler's retention hold (which carries
@@ -288,7 +288,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
 
     /// **Lift** a [`Sealed`] carrier at rest into a delivery envelope in transit (`Sealed →
     /// Delivered`): upgrade the sealed carrier's reach description `Weak → Rc` into an owned inline
-    /// [`PinBundle`] under `home`, and union `home` itself in. The owned set is what lets the value
+    /// `PinBundle` under `home`, and union `home` itself in. The owned set is what lets the value
     /// travel after its source frame dies — an arena-hosted `&ReachDescription` would dangle in
     /// transit, so the lift re-owns the claimed subset while the reached regions are still covered
     /// (the holder rule under `home`). `home` is the value's residence owner, covering both its
@@ -301,7 +301,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     }
 
     /// Seal a live [`Witnessed`] carrier into a delivery envelope pinned by `home` and the owned
-    /// [`PinBundle`] `reach` — the resident / Done-arm seal veneer's library half. Bundles the
+    /// `PinBundle` `reach` — the resident / Done-arm seal veneer's library half. Bundles the
     /// born-witnessed carrier with the region owner the caller already holds and the owned bundle
     /// threaded in (the binding entry's pins, the Done-arm carrier's pins), so a resident value
     /// travels as an envelope pinned by its home frame, identical in shape to a delivered dep.

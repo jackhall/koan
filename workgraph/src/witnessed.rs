@@ -66,7 +66,13 @@ pub use dormant::{SealedPinned, Within};
 mod step_ctx;
 pub use step_ctx::StepContext;
 
+/// Fixture types the doctests and `compile_fail` guards name. They compile as external crates, so
+/// the fixture must be `pub` — and gated, or it would be production surface an embedder could build
+/// against. `test-hooks` is the same gate the white-box readers take, and it is on in every
+/// configuration that runs a doctest (the workgraph slate passes it; the full slate gets it through
+/// koan's dev-dependency), so gating costs the guards nothing.
 #[doc(hidden)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub mod doctest_fixture;
 
 #[cfg(test)]
@@ -324,9 +330,10 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     }
 
     /// Forge a placement for an embedder white-box test that has no enclosing fold engine to mint
-    /// one — gated off production (like [`region_metrics`]) **and** out of the external-crate
-    /// `compile_fail` fixtures (which do not enable `test-hooks`), so it never weakens the
-    /// confinement the private field enforces.
+    /// one — gated off production (like [`region_metrics`]), so the confinement the private field
+    /// enforces holds for every build an embedder ships. The gate is on in the external-crate
+    /// `compile_fail` fixtures too, so a guard must not assert that *forging* is impossible; the
+    /// confinement those guards pin down is the private field, which no configuration opens.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn forge_for_test(handle: RegionHandle<'b, W>) -> Self {
         FoldedPlacement { handle }
@@ -473,7 +480,7 @@ const _: fn() = || {
 /// operand that carries no region content at all), so the read needs no pin of its own.
 ///
 /// It exists so an embedder can say "no coverage of my own" without naming an owned
-/// [`PinBundle`](reach::PinBundle): a bundle is the ownership tier, and constructing an empty one
+/// `PinBundle`: a bundle is the ownership tier, and constructing an empty one
 /// purely to stand in as a witness would put pin vocabulary in embedder hands for a site that pins
 /// nothing.
 #[derive(Clone, Copy, Debug, Default)]
@@ -537,7 +544,7 @@ unsafe impl<F: RegionOwner> WitnessRegion for Rc<F> {
 /// so an impl can *mint* into the destination rather than only computing a pure union. Total: every
 /// pair of witnesses is composable against any destination, so there is no failure verdict.
 ///
-/// Deliberately **not** `: Witness` — a reference-only witness composes too. [`PinBundle`] (a
+/// Deliberately **not** `: Witness` — a reference-only witness composes too. `PinBundle` (a
 /// pinning witness) composes by plain union, ignoring `dest`; [`Carrier`] (reference-only) composes
 /// by minting both operands' reach into `dest`'s own arena, which is also the product's residence.
 /// The carrier owns no pin, so the *owned* bundles the mint folds are threaded in by the holder
@@ -622,7 +629,7 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     }
 
     /// The bundled witness — the value's reach/pin description. For a pinning witness (a
-    /// [`PinBundle`]) this is the set of producer frame `Rc`s that pin the carrier's pointee; for
+    /// `PinBundle`) this is the set of producer frame `Rc`s that pin the carrier's pointee; for
     /// a reference-only witness (the collapsed [`Carrier`]) it names the reach without pinning it.
     pub fn witness(&self) -> &W {
         &self.witness
@@ -817,7 +824,7 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
 }
 
 /// A bundled carrier whose value family is a bit-copy (a thin/fat reference) and whose witness is
-/// too — the reference-only [`Carrier`], never an owned [`PinBundle`] — is itself `Copy`, so it
+/// too — the reference-only [`Carrier`], never an owned `PinBundle` — is itself `Copy`, so it
 /// rides inside a `Copy` embedder value (a resting cell held in an expression part) instead of
 /// forcing that value to carry `Drop` glue. It grants nothing [`Self::duplicate`] does not already:
 /// both copy the erased value and duplicate the witness, and a witness that *owns* pins is
@@ -1213,7 +1220,7 @@ impl<T: Reattachable + DropFree, W> Sealed<T, W> {
 }
 
 /// A seal over a bit-copy value family and a bit-copy witness — the reference-only [`Carrier`],
-/// never an owned [`PinBundle`] — is itself `Copy` and **`Drop`-free**, so a dormant carrier rests
+/// never an owned `PinBundle` — is itself `Copy` and **`Drop`-free**, so a dormant carrier rests
 /// inside an embedder's own `Copy` value (a resolved sub-result at rest in an expression part)
 /// rather than making that value heap-shaped. Copying is exactly [`Self::duplicate`] — the erased
 /// value bit-copied, the witness duplicated — so it grants no capability the seal did not already

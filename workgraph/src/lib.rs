@@ -20,13 +20,16 @@
 //!   [`witnessed::Witness`], [`witnessed::WitnessRegion`], [`witnessed::RegionOwner`] (the
 //!   `Rc<F>` blanket-impl seam for [`witnessed::WitnessRegion`]), and the reference-only
 //!   composition seam [`witnessed::ComposeWitness`].
-//! - The reach-evidence types [`witnessed::ReachDescription`] (non-owning, side-table hosted) and
-//!   [`witnessed::PinBundle`] (owned), generic over the member trait [`witnessed::PinsRegion`] an
-//!   embedder implements for its own frame-owner type. Both are frozen together at a
-//!   [`witnessed::ReachDescription::mint_resident`], which is also where the destination's retention
-//!   of the composed bundle is established, and a value's home region rides them as an ordinary
-//!   member — the sole asymmetry is the self rule, which strips `dest`'s own region from the
-//!   retained bundle (a region pinning itself is a cycle) while leaving it in the description. A
+//! - The reach evidence an embedder sees, split by ownership: [`witnessed::ReachDescription`]
+//!   (non-owning, side-table hosted) and [`witnessed::StepCoverage`] (owned), both generic over the
+//!   member trait [`witnessed::PinsRegion`] an embedder implements for its own frame-owner type. The
+//!   owned tier is deliberately a *narrowed* view: the pin arithmetic behind `StepCoverage` — union,
+//!   subsumption, member strip — is crate-private, so an embedder can name coverage and widen it, but
+//!   cannot assemble or narrow a claim by hand. Description and retention are frozen together at the
+//!   resident mint (the door an embedder reaches through
+//!   [`witnessed::RegionHandle::mint_retained`]), and a value's home region rides them as an
+//!   ordinary member — the sole asymmetry is the self rule, which strips `dest`'s own region from the
+//!   retained pins (a region pinning itself is a cycle) while leaving it in the description. A
 //!   region's side table *interns* descriptions, so within one region a description's address is
 //!   its member set — and an entry's existence is proof the region already pins what it names.
 //! - Sub-value reach storage: [`witnessed::Sectioned`], a cell-generic `Copy`, `Drop`-free container
@@ -48,8 +51,10 @@
 //!   embedder-reachable door that pairs a loose value with a loose witness.
 //! - Combinators: [`witnessed::seal_option`], and the `And` / `OptionOf` families the `zip` /
 //!   `seal_option` combinators seal.
-//! - [`witnessed::doctest_fixture`] — a fixture crate for the `compile_fail` soundness guards;
-//!   not part of the real surface (see its own module docs).
+//! - `witnessed::doctest_fixture` — a fixture crate for the doctests and `compile_fail` soundness
+//!   guards, which compile as external crates and so need types they can name. Gated behind
+//!   `test-hooks` alongside the white-box surface below, so it is absent from a production build and
+//!   no embedder can accrete against it (see its own module docs).
 //!
 //! [`scheduler`] — the workload-generic DAG scheduler:
 //! - [`scheduler::Scheduler`], generic over an embedder's [`scheduler::Workload`] impl.

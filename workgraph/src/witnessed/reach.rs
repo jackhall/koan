@@ -61,14 +61,14 @@ use super::{
 };
 
 /// A [`RegionOwner`] that can report whether holding it keeps another region's storage alive — the
-/// outer-chain subsumption hook [`PinBundle`] folds and inserts through, and the membership hook
+/// outer-chain subsumption hook `PinBundle` folds and inserts through, and the membership hook
 /// [`ReachDescription`] answers queries with.
 ///
 /// # Safety
 ///
 /// `pins_region(r) == true` asserts that holding `Self` (behind its `Rc`) keeps the storage of the
 /// region at `r` live and at a fixed address for as long as `Self` is held — `Self`'s own region or
-/// one reached through an owner chain it pins. This is what makes subsumption sound: [`PinBundle`]
+/// one reached through an owner chain it pins. This is what makes subsumption sound: `PinBundle`
 /// drops a member whose region another member already pins, and the remaining member must genuinely
 /// carry that pin.
 pub unsafe trait PinsRegion: RegionOwner {
@@ -97,7 +97,7 @@ pub unsafe trait PinsRegion: RegionOwner {
 /// the carrier. The member set is a singleton for a single-region value (a lifted closure over one
 /// source region), larger for a multi-region value, and empty for a region-pure value, which still
 /// gets a description because that is where its residence is recorded. Holding a description pins
-/// **nothing**: host and members are all `Weak`, and the owning [`PinBundle`] the holder keeps is
+/// **nothing**: host and members are all `Weak`, and the owning `PinBundle` the holder keeps is
 /// what keeps them alive.
 ///
 /// Queries ([`Self::pins_region`] / [`Self::any_member_region`] / [`Self::with_home_region`]) run
@@ -192,7 +192,7 @@ impl<F: PinsRegion> ReachDescription<F> {
 
     /// Whether any member's storage is **not** already eternal ([`PinsRegion::needs_no_pin`]) — "does
     /// this value reach a region that can die?". The description-side companion of the retention's
-    /// eternal rule ([`PinBundle::without_eternal`]): a value whose whole reach is eternal storage
+    /// eternal rule (`PinBundle::without_eternal`): a value whose whole reach is eternal storage
     /// needs no relocation to outlive a per-call frame, because nothing it names dies with one.
     pub fn pins_beyond_eternal(&self) -> bool {
         let mut hit = false;
@@ -239,8 +239,11 @@ impl<F: PinsRegion> ReachDescription<F> {
     /// under the holder rule (the caller holds a pin covering this description's hosting arena for the
     /// whole call), so every member upgrade succeeds — a failure is the same coverage bug
     /// [`Self::for_each_owner`] `debug_assert`s. Subsumption is re-applied through
-    /// [`PinBundle::insert`], so the result is an antichain of the deepest owners.
-    pub fn to_bundle(&self) -> PinBundle<F> {
+    /// `PinBundle::insert`, so the result is an antichain of the deepest owners.
+    ///
+    /// Confined to this module: it hands out the ownership tier, which the embedder has no
+    /// vocabulary for — every embedder-facing owned witness is a [`StepCoverage`].
+    pub(in crate::witnessed) fn to_bundle(&self) -> PinBundle<F> {
         let mut bundle = PinBundle::empty();
         self.for_each_owner(|owner| bundle.insert(Rc::clone(owner)));
         bundle
@@ -390,6 +393,11 @@ impl<F: PinsRegion> PinBundle<F> {
     /// Whether any member's owner chain keeps `region`'s storage alive — the set-level lift of
     /// [`PinsRegion::pins_region`] over the bundle's **strong** members. No `Weak` upgrade, since
     /// the bundle already owns its members.
+    ///
+    /// White-box membership introspection with no production caller — a live holder queries the
+    /// description, which answers the same question without upgrading the owned tier — so gated
+    /// behind `test-hooks` like [`Self::members`].
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn pins_region(&self, region: &F::Region) -> bool {
         self.members.iter().any(|m| m.pins_region(region))
     }
@@ -558,18 +566,17 @@ unsafe impl<F: PinsRegion, B: Reattachable> ComposeWitness<B> for PinBundle<F> {
     }
 }
 
-/// The **embedder-facing** owned-coverage holder: a [`PinBundle`] an embedder may hold, clone,
+/// The **embedder-facing** owned-coverage holder: a `PinBundle` an embedder may hold, clone,
 /// thread and drop — but not compute with. It is the "step's coverage" of
 /// design/reach.md § Threading, and the shape every owned pin crosses the library
 /// boundary in: a step carries one from the fold that composed it to the seal that consumes it, a
 /// finalize hands one to the retention hold, a region retains one for its life.
 ///
-/// The point is what it *lacks*. `PinBundle`'s arithmetic — [`union`](PinBundle::union),
-/// [`without_region`](PinBundle::without_region), [`retaining`](PinBundle::retaining),
-/// [`insert`](PinBundle::insert), [`absorb`](PinBundle::absorb) — is crate-private, so an embedder
-/// cannot narrow a claim, strip a member, or assemble a bundle by hand. Every set operation is a
-/// container verb on the holder that owns the pins, which is what makes the pinning invariant
-/// something the embedder has no vocabulary to break rather than a rule it is asked to honor.
+/// The point is what it *lacks*. `PinBundle`'s arithmetic — `union`, `without_region`, `retaining`,
+/// `insert`, `absorb` — is crate-private, so an embedder cannot narrow a claim, strip a member, or
+/// assemble a bundle by hand. Every set operation is a container verb on the holder that owns the
+/// pins, which is what makes the pinning invariant something the embedder has no vocabulary to
+/// break rather than a rule it is asked to honor.
 ///
 /// It is a [`Witness`]: holding one keeps every member region live, so a read may run under it.
 pub struct StepCoverage<F: PinsRegion>(pub(crate) PinBundle<F>);
