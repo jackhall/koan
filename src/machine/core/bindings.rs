@@ -86,7 +86,7 @@ pub(crate) use ops::{TypeWritePolicy, WriteOp, powerset_probes};
 /// union bundle that keeps every reached region alive for the region's life, so a read hands out a
 /// bit-copy of this seal with no refcount traffic and the value can only be re-anchored under a pin
 /// ([`Sealed::open_at`], the [`Delivered`](crate::machine::DeliveredCarried) lift).
-pub type SealedValue = Sealed<CarriedFamily, CarrierWitness>;
+pub type SealedValue<'home> = Sealed<'home, CarriedFamily, CarrierWitness>;
 
 pub use crate::machine::model::BindKind;
 
@@ -138,14 +138,14 @@ pub struct PendingBinding {
 
 /// One `data` slot: bound, or claimed by a still-finalizing binder. The two are exclusive by
 /// construction — a value name is never pending and bound at once, and the enum is what says so.
-pub(crate) enum ValueSlot {
-    Bound(DataEntry),
+pub(crate) enum ValueSlot<'a> {
+    Bound(DataEntry<'a>),
     Pending(PendingBinding),
 }
 
-impl ValueSlot {
+impl<'a> ValueSlot<'a> {
     /// The committed entry, or `None` for a still-finalizing binder.
-    pub(crate) fn bound(&self) -> Option<&DataEntry> {
+    pub(crate) fn bound(&self) -> Option<&DataEntry<'a>> {
         match self {
             ValueSlot::Bound(entry) => Some(entry),
             ValueSlot::Pending(_) => None,
@@ -230,12 +230,12 @@ impl<'a> OverloadSlot<'a> {
 /// so region death and entry death are the same schedule — the entry is `Copy`-cheap to read out
 /// and carries no `Drop`. Fusing value and reach in the seal keeps the write door from ever pairing
 /// a value with a reach derived for a different value.
-pub(crate) struct DataEntry {
+pub(crate) struct DataEntry<'a> {
     index: BindingIndex,
-    sealed: SealedValue,
+    sealed: SealedValue<'a>,
 }
 
-impl DataEntry {
+impl<'a> DataEntry<'a> {
     /// A bit-copy of the entry — the dormant seal duplicated (value bit-copy + reference-only
     /// witness clone, no refcount traffic) beside the `Copy` index. Every read
     /// hands one of these out so no caller holds the `tables` borrow across a carrier build.
@@ -262,7 +262,7 @@ pub(crate) struct FunctionBucketEntry<'a> {
     /// The overload's rendered signature, for the `DuplicateOverload` diagnostic — bumped for
     /// [`Self::token`]'s reason.
     summary: &'a str,
-    pub(crate) sealed: SealedFunction,
+    pub(crate) sealed: SealedFunction<'a>,
 }
 
 impl<'a> FunctionBucketEntry<'a> {
@@ -295,18 +295,18 @@ pub(crate) struct OperatorEntry<'a> {
     /// The registered record's rendered mode + member set — the upsert's structural arm, bumped so
     /// the entry carries no `Drop`.
     declaration: &'a str,
-    sealed: SealedOperatorGroup,
+    sealed: SealedOperatorGroup<'a>,
 }
 
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature
 /// member access. Produced by [`crate::machine::core::Scope::lookup_member`], which checks the
 /// module-own value side then the type side in one call. The `data`/`types` cross-kind exclusion
 /// keeps the two arms from ever both matching within a scope.
-pub enum MemberResolution {
+pub enum MemberResolution<'a> {
     /// The member's dormant carrier, duplicated off the module's own `data` entry — so an ATTR read
     /// replays the *stored* claim (value and reach as one unit) rather than re-asserting
     /// single-frame co-location.
-    Value(SealedValue),
+    Value(SealedValue<'a>),
     Type {
         /// The member type as a `Copy` handle — interned in the run frame's registry, so an ATTR
         /// type read copies the handle with no reach to replay.
@@ -328,12 +328,12 @@ pub enum MemberResolution {
 /// consumer parks on the earliest-index visible producer; on wake it
 /// re-dispatches and either picks from the now-live bucket or re-parks on the
 /// next-earliest pending sibling.
-pub struct FunctionLookup {
+pub struct FunctionLookup<'a> {
     /// The visible finalized overloads, each a bit-copy of the bucket's dormant carrier — value and
     /// proven reach as one unit, re-anchored only by an [`open`](crate::witnessed::Sealed::open_at)
     /// under a named pin. Copied out so no caller holds the `functions` borrow across a candidate
     /// walk.
-    pub overloads: Vec<SealedFunction>,
+    pub overloads: Vec<SealedFunction<'a>>,
     pub pending: Option<NodeId>,
 }
 
@@ -435,7 +435,7 @@ struct Tables<'a> {
     /// `Weak`, and the owning pins live in the region's union bundle rather than here — either a
     /// strong member or a per-entry `Rc` on the scope's own frame would close a
     /// `frame → region → scope → bindings → frame` cycle and leak the region.
-    data: BumpBackedMap<'a, &'a str, ValueSlot>,
+    data: BumpBackedMap<'a, &'a str, ValueSlot<'a>>,
     /// Each sealed bucket slot stores its callable fused to its reach claim in one dormant
     /// [`SealedFunction`], beside the precomputed data the write path dedupes on
     /// ([`FunctionBucketEntry`]). Written only by the `FN` / `OP` registration doors — an `FN`
@@ -553,7 +553,7 @@ impl<'a> Bindings<'a> {
         &self,
         name: &str,
         cutoff: Option<usize>,
-    ) -> Option<NameLookup<SealedValue>> {
+    ) -> Option<NameLookup<SealedValue<'a>>> {
         match self.tables.borrow().data.get(name)? {
             ValueSlot::Bound(entry) => Self::visible(entry.index, cutoff)
                 .then(|| NameLookup::Bound(entry.sealed.duplicate())),
@@ -587,7 +587,7 @@ impl<'a> Bindings<'a> {
     /// is "no member", not a fall-through. The cross-kind exclusion keeps the two arms from both
     /// matching, so the result is unambiguous. Bound arms only — a read module is finalized, so a
     /// pending arm never surfaces here.
-    pub fn lookup_member(&self, name: &str, cutoff: Option<usize>) -> Option<MemberResolution> {
+    pub fn lookup_member(&self, name: &str, cutoff: Option<usize>) -> Option<MemberResolution<'a>> {
         let tables = self.tables.borrow();
         if let Some(entry) = tables.data.get(name).and_then(ValueSlot::bound)
             && Self::visible(entry.index, cutoff)
@@ -621,7 +621,7 @@ impl<'a> Bindings<'a> {
     /// Per-scope dispatch-bucket lookup. One pass over `functions[key]` surfaces the visible sealed
     /// overloads AND the earliest-index visible pending sibling together, so the scope walk decides
     /// pending-vs-finalized precedence with both in hand.
-    pub fn lookup_function(&self, key: &UntypedKey, cutoff: Option<usize>) -> FunctionLookup {
+    pub fn lookup_function(&self, key: &UntypedKey, cutoff: Option<usize>) -> FunctionLookup<'a> {
         self.lookup_function_probe(&UntypedKeyProbe(key), cutoff)
     }
 
@@ -631,14 +631,14 @@ impl<'a> Bindings<'a> {
         &self,
         key: &[StoredElement<'_>],
         cutoff: Option<usize>,
-    ) -> FunctionLookup {
+    ) -> FunctionLookup<'a> {
         self.lookup_function_probe(&StoredKeyProbe(key), cutoff)
     }
 
     /// The one bucket read, over whichever key form the caller holds: hashbrown resolves both
     /// through `Equivalent`, and the two forms hash identically by construction (see
     /// [`UntypedKeyProbe`]).
-    fn lookup_function_probe<Q>(&self, key: &Q, cutoff: Option<usize>) -> FunctionLookup
+    fn lookup_function_probe<Q>(&self, key: &Q, cutoff: Option<usize>) -> FunctionLookup<'a>
     where
         Q: std::hash::Hash + hashbrown::Equivalent<&'a [StoredElement<'a>]> + ?Sized,
     {
@@ -673,7 +673,7 @@ impl<'a> Bindings<'a> {
         &self,
         probe: &str,
         cutoff: Option<usize>,
-    ) -> Option<SealedOperatorGroup> {
+    ) -> Option<SealedOperatorGroup<'a>> {
         let tables = self.tables.borrow();
         let entry = tables.operators.get(probe)?;
         Self::visible(entry.index, cutoff).then(|| entry.sealed.duplicate())
@@ -695,7 +695,7 @@ impl<'a> Bindings<'a> {
     pub(crate) fn write_operator_group(
         &self,
         probe: String,
-        seal: &GroupSeal,
+        seal: &GroupSeal<'a>,
         index: BindingIndex,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
@@ -728,7 +728,7 @@ impl<'a> Bindings<'a> {
     /// seal is a bit-copy; the caller re-anchors what it needs under its own pin. Pending slots are
     /// invisible to bulk reads — there is no carrier to hand out. For chain-gated single-name
     /// reads use [`Self::lookup_value`].
-    pub fn iter_data(&self) -> Vec<(String, SealedValue)> {
+    pub fn iter_data(&self) -> Vec<(String, SealedValue<'a>)> {
         self.tables
             .borrow()
             .data
@@ -752,7 +752,7 @@ impl<'a> Bindings<'a> {
     /// Sealed slots only, and a bucket holding none is skipped — a key claimed by pending siblings
     /// alone publishes no dispatch surface to snapshot. For chain-gated picks use
     /// [`Self::lookup_function`].
-    pub fn iter_functions(&self) -> Vec<(UntypedKey, Vec<SealedFunction>)> {
+    pub fn iter_functions(&self) -> Vec<(UntypedKey, Vec<SealedFunction<'a>>)> {
         self.tables
             .borrow()
             .functions
@@ -814,7 +814,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) fn data(&self) -> Ref<'_, BumpBackedMap<'a, &'a str, ValueSlot>> {
+    pub(crate) fn data(&self) -> Ref<'_, BumpBackedMap<'a, &'a str, ValueSlot<'a>>> {
         Ref::map(self.tables.borrow(), |t| &t.data)
     }
 
@@ -1151,7 +1151,7 @@ impl<'a> Bindings<'a> {
         &self,
         name: &str,
         index: BindingIndex,
-        sealed: SealedValue,
+        sealed: SealedValue<'a>,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         self.partition_guard(name, BindKind::Value)?;
@@ -1196,7 +1196,7 @@ impl<'a> Bindings<'a> {
         &self,
         name: &str,
         index: BindingIndex,
-        seal: OverloadSeal,
+        seal: OverloadSeal<'a>,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();

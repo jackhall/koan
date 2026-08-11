@@ -417,9 +417,9 @@ pub type CatchContinue<'a> = Box<
 /// statement's result at finish time (a deferred-`Expression` FN return: the return-type
 /// expression rides as the last leading statement, and the lowering's finish reads the resolved
 /// type and homes it as a `PerCall` contract for `func`).
-pub enum TailContract {
-    Eager(Option<ReturnContract>),
-    FromLastResult { func: SealedFunction },
+pub enum TailContract<'a> {
+    Eager(Option<ReturnContract<'a>>),
+    FromLastResult { func: SealedFunction<'a> },
 }
 
 /// What a builtin body (or a wake-time finish) returns: the binding-table writes it decided on,
@@ -431,7 +431,7 @@ pub enum TailContract {
 /// them in program order, before finalize. An apply error becomes the node's error terminal, so
 /// per-step writes are all-or-nothing.
 pub struct Action<'a> {
-    pub(crate) effects: Vec<WriteOp>,
+    pub(crate) effects: Vec<WriteOp<'a>>,
     pub next: ActionKind<'a>,
 }
 
@@ -453,7 +453,7 @@ impl<'a> Action<'a> {
     pub fn tail(
         leading: Vec<WorkingExpression<'a>>,
         tail: WorkingExpression<'a>,
-        contract: TailContract,
+        contract: TailContract<'a>,
         frame_placement: FramePlacement<'a>,
         block_entry: BlockEntry<'a>,
     ) -> Self {
@@ -478,7 +478,9 @@ impl<'a> Action<'a> {
 
     /// A `Done` terminal paired with the binding-table writes the body decided, or the error
     /// terminal — the shape every binder's finalize helper returns.
-    pub(crate) fn done_writing(result: Result<(StepCarried<'a>, Vec<WriteOp>), KError>) -> Self {
+    pub(crate) fn done_writing(
+        result: Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError>,
+    ) -> Self {
         match result {
             Ok((carrier, effects)) => Action::done(Ok(carrier)).with_effects(effects),
             Err(error) => Action::done(Err(error)),
@@ -486,13 +488,13 @@ impl<'a> Action<'a> {
     }
 
     /// Attach the binding-table writes this step decided on, in program order.
-    pub(crate) fn with_effects(mut self, effects: Vec<WriteOp>) -> Self {
+    pub(crate) fn with_effects(mut self, effects: Vec<WriteOp<'a>>) -> Self {
         self.effects.extend(effects);
         self
     }
 
     /// Attach one binding-table write.
-    pub(crate) fn with_effect(self, effect: WriteOp) -> Self {
+    pub(crate) fn with_effect(self, effect: WriteOp<'a>) -> Self {
         self.with_effects(vec![effect])
     }
 }
@@ -518,7 +520,7 @@ pub enum ActionKind<'a> {
     Tail {
         leading: Vec<WorkingExpression<'a>>,
         tail: WorkingExpression<'a>,
-        contract: TailContract,
+        contract: TailContract<'a>,
         frame_placement: FramePlacement<'a>,
         block_entry: BlockEntry<'a>,
     },

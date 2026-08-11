@@ -47,7 +47,7 @@ pub(crate) enum BlockScope<'a> {
 /// gate can be minted. [`block_tail`] mints one for the duration of the seed call and hands it in,
 /// so the capability is the caller's to give, never the builtin's to take.
 pub(crate) type BlockSeed<'a> =
-    Box<dyn for<'b> FnOnce(&Scope<'b>, &TypeRegistry, &mut WriteGate) + 'a>;
+    Box<dyn for<'b> FnOnce(&'b Scope<'b>, &TypeRegistry, &mut WriteGate) + 'a>;
 
 /// Run a block and yield its last statement as the tail — the shared constructor. `brand` is the
 /// region the working copies of the body's statements are frozen into: the body arrives as raw AST
@@ -58,7 +58,7 @@ pub(crate) fn block_tail<'a>(
     block: BlockScope<'a>,
     seed: Option<BlockSeed<'a>>,
     body: BlockBody<'a>,
-    contract: Option<ReturnContract>,
+    contract: Option<ReturnContract<'a>>,
     types: &TypeRegistry,
 ) -> Action<'a> {
     let block_entry = match block {

@@ -26,9 +26,9 @@ use crate::machine::core::carrier_witness::SealedFunction;
 /// `outer` chain for as long as its body runs (design/tail-call-optimization.md Lemma 3) — and the
 /// sealed [`ReturnObligation`](crate::machine::execute) the chain actually keeps is region-free
 /// `Copy` data resolved once, at the first read.
-pub enum ReturnContract {
+pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type()`, label via `summarize()`.
-    Function(SealedFunction),
+    Function(SealedFunction<'a>),
     /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`. `ret`
     /// is a `Copy` handle, so this arm names no region at all.
     Arm { ret: KType, kind: &'static str },
@@ -37,7 +37,10 @@ pub enum ReturnContract {
     /// lexical chain like any FN — preserving TCO — while `finalize_terminal` checks the
     /// lifted value against the resolved `ret` (labelled "per-call return type", `func` names
     /// the frame). `ret` is a `Copy` handle like `Arm`'s.
-    PerCall { func: SealedFunction, ret: KType },
+    PerCall {
+        func: SealedFunction<'a>,
+        ret: KType,
+    },
 }
 
 /// Split an FN / MATCH-arm / TRY-arm body into top-level statements. The single source of

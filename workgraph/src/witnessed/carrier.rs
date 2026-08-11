@@ -36,7 +36,7 @@ use std::rc::Rc;
 
 use super::{
     Delivered, DropFree, Erased, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable,
-    Region, RegionHandle, RegionOwner, StorageProfile, Witness,
+    Region, RegionHandle, RegionOwner, Retained, StorageProfile, Witness,
 };
 // `with_branded_ref` re-anchors the erased reach reference: for the `Sealed → Delivered` lift's
 // description-to-bundle upgrade ([`Carrier::upgrade_bundle`]) and for the membership queries the
@@ -256,7 +256,7 @@ impl<'b, T: Reattachable + DropFree, F: PinsRegion + 'static> Opened<'b, T, Carr
         F: RegionOwner,
     {
         let home = self.witness().home_owner();
-        Delivered::lift(self.reseal(), home)
+        Delivered::lift(Retained::from_sealed(self.reseal()), home)
     }
 }
 
@@ -360,11 +360,15 @@ mod tests {
 
     /// Seal `carrier` over a borrow of `value` — the caller then opens it under its own pin, which
     /// is the only route to a membership query, since only [`Opened`] can answer one.
-    fn seal_ref(carrier: Carrier<TestFrame>, value: &u32) -> Sealed<RefFamily, Carrier<TestFrame>> {
-        Sealed::seal(crate::witnessed::Witnessed::from_erased(
-            Erased::erase(value),
-            carrier,
-        ))
+    fn seal_ref<'h>(
+        carrier: Carrier<TestFrame>,
+        value: &u32,
+        home: RegionHandle<'h, TestProfile>,
+    ) -> Sealed<'h, RefFamily, Carrier<TestFrame>> {
+        Sealed::seal(
+            crate::witnessed::Witnessed::from_erased(Erased::erase(value), carrier),
+            home,
+        )
     }
 
     #[test]
@@ -412,8 +416,12 @@ mod tests {
         // Mint a description naming `foreign` into `home`'s own region — a resident bind's shape.
         let (minted, _bundle) = mint_in(&home, &[&foreign]);
         let value = 7u32;
-        let sealed = seal_ref(Carrier::new(minted), &value);
-        let opened = sealed.open_at(&home);
+        let sealed = seal_ref(
+            Carrier::new(minted),
+            &value,
+            RegionHandle::from_owner(&*home),
+        );
+        let opened = sealed.open_at();
         assert!(opened.reach_covers(foreign.region()));
         assert!(
             !opened.reach_covers(home.region()),
@@ -428,8 +436,12 @@ mod tests {
         let home = root_frame();
         let (minted, _bundle) = mint_in(&home, &[&foreign]);
         let value = 7u32;
-        let sealed = seal_ref(Carrier::new(minted), &value);
-        let opened = sealed.open_at(&home);
+        let sealed = seal_ref(
+            Carrier::new(minted),
+            &value,
+            RegionHandle::from_owner(&*home),
+        );
+        let opened = sealed.open_at();
         assert!(opened.with_home_region(|region| std::ptr::eq(region, home.region())));
     }
 
@@ -441,14 +453,22 @@ mod tests {
 
         // Borrows into its own region: home rides the source bundle as an ordinary member.
         let (self_borrowing, _bundle) = mint_in(&home, &[&home]);
-        let opened = seal_ref(Carrier::new(self_borrowing), &value);
-        let opened = opened.open_at(&home);
+        let opened = seal_ref(
+            Carrier::new(self_borrowing),
+            &value,
+            RegionHandle::from_owner(&*home),
+        );
+        let opened = opened.open_at();
         assert!(opened.borrows_home());
 
         // Borrows only a foreign region: resident in `home`, reaching nothing of it.
         let (foreign_only, _bundle) = mint_in(&home, &[&foreign]);
-        let sealed = seal_ref(Carrier::new(foreign_only), &value);
-        let opened = sealed.open_at(&home);
+        let sealed = seal_ref(
+            Carrier::new(foreign_only),
+            &value,
+            RegionHandle::from_owner(&*home),
+        );
+        let opened = sealed.open_at();
         assert!(!opened.borrows_home());
     }
 
@@ -457,8 +477,12 @@ mod tests {
         let home = root_frame();
         let value = 7u32;
         let (minted, _bundle) = mint_in(&home, &[]);
-        let sealed = seal_ref(Carrier::new(minted), &value);
-        let opened = sealed.open_at(&home);
+        let sealed = seal_ref(
+            Carrier::new(minted),
+            &value,
+            RegionHandle::from_owner(&*home),
+        );
+        let opened = sealed.open_at();
         assert!(
             !opened.borrows_home(),
             "living in a region is not borrowing into it"
@@ -473,11 +497,15 @@ mod tests {
         let home = root_frame();
         let (minted, _bundle) = mint_in(&home, &[&foreign]);
         let value = 7u32;
-        let sealed = seal_ref(Carrier::new(minted), &value);
-        let opened = sealed.open_at(&home);
+        let sealed = seal_ref(
+            Carrier::new(minted),
+            &value,
+            RegionHandle::from_owner(&*home),
+        );
+        let opened = sealed.open_at();
         assert!(opened.reach_covers(foreign.region()));
         let resealed = opened.reseal();
-        let reopened = resealed.open_at(&home);
+        let reopened = resealed.open_at();
         assert!(
             reopened.reach_covers(foreign.region()),
             "the value↔reach pairing survives the reseal/re-open round trip"

@@ -983,31 +983,6 @@ impl<T: Reattachable + DropFree, W: Witness> Witnessed<T, W> {
             witness,
         }
     }
-
-    /// Re-anchor the carrier and hand it **out** bounded by the `&self` borrow — the internal
-    /// borrow-bounded reader [`Sealed::open`] copies its value through. The borrow-bounded sibling of
-    /// [`Self::with`]: where `with`'s `for<'b>` brand forbids the carrier from escaping the closure,
-    /// `read` lets it escape *at the borrow lifetime itself* — the content lifetime is the `&self`
-    /// borrow, not a free `'b`, so the caller cannot widen it past the witness pin.
-    ///
-    /// This is sound for the exact reason the naive content-free reader is not: there, a free `'b`
-    /// could be inferred `'static` and outlive the witness (a Miri-proven use-after-free); here the
-    /// result is `T::At<'self>`, which the borrow checker keeps inside the `&self` borrow over which
-    /// the bundled witness holds the pointee live. `At<'static>: Copy` copies the erased carrier out
-    /// before re-anchoring.
-    ///
-    /// Module-private: the sole caller is [`Sealed::open`], the rank-2 access verb, so the
-    /// borrow-bounded escape here is never a public surface.
-    fn read(&self) -> T::At<'_>
-    where
-        T::At<'static>: Copy,
-    {
-        // SAFETY: `reattach`'s contract — the bundled `witness` pins the pointee for the whole
-        // `&self` borrow (dropping it needs `&mut self`), and the returned carrier is bounded by
-        // that borrow, so it cannot outlive the pin. The `Copy` bound copies the erased carrier
-        // out of `&self` before the consuming re-anchor.
-        unsafe { self.value.reattach() }
-    }
 }
 
 impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Witnessed<T, Rc<F>> {
@@ -1041,20 +1016,55 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Witnessed<T, Rc<F>> {
 /// "this carrier is dormant — nothing is borrowed from it" is a type, not a convention. It wraps a
 /// [`Witnessed`] rather than re-storing the erased carrier, so [`retype`] stays the single audited
 /// reattach home and `Sealed` adds no `unsafe` of its own.
-pub struct Sealed<T: Reattachable + DropFree, W> {
+/// `'home` is the **home-region brand**: the region hosting this carrier's reach description is
+/// live and fixed-address for all of `'home`. Every read below rests on it, which is why none of
+/// them takes a pin. The brand is covariant — a seal shortens into a narrower scope, never
+/// lengthens out of the region that established it.
+pub struct Sealed<'home, T: Reattachable + DropFree, W> {
     inner: Witnessed<T, W>,
+    _home: PhantomData<&'home ()>,
 }
 
-/// Storage verbs and the externally-pinned read — **unbounded** in `W`, so a reference-only
-/// witness (the collapsed [`Carrier`]) seals, travels, and duplicates as plain data, and opens
-/// only under an externally supplied pin. The bundled-witness read ([`Self::open`]) sits in the
-/// `W: Witness` block below — a bare `open` under a witness that pins nothing does not compile.
-impl<T: Reattachable + DropFree, W> Sealed<T, W> {
-    /// Seal a live [`Witnessed`] into its dormant storage form — the only way in. `Sealed` exposes no
-    /// other constructor and no transform once sealed, so a value can re-enter circulation only
-    /// through an accessor below.
-    pub fn seal(witnessed: Witnessed<T, W>) -> Self {
-        Sealed { inner: witnessed }
+/// Storage verbs and the reads — **unbounded** in `W`, so a reference-only witness (the collapsed
+/// [`Carrier`]) seals, travels, and duplicates as plain data. No read here takes a pin: the
+/// `'home` brand already carries the liveness a pin used to assert, and the home region's union
+/// bundle owns an `Rc` on every region the value reaches, so home-alive implies reach-alive.
+impl<'home, T: Reattachable + DropFree, W> Sealed<'home, T, W> {
+    /// Seal a live [`Witnessed`] into its dormant storage form under `home`'s brand — the only way
+    /// in. `home` is the region hosting the carrier's description, so the brand cannot be picked
+    /// freely: a caller must already hold the handle to the region the value lives in, which is the
+    /// same handle that placed it there. `Sealed` exposes no other constructor and no transform once
+    /// sealed, so a value can re-enter circulation only through an accessor below.
+    ///
+    /// The brand is load-bearing: a seal cannot outlive the region that minted it, which is the
+    /// whole reason its reads take no pin. Holding one past its region's death is a borrow-check
+    /// error, where before it was a prose obligation at every read site.
+    ///
+    /// ```compile_fail
+    /// use std::rc::Rc;
+    /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
+    /// use workgraph::witnessed::{Carrier, RegionHandle, Sealed, StepContext, Witnessed};
+    ///
+    /// static SEVEN: u32 = 7;
+    /// let escaped: Sealed<'_, RefFamily, Carrier<RegionCart>> = {
+    ///     let cart = fresh_cart();
+    ///     let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
+    ///     let w = ctx.alloc::<FixtureProfile, RefFamily>(|_handle| &SEVEN);
+    ///     // Try to smuggle the seal OUT of the region that branded it — rejected: `cart` (and the
+    ///     // region the handle borrows) dies at the end of this block.
+    ///     Sealed::seal(w, RegionHandle::<FixtureProfile>::from_owner(&*cart))
+    /// };
+    /// escaped.open(|r| *r);
+    /// ```
+    pub fn seal<P: StorageProfile>(
+        witnessed: Witnessed<T, W>,
+        home: RegionHandle<'home, P>,
+    ) -> Self {
+        let _ = home;
+        Sealed {
+            inner: witnessed,
+            _home: PhantomData,
+        }
     }
 
     /// Recover the bundled [`Witnessed`] — the exact inverse of [`seal`](Self::seal), a field move
@@ -1068,8 +1078,8 @@ impl<T: Reattachable + DropFree, W> Sealed<T, W> {
     /// use workgraph::witnessed::{Sealed, Witnessed};
     ///
     /// let cart = Cart(vec![7]);
-    /// let sealed: Sealed<RefFamily, Cart> =
-    ///     Sealed::seal(Witnessed::yoke(cart, |region| &region[0]));
+    /// let sealed: Sealed<'_, RefFamily, Cart> =
+    ///     Sealed::seal_bundled(Witnessed::yoke(cart, |region| &region[0]));
     /// // Unseal recovers the carrier; the value reads back unchanged.
     /// let witnessed = sealed.unseal();
     /// assert_eq!(witnessed.with(|r| **r), 7);
@@ -1078,42 +1088,59 @@ impl<T: Reattachable + DropFree, W> Sealed<T, W> {
         self.inner
     }
 
-    /// Open the sealed carrier at a **rank-2** brand pinned by an **externally supplied** witness
-    /// rather than the bundled one — the retention-pinned read. Identical to [`Self::open`] except the
-    /// liveness pin is `pin` (held by the caller for the whole call), so a carrier whose own bundled
-    /// witness pins nothing (a reference-only reach carrier, whose value's backing is kept alive by the
-    /// scheduler's frame-retention hold) still opens soundly. The `for<'b>` brand confines the
-    /// re-anchored value exactly as `open` does.
+    /// The bundled carrier, for the tier crossings inside this module.
+    pub(in crate::witnessed) fn into_inner(self) -> Witnessed<T, W> {
+        self.inner
+    }
+
+    /// Seal a carrier whose **bundled witness** pins — the tier where liveness rides in the value
+    /// rather than in a brand, so `'home` is free and harmless: every read is bounded by a `&self`
+    /// borrow, and `self` holds the pin. The region-branded [`seal`](Self::seal) is for the
+    /// reference-only [`Carrier`] tier, whose witness pins nothing and whose brand is therefore the
+    /// only liveness evidence there is.
+    pub fn seal_bundled(witnessed: Witnessed<T, W>) -> Self
+    where
+        W: Witness,
+    {
+        Sealed {
+            inner: witnessed,
+            _home: PhantomData,
+        }
+    }
+
+    /// Re-seal a value that was opened at `'home` — the step-end return to rest. The brand rides
+    /// back in from the [`Opened`] it came from, whose own `'b` was bounded by a live region (the
+    /// seal's brand, or the pin borrow the retained tier opened under), so this mints no claim the
+    /// open did not already carry.
+    pub(in crate::witnessed) fn from_opened(witnessed: Witnessed<T, W>) -> Self {
+        Sealed {
+            inner: witnessed,
+            _home: PhantomData,
+        }
+    }
+
+    /// Open the sealed carrier at a **rank-2** (`for<'b>`) brand — the read verb. Takes no pin: the
+    /// `'home` brand is the liveness proof, established by the region door that placed the value
+    /// and carried by the type ever since, so the pairing a pin argument could only assert in prose
+    /// ("this owner pins *this* carrier's pointee") is here a borrow-check fact.
     ///
-    /// # Panics / soundness
-    ///
-    /// The caller guarantees `pin` keeps the carrier's pointee live and fixed-address for the whole
-    /// call — the retained producer-frame `Rc` (pinning invariant rules 3-4). The value is read at the
-    /// `&self` borrow via [`Witnessed::read`], and the `for<'b>` quantifier keeps it from escaping, so
-    /// this adds no `unsafe` beyond the audited [`Witnessed`] reattach.
-    pub fn open_with<Wx: Witness, R>(&self, pin: &Wx, f: impl for<'b> FnOnce(T::At<'b>) -> R) -> R
+    /// The `for<'b>` quantifier confines the re-anchored value to the call, so nothing
+    /// content-branded escapes into `R`. Adds no `unsafe` beyond the audited [`Witnessed`] reattach.
+    pub fn open<R>(&self, f: impl for<'b> FnOnce(T::At<'b>) -> R) -> R
     where
         T::At<'static>: Copy,
     {
-        // The borrowed `pin` keeps the pointee live for the whole call — the same role the bundled
-        // witness plays in `open`, supplied externally here. `read_pinned()` re-anchors at the
-        // `&self` borrow and the `for<'b>` brand forbids escape, so nothing content-branded
-        // outlives `pin`.
-        let _ = pin;
+        // `'home` outlives this `&self` borrow, so the pointee is live for the whole call — the role
+        // an externally supplied pin used to play. `read_pinned()` re-anchors at the `&self` borrow
+        // and the `for<'b>` brand forbids escape.
         f(self.inner.read_pinned())
     }
 
-    /// [`Self::open_with`] handing `f` the re-anchored value **by reference** — the externally-pinned
-    /// read for a value family whose views are not `Copy`. Same soundness story as `open_with`: `pin`
-    /// is held for the whole call and keeps the pointee live, and the `for<'b>` brand confines the
-    /// view. Crate-internal: the public reads are the envelope's own-pinned
-    /// [`Delivered::open_ref`](delivered::Delivered::open_ref) family, which supplies the pin itself.
-    pub(in crate::witnessed) fn open_ref_with<Wx: Witness, R>(
-        &self,
-        pin: &Wx,
-        f: impl for<'b> FnOnce(&'b T::At<'b>) -> R,
-    ) -> R {
-        self.inner.with_pinned(pin, f)
+    /// [`Self::open`] handing `f` the re-anchored value **by reference**, for a value family whose
+    /// views are not `Copy`. Same soundness story: `'home` covers the call and the `for<'b>` brand
+    /// confines the view.
+    pub fn open_ref<R>(&self, f: impl for<'b> FnOnce(&'b T::At<'b>) -> R) -> R {
+        self.inner.with_pinned(&NoPins, f)
     }
 
     /// Open the sealed carrier into the **in-use** [`Opened`] state at the step lifetime `'b` — the
@@ -1125,21 +1152,21 @@ impl<T: Reattachable + DropFree, W> Sealed<T, W> {
     /// closure at every read site (the step opens once, reads freely, and [`Opened::reseal`]s or lifts
     /// at step end).
     ///
-    /// Sound for the exact reason [`Witnessed::read`] is: `'b` is a concrete lifetime bounded by
-    /// **both** the `&'b self` seal borrow and the `&'b pin` frame borrow — not a free `'b` an
-    /// inference could widen to `'static` (the Miri-proven use-after-free the rank-2 brand otherwise
-    /// guards). While `pin` is borrowed for `'b` its region stays live, so the value re-anchored into
-    /// it cannot dangle; the returned [`Opened`] is `Copy` and constructible only here, so the
-    /// value↔reach pairing it carries is exactly this seal's.
-    pub fn open_at<'b, Pin: Witness>(&'b self, pin: &'b Pin) -> Opened<'b, T, W>
+    /// Sound for the exact reason [`Witnessed::read`] is: `'b` is a concrete lifetime bounded by the
+    /// `&'b self` seal borrow — not a free `'b` an inference could widen to `'static` (the
+    /// Miri-proven use-after-free the rank-2 brand otherwise guards) — and `'home: 'b` follows from
+    /// the seal existing, so the region the value re-anchors into is live for the whole life of the
+    /// returned [`Opened`]. It is `Copy` and constructible only here, so the value↔reach pairing it
+    /// carries is exactly this seal's.
+    pub fn open_at<'b>(&'b self) -> Opened<'b, T, W>
     where
+        'home: 'b,
         T::At<'static>: Copy,
         W: Clone,
     {
-        // `pin` is borrowed for `'b`, so its region stays live for the whole life of the returned
-        // `Opened`; `read_pinned` re-anchors the value at the `&'b self` borrow (bounded by `'b`,
-        // never a free lifetime), and the witness is cloned so the value↔reach pairing rides along.
-        let _ = pin;
+        // `'home: 'b` keeps the home region live for the whole life of the returned `Opened`;
+        // `read_pinned` re-anchors the value at the `&'b self` borrow (bounded by `'b`, never a free
+        // lifetime), and the witness is cloned so the value↔reach pairing rides along.
         Opened {
             value: self.inner.read_pinned(),
             witness: self.inner.witness().clone(),
@@ -1158,6 +1185,7 @@ impl<T: Reattachable + DropFree, W> Sealed<T, W> {
     {
         Sealed {
             inner: self.inner.duplicate(),
+            _home: PhantomData,
         }
     }
 
@@ -1167,14 +1195,121 @@ impl<T: Reattachable + DropFree, W> Sealed<T, W> {
     pub fn witness(&self) -> &W {
         self.inner.witness()
     }
+}
 
-    /// The bundled `Erased<T>`, read without consuming the seal — the crate-internal half of
-    /// [`Delivered::to_extern`](delivered::Delivered::to_extern), which is where a carrier crosses
-    /// into the externally-witnessed tier. Adds no `unsafe`: the value stays erased (no reattach).
-    /// Crate-internal because dropping the witness is exactly what puts the coverage obligation on
-    /// the eventual opener, and that crossing is named once, at the door above.
+/// The **retention-held** dormant form: a carrier at rest with no home-region brand, because its
+/// home's liveness is not lexical. A finalized scheduler terminal lives here — what keeps its
+/// backing alive is the slot's retention hold, an `Rc` on the producer frame seeded at finalize and
+/// dropped at pull-count zero, which is a refcount protocol no lifetime can express.
+///
+/// So `Retained` has **no read verb at all**. It stores, it duplicates, and it re-enters circulation
+/// only through [`Delivered::lift`](delivered::Delivered::lift), where the holder supplies the owner
+/// the retention hold has been keeping. Splitting it from [`Sealed`] is what lets `Sealed`'s reads
+/// be pin-free: a type that cannot prove liveness cannot borrow a verb from one that can.
+pub struct Retained<T: Reattachable + DropFree, W> {
+    inner: Witnessed<T, W>,
+}
+
+impl<T: Reattachable + DropFree, W> Retained<T, W> {
+    /// Wrap a live carrier as retention-held — the finalize-side entry, where the value has left
+    /// every lexical region it could be branded against and the slot's hold takes over.
+    pub(crate) fn from_witnessed(witnessed: Witnessed<T, W>) -> Self {
+        Retained { inner: witnessed }
+    }
+
+    /// Take a branded seal down to the retention-held tier — a capability *loss* (the brand's
+    /// pin-free reads go with it), so it needs no proof of its own.
+    pub fn from_sealed(sealed: Sealed<'_, T, W>) -> Self {
+        Retained {
+            inner: sealed.into_inner(),
+        }
+    }
+
+    /// Re-brand this carrier against the region `home` names — the door back into pin-free reads.
+    /// Only [`Delivered::rest_into`](delivered::Delivered::rest_into) calls it, and only after
+    /// lodging the envelope's coverage in that same region, so the brand it mints is backed by
+    /// retention the caller cannot skip.
+    pub(crate) fn brand_to<'home, P: StorageProfile>(
+        self,
+        home: RegionHandle<'home, P>,
+    ) -> Sealed<'home, T, W> {
+        Sealed::seal(self.inner, home)
+    }
+
+    /// The bundled carrier, for the tier crossings inside this module.
+    pub(in crate::witnessed) fn into_retained_inner(self) -> Witnessed<T, W> {
+        self.inner
+    }
+
+    /// Recover the bundled [`Witnessed`] — the exact inverse of
+    /// [`from_witnessed`](Self::from_witnessed), a field move that consumes the carrier. Lets a
+    /// dormant slot value re-enter circulation as its producer's own carrier.
+    pub fn unseal(self) -> Witnessed<T, W> {
+        self.inner
+    }
+
+    /// The bundled witness — the carrier's reach description, read without consuming.
+    pub fn witness(&self) -> &W {
+        self.inner.witness()
+    }
+
+    /// The bundled `Erased<T>`, read without consuming — the crate-internal half of
+    /// [`Delivered::to_extern`](delivered::Delivered::to_extern).
     pub(crate) fn erased(&self) -> &Erased<T> {
         &self.inner.value
+    }
+
+    /// Duplicate the retained carrier, leaving this one intact — the consumer-pull copy.
+    pub fn duplicate(&self) -> Self
+    where
+        Erased<T>: Copy,
+        W: Clone,
+    {
+        Retained {
+            inner: self.inner.duplicate(),
+        }
+    }
+
+    /// Read under an externally supplied pin, at a **rank-2** (`for<'b>`) brand. Crate-internal by
+    /// design: this is the door where "does this pin cover this carrier?" is unchecked, so both
+    /// callers derive the pin from the structure that owns the retention rather than accepting one
+    /// — [`Delivered`](delivered::Delivered) supplies its own bundled coverage, and the scheduler's
+    /// `read_result_with` supplies the slot's own retention-hold owner. An embedder never reaches
+    /// it, which is the whole point of the [`Sealed`]/`Retained` split.
+    pub(crate) fn open_with<Wx: Witness, R>(
+        &self,
+        pin: &Wx,
+        f: impl for<'b> FnOnce(T::At<'b>) -> R,
+    ) -> R
+    where
+        T::At<'static>: Copy,
+    {
+        let _ = pin;
+        f(self.inner.read_pinned())
+    }
+
+    /// [`Self::open_with`] handing `f` the re-anchored value **by reference**, for a value family
+    /// whose views are not `Copy`. Same siting and same soundness story.
+    pub(crate) fn open_ref_with<Wx: Witness, R>(
+        &self,
+        pin: &Wx,
+        f: impl for<'b> FnOnce(&'b T::At<'b>) -> R,
+    ) -> R {
+        self.inner.with_pinned(pin, f)
+    }
+
+    /// Open into the **in-use** [`Opened`] state at the pin borrow's lifetime `'b`. Crate-internal
+    /// for [`Self::open_with`]'s reason.
+    pub(crate) fn open_at_with<'b, Pin: Witness>(&'b self, pin: &'b Pin) -> Opened<'b, T, W>
+    where
+        T::At<'static>: Copy,
+        W: Clone,
+    {
+        let _ = pin;
+        Opened {
+            value: self.inner.read_pinned(),
+            witness: self.inner.witness().clone(),
+        }
     }
 }
 
@@ -1185,14 +1320,14 @@ impl<T: Reattachable + DropFree, W> Sealed<T, W> {
 /// value bit-copied, the witness duplicated — so it grants no capability the seal did not already
 /// have; a witness that owns pins does not meet `W: Copy`, so a pin is never silently duplicated.
 ///
-/// What a copied seal does **not** carry is coverage: the witness pins nothing, so each copy still
-/// opens under an externally supplied pin ([`Self::open_with`]), and whoever holds the copies owes
-/// the storage that keeps their pointee alive ([`Delivered::rest_in`](delivered::Delivered::rest_in)
-/// is the door that lodges it).
+/// What a copied seal does **not** carry is coverage: the witness pins nothing. Each copy keeps the
+/// `'home` brand, which is what makes its reads pin-free, and the storage that keeps their pointee
+/// alive is the region that brand names ([`Delivered::rest_in`](delivered::Delivered::rest_in) is
+/// the door that lodges it there).
 ///
 /// Manual rather than derived: a derive would bound `T: Copy` (the family marker, which is never
 /// `Copy`) instead of the erased value.
-impl<T: Reattachable + DropFree, W: Copy> Clone for Sealed<T, W>
+impl<'home, T: Reattachable + DropFree, W: Copy> Clone for Sealed<'home, T, W>
 where
     T::At<'static>: Copy,
 {
@@ -1200,60 +1335,9 @@ where
         *self
     }
 }
-impl<T: Reattachable + DropFree, W: Copy> Copy for Sealed<T, W> where T::At<'static>: Copy {}
-
-/// The bundled-witness re-anchors — gated on `W: Witness`, so they exist only for a witness that
-/// genuinely pins. A reference-only carrier witness has no bundled coverage: its seal opens
-/// through [`Sealed::open_with`] under an external pin, or relocates through the envelope-bearing
-/// verbs; a bare `open` under it is a compile error by this bound.
-impl<T: Reattachable + DropFree, W: Witness> Sealed<T, W> {
-    /// Open the sealed carrier at a **rank-2** (`for<'b>`) brand — the destination verb. The value is
-    /// re-anchored and handed *by value* to a closure whose result `R` cannot mention the
-    /// universally-quantified `'b`, so nothing branded by the fabricated content lifetime escapes the
-    /// witness pin (the same generativity trick as [`Witnessed::with`]). The value arrives at the
-    /// `&self` borrow via [`Witnessed::read`] — witness-pinned for that borrow — and the `for<'b>`
-    /// quantifier is what forbids it leaving, so `open` carries no `unsafe` beyond the audited
-    /// [`Witnessed`] reattach. The `At<'static>: Copy` bound is the slot's value-channel bound, so the
-    /// result-slot readers can later route through `open` without strengthening it.
-    ///
-    /// The brand is load-bearing: returning the branded value out of the closure (`open(|live| live)`)
-    /// fails to compile, because `R` would have to name `'b`. This mirrors the [`Witnessed::with`] /
-    /// [`Witnessed::map`] guards.
-    ///
-    /// ```
-    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use workgraph::witnessed::{Sealed, Witnessed};
-    ///
-    /// let cart = Cart(vec![42]);
-    /// let sealed: Sealed<RefFamily, Cart> =
-    ///     Sealed::seal(Witnessed::yoke(cart, |region| &region[0]));
-    /// // Copy a brand-free scalar out — the compiling twin of the guard below.
-    /// let value: u32 = sealed.open(|live| *live);
-    /// assert_eq!(value, 42);
-    /// ```
-    ///
-    /// ```compile_fail
-    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use workgraph::witnessed::{Sealed, Witnessed};
-    ///
-    /// let cart = Cart(vec![42]);
-    /// let sealed: Sealed<RefFamily, Cart> =
-    ///     Sealed::seal(Witnessed::yoke(cart, |region| &region[0]));
-    /// // Try to smuggle the branded value OUT of `open` — rejected by the `for<'b>` brand.
-    /// let escaped: &u32 = sealed.open(|live| live);
-    /// drop(sealed);
-    /// println!("{}", *escaped);
-    /// ```
-    pub fn open<R>(&self, f: impl for<'b> FnOnce(T::At<'b>) -> R) -> R
-    where
-        T::At<'static>: Copy,
-    {
-        // The value is read at the `&self` borrow via [`Witnessed::read`] — witness-pinned for its
-        // whole duration — and the `for<'b>` brand on `f` keeps anything content-branded from escaping
-        // into `R`. Same brand and same audited reattach as `Witnessed::with`, so `Sealed` introduces
-        // no `unsafe` of its own.
-        f(self.inner.read())
-    }
+impl<'home, T: Reattachable + DropFree, W: Copy> Copy for Sealed<'home, T, W> where
+    T::At<'static>: Copy
+{
 }
 
 /// The **in-use** carrier state: a value re-anchored at a step lifetime `'b`, paired with its reach
@@ -1330,8 +1414,8 @@ impl<'b, T: Reattachable + DropFree, W> Opened<'b, T, W> {
     /// witness it was opened with reconstitutes exactly that carrier's value↔reach pairing, never a
     /// fabricated one. Safe: the value stays a lifetime-only re-erase to `'static` for storage (no
     /// reattach), so this adds no `unsafe`.
-    pub fn reseal(self) -> Sealed<T, W> {
-        Sealed::seal(Witnessed::from_erased(
+    pub fn reseal(self) -> Sealed<'b, T, W> {
+        Sealed::from_opened(Witnessed::from_erased(
             Erased::erase(self.value),
             self.witness,
         ))

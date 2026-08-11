@@ -20,7 +20,7 @@ use super::{Live, NodeId, SealedTerminal, Workload};
 // `Erased` / `Carrier` / `Witnessed` re-anchor a test-only result through `set_result`; the
 // production store path takes a pre-built `Witnessed`, so these imports are test-scoped.
 #[cfg(any(test, feature = "test-hooks"))]
-use crate::witnessed::{Carrier, Erased, Sealed, Witnessed};
+use crate::witnessed::{Carrier, Erased, Witnessed};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -315,11 +315,9 @@ impl<W: Workload> NodeStore<W> {
         output: Result<Live<'_, W>, W::Error>,
         carrier: Carrier<OwnerOf<W>>,
     ) {
-        self.slots[id] = SlotState::Done(
-            output
-                .map(Erased::erase)
-                .map(|e| Sealed::seal(Witnessed::from_erased(e, carrier))),
-        );
+        self.slots[id] = SlotState::Done(output.map(Erased::erase).map(|e| {
+            crate::witnessed::Retained::from_witnessed(Witnessed::from_erased(e, carrier))
+        }));
     }
 
     #[cfg(any(test, feature = "test-hooks"))]

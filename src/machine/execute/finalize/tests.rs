@@ -58,7 +58,10 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, false);
-    let delivered = Delivered::lift(Sealed::seal(carrier), producer.storage_rc());
+    let delivered = Delivered::lift(
+        crate::witnessed::Retained::from_sealed(Sealed::seal(carrier, producer.brand().handle())),
+        producer.storage_rc(),
+    );
     assert!(
         !delivered.open_at().has_reach_members(),
         "a region-pure scalar's reach names nothing — the carrier itself pins nothing, so \
@@ -138,7 +141,10 @@ fn home_borrowing_value_keeps_its_home_membership_and_rides_retention() {
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, true);
-    let delivered = Delivered::lift(Sealed::seal(carrier), producer.storage_rc());
+    let delivered = Delivered::lift(
+        crate::witnessed::Retained::from_sealed(Sealed::seal(carrier, producer.brand().handle())),
+        producer.storage_rc(),
+    );
     assert!(
         delivered.open_at().borrows_home(),
         "home is an ordinary member of the value's own description"
@@ -367,7 +373,13 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
     let cell = test_run
         .runtime
         .finalize_terminal(
-            Delivered::lift(Sealed::seal(carrier), producer.storage_rc()),
+            Delivered::lift(
+                crate::witnessed::Retained::from_sealed(Sealed::seal(
+                    carrier,
+                    producer.brand().handle(),
+                )),
+                producer.storage_rc(),
+            ),
             &producer.storage_rc(),
             None,
         )
@@ -421,7 +433,10 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let storage = producer.storage_rc();
     let count_before = Rc::strong_count(&storage);
 
-    let delivered = Delivered::lift(Sealed::seal(carrier), producer.storage_rc());
+    let delivered = Delivered::lift(
+        crate::witnessed::Retained::from_sealed(Sealed::seal(carrier, producer.brand().handle())),
+        producer.storage_rc(),
+    );
     assert_eq!(
         Rc::strong_count(&storage),
         count_before + 1,

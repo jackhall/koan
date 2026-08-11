@@ -145,22 +145,6 @@ fn erased_roundtrip() {
     assert_eq!(*reattached, 7);
 }
 
-/// `Witnessed::read`: the carrier escapes the call bounded by the `&self` borrow, read after the
-/// original binding drops. The witness pins the pointee for the borrow the returned `&u32` rides.
-#[test]
-fn read_borrow_bounded_witness_only() {
-    let backing: Rc<Vec<u32>> = Rc::new(vec![5, 6, 7]);
-    let w: Witnessed<RefFamily, Rc<Vec<u32>>> = {
-        let borrow: &u32 = &backing[2];
-        Witnessed::from_erased(Erased::erase(borrow), Rc::clone(&backing))
-    };
-    drop(backing); // witness is sole owner.
-    let escaped: &u32 = w.read(); // hands the carrier OUT, bounded by `&w`.
-    assert_eq!(*escaped, 7);
-    // `w` stays borrowed while `escaped` is live, so the witness pin holds.
-    assert_eq!(*w.read(), 7);
-}
-
 /// `with_branded_ref`: re-anchor a reference-to-an-erased-store behind the rank-2 brand and copy a
 /// scalar out — the witnessed read the deleted free-`'b` reattach is replaced by. Mirrors the
 /// production region-store flow: erase a borrow to the `'static` store, then read it back under the
@@ -379,7 +363,7 @@ fn open_at_reseal_roundtrip() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![5, 6, 7]);
     let sealed: Sealed<RefFamily, Rc<Vec<u32>>> = {
         let borrow: &u32 = &backing[2];
-        Sealed::seal(Witnessed::from_erased(
+        Sealed::seal_bundled(Witnessed::from_erased(
             Erased::erase(borrow),
             Rc::clone(&backing),
         ))
@@ -388,7 +372,7 @@ fn open_at_reseal_roundtrip() {
     let pin = Rc::clone(&backing);
     drop(backing); // the seal's bundled witness + `pin` keep the pointee live.
     let resealed: Sealed<RefFamily, Rc<Vec<u32>>> = {
-        let opened = sealed.open_at(&pin);
+        let opened = sealed.open_at();
         assert_eq!(*opened.value(), 7);
         opened.reseal()
     };
@@ -601,8 +585,8 @@ fn step_context_alloc_carrier_names_its_home_and_no_members() {
     let w: Witnessed<RefFamily, Carrier<StepFrame>> =
         ctx.alloc_in_region::<RefFamily, StepProfile>(|_region| &SEVEN);
     assert_eq!(w.with_pinned(&frame, |r| **r), 7);
-    let sealed = Sealed::seal(w);
-    let opened = sealed.open_at(&frame);
+    let sealed = Sealed::seal(w, RegionHandle::from_owner(&*frame));
+    let opened = sealed.open_at();
     assert!(!opened.has_reach_members(), "reach = own region only");
     assert!(!opened.borrows_home());
     assert!(opened.with_home_region(|region| std::ptr::eq(region, frame.region())));
@@ -634,8 +618,9 @@ fn step_context_alloc_with_mints_dep_homes_and_preserves_dep_order() {
     // Both dep homes composed into the set minted into `own`'s arena — they arrived as ordinary
     // members of each dep envelope's pins. `own` itself is not a member: nothing composed it in
     // (the accumulator is region-pure), so the built value borrows into no region of its own.
-    let sealed: Sealed<RefFamily, Carrier<StepFrame>> = built.into_cell();
-    let opened = sealed.open_at(&own);
+    let sealed: Retained<RefFamily, Carrier<StepFrame>> = built.into_cell();
+    let pin = StepCoverage::<StepFrame>::of(Rc::clone(&own));
+    let opened = sealed.open_at_with(&pin);
     opened.with_reach(|reach| {
         assert!(reach.pins_region(dep_a.region()));
         assert!(reach.pins_region(dep_b.region()));

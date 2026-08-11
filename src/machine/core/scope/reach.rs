@@ -126,8 +126,8 @@ impl<'a> Scope<'a> {
     pub(crate) fn seal_resident<'v: 'a, T: Reattachable + DropFree>(
         &self,
         value: T::At<'v>,
-    ) -> Sealed<T, CarrierWitness> {
-        Sealed::seal(self.resident(value))
+    ) -> Sealed<'a, T, CarrierWitness> {
+        Sealed::seal(self.resident(value), self.brand().handle())
     }
 
     /// Test fixture: seal a value living in this scope's region under a description hand-minted for
@@ -150,8 +150,11 @@ impl<'a> Scope<'a> {
         &self,
         value: T::At<'v>,
         reach: &'a FrameReach,
-    ) -> Sealed<T, CarrierWitness> {
-        Sealed::seal(self.brand().seal_reaching(value, reach))
+    ) -> Sealed<'a, T, CarrierWitness> {
+        Sealed::seal(
+            self.brand().seal_reaching(value, reach),
+            self.brand().handle(),
+        )
     }
 
     /// **Open** a dormant function carrier at this scope's own region lifetime: lift it into a
@@ -173,7 +176,7 @@ impl<'a> Scope<'a> {
         sealed: &SealedFunction,
         read: impl for<'b> FnOnce(&'b KFunction<'b>) -> R,
     ) -> R {
-        sealed.open_with(&self.home(), read)
+        sealed.open(read)
     }
 
     /// Adopt a delivered value **as a callable** into this scope — the head-resolution twin of
@@ -211,7 +214,7 @@ impl<'a> Scope<'a> {
     ///
     /// The counterpart read is [`Self::lift_spliced`], an adoption, which names this scope's own
     /// region owner as its pin — what the retention above makes sufficient.
-    pub(crate) fn rest_delivered(&self, cell: &DeliveredCarried) -> SplicedCell {
+    pub(crate) fn rest_delivered(&self, cell: &DeliveredCarried) -> SplicedCell<'a> {
         cell.rest_in(self.brand().handle())
     }
 
@@ -225,7 +228,7 @@ impl<'a> Scope<'a> {
     /// cell reaches, or one of its descendants. Holding this scope holds that region's owner, which
     /// is what makes the `Weak → Rc` upgrade behind the lift succeed.
     pub(crate) fn lift_spliced(&self, cell: &SplicedCell) -> DeliveredCarried {
-        cell.open_at(&self.home()).lift_out()
+        cell.open_at().lift_out()
     }
 
     /// Read a resting splice cell for a **verdict only** — the reader extracts region-free data (an
@@ -247,7 +250,7 @@ impl<'a> Scope<'a> {
         cell: &SplicedCell,
         read: impl for<'b> FnOnce(Carried<'b>) -> R,
     ) -> R {
-        cell.open_with(&self.home(), read)
+        cell.open(read)
     }
 
     /// **Lift** a binding's dormant carrier into a delivery envelope pinned by this scope's own
@@ -259,7 +262,7 @@ impl<'a> Scope<'a> {
         &self,
         sealed: Sealed<T, CarrierWitness>,
     ) -> Delivered<T, CarrierWitness, FrameStorage> {
-        Delivered::lift(sealed, self.home())
+        Delivered::lift(crate::witnessed::Retained::from_sealed(sealed), self.home())
     }
 
     /// [`Self::resident`] handed out as a delivery envelope — the same value, the same member-less
@@ -352,7 +355,7 @@ impl<'a> Scope<'a> {
     /// [`Self::place_pure_value`] sealed into its dormant binding form — the region-pure twin of
     /// [`Self::adopt_for_binding`]. The product borrows only this region, so it seals resident: the
     /// description records where the value lives and names no member.
-    pub(crate) fn seal_pure_value(&self, value: &KObject<'a>) -> Result<SealedValue, KError> {
+    pub(crate) fn seal_pure_value(&self, value: &KObject<'a>) -> Result<SealedValue<'a>, KError> {
         Ok(self.seal_resident::<CarriedFamily>(Carried::Object(self.place_pure_value(value)?)))
     }
 
@@ -470,7 +473,7 @@ impl<'a> Scope<'a> {
         &self,
         cell: &DeliveredCarried,
         project: P,
-    ) -> Result<SealedValue, KError>
+    ) -> Result<SealedValue<'a>, KError>
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
@@ -591,7 +594,7 @@ impl<'a> Scope<'a> {
     /// Infallible, and check-free: the wrapping `KObject::KFunction` is built at the fold brand from
     /// the merge's own operand view, so an ambient-lifetime capture is a compile error at the
     /// closure's signature.
-    pub(crate) fn store_function_cell(&self, function: &'a KFunction<'a>) -> SealedValue {
+    pub(crate) fn store_function_cell(&self, function: &'a KFunction<'a>) -> SealedValue<'a> {
         let source = self.deliver_resident::<KFunctionFamily>(function);
         source
             .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
@@ -623,7 +626,7 @@ impl<'a> Scope<'a> {
     /// Infallible, and check-free: the wrapping `KObject::Module` is built at the fold brand from
     /// the merge's own operand view, so an ambient-lifetime capture is a compile error at the
     /// closure's signature.
-    pub(crate) fn store_module_object(&self, module: &'a Module<'a>) -> SealedValue {
+    pub(crate) fn store_module_object(&self, module: &'a Module<'a>) -> SealedValue<'a> {
         let child = module.child_scope();
         let source = child.deliver_resident::<ModuleRefFamily>(module);
         source
@@ -707,7 +710,7 @@ impl<'a> Scope<'a> {
         name: String,
         source_child: &'a Scope<'a>,
         self_sig: impl for<'b> FnOnce(&'b Scope<'b>) -> KType,
-    ) -> SealedValue {
+    ) -> SealedValue<'a> {
         let source = source_child.deliver_resident::<ScopeRefFamily>(source_child);
         source
             .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(

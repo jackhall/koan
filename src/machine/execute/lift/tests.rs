@@ -555,7 +555,13 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
         // decides release vs. retain below; the claim only matters if the source is retained.
         let sealed = producer.seal_born_here(Carried::Object(obj), true);
         let owned_cells = crate::machine::core::FrameCoverage::empty();
-        let dep: DeliveredCarried = Delivered::lift(Sealed::seal(sealed), producer.storage_rc());
+        let dep: DeliveredCarried = Delivered::lift(
+            crate::witnessed::Retained::from_sealed(Sealed::seal(
+                sealed,
+                producer.brand().handle(),
+            )),
+            producer.storage_rc(),
+        );
         producers.push(producer);
         dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
             acc,
@@ -642,7 +648,13 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         // rebuilt cell and finds the closure leaf, so the producer is retained either way.
         let sealed = producer.seal_born_here(Carried::Object(obj), true);
         let owned_cells = crate::machine::core::FrameCoverage::empty();
-        let dep: DeliveredCarried = Delivered::lift(Sealed::seal(sealed), producer.storage_rc());
+        let dep: DeliveredCarried = Delivered::lift(
+            crate::witnessed::Retained::from_sealed(Sealed::seal(
+                sealed,
+                producer.brand().handle(),
+            )),
+            producer.storage_rc(),
+        );
         producers.push(producer);
         dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
             acc,
@@ -729,8 +741,13 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
             // Born in the producer's own region with a home-borrowing closure leaf, so home is an
             // ordinary member of the description the birth mint stamps.
             let sealed = producer.seal_born_here(Carried::Object(obj), true);
-            let dep: DeliveredCarried =
-                Delivered::lift(Sealed::seal(sealed), producer.storage_rc());
+            let dep: DeliveredCarried = Delivered::lift(
+                crate::witnessed::Retained::from_sealed(Sealed::seal(
+                    sealed,
+                    producer.brand().handle(),
+                )),
+                producer.storage_rc(),
+            );
             assert!(
                 matches!(seam_verb(&dep), RegionEscape::Pin),
                 "a priceable home-borrowing record must select the Pin verb at the value-level seam"
@@ -814,7 +831,10 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
     );
     let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
     let sealed = producer.seal_born_here(Carried::Object(obj), true);
-    let dep: DeliveredCarried = Delivered::lift(Sealed::seal(sealed), producer.storage_rc());
+    let dep: DeliveredCarried = Delivered::lift(
+        crate::witnessed::Retained::from_sealed(Sealed::seal(sealed, producer.brand().handle())),
+        producer.storage_rc(),
+    );
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let acc_final = dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
         acc,

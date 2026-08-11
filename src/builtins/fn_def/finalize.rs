@@ -232,7 +232,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     kind: FnKind<'a>,
     bind_index: BindingIndex,
     types: &TypeRegistry,
-) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError> {
+) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError> {
     check_value_type_kinds(&elements, &return_type, types)?;
 
     // First Keyword keys the data table. Dispatch is by full signature via
@@ -257,7 +257,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // wrapper's reach — the callable's captured `&Scope` borrows into exactly that region.
     // A keyworded FN's overload registration rides the step outcome: the seal is built here, where
     // the callable is open under its home pin, and the bucket write lands at the run loop's apply.
-    let mut writes: Vec<WriteOp> = Vec::new();
+    let mut writes: Vec<WriteOp<'a>> = Vec::new();
     let bound_name = match kind {
         FnKind::Anonymous => None,
         FnKind::Function { bound_name } => {
@@ -304,7 +304,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 /// (it names its captured scope's frame), so success seals as `Done(Ok)` carrying the overload
 /// registration as the step's effect.
 pub(crate) fn fn_action<'a>(
-    result: Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError>,
+    result: Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError>,
 ) -> Action<'a> {
     match result {
         Ok((witnessed, writes)) => {

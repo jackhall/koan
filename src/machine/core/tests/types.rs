@@ -147,7 +147,7 @@ fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
     let parent = run_root_bare(&parent_storage);
     let stored = parent.store_module_object(module);
 
-    let opened = stored.open_at(&parent_storage);
+    let opened = stored.open_at();
     let members: Vec<*const KoanRegion> = opened.with_reach_for_test(|reach| {
         reach
             .members()

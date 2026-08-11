@@ -32,7 +32,7 @@ use elsa::FrozenMap;
 
 use super::{
     BumpAllocator, Carrier, Delivered, DropFree, Erased, FoldedPlacement, PinBundle, PinsRegion,
-    ReachDescription, Reattachable, ReferenceFamily, RegionOwner, Sealed, SealedExtern,
+    ReachDescription, Reattachable, ReferenceFamily, RegionOwner, Retained, SealedExtern,
     StepCoverage, Witness, Witnessed,
 };
 
@@ -495,7 +495,8 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         W::FrameOwner: RegionOwner<Region = Region<W>>,
     {
         let home = self.home_pin();
-        let cell = Sealed::seal(self.seal_reaching::<T>(value, self.mint_retained(&[])));
+        let cell =
+            Retained::from_witnessed(self.seal_reaching::<T>(value, self.mint_retained(&[])));
         Delivered::hosted(cell, home, StepCoverage::empty())
     }
 
@@ -523,7 +524,7 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         let home = self.home_pin();
         let born = Witnessed::<T, Rc<W::FrameOwner>>::yoke_handle(Rc::clone(&home), build)
             .into_reference_only::<W>();
-        Delivered::hosted(Sealed::seal(born), home, StepCoverage::empty())
+        Delivered::hosted(Retained::from_witnessed(born), home, StepCoverage::empty())
     }
 
     /// **Build a region-borrowing value from a crossing operand and bump it here** — the born door,

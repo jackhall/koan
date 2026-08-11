@@ -286,7 +286,7 @@ fn the_product_reseals_and_reopens_with_its_pairing_intact() {
         });
 
     let resealed = product.reseal();
-    let reopened = resealed.open_at(&dest);
+    let reopened = resealed.open_at();
     assert_eq!(reopened.value(), "travelling");
     assert!(reopened.reach_covers(member.region()));
     assert!(reopened.reach_covers(source.region()));

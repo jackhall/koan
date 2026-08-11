@@ -345,7 +345,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         operand: KType,
         result: Option<KType>,
         types: &TypeRegistry,
-    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError> {
+    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError> {
         let OpPlan {
             sym,
             kind,
@@ -355,7 +355,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
             program,
             bound_name,
         } = self;
-        let mut writes: Vec<WriteOp> = Vec::new();
+        let mut writes: Vec<WriteOp<'a>> = Vec::new();
         // The cell of the operator's *primary* function — the binary body for a binary operator,
         // the list body for a unary one. It is the value the declaration evaluates to, and, for the
         // combined form, the value the bound name reads.
@@ -468,7 +468,7 @@ pub(super) fn register_unary_operator<'a>(
     in_group: bool,
     bind_index: BindingIndex,
     types: &TypeRegistry,
-) -> Result<(SealedValue, Vec<WriteOp>), KError> {
+) -> Result<(SealedValue<'a>, Vec<WriteOp<'a>>), KError> {
     let OperatorForm {
         signature: list_signature,
         body: list_body,
@@ -527,7 +527,7 @@ fn register_body<'a>(
     body: Body<'a>,
     bind_index: BindingIndex,
     types: &TypeRegistry,
-) -> Result<(SealedValue, WriteOp), KError> {
+) -> Result<(SealedValue<'a>, WriteOp<'a>), KError> {
     let f: &'a KFunction<'a> = KFunction::alloc_captured(scope, signature, body, false, types);
     let write = WriteOp::Overload {
         name: sym.to_string(),
@@ -571,7 +571,7 @@ fn bridge_body<'a>(program: ProgramBrand<'a>, sym: &str) -> KExpression<'a> {
 /// Seal a finalize result as the slot's terminal — the operator function value, built witnessed in
 /// its declaring scope's region.
 fn op_action<'a>(
-    result: Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp>), KError>,
+    result: Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError>,
 ) -> Action<'a> {
     match result {
         Ok((witnessed, writes)) => {

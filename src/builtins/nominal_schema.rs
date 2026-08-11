@@ -27,7 +27,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
     &DeclWindow<'a>,
     Vec<(String, KType)>,
     DeclarationSite,
-) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError>;
+) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError>;
 
 /// Elaborate `schema_expr` as the named declarator's field list and fold or defer it.
 /// `context` / `name_kind` / `error_frame` parameterize the diagnostic and seal shape; `finalize`

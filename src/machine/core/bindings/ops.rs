@@ -38,13 +38,13 @@ pub(crate) enum TypeWritePolicy {
 }
 
 /// One binding-table write, as data. Ops apply in `Vec` order — program order within the step.
-pub(crate) enum WriteOp {
+pub(crate) enum WriteOp<'a> {
     /// LET binding a value. A value binding is callable by name alone — a function value binds
     /// here like any other value and publishes no keyworded expression.
     Value {
         name: String,
         index: BindingIndex,
-        sealed: SealedValue,
+        sealed: SealedValue<'a>,
     },
     /// `FN` / `OP` overload registration: dispatch bucket only, no `data` entry — the only door a
     /// keyworded expression becomes dispatchable through. `builtin_shadow_guard` is false
@@ -54,7 +54,7 @@ pub(crate) enum WriteOp {
     Overload {
         name: String,
         index: BindingIndex,
-        seal: OverloadSeal,
+        seal: OverloadSeal<'a>,
         builtin_shadow_guard: bool,
     },
     /// Type registration. `builtin_shadow_guard` is set by the user-facing doors (`LET <Type> =`,
@@ -74,7 +74,7 @@ pub(crate) enum WriteOp {
     /// lifetime-free, so a `WriteOp` still names no region borrow.
     Group {
         probes: Vec<String>,
-        seal: GroupSeal,
+        seal: GroupSeal<'a>,
         index: BindingIndex,
     },
     /// A `VAL` slot into the nearest enclosing SIG decl scope's slot collector. A slot is a schema
@@ -82,11 +82,11 @@ pub(crate) enum WriteOp {
     SigSlot { name: String, kt: KType },
 }
 
-impl WriteOp {
+impl<'a> WriteOp<'a> {
     /// Apply this write against `scope` — the step scope the op was returned from, which is always
     /// the scope the entry lands in. The single interpreter: run the door's guards, then mutate the
     /// table.
-    pub(crate) fn apply(self, scope: &Scope<'_>, gate: &mut WriteGate) -> Result<(), KError> {
+    pub(crate) fn apply(self, scope: &Scope<'a>, gate: &mut WriteGate) -> Result<(), KError> {
         scope.assert_owns_bindings();
         match self {
             WriteOp::Value {

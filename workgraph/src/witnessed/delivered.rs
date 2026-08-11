@@ -40,7 +40,7 @@ use std::rc::Rc;
 use super::{
     Carrier, DropFree, Erased, FoldToken, FoldedPlacement, HasRegionHandle, Opened, PinBundle,
     PinsRegion, ReachDescription, Reattachable, Region, RegionHandle, RegionHandleFamily,
-    RegionOwner, Sealed, SealedExtern, StepCoverage, StorageProfile, Witnessed,
+    RegionOwner, Retained, Sealed, SealedExtern, StepCoverage, StorageProfile, Witnessed,
 };
 
 /// A sealed carrier paired with the owned `PinBundle` that pins every region its value reaches —
@@ -50,7 +50,7 @@ use super::{
 /// across transit — from a scheduler pull to the point a consumer adopts or re-homes it.
 pub struct Delivered<T: Reattachable + DropFree, W, F: PinsRegion> {
     /// The dormant carrier — value, residence and reach description as one unit.
-    cell: Sealed<T, W>,
+    cell: Retained<T, W>,
     /// The owned pins for every region the value's borrows reach, **home included** — the ownership
     /// counterpart of the carrier's non-owning reach description, composed at construction from the
     /// home owner the constructor is handed and the reach bundle threaded in with it. It is what
@@ -90,7 +90,7 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
         T::At<'static>: Copy,
         W: Clone,
     {
-        self.cell.open_at(&self.pins)
+        self.cell.open_at_with(&self.pins)
     }
 
     /// The reference-only reach witness — the value's reach description, for a reach query or a
@@ -139,7 +139,7 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
     /// re-home, whose value moved into a region outliving the scheduler). Crate-internal precisely
     /// because it drops the pins without saying where the retention went: the embedder-facing exit
     /// is [`rest_into`](Self::rest_into), which lodges the coverage in the region it names.
-    pub(crate) fn into_cell(self) -> Sealed<T, W> {
+    pub(crate) fn into_cell(self) -> Retained<T, W> {
         self.cell
     }
 
@@ -183,7 +183,7 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
     /// resident in `dest`'s own region rests for free: [`RegionHandle::retain_reach`]'s self rule
     /// strips that region from the bundle, so the coverage may be handed over whole without the
     /// caller first asking where the value lives.
-    pub fn rest_in<'d, P>(&self, dest: RegionHandle<'d, P>) -> Sealed<T, W>
+    pub fn rest_in<'d, P>(&self, dest: RegionHandle<'d, P>) -> Sealed<'d, T, W>
     where
         P: StorageProfile<FrameOwner = F>,
         F: RegionOwner<Region = Region<P>>,
@@ -199,14 +199,14 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
     /// resting one lodges a bundle the region already holds and the envelope's transit copy has
     /// nothing left to do. Free of [`rest_in`](Self::rest_in)'s `Copy`/`Clone` bounds, since nothing
     /// is duplicated.
-    pub fn rest_into<'d, P>(self, dest: RegionHandle<'d, P>) -> Sealed<T, W>
+    pub fn rest_into<'d, P>(self, dest: RegionHandle<'d, P>) -> Sealed<'d, T, W>
     where
         P: StorageProfile<FrameOwner = F>,
         F: RegionOwner<Region = Region<P>>,
     {
         let Delivered { cell, pins } = self;
         dest.retain_reach(pins);
-        cell
+        cell.brand_to(dest)
     }
 
     /// Re-family the delivered value **in place**: re-anchor it under the envelope's own pins at a
@@ -226,9 +226,9 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
         let Delivered { cell, pins } = self;
         // The envelope's own pins cover the re-anchor for the whole call — the same coverage every
         // read of this envelope runs under.
-        let projected = cell.unseal().map_pinned(&pins, f);
+        let projected = cell.into_retained_inner().map_pinned(&pins, f);
         Delivered {
-            cell: Sealed::seal(projected),
+            cell: Retained::from_witnessed(projected),
             pins,
         }
     }
@@ -263,7 +263,11 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     /// and the destination residence it was minted into, or [`RegionHandle::deliver_resident`] /
     /// [`RegionHandle::deliver_yoked`], which read both off one handle. An embedder reaches the
     /// envelope through those, never through this.
-    pub(crate) fn hosted(cell: Sealed<T, Carrier<F>>, home: Rc<F>, reach: StepCoverage<F>) -> Self {
+    pub(crate) fn hosted(
+        cell: Retained<T, Carrier<F>>,
+        home: Rc<F>,
+        reach: StepCoverage<F>,
+    ) -> Self {
         let pins = StepCoverage(PinBundle::union(&PinBundle::singleton(home), &reach.0));
         Delivered { cell, pins }
     }
@@ -298,7 +302,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     /// (the holder rule under `home`). `home` is the value's residence owner, covering both its
     /// backing and its description's hosting arena; it is unioned in explicitly because the self
     /// rule strips it from the bundle a mint into that same region hands back.
-    pub fn lift(cell: Sealed<T, Carrier<F>>, home: Rc<F>) -> Self {
+    pub fn lift(cell: Retained<T, Carrier<F>>, home: Rc<F>) -> Self {
         let reach = cell.witness().upgrade_bundle(&home);
         let pins = StepCoverage(PinBundle::union(&PinBundle::singleton(home), &reach));
         Delivered { cell, pins }
@@ -314,7 +318,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     ) -> Self {
         let pins = StepCoverage(PinBundle::union(&PinBundle::singleton(home), &reach.0));
         Delivered {
-            cell: Sealed::seal(witnessed),
+            cell: Retained::from_witnessed(witnessed),
             pins,
         }
     }
@@ -406,8 +410,8 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         let dest_reach = dest.pins().without_region(RegionOwner::region(&*dest_home));
         // The re-anchor runs under the envelope's own pins, whatever the predicate later claims the
         // product reaches: reading the source value is always covered here.
-        let (product, bundle) = self.cell.duplicate().unseal().merge_composed(
-            dest.cell.unseal(),
+        let (product, bundle) = self.cell.duplicate().into_retained_inner().merge_composed(
+            dest.cell.into_retained_inner(),
             self.pins(),
             relocate_then_compose::<T, B, P, F, Pr>(
                 self.pins(),
@@ -419,7 +423,11 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         // The product lives in `dest`'s region, so that is its residence; the composed bundle is
         // its reach with `dest`'s own region stripped by the self rule, which `hosted` unions back
         // as the transit pin.
-        Delivered::hosted(Sealed::seal(product), dest_home, StepCoverage(bundle))
+        Delivered::hosted(
+            Retained::from_witnessed(product),
+            dest_home,
+            StepCoverage(bundle),
+        )
     }
 
     /// Relocate the delivered value into a destination and re-seal it under the composed carrier
@@ -493,8 +501,8 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         // product's host. Stripped in place: the envelope was consumed above, so these pins are
         // ours to narrow.
         right_pins.remove_region(RegionOwner::region(&*dest_home));
-        let (product, bundle) = left.unseal().merge_composed(
-            right.unseal(),
+        let (product, bundle) = left.into_retained_inner().merge_composed(
+            right.into_retained_inner(),
             &pin,
             |_left, _right, value, dest, token| {
                 // Both operands ride un-copied, so neither claim depends on the product:
@@ -504,7 +512,11 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
                 (f(value, dest, token), witness, bundle)
             },
         );
-        Delivered::hosted(Sealed::seal(product), dest_home, StepCoverage(bundle))
+        Delivered::hosted(
+            Retained::from_witnessed(product),
+            dest_home,
+            StepCoverage(bundle),
+        )
     }
 
     /// Merge two envelopes into one — the composition verb for two values already in hand, where
@@ -606,7 +618,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
 /// outer region, that region is a genuine member and dropping it would discard the only pin naming
 /// it.
 pub struct Unhosted<T: Reattachable + DropFree, W, F: PinsRegion> {
-    cell: Sealed<T, W>,
+    cell: Retained<T, W>,
     pins: StepCoverage<F>,
 }
 
@@ -619,7 +631,7 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Unhosted<T, W, F> {
     /// [`Delivered::unhost`], carrying its bundle.
     pub fn born(witnessed: Witnessed<T, W>) -> Self {
         Unhosted {
-            cell: Sealed::seal(witnessed),
+            cell: Retained::from_witnessed(witnessed),
             pins: StepCoverage::empty(),
         }
     }

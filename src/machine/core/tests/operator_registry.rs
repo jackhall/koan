@@ -21,12 +21,12 @@ use crate::machine::model::{OperatorGroup, ReductionMode, probe_key};
 
 /// The declaration door a fixture takes: host the record in `scope`'s own region and seal it, which
 /// is what every registry entry for this declaration then holds a bit-copy of.
-fn declare<'a>(scope: &'a Scope<'a>, members: &[&str], mode: ReductionMode<'_>) -> GroupSeal {
+fn declare<'a>(scope: &'a Scope<'a>, members: &[&str], mode: ReductionMode<'_>) -> GroupSeal<'a> {
     GroupSeal::of_resident(scope, OperatorGroup::alloc(scope.brand(), members, mode))
 }
 
 /// Arithmetic-shaped group: `+` and `-` fold left.
-fn arithmetic_group<'a>(scope: &'a Scope<'a>) -> GroupSeal {
+fn arithmetic_group<'a>(scope: &'a Scope<'a>) -> GroupSeal<'a> {
     declare(scope, &["+", "-"], ReductionMode::FoldLeft)
 }
 

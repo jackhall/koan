@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::{DropFree, Reattachable};
-use crate::witnessed::{Carrier, Delivered, PinsRegion, Sealed, Witnessed};
+use crate::witnessed::{Carrier, Delivered, PinsRegion, Retained, Witnessed};
 
 /// The live (caller-lifetime) form of the inter-node value for a workload `W`, re-anchored from the
 /// scheduler's `Witnessed<W::Value, _>` slot at the borrow under which the producer frame stays
@@ -30,7 +30,7 @@ pub type Terminal<W> = Witnessed<<W as Workload>::Value, Carrier<OwnerOf<W>>>;
 
 /// A finalized terminal in its dormant [`Sealed`] form — what a result slot stores and a
 /// consumer pull duplicates, read back under the retention hold ([`Sealed::open_with`]).
-pub type SealedTerminal<W> = Sealed<<W as Workload>::Value, Carrier<OwnerOf<W>>>;
+pub type SealedTerminal<W> = Retained<<W as Workload>::Value, Carrier<OwnerOf<W>>>;
 
 /// A terminal **in transit**: the carrier bundled with the owned coverage pinning every region it
 /// reaches, its own residence among them. This is the currency of both terminal doors — the value

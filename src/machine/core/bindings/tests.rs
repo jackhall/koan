@@ -29,21 +29,24 @@ fn sealed_reaching<'a>(
     region: RegionBrand<'a>,
     obj: &'a KObject<'a>,
     foreign: &Rc<FrameStorage>,
-) -> (SealedValue, &'a FrameReach) {
+) -> (SealedValue<'a>, &'a FrameReach) {
     // Mint a description naming `foreign` (foreign to `region`, so the self rule keeps it in the
     // owned bundle) to stand in for the reach a value borrows. The mint retains its own bundle in
     // `region`; these tests assert on the description the seal carries, and `foreign` outlives them
     // on the stack.
     let foreign_bundle = FrameCoverage::of(Rc::clone(foreign));
     let reach_set = region.handle().mint_retained(&[&foreign_bundle]);
-    let sealed = Sealed::seal(region.seal_reaching(Carried::Object(obj), reach_set));
+    let sealed = Sealed::seal(
+        region.seal_reaching(Carried::Object(obj), reach_set),
+        region.handle(),
+    );
     (sealed, reach_set)
 }
 
 /// The sole member of the description a bound entry's seal carries. The reach is readable only
 /// under a pin, so the caller's own hold on the hosting frame opens the seal.
-fn sole_reach_member(sealed: &SealedValue, pin: &Rc<FrameStorage>) -> Rc<FrameStorage> {
-    sealed.open_at(pin).with_reach_for_test(|reach| {
+fn sole_reach_member(sealed: &SealedValue<'_>) -> Rc<FrameStorage> {
+    sealed.open_at().with_reach_for_test(|reach| {
         let members = reach.members();
         match members.as_slice() {
             [only] => Rc::clone(only),
@@ -74,7 +77,7 @@ fn data_binding_round_trips_sealed_reach() {
         .expect("value bind should succeed");
     match bindings.lookup_value("x", None) {
         Some(NameLookup::Bound(hit)) => assert!(
-            Rc::ptr_eq(&sole_reach_member(&hit, &storage), &foreign),
+            Rc::ptr_eq(&sole_reach_member(&hit), &foreign),
             "the sealed reach should round-trip the foreign frame",
         ),
         _ => panic!("expected a bound value hit"),
@@ -102,9 +105,9 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
         .expect("value bind should succeed");
 
     let read = |label: &str| match bindings.lookup_value("x", None) {
-        Some(NameLookup::Bound(hit)) => hit
-            .open_at(&storage)
-            .with_reach_for_test(|reach| reach as *const _),
+        Some(NameLookup::Bound(hit)) => {
+            hit.open_at().with_reach_for_test(|reach| reach as *const _)
+        }
         _ => panic!("expected a bound value hit for {label}"),
     };
     let (first, second) = (read("first"), read("second"));
@@ -346,7 +349,7 @@ fn type_token_may_not_bind_value_side() {
     let error = match bindings.write_value(
         "IntOrd",
         BindingIndex::BUILTIN,
-        Sealed::seal(region.seal_resident(Carried::Object(val))),
+        Sealed::seal(region.seal_resident(Carried::Object(val)), region.handle()),
         &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
@@ -394,7 +397,7 @@ fn value_write_finalizes_the_pending_arm_in_place() {
         .write_value(
             "x",
             BindingIndex::value(2),
-            Sealed::seal(region.seal_resident(Carried::Object(val))),
+            Sealed::seal(region.seal_resident(Carried::Object(val)), region.handle()),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("the finalize write should overwrite the pending arm");

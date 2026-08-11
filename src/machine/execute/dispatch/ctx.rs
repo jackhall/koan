@@ -16,7 +16,7 @@ use std::rc::Rc;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{DepPlacement, scope_frame};
-use crate::machine::core::{FrameCoverage, FrameStorage, ProgramBrand, RunWriter, StepAllocator};
+use crate::machine::core::{FrameStorage, ProgramBrand, RunWriter, StepAllocator};
 use crate::machine::model::FoldDirection;
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
@@ -104,19 +104,7 @@ pub(in crate::machine::execute) struct SchedulerView<'program: 'step, 'step, 'vi
     /// outside the execute layer can deposit. The asymmetry is deliberate — builtins express writes
     /// as outcome *data* on their `Action`; this is a harness-internal hop from `run_action` to the
     /// run loop's apply point, not a channel bodies write through.
-    effects: &'view RefCell<Vec<WriteOp>>,
-    /// **The step's coverage**: every region this step's own machinery keeps alive for its whole
-    /// duration — the slot's memory anchor, each dep envelope's members, and a framed tail hop's TCO
-    /// handoff hold (the retiring incarnation's frame). Assembled by
-    /// [`run_step`](super::super::run_loop) before the step open and held across it, so it outlives
-    /// every read taken under it.
-    ///
-    /// It is what [`Self::lift_spliced`] opens a resting splice cell under. A cell rests in the
-    /// region the splice site named — the dispatching step's own cart — and the reading step may be a
-    /// *later* incarnation of the same slot, running against a freshly minted cart whose ancestor
-    /// chain does not reach the retiring one. The handoff hold is precisely the pin that spans that
-    /// hop, so it is named here rather than re-derived from the reader's scope.
-    coverage: &'view FrameCoverage,
+    effects: &'view RefCell<Vec<WriteOp<'step>>>,
     /// The run's program storage capability, minted once per run and carried unchanged across every
     /// step. A builtin body reaches it through [`BodyCtx::program`](crate::machine::BodyCtx); it is
     /// what the one runtime site that synthesizes a **value-channel** node (`OP`'s bridge body)
@@ -134,8 +122,7 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
         scope: &'step Scope<'step>,
         dest_frame: Rc<FrameStorage>,
         node: NodeHandle,
-        effects: &'view RefCell<Vec<WriteOp>>,
-        coverage: &'view FrameCoverage,
+        effects: &'view RefCell<Vec<WriteOp<'step>>>,
         program: ProgramBrand<'program>,
     ) -> Self {
         Self {
@@ -145,7 +132,6 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
             dest_frame,
             node,
             effects,
-            coverage,
             program,
         }
     }
@@ -156,18 +142,18 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
     }
 
     /// **Lift** a resting splice cell back into a delivery envelope owning its whole reach, under
-    /// [the step's coverage](Self::coverage) — the read door for a consumer that goes on to adopt the
+    /// the cell's own `'home` brand — the read door for a consumer that goes on to adopt the
     /// value. The scope-level twin ([`Scope::lift_spliced`]) covers a read inside the region that did
     /// the resting; this one also covers a read *after* a framed tail hop, where the resting region
     /// survives only as the run loop's handoff hold.
     pub(in crate::machine::execute) fn lift_spliced(&self, cell: &SplicedCell) -> DeliveredCarried {
-        cell.open_at(self.coverage).lift_out()
+        cell.open_at().lift_out()
     }
 
     /// Append this step's next batch of binding writes to the run-loop-owned sink, preserving the
     /// order the bodies decided them in. The only way into `effects`; called once per interpreted
     /// `Action` by [`run_action`](super::super::runtime::run_action).
-    pub(in crate::machine::execute) fn deposit_effects(&self, ops: Vec<WriteOp>) {
+    pub(in crate::machine::execute) fn deposit_effects(&self, ops: Vec<WriteOp<'step>>) {
         self.effects.borrow_mut().extend(ops);
     }
 

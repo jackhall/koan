@@ -47,7 +47,7 @@ fn finalize_newtype<'a>(
     name: String,
     repr: KType,
     site: DeclarationSite,
-) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
+) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError> {
     // The repr types the values the NEWTYPE wraps, so it must be a proper type; a bare
     // constructor of kind `* -> *` standing unapplied is a kind error.
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
@@ -82,7 +82,7 @@ fn finalize_record_newtype<'a>(
     window: &DeclWindow<'a>,
     fields: Vec<(String, KType)>,
     site: DeclarationSite,
-) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
+) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE record repr must have at least one field".to_string(),
@@ -108,8 +108,8 @@ fn finalize_record_newtype<'a>(
 fn seal_outcome_into_carrier<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: &str,
-    outcome: SealOutcome,
-) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
+    outcome: SealOutcome<'a>,
+) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError> {
     match outcome {
         SealOutcome::Sealed { kt, writes } => Ok((seal_type_identity(fctx.scope, kt), writes)),
         SealOutcome::Deferred => Ok((

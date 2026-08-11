@@ -49,7 +49,7 @@ pub enum WorkingPart<'a> {
     /// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) re-owns its reach for a
     /// consuming adoption, and a verdict-only probe opens it at its own brand
     /// ([`KType::accepts_cell`](crate::machine::model::KType::accepts_cell)) with nothing minted.
-    Spliced { cell: SplicedCell },
+    Spliced { cell: SplicedCell<'a> },
     /// A positional argument slot whose eager value is being produced by a sibling dispatch,
     /// awaiting its resolved carrier. The keyworded part walk stages an eager part as an owned
     /// [`DepRequest`](crate::machine::core::DepRequest) and leaves this marker in its slot so the

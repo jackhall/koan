@@ -14,13 +14,10 @@ use crate::machine::model::KType;
 /// A trivial declared-return obligation the bracket tests deposit to stand in for the old
 /// `in_contract_chain` bool: any obligation makes `in_contract_chain()` read `true` inside the step.
 fn sample_obligation() -> ReturnObligation {
-    ReturnObligation::seal(
-        ReturnContract::Arm {
-            ret: KType::NUMBER,
-            kind: "return type",
-        },
-        None,
-    )
+    ReturnObligation::seal(ReturnContract::Arm {
+        ret: KType::NUMBER,
+        kind: "return type",
+    })
 }
 
 #[test]

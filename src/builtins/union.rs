@@ -29,7 +29,7 @@ fn finalize_union<'a>(
     window: &DeclWindow<'a>,
     fields: Vec<(String, KType)>,
     site: DeclarationSite,
-) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError> {
+) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "UNION schema must have at least one tag".to_string(),

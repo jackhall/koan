@@ -53,7 +53,10 @@ impl<'a> Scope<'a> {
     /// Fused MODULE-finish value **construction**: merge the resident module reference into this
     /// scope's region ([`Self::store_module_object`]), which mints and retains the child's region as
     /// the module value's reach. Membership is derived by the composition, never hand-asserted.
-    pub(crate) fn seal_module(&self, module: &'a crate::machine::model::Module<'a>) -> SealedValue {
+    pub(crate) fn seal_module(
+        &self,
+        module: &'a crate::machine::model::Module<'a>,
+    ) -> SealedValue<'a> {
         self.store_module_object(module)
     }
 
@@ -64,7 +67,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn bind_value_direct(
         &self,
         name: String,
-        sealed: SealedValue,
+        sealed: SealedValue<'a>,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
@@ -80,13 +83,13 @@ impl<'a> Scope<'a> {
     /// of a delivered value bind. Returns a duplicate of the entry's own [`SealedValue`], from
     /// which the caller lifts its terminal envelope ([`Self::lift_resident`]).
     pub(crate) fn bind_delivered_direct(
-        &self,
+        &'a self,
         name: String,
         cell: &DeliveredCarried,
         index: BindingIndex,
         project: impl for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
         gate: &mut WriteGate,
-    ) -> Result<SealedValue, KError> {
+    ) -> Result<SealedValue<'a>, KError> {
         let sealed = self.adopt_for_binding(cell, project)?;
         // Duplicate the seal: one binds into the entry, the other rides the caller's terminal
         // carrier out of the step. Neither owns pins — the region's union bundle does — so the
@@ -115,7 +118,7 @@ impl<'a> Scope<'a> {
     /// `functions` bucket. The builtin-seeding door — the run-global root registers its own
     /// overloads at [`BindingIndex::BUILTIN`], where the shadow guard is a no-op anyway.
     pub(crate) fn register_function_direct(
-        &self,
+        &'a self,
         name: String,
         fn_ref: &'a KFunction<'a>,
         index: BindingIndex,
@@ -244,7 +247,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn register_operator_group_direct(
         &self,
         probe: String,
-        seal: GroupSeal,
+        seal: GroupSeal<'a>,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
@@ -329,7 +332,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn register_group_under_all_subsets_direct(
         &self,
         members: &[&str],
-        seal: GroupSeal,
+        seal: GroupSeal<'a>,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {

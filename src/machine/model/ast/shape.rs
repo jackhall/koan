@@ -58,7 +58,7 @@ pub enum FieldSlot<'a> {
     /// A record body already threaded — elaborate its field list inline.
     ThreadedRecord(&'a WorkingExpression<'a>),
     /// A resolved carrier the threading wrote in: a co-declared sibling's handle.
-    Resolved(SplicedCell),
+    Resolved(SplicedCell<'a>),
     /// Any other shape, which no field-list position accepts.
     Other,
 }

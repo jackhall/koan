@@ -409,7 +409,7 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
     assert!(matches!(
         bindings.lookup_member("val", None),
         Some(MemberResolution::Value(sealed))
-            if matches!(sealed.open_at(&region).value(), Carried::Object(KObject::Number(n)) if *n == 1.0)
+            if matches!(sealed.open_at().value(), Carried::Object(KObject::Number(n)) if *n == 1.0)
     ));
     assert!(matches!(
         bindings.lookup_member("Ty", None),

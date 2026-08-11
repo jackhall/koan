@@ -339,10 +339,10 @@ fn fold_witnessed_yokes_a_reference_only_value() {
     // envelope rests here, which is what strips its own home from what the region retains.
     let sealed = delivered.rest_into(frame.brand().handle());
     assert!(
-        !sealed.open_at(&frame).has_reach_members(),
+        !sealed.open_at().has_reach_members(),
         "born reference-only: empty reach",
     );
-    let got = sealed.open_with(&frame, |c| match c {
+    let got = sealed.open(|c| match c {
         Carried::Object(KObject::Number(n)) => *n,
         _ => panic!("expected a Number object"),
     });
@@ -670,13 +670,13 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     // The producer storage is the sole pin: the re-stamped value lives in its own region, so resting
     // it there retains nothing (the self rule strips the one member) and the seal read below names
     // that storage.
-    let restamped: Sealed<CarriedFamily, CarrierWitness> =
-        restamped.rest_into(RegionHandle::from_owner(&*producer_frame.storage_rc()));
     let producer_storage = producer_frame.storage_rc();
+    let restamped: Sealed<'_, CarriedFamily, CarrierWitness> =
+        restamped.rest_into(RegionHandle::from_owner(&*producer_storage));
     drop(envelope);
     drop(producer_frame);
 
-    let read_addr = restamped.open_with(&producer_storage, |c| match c.object() {
+    let read_addr = restamped.open(|c| match c.object() {
         KObject::Record(substrate, record_type) => {
             assert_eq!(*record_type, declared, "re-stamped to the declared type");
             *substrate as *const RecordSubstrate<'_> as usize
@@ -1002,7 +1002,8 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
     let sealed = producer_scope
         .seal_reaching(Carried::Object(text), producer_scope.mint_born_here(false))
         .unseal();
-    let dep: DeliveredCarried = producer_scope.lift_resident(Sealed::seal(sealed));
+    let dep: DeliveredCarried =
+        producer_scope.lift_resident(Sealed::seal(sealed, producer.brand().handle()));
 
     let bound = consumer
         .adopt_for_binding(&dep, |carried| Ok(carried.object()))
@@ -1012,7 +1013,7 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
     drop(dep);
     drop(producer);
 
-    match bound.open_at(&root).value().object() {
+    match bound.open_at().value().object() {
         KObject::KString(s) => assert_eq!(
             *s, "koan",
             "the bound string reads back after the producer frees"

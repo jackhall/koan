@@ -146,14 +146,10 @@ impl SigSchema {
             manifest_members.insert(name.clone(), *kt);
         }
         let mut value_slots: HashMap<String, KType> = HashMap::new();
-        // A value member's slot type is read under the module scope's own region owner: the seal
-        // re-anchors its value at the pin borrow and only the `Copy` `KType` leaves the open.
-        let home = child
-            .region_owner()
-            .upgrade()
-            .expect("a module's child scope owns its region while its self-sig is derived");
+        // A value member's slot type: the seal's own `'home` brand covers the re-anchor, and only
+        // the `Copy` `KType` leaves the open.
         for (name, sealed) in child.bindings().iter_data() {
-            value_slots.insert(name, sealed.open_at(&home).value().object().ktype());
+            value_slots.insert(name, sealed.open_at().value().object().ktype());
         }
         for (name, tag) in draft.slot_type_tags.iter() {
             value_slots.insert(name.clone(), *tag);

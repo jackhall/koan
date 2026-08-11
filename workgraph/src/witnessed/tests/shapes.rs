@@ -393,7 +393,7 @@ fn restamp_in_place_keeps_home_in_the_description_but_pins_nothing_on_itself() {
         "membership is exact: the re-stamped value's own home is an ordinary member"
     );
 
-    let cell: Sealed<RefValFamily, Carrier<ShapeFrame>> = restamped.into_cell();
+    let cell: Retained<RefValFamily, Carrier<ShapeFrame>> = restamped.into_cell();
     drop(element);
     assert_eq!(
         Rc::strong_count(&producer),
@@ -426,10 +426,9 @@ fn lift_reowns_description_into_transit_bundle() {
         RegionHandle::from_owner(&*host),
         &[&PinBundle::singleton(Rc::clone(&content))],
     );
-    let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
-        Erased::erase(value),
-        Carrier::new(reach),
-    ));
+    let sealed: Retained<RefValFamily, Carrier<ShapeFrame>> = Retained::from_witnessed(
+        Witnessed::from_erased(Erased::erase(value), Carrier::new(reach)),
+    );
 
     let delivered = Delivered::lift(sealed, Rc::clone(&host));
     assert!(
@@ -469,10 +468,9 @@ fn lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle() {
     let value: &u32 = handle.allocator().value(37u32);
     // No sources: the value reaches nothing beyond the region hosting it.
     let reach = handle.mint_retained(&[]);
-    let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
-        Erased::erase(value),
-        Carrier::new(reach),
-    ));
+    let sealed: Retained<RefValFamily, Carrier<ShapeFrame>> = Retained::from_witnessed(
+        Witnessed::from_erased(Erased::erase(value), Carrier::new(reach)),
+    );
 
     let delivered = Delivered::lift(sealed, Rc::clone(&declaring));
     assert!(
@@ -516,10 +514,9 @@ fn delivered_by_value_drop_frees_region_in_call() {
     let handle = RegionHandle::from_owner(&*host);
     let value: &u32 = handle.allocator().value(11u32);
     let reach = handle.mint_retained(&[]);
-    let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
-        Erased::erase(value),
-        Carrier::new(reach),
-    ));
+    let sealed: Retained<RefValFamily, Carrier<ShapeFrame>> = Retained::from_witnessed(
+        Witnessed::from_erased(Erased::erase(value), Carrier::new(reach)),
+    );
     let delivered = Delivered::lift(sealed, Rc::clone(&host));
 
     // Release the frame handle: the envelope's bundle is now the last `Rc` on the region.
@@ -562,10 +559,10 @@ fn a_regions_union_pins_what_its_own_members_reach() {
     let parent = frame();
     let reach =
         RegionHandle::from_owner(&*parent).mint_retained(&[&StepCoverage::of(Rc::clone(&child))]);
-    let stored: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
-        Erased::erase(value),
-        Carrier::new(reach),
-    ));
+    let stored: Sealed<'_, RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(
+        Witnessed::from_erased(Erased::erase(value), Carrier::new(reach)),
+        RegionHandle::from_owner(&*parent),
+    );
 
     drop(child);
     drop(foreign);
@@ -577,7 +574,7 @@ fn a_regions_union_pins_what_its_own_members_reach() {
         .expect("the child region's own union pins the member's foreign region");
 
     let pins = StepCoverage::of(Rc::clone(&parent));
-    let opened = stored.open_at(&pins);
+    let opened = stored.open_at();
     assert!(
         opened.reach_covers(child_owner.region()),
         "the description names the child region"
@@ -619,10 +616,9 @@ fn lift_reads_a_description_hosted_under_a_transitive_root() {
     let module_handle = RegionHandle::from_owner(&*module);
     let value: &u32 = module_handle.allocator().value(19u32);
     let reach = module_handle.mint_retained(&[&StepCoverage::of(Rc::clone(&foreign))]);
-    let sealed: Sealed<RefValFamily, Carrier<ShapeFrame>> = Sealed::seal(Witnessed::from_erased(
-        Erased::erase(value),
-        Carrier::new(reach),
-    ));
+    let sealed: Retained<RefValFamily, Carrier<ShapeFrame>> = Retained::from_witnessed(
+        Witnessed::from_erased(Erased::erase(value), Carrier::new(reach)),
+    );
 
     // The reading window roots the hosting arena transitively — the only thing that makes its own
     // handle a legitimate cover for an arena it does not host.
@@ -670,8 +666,8 @@ fn adopt_settles_resident_value_into_dest() {
         .reseal();
     drop(element);
     drop(producer);
-    let pins = StepCoverage::of(Rc::clone(&dest));
-    assert_eq!(sealed.open_with(&pins, |r| *r), 7);
+    // No pin local: the seal's own `'home` brand is what covers this read.
+    assert_eq!(sealed.open(|r| *r), 7);
 }
 
 /// **The region's union bundle** — a region retains ONE deduped [`PinBundle`], folded through
@@ -739,20 +735,20 @@ fn transform_verb_round_trip_preserves_liveness() {
         .reseal();
     let pins = StepCoverage::of(Rc::clone(&dest));
     assert!(
-        sealed.open_at(&pins).reach_covers(producer.region()),
+        sealed.open_at().reach_covers(producer.region()),
         "the adoption composed the value's home into dest's description as an ordinary member"
     );
     drop(element);
     drop(producer);
 
     // Sealed → Opened → Sealed: the in-use state answers membership, then returns to rest.
-    let opened = sealed.open_at(&pins);
+    let opened = sealed.open_at();
     assert_eq!(*opened.value(), 11);
     let resealed = opened.reseal();
 
     // Sealed → Delivered: the lift re-owns the description into a transit bundle of its own, so the
     // holder's pins can go.
-    let delivered = Delivered::lift(resealed, Rc::clone(&dest));
+    let delivered = Delivered::lift(Retained::from_sealed(resealed), Rc::clone(&dest));
     drop(pins);
     drop(dest);
     assert_eq!(delivered.open(|r| *r), 11);
@@ -854,7 +850,7 @@ fn open_adopted_reads_at_the_destination_lifetime_after_the_producer_drops() {
     );
     let resealed = opened.reseal();
     assert_eq!(
-        resealed.open_with(&StepCoverage::<ShapeFrame>::of(Rc::clone(&dest)), |r| *r),
+        resealed.open(|r| *r),
         23,
         "reseal returns exactly the adopted seal",
     );
@@ -924,10 +920,10 @@ fn retain_reach_never_folds_a_regions_own_pin_into_itself() {
 /// is `Copy`, and the assert below pins that the part carries no `Drop` glue, so region death runs
 /// nothing per cell.
 #[derive(Clone, Copy)]
-struct RestingPart(Sealed<RefValFamily, Carrier<ShapeFrame>>);
+struct RestingPart<'a>(Sealed<'a, RefValFamily, Carrier<ShapeFrame>>);
 
 const _: () = assert!(
-    !std::mem::needs_drop::<RestingPart>(),
+    !std::mem::needs_drop::<RestingPart<'static>>(),
     "a resting cell is pure data — its pins live one level down, in the region"
 );
 
@@ -958,13 +954,13 @@ fn rest_in_lodges_coverage_for_the_destination_regions_life() {
     drop(element);
     drop(producer);
 
-    let pin = StepCoverage::<ShapeFrame>::of(Rc::clone(&dest));
+    // No pin local: the resting cell's `'home` brand covers the read.
     assert_eq!(
-        cell.open_with(&pin, |r| *r),
+        cell.open(|r| *r),
         41,
         "the region's retained bundle is the sole pin left"
     );
-    assert_eq!(twin.open_with(&pin, |r| *r), 41);
+    assert_eq!(twin.open(|r| *r), 41);
 }
 
 /// **A resting cell travels as plain data.** Copying it is a bit-copy of the erased value and the
@@ -991,8 +987,8 @@ fn a_resting_cell_copies_as_plain_data() {
     drop(element);
     drop(producer);
 
-    let pin = StepCoverage::<ShapeFrame>::of(Rc::clone(&dest));
+    // No pin local: every copy carries the same `'home` brand.
     for copy in copies {
-        assert_eq!(copy.0.open_with(&pin, |r| *r), 47);
+        assert_eq!(copy.0.open(|r| *r), 47);
     }
 }

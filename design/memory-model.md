@@ -268,7 +268,7 @@ reach into the destination's own arena. All keep their `unsafe` retype inside th
 carry none; `yoke` in fact routes only the safe `erase`, carrying no retype of its own.
 
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
-`SealedTerminal<W>` = `Sealed<W::Value, Carrier<W::Frame>>`
+`SealedTerminal<W>` = `Retained<W::Value, Carrier<W::Frame>>`
 ([`node_store.rs`](../workgraph/src/scheduler/node_store.rs)) — the opaque dormant form of a
 `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` / the envelope merge) and re-anchors
 only through a rank-2 destination verb. `finalize` bundles the erased value under a
@@ -279,9 +279,11 @@ and seals it **as-is** (a declared return is checked and re-stamped in place fir
 Done-boundary relocation or sever gate. What keeps the
 producer frame alive is the scheduler's **frame-retention hold**, seeded at finalize and released
 once every destination has pulled (pull-count zero); a walking terminal carries that hold inside its
-[`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope's pin bundle. A value read goes
-through the envelope's pinned open (`Sealed::open_with` under the retained host — the carrier is not
-a `Witness`, so a bare `open` under it does not compile, and every read names its pin), which copies
+[`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope's pin bundle. Because that liveness
+is a refcount protocol rather than a lexical extent, a terminal rests in `Retained` — the tier with
+**no read verb at all**, which re-enters circulation only through `Delivered::lift` under the owner
+the hold was keeping. A value read therefore goes through the envelope's own bundled coverage, which
+copies
 the value out inside a `for<'b>` brand: the fabricated content lifetime is un-nameable, so nothing
 branded escapes into the result. The driver exposes two accessors over it:
 [`read_result_with`](../src/machine/execute/runtime.rs) hands the value to a closure that copies out

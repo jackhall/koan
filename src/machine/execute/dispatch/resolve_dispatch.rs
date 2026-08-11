@@ -174,14 +174,10 @@ fn decide_scope<'step, 'e>(
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
-    let pin = scope
-        .region_owner()
-        .upgrade()
-        .expect("a scope's region owner is held while its dispatch bucket is walked");
     let candidates: Vec<OpenedFunction<'_>> = lookup
         .overloads
         .iter()
-        .map(|sealed| sealed.open_at(&pin))
+        .map(|sealed| sealed.open_at())
         .collect();
     let bucket = OverloadBucket {
         candidates: &candidates,

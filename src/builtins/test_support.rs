@@ -476,7 +476,10 @@ pub(crate) fn spliced_part<'a>(
 ) -> crate::machine::model::WorkingPart<'a> {
     let brand = RegionBrand(RegionHandle::from_owner(&**host));
     crate::machine::model::WorkingPart::Spliced {
-        cell: Sealed::seal(brand.seal_resident::<crate::machine::model::CarriedFamily>(c)),
+        cell: Sealed::seal(
+            brand.seal_resident::<crate::machine::model::CarriedFamily>(c),
+            brand.handle(),
+        ),
     }
 }
 

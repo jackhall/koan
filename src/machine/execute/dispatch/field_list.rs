@@ -55,7 +55,7 @@ pub(crate) type FieldListFinalizeAction<'a> = Box<
             &FinishCtx<'a, 'r>,
             Option<&'w DeclWindow<'a>>,
             Vec<(String, KType)>,
-        ) -> Result<(StepCarried<'a>, Vec<WriteOp>), KError>
+        ) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError>
         + 'a,
 >;
 

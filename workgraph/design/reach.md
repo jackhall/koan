@@ -81,11 +81,12 @@ bare bundle, and every operation on them is a verb on the envelope itself.
 
 The transform verbs:
 
-- **`Sealed::open_at<'b>(&'b self, pin: &'b F) -> Opened<'b>`** — a borrow-tied
-  read. `'b` rides the pin borrow (the live region owner), so no rank-2 closure is
-  needed. `Delivered::open_at` is the one-line convenience that supplies its own
-  owned coverage.
-- **`Opened::reseal() -> Sealed`** — the step-end return to rest. Sound because
+- **`Sealed::open_at<'b>(&'b self) -> Opened<'b>`** — a borrow-tied read, taking
+  no pin: a `Sealed<'home, ..>` carries the brand of the region hosting its reach
+  description, and `'home: 'b` is what keeps the re-anchored value from dangling.
+  `Delivered::open_at` is the twin for a value in transit, covered by the
+  envelope's own owned coverage rather than by a brand.
+- **`Opened::reseal() -> Sealed<'b, ..>`** — the step-end return to rest. Sound because
   `Opened` is `Copy` and constructible only by opening, so the value↔reach pairing
   it reseals is exactly the one it was opened from.
 - **`Opened::lift_out() -> Delivered`** — the relocation seam, `reseal` composed

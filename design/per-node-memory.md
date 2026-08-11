@@ -228,10 +228,10 @@ alias, and composed from the child scope's own region for a module
 ([`Scope::store_module_object`](../src/machine/core/scope/reach.rs)), whose union
 already covers everything its members reach. A value lookup or an `ATTR` member read hands
 out a bit-copy of the seal — the thin description reference beside the value, no
-bundle cloned — and the reader re-anchors it under a pin it already holds
+bundle cloned — and the reader re-anchors it with no pin of its own
 ([`Scope::lift_resident`](../src/machine/core/scope/reach.rs) for travel,
-`Sealed::open_at` for an in-step read), witnessing the existing `&'a KObject` **in
-place**.
+`Sealed::open_at` for an in-step read, covered by the seal's own `'home` brand),
+witnessing the existing `&'a KObject` **in place**.
 
 The `types` channel stores no reach at all: a `KType` is a `Copy` handle interned
 in the run frame's registry, so a bound type borrows nothing and names the same type

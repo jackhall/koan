@@ -1,7 +1,7 @@
 # Derived function reach
 
-Derive a registered callable's reach from the composition that placed it,
-retiring the empty-member mint asserted by fiat.
+Derive a registered callable's — and operator group record's — reach from the
+composition that placed it, retiring the empty-member mint asserted by fiat.
 
 **Problem.** The registration doors `OverloadSeal::of_resident` and
 `GroupSeal::of_resident`
@@ -29,29 +29,32 @@ no reach to mint in the first place.
 - A registered callable's reach description is composed from the operands
   that placed it — the captured scope's own coverage — not minted empty on an
   asserted claim; `RegionBrand::seal_resident`'s empty-member mint has no
-  callable caller.
+  callable and no operator-group caller.
 - `KFunction::alloc_captured` is a witnessed birth: its return carries the
   envelope the seal composes from, and no bare envelope-free `&KFunction`
   construction remains in production.
 - `Scope::store_function_cell`'s wrapper composition takes the birth envelope
   as its function operand rather than re-minting an empty one.
+- A `GroupSeal`'s carrier is rested from the group record's own birth
+  envelope — a yoked construction whose `for<'b>` brand proves the record is
+  region-pure — rather than sealed under a fresh empty mint.
 - A test registering a callable through each production door (`FN`, `OP`, the
   builtin seeds) observes the derived description naming exactly the home
-  region — the structural claim held as a composed fact.
+  region, and a test registering an operator group observes the yoke-derived
+  description: hosted at home with no members — each structural claim held as
+  a composed fact.
 
 **Directions.**
 
-- *Birth shape — open.* (a) Make `alloc_captured` a fold/merge birth whose
-  operands are the captured scope's coverage, so "borrows only its home" is a
-  composed member set; (b) keep the bare bump and audit the claim at seal time
-  with a runtime walk. (b) is rejected as an end state — a runtime residence
-  walk is what this project retires; at most a stopgap with this item left
-  open. Recommended: (a).
-- *Seal fusion — open.* Both non-seed production sites mint the overload seal
-  and immediately call `store_function_cell` (`fn_def/finalize.rs`,
-  `op_def.rs`); a fused door returning both products off one composition would
-  collapse the two mints into one derived reach. Worth taking only after the
-  birth ships — decide when the birth's envelope shape is settled.
+- *Birth shape — decided.* `alloc_captured` is a fold/merge birth: the
+  captured scope, the signature pre-minted at the same brand, and the body
+  cross as one resident seed operand into a `merge_into` whose rank-2 brand
+  proves residence and whose composition derives the description — hosted at
+  home, home its one member. No new workgraph surface.
+- *Group birth — decided.* The group record is born through
+  `KoanRegionExt::yoke_branded` around `OperatorGroup::alloc` (which already
+  re-homes every byte it stores), so its region-purity is the yoke brand's
+  compile-time fact and the seal rests the birth envelope.
 
 ## Dependencies
 

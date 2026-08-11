@@ -109,15 +109,17 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// ```
     /// use std::rc::Rc;
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile, RefFamily, RegionCart};
-    /// use workgraph::witnessed::{Carrier, Sealed, StepContext, Witnessed};
+    /// use workgraph::witnessed::{Carrier, RegionHandle, Sealed, StepContext, Witnessed};
     ///
     /// static SEVEN: u32 = 7;
     /// let cart = fresh_cart();
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
     /// let w: Witnessed<RefFamily, Carrier<RegionCart>> =
     ///     ctx.alloc::<FixtureProfile, RefFamily>(|_handle| &SEVEN);
-    /// // The carrier pins nothing, so a read names its coverage: the frame it was yoked into.
-    /// assert_eq!(Sealed::seal(w).open_with(&cart, |r| *r), 7);
+    /// // The carrier pins nothing; the seal's `'home` brand — the frame it was yoked into — is
+    /// // what covers the read, so no pin is named at the call.
+    /// let home = RegionHandle::<FixtureProfile>::from_owner(&*cart);
+    /// assert_eq!(Sealed::seal(w, home).open(|r| *r), 7);
     /// ```
     ///
     /// ```compile_fail

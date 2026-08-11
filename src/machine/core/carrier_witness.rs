@@ -48,7 +48,7 @@ pub type DeliveredCarried =
 /// Reading one names its coverage, as every reference-only carrier does: the reach-carrying route is
 /// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced), back to an envelope for an
 /// adoption; a verdict-only reader opens the cell at its own brand through [`read_resting`].
-pub type SplicedCell = crate::witnessed::Sealed<CarriedFamily, CarrierWitness>;
+pub type SplicedCell<'home> = crate::witnessed::Sealed<'home, CarriedFamily, CarrierWitness>;
 
 /// Read a resting splice cell at a site with **no pin vocabulary** — the registry-free renderers
 /// ([`WorkingPart`](crate::machine::model::WorkingPart)'s `Debug` / `summarize`) and the slot
@@ -65,10 +65,10 @@ pub type SplicedCell = crate::witnessed::Sealed<CarriedFamily, CarrierWitness>;
 /// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) when it goes on to *adopt* the
 /// value, which owns the reach rather than merely naming it.
 pub(crate) fn read_resting<R>(
-    cell: &SplicedCell,
+    cell: &SplicedCell<'_>,
     read: impl for<'b> FnOnce(Carried<'b>) -> R,
 ) -> R {
-    cell.open_with(&crate::witnessed::NoPins, read)
+    cell.open(read)
 }
 
 /// A callable's **dormant** carrier: the `KFunction` fused to the exact reach description minted for
@@ -76,7 +76,7 @@ pub(crate) fn read_resting<R>(
 /// bucket stores and what a [`ReturnContract`](crate::machine::core::ReturnContract) carries across
 /// a tail chain: the seal fuses the callable with its reach claim, where a bare `&KFunction` would
 /// state no reach at all.
-pub type SealedFunction = crate::witnessed::Sealed<KFunctionFamily, CarrierWitness>;
+pub type SealedFunction<'home> = crate::witnessed::Sealed<'home, KFunctionFamily, CarrierWitness>;
 
 /// An operator group's **dormant** carrier: the region-hosted [`OperatorGroup`] record fused to the
 /// reach description minted for it, over the [`OperatorGroupFamily`]. This is what an `operators`
@@ -84,7 +84,8 @@ pub type SealedFunction = crate::witnessed::Sealed<KFunctionFamily, CarrierWitne
 /// [`Bindings`](crate::machine::core::Bindings) table stays lifetime-free. Every powerset key of one
 /// `GROUP` declaration holds a duplicate of the same seal over the same pointee, so sharing is
 /// address identity.
-pub type SealedOperatorGroup = crate::witnessed::Sealed<OperatorGroupFamily, CarrierWitness>;
+pub type SealedOperatorGroup<'home> =
+    crate::witnessed::Sealed<'home, OperatorGroupFamily, CarrierWitness>;
 
 /// An operator group **in transit**: [`SealedOperatorGroup`] lifted at its declaring scope, so the
 /// envelope's coverage owns the region hosting the record — which is what lets a chain resolve a
@@ -105,9 +106,9 @@ pub type OpenedFunction<'a> = crate::witnessed::Opened<'a, KFunctionFamily, Carr
 /// A keyworded expression becomes dispatchable **only** through one of these — the `FN` / `OP`
 /// registration doors and the builtin seeds. Binding a function *value* (`LET g = (f)`) publishes
 /// nothing here: a value binding is callable by name alone.
-pub(crate) struct OverloadSeal {
+pub(crate) struct OverloadSeal<'a> {
     /// The dormant callable carrier the dispatch bucket stores.
-    pub sealed: SealedFunction,
+    pub sealed: SealedFunction<'a>,
     /// `signature.untyped_key()` — the bucket this callable belongs in.
     pub key: UntypedKey,
     /// `signature.dispatch_token()` — the stored form of the duplicate-overload predicate.
@@ -117,14 +118,14 @@ pub(crate) struct OverloadSeal {
     pub summary: String,
 }
 
-impl OverloadSeal {
+impl<'a> OverloadSeal<'a> {
     /// The bundle for a callable **resident in `scope`'s own region** — the `FN` / `OP`
     /// registration doors. The description is hosted in `scope`'s own region with no members: `FN`
     /// allocates the callable into the very scope it captures, so it reaches nothing beyond the
     /// region it lives in, which every read of it already pins. The callable is held live here, so
     /// everything the bucket write keys on is read straight off the reference and travels as plain
     /// data.
-    pub(crate) fn of_resident<'a>(scope: &Scope<'a>, f: &'a KFunction<'a>) -> Self {
+    pub(crate) fn of_resident(scope: &'a Scope<'a>, f: &'a KFunction<'a>) -> Self {
         let sealed = scope.seal_resident::<KFunctionFamily>(f);
         OverloadSeal {
             sealed,
@@ -143,9 +144,9 @@ impl OverloadSeal {
 /// One of these backs a whole `GROUP` declaration: every powerset key of the install names the same
 /// record, so the write applies this one bundle across all of its probe keys.
 #[derive(Clone)]
-pub(crate) struct GroupSeal {
+pub(crate) struct GroupSeal<'a> {
     /// The dormant group carrier the registry entry stores.
-    pub sealed: SealedOperatorGroup,
+    pub sealed: SealedOperatorGroup<'a>,
     /// The record's address — the upsert's **cheap** identity arm. Every powerset key of one
     /// declaration shares one pointee, so re-registering a key that is already installed compares
     /// equal here without ever touching the record.
@@ -155,11 +156,11 @@ pub(crate) struct GroupSeal {
     pub declaration: String,
 }
 
-impl GroupSeal {
+impl<'a> GroupSeal<'a> {
     /// The bundle for a group record **resident in `scope`'s own region** — the `GROUP` binder, the
     /// `OP` declaration doors, and the builtin seeds, each of which allocates its record from the
     /// very brand it registers against ([`OperatorGroup::alloc`]).
-    pub(crate) fn of_resident<'a>(scope: &Scope<'a>, group: &'a OperatorGroup<'a>) -> Self {
+    pub(crate) fn of_resident(scope: &'a Scope<'a>, group: &'a OperatorGroup<'a>) -> Self {
         GroupSeal {
             sealed: scope.seal_resident::<OperatorGroupFamily>(group),
             address: std::ptr::from_ref(group) as usize,

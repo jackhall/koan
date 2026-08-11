@@ -102,12 +102,15 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
     // The record lives in the producer's region and borrows into it, so its description is hosted
     // there with home as an ordinary member — what the producer's own birth mint would have stamped.
     let sealed = producer.seal_born_here(Carried::Object(record), true);
-    let dep: DeliveredCarried = Delivered::lift(Sealed::seal(sealed), producer.storage_rc());
+    let dep: DeliveredCarried = Delivered::lift(
+        crate::witnessed::Retained::from_sealed(Sealed::seal(sealed, producer.brand().handle())),
+        producer.storage_rc(),
+    );
 
     let bound_seal = consumer
         .adopt_for_binding(&dep, |carried| Ok(carried.object()))
         .expect("a whole-value projection is infallible");
-    let opened = bound_seal.open_at(&root);
+    let opened = bound_seal.open_at();
     let bound = opened.value().object();
 
     // The pin shares the producer-resident substrate rather than rebuilding it.

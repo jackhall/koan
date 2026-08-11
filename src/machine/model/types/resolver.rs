@@ -248,12 +248,12 @@ pub fn elaborate_type_identifier(
 }
 
 /// Outcome of [`finalize_nominal_member`].
-pub enum SealOutcome {
+pub enum SealOutcome<'a> {
     /// The member sealed (or was already sealed): the `Copy` handle is its interned member handle,
     /// ready to wrap in a `Carried::Type`, beside the `types` writes installing every name the seal
     /// settles. The writes ride the step outcome — a redeclaration surfaces as the binder's error
     /// terminal when the run loop applies them.
-    Sealed { kt: KType, writes: Vec<WriteOp> },
+    Sealed { kt: KType, writes: Vec<WriteOp<'a>> },
     /// The member's schema filled, but its window still holds unfilled members, so no member has
     /// an identity yet. Only a member of an announced module group reaches this: the fill that
     /// closes the group is the seal barrier, and it installs every member at once.
@@ -271,7 +271,7 @@ pub enum SealOutcome {
 /// idempotent: it recognizes the re-entry by its installing
 /// [`NodeHandle`](crate::machine::core::NodeHandle) matching the stored entry's, while a genuine
 /// redeclaration installs under a different node and surfaces as `Rebind`.
-pub fn seal_writes(view: WindowView<'_, '_>, site: DeclarationSite) -> Vec<WriteOp> {
+pub fn seal_writes<'a>(view: WindowView<'_, 'a>, site: DeclarationSite) -> Vec<WriteOp<'a>> {
     view.installable()
         .into_iter()
         .map(|(name, kt)| WriteOp::Type {
@@ -303,7 +303,7 @@ pub fn finalize_nominal_member<'a>(
     site: DeclarationSite,
     brand: crate::machine::core::RegionBrand<'a>,
     types: &TypeRegistry,
-) -> SealOutcome {
+) -> SealOutcome<'a> {
     let index = match window.view().member_index(name) {
         Some(index) => index,
         // The declarator handed a window that does not announce its own binder — a wiring bug, not

@@ -99,11 +99,6 @@ impl<'run> KoanRuntime<'run> {
         anchor: Rc<super::nodes::SlotFrame>,
         handoff: Option<Rc<super::nodes::SlotFrame>>,
     ) {
-        // The step's binding-write sink: every `Action` the step interprets deposits its `WriteOp`s
-        // here through `run_action`, and the drain below applies them against the step scope. Owned
-        // by the run loop and confined to this call, so nothing crosses steps — a wake-time finish
-        // runs inside its own step and fills that step's sink.
-        let step_effects: std::cell::RefCell<Vec<WriteOp>> = std::cell::RefCell::new(Vec::new());
         // Source the step's context off the scheduler-held anchor: the cart, the slot's scope
         // handle, and its lexical chain. Read as values up front so nothing holds a scope borrow
         // across the step's `&mut self` work or a tail hop's frame swap.
@@ -178,6 +173,13 @@ impl<'run> KoanRuntime<'run> {
             |_within: crate::witnessed::Within<'_, 'run>,
              continuation: super::outcome::NodeContinuation<'_>,
              scope| {
+                // The step's binding-write sink: every `Action` the step interprets deposits its
+                // `WriteOp`s here through `run_action`, and the drain below applies them against
+                // the step scope. Declared inside the step brand because a `WriteOp` carries seals
+                // branded to `scope`'s region — so "nothing crosses steps" is the borrow checker's
+                // rule here, not a convention.
+                let step_effects: std::cell::RefCell<Vec<WriteOp<'_>>> =
+                    std::cell::RefCell::new(Vec::new());
                 // `scope` is now live at `'b` and the `dest` region is its own region; deps arrive
                 // un-relocated. A `ForwardReady` relocation below builds its destination carrier
                 // from this same scope's brand.
@@ -203,7 +205,6 @@ impl<'run> KoanRuntime<'run> {
                                     node: id,
                                 },
                                 &step_effects,
-                                &combined,
                                 rt.program,
                             ),
                             deps.results(&dep_sources),
