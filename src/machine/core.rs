@@ -8,6 +8,10 @@ mod carrier_witness;
 mod kerror;
 pub(crate) mod kfunction;
 mod lexical_frame;
+/// The reach-tightness report — the over-pinning audit at the fold chokepoint, compiled only under
+/// the `region-audit` gate.
+#[cfg(any(test, feature = "region-audit"))]
+pub mod reach_audit;
 mod ref_carriers;
 mod run_id;
 mod scope;

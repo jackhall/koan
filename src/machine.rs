@@ -12,6 +12,10 @@ pub mod model;
 
 pub(crate) use core::kfunction::Body;
 pub use core::kfunction::{KFunction, NodeId};
+/// The reach-tightness report's reader surface — present only under the `region-audit` gate, which
+/// is also what compiles the audit itself in.
+#[cfg(any(test, feature = "region-audit"))]
+pub use core::reach_audit;
 pub(crate) use core::{
     Action, ActionFn, AwaitContinue, BlockBody, BlockEntry, BlockScope, BlockSeed, BodyCtx,
     CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx, FoldingBrand, FramePlacement,

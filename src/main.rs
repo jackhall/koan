@@ -32,11 +32,36 @@ fn main() -> ExitCode {
     };
 
     let out: Box<dyn std::io::Write> = Box::new(std::io::stdout());
-    match interpret_with_writer_path(&source, path.as_deref(), out) {
+    let outcome = interpret_with_writer_path(&source, path.as_deref(), out);
+    report_region_audits();
+    match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {}", e);
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Print the debug region audits' findings to stderr after the run — the reader half of the two
+/// audits, without which turning them on surfaces nothing. Each arm compiles in with what it
+/// reports: the pin-ring log is a debug-build surface, the tightness log the `region-audit`
+/// feature's. The feature is named rather than `cfg(test)`-ored because this binary is its own
+/// crate: the library it links against is built without `--test`, so only the feature turns the
+/// tightness surface on here.
+fn report_region_audits() {
+    #[cfg(debug_assertions)]
+    for ring in koan::witnessed::pin_cycle_reports() {
+        eprintln!(
+            "region audit: pin ring retained by {:#x} along {:x?}",
+            ring.retainer, ring.path
+        );
+    }
+    #[cfg(feature = "region-audit")]
+    for flag in koan::machine::reach_audit::tightness_flags() {
+        eprintln!(
+            "region audit: over-fold at {} — member {:#x} unjustified; deps {:?} contributed nothing",
+            flag.site, flag.member, flag.non_contributing
+        );
     }
 }

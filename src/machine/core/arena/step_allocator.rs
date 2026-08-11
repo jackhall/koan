@@ -10,6 +10,8 @@ use super::{FoldingBrand, FrameStorage, KoanStorageProfile, RegionBrand};
 use crate::machine::DeliveredCarried;
 use crate::machine::core::Scope;
 use crate::machine::core::kfunction::action::scope_frame;
+#[cfg(any(test, feature = "region-audit"))]
+use crate::machine::core::reach_audit;
 use crate::machine::execute::StepCarried;
 use crate::machine::model::{Carried, CarriedFamily, KObject, KType};
 use crate::witnessed::{Reattachable, StepContext};
@@ -99,13 +101,30 @@ impl<'step> StepAllocator<'step> {
         // The fold composes the deps' reach into the built carrier and hands back the product as a
         // delivery envelope homed in this context's own frame; `born_delivered` releases that home
         // (the seal re-pins it) so the product's foreign coverage rides the step to the seal.
-        StepCarried::born_delivered(
-            self.context
-                .alloc_with::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
-                    deps,
-                    |placement, views| build(FoldingBrand::in_fold_closure(placement), views),
-                ),
-        )
+        //
+        // This is the sole instrumented fold door: the operand views and the product are nameable
+        // only inside the brand, so the tightness audit's address walk runs there and only `usize`
+        // addresses cross back out to the comparison below.
+        #[cfg(any(test, feature = "region-audit"))]
+        let audit = reach_audit::FoldAudit::begin("StepAllocator::alloc_carried_with");
+        let delivered = self
+            .context
+            .alloc_with::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
+                deps,
+                |placement, views| {
+                    #[cfg(any(test, feature = "region-audit"))]
+                    for view in views {
+                        audit.note_operand(view);
+                    }
+                    let product = build(FoldingBrand::in_fold_closure(placement), views);
+                    #[cfg(any(test, feature = "region-audit"))]
+                    audit.note_product(&product);
+                    product
+                },
+            );
+        #[cfg(any(test, feature = "region-audit"))]
+        audit.finish(deps, &delivered);
+        StepCarried::born_delivered(delivered)
     }
 
     /// Wrap a `Copy` [`KType`] handle in a step terminal: reach = own region only. A handle carries

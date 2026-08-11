@@ -24,6 +24,12 @@ path = "src/main.rs"
 seam-force-copy = []   # escape seam always copies records
 seam-force-pin  = []   # escape seam always pins records
 
+# Reach-tightness auditing: the over-pinning report at the fold chokepoint
+# (`machine::core::reach_audit`). Off by default and absent from a release build; `cargo run
+# --features region-audit -- <program>` turns it on for a debug interpreter run. Pulls
+# workgraph's white-box reach readers in, which is what a tightness comparison reads.
+region-audit = ["workgraph/test-hooks"]
+
 [dependencies]
 regex = "1.12.3"
 indexmap = "2"
