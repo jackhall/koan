@@ -682,9 +682,11 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
         "membership is exact: the restamped value's own home is an ordinary member"
     );
 
-    // The producer storage is the sole pin: the re-stamped value lives in its own region, so the
-    // product envelope's own pins are dropped here and the seal read below names that storage.
-    let restamped: Sealed<CarriedFamily, CarrierWitness> = restamped.into_cell();
+    // The producer storage is the sole pin: the re-stamped value lives in its own region, so resting
+    // it there retains nothing (the self rule strips the one member) and the seal read below names
+    // that storage.
+    let restamped: Sealed<CarriedFamily, CarrierWitness> =
+        restamped.rest_into(RegionHandle::from_owner(&*producer_frame.storage_rc()));
     let producer_storage = producer_frame.storage_rc();
     drop(envelope);
     drop(producer_frame);

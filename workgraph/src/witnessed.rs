@@ -19,7 +19,10 @@
 //! rank-2 [`Sealed::open`]. *During* a step it opens into an [`Opened`], the borrow-tied in-use
 //! state whose content lifetime rides the frame borrow so a step reads freely and
 //! [`reseal`](Opened::reseal)s at step end — the third carrier state alongside `Sealed` (at rest)
-//! and [`Delivered`](delivered::Delivered) (in transit).
+//! and [`Delivered`](delivered::Delivered) (in transit). A holder that has a carrier and its
+//! coverage before it knows which frame will own them keeps them fused as an
+//! [`Unhosted`](delivered::Unhosted) — the envelope minus its home pin, whose only exit
+//! ([`Unhosted::host`](delivered::Unhosted::host)) supplies that pin.
 //!
 //! The layout machinery underneath — the [`Reattachable`] family contract, the private [`retype`]
 //! primitive, [`erase_to_static`] and the storable [`Erased<T>`] — is the same single-lifetime
@@ -54,7 +57,7 @@ mod sectioned;
 pub use sectioned::{CellInput, CellReach, CellRef, Sectioned};
 
 mod delivered;
-pub use delivered::Delivered;
+pub use delivered::{Delivered, Unhosted};
 
 mod dormant;
 use dormant::Dormant;
@@ -1199,11 +1202,12 @@ impl<T: Reattachable + DropFree, W> Sealed<T, W> {
         self.inner.witness()
     }
 
-    /// The bundled `Erased<T>`, read without consuming the seal — for a caller that must feed the
-    /// erased inner into a further carrier (e.g. a `SealedExtern` zip) while keeping the original
-    /// seal around for a later keep-first decision. Adds no `unsafe`: the value stays erased (no
-    /// reattach), so this weakens opacity no further than [`Self::witness`] does for the witness half.
-    pub fn erased(&self) -> &Erased<T> {
+    /// The bundled `Erased<T>`, read without consuming the seal — the crate-internal half of
+    /// [`Delivered::to_extern`](delivered::Delivered::to_extern), which is where a carrier crosses
+    /// into the externally-witnessed tier. Adds no `unsafe`: the value stays erased (no reattach).
+    /// Crate-internal because dropping the witness is exactly what puts the coverage obligation on
+    /// the eventual opener, and that crossing is named once, at the door above.
+    pub(crate) fn erased(&self) -> &Erased<T> {
         &self.inner.value
     }
 }

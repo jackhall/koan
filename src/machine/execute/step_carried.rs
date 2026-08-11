@@ -17,16 +17,16 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::CarrierWitness;
-use crate::machine::core::{FrameCoverage, FrameStorage, StepAllocator, run_root_storage};
+use crate::machine::core::{FrameStorage, StepAllocator, run_root_storage};
 use crate::machine::model::CarriedFamily;
-use crate::witnessed::{Delivered, DropFree, Reattachable, Witnessed};
+use crate::witnessed::{Delivered, DropFree, Reattachable, Unhosted, Witnessed};
 
 /// A value carrier confined to the scheduler step that built it. The brand lifetime `'step` is the
 /// step tail's rank-2 open lifetime (`run_loop.rs`), unnameable outside that closure, so a
 /// `StepCarried` cannot be stored past its construction step: the within-step transient invariant,
 /// enforced by the borrow checker.
 ///
-/// The `inner` carrier is **private to this module** — that privacy is the mechanism. The sole exit
+/// The `inner` pair is **private to this module** — that privacy is the mechanism. The sole exit
 /// is [`Self::seal_at_step`], which consumes the wrapper into a delivery envelope; no accessor hands
 /// back the lifetime-free [`Witnessed`] for a builtin to stash. `PhantomData<&'step ()>` is
 /// covariant, matching [`FoldToken`](crate::witnessed::FoldToken): escaping the brand would require
@@ -41,13 +41,15 @@ use crate::witnessed::{Delivered, DropFree, Reattachable, Witnessed};
 /// [`seal_at_step`](Self::seal_at_step) (`pub(super)`) being unreachable outside the crate, plus the
 /// brand lifetime — never on the type being unnameable.
 pub struct StepCarried<'step, T: Reattachable + DropFree = CarriedFamily> {
-    inner: Witnessed<T, CarrierWitness>,
-    /// The carrier's owned foreign coverage — pinning every region the value reaches beyond the
-    /// producer's own. Empty for a region-pure / empty-reach producer (the majority of Done sites);
-    /// carried in hand for a reach-carrying producer (a resident binding read, a merge product, a
-    /// splice). [`Self::seal_at_step`] consumes it into the delivery envelope, so the terminal's
-    /// reach is threaded from here — never re-derived from the carrier's description.
-    pins: FrameCoverage,
+    /// The carrier fused with its owned coverage, minus the home pin — the library's
+    /// [`Unhosted`] state, which is exactly this wrapper's shape: the host is the *finalizing*
+    /// node's anchor owner, not known at any door that builds a Done-arm value. The coverage pins
+    /// every region the value reaches beyond the producer's own — empty for a region-pure producer
+    /// (the majority of Done sites), carried in hand for a reach-carrying one (a resident binding
+    /// read, a merge product, a splice). [`Self::seal_at_step`] supplies the host and the pair
+    /// becomes the delivery envelope, so the terminal's reach is threaded from here — never
+    /// re-derived from the carrier's description.
+    inner: Unhosted<T, CarrierWitness, FrameStorage>,
     step: PhantomData<&'step ()>,
 }
 
@@ -72,8 +74,7 @@ impl<'step, T: Reattachable + DropFree> StepCarried<'step, T> {
     /// carrier, and this door holds no pin to open one under.)
     pub(crate) fn born(inner: Witnessed<T, CarrierWitness>) -> Self {
         StepCarried {
-            inner,
-            pins: FrameCoverage::empty(),
+            inner: Unhosted::born(inner),
             step: PhantomData,
         }
     }
@@ -81,20 +82,19 @@ impl<'step, T: Reattachable + DropFree> StepCarried<'step, T> {
     /// Wrap a **reach-carrying** carrier into the step brand by consuming its whole delivery
     /// envelope — a lifted binding (the value's home region among the members), a splice recovered
     /// from its producer's envelope, or the product of a composition into the step's own destination
-    /// region (a fold, a relocation, a merge). The envelope is the only source: the carrier and the
-    /// coverage cannot arrive from different values, and a caller cannot drop the pins and brand the
-    /// carrier alone. [`Self::seal_at_step`] hands the coverage back into the delivery envelope, so
-    /// the terminal's reach is owned end-to-end rather than re-derived.
+    /// region (a fold, a relocation, a merge). The envelope is the only source, and it is never
+    /// taken apart: [`Delivered::unhost`] drops the home pin and keeps the carrier fused to its
+    /// coverage, so the two cannot arrive from different values and a caller cannot drop the pins
+    /// and brand the carrier alone. [`Self::seal_at_step`] pins a host back on, so the terminal's
+    /// reach is owned end-to-end rather than re-derived.
     ///
     /// The coverage travels whole, residence included. Where residence *is* the step's own
     /// destination region, [`Self::seal_at_step`] re-pins it as the terminal's host and the union
     /// collapses the duplicate; where it is some outer region the value was lifted out of (a binding
     /// scope), it is a genuine member and stripping it would drop the only pin naming it.
     pub(crate) fn born_delivered(envelope: Delivered<T, CarrierWitness, FrameStorage>) -> Self {
-        let (cell, pins) = envelope.into_parts();
         StepCarried {
-            inner: cell.unseal(),
-            pins,
+            inner: envelope.unhost(),
             step: PhantomData,
         }
     }
@@ -111,7 +111,7 @@ impl<'step, T: Reattachable + DropFree> StepCarried<'step, T> {
         self,
         host: Rc<FrameStorage>,
     ) -> Delivered<T, CarrierWitness, FrameStorage> {
-        Delivered::seal(self.inner, host, self.pins)
+        self.inner.host(host)
     }
 
     /// Seal the carrier the door built over its anchor's owner and read the delivered value by
@@ -130,7 +130,7 @@ impl<'step, T: Reattachable + DropFree> StepCarried<'step, T> {
         host: Rc<FrameStorage>,
         read: impl for<'b> FnOnce(&'b <T as Reattachable>::At<'b>) -> R,
     ) -> R {
-        Delivered::seal(self.inner, host, self.pins).open_ref(read)
+        self.inner.host(host).open_ref(read)
     }
 }
 

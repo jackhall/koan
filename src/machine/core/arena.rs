@@ -474,14 +474,16 @@ impl KoanRegionExt for KoanRegion {
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         // A zero-dep fold: the engine composes no operand reach, so the envelope it hands back is
         // homed in `owner`'s own region with empty coverage — the same claim `yoke_branded`'s
-        // reference-only re-bundle makes, reached through the fold door instead. Unsealing it drops
-        // an empty coverage, so nothing a pin was holding is discarded.
-        StepContext::new(owner)
+        // reference-only re-bundle makes, reached through the fold door instead. Resting it in that
+        // same region retains nothing (the self rule strips the one member), so the returned carrier
+        // is exactly the region-pure one the door promises.
+        let handle = RegionHandle::from_owner(&*owner);
+        StepContext::new(Rc::clone(&owner))
             .alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
                 &[],
                 |placement, _views| build(FoldingBrand::in_fold_closure(placement)),
             )
-            .into_cell()
+            .rest_into(handle)
             .unseal()
     }
 

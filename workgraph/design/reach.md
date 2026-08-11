@@ -122,7 +122,20 @@ The transform verbs:
   released when it dropped is now held until that region dies. It is how an
   embedder parks a resolved sub-result **inside a value it owns** — the cell is
   `Copy` and `Drop`-free, so it can sit inline in the embedder's own bit-copy data
-  rather than in a slot the library holds.
+  rather than in a slot the library holds. `rest_into` is the same verb consuming
+  the envelope instead of duplicating it, which is what every relocation product
+  takes: the composition already retained the product's reach at the destination,
+  so resting it there lodges a bundle the region holds anyway. **These two are the
+  whole public exit from an envelope to a bare cell**, and both name the region the
+  coverage went to — an exit that merely dropped the pins would hand back a cell
+  whose every later read is a promise no one checked.
+- **`Delivered::unhost` / `Unhosted::host`, the missing-home pair** — an embedder
+  holder whose host is chosen *after* the value exists (a step-scoped brand, whose
+  host is the finalizing node's anchor owner) cannot keep an envelope, and must not
+  keep the cell and the coverage as two fields it could separate. `unhost` drops
+  the home pin and keeps the pair fused as an `Unhosted`, whose only exit is
+  `host`, which pins a home back on and yields the envelope. `Unhosted::born` is
+  the same state for a no-reach carrier, whose coverage is empty and exact.
 - **`Delivered::project`** re-families an envelope *in place* — no mint, no copy,
   no relocation. The envelope keeps its residence, coverage and witness, which stay
   correct because the projection selects a part **of** the value the envelope

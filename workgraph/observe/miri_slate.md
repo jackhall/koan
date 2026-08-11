@@ -217,7 +217,10 @@ the adoption (`open_adopted`) mints into the destination, which retains the owne
 the same act (the test drops the producer and reads back under the destination's own pin alone); and
 the round-trip test walks `Delivered → open_adopted → Opened → reseal → Sealed → open_at → Opened →
 reseal → Sealed → lift → Delivered` with every intermediate handle dropped before the final read, so
-only the chain of pins each verb hands the next keeps the value's region alive.
+only the chain of pins each verb hands the next keeps the value's region alive. The `unhost`/`host`
+pair is the same question across a *hostless* interval: a value homed in one region and reaching a
+second is unhosted, both handles die, and a third frame that pins neither supplies the eventual host
+— so a pair that shed either member on the way through is a UAF at the read.
 
 Three further shapes pin what the lift's `home` parameter and a region's union bundle are each
 answerable for. The **degenerate reach** — a bump-hosted `Copy` pointee with an *empty* member set —
@@ -239,12 +242,13 @@ A further shape rides this group: an envelope dropped **by value** while its own
 last `Rc` on the region its contents point into. The function-entry retag descends into the
 by-value aggregate, so the in-call deallocation must not free memory carrying a protected tag —
 which is what the dormant union slot supplies (retag does not descend into unions). Two tests drop
-the envelope directly rather than splitting it with `into_parts`, and a third builds the shape
+the envelope directly rather than resting its cell out first, and a third builds the shape
 minimally.
 
 - `lift_reowns_description_into_transit_bundle`
 - `adopt_settles_resident_value_into_dest`
 - `transform_verb_round_trip_preserves_liveness`
+- `an_unhosted_pair_pins_its_whole_reach_until_it_is_hosted`
 - `lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle`
 - `delivered_by_value_drop_frees_region_in_call`
 - `a_regions_union_pins_what_its_own_members_reach`

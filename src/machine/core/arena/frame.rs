@@ -372,11 +372,14 @@ impl CallFrame {
     /// The child scope's externally-witnessed carrier by value (`SealedExtern<ScopeRefFamily>` is
     /// `Copy`) — the run-loop step's source for a `Yoked` slot, opened at the step brand alongside the
     /// continuation / contract / deps instead of re-anchored through the borrow-bounded `attach`.
-    /// Reconstructed from the envelope's sealed carrier: the same erased `&Scope`, exposed witness-less
-    /// so it [`zip`](SealedExtern::zip)s with the step's other externally-witnessed carriers under one
-    /// brand (the envelope host is folded into that step witness separately).
+    /// Re-sealed off the envelope's own carrier ([`Delivered::to_extern`]): the same erased `&Scope`,
+    /// exposed witness-less so it [`zip`](SealedExtern::zip)s with the step's other
+    /// externally-witnessed carriers under one brand (the envelope host is folded into that step
+    /// witness separately). This frame owns the envelope it re-seals from and outlives the step that
+    /// opens the zip, so the pin presented there covers the scope — the externally-witnessed tier's
+    /// obligation, discharged by the holder rather than by the carrier.
     pub(crate) fn scope_sealed(&self) -> SealedExtern<ScopeRefFamily> {
-        SealedExtern::seal(*self.envelope.cell().erased())
+        self.envelope.to_extern()
     }
 
     /// Run `f` with this frame's child scope opened at a `for<'b>` brand — the sole scope read, folded

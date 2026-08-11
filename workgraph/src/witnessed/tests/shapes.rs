@@ -772,6 +772,52 @@ fn transform_verb_round_trip_preserves_liveness() {
     assert_eq!(delivered.open(|r| *r), 11);
 }
 
+/// **The unhosted pair carries the whole reach across a hostless interval.** `unhost` drops the home
+/// pin and keeps the carrier fused to its coverage; `host` pins a new home back on. The value here
+/// lives in `producer`'s region and reaches `reached`, and *both* handles die while the pair is
+/// unhosted — so the coverage the pair carried is the only thing that kept either region alive, and
+/// the eventual host is a third frame that pins neither. A `born` pair, which claims an empty reach,
+/// would drop them both here; an `unhost` that dropped the home member would drop `producer`.
+#[test]
+fn an_unhosted_pair_pins_its_whole_reach_until_it_is_hosted() {
+    let producer = frame();
+    let reached = frame();
+    // A value living in `producer`'s region whose borrow reaches `reached`: the merge mints both
+    // regions into the product's description, homed in `producer`.
+    let far: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> = Delivered::seal(
+        Witnessed::resident_in::<ShapeProfile>(store_val(&reached, 29), &reached),
+        Rc::clone(&reached),
+        StepCoverage::empty(),
+    );
+    let home: Delivered<RegionHandleFamily<ShapeProfile>, Carrier<ShapeFrame>, ShapeFrame> =
+        Delivered::seal(
+            Witnessed::<RegionHandleFamily<ShapeProfile>, Rc<ShapeFrame>>::yoke_handle(
+                Rc::clone(&producer),
+                |handle| handle,
+            )
+            .into_reference_only::<ShapeProfile>(),
+            Rc::clone(&producer),
+            StepCoverage::empty(),
+        );
+    let merged = far.merge_into::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
+        home,
+        |value, _dest, _token| value,
+    );
+
+    let pair = merged.unhost();
+    drop(reached);
+    drop(producer);
+
+    // A frame that pins neither region: the read below is covered by what the pair carried across
+    // the drops, never by the host.
+    let host = frame();
+    assert_eq!(
+        pair.host(Rc::clone(&host)).open(|r| *r),
+        29,
+        "the unhosted pair kept both the value's home and its reached region alive"
+    );
+}
+
 /// **Finish-surface fold** — `alloc_with` folds every listed dep's envelope into the result's
 /// carrier *by construction*, before the build closure can embed a dep view. The built value here
 /// IS a dep view (a borrow into the producer's region, riding the result un-copied); the producer

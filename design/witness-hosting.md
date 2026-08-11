@@ -29,11 +29,13 @@ generic over `Reattachable` families, so a function is a family rather than a
 carrier variant, and both ride the same three carrier states
 ([reach.md § The carrier states](../workgraph/design/reach.md#the-carrier-states)).
 
-Koan's own type positions name `Delivered` — the one state the embedder can name —
-where a value is in transit: a parked node slot, a dep terminal, a finish's result.
-At rest a binding entry holds a `Sealed`; inside a step a read is an `Opened<'b>`,
-typed at the step's `'step` lifetime by
-[`StepCarried`](../src/machine/execute/step_carried.rs). Dispatch's picked overload
+Koan's own type positions name `Delivered` where a value is in transit: a parked
+node slot, a dep terminal, a finish's result. At rest a binding entry holds a
+`Sealed`; inside a step a read is an `Opened<'b>`.
+[`StepCarried`](../src/machine/execute/step_carried.rs) types the step's own Done-arm
+carrier at the `'step` lifetime, wrapping an `Unhosted` — the envelope minus its home
+pin, since the host is the finalizing node's anchor owner and no door that builds a
+Done-arm value knows it yet. Dispatch's picked overload
 rides an adopted `Opened<'step, KFunctionFamily>` carried by `Resolved<'step>` across
 argument evaluation and `reseal`ed into the `ReturnContract` that escapes into the
 call chain.

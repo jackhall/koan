@@ -491,7 +491,9 @@ impl<'a> Scope<'a> {
             AdoptDisposition::Relocate => RegionEscape::Copy,
             AdoptDisposition::Pin => RegionEscape::Pin,
         };
-        Ok(self.relocate_delivered(cell, project, verb)?.into_cell())
+        Ok(self
+            .relocate_delivered(cell, project, verb)?
+            .rest_into(self.brand().handle()))
     }
 
     /// Relocate a delivered value's **projection** into this scope's region through the fold door,
@@ -610,7 +612,7 @@ impl<'a> Scope<'a> {
                     Carried::Object(door.alloc_object_folded(KObject::KFunction(function_view)))
                 },
             )
-            .into_cell()
+            .rest_into(self.brand().handle())
     }
 
     /// Seal a resident `Module` value into this scope — the Object-arm module bind
@@ -646,7 +648,7 @@ impl<'a> Scope<'a> {
                     Carried::Object(door.alloc_object_folded(KObject::Module(module_view)))
                 },
             )
-            .into_cell()
+            .rest_into(self.brand().handle())
     }
 
     /// Open the module `delivered` carries as a `USING … SCOPE` window on this scope — the root that
@@ -740,7 +742,7 @@ impl<'a> Scope<'a> {
                     Carried::Object(door.alloc_object_folded(KObject::Module(module)))
                 },
             )
-            .into_cell()
+            .rest_into(self.brand().handle())
     }
 }
 

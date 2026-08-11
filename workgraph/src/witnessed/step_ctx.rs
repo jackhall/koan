@@ -172,13 +172,10 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
                 fold_dep_view::<V, P>(),
             )
         });
-        // `map_pinned` re-projects the value under the same witness, so the accumulated envelope's
-        // pins carry over unchanged as the built carrier's owned coverage.
-        let (cell, pins) = acc.into_parts();
-        let result = cell
-            .unseal()
-            .map_pinned::<T, _>(&self.frame, finalize_alloc_with::<F, T, V>(build));
-        Delivered::seal(result, Rc::clone(&self.frame), pins)
+        // The projection re-anchors under the accumulator's own pins and re-seals under the same
+        // witness, so the accumulated envelope's coverage — this context's frame among its members,
+        // unioned in at `acc0` — carries over unchanged as the built carrier's owned coverage.
+        acc.project::<T>(finalize_alloc_with::<F, T, V>(build))
     }
 
     /// [`Self::alloc`] for a frame owning a library [`Region`]: the build closure receives the

@@ -24,6 +24,12 @@
 //! reaches is a checked property of the bytes rather than a promise made before they existed. See
 //! [design/reach.md § Composition](../../design/reach.md#composition-minting-a-description-and-retaining-its-pins).
 //!
+//! The fusion holds on the way out too. The public exits to a bare [`Sealed`] —
+//! [`Delivered::rest_in`] and [`Delivered::rest_into`] — both take the destination and lodge the
+//! coverage there, so a cell is obtainable only once its pins are somewhere durable; and a holder
+//! that needs the pair *before* it knows its home takes [`Delivered::unhost`], which drops only the
+//! home pin and keeps the rest fused as an [`Unhosted`] whose sole exit pins a home back on.
+//!
 //! [`Delivered::adopt_into`] fuses the mint with the re-anchor it justifies into one copy-free
 //! adoption verb, so a caller cannot split the pin from the reattach it pins — and the mint itself
 //! establishes the destination's retention ([`ReachDescription::mint_resident`]), so there is no
@@ -34,7 +40,7 @@ use std::rc::Rc;
 use super::{
     Carrier, DropFree, Erased, FoldToken, FoldedPlacement, HasRegionHandle, Opened, PinBundle,
     PinsRegion, ReachDescription, Reattachable, Region, RegionHandle, RegionHandleFamily,
-    RegionOwner, Sealed, StepCoverage, StorageProfile, Witnessed,
+    RegionOwner, Sealed, SealedExtern, StepCoverage, StorageProfile, Witnessed,
 };
 
 /// A sealed carrier paired with the owned [`PinBundle`] that pins every region its value reaches —
@@ -115,24 +121,40 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
         StepCoverage(self.pins.0.retaining(keep))
     }
 
-    /// Consume the envelope into its parts — the dormant carrier and the owned coverage — for a
-    /// consumer that re-seeds a hold or re-envelopes the value under the same ownership it already
-    /// holds (the value-terminal finalize keeps the coverage and re-seals the carrier).
-    pub fn into_parts(self) -> (Sealed<T, W>, StepCoverage<F>) {
-        (self.cell, self.pins)
+    /// Drop the **home pin** and keep the pair: the envelope's carrier and its whole coverage as an
+    /// [`Unhosted`] — the state for a holder that has a value in hand before it knows which frame
+    /// will own it (an embedder's step-scoped brand, whose host is the finalizing node's anchor
+    /// owner). The pair stays fused: the only way back out is [`Unhosted::host`], which re-pins a
+    /// home and hands back an envelope.
+    pub fn unhost(self) -> Unhosted<T, W, F> {
+        Unhosted {
+            cell: self.cell,
+            pins: self.pins,
+        }
     }
 
-    /// The dormant carrier cell — for a consumer that reads the erased inner (a `SealedExtern`
-    /// zip) or threads the seal onward while the envelope keeps covering it.
-    pub fn cell(&self) -> &Sealed<T, W> {
-        &self.cell
-    }
-
-    /// Recover the dormant carrier, consuming the envelope and dropping the retained pin — for a
-    /// consumer that re-homes the value under its own liveness and no longer needs the transit host
-    /// (the single-part pass-through's `unseal`).
-    pub fn into_cell(self) -> Sealed<T, W> {
+    /// Recover the dormant carrier, consuming the envelope and dropping its coverage — for a
+    /// consumer that has taken the coverage over by another route and no longer needs the transit
+    /// pins (the scheduler's finalize, which re-seeds them as the slot's retention hold; its
+    /// re-home, whose value moved into a region outliving the scheduler). Crate-internal precisely
+    /// because it drops the pins without saying where the retention went: the embedder-facing exit
+    /// is [`rest_into`](Self::rest_into), which lodges the coverage in the region it names.
+    pub(crate) fn into_cell(self) -> Sealed<T, W> {
         self.cell
+    }
+
+    /// The carrier's erased inner re-sealed **witness-less**, into the externally-witnessed tier —
+    /// for a holder that zips this value with other carriers under one presented pin (an embedder's
+    /// step open). The reach witness is dropped, so the returned [`SealedExtern`] carries no
+    /// evidence of its own: opening it takes a pin at the call, and *that* pin covering this
+    /// value's home is the caller's obligation, checked by nothing (the externally-witnessed tier's
+    /// standing prose contract). The envelope is borrowed, so a holder that keeps it — a frame that
+    /// owns the envelope it is re-sealing from — is itself the coverage.
+    pub fn to_extern(&self) -> SealedExtern<T>
+    where
+        Erased<T>: Copy,
+    {
+        SealedExtern::seal(*self.cell.erased())
     }
 
     /// Drop the delivered value **to rest** in `dest`'s region (`Delivered → Sealed`): duplicate the
@@ -142,11 +164,12 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
     /// an embedder's own `Copy` value while the pins that keep its pointee alive live one level
     /// down, in the region.
     ///
-    /// Fused so the two cannot be split: a caller that received the cell and the coverage separately
-    /// could store the cell and drop the pins, and every later read of it would dangle. Here the
-    /// only way to obtain the cell is to have already lodged its coverage, so any read under a hold
-    /// on `dest`'s region — [`Sealed::open_with`], or an [`Opened`] at `dest`'s own lifetime — is
-    /// covered by construction, for as long as that region lives.
+    /// This and [`rest_into`](Self::rest_into) are the whole public exit from an envelope to a bare
+    /// cell, and both take the destination: a caller that received the cell and the coverage
+    /// separately could store the cell and drop the pins, and every later read of it would dangle.
+    /// Here the only way to obtain the cell is to have already lodged its coverage, so any read
+    /// under a hold on `dest`'s region — [`Sealed::open_with`], or an [`Opened`] at `dest`'s own
+    /// lifetime — is covered by construction, for as long as that region lives.
     ///
     /// Distinct from [`adopt_into`](Self::adopt_into), which *mints* the value's reach into `dest`
     /// and re-anchors the value at `dest`'s own lifetime: nothing is minted here and the value keeps
@@ -167,8 +190,22 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
         Erased<T>: Copy,
         W: Clone,
     {
-        let (cell, coverage) = self.duplicate().into_parts();
-        dest.retain_reach(coverage);
+        self.duplicate().rest_into(dest)
+    }
+
+    /// [`rest_in`](Self::rest_in) **consuming** the envelope instead of duplicating it — the drop to
+    /// rest for a holder that is done with the value in transit, which is every relocation product:
+    /// a composition mints its product's reach into `dest`'s own side table and retains it there, so
+    /// resting one lodges a bundle the region already holds and the envelope's transit copy has
+    /// nothing left to do. Free of [`rest_in`](Self::rest_in)'s `Copy`/`Clone` bounds, since nothing
+    /// is duplicated.
+    pub fn rest_into<'d, P>(self, dest: RegionHandle<'d, P>) -> Sealed<T, W>
+    where
+        P: StorageProfile<FrameOwner = F>,
+        F: RegionOwner<Region = Region<P>>,
+    {
+        let Delivered { cell, pins } = self;
+        dest.retain_reach(pins);
         cell
     }
 
@@ -523,6 +560,49 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
             |_product, _region| true,
             relocate,
         )
+    }
+}
+
+/// A [`Delivered`] **before its home is known**: the same fused carrier-plus-coverage pair, minus the
+/// home pin. It exists for the one holder shape the envelope cannot serve — a value built in a step
+/// whose host is the frame that will *finalize* it, chosen after the step body has already produced
+/// the carrier. Rather than let such a holder carry the cell and the coverage as two fields it could
+/// separate, it carries this: the fields are private, no accessor hands the cell back, and the only
+/// exit is [`host`](Self::host), which supplies the missing pin and yields the envelope.
+///
+/// The coverage travels whole. Where the eventual host *is* the region the value already lives in,
+/// [`host`](Self::host)'s union collapses the duplicate; where the value was lifted out of some
+/// outer region, that region is a genuine member and dropping it would discard the only pin naming
+/// it.
+pub struct Unhosted<T: Reattachable + DropFree, W, F: PinsRegion> {
+    cell: Sealed<T, W>,
+    pins: StepCoverage<F>,
+}
+
+impl<T: Reattachable + DropFree, W, F: PinsRegion> Unhosted<T, W, F> {
+    /// Hold a **no-reach** carrier hostless: a value whose borrows reach nothing beyond the region
+    /// it lives in, so there is no coverage to carry and the empty bundle is exact. The premise is
+    /// the construction door's, not checked here — a carrier whose mint composed no source has a
+    /// description with no members at all, and the membership query lives on the opened carrier,
+    /// which this state holds no pin to reach. A value that *does* reach elsewhere arrives through
+    /// [`Delivered::unhost`], carrying its bundle.
+    pub fn born(witnessed: Witnessed<T, W>) -> Self {
+        Unhosted {
+            cell: Sealed::seal(witnessed),
+            pins: StepCoverage::empty(),
+        }
+    }
+
+    /// Pin the home and become a delivery envelope — the sole exit. `home` is unioned into the
+    /// coverage exactly as the envelope's own constructors union theirs, so a hosted pair is
+    /// indistinguishable from one that was never unhosted. The caller supplies the right owner (the
+    /// frame the value is being stored against); this door's contract is only that it is the one way
+    /// out.
+    pub fn host(self, home: Rc<F>) -> Delivered<T, W, F> {
+        Delivered {
+            cell: self.cell,
+            pins: StepCoverage(PinBundle::union(&PinBundle::singleton(home), &self.pins.0)),
+        }
     }
 }
 

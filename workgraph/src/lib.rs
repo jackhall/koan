@@ -13,7 +13,9 @@
 //!   [`witnessed::Delivered`] in transit (owned pins), [`witnessed::Sealed`] at rest (weak members
 //!   via an arena-hosted description), and [`witnessed::Opened`] in use (borrowed at a step
 //!   lifetime under a presented pin — the only state that answers a membership query). The
-//!   reference-only reach witness they carry is [`witnessed::Carrier`].
+//!   reference-only reach witness they carry is [`witnessed::Carrier`]. [`witnessed::Unhosted`] is
+//!   that in-transit envelope minus its home pin, for a holder whose host is chosen after the value
+//!   exists; its only exit re-pins a home and hands back a [`witnessed::Delivered`].
 //! - The witness traits an embedder implements for its own region-owner type:
 //!   [`witnessed::Witness`], [`witnessed::WitnessRegion`], [`witnessed::RegionOwner`] (the
 //!   `Rc<F>` blanket-impl seam for [`witnessed::WitnessRegion`]), and the reference-only
