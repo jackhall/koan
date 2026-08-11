@@ -175,7 +175,7 @@ The rails the dispatch driver feeds:
     path produces.
   - `HeadDeferred` (`(pick) {x = 1}`) and `TypeHeadDeferred`
     (`:(pick_type) {x = 1}`) — [`HeadDeferredState`](../../src/machine/execute/dispatch/head_deferred.rs)
-    sub-dispatches the head first (an Owned edge; the park/resume pair mirrors
+    sub-dispatches the head first (an owned dep; the park/resume pair mirrors
     `CtorState`'s), then branches the resumed value's kind into a
     `ResolvedCallable`. `HeadDeferred` admits any function value or a
     constructible type; `TypeHeadDeferred` (the `:(...)` sigil guarantees a

@@ -277,8 +277,8 @@ reference to the value's reach description and nothing else, pinning nothing its
 is where both of the value's region facts live, its host region and the regions its borrows reach —
 and seals it **as-is** (a declared return is checked and re-stamped in place first): there is no
 Done-boundary relocation or sever gate. What keeps the
-producer frame alive is the scheduler's **frame-retention hold**, seeded at finalize and released
-once every destination has pulled (pull-count zero); a walking terminal carries that hold inside its
+producer frame alive is the scheduler's **frame-retention hold**, materialized at finalize under the
+standing-destination count and released at destination-count zero; a walking terminal carries that hold inside its
 [`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope's pin bundle. Because that liveness
 is a refcount protocol rather than a lexical extent, a terminal rests in `Retained` — the tier with
 **no read verb at all**, which re-enters circulation only through `Delivered::lift` under the owner
@@ -707,19 +707,19 @@ methods, so the invariant (every forward edge in a producer's `notify` matched
 by a backward `edges` entry and a +1 in `pending` on the consumer) is enforced
 by the surface rather than by convention.
 
-Transient-node reclamation runs through `Scheduler::reclaim_deps` from the
+Transient-node reclamation runs through the step-end wire release from the
 unified node handler `KoanRuntime::run_step`, *after* the finish closure returns
 its `Outcome` but *before* the harness applies it. So
 when a dispatch splice finish has rewritten `working_expr.parts` to
 `WorkingPart::Spliced`, the freed slots are back on the free-list before
-the harness dispatches the bound expression — its `add()` can recycle them
-immediately. `reclaim_deps` clears the consumer's dep edges and
-invokes `Scheduler::free` per dep; the walk follows `DepGraph::owned_children`,
-which only yields `DepEdge::Owned` arms (`Notify` arms are filtered
-inside `DepGraph`), so reclaiming a consumer cannot reach a sibling
-producer's subtree through a park edge. It skips any still-live slot
-via the `NodeStore::is_live` guard, so a free that dives into another
-in-flight user-fn call leaves that subtree for that call's own reclamation.
+the harness dispatches the bound expression — its `alloc_node` can recycle them
+immediately. The release decrements each wired producer's standing-destination
+count; a producer at zero is reclaimed and releases its own wires recursively,
+while a producer another destination still counts — a sibling park producer, or
+one the run roots — survives, so reclaiming a consumer cannot reach into a
+shared subtree. A mid-run slot is skipped via the `NodeStore::is_live` guard, so
+a release whose decrements dive into another in-flight user-fn call leaves that
+subtree for that call's own reclamation.
 
 ## Verification
 

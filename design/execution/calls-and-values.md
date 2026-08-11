@@ -91,8 +91,8 @@ recursive tree-walker can't get cheaply.
 
 ### What amortizes
 
-- **Slot recycling.** `Scheduler::reclaim_deps` frees sub-slots eagerly
-  during [`run_step`](../../src/machine/execute/run_loop.rs), and `add()`
+- **Slot recycling.** The step-end wire release reclaims sub-slots eagerly
+  during [`run_step`](../../src/machine/execute/run_loop.rs), and `alloc_node`
   pulls
   from the free-list before extending the underlying vectors. A
   steady-state recursive body reuses the same slot indices across

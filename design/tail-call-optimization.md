@@ -118,9 +118,10 @@ run loop's ordering: graph edits apply after a step returns, never mid-step.
 **Lemma 2 — the retiring region outlives argument adoption.** The retiring
 incarnation seals its carried arguments as carriers hosted in its own region; the
 reinstalled incarnation adopts them into its fresh region on its first step.
-Frame-retention holds the retiring region's owner until every destination has
-pulled — here, until the one successor incarnation adopts (release at pull-count
-zero, [reach.md § Retention model](../workgraph/design/reach.md#retention-model)).
+Frame-retention holds the retiring region's owner until every standing
+destination has released — here, until the one successor incarnation adopts
+(release at destination-count zero,
+[reach.md § Retention model](../workgraph/design/reach.md#retention-model)).
 So the free is ordered *after* the adoption copy, never before, and the single
 consumer of tail position makes the release prompt.
 

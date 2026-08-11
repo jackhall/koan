@@ -71,9 +71,9 @@ relocates it across each dep edge — never the producer.
   [`CarrierWitness`](../../src/machine/core/carrier_witness.rs) — the
   reference-only carrier, pinning nothing — **as-is**: there is no Done-boundary
   relocation or sever gate. The producer frame's lifetime is the scheduler's frame-retention
-  hold, seeded at finalize and released once every destination has pulled
-  (pull-count zero), so a region-pure and a frame-borrowing terminal alike leave
-  the frame to retention. The bare `NodeLift` hook is thereby reusable for any
+  hold, materialized at finalize under the standing-destination count and
+  released at destination-count zero, so a region-pure and a frame-borrowing
+  terminal alike leave the frame to retention. The bare `NodeLift` hook is thereby reusable for any
   delivery edge.
 
 Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none

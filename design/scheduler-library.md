@@ -6,8 +6,8 @@ stack with no dependency on Koan's language semantics. It ships as two
 workspace crates: `cellgraph` *(working name — [cellgraph.md](../workgraph/design/cellgraph.md))*,
 the computation-cell substrate (witnessed memory plus a cell table:
 continuations, memory anchors, inter-cell values — no acyclicity, no
-terminality), and `workgraph`, the DAG scheduler layered on it (dep edges,
-park/notify, cycle detection, terminal results, retention, splicing). The
+terminality), and `workgraph`, the DAG scheduler layered on it (dep wires,
+wake/notify, cycle detection, terminal results, retention, splicing). The
 dependency direction (`koan` → `workgraph` → `cellgraph`, never the reverse)
 is what makes "no Koan type in scope" compile-enforced rather than a
 convention. Koan is its first embedder, re-exporting `workgraph::witnessed`
@@ -70,9 +70,11 @@ a concept, not a final identifier.
   representation, the resident/walking carrier forms, and the holder rule.
 - **Slot / node** — one unit of scheduled work with an identity (`NodeId`),
   dep edges, and eventually a terminal.
-- **Dep** — a producer another slot waits on. **Park** deps are
-  notify-only (kept alive); **owned** deps are cascade-freed with their
-  consumer.
+- **Dep** — a producer another slot waits on. To the scheduler every dep is
+  one **wire**: a wake edge while the producer is pending, and one standing
+  destination on its retention count until the consumer releases it. The
+  **park**/**owned** labels are Koan's `Deps`-currency roles (positional
+  addressing and dispatch classification), not scheduler semantics.
 - **Terminal** — a slot's finished result: a sealed carrier, or the
   workload's error.
 - **Delivery envelope** — *(working name `Delivered`)* a walking terminal's
@@ -222,8 +224,8 @@ stays smaller.
 
 ```rust
 let mut deps = Deps::new();
-deps.park_on(producer);                    // dedup'd notify-only edge
-let arg = deps.own(request);               // owned edge, returns owned index
+deps.park_on(producer);                    // dedup'd park entry
+let arg = deps.own(request);               // owned entry, returns owned index
 ```
 
 `Deps` owns the `[park..., owned...]` layout internally. A finish addresses

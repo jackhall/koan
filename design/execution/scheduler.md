@@ -138,9 +138,9 @@ method names only `NodeId` and the workload's associated types — no signature
 names a `KExpression`, `Scope`, or AST type. `pop_next` / `take_for_run` /
 `replace` drive a slot's lifecycle; `alloc_node`, `install_edges` and
 `splice_forward` wire the graph — `install_edges` being the single door for
-wiring an already-allocated slot, with the alias-resolving `add_owned_edge` /
-`add_park_edge` facades it routes staying scheduler-internal;
-`finalize` / `free` / `reclaim_deps` terminalize and reclaim; `read*` /
+wiring an already-allocated slot, routing the same scheduler-internal,
+alias-resolving wire primitive `alloc_node` uses;
+`finalize` and the wire-release verb terminalize and reclaim; `read*` /
 `is_result_ready` / `would_create_cycle` / `unresolved` are the reads. No trait
 wraps `Scheduler`: those are inherent methods capped `pub(crate)`, so only the
 Koan driver reaches them, and the `queues` / `deps` / `store` fields stay
@@ -183,13 +183,18 @@ coherent — is the library's
 ([workgraph/design/dag-scheduler.md](../../workgraph/design/dag-scheduler.md)).
 What is Koan's is *which* edges each dispatch shape installs:
 
-- **Owned** edges are the sub-Dispatches a slot spawns for its own nested
+- **Owned** deps are the sub-Dispatches a slot spawns for its own nested
   sub-expressions — the deps of the working-copy splice, a body block's leading
-  statements. They are the slot's to cascade-reclaim.
-- **Notify** (park) edges are Koan's wait-on-someone-else's-producer cases: a
-  dispatch decide's park-on-producer when a name resolves to a still-running
-  binding producer, and a dep-finish's `Existing` sibling parks. These leave the
-  producer alive and unowned, which is why the reclaim walk skips them.
+  statements. Their spawning consumer holds their only standing destination, so
+  they reclaim when it releases its wires.
+- **Park** deps are Koan's wait-on-someone-else's-producer cases: a dispatch
+  decide's park-on-producer when a name resolves to a still-running binding
+  producer, and a dep-finish's `Existing` sibling parks. Their producer keeps
+  other standing destinations (its own spawner's wire, or the run's root pull),
+  which is why a reader's release leaves it alive.
+
+To the scheduler both are the same wire; the owned/park split is Koan's `Deps`
+currency labeling — positional addressing plus the classification below.
 
 The classification behind the choice — ready / already-errored / would-cycle /
 must-park — is Koan policy over the library's dependence primitives, and lives in
@@ -283,7 +288,7 @@ construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 assertions in the test suite. When a body has leading (non-tail) statements,
 they become owned deps the slot parks on (one body-block `DepRequest::BodyBlock`) and
 the `Continue` tail fires only from the resolving finish — so the leading
-siblings run, and cascade-free, before the tail-replace, so the tail hop
+siblings run, and are reclaimed, before the tail-replace, so the tail hop
 [reinstalls the slot](../tail-call-optimization.md#the-design-reinstall-the-slot-turn-over-the-region)
 cleanly and TCO stays flat even for side-effecting multi-statement bodies.
 
@@ -309,8 +314,8 @@ a sub-Dispatch that the parent slot parks on as an owned dep. Without
 reclamation those slots accumulate per body iteration, so realistic recursive
 code is O(n) scheduler memory even when its data footprint is O(1).
 
-Reclamation is the library's cascade over owned edges
-([workgraph/design/dag-scheduler.md § Cascade reclamation](../../workgraph/design/dag-scheduler.md#cascade-reclamation)),
+Reclamation is the library's refcount release
+([workgraph/design/dag-scheduler.md § Refcount reclamation](../../workgraph/design/dag-scheduler.md#refcount-reclamation)),
 and Koan's part is the *timing*: it runs in
 [`run_step`](../../src/machine/execute/run_loop.rs) after the `cont` closure returns
 its `Outcome` and before the harness applies it — so a dispatch splice finish's
@@ -321,15 +326,15 @@ them to its dep-finish / catch finish, so its owned dep slots are unreachable.
 
 The net effect: recursive bodies whose only persistent state is the call result run
 in O(1) scheduler memory across iterations, with the per-iteration fanout (the
-body's transient sub-Dispatches) recycled through the library's free list. A free
-that dives into another in-flight user-fn call stops at that call's still-live
-slots, leaving that subtree for its own reclamation. See also
+body's transient sub-Dispatches) recycled through the library's free list. A
+release whose decrements reach into another in-flight user-fn call stops at that
+call's still-counted slots, leaving that subtree for its own reclamation. See also
 [memory-model.md § Performance notes](../memory-model.md).
 
-The known residual — a small constant of persistent slots per top-level dispatch
-(the entry slot returned to the user, and for a bare-name binding the spliced-out
-alias slot plus its producer) — is a property of the library's reclaim, linear in
-call count rather than multiplicative in body size.
+Per-top-level-dispatch persistent slots (the entry slot returned to the user,
+and for a bare-name binding the spliced-out alias slot plus its producer) are
+run-rooted and reclaim at the drain boundary — linear in *live* call count,
+never multiplicative in body size.
 
 ## Pegged and free execution
 

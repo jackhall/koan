@@ -227,8 +227,8 @@ live:
   embedder's hands.
 - **The retention hold.** A finalized cell slot's hold pairs the producer region
   owner with owned pins for every *other* region the terminal reaches —
-  `{ owner, reach, pulls }` — released together at pull-count zero
-  (§ Retention model). `owner` is the home pin; `reach` never re-pins that same
+  `{ owner, reach }` under the slot's standing-destination count — released
+  together at destination-count zero (§ Retention model). `owner` is the home pin; `reach` never re-pins that same
   region (the self rule). This is the parked terminal's ownership; the slot's
   resting `Sealed` carrier is inert data without it.
 - **Transient pins.** Short function-scope holds that open carriers — a run loop's
@@ -395,9 +395,13 @@ last-holder drop, never at some later death.
 
 The lifetime of a **producer region** is the scheduler's retention: the scheduler
 holds the producer's region owner — paired with the terminal's owned reach pins,
-`{ owner, reach, pulls }` — until every destination of its terminals has pulled;
-release of both halves is a function of deliveries only, never of any value's
-reach. A walking terminal carries this hold inside its `Delivered` carrier, so the
+`{ owner, reach }` under the slot's standing-destination count — until every
+standing destination has released. A destination stands from the moment a
+consumer wires to the slot (or the run roots it) until that consumer's
+end-of-step release or death; release of both halves is a function of standing
+destinations only, never of any value's reach
+([dag-scheduler.md § Refcount reclamation](dag-scheduler.md#refcount-reclamation)).
+A walking terminal carries this hold inside its `Delivered` carrier, so the
 pins travel with the value to each consumer.
 
 - A **pass-through** value stays hosted in its birth region and rides onward by
@@ -481,7 +485,7 @@ what its product embeds. Koan's use of it is
   allocation capability by signature; the in-place restamp verb
   [`restamp_in_place`](../src/witnessed/delivered.rs) (re-tags a delivered value's
   top node in its own producer region, composing to a witness identical to the
-  input's); the scheduler's retention (release at pull-count zero); and **every
+  input's); the scheduler's retention (release at destination-count zero); and **every
   owned pin** — the region union bundles, the retention holds, the step coverages.
   `PinBundle` is crate-private, an envelope's pins have no accessor, and the fold
   into a region's union bundle is crate-private as well, so the whole ownership tier

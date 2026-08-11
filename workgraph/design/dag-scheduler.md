@@ -2,7 +2,7 @@
 
 What `workgraph` adds on top of the [cellgraph](cellgraph.md) substrate: a
 *scheduling discipline* over cells. Cells become **nodes** with dependency edges,
-a wake protocol, terminal results, cascade reclamation, and alias splicing.
+a wake protocol, terminal results, refcount reclamation, and alias splicing.
 Everything here is defined in terms of edges and terminals — which is exactly why
 none of it belongs one layer down.
 
@@ -61,43 +61,48 @@ side channel — a continuation that re-resolves reads its producers itself, not
 "who woke me" list. `DepGraph::drain_notify` returns the per-consumer `hit_zero`
 flag so the enqueue-on-zero runs off a single drain.
 
-Deps come in two flavours, and the distinction is ownership, not wake behaviour:
-**park** deps are notify-only, leaving the producer alive and unowned; **owned**
-deps are the consumer's to cascade-reclaim (§ Cascade reclamation).
+A dep edge is a **wire**, and there is one kind. While the producer is pending,
+the wire is the wake edge above; from the moment it is installed it is also one
+**standing destination** on the producer's retention count (§ Refcount
+reclamation, § Terminals and retention). The scheduler records no ownership
+distinction between deps — who outlives whom falls out of who still holds a
+wire, not out of an edge tag.
 
 ## The dep row and its invariants
 
 [`DepGraph`](../src/scheduler/dep_graph.rs) stores one `rows: Vec<DepRow>`
-parallel to the slot table. Each `DepRow` bundles the three coordinated per-slot
-fields — `notify` (forward wake edges to this slot's dependents), `pending` (this
-slot's unresolved-dep counter), and `edges` (backward edges to producers it
-depends on, tagged `Owned` or `Notify`) — and the rows uphold three invariants:
+parallel to the slot table. Each `DepRow` bundles the coordinated per-slot
+fields — `notify` (forward wake edges to this slot's dependents), `pending`
+(this slot's unresolved-dep counter), the slot's backward wires to the producers
+it depends on, and its own standing-destination count — and the rows uphold
+three invariants:
 
 - **Inv-A (wake-pending coherence).** For every consumer slot `c`,
   `rows[c].pending == |{ p : c appears in rows[p].notify }|`. Mutations go through
-  the row, so a slot's `notify` / `pending` / `edges` cannot desync — Inv-A holds
-  by construction.
-- **Inv-B (free-cascade source).** `rows[c].edges` lists every `Owned` sub-slot `c`
-  must cascade-reclaim. Park edges are tagged `Notify` and filtered out of the
-  free walk via `owned_children`. Independent of Inv-A.
+  the row, so a slot's wake fields cannot desync — Inv-A holds by construction.
+- **Inv-B (destination coherence).** For every producer slot `p`, its
+  standing-destination count equals the number of installed-and-unreleased wires
+  to `p` (alias-resolved) plus any run-held root pull on it. Every wire
+  increments the count at installation, unconditionally — no wiring path
+  branches on producer readiness for accounting — and each is released exactly
+  once, by its consumer's end-of-step release or that consumer's death, which
+  are the same verb.
 - **Inv-C (lazy notify-scrub on free).** A slot `c` is only freed once every
   producer's `drain_notify` has run and removed `c` from every `rows[*].notify`.
   The free path relies on Inv-A and Inv-C still holding rather than scrubbing
   itself.
 
-Inv-B is what makes an eager `clear_dep_edges(idx)` sound at the owned-suffix
-reclaim: the owned deps a node holds carry only `Owned` edges — the sub-work the
-slot itself spawned. `Notify` edges land only on a node's park producers, which
-the reclaim excludes by reading only the resolved dep list's owned entries, so
-clearing the owned tree cannot drop a wake intent on a sibling producer.
+Inv-B is what makes reclamation a local decision: a slot's count reaching zero
+*is* the proof that no consumer, root, or forwarding alias can still read it, so
+the reclaim needs no edge tags and no knowledge of who allocated what.
 
-The rows are private and mutated only through a small surface —
-`install_for_slot`, `add_owned_edge`, `add_park_edge`, `drain_notify`,
-`owned_children`, `clear_dep_edges`, `splice_notify` — so every change preserves
-the per-row invariant atomically. `Scheduler::add` orchestrates across the two
-sub-structs: `NodeStore::alloc_slot` picks the index (popping the free list or
-extending) and `DepGraph::install_for_slot` branches privately on whether the slot
-is recycled or freshly extended, writing the dep entries in lockstep.
+The rows are private and mutated only through a small surface — row
+installation, the wire primitive, `drain_notify`, the release verb,
+`splice_notify` — so every change preserves the per-row invariants atomically.
+`Scheduler::alloc_node` orchestrates across the two sub-structs:
+`NodeStore::alloc_slot` picks the index (popping the free list or extending) and
+the dep graph's row installation branches privately on whether the slot is
+recycled or freshly extended, writing the dep entries in lockstep.
 
 ## Work queues: two priority bands
 
@@ -128,49 +133,51 @@ All the graph logic lives in [`splice.rs`](../src/scheduler/splice.rs):
 
 Reads follow the alias to the real producer: `Scheduler::resolve_alias` walks the
 chain (iterative, always pointing downstream to a real producer, so it terminates
-and never cycles), and the result reads resolve through it. Edge installs resolve
-it too — `add_owned_edge` / `add_park_edge` wire a late consumer to the *resolved*
-producer, and a producer that has already finalized adds no edge at all, so the
-consumer reads its value directly when it runs and contributes nothing to its
-pending count. Neither the store nor the dep graph has to be alias-aware on its
-own; the alias contract lives in one module.
+and never cycles), and the result reads resolve through it. Wiring resolves it
+too — the wire primitive wires a late consumer against the *resolved* producer.
+An already-finalized producer contributes no wake bookkeeping (no notify entry,
+no pending increment — the consumer never parks on a slot that will not fire),
+but its wire still counts as a standing destination, so the consumer's read is
+covered by the producer's retention hold (Inv-B). Neither the store nor the dep
+graph has to be alias-aware on its own; the alias contract lives in one module.
 
-Both facades are scheduler-internal. An embedder wiring an already-allocated slot
-goes through the single public door, `Scheduler::install_edges`, which routes a
-`ResolvedDeps` list's parks and owned deps to the two of them — so the embedder
-never picks an edge kind by hand, and neither kind is reachable without the other.
-`alloc_node` is deliberately not the same operation: a fresh slot initializes its
-row and its edges atomically, and it *owns* the sub-work it spawns, so an
-already-finalized owned dep there still records its backward `Owned` edge — the
-ownership record the error-path cascade walks — while only the pending counts
-filter by readiness.
+The wire primitive is scheduler-internal. An embedder wiring an
+already-allocated slot goes through the single public door,
+`Scheduler::install_edges`, which routes a `ResolvedDeps` list through it; a
+fresh slot's row and its wires are initialized as one atomic step by
+`alloc_node`, which routes the same primitive. One primitive, two doors — so no
+wiring path can skew the destination count.
 
-## Cascade reclamation
+## Refcount reclamation
 
 A reinstalled slot is reused, but the work it spawns each iteration is not: every
-sub-unit is a fresh slot the parent parks on as an owned dep. Without reclamation
-those slots accumulate per iteration, so a loop-shaped workload costs O(n)
-scheduler memory even when its data footprint is O(1).
+sub-unit is a fresh slot the parent wires as a dep. Without reclamation those
+slots accumulate per iteration, so a loop-shaped workload costs O(n) scheduler
+memory even when its data footprint is O(1).
 
-Reclamation runs after a step's continuation returns its outcome and *before* the
-outcome is applied, so freed indices are on the free list before the step's
-follow-on work is submitted. Once the consumer has read its dep results, its owned
-dep slots are unreachable: an owned sub-unit belongs to exactly one consumer,
-recorded in that consumer's row as an `Owned` edge. The free walk recurses,
-recycling each dep's own dep tree, and stops at any still-live slot via
-`NodeStore::is_live` — so a free that dives into another in-flight computation
-leaves that subtree for that computation's own reclamation.
+Reclamation is refcount-driven: a slot is reclaimed exactly when its
+standing-destination count decrements to zero. A consumer's end of step —
+success and death alike — releases every wire it holds through one verb; each
+release decrements a producer's count, and a producer that hits zero (and is not
+mid-run, via `NodeStore::is_live`) is reclaimed on the spot — retention hold
+released, anchor dropped, slot recycled onto the free list, and its own wires
+released recursively. The recursion stops wherever a count stays positive: a
+producer another consumer still wires, or one the run still roots, survives —
+reclaiming one consumer can never reach into a shared producer's subtree, and no
+path force-kills a still-counted slot. The success-path release runs after a
+step's continuation returns its outcome and *before* the outcome is applied, so
+freed indices are on the free list before the step's follow-on work is
+submitted.
 
 The net effect: a loop whose only persistent state is its carried result runs in
 O(1) scheduler memory across iterations, with the per-iteration fanout recycled
 through the free list that `alloc_slot` pulls from before extending the vectors.
 
-Each top-level submission retains a small constant of persistent slots — the entry
-slot returned to the embedder, plus, where the result was spliced, the aliased slot
-and its producer. An aliased slot is never freed (it has no parent to reclaim it),
-and a top-level producer has no parent either. So each submission costs a small
-constant rather than one slot — linear in submission count, not multiplicative in
-work size; closing it would need a post-run compaction pass.
+Top-level roots have no consumer to wire them; the **run itself** holds one
+destination on each entry slot, released at the drain boundary — so root
+terminals stay readable until the embedder is done with the run, and each
+submission's persistent slots are reclaimed at drain rather than accumulating
+past it.
 
 ## Terminals and retention
 
@@ -191,10 +198,15 @@ therefore one value throughout — no signature in the terminal path can be hand
 coverage belonging to some other terminal, and none can be handed a value with its
 coverage dropped.
 
-Retention is delivery-driven and reach-independent: the scheduler holds a
-producer's `{ owner, reach, pulls }` hold until every destination of its terminals
-has pulled, then releases both halves. Release is a function of deliveries only —
-never of any value's reach ([reach.md § Retention model](reach.md#retention-model)).
+Retention is destination-driven and reach-independent: `finalize` materializes
+the producer's `{ owner, reach }` hold under the slot's already-standing
+destination count — the wires installed since its birth plus any run-held root
+pull — and both halves release when that count decrements to zero (§ Refcount
+reclamation). There is no seed arithmetic at finalize and no separate late-wire
+channel: a destination stands from wiring to release, so a wired consumer's
+`dep_delivered` can never observe a released hold — the read verb's hold lookup
+is total. Release is a function of standing destinations only — never of any
+value's reach ([reach.md § Retention model](reach.md#retention-model)).
 The hold's `reach` half is derived inside `finalize` from the terminal envelope's
 own coverage with its residence released — the hold owns that region as its `owner`
 field, so re-listing it there would be a second `Rc` on the very frame the hold's
@@ -204,3 +216,9 @@ release frees, and a tail loop's retiring region would never turn over.
 errored dep. The first errored dep short-circuits the resolve, and the consumer's
 own terminal carries the error with whatever label the embedder attached to the
 envelope.
+
+## Open work
+
+- [Wire-refcounted retention and reclamation](../roadmap/wire-refcount-retention.md)
+  — implements the single-wire accounting above (unconditional counting, the one
+  release verb, refcount reclamation, run-held root pulls).
