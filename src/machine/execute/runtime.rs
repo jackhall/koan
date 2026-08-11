@@ -689,9 +689,9 @@ impl<'run> KoanRuntime<'run> {
                     // `catch_continuation` runs the finish without short-circuiting on a dep error.
                     Continuation::Catch { watched, finish } => {
                         let from = self.realize_catch_dep(watched);
-                        self.sched.add_owned_edge(from, id);
                         let mut watched_deps = ResolvedDeps::new();
                         watched_deps.own(from);
+                        self.sched.install_edges(&watched_deps, id);
                         (watched_deps, catch_continuation(finish), None)
                     }
                     // The resume closure carries the evolving `working_expr` from here on; the

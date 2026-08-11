@@ -13,6 +13,12 @@ impl<W: Workload> Scheduler<W> {
     /// matching the in-flight-vs-fresh split). This allocator never names a workload type — it only
     /// wires the slot's deps and installs its anchor. The work arrives with its continuation live;
     /// this is one of the erase doors that seals it against `anchor`.
+    ///
+    /// Edge installation here is *not*
+    /// [`install_edges`](super::Scheduler::install_edges) — a fresh slot's row and its edges are
+    /// initialized as one atomic step, and the slot **owns** the sub-work it spawns, so an
+    /// already-finalized owned dep still records its backward `Owned` edge (the ownership record the
+    /// error-path cascade walks). Only the pending counts filter by readiness.
     pub fn alloc_node(
         &mut self,
         work: NodeWork<'_, W>,

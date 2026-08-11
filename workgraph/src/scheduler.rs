@@ -254,10 +254,17 @@ impl<W: Workload> Scheduler<W> {
 
     /// Install a resolved dep list's edges against `consumer`: each park a `Notify` edge (the
     /// consumer reads the producer but does not own it), each owned dep an `Owned` edge (cascade-freed
-    /// on success). Both route the alias-resolving [`splice`](self::splice) facades, which drop the
-    /// edge for an already-finalized producer. The apply harness uses this for an
-    /// already-allocated consumer slot; the submit-time path installs its own edges in
-    /// [`alloc`](self::alloc).
+    /// on success). Both kinds resolve a bare-name-forward alias first, and an already-finalized
+    /// producer takes no edge at all — its value is read directly, so the consumer never parks on a
+    /// slot that will not fire — but its pull on the producer's retained frame is counted, to be
+    /// discharged after the read.
+    ///
+    /// **The one door an embedder wires edges through.** It serves an already-allocated consumer
+    /// slot, which is why it takes the dep list separately from the work. The submit-time path does
+    /// not route here: [`alloc_node`](Self::alloc_node) initializes a fresh row and its edges as one
+    /// atomic step, and takes ownership of the sub-work it spawns — so an already-finalized *owned*
+    /// dep still records its backward edge there, because that edge is the ownership record the
+    /// error-path cascade walks. The two are deliberately not the same operation.
     pub fn install_edges(&mut self, deps: &ResolvedDeps, consumer: NodeId) {
         for &producer in deps.parks() {
             self.add_park_edge(producer, consumer);

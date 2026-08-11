@@ -136,8 +136,10 @@ data, and a single harness method applies them. The three pieces:
 The scheduler reaches the driver only through its method contract, and every
 method names only `NodeId` and the workload's associated types — no signature
 names a `KExpression`, `Scope`, or AST type. `pop_next` / `take_for_run` /
-`replace` drive a slot's lifecycle; `submit_node` and the alias-resolving edge
-installs (`add_owned_edge` / `add_park_edge` / `splice_forward`) wire the graph;
+`replace` drive a slot's lifecycle; `alloc_node`, `install_edges` and
+`splice_forward` wire the graph — `install_edges` being the single door for
+wiring an already-allocated slot, with the alias-resolving `add_owned_edge` /
+`add_park_edge` facades it routes staying scheduler-internal;
 `finalize` / `free` / `reclaim_deps` terminalize and reclaim; `read*` /
 `is_result_ready` / `would_create_cycle` / `unresolved` are the reads. No trait
 wraps `Scheduler`: those are inherent methods capped `pub(crate)`, so only the

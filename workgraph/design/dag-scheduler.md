@@ -135,6 +135,16 @@ consumer reads its value directly when it runs and contributes nothing to its
 pending count. Neither the store nor the dep graph has to be alias-aware on its
 own; the alias contract lives in one module.
 
+Both facades are scheduler-internal. An embedder wiring an already-allocated slot
+goes through the single public door, `Scheduler::install_edges`, which routes a
+`ResolvedDeps` list's parks and owned deps to the two of them — so the embedder
+never picks an edge kind by hand, and neither kind is reachable without the other.
+`alloc_node` is deliberately not the same operation: a fresh slot initializes its
+row and its edges atomically, and it *owns* the sub-work it spawns, so an
+already-finalized owned dep there still records its backward `Owned` edge — the
+ownership record the error-path cascade walks — while only the pending counts
+filter by readiness.
+
 ## Cascade reclamation
 
 A reinstalled slot is reused, but the work it spawns each iteration is not: every
