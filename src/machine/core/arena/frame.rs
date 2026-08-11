@@ -426,6 +426,33 @@ impl CallFrame {
         self.storage().brand()
     }
 
+    /// Test fixture: seal a value born through this frame's **own** brand under the description its
+    /// birth mint stamps — the frame-brand twin of
+    /// [`Scope::seal_reaching`](crate::machine::core::Scope), for the suite that allocates at the
+    /// frame lifetime rather than inside a transient [`Self::with_scope`] sub-brand. Value and
+    /// description come off the one brand, which is the pairing
+    /// [`RegionHandle::seal_reaching`](crate::witnessed::RegionHandle::seal_reaching) takes: a
+    /// sub-brand's `'b` is universally quantified and outlives nothing, so a frame-lifetime value
+    /// cannot be sealed through it at all.
+    #[cfg(test)]
+    pub(crate) fn seal_born_here<
+        's,
+        'v: 's,
+        T: crate::witnessed::Reattachable + crate::witnessed::DropFree,
+    >(
+        &'s self,
+        value: T::At<'v>,
+        borrows_home: bool,
+    ) -> crate::witnessed::Witnessed<T, CarrierWitness> {
+        let brand = self.brand();
+        let home = FrameCoverage::of(self.storage_rc());
+        let sources: &[&FrameCoverage] = match borrows_home {
+            true => &[&home],
+            false => &[],
+        };
+        brand.seal_reaching(value, brand.handle().mint_retained(sources))
+    }
+
     /// Clone this frame's `FrameStorage` Rc — the handle an escaping value (a returned closure, a
     /// module frame) pins to keep its captured environment alive independently of the shell: a
     /// `FreshTail` tail hop drops this frame's shell outright, and the escaped storage clone keeps

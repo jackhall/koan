@@ -114,18 +114,18 @@ impl<'a> Scope<'a> {
     /// operands. Its carrier pins nothing either — the reached regions are owned by this region's
     /// union bundle — so an entry read is a pointer copy, and a read that leaves the container
     /// re-owns the reach by lifting into a [`DeliveredCarried`] envelope ([`Self::lift_resident`]).
-    pub(crate) fn resident<T: Reattachable + DropFree>(
+    pub(crate) fn resident<'v: 'a, T: Reattachable + DropFree>(
         &self,
-        value: T::At<'_>,
+        value: T::At<'v>,
     ) -> Witnessed<T, CarrierWitness> {
         self.brand().seal_resident(value)
     }
 
     /// [`Self::resident`], sealed into its dormant binding form — the door a dispatch-bucket
     /// registration writes through.
-    pub(crate) fn seal_resident<T: Reattachable + DropFree>(
+    pub(crate) fn seal_resident<'v: 'a, T: Reattachable + DropFree>(
         &self,
-        value: T::At<'_>,
+        value: T::At<'v>,
     ) -> Sealed<T, CarrierWitness> {
         Sealed::seal(self.resident(value))
     }
@@ -146,9 +146,9 @@ impl<'a> Scope<'a> {
     /// carrier exists — so holding the call-site frame roots the module's arena one hop removed, and
     /// through it the description's pointee.
     #[cfg(test)]
-    pub(crate) fn seal_reaching<T: Reattachable + DropFree>(
+    pub(crate) fn seal_reaching<'v: 'a, T: Reattachable + DropFree>(
         &self,
-        value: T::At<'_>,
+        value: T::At<'v>,
         reach: &'a FrameReach,
     ) -> Sealed<T, CarrierWitness> {
         Sealed::seal(self.brand().seal_reaching(value, reach))

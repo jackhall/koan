@@ -31,8 +31,9 @@ use bumpalo::Bump;
 use elsa::FrozenMap;
 
 use super::{
-    BumpAllocator, DropFree, Erased, FoldedPlacement, PinBundle, PinsRegion, ReachDescription,
-    Reattachable, ReferenceFamily, RegionOwner, SealedExtern, StepCoverage, Witness,
+    BumpAllocator, Carrier, DropFree, Erased, FoldedPlacement, PinBundle, PinsRegion,
+    ReachDescription, Reattachable, ReferenceFamily, RegionOwner, SealedExtern, StepCoverage,
+    Witness, Witnessed,
 };
 
 /// A workload's storage declaration: the frame-owner type a [`Region`]'s reach descriptions name.
@@ -435,6 +436,31 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     {
         let bundles: Vec<&PinBundle<W::FrameOwner>> = sources.iter().map(|s| &s.0).collect();
         ReachDescription::mint_resident(self, &bundles)
+    }
+
+    /// **Bundle a value that already lives in this region** under the description minted for it —
+    /// the born-witnessed door for a value the region hosts but did not allocate through a
+    /// placement: a binding entry read back out, a structural resident an embedder holds an `&'a`
+    /// to. The value is not stored here; it pre-exists, and this names its reach.
+    ///
+    /// It sits on the handle that [`mint_retained`](Self::mint_retained) sits on, so the residence
+    /// the description is stamped with and the capability that seals under it are the *same*
+    /// handle — there is no second door for a caller to bring a foreign description to. The value
+    /// borrows for some `'v` outliving `'a`, this handle's own lifetime, so a borrow that does not
+    /// live as long as the region handle cannot be sealed under it at all. `'v` is free rather than
+    /// pinned to `'a` so an *invariant* family — one whose `At` cannot shrink — can still seal a
+    /// value that outlives the handle, which is the safe direction.
+    ///
+    /// The witness is the reference-only [`Carrier`]: it names the reach without pinning it, so
+    /// every read opens under an external pin — the active frame during the producing step, the
+    /// delivery envelope's retention hold afterwards. A value whose reach is genuinely empty takes
+    /// `mint_retained(&[])` for its description, the degenerate case of the same door.
+    pub fn seal_reaching<'v: 'a, T: Reattachable + DropFree>(
+        self,
+        value: T::At<'v>,
+        reach: &'a ReachDescription<W::FrameOwner>,
+    ) -> Witnessed<T, Carrier<W::FrameOwner>> {
+        Witnessed::from_erased(Erased::erase(value), Carrier::new(reach))
     }
 
     /// **Build a region-borrowing value from a crossing operand and bump it here** — the born door,

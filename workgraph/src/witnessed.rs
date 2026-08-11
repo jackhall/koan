@@ -368,7 +368,13 @@ impl<T: Reattachable + DropFree> Erased<T> {
     /// Erase a live carrier to its storable `'static` form. Safe: forgetting a lifetime for
     /// storage cannot fabricate one — the value is stored, never used at `'static`, until a
     /// witnessed re-anchor.
-    pub fn erase(live: T::At<'_>) -> Self {
+    ///
+    /// Crate-private, so no embedder mints a bare erased carrier: the only paths that produce one
+    /// outside the crate are the seals that bundle it with its reach in the same act
+    /// ([`RegionHandle::seal_reaching`](super::RegionHandle::seal_reaching),
+    /// [`SealedExtern::erase`]) — and [`Sealed::erased`], which hands one back out of a carrier
+    /// that was already witnessed.
+    pub(crate) fn erase(live: T::At<'_>) -> Self {
         Erased {
             inner: Dormant::new(erase_to_static::<T>(live)),
         }
@@ -571,14 +577,17 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// `Result::map(Erased::erase)` pipeline, where threading the live value's lifetime through a
     /// closure would otherwise let it default to `'static`.
     ///
-    /// Co-location — that the witness pins *this* value's references — is **caller-asserted** here: the
-    /// value and witness arrive independently, so this is the crate-private substrate primitive, never
-    /// a production construction path. Every production carrier is born co-located instead — via
+    /// Co-location — that the witness pins *this* value's references — is **caller-asserted** here:
+    /// the value and witness arrive independently, so this is the crate-private substrate
+    /// primitive and its visibility is what holds the assertion in. Every carrier an embedder can
+    /// reach is born co-located through a door that derives one side from the other — via
     /// [`yoke`](Self::yoke) (sourced from the witness's region), [`resident`](Self::resident) (a
     /// region-pure value under the empty witness) or its reference-only twin
-    /// [`resident_in`](Witnessed::resident_in), or the envelope merge (folding two co-located
-    /// carriers) — so no site pairs an arbitrary value with an arbitrary witness.
-    pub fn from_erased(value: Erased<T>, witness: W) -> Self {
+    /// [`resident_in`](Witnessed::resident_in),
+    /// [`RegionHandle::seal_reaching`](region::RegionHandle::seal_reaching) (value and description
+    /// off the same handle), or the envelope merge (folding two co-located carriers) — so no
+    /// embedder site pairs an arbitrary value with an arbitrary witness.
+    pub(crate) fn from_erased(value: Erased<T>, witness: W) -> Self {
         Witnessed { value, witness }
     }
 

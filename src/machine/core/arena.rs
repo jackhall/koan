@@ -24,8 +24,8 @@ use crate::machine::model::{
 };
 use crate::witnessed::reattachable;
 use crate::witnessed::{
-    BumpAllocator, DropFree, Erased, FoldedPlacement, Reattachable, Region, RegionHandle,
-    StepContext, StorageProfile, Witnessed,
+    BumpAllocator, DropFree, FoldedPlacement, Reattachable, Region, RegionHandle, StepContext,
+    StorageProfile, Witnessed,
 };
 
 mod frame;
@@ -203,9 +203,9 @@ impl<'a> RegionBrand<'a> {
     /// A value that *does* reach somewhere takes [`Self::seal_reaching`] with the description
     /// [`Scope::mint_retained`](crate::machine::core::Scope) derived for it. The brand is the
     /// capability marker: only a handle into the region the value lives in may seal it resident.
-    pub(crate) fn seal_resident<T: Reattachable + DropFree>(
+    pub(crate) fn seal_resident<'v: 'a, T: Reattachable + DropFree>(
         self,
-        value: T::At<'_>,
+        value: T::At<'v>,
     ) -> Witnessed<T, CarrierWitness> {
         // A mint with no sources composes nothing, so the retained bundle is empty and the frozen
         // description names this region's owner as host and no member at all.
@@ -217,12 +217,16 @@ impl<'a> RegionBrand<'a> {
     /// ([`Scope::mint_retained`](crate::machine::core::Scope)). The description carries the value's
     /// residence as its host, so the pairing this takes is one record, not two — there is no
     /// separate residence for a caller to get wrong.
-    pub(crate) fn seal_reaching<T: Reattachable + DropFree>(
+    ///
+    /// Forwards to the library door on the handle this brand wraps, which is the same handle the
+    /// description was minted off: the value borrows for the frame lifetime `'a`, so a borrow that
+    /// does not outlive the region cannot be sealed under it.
+    pub(crate) fn seal_reaching<'v: 'a, T: Reattachable + DropFree>(
         self,
-        value: T::At<'_>,
+        value: T::At<'v>,
         reach: &'a FrameReach,
     ) -> Witnessed<T, CarrierWitness> {
-        Witnessed::from_erased(Erased::erase(value), CarrierWitness::new(reach))
+        self.0.seal_reaching(value, reach)
     }
 }
 

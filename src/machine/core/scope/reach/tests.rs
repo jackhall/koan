@@ -101,11 +101,7 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
 
     // The record lives in the producer's region and borrows into it, so its description is hosted
     // there with home as an ordinary member — what the producer's own birth mint would have stamped.
-    let sealed = producer.with_scope(|child| {
-        child
-            .seal_reaching(Carried::Object(record), child.mint_born_here(true))
-            .unseal()
-    });
+    let sealed = producer.seal_born_here(Carried::Object(record), true);
     let dep: DeliveredCarried =
         Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
 

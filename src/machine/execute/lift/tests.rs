@@ -562,11 +562,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
         // conservatively claims its own home as a member at construction, regardless of its own
         // contents — the retention predicate's walk over the rebuilt cell is what actually
         // decides release vs. retain below; the claim only matters if the source is retained.
-        let sealed = producer.with_scope(|child| {
-            child
-                .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
-                .unseal()
-        });
+        let sealed = producer.seal_born_here(Carried::Object(obj), true);
         let owned_cells = crate::machine::core::FrameCoverage::empty();
         let dep: DeliveredCarried =
             Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
@@ -658,11 +654,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         // The seal chokepoint (Ruling 5): every record's carrier conservatively claims its own home
         // as a member at construction; the retention predicate below independently walks the
         // rebuilt cell and finds the closure leaf, so the producer is retained either way.
-        let sealed = producer.with_scope(|child| {
-            child
-                .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
-                .unseal()
-        });
+        let sealed = producer.seal_born_here(Carried::Object(obj), true);
         let owned_cells = crate::machine::core::FrameCoverage::empty();
         let dep: DeliveredCarried =
             Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
@@ -751,11 +743,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
             });
             // Born in the producer's own region with a home-borrowing closure leaf, so home is an
             // ordinary member of the description the birth mint stamps.
-            let sealed = producer.with_scope(|child| {
-                child
-                    .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
-                    .unseal()
-            });
+            let sealed = producer.seal_born_here(Carried::Object(obj), true);
             let dep: DeliveredCarried =
                 Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
             assert!(
@@ -844,11 +832,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
             .collect::<Vec<_>>(),
     );
     let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
-    let sealed = producer.with_scope(|child| {
-        child
-            .seal_reaching(Carried::Object(obj), child.mint_born_here(true))
-            .unseal()
-    });
+    let sealed = producer.seal_born_here(Carried::Object(obj), true);
     let dep: DeliveredCarried =
         Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
     let owned_cells = crate::machine::core::FrameCoverage::empty();
