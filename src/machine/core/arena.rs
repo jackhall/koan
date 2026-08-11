@@ -193,7 +193,7 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// Bundle a value **already resident in this brand's region** whose borrows reach nothing — the
-    /// terminal carrier a name / ATTR read hands back and an FN-def / LET define site seals its
+    /// terminal carrier a name / ATTR read hands back and a region-pure `LET` define site seals its
     /// object with. Unlike [`alloc_scalar_witnessed`](Self::alloc_scalar_witnessed) the value is not
     /// stored here; it pre-exists in the region. The description is minted **here**, so no caller
     /// pairs a value with a residence it did not derive: its host is this brand's own region owner

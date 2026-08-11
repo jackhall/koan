@@ -459,7 +459,7 @@ impl CallFrame {
     ///
     /// Test-only. Production functions take [`KFunction::alloc_captured`] directly, with a scope the
     /// caller already holds; the Miri shapes need the same value at the *frame's* lifetime. The
-    /// captured scope is minted here rather than read off [`Self::scope_sealed`]: the bump door stores
+    /// captured scope is minted here rather than read off [`Self::scope_sealed`]: the birth door stores
     /// the function at the destination's own `'f`, so it needs a `&'f Scope<'f>`, and the frame's
     /// envelope opens only at a rank-2 brand nothing escapes. What the tests exercise — a callable
     /// whose captured scope lives in the region the callable itself lives in — holds either way, since

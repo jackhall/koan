@@ -127,8 +127,8 @@ impl<'a> Scope<'a> {
         self.brand().seal_resident(value)
     }
 
-    /// [`Self::resident`], sealed into its dormant binding form — the door a dispatch-bucket
-    /// registration writes through.
+    /// [`Self::resident`], sealed into its dormant binding form — the door a region-pure value bind
+    /// writes through ([`Self::seal_pure_value`]).
     pub(crate) fn seal_resident<'v: 'a, T: Reattachable + DropFree>(
         &self,
         value: T::At<'v>,

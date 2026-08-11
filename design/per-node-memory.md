@@ -79,9 +79,10 @@ borrows nothing a seal would have to pin.
 
 **`merge_into` / `transfer_into` — everything that references a pre-existing
 value.** An aggregate folds its *element carriers* (deps arriving witnessed from
-the lift) via `transfer_into`; a closure folds the captured-scope operand minted
-from its frame `Rc` via `merge_into`
-([reach.rs](../src/machine/core/scope/reach.rs)) directly. The object family's leaves and
+the lift) via `transfer_into`; a closure is *born* through `merge_into`, its
+captured scope riding a resident seed operand delivered at that very scope
+([kfunction.rs](../src/machine/core/kfunction.rs)), so the callable's reach is
+the fold's own composition. The object family's leaves and
 aggregates are built this way — a single-part literal and a static aggregate cell
 `yoke` their owned data, and a list / dict / record folds its dep carriers via
 `transfer_into` ([dispatch/literal.rs](../src/machine/execute/dispatch/literal.rs) /
@@ -89,8 +90,10 @@ aggregates are built this way — a single-part literal and a static aggregate c
 carrier-self-building constructions follow: the newtype / tagged-union
 [`constructors`](../src/machine/execute/dispatch/constructors.rs) and
 [`catch`](../src/builtins/catch.rs) fold their dep carriers, and FN def
-[`finalize`](../src/builtins/fn_def/finalize.rs) `yoke`s its co-located
-`KObject::KFunction` onto a carrier witnessed by the defining scope's frame.
+[`finalize`](../src/builtins/fn_def/finalize.rs) hands the callable's birth
+envelope to [`Scope::store_function_cell`](../src/machine/core/scope/reach.rs),
+whose merge wraps it as a co-located `KObject::KFunction` under the description
+that birth already composed.
 
 The value-embedding sites that take a *bare arg* —
 [`attr`](../src/builtins/attr.rs)'s `Wrapped`,

@@ -200,11 +200,13 @@ destination through a door whose *signature* is the enforcement instead:
   ([value-substrates.md § Value-channel AST](value-substrates.md#value-channel-ast-the-program-storage-marker)).
 - **A fresh `KFunction` wrapper** takes
   [`Scope::store_function_cell`](../src/machine/core/scope/reach.rs), a merge modelled
-  on the module store fold: the composition mints the callable's home region into the
-  product's reach, which is the borrows-home fact the wrapper carries, and the self rule
-  strips it from the retained bundle. The claim is exact — a `KFunction`'s only region
-  borrow is its captured scope, whose own sealed reach set transitively covers everything
-  its bindings reach.
+  on the module store fold, whose function operand is the callable's own birth envelope
+  ([`KFunction::alloc_captured`](../src/machine/core/kfunction.rs)): the wrapper's composition
+  inherits the home-region membership that birth composed, which is the borrows-home fact it
+  carries, and the self rule strips the region from the retained bundle. The claim is exact — a
+  `KFunction`'s only region borrow is its captured scope, whose own sealed reach set transitively
+  covers everything its bindings reach — and it arrives derived rather than restated here
+  ([memory-model.md § Move-in residence](memory-model.md#move-in-residence)).
 
 A carrier-less argument routes those shapes through
 [`Scope::place_pure_value`](../src/machine/core/scope/reach.rs). Every other shape borrows
@@ -216,8 +218,10 @@ not a residence verdict a caller could turn into an admission.
 single region (its captured / parent / child scope), and none can carry a region pointer other
 than its destination's. Nothing is erased on the way in: all three land in the destination's bump,
 where the borrow checker alone holds every embedded reference to the lifetime the destination brand
-borrows its region for. `KFunction` and `Module` are `Copy` and take the plain bump verb; a `Scope`
-keeps mutating in place, so it takes
+borrows its region for. `KFunction` and `Module` are `Copy` and take the plain bump verb — the
+`KFunction`'s reaching it as the placement's own bump inside the merge that births it, a fold it
+takes to *compose* its reach description, not to discharge a residence obligation the borrow checker
+already held; a `Scope` keeps mutating in place, so it takes
 [`BumpAllocator::in_place`](../workgraph/src/witnessed/bump.rs), whose `!needs_drop` assert stands
 where the `Copy` bound stands for the others. The two stores whose operand lives in *another* region
 — the per-call frame child's lexical parent, the transparent `USING` window's binding table — are

@@ -430,18 +430,18 @@ copy, and content-digest identity is preserved because the handle *is* the ident
 tables therefore store `KType` by value ([`bindings.rs`](../src/machine/core/bindings.rs)), with no
 reach evidence and no borrow to witness.
 
-A `Drop`-free region-borrowing value — a `KFunction`, a `Module` — takes the plain bump verb
+A `Drop`-free region-borrowing `Module` takes the plain bump verb
 `RegionBrand::allocator().value` alongside those leaves, because it is `Copy` and nothing about it is
 erased on the way in; the door derives its brand from the value's own anchoring scope and re-homes
 the value's bytes at that same brand (see below).
 
 Everything else takes one of the two **rank-2 brand** doors — the second kind, where the input is
-taken at a `for<'b>` lifetime no ambient borrow inhabits. A `KObject` embedding a substrate, a fresh
-`KFunction` wrapper, a re-tagged `Module` and a relocated container ride the *folded* one; a `Scope`
-itself is *born* at its destination:
+taken at a `for<'b>` lifetime no ambient borrow inhabits. A `KObject` embedding a substrate, a
+`KFunction` and its wrapper, a re-tagged `Module` and a relocated container ride the *folded* one; a
+`Scope` itself is *born* at its destination:
 
 - **folded** (`FoldingBrand::alloc_object_folded` / `alloc_cell_folded` / `alloc_substrate_folded` /
-  `alloc_module_folded`) — no runtime audit at all,
+  `alloc_module_folded` / `alloc_function_folded`) — no runtime audit at all,
   sound by signature: the sink takes its input at the brand lifetime (`KObject<'b>` on
   `FoldingBrand<'b>`), and inside a fold combinator's `for<'b>` closure the only inhabitants of that
   lifetime are values derived from the fold's declared operand views, the brand's own allocations, and
@@ -489,6 +489,23 @@ opaque `StepCoverage`, so Koan cannot assemble, widen or narrow a claim at all
 ([reach.md § The carrier states](../workgraph/design/reach.md#the-carrier-states)); what it holds is
 whatever a composition derived for a specific value.
 
+A **registered callable** and an **operator-group record** are placed by such a composition too, so
+the registration doors state no reach of their own.
+[`KFunction::alloc_captured`](../src/machine/core/kfunction.rs) is a witnessed birth: the captured
+scope, the signature already minted at that scope's own brand, and the body cross as one resident
+seed operand, and the callable is assembled *inside* the `merge_into` fold that stores it. The fold's
+`for<'b>` brand is the residence proof — an ambient region borrow cannot inhabit `KFunction<'b>` —
+and the merge composes the product's description: hosted in the captured scope's region, that region
+its one member. A group record's birth is a *yoke* instead
+([`Scope::birth_operator_group`](../src/machine/core/scope/reach.rs) around
+[`OperatorGroup::alloc`](../src/machine/model/operators.rs), which re-homes every byte at the brand
+it is handed), so its composed description names the declaring region as host with **no members** at
+all — the record borrows nothing, where a callable borrows its home. Both bucket doors
+([`OverloadSeal::of_delivered`](../src/machine/core/carrier_witness.rs) and its group sibling) and
+the value wrapper ([`Scope::store_function_cell`](../src/machine/core/scope/reach.rs)) take that one
+birth envelope as their operand — the seal rests it, the wrapper merges it — so the bound name and
+the registered overload carry the same derived fact rather than two independent claims.
+
 A deferred FN's per-call return *type* needs no residence machinery at all —
 [`home_return_type`](../src/machine/core/kfunction/exec.rs) clones it into the captured-scope region
 through the single type door — but the clone still comes back capped at the caller-supplied
@@ -500,9 +517,11 @@ No runtime residence check survives. Each of the three region-borrowing families
 region borrow (a `KFunction` its captured scope, a `Scope` its own region, a `Module` its child
 scope), and none of the three can name a region the destination brand did not hand it.
 
-None of the three needs a brand for the ordinary case, because nothing about them is erased on the
+None of the three needs a brand for *residence*, because nothing about them is erased on the
 way in. A `KFunction` and a `Module` are `Copy` and store through the plain bump verb
-([`BumpAllocator::value`](../workgraph/src/witnessed/bump.rs)); a `Scope` is not `Copy` — it keeps
+([`BumpAllocator::value`](../workgraph/src/witnessed/bump.rs)) — the `KFunction`'s reaching it as the
+placement's own bump inside its birth fold, which it takes for the composed reach rather than for
+residence; a `Scope` is not `Copy` — it keeps
 mutating in place through its `Cell` / `RefCell` fields — so it stores through
 [`in_place`](../workgraph/src/witnessed/bump.rs), the glue-free verb whose `!needs_drop` assert
 stands where the `Copy` bound stands for the others. Either way every reference the stored value
@@ -676,6 +695,12 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   the only one a bump cannot fail loudly on: a family that reintroduced an owning slot would still
   read and write correctly and simply never free. Miri's process-exit leak count is the assertion;
   `Copy` at every bump primitive is the static proxy this checks in composition.
+- [derived_reach.rs](../src/machine/core/tests/derived_reach.rs) takes each production registration
+  door — the builtin seeds, `FN`, `OP` — and reads the description the bucket stores back off the
+  opened carrier: it covers the callable's home region, names it a member (`borrows_home`), and
+  covers no sibling region. Its group-record sibling asserts the other composed shape — hosted at
+  the declaring region with no members — so both structural claims are checked as facts a
+  composition produced rather than as prose.
 - [`functor_application_mints_distinct_abstract_types`](../src/builtins/ascribe/tests/functor.rs)
   and [`a_returned_transparent_view_keeps_the_region_it_was_minted_in`](../src/builtins/ascribe/tests/ascription.rs)
   are the escaping-module half of the slate: an opaque view's path and both member maps are read
