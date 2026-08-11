@@ -73,7 +73,7 @@ fn cell_carrier(slot: Slot, terminals: DepResults<'_, &DepTerminal>) -> Delivere
 
 /// Fold a sequence of cell envelopes into a witnessed `(region, Vec<Held>)` accumulator over the
 /// consumer scope's region: `yoke` an empty accumulator under the consumer frame, then
-/// `transfer_into_placing` each envelope under [`cell_still_borrows`] — [`copy_held_from_carried`]
+/// `transfer_into` each envelope under [`cell_still_borrows`] — [`copy_held_from_carried`]
 /// relocates each cell into the aggregate region (a top-level record totally rebuilt through the
 /// record door so its substrate is container-resident), so a plain-data record cell releases its
 /// producer while a cell that still borrows its producer (a closure's captured environment)
@@ -100,7 +100,7 @@ fn fold_cells(
         // that door; this envelope's coverage is the holder-rule proof for any part of it that stays
         // foreign, captured before the fold closure.
         let holder = cell.coverage().clone();
-        cell.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
+        cell.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
             acc,
             // The cell always rebuilds through the container door, so the retention predicate walks
             // the cell the fold just pushed — the exact answer for what this relocation left
@@ -251,19 +251,18 @@ impl<'step> KoanRuntime<'step> {
             // proof the substrate door reads their stored reach under, and the declared reach for a
             // cell that carries no stored description of its own (a spliced expression).
             let holder = acc.coverage().clone();
-            let built = acc
-                .merge_into_placing::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
-                    dest_brand(dest_frame),
-                    move |(_region, value_helds), _dest_handle, placement| {
-                        let region = FoldingBrand::in_fold_closure(placement);
-                        Carried::Object(region.alloc_object_folded(assemble(
-                            region.with_holder(&holder),
-                            keys,
-                            value_helds,
-                            types,
-                        )))
-                    },
-                );
+            let built = acc.merge_into::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
+                dest_brand(dest_frame),
+                move |(_region, value_helds), _dest_handle, placement| {
+                    let region = FoldingBrand::in_fold_closure(placement);
+                    Carried::Object(region.alloc_object_folded(assemble(
+                        region.with_holder(&holder),
+                        keys,
+                        value_helds,
+                        types,
+                    )))
+                },
+            );
             Ok(StepCarried::born_delivered(built))
         });
         self.submit_dep_finish_witnessed_in_own_scope(deps, finish)

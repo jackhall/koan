@@ -479,7 +479,7 @@ impl KoanRegionExt for KoanRegion {
         // is exactly the region-pure one the door promises.
         let handle = RegionHandle::from_owner(&*owner);
         StepContext::new(Rc::clone(&owner))
-            .alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
+            .alloc_with::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
                 &[],
                 |placement, _views| build(FoldingBrand::in_fold_closure(placement)),
             )

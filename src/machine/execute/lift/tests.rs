@@ -444,12 +444,12 @@ fn type_recursive_member_relocates_and_navigates() {
 /// Build-time accumulator for the aggregate-fold mirrors below: the destination region plus the
 /// cells folded in so far — a local twin of `dispatch::literal::AggBuildFamily` (private to that
 /// module), reattached here so the tests can drive `fold_cells`'s own mechanism
-/// (`cell_still_borrows` + `transfer_into_placing` + `copy_held_from_carried`) directly, including
+/// (`cell_still_borrows` + `transfer_into` + `copy_held_from_carried`) directly, including
 /// its region-bumped cell slice.
 struct RecordAggFamily;
 reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held<'r>]));
 
-/// The birth mint at a fold door: a record literal assembled by `merge_into_placing` into the
+/// The birth mint at a fold door: a record literal assembled by `merge_into` into the
 /// destination brand — `schedule_record_literal`'s terminal step verbatim — references a
 /// description whose members name the very region it was built in. The substrate is region-resident,
 /// so the fresh value genuinely borrows into its birth region, and the mint at the door records that
@@ -478,7 +478,7 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
 
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let born: DeliveredCarried = acc
-        .merge_into_placing::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
+        .merge_into::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
             dest_brand(Rc::clone(&dest_storage)),
             move |(_region, _cells), _dest_handle, placement| {
                 let door = FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells);
@@ -521,7 +521,7 @@ fn alloc_home_closure_record<'run>(
 }
 
 /// Escape with **copy**: `fold_cells`'s exact aggregate loop (`cell_still_borrows` +
-/// `transfer_into_placing` + `copy_held_from_carried`), mirrored here for `DEPTH` independent
+/// `transfer_into` + `copy_held_from_carried`), mirrored here for `DEPTH` independent
 /// producers each contributing a plain-data record — no field borrows anything, so the retention
 /// predicate answers false over the rebuilt cell and every producer is released: the
 /// record is totally rebuilt into the aggregate's own region and every producer frame is dropped
@@ -567,7 +567,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
         let dep: DeliveredCarried =
             Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
         producers.push(producer);
-        dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
+        dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
             acc,
             cell_still_borrows(&dep),
             |value, (region, cells), placement| {
@@ -659,7 +659,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         let dep: DeliveredCarried =
             Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
         producers.push(producer);
-        dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
+        dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
             acc,
             cell_still_borrows(&dep),
             |value, (region, cells), placement| {
@@ -787,7 +787,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
 /// reordered against the literal. A dict's is the `hashbrown` table `alloc_dict` freezes over
 /// re-bumped keys — and the keys were already re-bumped once into the producer at construction, so
 /// the relocation must re-bump them *again* rather than share. Nesting the dict in a record field
-/// puts both under a single `transfer_into_placing`: the outer index is read on the way to the inner
+/// puts both under a single `transfer_into`: the outer index is read on the way to the inner
 /// one, so an index still pointing into the producer's freed bump reads dead bytes here — which only
 /// tree borrows observes, since a normal build compares them back intact and the lookup succeeds.
 #[test]
@@ -836,7 +836,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
     let dep: DeliveredCarried =
         Delivered::seal(sealed, producer.storage_rc(), FrameCoverage::empty());
     let owned_cells = crate::machine::core::FrameCoverage::empty();
-    let acc_final = dep.transfer_into_placing::<RecordAggFamily, RecordAggFamily, _>(
+    let acc_final = dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
         acc,
         cell_still_borrows(&dep),
         |value, (region, cells), placement| {

@@ -55,7 +55,7 @@ no reach to mint in the first place.
 
 ## Dependencies
 
-**Requires:** none — the composition doors (`merge_into_placing`, the fused
+**Requires:** none — the composition doors (`merge_into`, the fused
 bind seals) already exist.
 
 **Unblocks:** none tracked.

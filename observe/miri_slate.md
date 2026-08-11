@@ -92,8 +92,8 @@ group just to silence the stale-anchor check.
   `witnessed.rs`, routed through the `Sealed`/`SealedExtern` opens `run_step` and the dep reads
   perform.
 - `src/machine/core/scope/reach.rs` — the reach/carrier derivation cluster is safe code end to end:
-  every store door composes through the library's envelope verbs (`merge_into_placing`,
-  `transfer_into_placing`) and builds its product at a `FoldingBrand`, whose rank-2 signature makes
+  every store door composes through the library's envelope verbs (`merge_into`,
+  `transfer_into`) and builds its product at a `FoldingBrand`, whose rank-2 signature makes
   an ambient-lifetime capture a compile error rather than a retype. The `unsafe` those verbs route
   is the shared retype in `witnessed.rs`. The group pins what no signature can prove — that the
   composition's **minted reach** names every region the product borrows, and that the release
@@ -273,7 +273,7 @@ buy the audit nothing past the fifth. The only `unsafe` routed is the shared `re
 tail call's loop-carried argument is delivered as its envelope (host = the retiring incarnation's
 frame) and adopted through `Scope::adopt_for_binding`
 ([scope/reach.rs](../src/machine/core/scope/reach.rs)), whose copy verb
-(`RegionEscape::Copy` run by `relocate_delivered` through the library's `transfer_into_placing`
+(`RegionEscape::Copy` run by `relocate_delivered` through the library's `transfer_into`
 fold) totally rebuilds the value into the adopting scope's own region: the rebuild's interior
 borrows are minted into the adopter's composed reach before the product's `&'a` is fabricated,
 and the release predicate is release-exact over the rebuilt product — a retiring host the product
@@ -485,7 +485,7 @@ reads no surviving borrow leaf into the cell's own producer host off the rebuilt
 reach (the cell is totally rebuilt via `copy_held_from_carried`), and the producer materializes
 into the aggregate's reach and stays pinned when it does. One unit test mirrors
 `dispatch::literal::fold_cells`'s exact aggregate loop
-(`cell_still_borrows` + `transfer_into_placing` + `copy_held_from_carried`) directly for five
+(`cell_still_borrows` + `transfer_into` + `copy_held_from_carried`) directly for five
 independent producers, each record cell embedding a closure captured in that same producer (every
 producer pinned; drops every producer first, then reads every closure's captured scope back) —
 wrongly releasing a still-borrowing record dangles under tree borrows; wrongly pinning leaks. The

@@ -145,7 +145,9 @@ pub struct DepResults<'a, T> {
 }
 
 impl<'a, T> DepResults<'a, T> {
-    pub fn new(items: &'a [T], park_count: usize) -> Self {
+    /// Crate-private: [`ResolvedDeps::results`] is the single crossing from the write side to the
+    /// read side, so the prefix length is never paired with a slice by hand outside the scheduler.
+    pub(crate) fn new(items: &'a [T], park_count: usize) -> Self {
         DepResults { items, park_count }
     }
 

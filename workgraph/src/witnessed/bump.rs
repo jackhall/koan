@@ -356,7 +356,7 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
     /// // No operands: bytes only, and the product's reach is empty structurally.
     /// let built: Delivered<StrFamily, Carrier<RegionCart>, RegionCart> = ctx
-    ///     .alloc_with_handle::<FixtureProfile, StrFamily, RefFamily>(&[], |placement, _views| {
+    ///     .alloc_with::<FixtureProfile, StrFamily, RefFamily>(&[], |placement, _views| {
     ///         placement
     ///             .fold_and_bump::<StrFamily, RefFamily, RegionCart>(&[], |bump, _operands| {
     ///                 bump.text("hello")
@@ -376,7 +376,7 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
     /// // A second call takes the first's product as an operand — composition within one brand.
     /// let built: Delivered<StrFamily, Carrier<RegionCart>, RegionCart> = ctx
-    ///     .alloc_with_handle::<FixtureProfile, StrFamily, RefFamily>(&[], |placement, _views| {
+    ///     .alloc_with::<FixtureProfile, StrFamily, RefFamily>(&[], |placement, _views| {
     ///         let head = placement
     ///             .fold_and_bump::<StrFamily, RefFamily, RegionCart>(&[], |bump, _| bump.text("koan"));
     ///         placement
@@ -398,7 +398,7 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     /// let outside = String::from("ambient");
     /// // Try to build the stored value out of an enclosing borrow — rejected by the fold brand:
     /// // `outside`'s lifetime has no outlives relation to the universally-quantified `'b`.
-    /// let _ = ctx.alloc_with_handle::<FixtureProfile, StrFamily, RefFamily>(&[], |placement, _views| {
+    /// let _ = ctx.alloc_with::<FixtureProfile, StrFamily, RefFamily>(&[], |placement, _views| {
     ///     placement
     ///         .fold_and_bump::<StrFamily, RefFamily, RegionCart>(&[], |_bump, _operands| &outside[..])
     ///         .value()
@@ -414,7 +414,7 @@ impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
     /// let mut escaped: Option<&str> = None;
     /// // Try to smuggle the product's view past the enclosing fold closure — rejected by `for<'b>`.
-    /// let _ = ctx.alloc_with_handle::<FixtureProfile, StrFamily, RefFamily>(&[], |placement, _views| {
+    /// let _ = ctx.alloc_with::<FixtureProfile, StrFamily, RefFamily>(&[], |placement, _views| {
     ///     let product = placement
     ///         .fold_and_bump::<StrFamily, RefFamily, RegionCart>(&[], |bump, _| bump.text("hello"));
     ///     escaped = Some(product.value());

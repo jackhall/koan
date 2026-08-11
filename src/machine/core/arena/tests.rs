@@ -405,7 +405,7 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
     // foreign region exactly as a surviving closure rides its bare borrow); the accumulated envelope
     // covers the union. `transfer_into` borrows the dep's seal (does not consume it — other
     // consumers keep reading the producer terminal).
-    let acc1 = dep_a.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
+    let acc1 = dep_a.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc0,
         |_product, _region| true,
         |dep, (region, cells), placement| {
@@ -415,7 +415,7 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
             (region, placement.allocator().slice(&grown))
         },
     );
-    let acc2 = dep_b.transfer_into_placing::<AggBuildFamily, AggBuildFamily, _>(
+    let acc2 = dep_b.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc1,
         |_product, _region| true,
         |dep, (region, cells), placement| {

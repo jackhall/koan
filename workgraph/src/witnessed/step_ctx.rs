@@ -47,12 +47,64 @@ impl<F: RegionOwner> StepContext<F> {
 }
 
 impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
+    /// [`Self::alloc`] handing `build` the bare `&F::Region` instead of its [`RegionHandle`] — the
+    /// raw yoke the public door adapts. Crate-internal: every embedder allocation goes through the
+    /// handle capability.
+    pub(in crate::witnessed) fn alloc_in_region<T, P>(
+        &self,
+        build: impl for<'b> FnOnce(&'b F::Region) -> T::At<'b>,
+    ) -> Witnessed<T, Carrier<F>>
+    where
+        T: Reattachable + DropFree,
+        P: StorageProfile<FrameOwner = F> + 'static,
+        F: RegionOwner<Region = Region<P>>,
+    {
+        Witnessed::<T, Rc<F>>::yoke(Rc::clone(&self.frame), build).into_reference_only::<P>()
+    }
+
+    /// [`Self::alloc_with`] handing `build` the bare region plus a [`FoldToken`] instead of a
+    /// [`FoldedPlacement`] over the region's handle — the raw dep fold the public door adapts.
+    pub(in crate::witnessed) fn alloc_with_in_region<T, V, P>(
+        &self,
+        deps: &[&Delivered<V, Carrier<F>, F>],
+        build: impl for<'b> FnOnce(&'b F::Region, &'b [V::At<'b>], FoldToken<'b>) -> T::At<'b>,
+    ) -> Delivered<T, Carrier<F>, F>
+    where
+        T: Reattachable + DropFree,
+        V: Reattachable + DropFree,
+        for<'b> V::At<'b>: Copy,
+        P: StorageProfile<FrameOwner = F> + 'static,
+        F: RegionOwner<Region = Region<P>>,
+    {
+        // The accumulator is enveloped over this context's own frame — the region it is yoked into —
+        // so each fold step composes into an envelope rather than a carrier plus a loose bundle.
+        let acc0 = Delivered::seal(
+            self.alloc_in_region::<AllocViews<V, F::Region>, P>(|region| (region, &[][..])),
+            Rc::clone(&self.frame),
+            StepCoverage::empty(),
+        );
+        let acc = deps.iter().fold(acc0, |acc, dep| {
+            dep.transfer_into::<AllocViews<V, F::Region>, AllocViews<V, F::Region>, P>(
+                acc,
+                // The view rides the accumulator un-copied, so the built value genuinely
+                // borrows into every region the dep does: the predicate releases none.
+                |_product, _region| true,
+                fold_dep_view::<V, P>(),
+            )
+        });
+        // The projection re-anchors under the accumulator's own pins and re-seals under the same
+        // witness, so the accumulated envelope's coverage — this context's frame among its members,
+        // unioned in at `acc0` — carries over unchanged as the built carrier's owned coverage.
+        acc.project::<T>(finalize_alloc_with::<F, T, V>(build))
+    }
+
     /// Build a value reachable only through the held frame's own region: reach = own region only,
     /// so the carrier references a description with empty members hosted in that same region — its
     /// liveness is the frame the step loop holds (guarantee 4), then the retention hold once
-    /// finalized. The `for<'b>` brand on `build` admits only region-derived or owned references, so
-    /// purity is structural rather than asserted: the value is yoked from the frame's own region and
-    /// only then re-bundled under the pin-free carrier.
+    /// finalized. `build` receives the region's [`RegionHandle`], the one allocation capability, and
+    /// the `for<'b>` brand on it admits only region-derived or owned references — so purity is
+    /// structural rather than asserted: the value is yoked from the frame's own region and only then
+    /// re-bundled under the pin-free carrier.
     ///
     /// ```
     /// use std::rc::Rc;
@@ -63,7 +115,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// let cart = fresh_cart();
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
     /// let w: Witnessed<RefFamily, Carrier<RegionCart>> =
-    ///     ctx.alloc::<RefFamily, FixtureProfile>(|_region| &SEVEN);
+    ///     ctx.alloc::<FixtureProfile, RefFamily>(|_handle| &SEVEN);
     /// let sealed = Delivered::seal(w, Rc::clone(&cart), StepCoverage::empty());
     /// assert_eq!(sealed.open(|r| *r), 7);
     /// ```
@@ -78,18 +130,18 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// let ctx: StepContext<RegionCart> = StepContext::new(cart);
     /// // Try to capture a non-region borrow into the closure — rejected by the `for<'b>` brand.
     /// let _: Witnessed<RefFamily, Carrier<RegionCart>> =
-    ///     ctx.alloc::<RefFamily, FixtureProfile>(|_region| &outside);
+    ///     ctx.alloc::<FixtureProfile, RefFamily>(|_handle| &outside);
     /// ```
-    pub fn alloc<T, P>(
+    pub fn alloc<P, T>(
         &self,
-        build: impl for<'b> FnOnce(&'b F::Region) -> T::At<'b>,
+        build: impl for<'b> FnOnce(RegionHandle<'b, P>) -> T::At<'b>,
     ) -> Witnessed<T, Carrier<F>>
     where
-        T: Reattachable + DropFree,
         P: StorageProfile<FrameOwner = F> + 'static,
         F: RegionOwner<Region = Region<P>>,
+        T: Reattachable + DropFree,
     {
-        Witnessed::<T, Rc<F>>::yoke(Rc::clone(&self.frame), build).into_reference_only::<P>()
+        self.alloc_in_region::<T, P>(|region| build(RegionHandle::new(region)))
     }
 
     /// Build a value whose carrier names the held frame's own region implicitly plus every named
@@ -100,6 +152,10 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// (an ordinary member of those pins) composes into the minted set. A dep's payload is handed
     /// to `build` only inside the shared `for<'b>` brand — the [`compile_fail`] guard below pins
     /// that a view cannot be smuggled out of the closure and stored unwitnessed.
+    ///
+    /// `build` receives a [`FoldedPlacement`] over the destination region: it carries the
+    /// destination handle and is itself the fold-brand proof, minted over the same region this door
+    /// folds the deps' reach into, so the two never have to be paired by hand.
     ///
     /// ```
     /// use std::rc::Rc;
@@ -117,7 +173,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// let cart = fresh_cart();
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
     /// let built: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> =
-    ///     ctx.alloc_with::<RefFamily, RefFamily, FixtureProfile>(&[&dep], |_region, views, _token| views[0]);
+    ///     ctx.alloc_with::<FixtureProfile, RefFamily, RefFamily>(&[&dep], |_placement, views| views[0]);
     /// assert_eq!(built.open(|r| *r), 10);
     /// ```
     ///
@@ -138,66 +194,13 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// let ctx: StepContext<RegionCart> = StepContext::new(cart);
     /// let mut escaped: Option<&u32> = None;
     /// // Try to smuggle a dep view OUT of `alloc_with`'s closure — rejected by the `for<'b>` brand.
-    /// let _built: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = ctx.alloc_with::<RefFamily, RefFamily, FixtureProfile>(&[&dep], |_region, views, _token| {
+    /// let _built: Delivered<RefFamily, Carrier<RegionCart>, RegionCart> = ctx.alloc_with::<FixtureProfile, RefFamily, RefFamily>(&[&dep], |_placement, views| {
     ///     escaped = Some(views[0]);
     ///     views[0]
     /// });
     /// println!("{}", *escaped.unwrap());
     /// ```
-    pub fn alloc_with<T, V, P>(
-        &self,
-        deps: &[&Delivered<V, Carrier<F>, F>],
-        build: impl for<'b> FnOnce(&'b F::Region, &'b [V::At<'b>], FoldToken<'b>) -> T::At<'b>,
-    ) -> Delivered<T, Carrier<F>, F>
-    where
-        T: Reattachable + DropFree,
-        V: Reattachable + DropFree,
-        for<'b> V::At<'b>: Copy,
-        P: StorageProfile<FrameOwner = F> + 'static,
-        F: RegionOwner<Region = Region<P>>,
-    {
-        // The accumulator is enveloped over this context's own frame — the region it is yoked into —
-        // so each fold step composes into an envelope rather than a carrier plus a loose bundle.
-        let acc0 = Delivered::seal(
-            self.alloc::<AllocViews<V, F::Region>, P>(|region| (region, &[][..])),
-            Rc::clone(&self.frame),
-            StepCoverage::empty(),
-        );
-        let acc = deps.iter().fold(acc0, |acc, dep| {
-            dep.transfer_into_placing::<AllocViews<V, F::Region>, AllocViews<V, F::Region>, P>(
-                acc,
-                // The view rides the accumulator un-copied, so the built value genuinely
-                // borrows into every region the dep does: the predicate releases none.
-                |_product, _region| true,
-                fold_dep_view::<V, P>(),
-            )
-        });
-        // The projection re-anchors under the accumulator's own pins and re-seals under the same
-        // witness, so the accumulated envelope's coverage — this context's frame among its members,
-        // unioned in at `acc0` — carries over unchanged as the built carrier's owned coverage.
-        acc.project::<T>(finalize_alloc_with::<F, T, V>(build))
-    }
-
-    /// [`Self::alloc`] for a frame owning a library [`Region`]: the build closure receives the
-    /// region's [`RegionHandle`] instead of the bare region.
-    pub fn alloc_handle<P, T>(
-        &self,
-        build: impl for<'b> FnOnce(RegionHandle<'b, P>) -> T::At<'b>,
-    ) -> Witnessed<T, Carrier<F>>
-    where
-        P: StorageProfile<FrameOwner = F> + 'static,
-        F: RegionOwner<Region = Region<P>>,
-        T: Reattachable + DropFree,
-    {
-        self.alloc::<T, P>(|region| build(RegionHandle::new(region)))
-    }
-
-    /// [`Self::alloc_with`] for a frame owning a library [`Region`]: same dep folding, build closure
-    /// receives a [`FoldedPlacement`] over the destination region. The placement replaces the bare
-    /// handle and the [`FoldToken`] of the region-based [`Self::alloc_with`] with one capability: it
-    /// carries the destination handle and is itself the fold-brand proof, minted here over the same
-    /// region [`Self::alloc_with`] folds the deps' reach into.
-    pub fn alloc_with_handle<P, T, V>(
+    pub fn alloc_with<P, T, V>(
         &self,
         deps: &[&Delivered<V, Carrier<F>, F>],
         build: impl for<'b> FnOnce(FoldedPlacement<'b, P>, &'b [V::At<'b>]) -> T::At<'b>,
@@ -209,34 +212,13 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         V: Reattachable + DropFree,
         for<'b> V::At<'b>: Copy,
     {
-        self.alloc_with::<T, V, P>(deps, |region, views, token| {
+        self.alloc_with_in_region::<T, V, P>(deps, |region, views, token| {
             // The accumulator was yoked over this frame's own region and `alloc_with` folds every
             // dep's reach into it, so a placement over its handle is honestly minted here; the fold
             // token is subsumed by the placement as the `'b` brand proof.
             let _ = token;
             build(FoldedPlacement::mint(RegionHandle::new(region)), views)
         })
-    }
-
-    /// The operand-placing fold pinned by **this context's own held frame** (guarantee 4):
-    /// the build closure receives a [`FoldedPlacement`] over the operand's own head handle — the
-    /// handle its [`Carrier<F>`] witness was yoked over — instead of a bare [`FoldToken`], so a
-    /// value the closure folds from `operand`'s declared views stores through the placement with no
-    /// per-value audit and no caller-supplied handle. The covariance door fork 2 rejected is closed
-    /// because koan never supplies the destination handle: the placement is minted from the
-    /// operand's own [`HasRegionHandle`](super::HasRegionHandle) projection.
-    pub fn map_pinned_placing<T, P2, P>(
-        &self,
-        operand: Witnessed<T, Carrier<F>>,
-        f: impl for<'b> FnOnce(T::At<'b>, FoldedPlacement<'b, P>) -> P2::At<'b>,
-    ) -> Witnessed<P2, Carrier<F>>
-    where
-        T: Reattachable + DropFree,
-        P2: Reattachable + DropFree,
-        P: StorageProfile + 'static,
-        for<'b> T::At<'b>: super::HasRegionHandle<'b, P>,
-    {
-        operand.map_pinned_placing::<P2, P, _>(&self.frame, f)
     }
 }
 

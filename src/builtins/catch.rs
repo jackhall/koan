@@ -59,7 +59,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // Wrap `payload` as a `Result` `Tagged` at the build brand `'x`, allocating the payload
         // substrate through the fold `door`. A free fn (no captured lifetime) so both branches'
-        // `transfer_into_placing` brand closures can call it.
+        // `transfer_into` brand closures can call it.
         fn build_result<'x>(
             door: SubstrateDoor<'x, '_>,
             tag: &str,
@@ -93,7 +93,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         let holder = carrier.coverage().clone();
         // The type operand is empty-reach; the transfer composes the result payload's reach and
         // homes the product in the operand's dest frame.
-        let product = carrier.transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
+        let product = carrier.transfer_into::<RegionTypeFamily, CarriedFamily, _>(
             home,
             // The built `Ok`/`Error` record holds the payload's borrow verbatim, so the
             // predicate releases nothing: every region the payload reaches rides on.

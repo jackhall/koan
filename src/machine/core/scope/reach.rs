@@ -540,7 +540,7 @@ impl<'a> Scope<'a> {
         // Copy, everything the envelope named for a Pin. The composition also retains its bundle in
         // this scope's region, which is what covers the relocated value read in place.
         let copied = cell
-            .transfer_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+            .transfer_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 dest,
                 |product, region| match verb {
                     RegionEscape::Pin => true,
@@ -605,7 +605,7 @@ impl<'a> Scope<'a> {
             FrameCoverage::empty(),
         );
         source
-            .merge_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+            .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 self.dest_operand(),
                 |function_view, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement);
@@ -641,7 +641,7 @@ impl<'a> Scope<'a> {
             FrameCoverage::empty(),
         );
         source
-            .merge_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+            .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 self.dest_operand(),
                 |module_view, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement);
@@ -727,7 +727,7 @@ impl<'a> Scope<'a> {
             FrameCoverage::empty(),
         );
         source
-            .merge_into_placing::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+            .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 self.dest_operand(),
                 |scope_view, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement);

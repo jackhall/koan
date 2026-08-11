@@ -359,22 +359,15 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         )
     }
 
-    /// Relocate the delivered value into a destination and re-seal it under the composed carrier
-    /// that names everything it reaches from there — the envelope-bearing form of the witnessed
-    /// transfer, and the only relocation verb for a carrier-witnessed value. The sealed carrier is
-    /// duplicated (the envelope keeps its cell for other consumers), re-anchored at a shared
-    /// `for<'b>` brand with `dest`'s live form under the envelope's own pins, and handed to
-    /// `relocate` — the workload's structural copy/fold, which builds into `dest` at the brand
-    /// natively. The composed witness mints both operands' reach into `dest`'s own arena.
-    ///
-    /// What the relocated product still reaches *from the source side* is **derived, not accepted**:
-    /// once `relocate` has built the product, `still_borrows` is run over it against each region
-    /// this envelope pins, and the source claim is the members it answers `true` for (design §
-    /// Escape). A `false` verdict drops that region from the composed bundle, so its owner frees at
-    /// retention discharge — the tail-loop turnover rule; a `true` verdict keeps it, so the producer
-    /// transfers by hold. The claim is therefore a checked property of the bytes that exist. A
-    /// predicate that answers conservatively costs retention, never soundness.
-    pub fn transfer_into<B: Reattachable + DropFree, P: Reattachable + DropFree, Pr>(
+    /// [`Self::transfer_into`] handing `relocate` a bare [`FoldToken`] and the destination's live
+    /// form instead of a [`FoldedPlacement`] over its handle — the raw fold the public door adapts.
+    /// Crate-internal: an embedder that reached this would have to pair the destination handle with
+    /// the brand by hand, which is exactly the pairing the placement exists to make structural.
+    pub(in crate::witnessed) fn transfer_into_token<
+        B: Reattachable + DropFree,
+        P: Reattachable + DropFree,
+        Pr,
+    >(
         &self,
         dest: Delivered<B, Carrier<F>, F>,
         still_borrows: impl for<'b> FnMut(&P::At<'b>, &F::Region) -> bool,
@@ -409,12 +402,27 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         Delivered::hosted(Sealed::seal(product), dest_home, StepCoverage(bundle))
     }
 
-    /// [`Self::transfer_into`] handing `relocate` a [`FoldedPlacement`] over the destination operand's
-    /// own handle instead of a bare [`FoldToken`]. The placement is minted over exactly the handle
-    /// [`Carrier::compose_into`] mints the composed reach set over, so the folded store rides the same
-    /// confinement the composition establishes — the destination is the engine's own operand region,
-    /// never a caller-captured handle.
-    pub fn transfer_into_placing<B: Reattachable + DropFree, P: Reattachable + DropFree, Pr>(
+    /// Relocate the delivered value into a destination and re-seal it under the composed carrier
+    /// that names everything it reaches from there — the envelope-bearing form of the witnessed
+    /// transfer, and the only relocation verb for a carrier-witnessed value. The sealed carrier is
+    /// duplicated (the envelope keeps its cell for other consumers), re-anchored at a shared
+    /// `for<'b>` brand with `dest`'s live form under the envelope's own pins, and handed to
+    /// `relocate` — the workload's structural copy/fold, which builds into `dest` at the brand
+    /// natively. The composed witness mints both operands' reach into `dest`'s own arena.
+    ///
+    /// `relocate` receives a [`FoldedPlacement`] over the destination operand's own handle, minted
+    /// over exactly the handle [`Carrier::compose_into`] mints the composed reach set over, so the
+    /// folded store rides the same confinement the composition establishes — the destination is the
+    /// engine's own operand region, never a caller-captured handle.
+    ///
+    /// What the relocated product still reaches *from the source side* is **derived, not accepted**:
+    /// once `relocate` has built the product, `still_borrows` is run over it against each region
+    /// this envelope pins, and the source claim is the members it answers `true` for (design §
+    /// Escape). A `false` verdict drops that region from the composed bundle, so its owner frees at
+    /// retention discharge — the tail-loop turnover rule; a `true` verdict keeps it, so the producer
+    /// transfers by hold. The claim is therefore a checked property of the bytes that exist. A
+    /// predicate that answers conservatively costs retention, never soundness.
+    pub fn transfer_into<B: Reattachable + DropFree, P: Reattachable + DropFree, Pr>(
         &self,
         dest: Delivered<B, Carrier<F>, F>,
         still_borrows: impl for<'b> FnMut(&P::At<'b>, &F::Region) -> bool,
@@ -426,23 +434,17 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
         T::At<'static>: Copy,
     {
-        self.transfer_into::<B, P, Pr>(
+        self.transfer_into_token::<B, P, Pr>(
             dest,
             still_borrows,
             super::place_over_dest::<T, B, P, Pr>(relocate),
         )
     }
 
-    /// Merge two envelopes into one — the composition verb for two values already in hand, where
-    /// [`Self::transfer_into`] is the one for a value being relocated *out* of this envelope.
-    /// `other` is the **destination** operand: its region is what both operands' reach is minted
-    /// into, and its residence becomes the product's. Both operands' pins cover the shared `for<'b>`
-    /// re-anchor, so neither side needs a pin threaded in from the caller.
-    ///
-    /// Nothing is copied out of either operand — the fold reads both live forms and builds a value
-    /// that borrows them verbatim — so there is no retention predicate here: the composed bundle
-    /// keeps every member both envelopes named.
-    pub fn merge_into<B, P, Pr>(
+    /// [`Self::merge_into`] handing `f` a bare [`FoldToken`] instead of a [`FoldedPlacement`] over
+    /// the destination operand's handle — the raw fold the public door adapts, crate-internal for
+    /// the same reason [`Self::transfer_into_token`] is.
+    pub(in crate::witnessed) fn merge_into_token<B, P, Pr>(
         self,
         other: Delivered<B, Carrier<F>, F>,
         f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
@@ -485,10 +487,19 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         Delivered::hosted(Sealed::seal(product), dest_home, StepCoverage(bundle))
     }
 
-    /// [`Self::merge_into`] handing `f` a [`FoldedPlacement`] over the destination operand's own
-    /// handle instead of a bare [`FoldToken`], so a value the fold builds stores through the same
-    /// confinement the composition establishes.
-    pub fn merge_into_placing<B, P, Pr>(
+    /// Merge two envelopes into one — the composition verb for two values already in hand, where
+    /// [`Self::transfer_into`] is the one for a value being relocated *out* of this envelope.
+    /// `other` is the **destination** operand: its region is what both operands' reach is minted
+    /// into, and its residence becomes the product's. Both operands' pins cover the shared `for<'b>`
+    /// re-anchor, so neither side needs a pin threaded in from the caller.
+    ///
+    /// `f` receives a [`FoldedPlacement`] over the destination operand's own handle, so a value the
+    /// fold builds stores through the same confinement the composition establishes.
+    ///
+    /// Nothing is copied out of either operand — the fold reads both live forms and builds a value
+    /// that borrows them verbatim — so there is no retention predicate here: the composed bundle
+    /// keeps every member both envelopes named.
+    pub fn merge_into<B, P, Pr>(
         self,
         other: Delivered<B, Carrier<F>, F>,
         f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P::At<'b>,
@@ -500,7 +511,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         F: RegionOwner<Region = Region<Pr>>,
         for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
     {
-        self.merge_into::<B, P, Pr>(other, super::place_over_dest::<T, B, P, Pr>(f))
+        self.merge_into_token::<B, P, Pr>(other, super::place_over_dest::<T, B, P, Pr>(f))
     }
 
     /// Re-stamp the delivered value **in place, in its own home region** — the single-seam escape
@@ -555,7 +566,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         // The destination is a bare region handle (empty reach), so the destination operand pins
         // only its own home; nothing is copied out, so the retention predicate keeps every member —
         // the restamped value borrows exactly what the original did.
-        self.transfer_into_placing::<RegionHandleFamily<Pr>, P, Pr>(
+        self.transfer_into::<RegionHandleFamily<Pr>, P, Pr>(
             dest,
             |_product, _region| true,
             relocate,

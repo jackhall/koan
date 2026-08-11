@@ -80,9 +80,7 @@ impl<'step> StepAllocator<'step> {
     ) -> StepCarried<'step> {
         StepCarried::born(
             self.context
-                .alloc_handle::<KoanStorageProfile, CarriedFamily>(|handle| {
-                    build(RegionBrand(handle))
-                }),
+                .alloc::<KoanStorageProfile, CarriedFamily>(|handle| build(RegionBrand(handle))),
         )
     }
 
@@ -103,7 +101,7 @@ impl<'step> StepAllocator<'step> {
         // (the seal re-pins it) so the product's foreign coverage rides the step to the seal.
         StepCarried::born_delivered(
             self.context
-                .alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
+                .alloc_with::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
                     deps,
                     |placement, views| build(FoldingBrand::in_fold_closure(placement), views),
                 ),

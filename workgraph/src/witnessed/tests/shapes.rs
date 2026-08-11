@@ -53,14 +53,14 @@ fn store_val(frame: &Rc<ShapeFrame>, v: u32) -> &u32 {
 }
 
 /// A destination accumulator born through the step context: the dest frame's own handle under the
-/// empty reference-only carrier — the `HasRegionHandle` operand every `transfer_into` composes
+/// empty reference-only carrier — the `HasRegionHandle` operand every `transfer_into_token` composes
 /// against.
 fn dest_handle_acc(
     dest: &Rc<ShapeFrame>,
 ) -> Delivered<RegionHandleFamily<ShapeProfile>, Carrier<ShapeFrame>, ShapeFrame> {
     Delivered::seal(
         StepContext::new(Rc::clone(dest))
-            .alloc_handle::<ShapeProfile, RegionHandleFamily<ShapeProfile>>(|handle| handle),
+            .alloc::<ShapeProfile, RegionHandleFamily<ShapeProfile>>(|handle| handle),
         Rc::clone(dest),
         StepCoverage::empty(),
     )
@@ -105,7 +105,7 @@ fn transfer_composes_the_source_home_from_its_pins() {
     );
     let dest = frame();
     let merged = element
-        .transfer_into::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
+        .transfer_into_token::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
             // The product IS the source borrow, so it still reaches every region the envelope pins.
             |_product, _region| true,
@@ -130,12 +130,12 @@ fn transfer_unions_element_reach_across_folds() {
 
     let acc0 = Delivered::seal(
         StepContext::new(Rc::clone(&dest))
-            .alloc_handle::<ShapeProfile, PairAcc>(|handle| (handle, &[][..])),
+            .alloc::<ShapeProfile, PairAcc>(|handle| (handle, &[][..])),
         Rc::clone(&dest),
         StepCoverage::empty(),
     );
     let element_a = reach_element(&dest, &content_a, 1);
-    let acc1 = element_a.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
+    let acc1 = element_a.transfer_into_token::<PairAcc, PairAcc, ShapeProfile>(
         acc0,
         |_product, _region| true,
         |value, (handle, values), _brand| {
@@ -147,7 +147,7 @@ fn transfer_unions_element_reach_across_folds() {
         },
     );
     let element_b = reach_element(&dest, &content_b, 2);
-    let acc2 = element_b.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
+    let acc2 = element_b.transfer_into_token::<PairAcc, PairAcc, ShapeProfile>(
         acc1,
         |_product, _region| true,
         |value, (handle, values), _brand| {
@@ -185,7 +185,7 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
 
     let acc0 = Delivered::seal(
         StepContext::new(Rc::clone(&dest))
-            .alloc_handle::<ShapeProfile, PairAcc>(|handle| (handle, &[][..])),
+            .alloc::<ShapeProfile, PairAcc>(|handle| (handle, &[][..])),
         Rc::clone(&dest),
         StepCoverage::empty(),
     );
@@ -194,7 +194,7 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
         Rc::clone(&producer_a),
         StepCoverage::empty(),
     );
-    let acc1 = element_a.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
+    let acc1 = element_a.transfer_into_token::<PairAcc, PairAcc, ShapeProfile>(
         acc0,
         |_product, _region| true,
         |value, (handle, values), _brand| {
@@ -206,7 +206,7 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
         },
     );
     let element_b = reach_element(&reader_b, &content_b, 4);
-    let acc2 = element_b.transfer_into::<PairAcc, PairAcc, ShapeProfile>(
+    let acc2 = element_b.transfer_into_token::<PairAcc, PairAcc, ShapeProfile>(
         acc1,
         |_product, _region| true,
         |value, (handle, values), _brand| {
@@ -252,7 +252,7 @@ fn copied_transfer_pins_the_producer_when_the_product_still_borrows() {
     );
     let dest = frame();
     let merged = element
-        .transfer_into::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
+        .transfer_into_token::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
             // The product's leaves still point into the producer's region, so the predicate keeps
             // every member and the fold composes the producer in.
@@ -280,7 +280,7 @@ fn copied_transfer_releases_the_producer_when_nothing_borrows_it() {
     );
     let dest = frame();
     let copied = element
-        .transfer_into::<RegionHandleFamily<ShapeProfile>, ValFamily, ShapeProfile>(
+        .transfer_into_token::<RegionHandleFamily<ShapeProfile>, ValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
             // The product is an owned `u32` — it borrows nothing, so the predicate releases every
             // member and the fold pins nothing on the source side.
@@ -799,10 +799,11 @@ fn an_unhosted_pair_pins_its_whole_reach_until_it_is_hosted() {
             Rc::clone(&producer),
             StepCoverage::empty(),
         );
-    let merged = far.merge_into::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
-        home,
-        |value, _dest, _token| value,
-    );
+    let merged = far
+        .merge_into_token::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
+            home,
+            |value, _dest, _token| value,
+        );
 
     let pair = merged.unhost();
     drop(reached);
@@ -833,7 +834,7 @@ fn alloc_with_folds_dep_reach_before_result_read() {
     );
     let own = frame();
     let ctx: StepContext<ShapeFrame> = StepContext::new(Rc::clone(&own));
-    let built = ctx.alloc_with::<RefValFamily, RefValFamily, ShapeProfile>(
+    let built = ctx.alloc_with_in_region::<RefValFamily, RefValFamily, ShapeProfile>(
         &[&dep],
         |_region, views, _token| views[0],
     );

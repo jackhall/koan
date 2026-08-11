@@ -112,7 +112,7 @@ impl<P: StorageProfile> RegionHost<P> {
     /// minted) region or any of its `outer` ancestors' (each pinned by the chain). A host whose own
     /// region is not yet minted has nothing of its own to compare, so the walk simply continues to
     /// its ancestors.
-    pub fn pins_region(&self, region: *const Region<P>) -> bool {
+    pub fn pins_region(&self, region: &Region<P>) -> bool {
         let mut node = self;
         loop {
             if let Some(minted) = node.minted()
@@ -147,7 +147,7 @@ unsafe impl<P: StorageProfile> RegionOwner for RegionHost<P> {
 // live and fixed-address while self is held.
 unsafe impl<P: StorageProfile> PinsRegion for RegionHost<P> {
     fn pins_region(&self, region: &Region<P>) -> bool {
-        RegionHost::pins_region(self, region as *const Region<P>)
+        RegionHost::pins_region(self, region)
     }
 
     fn needs_no_pin(&self) -> bool {
@@ -288,13 +288,12 @@ mod tests {
         let child = RegionHost::<TestProfile>::fresh(Some(Rc::clone(&parent)));
 
         // The grandparent mints; parent and child never do, so the walk must pass through them.
-        let grandparent_region: *const Region<TestProfile> = grandparent.region();
+        let grandparent_region = grandparent.region();
         assert!(parent.pins_region(grandparent_region));
         assert!(child.pins_region(grandparent_region));
 
         let other = RegionHost::<TestProfile>::fresh(None);
-        let other_region: *const Region<TestProfile> = other.region();
-        assert!(!child.pins_region(other_region));
+        assert!(!child.pins_region(other.region()));
     }
 
     #[test]

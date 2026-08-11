@@ -12,7 +12,7 @@ use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Scalar;
 use crate::machine::model::values::Carried;
-use workgraph::scheduler::Sealed;
+use workgraph::witnessed::Sealed;
 
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::GroupSeal;

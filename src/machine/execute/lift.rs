@@ -139,7 +139,7 @@ pub(in crate::machine::execute) fn relocate_seam(
     // The source envelope's coverage is the holder-rule proof the relocation's cells read their
     // stored reach under — captured before the fold, which cannot reach its operand's pins.
     let holder = delivered.coverage().clone();
-    delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
+    delivered.transfer_into::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
         dest,
         seam_still_borrows(delivered, verb),
         |value, _region, placement| {

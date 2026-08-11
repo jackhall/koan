@@ -267,8 +267,8 @@ unsafe impl<W: StorageProfile> super::Witness for Region<W> {}
 /// crate-internal constructor are private): a handle enters circulation only by [`Self::from_owner`]
 /// — minting requires the region's *owner*, whose `RegionOwner` impl is an audited, `unsafe`-opt-in
 /// declaration — or handed out at a `for<'b>` brand by the library's construction combinators
-/// ([`Witnessed::yoke_handle`](super::Witnessed::yoke_handle), [`StepContext::alloc_handle`](super::StepContext::alloc_handle),
-/// [`StepContext::alloc_with_handle`](super::StepContext::alloc_with_handle)).
+/// ([`Witnessed::yoke_handle`](super::Witnessed::yoke_handle), [`StepContext::alloc`](super::StepContext::alloc),
+/// [`StepContext::alloc_with`](super::StepContext::alloc_with)).
 ///
 /// ```compile_fail
 /// // A bare `&Region` has no allocation surface: `allocator` is crate-private.

@@ -80,7 +80,7 @@ borrows nothing a seal would have to pin.
 **`merge_into` / `transfer_into` — everything that references a pre-existing
 value.** An aggregate folds its *element carriers* (deps arriving witnessed from
 the lift) via `transfer_into`; a closure folds the captured-scope operand minted
-from its frame `Rc` via `merge_into_placing`
+from its frame `Rc` via `merge_into`
 ([reach.rs](../src/machine/core/scope/reach.rs)) directly. The object family's leaves and
 aggregates are built this way — a single-part literal and a static aggregate cell
 `yoke` their owned data, and a list / dict / record folds its dep carriers via

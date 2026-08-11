@@ -599,7 +599,7 @@ fn step_context_alloc_carrier_names_its_home_and_no_members() {
     let frame = step_frame();
     let ctx: StepContext<StepFrame> = StepContext::new(Rc::clone(&frame));
     let w: Witnessed<RefFamily, Carrier<StepFrame>> =
-        ctx.alloc::<RefFamily, StepProfile>(|_region| &SEVEN);
+        ctx.alloc_in_region::<RefFamily, StepProfile>(|_region| &SEVEN);
     assert_eq!(w.with_pinned(&frame, |r| **r), 7);
     let sealed = Sealed::seal(w);
     let opened = sealed.open_at(&frame);
@@ -630,7 +630,7 @@ fn step_context_alloc_with_mints_dep_homes_and_preserves_dep_order() {
     );
 
     let ctx: StepContext<StepFrame> = StepContext::new(Rc::clone(&own));
-    let built = ctx.alloc_with::<RefFamily, RefFamily, StepProfile>(
+    let built = ctx.alloc_with_in_region::<RefFamily, RefFamily, StepProfile>(
         &[&delivered_a, &delivered_b],
         |_region, views, _token| {
             assert_eq!(views.iter().map(|v| **v).collect::<Vec<_>>(), vec![1, 2]);

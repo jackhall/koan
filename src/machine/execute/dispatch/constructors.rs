@@ -444,7 +444,7 @@ fn finish_witnessed<'step>(
             // hands back the wrapped product as an envelope homed in the dest frame.
             Ok(terminals[0]
                 .delivered
-                .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
+                .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     // The wrap holds the value's borrow verbatim, so nothing is released.
                     |_product, _region| true,
@@ -497,7 +497,7 @@ fn finish_witnessed<'step>(
             );
             let fields = terminals.iter().fold(acc0, |acc, term| {
                 term.delivered
-                    .transfer_into_placing::<RecordFieldsFamily, RecordFieldsFamily, _>(
+                    .transfer_into::<RecordFieldsFamily, RecordFieldsFamily, _>(
                         acc,
                         // Each field cell is a pointer copy of the term's value, so it
                         // borrows everything the term did.
@@ -521,28 +521,25 @@ fn finish_witnessed<'step>(
             let holder = fields.coverage().clone();
             // The type operand is empty-reach; merge the accumulated fields into it, yielding the
             // wrapped record homed in the dest frame.
-            let product = fields
-                .merge_into_placing::<RegionTypeFamily, CarriedFamily, KoanStorageProfile>(
-                    home,
-                    |(_region, fields), (_identity_region, identity_ty), placement| {
-                        let region = FoldingBrand::in_fold_closure(placement);
-                        let door = region.with_holder(&holder);
-                        // The names never rode the carrier — they pair back with the accumulated
-                        // values here, in the fold order the terminals were visited in.
-                        let record = KObject::record(
-                            door,
-                            Record::from_pairs(
-                                field_names.iter().cloned().zip(fields.iter().copied()),
-                            ),
-                            types,
-                        );
-                        Carried::Object(region.alloc_object_folded(KObject::wrapped_hold(
-                            door,
-                            &record,
-                            identity_ty,
-                        )))
-                    },
-                );
+            let product = fields.merge_into::<RegionTypeFamily, CarriedFamily, KoanStorageProfile>(
+                home,
+                |(_region, fields), (_identity_region, identity_ty), placement| {
+                    let region = FoldingBrand::in_fold_closure(placement);
+                    let door = region.with_holder(&holder);
+                    // The names never rode the carrier — they pair back with the accumulated
+                    // values here, in the fold order the terminals were visited in.
+                    let record = KObject::record(
+                        door,
+                        Record::from_pairs(field_names.iter().cloned().zip(fields.iter().copied())),
+                        types,
+                    );
+                    Carried::Object(region.alloc_object_folded(KObject::wrapped_hold(
+                        door,
+                        &record,
+                        identity_ty,
+                    )))
+                },
+            );
             // The merge minted the product's description into `dest_frame`'s own region, so that
             // region is the product's host and rides its members: the fresh record's substrate
             // borrows into the very region it was built in, and the accumulator's pins named it.
@@ -587,7 +584,7 @@ fn finish_witnessed<'step>(
             let holder = terminals[0].delivered.coverage().clone();
             Ok(terminals[0]
                 .delivered
-                .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
+                .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     // The tag holds the value's borrow verbatim, so nothing is released.
                     |_product, _region| true,
@@ -626,7 +623,7 @@ fn finish_witnessed<'step>(
             let holder = terminals[0].delivered.coverage().clone();
             Ok(terminals[0]
                 .delivered
-                .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
+                .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     // The wrap holds the value's borrow verbatim, so nothing is released.
                     |_product, _region| true,

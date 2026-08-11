@@ -271,11 +271,11 @@ What a finish receives and the only way it can build a result:
 ```rust
 ctx.region()                       // the consumer's live region — infallible
                                    // (guarantee 4)
-ctx.alloc(|b| value)               // reach = own region only: purity is
+ctx.alloc(|handle| value)          // reach = own region only: purity is
                                    // structural, not asserted
 ctx.alloc_with(&[dep_a, dep_b],    // reach = own region ∪ those deps' reaches
-    |b, views| value)              // dep payloads viewable only inside, at
-                                   // brand `b` (guarantee 5)
+    |placement, views| value)      // dep payloads viewable only inside, at
+                                   // the placement's brand (guarantee 5)
 dep.carrier()                      // the dep's sealed carrier, freely
                                    // passable — for policy work
 ```
@@ -285,12 +285,12 @@ the deps' sealed carriers (for policy: binding results into scopes,
 threading argument carriers onward). Views cannot escape; carriers can,
 safely.
 
-The bare `alloc`/`alloc_with` above are the doctest-bearing conceptual
-surface. Koan itself allocates through the profile-typed `_handle` veneers —
-[`alloc_handle`/`alloc_with_handle`](../workgraph/src/witnessed/step_ctx.rs),
-called from [arena.rs](../src/machine/core/arena.rs) — which thread the
-`RegionHandle` capability the same way; both forms stay `pub` as distinct
-layers, not a naming inconsistency to resolve.
+There is one door per verb. `alloc` hands its closure the region's
+`RegionHandle`, and `alloc_with` hands it a `FoldedPlacement` over that same
+handle — the allocation capability and the fold-brand proof as one value, so
+the two are never paired by hand. The region-flavoured forms that take a bare
+`&Region` plus a separate `FoldToken` are crate-internal implementations of
+those two, not a second public layer.
 
 **Two allocation modes, one substrate.** The step context is the
 maximally-checked path. Outside a step, an embedder allocates through a held

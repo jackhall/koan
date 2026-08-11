@@ -20,9 +20,7 @@ use super::{Live, NodeId, SealedTerminal, Workload};
 // `Erased` / `Carrier` / `Witnessed` re-anchor a test-only result through `set_result`; the
 // production store path takes a pre-built `Witnessed`, so these imports are test-scoped.
 #[cfg(any(test, feature = "test-hooks"))]
-use super::Erased;
-#[cfg(any(test, feature = "test-hooks"))]
-use crate::witnessed::{Carrier, Sealed, Witnessed};
+use crate::witnessed::{Carrier, Erased, Sealed, Witnessed};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
