@@ -425,14 +425,14 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
     scope
         .install_placeholder(
             "x".to_string(),
-            NodeId(7),
+            NodeId::for_test(7),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     match scope.resolve("x") {
-        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId(7)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId::for_test(7)),
         _ => panic!("expected Placeholder"),
     }
 }
@@ -454,14 +454,14 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
     inner
         .install_placeholder(
             "x".to_string(),
-            NodeId(3),
+            NodeId::for_test(3),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     match inner.resolve("x") {
-        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId(3)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId::for_test(3)),
         other => panic!(
             "expected Placeholder from inner — outer's Value should not shadow it. Got {}",
             match other {
@@ -480,7 +480,7 @@ fn bind_value_direct_clears_own_placeholder() {
     scope
         .install_placeholder(
             "x".to_string(),
-            NodeId(2),
+            NodeId::for_test(2),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
@@ -605,7 +605,7 @@ fn visibility_placeholder_filtered_same_as_value() {
     scope
         .install_placeholder(
             "ph".to_string(),
-            NodeId(2),
+            NodeId::for_test(2),
             BindingIndex::value(5),
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),

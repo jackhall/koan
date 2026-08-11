@@ -40,7 +40,7 @@ impl<W: Workload> Scheduler<W> {
     /// resolving the alias when they wire in.
     pub fn splice_forward(&mut self, slot: NodeId, producer: NodeId) {
         let producer = self.resolve_alias(producer);
-        self.deps.splice_notify(slot.index(), producer.index());
+        self.deps.splice_notify(slot, producer);
         self.store.alias(slot, producer);
     }
 
@@ -52,7 +52,7 @@ impl<W: Workload> Scheduler<W> {
     pub fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
         let producer = self.resolve_alias(producer);
         if self.store.is_result_ready(producer) {
-            self.deps.owe_late_pull(producer.index(), consumer.index());
+            self.deps.owe_late_pull(producer, consumer);
         } else {
             self.deps.add_owned_edge(producer, consumer);
         }
@@ -63,7 +63,7 @@ impl<W: Workload> Scheduler<W> {
     pub(crate) fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
         let producer = self.resolve_alias(producer);
         if self.store.is_result_ready(producer) {
-            self.deps.owe_late_pull(producer.index(), consumer.index());
+            self.deps.owe_late_pull(producer, consumer);
         } else {
             self.deps.add_park_edge(producer, consumer);
         }

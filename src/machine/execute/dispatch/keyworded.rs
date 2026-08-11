@@ -22,7 +22,7 @@ use crate::scheduler::ResolvedDeps;
 pub(super) fn initial<'step>(
     ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
-    idx: usize,
+    id: NodeId,
 ) -> Outcome<'step> {
     let bare_outcomes = match ctx.build_bare_outcomes(expr.parts) {
         Ok(outcomes) => outcomes,
@@ -57,7 +57,7 @@ pub(super) fn initial<'step>(
             return install_eager_only(ctx, expr);
         }
         DispatchOutcome::ParkOnProducers(producers) => {
-            return install_overload_park(ctx, producers, expr, idx);
+            return install_overload_park(ctx, producers, expr, id);
         }
     };
     // Binder name claims / pending overload slots were installed at statement submission from the
@@ -67,7 +67,7 @@ pub(super) fn initial<'step>(
         resolved,
         expr,
         &bare_outcomes,
-        idx,
+        id,
         install_bare_name_park,
     )
 }
@@ -88,10 +88,10 @@ fn walk_and_invoke<'step>(
     resolved: Resolved<'step>,
     expr: WorkingExpression<'step>,
     bare_outcomes: &[Option<NameOutcome>],
-    idx: usize,
+    id: NodeId,
     park: impl FnOnce(Vec<NodeId>, WorkingExpression<'step>) -> Outcome<'step>,
 ) -> Outcome<'step> {
-    let walk = match part_walk(ctx, expr.parts, bare_outcomes, &resolved.slots, idx) {
+    let walk = match part_walk(ctx, expr.parts, bare_outcomes, &resolved.slots, id) {
         Ok(w) => w,
         Err(e) => return Outcome::Done(Err(e)),
     };
@@ -128,7 +128,7 @@ fn walk_and_invoke<'step>(
 pub(super) fn finish<'step>(
     ctx: &SchedulerView<'_, 'step, '_>,
     working_expr: WorkingExpression<'step>,
-    idx: usize,
+    id: NodeId,
 ) -> Outcome<'step> {
     let bare_outcomes = match ctx.build_bare_outcomes(working_expr.parts) {
         Ok(outcomes) => outcomes,
@@ -146,7 +146,7 @@ pub(super) fn finish<'step>(
         ctx.types(),
     ) {
         DispatchOutcome::Resolved(r) => {
-            walk_and_invoke(ctx, r, working_expr, &bare_outcomes, idx, park_finish)
+            walk_and_invoke(ctx, r, working_expr, &bare_outcomes, id, park_finish)
         }
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
@@ -163,7 +163,7 @@ pub(super) fn finish<'step>(
             })))
         }
         DispatchOutcome::ParkOnProducers(producers) => {
-            install_overload_park(ctx, producers, working_expr, idx)
+            install_overload_park(ctx, producers, working_expr, id)
         }
         DispatchOutcome::UnboundName(name) => {
             Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
@@ -181,7 +181,7 @@ fn park_finish<'step>(
     park_resume(
         producers,
         Some(carrier),
-        Box::new(move |ctx, idx| finish(ctx, working_expr, idx)),
+        Box::new(move |ctx, id| finish(ctx, working_expr, id)),
     )
 }
 
@@ -195,7 +195,7 @@ pub(super) fn redispatch_continue<'step>(
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let carrier = working_expr.summarize();
-    let continuation = ignore_results(Box::new(move |ctx, idx| finish(ctx, working_expr, idx)));
+    let continuation = ignore_results(Box::new(move |ctx, id| finish(ctx, working_expr, id)));
     let continuation = match view.current_obligation_duplicate() {
         Some(obligation) => with_obligation(obligation, continuation),
         None => continuation,
@@ -217,14 +217,14 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     ctx: &SchedulerView<'_, 'step, '_>,
     producers: Vec<NodeId>,
     expr: WorkingExpression<'step>,
-    idx: usize,
+    id: NodeId,
 ) -> Outcome<'step> {
     // Classify each candidate through the shared park ladder; a ready-errored producer short-circuits,
     // a ready-Ok or would-cycle producer is skipped, and a still-finalizing one joins the park set
     // (deduped by `park_on`).
     let mut to_wait = ResolvedDeps::new();
     for p in producers {
-        match ctx.producer_disposition(p, NodeId(idx)) {
+        match ctx.producer_disposition(p, id) {
             ProducerDisposition::Errored(e) => {
                 let frame = working_frame("<dispatch-park>", &expr);
                 return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
@@ -247,7 +247,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     park_resume(
         to_wait.parks().to_vec(),
         Some(carrier),
-        Box::new(move |ctx, idx| initial(ctx, expr, idx)),
+        Box::new(move |ctx, id| initial(ctx, expr, id)),
     )
 }
 
@@ -282,7 +282,7 @@ fn install_bare_name_park<'step>(
     park_resume(
         producers,
         Some(carrier),
-        Box::new(move |ctx, idx| initial(ctx, working_expr, idx)),
+        Box::new(move |ctx, id| initial(ctx, working_expr, id)),
     )
 }
 
@@ -304,11 +304,11 @@ fn install_eager_subs_track<'step>(
 fn park_walk_producer(
     ctx: &SchedulerView<'_, '_, '_>,
     producer: NodeId,
-    idx: usize,
+    id: NodeId,
     part: &crate::machine::model::ExpressionPart<'_>,
     producers_to_wait: &mut Vec<NodeId>,
 ) -> Result<(), KError> {
-    if ctx.would_create_cycle(producer, NodeId(idx)) {
+    if ctx.would_create_cycle(producer, id) {
         let name = bare_name_of(part).unwrap_or_default();
         return Err(KError::new(KErrorKind::SchedulerDeadlock {
             pending: 1,
@@ -331,7 +331,7 @@ fn part_walk<'step>(
     parts: &[crate::source::Spanned<crate::machine::model::WorkingPart<'step>>],
     bare_outcomes: &[Option<NameOutcome>],
     slots: &crate::machine::core::ClassifiedSlots,
-    idx: usize,
+    id: NodeId,
 ) -> Result<PartWalkResult<'step>, KError> {
     use crate::machine::model::{ExpressionPart, WorkingPart};
     use crate::source::Spanned;
@@ -370,7 +370,7 @@ fn part_walk<'step>(
                     span,
                 }),
                 BareCarrier::Parked(p) => {
-                    park_walk_producer(ctx, p, idx, &name_part, &mut producers_to_wait)?;
+                    park_walk_producer(ctx, p, id, &name_part, &mut producers_to_wait)?;
                     new_parts.push(*part);
                 }
                 BareCarrier::Unbound(name) => {
@@ -382,7 +382,7 @@ fn part_walk<'step>(
         if ref_name_set.contains(&i) {
             if let (true, Some(NameOutcome::Parked(p))) = (bare_name, &bare_outcomes[i]) {
                 let name_part = ast.expect("bare_name implies an AST slot");
-                park_walk_producer(ctx, *p, idx, &name_part, &mut producers_to_wait)?;
+                park_walk_producer(ctx, *p, id, &name_part, &mut producers_to_wait)?;
             }
             new_parts.push(*part);
             continue;

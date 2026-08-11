@@ -629,26 +629,26 @@ the only path that picks an index (pulling from `free_list` before extending
 `free_one` is the only path that returns a slot to `Free` and pushes its index
 onto `free_list`. Dependency bookkeeping lives alongside it in a
 [`DepGraph`](../workgraph/src/scheduler/dep_graph.rs) sub-struct
-that bundles three `Vec`-shaped fields: `notify_list: Vec<Vec<NodeId>>`
-(each producer's dependent list), `pending_deps: Vec<usize>` (each consumer's
-unresolved-dep counter), and `dep_edges: Vec<Vec<DepEdge>>` (each slot's
+that holds one `DepRow` per slot, bundling three coordinated fields:
+`notify: Vec<NodeId>` (this producer's dependent list), `pending: usize` (this
+consumer's unresolved-dep counter), and `edges: Vec<DepEdge>` (this slot's
 backward edges to producers, tagged `DepEdge::Owned(NodeId)` for sub-slots
 the consumer is responsible for reclaiming and `DepEdge::Notify(NodeId)` for
-sibling producers the consumer only parked on for wake notification). All
-three are 1:1 with `NodeStore`'s slot count; the fields are private and
-mutated only through `DepGraph`'s atomic-update methods, so the tri-vector
-invariant (every forward edge in `notify_list[p]` matched by a backward
-`dep_edges[c]` entry and a +1 in `pending_deps[c]`) is enforced by the
-surface rather than by convention.
+sibling producers the consumer only parked on for wake notification). Housing
+the three in one row is what makes their coherence structural: the rows are
+private, keyed by `NodeId`, and mutated only through `DepGraph`'s atomic-update
+methods, so the invariant (every forward edge in a producer's `notify` matched
+by a backward `edges` entry and a +1 in `pending` on the consumer) is enforced
+by the surface rather than by convention.
 
 Transient-node reclamation runs through `Scheduler::reclaim_deps` from the
 unified node handler `KoanRuntime::run_step`, *after* the finish closure returns
 its `Outcome` but *before* the harness applies it. So
 when a dispatch splice finish has rewritten `working_expr.parts` to
-`WorkingPart::Spliced`, the freed indices are back on the free-list before
+`WorkingPart::Spliced`, the freed slots are back on the free-list before
 the harness dispatches the bound expression — its `add()` can recycle them
-immediately. `reclaim_deps` clears `dep_edges[idx]` and
-invokes `Scheduler::free` per dep index; the walk follows `DepGraph::owned_children`,
+immediately. `reclaim_deps` clears the consumer's dep edges and
+invokes `Scheduler::free` per dep; the walk follows `DepGraph::owned_children`,
 which only yields `DepEdge::Owned` arms (`Notify` arms are filtered
 inside `DepGraph`), so reclaiming a consumer cannot reach a sibling
 producer's subtree through a park edge. It skips any still-live slot

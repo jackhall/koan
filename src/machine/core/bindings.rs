@@ -365,13 +365,21 @@ impl BindingIndex {
     }
 }
 
-/// The scheduler slot that installed a binding, qualified by its run: [`NodeId`]s are
+/// What installed a binding — the identity a same-declaration check compares.
+///
+/// A scheduler-driven install names its slot, qualified by its run: [`NodeId`]s are
 /// scheduler-local and restart per runtime, so only the pair identifies a declaration
-/// statement across the lifetime of a persistent scope.
+/// statement across the lifetime of a persistent scope. An install that no slot drove
+/// carries no id at all rather than a reserved index, so it can never collide with a
+/// live slot — however many schedulers a run has.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct NodeHandle {
-    pub run: RunId,
-    pub node: NodeId,
+pub enum NodeHandle {
+    /// Registered outside any scheduler — builtin installs, and bindings a scope takes on
+    /// at birth. All such installs share this one identity, so re-registering a name under
+    /// [`TypeWritePolicy::UpsertEqual`] upserts rather than raising `Rebind`.
+    OffScheduler,
+    /// Installed by the slot `node` stepping in run `run`.
+    Slot { run: RunId, node: NodeId },
 }
 
 /// The identity of the declaration statement that installed a `types` entry: the installing
@@ -387,23 +395,17 @@ pub struct DeclarationSite {
 impl DeclarationSite {
     /// Off-scheduler builtin registration: no slot installed it.
     pub const BUILTIN: DeclarationSite = DeclarationSite {
-        node: NodeHandle {
-            run: RunId::OFF_SCHEDULER,
-            node: NodeId(0),
-        },
+        node: NodeHandle::OffScheduler,
         index: BindingIndex::BUILTIN,
     };
 
     /// A binding installed when its scope is **born**, rather than by a declaration statement
     /// running in it — a type-denoting FN parameter landing in the fresh per-call scope, an
     /// ascription seeding the newborn view scope's type members. No slot installed it, so the
-    /// identity node is the off-scheduler sentinel and same-declaration checks never key on it;
-    /// the index is `value(0)`, the parameter position the visibility predicate admits.
+    /// identity node is [`NodeHandle::OffScheduler`] and same-declaration checks never key on a
+    /// slot; the index is `value(0)`, the parameter position the visibility predicate admits.
     pub const AT_CONSTRUCTION: DeclarationSite = DeclarationSite {
-        node: NodeHandle {
-            run: RunId::OFF_SCHEDULER,
-            node: NodeId(0),
-        },
+        node: NodeHandle::OffScheduler,
         index: BindingIndex::value(0),
     };
 }

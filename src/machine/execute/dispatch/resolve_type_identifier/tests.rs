@@ -178,7 +178,7 @@ mod bare_leaf_resolution {
         scope
             .install_placeholder(
                 "Node".into(),
-                NodeId(7),
+                NodeId::for_test(7),
                 BindingIndex::value(0),
                 crate::machine::model::BindKind::Type,
                 &mut crate::machine::WriteGate::for_test(),
@@ -189,7 +189,11 @@ mod bare_leaf_resolution {
         let leaf = TypeIdentifier::leaf("Node");
         match scope.resolve_type_identifier(&leaf, None, &types) {
             TypeResolution::Park(producers) => {
-                assert_eq!(producers, vec![NodeId(7)], "parks on the single producer");
+                assert_eq!(
+                    producers,
+                    vec![NodeId::for_test(7)],
+                    "parks on the single producer"
+                );
             }
             other => panic!("expected Park mid-window, got {:?}", outcome_tag(&other)),
         }
@@ -241,7 +245,7 @@ mod bare_leaf_resolution {
         outer
             .install_placeholder(
                 "Node".into(),
-                NodeId(11),
+                NodeId::for_test(11),
                 BindingIndex::value(0),
                 crate::machine::model::BindKind::Type,
                 &mut crate::machine::WriteGate::for_test(),

@@ -217,8 +217,8 @@ impl<'run> KoanRuntime<'run> {
         &mut self.sched
     }
 
-    pub(in crate::machine::execute) fn free(&mut self, idx: usize) {
-        self.sched.free(idx)
+    pub(in crate::machine::execute) fn free(&mut self, id: NodeId) {
+        self.sched.free(id)
     }
 
     pub fn chain_of(&self, id: NodeId) -> Option<Rc<crate::machine::LexicalFrame>> {
@@ -548,9 +548,9 @@ impl<'run> KoanRuntime<'run> {
     /// (a `Done` return, or a tail `Continue` retiring this iteration), so the scope
     /// takes no further binds and its reach-set seals. A `Yoked` sub-expression slot owns no frame
     /// (its `owner` never names this slot), so its `Done` is a no-op here.
-    fn close_owned_scope(&self, idx: usize) {
+    fn close_owned_scope(&self, id: NodeId) {
         if let Some(frame) = self.ambient.active_frame_ref()
-            && frame.owner() == Some(NodeId(idx))
+            && frame.owner() == Some(id)
         {
             frame.with_scope(|s| s.close());
         }
@@ -563,11 +563,11 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         outcome: Outcome<'step>,
         brand: RegionBrand<'step>,
-        idx: usize,
+        id: NodeId,
     ) -> NodeStep<'step> {
         match outcome {
             Outcome::Done(result) => {
-                self.close_owned_scope(idx);
+                self.close_owned_scope(id);
                 match result {
                     Ok(carrier) => NodeStep::DoneWitnessed(carrier),
                     Err(error) => NodeStep::Error(error),
@@ -585,12 +585,12 @@ impl<'run> KoanRuntime<'run> {
                 // A tail iteration (`FreshTail`) retires this scope before the fresh cart is
                 // installed for the next; other placements keep the current scope live.
                 if matches!(frame, FramePlacement::FreshTail { .. }) {
-                    self.close_owned_scope(idx);
+                    self.close_owned_scope(id);
                 }
                 let frame = self.resolve_frame_placement(frame);
                 // The body re-dispatched into a freshly installed frame finalizes that frame's scope.
                 if let Some(installed) = frame.as_ref() {
-                    installed.set_owner(NodeId(idx));
+                    installed.set_owner(id);
                 }
                 // The chain reshape was decided at the `Continue` construction site while the
                 // contract variant was live (see [`ChainOp`]); the run loop assembles it against the
@@ -674,7 +674,7 @@ impl<'run> KoanRuntime<'run> {
                 // (kept alive), each owned dep an `Owned` edge (cascade-freed on resolve). (`Catch`
                 // declares no deps here, so `resolved` is empty — it realizes and owns its single
                 // watched dep in the `cont` match below.)
-                self.sched.install_edges(&resolved, NodeId(idx));
+                self.sched.install_edges(&resolved, id);
                 // Lower each variant to its outermost live `NodeContinuation` alongside the deps it
                 // waits on and its deadlock-summary carrier, then wrap once below before erasing.
                 let (deps, continuation, carrier) = match continuation {
@@ -700,7 +700,7 @@ impl<'run> KoanRuntime<'run> {
                     // `catch_continuation` runs the finish without short-circuiting on a dep error.
                     Continuation::Catch { watched, finish } => {
                         let from = self.realize_catch_dep(watched);
-                        self.sched.add_owned_edge(from, NodeId(idx));
+                        self.sched.add_owned_edge(from, id);
                         let mut watched_deps = ResolvedDeps::new();
                         watched_deps.own(from);
                         (watched_deps, catch_continuation(finish), None)
@@ -760,7 +760,7 @@ impl<'run> KoanRuntime<'run> {
                     };
                     match checked {
                         Ok(()) => NodeStep::ForwardReady(producer),
-                        Err(error) => self.apply_outcome(Outcome::Done(Err(error)), brand, idx),
+                        Err(error) => self.apply_outcome(Outcome::Done(Err(error)), brand, id),
                     }
                 } else {
                     // The producer is not yet resolved: park a checker micro-step on it (an
@@ -786,7 +786,7 @@ impl<'run> KoanRuntime<'run> {
                         continuation: Continuation::FinishTerminal(finish),
                         dep_error_frame: Some(dep_error_frame()),
                     };
-                    self.apply_outcome(park, brand, idx)
+                    self.apply_outcome(park, brand, id)
                 }
             }
         }

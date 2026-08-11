@@ -184,7 +184,7 @@ fn write_type_finalizes_pending_arm_in_place() {
     bindings
         .install_placeholder(
             "Bar",
-            NodeId(7),
+            NodeId::for_test(7),
             BindingIndex::BUILTIN,
             BindKind::Type,
             &mut crate::machine::WriteGate::for_test(),
@@ -192,7 +192,7 @@ fn write_type_finalizes_pending_arm_in_place() {
         .expect("placeholder install should succeed on fresh bindings");
     assert_eq!(
         bindings.pending_names(),
-        vec![("Bar".to_string(), BindKind::Type, NodeId(7))],
+        vec![("Bar".to_string(), BindKind::Type, NodeId::for_test(7))],
     );
     bindings
         .write_type(
@@ -241,9 +241,9 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
     let second_run = RunId::next();
     assert_ne!(first_run, second_run, "two runs must mint distinct RunIds");
     // One scheduler-local NodeId, reused across both runs — as a per-run scheduler would restart it.
-    let node = NodeId(5);
+    let node = NodeId::for_test(5);
     let site = |run| DeclarationSite {
-        node: NodeHandle { run, node },
+        node: NodeHandle::Slot { run, node },
         index: BindingIndex::value(0),
     };
 
@@ -372,7 +372,7 @@ fn value_write_finalizes_the_pending_arm_in_place() {
     bindings
         .install_placeholder(
             "x",
-            NodeId(11),
+            NodeId::for_test(11),
             BindingIndex::value(2),
             BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
@@ -380,11 +380,11 @@ fn value_write_finalizes_the_pending_arm_in_place() {
         .expect("value claim should succeed on fresh bindings");
     assert_eq!(
         bindings.pending_value("x").map(|p| p.producer),
-        Some(NodeId(11)),
+        Some(NodeId::for_test(11)),
     );
     assert!(matches!(
         bindings.lookup_value("x", None),
-        Some(NameLookup::Parked(NodeId(11))),
+        Some(NameLookup::Parked(id)) if id == NodeId::for_test(11),
     ));
 
     let val: &KObject = region.alloc_scalar(Scalar::Number(5.0));
@@ -426,7 +426,7 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
     bindings
         .install_placeholder(
             "Wrapper",
-            NodeId(9),
+            NodeId::for_test(9),
             BindingIndex::BUILTIN,
             BindKind::Type,
             &mut crate::machine::WriteGate::for_test(),
@@ -439,10 +439,13 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
     ));
     assert_eq!(
         bindings.type_placeholder_producer("Wrapper"),
-        Some(NodeId(9)),
+        Some(NodeId::for_test(9)),
     );
 
-    bindings.clear_placeholders_for_producer(NodeId(9), &mut crate::machine::WriteGate::for_test());
+    bindings.clear_placeholders_for_producer(
+        NodeId::for_test(9),
+        &mut crate::machine::WriteGate::for_test(),
+    );
     assert!(bindings.pending_names().is_empty());
     assert_eq!(bindings.expect_type("Wrapper"), KType::NUMBER);
 }
@@ -504,7 +507,7 @@ fn bump_backed_tables_full_churn() {
             &types,
         );
         let sealed_key = f.signature.untyped_key();
-        for producer in [NodeId(7), NodeId(8)] {
+        for producer in [NodeId::for_test(7), NodeId::for_test(8)] {
             scope
                 .install_pending_overload(
                     sealed_key.clone(),
@@ -528,14 +531,14 @@ fn bump_backed_tables_full_churn() {
         scope
             .install_pending_overload(
                 purged_key.clone(),
-                NodeId(9),
+                NodeId::for_test(9),
                 BindingIndex::value(2),
                 &mut gate,
             )
             .expect("the purged binder claims its bucket");
         scope
             .bindings()
-            .clear_placeholders_for_producer(NodeId(9), &mut gate);
+            .clear_placeholders_for_producer(NodeId::for_test(9), &mut gate);
         assert!(
             scope
                 .bindings()

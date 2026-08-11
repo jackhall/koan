@@ -27,8 +27,7 @@ impl<W: Workload> Scheduler<W> {
     /// very frame the hold's release frees. An error carries no value and so reaches nothing. The
     /// region and every reached region stay retained until every destination — the consumers parked
     /// here at finalize, plus any late parker — has pulled, released at pull-count zero.
-    pub fn finalize(&mut self, idx: usize, output: Result<DeliveredTerminal<W>, W::Error>) {
-        let id = NodeId(idx);
+    pub fn finalize(&mut self, id: NodeId, output: Result<DeliveredTerminal<W>, W::Error>) {
         let (sealed, foreign) = match output {
             Ok(envelope) => {
                 let foreign = envelope.coverage_releasing_home();
@@ -37,7 +36,7 @@ impl<W: Workload> Scheduler<W> {
             Err(error) => (Err(error), StepCoverage::empty()),
         };
         self.store.finalize(id, sealed);
-        let drained = self.deps.drain_notify(idx);
+        let drained = self.deps.drain_notify(id);
         // The consumers parked on this producer at finalize are its known destinations; a late parker
         // (wiring after this point) bumps the count through the ready-branch increment. Project the
         // retention owner from the slot's own anchor, then drop the anchor — its cart/chain are dead
@@ -45,11 +44,11 @@ impl<W: Workload> Scheduler<W> {
         // alongside the terminal's threaded foreign bundle.
         let anchor = self
             .deps
-            .take_anchor(idx)
+            .take_anchor(id)
             .expect("a finalizing slot still holds its anchor");
         self.deps
-            .seed_retain(idx, Rc::clone(anchor.owner()), foreign.0, drained.len());
-        let mut woken: Vec<usize> = Vec::new();
+            .seed_retain(id, Rc::clone(anchor.owner()), foreign.0, drained.len());
+        let mut woken: Vec<NodeId> = Vec::new();
         for (consumer, hit_zero) in drained {
             if hit_zero {
                 woken.push(consumer);
@@ -66,13 +65,13 @@ impl<W: Workload> Scheduler<W> {
     ///
     /// Idempotent and safe to call on a still-live slot. A value opened by a read lives in a region
     /// the carrier's frame pins, not in the slot, so freeing the slot cannot dangle it.
-    pub fn free(&mut self, idx: usize) {
-        let mut stack: Vec<NodeId> = vec![NodeId(idx)];
+    pub fn free(&mut self, id: NodeId) {
+        let mut stack: Vec<NodeId> = vec![id];
         while let Some(id) = stack.pop() {
             if self.store.is_live(id) {
                 continue;
             }
-            if self.store.is_reclaimed(id) && self.deps.is_dep_edges_empty(id.index()) {
+            if self.store.is_reclaimed(id) && self.deps.is_dep_edges_empty(id) {
                 continue;
             }
             // This slot is dying: its last possible pull on every producer it still depends on is
@@ -80,11 +79,11 @@ impl<W: Workload> Scheduler<W> {
             // own retention hold — an owned producer's owner is done with it, so its region dies here
             // regardless of the remaining count — and release its memory anchor. All run before
             // `owned_children` drains the edges.
-            self.deps.discharge_edges(id.index());
-            self.deps.discharge_owed(id.index());
-            self.deps.drop_retain(id.index());
-            self.deps.clear_anchor(id.index());
-            for child in self.deps.owned_children(id.index()) {
+            self.deps.discharge_edges(id);
+            self.deps.discharge_owed(id);
+            self.deps.drop_retain(id);
+            self.deps.clear_anchor(id);
+            for child in self.deps.owned_children(id) {
                 stack.push(child);
             }
             self.store.free_one(id);
@@ -92,18 +91,18 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// Success-path eager free; the error path leaves deps for chain-free
-    /// at slot drop. Inv-B is what makes `dep_edges[idx].clear()` sound
+    /// at slot drop. Inv-B is what makes the slot's dep-edge clear sound
     /// here — see
     /// [design/dag-scheduler.md § The dep row and its invariants](../../design/dag-scheduler.md#the-dep-row-and-its-invariants).
-    pub fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
+    pub fn reclaim_deps(&mut self, id: NodeId, deps: Vec<NodeId>) {
         // The finalizing consumer has read its deps and won't read them again: discharge any
         // late-park debt it owes (its edges' pulls on shared/persistent producers ride until those
         // producers are themselves freed or the run tears down; its owned deps are released by the
         // cascade `free` below). `clear_dep_edges` then drops the edges, so a later free of this slot
         // finds none and cannot double-discharge.
-        self.deps.discharge_owed(idx);
-        self.deps.clear_dep_edges(idx);
-        for d in dep_indices {
+        self.deps.discharge_owed(id);
+        self.deps.clear_dep_edges(id);
+        for d in deps {
             self.free(d);
         }
     }

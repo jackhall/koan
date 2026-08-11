@@ -55,8 +55,7 @@ impl<'run> KoanRuntime<'run> {
     /// about to drop, so it must be lifted into the captured scope's region before the
     /// frame is released. See design/memory-model.md.
     pub fn execute(&mut self) -> Result<(), KError> {
-        while let Some(idx) = self.sched.pop_next() {
-            let id = NodeId(idx);
+        while let Some(id) = self.sched.pop_next() {
             // A framed tail replace's retiring incarnation frame rides into the step as part of its
             // coverage: the reinstalled incarnation adopts the carried arguments here
             // (`extract_carried_args`), reading them out of the retiring region — where the
@@ -102,7 +101,6 @@ impl<'run> KoanRuntime<'run> {
         anchor: Rc<super::nodes::SlotFrame>,
         handoff: Option<Rc<super::nodes::SlotFrame>>,
     ) {
-        let idx = id.index();
         // The step's binding-write sink: every `Action` the step interprets deposits its `WriteOp`s
         // here through `run_action`, and the drain below applies them against the step scope. Owned
         // by the run loop and confined to this call, so nothing crosses steps — a wake-time finish
@@ -124,7 +122,7 @@ impl<'run> KoanRuntime<'run> {
         // even for a transparent USING window). The lift delivers deps *un-relocated*; the copy into
         // `dest` runs inside a construction fold's witnessed transfer, not here — the catch channel
         // duplicates the watched carrier instead of copying.
-        let owned_indices: Vec<usize> = deps.owned().iter().map(|d| d.index()).collect();
+        let owned_deps: Vec<NodeId> = deps.owned().to_vec();
         // Read each producer terminal out into the dep slice. A `DepTerminal` is exactly the
         // producer's delivery envelope — value, reach, and the retained producer-frame pins as one
         // lifetime-free unit — so the slice is plain step-local data: it rides no carrier and enters
@@ -202,7 +200,7 @@ impl<'run> KoanRuntime<'run> {
                                 &rt.ambient,
                                 scope,
                                 scope_frame(scope),
-                                NodeHandle {
+                                NodeHandle::Slot {
                                     run: rt.run,
                                     node: id,
                                 },
@@ -211,9 +209,9 @@ impl<'run> KoanRuntime<'run> {
                                 rt.program,
                             ),
                             deps.results(&dep_sources),
-                            idx,
+                            id,
                         );
-                        rt.sched.reclaim_deps(idx, owned_indices);
+                        rt.sched.reclaim_deps(id, owned_deps);
                         // Apply the step's binding writes against the step scope, in the order the
                         // bodies decided them. This is the **only** path that mutates a published
                         // binding table: it runs after the continuation returned — so no koan frame
@@ -239,7 +237,7 @@ impl<'run> KoanRuntime<'run> {
                         // brand rides along: an owned dep the outcome names may still have to bump
                         // its own dispatch node (an aggregate literal's elements, a body block's
                         // statements) into this region as it is realized.
-                        rt.apply_outcome(outcome, scope.brand(), idx)
+                        rt.apply_outcome(outcome, scope.brand(), id)
                     },
                 );
                 // The producer's per-call frame, gated to a *dying* producer (a frameless / run-frame
@@ -268,13 +266,13 @@ impl<'run> KoanRuntime<'run> {
                             anchor.owner(),
                             frame.and(post.obligation.as_ref()),
                         ) {
-                            Ok(delivered) => self.sched.finalize(idx, Ok(delivered)),
+                            Ok(delivered) => self.sched.finalize(id, Ok(delivered)),
                             Err(error) => {
                                 scope.clear_placeholders_for_producer(
                                     id,
                                     &mut WriteGate::for_run_loop(),
                                 );
-                                self.sched.finalize(idx, Err(error));
+                                self.sched.finalize(id, Err(error));
                             }
                         }
                     }
@@ -285,7 +283,7 @@ impl<'run> KoanRuntime<'run> {
                         scope.clear_placeholders_for_producer(id, &mut WriteGate::for_run_loop());
                         // A terminal error carries no value and so reaches nothing; the producer
                         // frame still retains until its (short-circuiting) destinations pull.
-                        self.sched.finalize(idx, Err(error));
+                        self.sched.finalize(id, Err(error));
                     }
                     NodeStep::ForwardReady(producer) => {
                         // Relocate `producer`'s terminal into this slot's region via merge-transfer;
@@ -304,13 +302,13 @@ impl<'run> KoanRuntime<'run> {
                         // The relocation's product envelope crosses back whole; the retention hold
                         // seeds from its own coverage, so no pull re-derives the reach.
                         match self.relocate_terminal(producer, dest) {
-                            Ok(delivered) => self.sched.finalize(idx, Ok(delivered)),
+                            Ok(delivered) => self.sched.finalize(id, Ok(delivered)),
                             Err(error) => {
                                 scope.clear_placeholders_for_producer(
                                     id,
                                     &mut WriteGate::for_run_loop(),
                                 );
-                                self.sched.finalize(idx, Err(error));
+                                self.sched.finalize(id, Err(error));
                             }
                         }
                     }

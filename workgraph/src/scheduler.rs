@@ -76,9 +76,9 @@ impl<W: Workload> Scheduler<W> {
         }
     }
 
-    /// Pop the next ready slot index — the run loop's iterator (in-flight slots ahead of fresh
+    /// Pop the next ready slot — the run loop's iterator (in-flight slots ahead of fresh
     /// dispatches). `None` when the queue drains.
-    pub fn pop_next(&mut self) -> Option<usize> {
+    pub fn pop_next(&mut self) -> Option<NodeId> {
         self.queues.pop_next()
     }
 
@@ -97,8 +97,8 @@ impl<W: Workload> Scheduler<W> {
     ) -> (StoredWork<W>, Rc<W::Frame>, Option<Rc<W::Frame>>) {
         (
             self.store.take_for_run(id),
-            self.deps.anchor_clone(id.index()),
-            self.deps.take_handoff(id.index()),
+            self.deps.anchor_clone(id),
+            self.deps.take_handoff(id),
         )
     }
 
@@ -113,7 +113,7 @@ impl<W: Workload> Scheduler<W> {
         // resting continuation is pinned by the anchor whose region it will read.
         let stored = match &anchor {
             Some(new) => seal_work(work, new),
-            None => seal_work(work, &self.deps.anchor_clone(id.index())),
+            None => seal_work(work, &self.deps.anchor_clone(id)),
         };
         // On a framed replace, swap the row's anchor for the new incarnation's and park the displaced
         // one as the reinstalled slot's TCO handoff hold; the run loop holds it across the reinstalled
@@ -122,16 +122,16 @@ impl<W: Workload> Scheduler<W> {
         // any handoff — it turns over no region.
         match anchor {
             Some(new) => {
-                let displaced = self.deps.set_anchor(id.index(), new);
-                self.deps.set_handoff(id.index(), Some(displaced));
+                let displaced = self.deps.set_anchor(id, new);
+                self.deps.set_handoff(id, Some(displaced));
             }
-            None => self.deps.set_handoff(id.index(), None),
+            None => self.deps.set_handoff(id, None),
         }
         self.store.reinstall(id, stored);
         // Replace return sites install their own edges (or clear the slot's dep edges for tail
         // rewrites), so the pending count is authoritative here.
-        if self.deps.pending_count(id.index()) == 0 {
-            self.queues.push_after_replace(id.index());
+        if self.deps.pending_count(id) == 0 {
+            self.queues.push_after_replace(id);
         }
     }
 
@@ -145,7 +145,7 @@ impl<W: Workload> Scheduler<W> {
     /// A clone of the slot's memory anchor, or `None` for a slot with none installed. Test-only.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn anchor_of(&self, id: NodeId) -> Option<Rc<W::Frame>> {
-        self.deps.anchor_of(id.index())
+        self.deps.anchor_of(id)
     }
 
     pub fn len(&self) -> usize {
@@ -172,7 +172,7 @@ impl<W: Workload> Scheduler<W> {
         let target = self.resolve_alias(id);
         // The retained producer frame owner pins the value across the open (`None` for a frameless /
         // run-region producer); held in `pin` for the duration of the read.
-        let pin = self.deps.retained_owner(target.index());
+        let pin = self.deps.retained_owner(target);
         self.store.read_result_with(target, pin.as_ref(), f)
     }
 
@@ -212,13 +212,13 @@ impl<W: Workload> Scheduler<W> {
         let target = self.resolve_alias(id);
         let host = self
             .deps
-            .retained_owner(target.index())
+            .retained_owner(target)
             .expect("a pull-able dep's retention hold is active (seeded at every finalize)");
         // Clone the terminal's owned foreign bundle out of the hold — the reach was captured at
         // finalize and threaded in, never re-derived from the carrier's description here.
         let foreign = self
             .deps
-            .retained_foreign(target.index())
+            .retained_foreign(target)
             .expect("a pull-able dep's retention hold carries its foreign bundle");
         Ok(Delivered::hosted(
             cell,
@@ -241,7 +241,7 @@ impl<W: Workload> Scheduler<W> {
         // The re-homed terminal has no per-call producer frame to retain — its value moved into a
         // surviving region — so any hold seeded at its finalize is released here (its count is zero
         // by construction: a consumer-less root has no parked destination).
-        self.deps.drop_retain(target.index());
+        self.deps.drop_retain(target);
         self.store
             .rehome_terminal(target, output.map(Delivered::into_cell));
     }
@@ -303,7 +303,7 @@ impl<W: Workload> Scheduler<W> {
         foreign: crate::witnessed::StepCoverage<OwnerOf<W>>,
         pulls: usize,
     ) {
-        self.deps.seed_retain(id.index(), owner, foreign.0, pulls);
+        self.deps.seed_retain(id, owner, foreign.0, pulls);
     }
     pub fn result_is_none(&self, id: NodeId) -> bool {
         self.store.result_is_none(id)
@@ -314,7 +314,7 @@ impl<W: Workload> Scheduler<W> {
     pub fn is_live(&self, id: NodeId) -> bool {
         self.store.is_live(id)
     }
-    pub fn notify_list_iter(&self) -> impl Iterator<Item = (usize, &Vec<usize>)> {
+    pub fn notify_list_iter(&self) -> impl Iterator<Item = (NodeId, &Vec<NodeId>)> {
         self.deps.notify_list_iter()
     }
     pub fn free_list_snapshot(&self) -> Vec<NodeId> {
@@ -323,10 +323,10 @@ impl<W: Workload> Scheduler<W> {
     pub fn free_list_len(&self) -> usize {
         self.store.free_list_len()
     }
-    pub fn set_dep_edges(&mut self, idx: usize, edges: Vec<DepEdge>) {
-        self.deps.set_dep_edges(idx, edges);
+    pub fn set_dep_edges(&mut self, id: NodeId, edges: Vec<DepEdge>) {
+        self.deps.set_dep_edges(id, edges);
     }
-    pub fn dep_edges_at(&self, idx: usize) -> &[DepEdge] {
-        self.deps.dep_edges_at(idx)
+    pub fn dep_edges_at(&self, id: NodeId) -> &[DepEdge] {
+        self.deps.dep_edges_at(id)
     }
 }

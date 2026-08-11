@@ -298,7 +298,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     scope
         .install_pending_overload(
             bucket_single,
-            NodeId(42),
+            NodeId::for_test(42),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -313,7 +313,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     );
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&bare, Some(&chain), &[], &types) {
-        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![NodeId(42)]),
+        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![NodeId::for_test(42)]),
         other => panic!(
             "expected ParkOnProducers([42]) for matching bucket, got {}",
             std::any::type_name_of_val(&other)
@@ -379,13 +379,13 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         ],
     );
     // Inner pending sibling on the same bucket key, body not yet finalized.
-    scope_install_pending(inner, &expr, NodeId(55));
+    scope_install_pending(inner, &expr, NodeId::for_test(55));
 
     let chain = LexicalFrame::detached();
     match inner.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
-            vec![NodeId(55)],
+            vec![NodeId::for_test(55)],
             "inner pending must shadow the outer strict Pick",
         ),
         other => panic!(
@@ -537,7 +537,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     scope
         .install_pending_overload(
             expr.untyped_key(),
-            NodeId(77),
+            NodeId::for_test(77),
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -547,7 +547,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
-            vec![NodeId(77)],
+            vec![NodeId::for_test(77)],
             "finalized Pick must park on the in-flight pending sibling",
         ),
         other => panic!(
@@ -625,7 +625,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     scope
         .install_pending_overload(
             bucket.clone(),
-            NodeId(101),
+            NodeId::for_test(101),
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -633,7 +633,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     scope
         .install_pending_overload(
             bucket.clone(),
-            NodeId(102),
+            NodeId::for_test(102),
             BindingIndex::value(4),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -658,7 +658,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
         DispatchOutcome::ParkOnProducers(ps) => {
             assert_eq!(
                 ps,
-                vec![NodeId(101)],
+                vec![NodeId::for_test(101)],
                 "consumer must park on earliest-index visible pending entry",
             );
         }

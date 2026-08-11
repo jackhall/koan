@@ -127,11 +127,7 @@ fn parked_continuation_opens_and_runs_after_its_handles_drop() {
     drop(anchor);
 
     let ready = sched.pop_next().expect("a dep-free slot is ready");
-    assert_eq!(
-        ready,
-        id.index(),
-        "the ready slot is the one just installed"
-    );
+    assert_eq!(ready, id, "the ready slot is the one just installed");
 
     let (work, _anchor, _handoff) = sched.take_for_run(id);
     let (_deps, sealed, _carrier) = work.into_run_parts();

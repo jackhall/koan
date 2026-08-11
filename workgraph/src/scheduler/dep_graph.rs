@@ -69,7 +69,7 @@ struct RetentionHold<F: crate::witnessed::PinsRegion> {
 /// retention owner (`Rc<OwnerOf<W>>`); these are distinct types.
 struct DepRow<W: Workload> {
     /// Forward wake edges from this producer to its consumers.
-    notify: Vec<usize>,
+    notify: Vec<NodeId>,
     /// Not-yet-observed deps for this consumer; zero routes via
     /// `WorkQueues::push_woken`.
     pending: usize,
@@ -87,7 +87,7 @@ struct DepRow<W: Workload> {
     /// Producers this consumer wired to **after** they had already finalized (the late-park path,
     /// which installs no `notify` edge). Each entry is a retained producer whose `pulls` this
     /// consumer bumped on wiring and must discharge once — after its read, or at its death.
-    owed: Vec<usize>,
+    owed: Vec<NodeId>,
     /// The **TCO handoff hold**: a framed tail replace's *displaced* incarnation anchor, parked
     /// here by [`Scheduler::replace`](crate::scheduler::Scheduler::replace) so the retiring region
     /// outlives the reinstalled incarnation's first step — where it adopts the loop-carried
@@ -120,6 +120,16 @@ pub(in crate::scheduler) struct DepGraph<W: Workload> {
 impl<W: Workload> DepGraph<W> {
     pub(super) fn new() -> Self {
         Self { rows: Vec::new() }
+    }
+
+    /// The two row accessors. Every method below reaches its row through one of these, so the
+    /// slot index a `NodeId` wraps is unwrapped in exactly one place per direction.
+    fn row(&self, id: NodeId) -> &DepRow<W> {
+        &self.rows[id.index()]
+    }
+
+    fn row_mut(&mut self, id: NodeId) -> &mut DepRow<W> {
+        &mut self.rows[id.index()]
     }
 
     /// Atomic init of the consumer's row (recycle or extend) plus the
@@ -157,7 +167,7 @@ impl<W: Workload> DepGraph<W> {
             });
         }
         for p in pending_producers {
-            self.rows[p.index()].notify.push(consumer.index());
+            self.row_mut(*p).notify.push(consumer);
         }
         pending
     }
@@ -166,8 +176,8 @@ impl<W: Workload> DepGraph<W> {
     /// producer's notify list. Caller guarantees `producer` is not yet
     /// terminal.
     pub(in crate::scheduler) fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
-        self.rows[producer.index()].notify.push(consumer.index());
-        let row = &mut self.rows[consumer.index()];
+        self.row_mut(producer).notify.push(consumer);
+        let row = self.row_mut(consumer);
         row.pending += 1;
         row.edges.push(DepEdge::Owned(producer));
     }
@@ -177,8 +187,8 @@ impl<W: Workload> DepGraph<W> {
     /// `free` skips past it. Caller guarantees `producer` is not yet
     /// terminal.
     pub(in crate::scheduler) fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
-        self.rows[producer.index()].notify.push(consumer.index());
-        let row = &mut self.rows[consumer.index()];
+        self.row_mut(producer).notify.push(consumer);
+        let row = self.row_mut(consumer);
         row.pending += 1;
         row.edges.push(DepEdge::Notify(producer));
     }
@@ -189,12 +199,12 @@ impl<W: Workload> DepGraph<W> {
     /// producer.
     pub(super) fn seed_retain(
         &mut self,
-        producer: usize,
+        producer: NodeId,
         owner: Rc<OwnerOf<W>>,
         foreign: PinBundle<OwnerOf<W>>,
         pulls: usize,
     ) {
-        self.rows[producer].retain = Some(RetentionHold {
+        self.row_mut(producer).retain = Some(RetentionHold {
             owner,
             foreign,
             pulls,
@@ -204,32 +214,32 @@ impl<W: Workload> DepGraph<W> {
     /// Record that `consumer` wired to an already-finalized retained `producer`: bump the producer's
     /// outstanding pull count and remember the debt on the consumer, to be discharged once (after the
     /// consumer's read, or at its death). No-op when `producer` carries no hold.
-    pub(super) fn owe_late_pull(&mut self, producer: usize, consumer: usize) {
-        if let Some(hold) = self.rows[producer].retain.as_mut() {
+    pub(super) fn owe_late_pull(&mut self, producer: NodeId, consumer: NodeId) {
+        if let Some(hold) = self.row_mut(producer).retain.as_mut() {
             hold.pulls += 1;
-            self.rows[consumer].owed.push(producer);
+            self.row_mut(consumer).owed.push(producer);
         }
     }
 
     /// Discharge one destination pull on `producer`, releasing its frame (dropping the owner `Rc`)
     /// when the count reaches zero. A `None` hold (frameless, or already released) is a no-op.
-    fn decrement_pull(&mut self, producer: usize) {
-        if let Some(hold) = self.rows[producer].retain.as_mut() {
+    fn decrement_pull(&mut self, producer: NodeId) {
+        if let Some(hold) = self.row_mut(producer).retain.as_mut() {
             debug_assert!(
                 hold.pulls > 0,
-                "retention over-discharge on slot {producer}"
+                "retention over-discharge on slot {producer:?}"
             );
             hold.pulls = hold.pulls.saturating_sub(1);
             if hold.pulls == 0 {
-                self.rows[producer].retain = None;
+                self.row_mut(producer).retain = None;
             }
         }
     }
 
     /// Discharge every late-pull `consumer` owes (draining the debt so it discharges exactly once) —
     /// the after-read / at-death discharge of the late-park increments.
-    pub(super) fn discharge_owed(&mut self, consumer: usize) {
-        let owed = std::mem::take(&mut self.rows[consumer].owed);
+    pub(super) fn discharge_owed(&mut self, consumer: NodeId) {
+        let owed = std::mem::take(&mut self.row_mut(consumer).owed);
         for producer in owed {
             self.decrement_pull(producer);
         }
@@ -239,11 +249,12 @@ impl<W: Workload> DepGraph<W> {
     /// consumer's last-possible-pull discharge (`free`). Reads the edge list without draining it;
     /// the caller drains it separately (`owned_children`) for the reclaim recursion, and `free`
     /// processes each slot once, so this fires exactly once per edge.
-    pub(super) fn discharge_edges(&mut self, consumer: usize) {
-        let producers: Vec<usize> = self.rows[consumer]
+    pub(super) fn discharge_edges(&mut self, consumer: NodeId) {
+        let producers: Vec<NodeId> = self
+            .row(consumer)
             .edges
             .iter()
-            .map(|e| e.node_id().index())
+            .map(|e| e.node_id())
             .collect();
         for producer in producers {
             self.decrement_pull(producer);
@@ -253,8 +264,8 @@ impl<W: Workload> DepGraph<W> {
     /// A clone of `producer`'s retained region owner, or `None` for a frameless / released producer —
     /// the liveness pin a retention-pinned read holds live across [`Sealed::open_with`] while it
     /// re-anchors the terminal's value.
-    pub(super) fn retained_owner(&self, producer: usize) -> Option<Rc<OwnerOf<W>>> {
-        self.rows[producer]
+    pub(super) fn retained_owner(&self, producer: NodeId) -> Option<Rc<OwnerOf<W>>> {
+        self.row(producer)
             .retain
             .as_ref()
             .map(|hold| Rc::clone(&hold.owner))
@@ -263,8 +274,8 @@ impl<W: Workload> DepGraph<W> {
     /// A clone of `producer`'s retained foreign pin bundle, or `None` for a frameless / released
     /// producer — the owned reach [`DepGraph`] threads back into the delivery envelope at each pull,
     /// never re-derived from the carrier's description.
-    pub(super) fn retained_foreign(&self, producer: usize) -> Option<PinBundle<OwnerOf<W>>> {
-        self.rows[producer]
+    pub(super) fn retained_foreign(&self, producer: NodeId) -> Option<PinBundle<OwnerOf<W>>> {
+        self.row(producer)
             .retain
             .as_ref()
             .map(|hold| hold.foreign.clone())
@@ -273,21 +284,21 @@ impl<W: Workload> DepGraph<W> {
     /// Drop `producer`'s retention hold outright — the owned-producer prompt release (its owning
     /// consumer is done with it) and the re-home drain's explicit clear. Releases the frame
     /// regardless of the remaining pull count.
-    pub(super) fn drop_retain(&mut self, producer: usize) {
-        self.rows[producer].retain = None;
+    pub(super) fn drop_retain(&mut self, producer: NodeId) {
+        self.row_mut(producer).retain = None;
     }
 
     /// Install the slot's memory anchor at alloc time (no previous anchor to displace). Every live
     /// slot holds an anchor from here until `free` clears it.
-    pub(super) fn install_anchor(&mut self, idx: usize, anchor: Rc<W::Frame>) {
-        self.rows[idx].anchor = Some(anchor);
+    pub(super) fn install_anchor(&mut self, id: NodeId, anchor: Rc<W::Frame>) {
+        self.row_mut(id).anchor = Some(anchor);
     }
 
     /// Swap the slot's memory anchor for `anchor` on a framed replace, returning the DISPLACED one
     /// (the previous incarnation's anchor, which the caller parks as the TCO handoff). Every live
     /// slot has an anchor, so the `.expect` is total on the replace path.
-    pub(super) fn set_anchor(&mut self, idx: usize, anchor: Rc<W::Frame>) -> Rc<W::Frame> {
-        self.rows[idx]
+    pub(super) fn set_anchor(&mut self, id: NodeId, anchor: Rc<W::Frame>) -> Rc<W::Frame> {
+        self.row_mut(id)
             .anchor
             .replace(anchor)
             .expect("a replacing slot still holds its anchor")
@@ -295,9 +306,9 @@ impl<W: Workload> DepGraph<W> {
 
     /// `Rc::clone` of the slot's memory anchor — the run loop keeps a clone across the step while
     /// the row retains its own. Every live slot has an anchor.
-    pub(super) fn anchor_clone(&self, idx: usize) -> Rc<W::Frame> {
+    pub(super) fn anchor_clone(&self, id: NodeId) -> Rc<W::Frame> {
         Rc::clone(
-            self.rows[idx]
+            self.row(id)
                 .anchor
                 .as_ref()
                 .expect("every live slot has an anchor"),
@@ -306,18 +317,18 @@ impl<W: Workload> DepGraph<W> {
 
     /// Take the slot's memory anchor by value — `finalize` does this to project the retention owner
     /// from it, then drops the anchor (its cart/chain are dead weight once the slot is terminal).
-    pub(super) fn take_anchor(&mut self, idx: usize) -> Option<Rc<W::Frame>> {
-        self.rows[idx].anchor.take()
+    pub(super) fn take_anchor(&mut self, id: NodeId) -> Option<Rc<W::Frame>> {
+        self.row_mut(id).anchor.take()
     }
 
     /// Clear the slot's memory anchor outright — a dying slot (`free`) releases it.
-    pub(super) fn clear_anchor(&mut self, idx: usize) {
-        self.rows[idx].anchor = None;
+    pub(super) fn clear_anchor(&mut self, id: NodeId) {
+        self.row_mut(id).anchor = None;
     }
 
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn anchor_of(&self, idx: usize) -> Option<Rc<W::Frame>> {
-        self.rows[idx].anchor.as_ref().map(Rc::clone)
+    pub(super) fn anchor_of(&self, id: NodeId) -> Option<Rc<W::Frame>> {
+        self.row(id).anchor.as_ref().map(Rc::clone)
     }
 
     /// Park a framed tail replace's displaced incarnation anchor on the reinstalled `slot` as its
@@ -325,16 +336,16 @@ impl<W: Workload> DepGraph<W> {
     /// run loop [`take_handoff`](Self::take_handoff)s it just before the reinstalled incarnation's
     /// first step and holds it across that step, so the retiring region outlives the adoption of the
     /// carried arguments.
-    pub(super) fn set_handoff(&mut self, slot: usize, displaced: Option<Rc<W::Frame>>) {
-        self.rows[slot].handoff = displaced;
+    pub(super) fn set_handoff(&mut self, slot: NodeId, displaced: Option<Rc<W::Frame>>) {
+        self.row_mut(slot).handoff = displaced;
     }
 
     /// Take the reinstalled `slot`'s pending TCO handoff hold (draining it, so a slot that replaces
     /// again on this step re-parks a fresh one). The caller holds the returned `Rc` live across the
     /// step and drops it after, ordering the retiring region's free after the adoption.
-    pub(super) fn take_handoff(&mut self, slot: usize) -> Option<Rc<W::Frame>> {
-        if slot < self.rows.len() {
-            self.rows[slot].handoff.take()
+    pub(super) fn take_handoff(&mut self, slot: NodeId) -> Option<Rc<W::Frame>> {
+        if slot.index() < self.rows.len() {
+            self.row_mut(slot).handoff.take()
         } else {
             None
         }
@@ -352,14 +363,14 @@ impl<W: Workload> DepGraph<W> {
         if producer == consumer {
             return true;
         }
-        let mut stack: Vec<usize> = vec![consumer.index()];
-        let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut stack: Vec<NodeId> = vec![consumer];
+        let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
         while let Some(node) = stack.pop() {
             if !visited.insert(node) {
                 continue;
             }
-            for &next in &self.rows[node].notify {
-                if next == producer.index() {
+            for &next in &self.row(node).notify {
+                if next == producer {
                     return true;
                 }
                 stack.push(next);
@@ -373,11 +384,11 @@ impl<W: Workload> DepGraph<W> {
     /// zero on this decrement. The `hit_zero` channel lets the caller append
     /// to a side-channel for every consumer while only enqueueing
     /// counter-zero ones, off a single drain.
-    pub(super) fn drain_notify(&mut self, producer_idx: usize) -> Vec<(usize, bool)> {
-        let notifees = std::mem::take(&mut self.rows[producer_idx].notify);
+    pub(super) fn drain_notify(&mut self, producer: NodeId) -> Vec<(NodeId, bool)> {
+        let notifees = std::mem::take(&mut self.row_mut(producer).notify);
         let mut out = Vec::with_capacity(notifees.len());
         for consumer in notifees {
-            let row = &mut self.rows[consumer];
+            let row = self.row_mut(consumer);
             row.pending -= 1;
             out.push((consumer, row.pending == 0));
         }
@@ -387,8 +398,8 @@ impl<W: Workload> DepGraph<W> {
     /// Drains the slot's edges (so a repeat free is a no-op) and yields only
     /// `Owned` children; `Notify` edges are dropped so the reclaim walk
     /// cannot transit into the producer's subtree.
-    pub(super) fn owned_children(&mut self, idx: usize) -> impl Iterator<Item = NodeId> + use<W> {
-        let edges = std::mem::take(&mut self.rows[idx].edges);
+    pub(super) fn owned_children(&mut self, id: NodeId) -> impl Iterator<Item = NodeId> + use<W> {
+        let edges = std::mem::take(&mut self.row_mut(id).edges);
         edges.into_iter().filter_map(|e| match e {
             DepEdge::Owned(id) => Some(id),
             DepEdge::Notify(_) => None,
@@ -397,42 +408,42 @@ impl<W: Workload> DepGraph<W> {
 
     /// Eager-free on the success path. Inv-C ensures the slot's notify list
     /// is already drained by the time the caller hits this.
-    pub(in crate::scheduler) fn clear_dep_edges(&mut self, idx: usize) {
-        self.rows[idx].edges.clear();
+    pub(in crate::scheduler) fn clear_dep_edges(&mut self, id: NodeId) {
+        self.row_mut(id).edges.clear();
     }
 
     /// Move `from`'s notify list onto `into`'s — the bare-name-forward splice. `from`'s consumers
     /// keep their pending counts and `from`-labelled edges; `into`'s fire now drains them (and their
     /// reads of `from` follow the alias to `into`). Their pending counts are unchanged: each still
     /// waits on one dep, now serviced by `into`'s single fire.
-    pub(in crate::scheduler) fn splice_notify(&mut self, from: usize, into: usize) {
-        let moved = std::mem::take(&mut self.rows[from].notify);
-        self.rows[into].notify.extend(moved);
+    pub(in crate::scheduler) fn splice_notify(&mut self, from: NodeId, into: NodeId) {
+        let moved = std::mem::take(&mut self.row_mut(from).notify);
+        self.row_mut(into).notify.extend(moved);
     }
 
-    pub(super) fn pending_count(&self, idx: usize) -> usize {
-        self.rows[idx].pending
+    pub(super) fn pending_count(&self, id: NodeId) -> usize {
+        self.row(id).pending
     }
 
-    pub(super) fn is_dep_edges_empty(&self, idx: usize) -> bool {
-        self.rows[idx].edges.is_empty()
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn dep_edges_at(&self, idx: usize) -> &[DepEdge] {
-        &self.rows[idx].edges
+    pub(super) fn is_dep_edges_empty(&self, id: NodeId) -> bool {
+        self.row(id).edges.is_empty()
     }
 
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn set_dep_edges(&mut self, idx: usize, edges: Vec<DepEdge>) {
-        self.rows[idx].edges = edges;
+    pub(super) fn dep_edges_at(&self, id: NodeId) -> &[DepEdge] {
+        &self.row(id).edges
     }
 
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn notify_list_iter(&self) -> impl Iterator<Item = (usize, &Vec<usize>)> {
+    pub(super) fn set_dep_edges(&mut self, id: NodeId, edges: Vec<DepEdge>) {
+        self.row_mut(id).edges = edges;
+    }
+
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn notify_list_iter(&self) -> impl Iterator<Item = (NodeId, &Vec<NodeId>)> {
         self.rows
             .iter()
             .enumerate()
-            .map(|(i, row)| (i, &row.notify))
+            .map(|(i, row)| (NodeId::new(i), &row.notify))
     }
 }

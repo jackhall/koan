@@ -469,7 +469,7 @@ pub(super) fn stage_all_eager_parts<'step>(
 /// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
 /// blind to which family it is — every `Wait` wakes through `run_step` uniformly.
 pub(in crate::machine::execute) type ResumeFn<'step> =
-    Box<dyn for<'view> FnOnce(&SchedulerView<'_, 'step, 'view>, usize) -> Outcome<'step> + 'step>;
+    Box<dyn for<'view> FnOnce(&SchedulerView<'_, 'step, 'view>, NodeId) -> Outcome<'step> + 'step>;
 
 // ---------- Cross-shape driver ----------
 
@@ -484,9 +484,7 @@ pub(in crate::machine::execute) fn decide_tail<'step>(
 ) -> NodeWork<'step, KoanWorkload> {
     let carrier = expr.summarize();
     // A birth decide waits on no deps: it runs on first poll, classifies, and routes.
-    let continuation = ignore_results(Box::new(move |view, idx| {
-        classify_dispatch(view, expr, idx)
-    }));
+    let continuation = ignore_results(Box::new(move |view, id| classify_dispatch(view, expr, id)));
     let continuation = match obligation {
         Some(obligation) => with_obligation(obligation, continuation),
         None => continuation,
@@ -502,7 +500,7 @@ pub(in crate::machine::execute) fn decide_error<'step>(
     error: KError,
     carrier: String,
 ) -> NodeWork<'step, KoanWorkload> {
-    let continuation = ignore_results(Box::new(move |_view: &SchedulerView<'_, '_, '_>, _idx| {
+    let continuation = ignore_results(Box::new(move |_view: &SchedulerView<'_, '_, '_>, _id| {
         Outcome::Done(Err(error))
     }));
     NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier))
@@ -515,7 +513,7 @@ pub(in crate::machine::execute) fn decide_error<'step>(
 fn classify_dispatch<'step>(
     view: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
-    idx: usize,
+    id: NodeId,
 ) -> Outcome<'step> {
     match expr.shape() {
         DispatchShape::BareTypeLeaf => {
@@ -551,9 +549,9 @@ fn classify_dispatch<'step>(
             })))
         }
         DispatchShape::OperatorChain => {
-            view.with_current_scope(|s| operator_chain::run(view, s, &expr, idx))
+            view.with_current_scope(|s| operator_chain::run(view, s, &expr, id))
         }
-        DispatchShape::Keyworded => keyworded::initial(view, expr, idx),
+        DispatchShape::Keyworded => keyworded::initial(view, expr, id),
         DispatchShape::SigiledTypeExpr => single_poll::sigiled_type_expr(view, expr),
         DispatchShape::RecordType => single_poll::record_type(view, expr),
         DispatchShape::LiteralPassThrough => single_poll::literal_pass_through(view, expr),

@@ -41,20 +41,20 @@ use super::{
 /// `None` probe is a classification bug.
 ///
 /// Every path but the pending-`OP` park is terminal (no scheduler write), so this decides against a
-/// read-only [`SchedulerView`] and returns [`Outcome::Done`]. `idx` is this slot's own node, needed
+/// read-only [`SchedulerView`] and returns [`Outcome::Done`]. `id` is this slot's own node, needed
 /// to classify a park edge's producers.
 pub(in crate::machine::execute) fn run<'step, 'b>(
     ctx: &SchedulerView<'_, 'step, '_>,
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'step>,
-    idx: usize,
+    id: NodeId,
 ) -> Outcome<'step> {
     let probe = expr
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");
     let chain = ctx.chain_deref();
     match s.resolve_operator_group_delivered(probe, chain) {
-        None => park_on_pending_operators(ctx, s, expr, idx, probe),
+        None => park_on_pending_operators(ctx, s, expr, id, probe),
         Some(delivered) => {
             // Everything the reducers need is read out inside the envelope's one open, so the
             // record's own borrow never escapes and the envelope's pins drop before the reduce.
@@ -362,12 +362,12 @@ fn park_on_pending_operators<'step, 'b>(
     ctx: &SchedulerView<'_, 'step, '_>,
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'step>,
-    idx: usize,
+    id: NodeId,
     probe: &str,
 ) -> Outcome<'step> {
     let mut to_wait = ResolvedDeps::new();
     for producer in pending_operator_producers(ctx, s, expr) {
-        match ctx.producer_disposition(producer, NodeId(idx)) {
+        match ctx.producer_disposition(producer, id) {
             ProducerDisposition::Errored(e) => {
                 let frame = working_frame("<operator-chain>", expr);
                 return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
@@ -389,7 +389,7 @@ fn park_on_pending_operators<'step, 'b>(
     park_resume(
         to_wait.parks().to_vec(),
         Some(carrier),
-        Box::new(move |ctx, idx| ctx.with_current_scope(|s| run(ctx, s, &parked_expr, idx))),
+        Box::new(move |ctx, id| ctx.with_current_scope(|s| run(ctx, s, &parked_expr, id))),
     )
 }
 

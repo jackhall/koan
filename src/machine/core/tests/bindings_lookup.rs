@@ -75,7 +75,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
     scope
         .install_placeholder(
             "placeholder".to_string(),
-            NodeId(2),
+            NodeId::for_test(2),
             BindingIndex::value(5),
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
@@ -88,7 +88,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
             .is_none()
     );
     match scope.bindings().lookup_value("placeholder", Some(9)) {
-        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId(2)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId::for_test(2)),
         _ => panic!("placeholder must be visible past its install index"),
     }
 }
@@ -227,14 +227,14 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
     scope
         .install_pending_overload(
             key.clone(),
-            NodeId(11),
+            NodeId::for_test(11),
             BindingIndex::value(2),
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let visible = scope.bindings().lookup_function(&key, Some(5));
     assert!(visible.overloads.is_empty());
-    assert_eq!(visible.pending, Some(NodeId(11)));
+    assert_eq!(visible.pending, Some(NodeId::for_test(11)));
     // Filtered out: no overloads and no visible pending — the old `None`.
     let hidden = scope.bindings().lookup_function(&key, Some(1));
     assert!(hidden.overloads.is_empty());
@@ -267,14 +267,14 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     scope
         .install_pending_overload(
             key.clone(),
-            NodeId(99),
+            NodeId::for_test(99),
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let lookup = scope.bindings().lookup_function(&key, Some(9));
     assert_eq!(lookup.overloads.len(), 1);
-    assert_eq!(lookup.pending, Some(NodeId(99)));
+    assert_eq!(lookup.pending, Some(NodeId::for_test(99)));
 }
 
 #[test]
@@ -336,11 +336,11 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
     }
     .untyped_key();
 
-    // NodeId(7) is one binder declaring two inner-call buckets; NodeId(8) is a sibling sharing one.
+    // NodeId::for_test(7) is one binder declaring two inner-call buckets; NodeId::for_test(8) is a sibling sharing one.
     for (key, producer, idx) in [
-        (&sealed_key, NodeId(7), 2),
-        (&other_key, NodeId(7), 2),
-        (&other_key, NodeId(8), 3),
+        (&sealed_key, NodeId::for_test(7), 2),
+        (&other_key, NodeId::for_test(7), 2),
+        (&other_key, NodeId::for_test(8), 3),
     ] {
         scope
             .install_pending_overload(
@@ -352,7 +352,10 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
             .unwrap();
     }
 
-    scope.clear_placeholders_for_producer(NodeId(7), &mut crate::machine::WriteGate::for_test());
+    scope.clear_placeholders_for_producer(
+        NodeId::for_test(7),
+        &mut crate::machine::WriteGate::for_test(),
+    );
 
     let bindings = scope.bindings();
     // The failed binder's claims are gone from both buckets it reached.
@@ -363,7 +366,7 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
             .iter()
             .map(|p| p.producer)
             .collect::<Vec<_>>(),
-        vec![NodeId(8)],
+        vec![NodeId::for_test(8)],
     );
     // The finalized overload sharing a bucket with a purged claim survives.
     assert_eq!(
@@ -372,7 +375,10 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
     );
 
     // Purging the last claim in a bucket that holds nothing else drops the key.
-    bindings.clear_placeholders_for_producer(NodeId(8), &mut crate::machine::WriteGate::for_test());
+    bindings.clear_placeholders_for_producer(
+        NodeId::for_test(8),
+        &mut crate::machine::WriteGate::for_test(),
+    );
     assert!(
         !bindings
             .functions()

@@ -36,15 +36,15 @@ impl<W: Workload> Scheduler<W> {
         let no_park = work.deps.parks().is_empty();
         let id = self.store.alloc_slot(seal_work(work, &anchor));
         self.deps.install_for_slot(id, owned_edges, &pending_owned);
-        self.deps.install_anchor(id.index(), anchor);
+        self.deps.install_anchor(id, anchor);
         for p in &pending_park {
             self.deps.add_park_edge(*p, id);
         }
         if pending_owned.is_empty() && pending_park.is_empty() {
             if !framed && no_owned && no_park {
-                self.queues.push_fresh(id.index());
+                self.queues.push_fresh(id);
             } else {
-                self.queues.push_in_flight_submit(id.index());
+                self.queues.push_in_flight_submit(id);
             }
         }
         id

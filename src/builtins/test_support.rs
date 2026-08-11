@@ -42,9 +42,9 @@ use super::unseeded_scopes;
 #[cfg(test)]
 pub(crate) fn mock_declaration_site(node: usize, index: usize) -> DeclarationSite {
     DeclarationSite {
-        node: NodeHandle {
+        node: NodeHandle::Slot {
             run: RunId::next(),
-            node: NodeId(node),
+            node: NodeId::for_test(node),
         },
         index: BindingIndex::value(index),
     }

@@ -5,7 +5,7 @@ use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use crate::machine::model::Scalar;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, KObject};
-use crate::scheduler::DepEdge;
+use crate::scheduler::{DepEdge, NodeId};
 
 #[test]
 fn free_reclaims_owned_subtree() {
@@ -33,24 +33,24 @@ fn free_reclaims_owned_subtree() {
     store.set_result(s1, Ok(Carried::Object(value)), resident_carrier(root));
     store.set_result(s2, Ok(Carried::Object(value)), resident_carrier(root));
     store.set_result(s3, Ok(Carried::Object(value)), resident_carrier(root));
-    store.set_dep_edges(s0.index(), vec![DepEdge::Owned(s1)]);
-    store.set_dep_edges(s1.index(), vec![DepEdge::Owned(s2)]);
-    store.set_dep_edges(s2.index(), vec![DepEdge::Owned(s3)]);
+    store.set_dep_edges(s0, vec![DepEdge::Owned(s1)]);
+    store.set_dep_edges(s1, vec![DepEdge::Owned(s2)]);
+    store.set_dep_edges(s2, vec![DepEdge::Owned(s3)]);
 
-    runtime.free(s1.index());
+    runtime.free(s1);
 
     assert!(runtime.scheduler().result_is_none(s1), "s1 result cleared");
     assert!(runtime.scheduler().result_is_none(s2), "s2 result cleared");
     assert!(runtime.scheduler().result_is_none(s3), "s3 result cleared");
     assert!(
-        runtime.scheduler().dep_edges_at(s1.index()).is_empty(),
+        runtime.scheduler().dep_edges_at(s1).is_empty(),
         "s1 deps drained"
     );
     assert!(
-        runtime.scheduler().dep_edges_at(s2.index()).is_empty(),
+        runtime.scheduler().dep_edges_at(s2).is_empty(),
         "s2 deps drained"
     );
-    let s0_edges = runtime.scheduler().dep_edges_at(s0.index());
+    let s0_edges = runtime.scheduler().dep_edges_at(s0);
     assert_eq!(s0_edges.len(), 1, "s0 edges untouched");
     assert!(
         matches!(s0_edges[0], DepEdge::Owned(id) if id == s1),
@@ -86,7 +86,7 @@ fn free_skips_live_slot_and_is_idempotent() {
     };
     let s = runtime.add(mk_dispatch(), root);
     // Live slot: free must be a no-op.
-    runtime.free(s.index());
+    runtime.free(s);
     assert!(runtime.scheduler().is_live(s));
     assert_eq!(runtime.scheduler().free_list_len(), 0);
 
@@ -95,9 +95,9 @@ fn free_skips_live_slot_and_is_idempotent() {
     runtime
         .scheduler_mut()
         .set_result(s, Ok(Carried::Object(value)), resident_carrier(root));
-    runtime.free(s.index());
+    runtime.free(s);
     assert_eq!(runtime.scheduler().free_list_snapshot(), vec![s]);
-    runtime.free(s.index());
+    runtime.free(s);
     assert_eq!(
         runtime.scheduler().free_list_snapshot(),
         vec![s],
@@ -138,13 +138,13 @@ fn free_does_not_recurse_through_notify_edges() {
     // Sibling self-loop is synthetic: a real scheduler never installs one, but it
     // gives the bug-shape something to walk into so we can assert the walk stopped.
     store.set_dep_edges(
-        s_owner.index(),
+        s_owner,
         vec![DepEdge::Owned(s_owned), DepEdge::Notify(s_sibling)],
     );
-    store.set_dep_edges(s_owned.index(), Vec::new());
-    store.set_dep_edges(s_sibling.index(), vec![DepEdge::Owned(s_sibling)]);
+    store.set_dep_edges(s_owned, Vec::new());
+    store.set_dep_edges(s_sibling, vec![DepEdge::Owned(s_sibling)]);
 
-    runtime.free(s_owner.index());
+    runtime.free(s_owner);
 
     let mut freed = runtime.scheduler().free_list_snapshot();
     freed.sort();
@@ -159,7 +159,7 @@ fn free_does_not_recurse_through_notify_edges() {
         "sibling's result must survive free of a slot that only parked on it",
     );
     assert_eq!(
-        runtime.scheduler().dep_edges_at(s_sibling.index()).len(),
+        runtime.scheduler().dep_edges_at(s_sibling).len(),
         1,
         "sibling's dep_edges must survive (the free walk stopped at the Notify edge)",
     );
@@ -187,18 +187,17 @@ fn freed_slot_does_not_appear_in_other_notify_lists() {
     }
     runtime.execute().expect("program should run");
 
-    let freed: std::collections::HashSet<usize> = runtime
+    let freed: std::collections::HashSet<NodeId> = runtime
         .scheduler()
         .free_list_snapshot()
         .into_iter()
-        .map(|id| id.index())
         .collect();
-    for (producer_idx, consumers) in runtime.scheduler().notify_list_iter() {
-        for &consumer in consumers {
+    for (producer, consumers) in runtime.scheduler().notify_list_iter() {
+        for consumer in consumers {
             assert!(
-                !freed.contains(&consumer),
-                "stale notify edge = producer slot {producer_idx} still lists \
-                 freed consumer slot {consumer} in its notify_list",
+                !freed.contains(consumer),
+                "stale notify edge = producer slot {producer:?} still lists \
+                 freed consumer slot {consumer:?} in its notify_list",
             );
         }
     }

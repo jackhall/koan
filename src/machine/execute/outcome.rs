@@ -204,7 +204,7 @@ pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'_, 'a, 'view>,
             DepResults<'_, Result<DepTerminal, KError>>,
-            usize,
+            NodeId,
         ) -> Outcome<'a>
         + 'a,
 >;
@@ -262,7 +262,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
     dep_error_frame: Option<TraceFrame>,
     finish: TerminalDepFinish<'a>,
 ) -> NodeContinuation<'a> {
-    Box::new(move |view, results, _idx| {
+    Box::new(move |view, results, _id| {
         let terminals = match all_or_first_error(&results, &dep_error_frame) {
             Ok(terminals) => terminals,
             Err(e) => return Outcome::Done(Err(e)),
@@ -302,7 +302,7 @@ pub(in crate::machine::execute) fn seal_witnessed<'a>(
 pub(in crate::machine::execute) fn catch_continuation<'a>(
     finish: CatchFinish<'a>,
 ) -> NodeContinuation<'a> {
-    Box::new(move |view, results, _idx| {
+    Box::new(move |view, results, _id| {
         let result = match &results.all()[0] {
             // The watched producer's own delivery envelope, duplicated (the producer keeps its
             // terminal); the finish adopts or opens it at its own step brand.
@@ -319,5 +319,5 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
 pub(in crate::machine::execute) fn ignore_results<'a>(
     resume: ResumeFn<'a>,
 ) -> NodeContinuation<'a> {
-    Box::new(move |view, _results, idx| resume(view, idx))
+    Box::new(move |view, _results, id| resume(view, id))
 }

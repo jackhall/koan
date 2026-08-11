@@ -119,9 +119,9 @@ impl<W: Workload> NodeStore<W> {
         }
     }
 
-    /// The only path that picks an index. `DepGraph::install_for_slot`
-    /// mirrors the recycle-vs.-extend choice via
-    /// `consumer.index() < notify_list.len()`.
+    /// The only path that picks an index, and the only mint of a [`NodeId`].
+    /// `DepGraph::install_for_slot` mirrors the recycle-vs.-extend choice by
+    /// testing the consumer against its own row count.
     pub(super) fn alloc_slot(&mut self, work: StoredWork<W>) -> NodeId {
         match self.free_list.pop() {
             Some(id) => {
@@ -129,7 +129,7 @@ impl<W: Workload> NodeStore<W> {
                 id
             }
             None => {
-                let id = NodeId(self.slots.len());
+                let id = NodeId::new(self.slots.len());
                 self.slots.push(SlotState::PreRun(work));
                 id
             }

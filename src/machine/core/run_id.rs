@@ -7,20 +7,19 @@
 //! `idx` counter in [`scope_id`](super::scope_id)) rather than per-root, because the
 //! per-root storage a koan run hangs off is a workgraph type and must not carry a koan
 //! concern.
+//!
+//! An install no scheduler drove carries no `RunId` at all — it is
+//! [`NodeHandle::OffScheduler`](super::NodeHandle), a variant rather than a reserved
+//! counter value.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Identity of one [`KoanRuntime`](crate::machine::execute::KoanRuntime) run. Minted once
-/// per runtime from a global counter. [`RunId::OFF_SCHEDULER`] (`RunId(0)`) is reserved for
-/// off-scheduler registration (builtins); minted ids start at 1.
+/// per runtime from a global counter.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct RunId(pub u64);
 
 impl RunId {
-    /// The run of an off-scheduler registration — builtin type installs that no scheduler
-    /// slot drove. Minted ids start at 1, so this cannot collide with a real run.
-    pub const OFF_SCHEDULER: RunId = RunId(0);
-
     pub fn next() -> RunId {
         RunId(RUN_COUNTER.fetch_add(1, Ordering::Relaxed))
     }
@@ -37,7 +36,5 @@ mod tests {
         let a = RunId::next();
         let b = RunId::next();
         assert_ne!(a, b);
-        assert_ne!(a, RunId::OFF_SCHEDULER);
-        assert_ne!(b, RunId::OFF_SCHEDULER);
     }
 }
