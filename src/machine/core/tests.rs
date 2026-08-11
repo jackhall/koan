@@ -1,6 +1,7 @@
 //! Tests for `machine::core`, split by surface.
 
 mod bindings_lookup;
+mod derived_reach;
 mod dispatch;
 mod operator_registry;
 mod register;

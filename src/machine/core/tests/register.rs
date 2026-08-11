@@ -708,39 +708,3 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
         "a value bind must not register a keyworded overload",
     );
 }
-
-/// A `FN` registration binds no value, so it has no `data` twin to derive a claim from: it seals the
-/// **exact empty** reach. `FN` allocates the callable into the very scope it captures, so its only
-/// region borrow is home — which every read of it already pins.
-#[test]
-fn bare_fn_registration_seals_the_empty_reach() {
-    let types = TypeRegistry::new();
-    let region = run_root_storage();
-    let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(
-        scope,
-        unit_signature(),
-        Body::Builtin(body_no_op),
-        false,
-        &types,
-    );
-    scope
-        .register_function_direct(
-            "FOO".to_string(),
-            &f,
-            BindingIndex::BUILTIN,
-            &mut crate::machine::WriteGate::for_test(),
-        )
-        .unwrap();
-    let foreign = run_root_storage();
-    let lookup = scope
-        .bindings()
-        .lookup_function(&f.open(|f| f.signature.untyped_key()), None);
-    assert_eq!(lookup.overloads.len(), 1);
-    assert!(
-        !scope
-            .open_function(&lookup.overloads[0])
-            .reach_covers(foreign.region()),
-        "a bare FN reaches nothing foreign",
-    );
-}

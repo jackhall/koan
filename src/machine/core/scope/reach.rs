@@ -18,8 +18,9 @@ use crate::machine::core::{
     KoanStorageProfile, ModuleRefFamily, ScopeRefFamily, product_reaches_region,
 };
 use crate::machine::model::{
-    Carried, CarriedFamily, KObject, KType, Module, ModuleDraft, OperatorGroup, OperatorGroupFamily,
-    ReductionMode, RegionEscape, TypeIdentifier, copy_or_pin, relocate_object_into,
+    Carried, CarriedFamily, KObject, KType, Module, ModuleDraft, OperatorGroup,
+    OperatorGroupFamily, ReductionMode, RegionEscape, TypeIdentifier, copy_or_pin,
+    relocate_object_into,
 };
 use crate::machine::{
     CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, KError, SplicedCell,
@@ -105,11 +106,14 @@ impl<'a> Scope<'a> {
     ///   foreign region and travels under the home-frame pin alone (the envelope host
     ///   [`Self::deliver_resident`] adds); the `Copy` handle rides in place, never re-cloned
     ///   into the region.
-    /// - **Callable** (`KFunctionFamily`): the `FN` / `OP` registration doors. `FN` allocates the
-    ///   callable into the very scope it captures, so it reaches nothing beyond the region it lives
-    ///   in, which every read of it already pins.
     /// - **Destination handle** (`RegionHandleFamily` / `DestHandleFamily`): a bare region handle
     ///   borrows nothing at all.
+    ///
+    /// A **callable** does not qualify and takes no door here: a `KFunction` borrows its captured
+    /// scope, so its description is composed by the birth that placed it
+    /// ([`KFunction::alloc_captured`](crate::machine::core::KFunction)) and the registration doors
+    /// rest that envelope. Likewise an **operator-group record**, whose region-purity is the yoke
+    /// brand's compile-time fact rather than a claim ([`Self::birth_operator_group`]).
     ///
     /// A **value carrier** whose borrows do reach somewhere is sealed by the composition that placed
     /// it, under the description [`Self::mint_retained`] derives from that composition's own

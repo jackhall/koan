@@ -6,11 +6,13 @@ use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::source::Spanned;
 
 use crate::machine::core::carrier_witness::DeliveredFunction;
-use crate::machine::core::{FoldingBrand, KError, KErrorKind, KoanStorageProfile, RegionBrand, Scope};
-use crate::witnessed::RegionHandleFamily;
+use crate::machine::core::{
+    FoldingBrand, KError, KErrorKind, KoanStorageProfile, RegionBrand, Scope,
+};
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, Record, SignatureDraft, SignatureElement};
 use crate::machine::model::{Held, NamedPairs};
+use crate::witnessed::RegionHandleFamily;
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
 /// `machine::execute::runtime::run_action`.

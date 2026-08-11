@@ -46,7 +46,8 @@ group just to silence the stale-anchor check.
   discipline that keeps `Scope`'s `RefCell<…>` invariant intact when a binding
   is added while a `data` borrow is live.
 - `src/machine/core/kfunction.rs` — `KFunction::captured_scope` is a bare field read of the
-  stored `&'a Scope<'a>` (re-anchored with the holder by the branded re-anchor), so
+  stored `&'a Scope<'a>` (re-anchored with the holder by the branded re-anchor), and the birth's
+  own `FunctionBirth` retype is the shared one in `witnessed.rs`'s `reattachable!`, so
   kfunction.rs carries no `unsafe` of its own. The group pins the captured-scope-survives-
   closure-escape and delivered-carrier reach-fold shapes.
 - `workgraph/src/scheduler/node_store.rs` — the slot-read group pins `read_result_with`'s
@@ -163,10 +164,12 @@ slate), and the shared-substrate-across-producer-free shape stays pinned here by
 test.
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
-closure invocation reads `KFunction::captured_scope`, a bare field read of a stored `&'a Scope<'a>`
-that was never retyped: the callable lives in the region bump, whose door stores at the destination's
-own `'a`, and `KFunction::alloc_captured` derives that destination from the captured scope itself. The
-escaped-closure shape — a closure returned out of its defining call and invoked after that frame
+closure invocation reads `KFunction::captured_scope`, a bare field read of a stored `&'a Scope<'a>`.
+`KFunction::alloc_captured` is a witnessed birth: the captured scope rides a `FunctionBirth` seed
+delivered resident at that same scope, and the merge re-anchors it to the fold's `for<'b>` brand
+before the callable is assembled from it — so the field the closure reads back is a re-anchored
+borrow of the region the callable itself lives in, and the merge's composition, not a claim, is what
+says so. The escaped-closure shape — a closure returned out of its defining call and invoked after that frame
 has returned — is pinned by `captured_per_call_value_survives_let_bind_and_call`, whose program
 additionally dereferences a captured per-call value on the invocation.
 The reading-the-captured-value tests pin the **delivered-carrier reach fold**
@@ -538,9 +541,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-11: 704s — 21 tests, 0 leaks, 0 UB
 - 2026-08-11: 546s — 21 tests, 0 leaks, 0 UB
 - 2026-08-11: 544s — 21 tests, 0 leaks, 0 UB
 - 2026-08-10: 1166s — 21 tests, 0 leaks, 0 UB
 - 2026-08-10: 1175s — 21 tests, 0 leaks, 0 UB
-- 2026-08-09: 1303s — 21 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

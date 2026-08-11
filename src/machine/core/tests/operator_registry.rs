@@ -19,8 +19,8 @@ use crate::machine::core::{
 };
 use crate::machine::model::{OperatorGroup, ReductionMode, probe_key};
 
-/// The declaration door a fixture takes: host the record in `scope`'s own region and seal it, which
-/// is what every registry entry for this declaration then holds a bit-copy of.
+/// The declaration door a fixture takes: birth the record in `scope`'s own region and rest that
+/// envelope, which is what every registry entry for this declaration then holds a bit-copy of.
 fn declare<'a>(scope: &'a Scope<'a>, members: &[&str], mode: ReductionMode<'_>) -> GroupSeal<'a> {
     GroupSeal::of_delivered(scope, &scope.birth_operator_group(members, mode))
 }

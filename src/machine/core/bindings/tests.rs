@@ -19,8 +19,7 @@ use crate::machine::core::GroupSeal;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::tests::{body_no_op, unit_signature};
 use crate::machine::model::{
-    ReductionMode, ReturnType, SignatureDraft, SignatureElement, TypeRegistry,
-    probe_key,
+    ReductionMode, ReturnType, SignatureDraft, SignatureElement, TypeRegistry, probe_key,
 };
 
 /// Seal `obj` as resident in `region` under a description naming `foreign` — the shape a bind

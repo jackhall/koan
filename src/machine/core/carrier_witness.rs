@@ -37,7 +37,7 @@ pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
 
 /// A callable **in transit from its birth**: the merge-born `KFunction` carrier paired with the home
-/// pin its birth composed. What [`KFunction::alloc_captured`] hands back and what every registration
+/// pin its birth composed. What [`KFunction::alloc_captured`](crate::machine::core::KFunction::alloc_captured) hands back and what every registration
 /// door composes from — the seal ([`OverloadSeal::of_delivered`]) rests it, the `KObject` wrapper
 /// ([`Scope::store_function_cell`](crate::machine::core::Scope)) merges it — so no door re-states the
 /// callable's reach on its own authority.
@@ -78,15 +78,15 @@ pub(crate) fn read_resting<R>(
     cell.open(read)
 }
 
-/// A callable's **dormant** carrier: the `KFunction` fused to the exact reach description minted for
-/// it, over the [`KFunctionFamily`] the library dispatches on. This is what a `functions` dispatch
+/// A callable's **dormant** carrier: the `KFunction` fused to the exact reach description its birth
+/// composed for it, over the [`KFunctionFamily`] the library dispatches on. This is what a `functions` dispatch
 /// bucket stores and what a [`ReturnContract`](crate::machine::core::ReturnContract) carries across
 /// a tail chain: the seal fuses the callable with its reach claim, where a bare `&KFunction` would
 /// state no reach at all.
 pub type SealedFunction<'home> = crate::witnessed::Sealed<'home, KFunctionFamily, CarrierWitness>;
 
-/// An operator group's **dormant** carrier: the region-hosted [`OperatorGroup`] record fused to the
-/// reach description minted for it, over the [`OperatorGroupFamily`]. This is what an `operators`
+/// An operator group's **dormant** carrier: the region-hosted [`OperatorGroup`](crate::machine::model::OperatorGroup) record fused to the
+/// reach description its yoked birth composed for it, over the [`OperatorGroupFamily`]. This is what an `operators`
 /// registry entry stores — the same entry shape the `data` and `functions` tables use, so a
 /// [`Bindings`](crate::machine::core::Bindings) table stays lifetime-free. Every powerset key of one
 /// `GROUP` declaration holds a duplicate of the same seal over the same pointee, so sharing is
@@ -178,7 +178,7 @@ impl<'a> GroupSeal<'a> {
     /// declaration doors, and the builtin seeds, each of which births its record at the very region
     /// it registers against ([`Scope::birth_operator_group`](crate::machine::core::Scope)). Nothing
     /// is minted here: the yoke brand is the compile-time proof that the record is region-pure —
-    /// [`OperatorGroup::alloc`] re-homes every byte it stores at the brand it is handed, so no
+    /// [`OperatorGroup::alloc`](crate::machine::model::OperatorGroup::alloc) re-homes every byte it stores at the brand it is handed, so no
     /// foreign borrow can inhabit the built value — and the description the birth composed says
     /// exactly that: hosted at the declaring region, with no members. The seal rests that envelope.
     ///
