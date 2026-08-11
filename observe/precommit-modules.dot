@@ -458,6 +458,7 @@ digraph {
     "koan::machine::core::arena" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::core::arena" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -502,6 +503,7 @@ digraph {
     "koan::machine::core::kfunction" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan" [label="uses", style="dashed"];

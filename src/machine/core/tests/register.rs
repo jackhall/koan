@@ -144,7 +144,7 @@ fn register_function_dedupes_exact_signature() {
     scope
         .register_function_direct(
             "FOO".to_string(),
-            f1,
+            &f1,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -159,7 +159,7 @@ fn register_function_dedupes_exact_signature() {
     let err = scope
         .register_function_direct(
             "FOO".to_string(),
-            f2,
+            &f2,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -188,7 +188,7 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
     scope
         .register_function_direct(
             "FOO".to_string(),
-            f1,
+            &f1,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -203,14 +203,14 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
     scope
         .bind_value_direct(
             "OTHER_NAME".to_string(),
-            scope.store_function_cell(f2),
+            scope.store_function_cell(&f2),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("a value bind of a callable is an ordinary bind, not an overload");
     let lookup = scope
         .bindings()
-        .lookup_function(&f1.signature.untyped_key(), None);
+        .lookup_function(&f1.open(|f| f.signature.untyped_key()), None);
     assert_eq!(
         lookup.overloads.len(),
         1,
@@ -226,7 +226,7 @@ fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(
+    let f = KFunction::alloc_captured_for_test(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -283,7 +283,7 @@ fn register_function_allows_overload_with_different_arg_types() {
     scope
         .register_function_direct(
             "BAR".to_string(),
-            f1,
+            &f1,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -291,7 +291,7 @@ fn register_function_allows_overload_with_different_arg_types() {
     scope
         .register_function_direct(
             "BAR".to_string(),
-            f2,
+            &f2,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -324,13 +324,13 @@ fn register_function_coexists_with_same_name_value() {
     scope
         .register_function_direct(
             "FOO".to_string(),
-            f,
+            &f,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bare FN registration must not collide with a same-name value");
     assert!(matches!(scope.lookup("FOO"), Some(KObject::Number(n)) if *n == 1.0));
-    let key = f.signature.untyped_key();
+    let key = f.open(|f| f.signature.untyped_key());
     assert!(
         scope
             .bindings()
@@ -365,13 +365,13 @@ fn register_function_coexists_with_same_name_type() {
     scope
         .register_function_direct(
             "Foo".to_string(),
-            f,
+            &f,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bare FN registration must not collide with a same-name type");
     assert!(scope.bindings().types().get("Foo").is_some());
-    let key = f.signature.untyped_key();
+    let key = f.open(|f| f.signature.untyped_key());
     assert!(
         scope
             .bindings()
@@ -686,7 +686,7 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
         false,
         &types,
     );
-    let sealed = scope.store_function_cell(f);
+    let sealed = scope.store_function_cell(&f);
     scope
         .bind_value_direct(
             "f".to_string(),
@@ -702,7 +702,7 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
     );
     let lookup = scope
         .bindings()
-        .lookup_function(&f.signature.untyped_key(), None);
+        .lookup_function(&f.open(|f| f.signature.untyped_key()), None);
     assert!(
         lookup.overloads.is_empty(),
         "a value bind must not register a keyworded overload",
@@ -727,7 +727,7 @@ fn bare_fn_registration_seals_the_empty_reach() {
     scope
         .register_function_direct(
             "FOO".to_string(),
-            f,
+            &f,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -735,7 +735,7 @@ fn bare_fn_registration_seals_the_empty_reach() {
     let foreign = run_root_storage();
     let lookup = scope
         .bindings()
-        .lookup_function(&f.signature.untyped_key(), None);
+        .lookup_function(&f.open(|f| f.signature.untyped_key()), None);
     assert_eq!(lookup.overloads.len(), 1);
     assert!(
         !scope

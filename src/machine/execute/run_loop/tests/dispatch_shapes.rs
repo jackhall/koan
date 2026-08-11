@@ -89,7 +89,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
             ktype: KType::NUMBER,
         })],
     };
-    let f = KFunction::alloc_captured(
+    let f = KFunction::alloc_captured_for_test(
         scope,
         sig,
         crate::machine::core::Body::Builtin(body_identity),
@@ -844,7 +844,7 @@ fn operator_chain_undeclared_errors_cleanly() {
 #[test]
 fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     use crate::machine::GroupSeal;
-    use crate::machine::model::{OperatorGroup, ReductionMode};
+    use crate::machine::model::ReductionMode;
 
     let program = program_storage();
     let region = run_root_storage();
@@ -853,11 +853,11 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let types = test_run.types.clone();
     let inner = scope.alloc_child_under();
 
-    let record = OperatorGroup::alloc(inner.brand(), &["-"], ReductionMode::FoldRight);
+    let record = inner.birth_operator_group(&["-"], ReductionMode::FoldRight);
     inner
         .register_operator_group_direct(
             "-".to_string(),
-            GroupSeal::of_resident(inner, record),
+            GroupSeal::of_delivered(inner, &record),
             BindingIndex::value(0),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -907,18 +907,18 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
 #[test]
 fn operator_chain_registered_unary_group_hands_body_the_list() {
     use crate::machine::GroupSeal;
-    use crate::machine::model::{OperatorGroup, ReductionMode};
+    use crate::machine::model::ReductionMode;
 
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
-    let record = OperatorGroup::alloc(scope.brand(), &["~"], ReductionMode::Unary);
+    let record = scope.birth_operator_group(&["~"], ReductionMode::Unary);
     scope
         .register_operator_group_direct(
             "~".to_string(),
-            GroupSeal::of_resident(scope, record),
+            GroupSeal::of_delivered(scope, &record),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )

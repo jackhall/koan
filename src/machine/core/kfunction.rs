@@ -5,7 +5,9 @@
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::source::Spanned;
 
-use crate::machine::core::{KError, KErrorKind, RegionBrand, Scope};
+use crate::machine::core::carrier_witness::DeliveredFunction;
+use crate::machine::core::{FoldingBrand, KError, KErrorKind, KoanStorageProfile, RegionBrand, Scope};
+use crate::witnessed::RegionHandleFamily;
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, Record, SignatureDraft, SignatureElement};
 use crate::machine::model::{Held, NamedPairs};
@@ -75,6 +77,26 @@ crate::witnessed::reattachable! {
     KFunctionFamily => &'r KFunction<'r>,
 }
 
+/// The birth operands that cross the merge brand together: the captured scope — the callable's one
+/// region borrow — the signature already minted into that same region, and the body. All `Copy`, and
+/// the layout is a thin reference plus two `Copy` handles, independent of `'r`, which is what the
+/// shared `reattachable!` macro's layout-invariance obligation names.
+#[derive(Clone, Copy)]
+struct FunctionBirth<'r> {
+    captured: &'r Scope<'r>,
+    signature: ExpressionSignature<'r>,
+    body: Body<'r>,
+}
+
+/// [`Reattachable`](crate::witnessed::Reattachable) family for [`FunctionBirth`] — the seed operand
+/// [`KFunction::alloc_captured`]'s merge folds, delivered resident at the captured scope so the
+/// composition's source pins name exactly that region.
+struct FunctionBirthFamily;
+
+crate::witnessed::reattachable! {
+    FunctionBirthFamily => FunctionBirth<'r>,
+}
+
 impl<'a> KFunction<'a> {
     /// **Build a function at its captured scope's region and store it there** — the sole door for a
     /// `KFunction`, and the reason the value never exists outside the region that owns its capture.
@@ -85,29 +107,76 @@ impl<'a> KFunction<'a> {
     /// program-storage AST part — because [`ExpressionSignature::mint`] re-homes every name at that
     /// same brand before the value is assembled.
     ///
-    /// The store is the plain bump verb off [`RegionBrand::allocator`]: a `KFunction` is `Copy`, so it lands in the region
+    /// **A witnessed birth.** The three ingredients ride in as one resident seed
+    /// ([`FunctionBirth`], delivered at the captured scope, so the source operand's pins are exactly
+    /// that region) and the callable is assembled *inside* a
+    /// [`merge_into`](crate::witnessed::Delivered::merge_into) whose destination is that same
+    /// region's own handle. The fold's rank-2 brand is the residence proof — an ambient region
+    /// borrow cannot inhabit `KFunction<'b>`, so the finished callable can borrow nothing but the
+    /// fold's declared operands — and the merge *composes* the product's description from the seed's
+    /// coverage: host the home region, home its one member. "A function borrows only the scope it
+    /// captures" is therefore a fact the composition derived, not a claim a seal asserts, and the
+    /// envelope handed back is what every registration door composes from
+    /// ([`OverloadSeal::of_delivered`](crate::machine::core::carrier_witness::OverloadSeal),
+    /// [`Scope::store_function_cell`]).
+    ///
+    /// The signature is minted **before** the merge, at the captured scope's own brand: its text is
+    /// re-homed into the very region the merge targets, so it enters as a region-resident operand
+    /// alongside the scope, and the `Copy` [`ExpressionSignature`] rides in the seed where the
+    /// `Vec`-holding [`SignatureDraft`] could not.
+    ///
+    /// The store inside the fold is the plain bump verb
+    /// ([`FoldingBrand::alloc_function_folded`]): a `KFunction` is `Copy`, so it lands in the region
     /// bump and region death frees it as a chunk with no destructor pass
     /// ([value-substrates.md § Untyped arenas](../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
-    /// Nothing is erased and re-anchored on the way in, so no residence audit stands behind this door:
-    /// the signature, the body and the captured scope are all plain `&'a`, checked by the borrow
-    /// checker against the very lifetime the destination brand borrows its region for.
     pub fn alloc_captured(
         captured: &'a Scope<'a>,
         draft: SignatureDraft<'a>,
         body: Body<'a>,
         binder: bool,
         types: &TypeRegistry,
-    ) -> &'a KFunction<'a> {
+    ) -> DeliveredFunction {
         let brand = captured.brand();
         let signature = ExpressionSignature::mint(brand, draft);
         let value_ktype = function_value_ktype(&signature, types);
-        brand.allocator().value(KFunction {
+        let seed = FunctionBirth {
+            captured,
             signature,
             body,
-            captured,
-            binder,
-            value_ktype,
-        })
+        };
+        captured
+            .deliver_resident::<FunctionBirthFamily>(seed)
+            .merge_into::<RegionHandleFamily<KoanStorageProfile>, KFunctionFamily, KoanStorageProfile>(
+                captured.dest_operand(),
+                |birth, _handle, placement| {
+                    let door = FoldingBrand::in_fold_closure(placement);
+                    door.alloc_function_folded(KFunction {
+                        signature: birth.signature,
+                        body: birth.body,
+                        captured: birth.captured,
+                        binder,
+                        value_ktype,
+                    })
+                },
+            )
+    }
+
+    /// Test fixture: the witnessed birth [`Self::alloc_captured`] performs, rested into the captured
+    /// scope and re-opened there, so a suite can hold the callable at `'a` directly. A resident
+    /// value rests for free — the library's self rule strips its own region from what is retained —
+    /// so this adds no coverage the birth did not already compose. Production keeps the envelope and
+    /// feeds both registration doors from it.
+    #[cfg(test)]
+    pub(crate) fn alloc_captured_for_test(
+        captured: &'a Scope<'a>,
+        draft: SignatureDraft<'a>,
+        body: Body<'a>,
+        binder: bool,
+        types: &TypeRegistry,
+    ) -> &'a KFunction<'a> {
+        let cell = Self::alloc_captured(captured, draft, body, binder, types);
+        let sealed = cell.rest_into(captured.brand().handle());
+        captured.open_function(&sealed).value()
     }
 
     /// This function value's type handle — a copy of the memo [`Self::alloc_captured`] interned.

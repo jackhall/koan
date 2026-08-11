@@ -19,7 +19,7 @@ use crate::machine::core::GroupSeal;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::tests::{body_no_op, unit_signature};
 use crate::machine::model::{
-    OperatorGroup, ReductionMode, ReturnType, SignatureDraft, SignatureElement, TypeRegistry,
+    ReductionMode, ReturnType, SignatureDraft, SignatureElement, TypeRegistry,
     probe_key,
 };
 
@@ -511,7 +511,7 @@ fn bump_backed_tables_full_churn() {
             false,
             &types,
         );
-        let sealed_key = f.signature.untyped_key();
+        let sealed_key = f.open(|f| f.signature.untyped_key());
         for producer in [NodeId::for_test(7), NodeId::for_test(8)] {
             scope
                 .install_pending_overload(
@@ -523,7 +523,7 @@ fn bump_backed_tables_full_churn() {
                 .expect("a sibling claim appends");
         }
         scope
-            .register_function_direct("FOO".to_string(), f, BindingIndex::value(1), &mut gate)
+            .register_function_direct("FOO".to_string(), &f, BindingIndex::value(1), &mut gate)
             .expect("the seal lands in the claim it finalizes");
 
         // A second producer's claim on its own bucket, purged so the bucket empties and its key is
@@ -562,12 +562,12 @@ fn bump_backed_tables_full_churn() {
         );
 
         // A per-group powerset install: every subset key's text bumped, all pointing at one record.
-        let record = OperatorGroup::alloc(scope.brand(), &["+", "-", "*"], ReductionMode::FoldLeft);
+        let record = scope.birth_operator_group(&["+", "-", "*"], ReductionMode::FoldLeft);
         for probe in powerset_probes(&["+", "-", "*"]) {
             scope
                 .register_operator_group_direct(
                     probe,
-                    GroupSeal::of_resident(scope, record),
+                    GroupSeal::of_delivered(scope, &record),
                     BindingIndex::value(3),
                     &mut gate,
                 )

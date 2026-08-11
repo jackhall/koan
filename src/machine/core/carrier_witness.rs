@@ -4,12 +4,11 @@
 //! [workgraph/design/reach.md § The carrier states](../../../workgraph/design/reach.md#the-carrier-states).
 
 use crate::machine::model::{
-    Carried, CarriedFamily, DispatchToken, KObject, OperatorGroup, OperatorGroupFamily, UntypedKey,
-    retains_home,
+    Carried, CarriedFamily, DispatchToken, KObject, OperatorGroupFamily, UntypedKey, retains_home,
 };
 
 use super::arena::{FrameStorage, KoanRegion};
-use super::kfunction::{KFunction, KFunctionFamily};
+use super::kfunction::KFunctionFamily;
 use super::scope::Scope;
 
 /// Koan's value-carrier witness: the library [`Carrier`](crate::witnessed::Carrier) over koan's
@@ -36,6 +35,14 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// rather than choosing a bundle up front.
 pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
+
+/// A callable **in transit from its birth**: the merge-born `KFunction` carrier paired with the home
+/// pin its birth composed. What [`KFunction::alloc_captured`] hands back and what every registration
+/// door composes from — the seal ([`OverloadSeal::of_delivered`]) rests it, the `KObject` wrapper
+/// ([`Scope::store_function_cell`](crate::machine::core::Scope)) merges it — so no door re-states the
+/// callable's reach on its own authority.
+pub type DeliveredFunction =
+    crate::witnessed::Delivered<KFunctionFamily, CarrierWitness, FrameStorage>;
 
 /// A resolved sub-result **at rest** inside a working expression: the producer's sealed value
 /// carrier alone, `Copy` and `Drop`-free, with the pins that keep its backing alive lodged one level
@@ -119,19 +126,29 @@ pub(crate) struct OverloadSeal<'a> {
 }
 
 impl<'a> OverloadSeal<'a> {
-    /// The bundle for a callable **resident in `scope`'s own region** — the `FN` / `OP`
-    /// registration doors. The description is hosted in `scope`'s own region with no members: `FN`
-    /// allocates the callable into the very scope it captures, so it reaches nothing beyond the
-    /// region it lives in, which every read of it already pins. The callable is held live here, so
-    /// everything the bucket write keys on is read straight off the reference and travels as plain
-    /// data.
-    pub(crate) fn of_resident(scope: &'a Scope<'a>, f: &'a KFunction<'a>) -> Self {
-        let sealed = scope.seal_resident::<KFunctionFamily>(f);
+    /// The bundle for a callable **fresh from its witnessed birth** — the `FN` / `OP` registration
+    /// doors and the builtin seeds. Nothing is minted here: the description the bucket stores is the
+    /// one [`KFunction::alloc_captured`] composed, naming the callable's home region as its host and
+    /// its one member, so the reach claim the bucket carries is the birth's derived fact rather than
+    /// a restatement at the registration site.
+    ///
+    /// `scope` must be the defining scope — the region the callable was born into. The envelope's
+    /// coverage is lodged there ([`Delivered::rest_in`](crate::witnessed::Delivered::rest_in)),
+    /// which the library's self rule makes free for a value already resident in it. Everything the
+    /// bucket write keys on is read inside the envelope's own open and travels as plain data.
+    pub(crate) fn of_delivered(scope: &'a Scope<'a>, cell: &DeliveredFunction) -> Self {
+        let (key, token, summary) = cell.open(|f| {
+            (
+                f.signature.untyped_key(),
+                f.signature.dispatch_token(),
+                f.summarize(),
+            )
+        });
         OverloadSeal {
-            sealed,
-            key: f.signature.untyped_key(),
-            token: f.signature.dispatch_token(),
-            summary: f.summarize(),
+            sealed: cell.rest_in(scope.brand().handle()),
+            key,
+            token,
+            summary,
         }
     }
 }
@@ -157,14 +174,24 @@ pub(crate) struct GroupSeal<'a> {
 }
 
 impl<'a> GroupSeal<'a> {
-    /// The bundle for a group record **resident in `scope`'s own region** — the `GROUP` binder, the
-    /// `OP` declaration doors, and the builtin seeds, each of which allocates its record from the
-    /// very brand it registers against ([`OperatorGroup::alloc`]).
-    pub(crate) fn of_resident(scope: &'a Scope<'a>, group: &'a OperatorGroup<'a>) -> Self {
+    /// The bundle for a group record **fresh from its yoked birth** — the `GROUP` binder, the `OP`
+    /// declaration doors, and the builtin seeds, each of which births its record at the very region
+    /// it registers against ([`Scope::birth_operator_group`](crate::machine::core::Scope)). Nothing
+    /// is minted here: the yoke brand is the compile-time proof that the record is region-pure —
+    /// [`OperatorGroup::alloc`] re-homes every byte it stores at the brand it is handed, so no
+    /// foreign borrow can inhabit the built value — and the description the birth composed says
+    /// exactly that: hosted at the declaring region, with no members. The seal rests that envelope.
+    ///
+    /// `scope` must be the declaring scope, the region the record was born into; resting there is
+    /// free under the library's self rule. The address and the declaration key are both read inside
+    /// the envelope's own open and travel as region-free data.
+    pub(crate) fn of_delivered(scope: &'a Scope<'a>, cell: &DeliveredOperatorGroup) -> Self {
+        let (address, declaration) =
+            cell.open(|group| (std::ptr::from_ref(group) as usize, group.declaration_key()));
         GroupSeal {
-            sealed: scope.seal_resident::<OperatorGroupFamily>(group),
-            address: std::ptr::from_ref(group) as usize,
-            declaration: group.declaration_key(),
+            sealed: cell.rest_in(scope.brand().handle()),
+            address,
+            declaration,
         }
     }
 }

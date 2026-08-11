@@ -249,14 +249,14 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         elements,
     };
 
-    let f: &'a KFunction<'a> =
-        KFunction::alloc_captured(scope, draft, Body::UserDefined(body_expr), false, types);
+    let birth = KFunction::alloc_captured(scope, draft, Body::UserDefined(body_expr), false, types);
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
-    // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just allocated
-    // into `scope`'s own region above, which is what `store_function_cell`'s merge names as the
-    // wrapper's reach — the callable's captured `&Scope` borrows into exactly that region.
-    // A keyworded FN's overload registration rides the step outcome: the seal is built here, where
-    // the callable is open under its home pin, and the bucket write lands at the run loop's apply.
+    // KFunction value escapes a per-call body; top-level FNs have no frame. The birth envelope
+    // carries the description the callable's own construction composed — hosted in `scope`'s region
+    // with that region its one member — and both doors below compose from it, so the wrapper's
+    // reach and the bucket's are the same derived fact rather than two independent claims.
+    // A keyworded FN's overload registration rides the step outcome: the seal is built here, from
+    // the envelope's own open, and the bucket write lands at the run loop's apply.
     let mut writes: Vec<WriteOp<'a>> = Vec::new();
     let bound_name = match kind {
         FnKind::Anonymous => None,
@@ -273,7 +273,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
             writes.push(WriteOp::Overload {
                 name,
                 index: bind_index,
-                seal: OverloadSeal::of_resident(scope, f),
+                seal: OverloadSeal::of_delivered(scope, &birth),
                 builtin_shadow_guard: true,
             });
             bound_name
@@ -282,10 +282,9 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // The FN value is co-located in its defining scope's region (owned signature / body, a `&Scope`
     // capture), and the captured scope — region-resident under that frame — transitively keeps every
     // foreign region its bindings reach alive through the scope's sealed reach-set. So a fresh FN
-    // reaches nothing foreign (its captured scope is home or a home-pinned ancestor): its terminal
-    // carrier is built with the empty foreign reach `stored` derived, witnessed by that scope's home
-    // frame alone.
-    let cell = scope.store_function_cell(f);
+    // reaches nothing foreign: the wrapper's merge takes the birth envelope as its source operand,
+    // so its composed reach names that home region and nothing else.
+    let cell = scope.store_function_cell(&birth);
     // The combined form's value write duplicates the very cell the terminal carries, at the same
     // `BindingIndex` the overload write and the submission-time placeholder both stamp — so the
     // bound name and the registered overload are the one `KFunction` allocated above, not two

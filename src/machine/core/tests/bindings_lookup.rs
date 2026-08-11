@@ -128,17 +128,18 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(
+    let cell = KFunction::alloc_captured(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
         false,
         &types,
     );
+    let f = cell.adopt_into(scope.brand().handle());
     scope
         .register_function_direct(
             "FOO".to_string(),
-            f,
+            &cell,
             BindingIndex::value(99),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -182,14 +183,13 @@ fn lookup_function_filters_per_overload_visibility() {
     };
     let key = sig_num.untyped_key();
     debug_assert_eq!(key, sig_str.untyped_key(), "untyped keys must collide");
-    let f_early =
-        KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), false, &types);
-    let f_late =
-        KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), false, &types);
+    let early = KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), false, &types);
+    let late = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), false, &types);
+    let f_early = early.adopt_into(scope.brand().handle());
     scope
         .register_function_direct(
             "BAR".to_string(),
-            f_early,
+            &early,
             BindingIndex::value(2),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -197,7 +197,7 @@ fn lookup_function_filters_per_overload_visibility() {
     scope
         .register_function_direct(
             "BAR".to_string(),
-            f_late,
+            &late,
             BindingIndex::value(7),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -256,12 +256,12 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     scope
         .register_function_direct(
             "FOO".to_string(),
-            f,
+            &f,
             BindingIndex::value(2),
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let key = f.signature.untyped_key();
+    let key = f.open(|f| f.signature.untyped_key());
     // A pending sibling is recorded alongside a finalized overload (no longer a
     // no-op): the scope walk parks the bucket until the sibling finalizes.
     scope
@@ -292,12 +292,12 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     scope
         .register_function_direct(
             "FOO".to_string(),
-            f,
+            &f,
             BindingIndex::value(9),
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let key = f.signature.untyped_key();
+    let key = f.open(|f| f.signature.untyped_key());
     // Empty-after-filter must surface an empty `overloads` with no pending, so
     // the dispatch walker keeps walking ancestors.
     let lookup = scope.bindings().lookup_function(&key, Some(3));
@@ -324,12 +324,12 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
     scope
         .register_function_direct(
             "FOO".to_string(),
-            f,
+            &f,
             BindingIndex::value(1),
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let sealed_key = f.signature.untyped_key();
+    let sealed_key = f.open(|f| f.signature.untyped_key());
     let other_key = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Keyword("BAR")],

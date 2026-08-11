@@ -1116,7 +1116,7 @@ fn region_death_frees_every_drop_free_family() {
                     }),
                 ],
             };
-            KFunction::alloc_captured(
+            KFunction::alloc_captured_for_test(
                 scope,
                 draft,
                 Body::Builtin(|ctx| {

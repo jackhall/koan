@@ -77,9 +77,8 @@ pub(crate) fn register_builtin_full<'a>(
     types: &TypeRegistry,
     gate: &mut WriteGate,
 ) {
-    let f: &'a KFunction<'a> =
-        KFunction::alloc_captured(scope, signature, Body::Builtin(body), binder, types);
-    let _ = scope.register_function_direct(name.into(), f, BindingIndex::BUILTIN, gate);
+    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), binder, types);
+    let _ = scope.register_function_direct(name.into(), &cell, BindingIndex::BUILTIN, gate);
 }
 
 /// Common-case [`register_builtin_full`]: not a binder builtin.
@@ -108,10 +107,9 @@ pub(crate) fn register_overload_at<'a>(
     types: &TypeRegistry,
     gate: &mut WriteGate,
 ) {
-    let f: &'a KFunction<'a> =
-        KFunction::alloc_captured(scope, signature, Body::Builtin(body), false, types);
+    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), false, types);
     scope
-        .register_function_direct(name.into(), f, index, gate)
+        .register_function_direct(name.into(), &cell, index, gate)
         .expect("register_overload_at: user-index overload should not collide with a builtin");
 }
 

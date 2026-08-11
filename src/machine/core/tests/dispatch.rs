@@ -521,7 +521,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     scope
         .register_function_direct(
             "pick_num".to_string(),
-            pick_num_fn,
+            &pick_num_fn,
             BindingIndex::value(1),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -579,7 +579,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     scope
         .register_function_direct(
             "pick_str".to_string(),
-            sibling,
+            &sibling,
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
         )

@@ -23,9 +23,9 @@ use crate::machine::core::bindings::powerset_probes;
 use crate::machine::core::bindings::{
     BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
 };
-use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
-use crate::machine::core::{KError, KErrorKind, KFunction, NodeId};
-use crate::machine::model::{Carried, KObject, KType, OperatorGroup, ReductionMode};
+use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
+use crate::machine::core::{KError, KErrorKind, NodeId};
+use crate::machine::model::{Carried, KObject, KType, ReductionMode};
 
 impl<'a> Scope<'a> {
     /// Spike guard: a bind after [`Self::close`] means the scope's defining block finished yet a
@@ -114,20 +114,22 @@ impl<'a> Scope<'a> {
         self.bind_value_direct(name, sealed, index, gate)
     }
 
-    /// Construction-time overload registration: seal `fn_ref` and add it to this scope's
-    /// `functions` bucket. The builtin-seeding door — the run-global root registers its own
-    /// overloads at [`BindingIndex::BUILTIN`], where the shadow guard is a no-op anyway.
+    /// Construction-time overload registration: seal the callable `cell` carries and add it to this
+    /// scope's `functions` bucket. The builtin-seeding door — the run-global root registers its own
+    /// overloads at [`BindingIndex::BUILTIN`], where the shadow guard is a no-op anyway. `cell` is
+    /// the birth envelope, so the seal rests the description the callable's own construction
+    /// composed.
     pub(crate) fn register_function_direct(
         &'a self,
         name: String,
-        fn_ref: &'a KFunction<'a>,
+        cell: &DeliveredFunction,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Overload {
             name,
             index,
-            seal: OverloadSeal::of_resident(self, fn_ref),
+            seal: OverloadSeal::of_delivered(self, cell),
             builtin_shadow_guard: true,
         }
         .apply(self, gate)
@@ -313,8 +315,9 @@ impl<'a> Scope<'a> {
         mode: ReductionMode<'_>,
         announced: Option<crate::machine::model::AnnouncedData>,
     ) -> Result<&'a Scope<'a>, KError> {
-        let record = OperatorGroup::alloc(outer.brand(), members, mode);
-        let seal = GroupSeal::of_resident(outer, record);
+        let cell = outer.birth_operator_group(members, mode);
+        let seal = GroupSeal::of_delivered(outer, &cell);
+        let record = outer.adopt_group_record(&cell);
         let child = outer.alloc_child_under_group(&name, record, announced);
         child.register_group_under_all_subsets_direct(
             members,

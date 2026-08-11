@@ -373,11 +373,10 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 )?;
                 writes.push(overload);
                 if !in_group {
-                    let record =
-                        OperatorGroup::alloc(scope.brand(), &[sym], ReductionMode::FoldLeft);
+                    let record = scope.birth_operator_group(&[sym], ReductionMode::FoldLeft);
                     writes.push(WriteOp::Group {
                         probes: powerset_probes(&[sym]),
-                        seal: GroupSeal::of_resident(scope, record),
+                        seal: GroupSeal::of_delivered(scope, &record),
                         index: bind_index,
                     });
                 }
@@ -500,11 +499,11 @@ pub(super) fn register_unary_operator<'a>(
         register_body(scope, sym, list_signature, list_body, bind_index, types)?;
     let (_, binary_overload) =
         register_body(scope, sym, binary_signature, binary_body, bind_index, types)?;
-    let record = OperatorGroup::alloc(scope.brand(), &[sym], ReductionMode::Unary);
+    let record = scope.birth_operator_group(&[sym], ReductionMode::Unary);
     let mut writes = vec![list_overload, binary_overload];
     writes.push(WriteOp::Group {
         probes: powerset_probes(&[sym]),
-        seal: GroupSeal::of_resident(scope, record),
+        seal: GroupSeal::of_delivered(scope, &record),
         index: bind_index,
     });
     Ok((cell, writes))
@@ -517,9 +516,10 @@ pub(super) fn register_unary_operator<'a>(
 /// first, so the builtin `+` still wins for the operand types it declares and only other operand
 /// types reach the module's body. Ordinary user `FN`s keep the guard.
 ///
-/// The `KFunction` is allocated into `scope`'s own region, so the checked seal always passes and the
-/// paired description names that region as a member, the composition having seen the callable's
-/// captured `&Scope` borrow into it. Bare-`FN` style: the overload lands in `functions` only, never in `data`.
+/// The callable is born into `scope`'s own region, and its birth's composition is what names that
+/// region as a member of the description both doors below carry — the bucket seal and the value
+/// wrapper compose from the one envelope, so the two never state the reach independently. Bare-`FN`
+/// style: the overload lands in `functions` only, never in `data`.
 fn register_body<'a>(
     scope: &'a Scope<'a>,
     sym: &str,
@@ -528,14 +528,14 @@ fn register_body<'a>(
     bind_index: BindingIndex,
     types: &TypeRegistry,
 ) -> Result<(SealedValue<'a>, WriteOp<'a>), KError> {
-    let f: &'a KFunction<'a> = KFunction::alloc_captured(scope, signature, body, false, types);
+    let cell = KFunction::alloc_captured(scope, signature, body, false, types);
     let write = WriteOp::Overload {
         name: sym.to_string(),
         index: bind_index,
-        seal: OverloadSeal::of_resident(scope, f),
+        seal: OverloadSeal::of_delivered(scope, &cell),
         builtin_shadow_guard: false,
     };
-    Ok((scope.store_function_cell(f), write))
+    Ok((scope.store_function_cell(&cell), write))
 }
 
 /// The bridge body `sym [left right]` — a keyword-first call over a two-element list literal, which

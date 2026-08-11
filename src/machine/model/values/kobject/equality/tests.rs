@@ -402,7 +402,7 @@ fn a_function<'a>(
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: Vec::new(),
     };
-    let f = KFunction::alloc_captured(
+    let f = KFunction::alloc_captured_for_test(
         scope,
         sig,
         Body::UserDefined(KExpression::new(storage.brand(), Vec::new())),

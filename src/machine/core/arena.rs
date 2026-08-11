@@ -17,6 +17,7 @@ use std::rc::Rc;
 
 use crate::machine::execute::StepCarried;
 
+use super::kfunction::KFunction;
 use super::scope::Scope;
 use crate::machine::model::KType;
 use crate::machine::model::{
@@ -310,6 +311,24 @@ impl<'a> FoldingBrand<'a> {
     /// a chunk and runs no per-slot glue.
     pub(crate) fn alloc_module_folded(self, m: Module<'a>) -> &'a Module<'a> {
         self.placement.allocator().value(m)
+    }
+
+    /// Store a [`KFunction`] built at this fold's own brand — the door
+    /// [`KFunction::alloc_captured`](crate::machine::core::KFunction) is born through. Sound by the
+    /// same rank-2 fold-brand argument as [`Self::alloc_object_folded`]: the callable is typed at
+    /// the brand lifetime, so its captured-scope borrow is the fold's own operand view and an
+    /// ambient-lifetime capture is a compile error at this signature. That is what turns "a function
+    /// borrows only the scope it captures" from an asserted claim into the composition's own fact —
+    /// the merge's source operand names the captured scope's region, and the closure can reach no
+    /// other.
+    ///
+    /// The store is the placement's own bump, exactly as [`Self::alloc_object_folded`]'s is: a
+    /// `KFunction` is `Copy`, its signature text already re-homed at this same region by
+    /// [`ExpressionSignature::mint`](crate::machine::model::ExpressionSignature), so region death
+    /// frees the value as a chunk and runs no per-slot glue. Assembling the struct literal stays
+    /// with `kfunction.rs`, which owns the private fields; this door only stores.
+    pub(crate) fn alloc_function_folded(self, f: KFunction<'a>) -> &'a KFunction<'a> {
+        self.placement.allocator().value(f)
     }
 
     /// Store a container substrate built at this fold's own brand — the container door, generic over

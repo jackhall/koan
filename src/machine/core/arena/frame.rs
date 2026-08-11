@@ -472,6 +472,8 @@ impl CallFrame {
         types: &TypeRegistry,
     ) -> &'f crate::machine::core::KFunction<'f> {
         let captured = Scope::alloc_run_root(frame.storage());
-        crate::machine::core::KFunction::alloc_captured(captured, signature, body, false, types)
+        crate::machine::core::KFunction::alloc_captured_for_test(
+            captured, signature, body, false, types,
+        )
     }
 }

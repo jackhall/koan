@@ -232,7 +232,7 @@ fn function_value_ktype_projects_kfunction() {
             }),
         ],
     };
-    let f = KFunction::alloc_captured(scope, sig, Body::Builtin(body_any), false, &types);
+    let f = KFunction::alloc_captured_for_test(scope, sig, Body::Builtin(body_any), false, &types);
     let obj = KObject::KFunction(f);
     match types.node(obj.ktype()) {
         TypeNode::KFunction { params, ret } => {

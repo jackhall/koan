@@ -12,7 +12,7 @@ use crate::machine::BindingIndex;
 use crate::machine::GroupSeal;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
-use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::model::{FoldDirection, ReductionMode};
 
 /// Registers the `%` pairwise group in the given mode, the `%` pair body (a sum), and the `MINUS`
 /// combiner the pair results fold through — declared with `OP`, the surface that gives a combiner
@@ -25,8 +25,7 @@ fn register_pairwise_fixture<'a>(
     direction: FoldDirection,
 ) {
     let scope = test_run.scope;
-    let record = OperatorGroup::alloc(
-        scope.brand(),
+    let record = scope.birth_operator_group(
         &["%"],
         ReductionMode::Pairwise {
             combiner,
@@ -36,7 +35,7 @@ fn register_pairwise_fixture<'a>(
     scope
         .register_operator_group_direct(
             "%".to_string(),
-            GroupSeal::of_resident(scope, record),
+            GroupSeal::of_delivered(scope, &record),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )

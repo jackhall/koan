@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use super::Scope;
 use crate::machine::core::bindings::SealedValue;
-use crate::machine::core::carrier_witness::{OpenedFunction, SealedFunction};
+use crate::machine::core::carrier_witness::{DeliveredFunction, OpenedFunction, SealedFunction};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::ref_carriers::BindingsReferenceFamily;
 use crate::machine::core::{
@@ -18,10 +18,12 @@ use crate::machine::core::{
     KoanStorageProfile, ModuleRefFamily, ScopeRefFamily, product_reaches_region,
 };
 use crate::machine::model::{
-    Carried, CarriedFamily, KObject, KType, Module, ModuleDraft, RegionEscape, TypeIdentifier,
-    copy_or_pin, relocate_object_into,
+    Carried, CarriedFamily, KObject, KType, Module, ModuleDraft, OperatorGroup, OperatorGroupFamily,
+    ReductionMode, RegionEscape, TypeIdentifier, copy_or_pin, relocate_object_into,
 };
-use crate::machine::{CarrierWitness, DeliveredCarried, KError, SplicedCell};
+use crate::machine::{
+    CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, KError, SplicedCell,
+};
 use crate::witnessed::{
     Delivered, DropFree, Reattachable, RegionHandleFamily, Sealed, SealedExtern, Witnessed,
 };
@@ -572,20 +574,20 @@ impl<'a> Scope<'a> {
     /// merges into. A bare handle borrows nothing, so its coverage is empty and the composition
     /// mints exactly the source operands' reach into this region, stamping the product with this
     /// scope's own residence.
-    fn dest_operand(
+    pub(crate) fn dest_operand(
         &self,
     ) -> Delivered<RegionHandleFamily<KoanStorageProfile>, CarrierWitness, FrameStorage> {
         self.deliver_resident::<RegionHandleFamily<KoanStorageProfile>>(self.brand().handle())
     }
 
-    /// Wrap a resident `KFunction` in its `KObject` carrier — the store every `FN` / `OP`
-    /// registration hands its fresh callable out through. `function` was stored at its captured
-    /// scope's own brand ([`KFunction::alloc_captured`](crate::machine::core::KFunction), which derives
-    /// the destination from that scope so the pair cannot come apart), so the door envelopes the
-    /// reference at this scope's home and **merges** it into the same region: the composition mints
-    /// that region into the product's reach, which is the borrows-home fact the wrapper carries.
-    /// Source and destination coincide, so the library's self rule strips the region from the
-    /// retained bundle — a callable never pins the region it lives in.
+    /// Wrap a freshly born `KFunction` in its `KObject` carrier — the store every `FN` / `OP`
+    /// registration hands its callable out through. `cell` is the birth envelope
+    /// ([`KFunction::alloc_captured`](crate::machine::core::KFunction)), so the wrapper's
+    /// composition takes the callable's *own composed* description as its source operand and
+    /// **merges** it into this scope's region. The borrows-home fact the wrapper carries therefore
+    /// arrives from the birth rather than being restated here. Source and destination coincide, so
+    /// the library's self rule strips the region from the retained bundle — a callable never pins
+    /// the region it lives in.
     ///
     /// The claim is exact. A `KFunction`'s only region borrow is its captured scope, and that
     /// scope's own sealed reach-set transitively keeps every foreign region its bindings reach
@@ -594,9 +596,8 @@ impl<'a> Scope<'a> {
     /// Infallible, and check-free: the wrapping `KObject::KFunction` is built at the fold brand from
     /// the merge's own operand view, so an ambient-lifetime capture is a compile error at the
     /// closure's signature.
-    pub(crate) fn store_function_cell(&self, function: &'a KFunction<'a>) -> SealedValue<'a> {
-        let source = self.deliver_resident::<KFunctionFamily>(function);
-        source
+    pub(crate) fn store_function_cell(&self, cell: &DeliveredFunction) -> SealedValue<'a> {
+        cell.duplicate()
             .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 self.dest_operand(),
                 |function_view, _handle, placement| {
@@ -605,6 +606,39 @@ impl<'a> Scope<'a> {
                 },
             )
             .rest_into(self.brand().handle())
+    }
+
+    /// **Birth an operator-group record in this scope's own region** — the one door behind every
+    /// `GROUP` / `OP` declaration and the builtin seeds. The record is built inside a
+    /// [`yoke_branded`](KoanRegionExt::yoke_branded) whose `for<'b>` brand is the region-purity
+    /// proof: [`OperatorGroup::alloc`] re-homes the member texts and any combiner name at that same
+    /// brand, so the finished record borrows nothing but the region it was born into, and the
+    /// closure has no way to smuggle an ambient borrow into `&'b OperatorGroup<'b>`.
+    ///
+    /// The envelope carries the description the yoke composed — hosted here, no members — which is
+    /// what [`GroupSeal::of_delivered`](crate::machine::core::carrier_witness::GroupSeal) rests into
+    /// the registry rather than minting a claim of its own. `members` and `mode` are read at their
+    /// own ambient lifetimes: only what the closure *returns* is confined by the brand.
+    pub(crate) fn birth_operator_group(
+        &self,
+        members: &[&str],
+        mode: ReductionMode<'_>,
+    ) -> DeliveredOperatorGroup {
+        KoanRegion::yoke_branded::<OperatorGroupFamily, _>(self.home(), |brand| {
+            OperatorGroup::alloc(brand, members, mode)
+        })
+    }
+
+    /// Adopt a freshly born group record at this scope's own region lifetime — the door
+    /// [`Scope::alloc_group_child`](crate::machine::core::Scope) takes when it needs the record
+    /// itself (the child scope stores a bare `&'a OperatorGroup<'a>`) alongside the seal its
+    /// registry entries hold. `self` must be the region the record was born into; the adoption's
+    /// mint is a self-rule no-op there.
+    pub(crate) fn adopt_group_record(
+        &self,
+        cell: &DeliveredOperatorGroup,
+    ) -> &'a OperatorGroup<'a> {
+        cell.adopt_into(self.brand().handle())
     }
 
     /// Seal a resident `Module` value into this scope — the Object-arm module bind
