@@ -66,6 +66,11 @@ unsafe impl PinsRegion for Cart {
     fn pins_region(&self, region: &[u32]) -> bool {
         std::ptr::eq(&self.0[..], region)
     }
+
+    #[cfg(debug_assertions)]
+    fn for_each_pinned_region(&self, visit: &mut dyn FnMut(&[u32])) {
+        visit(&self.0[..]);
+    }
 }
 
 /// Build a bundle-witnessed carrier over a cart: yoked from the cart's own region (so the value is
@@ -139,5 +144,10 @@ unsafe impl RegionOwner for RegionCart {
 unsafe impl PinsRegion for RegionCart {
     fn pins_region(&self, region: &Region<FixtureProfile>) -> bool {
         std::ptr::eq(&self.0, region)
+    }
+
+    #[cfg(debug_assertions)]
+    fn for_each_pinned_region(&self, visit: &mut dyn FnMut(&Region<FixtureProfile>)) {
+        visit(&self.0);
     }
 }

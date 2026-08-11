@@ -30,9 +30,14 @@ compile time, trusting the fold's declared coverage.
 
 **Directions.**
 
-- *Cycle handling — open.* (a) Detect and report in debug builds; (b) a
-  structural rule making mutual pins unrepresentable. Recommended: (a) now —
-  (b) is a separate design if the detector shows cycles arise in practice.
+- *Cycle handling — decided.* Detect and report in debug builds, online at the
+  retention fold that closes the ring (a detached mutual pin is unreachable
+  from any root afterwards, so an on-demand walk cannot find it). A structural
+  rule making mutual pins unrepresentable is a separate design if the detector
+  shows cycles arise in practice. The detector lives in `workgraph` with a
+  small report surface under `cfg(debug_assertions)`; the tightness report
+  lives in Koan behind a `region-audit` feature, instrumenting the
+  `alloc_carried_with` chokepoint only.
 - *Tightness ground truth — decided.* Instrument the witness composition to
   record which operands contributed. The alternative — walking a stored value's
   borrows against a recorded address table — is not available: a region keeps no

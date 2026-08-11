@@ -20,6 +20,10 @@ mod shapes;
 /// skipped retention fold on a hit, and the per-region empty singleton.
 mod intern;
 
+/// The pin-ring slate: the debug-mode detector at [`Region::retain_reach`], over the mutual pin, the
+/// chain-mediated ring, and the two shapes that are not rings at all.
+mod pin_cycles;
+
 /// The sectioned-storage slate: run grouping, index lookup, and the alloc door.
 mod sectioned;
 
@@ -126,6 +130,18 @@ unsafe impl PinsRegion for TestCart {
             match &node.outer {
                 Some(outer) => node = outer,
                 None => return false,
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn for_each_pinned_region(&self, visit: &mut dyn FnMut(&[u32])) {
+        let mut node = self;
+        loop {
+            visit(&node.backing[..]);
+            match &node.outer {
+                Some(outer) => node = outer,
+                None => return,
             }
         }
     }
@@ -565,6 +581,11 @@ unsafe impl RegionOwner for StepFrame {
 unsafe impl PinsRegion for StepFrame {
     fn pins_region(&self, region: &Region<StepProfile>) -> bool {
         std::ptr::eq(&self.region, region)
+    }
+
+    #[cfg(debug_assertions)]
+    fn for_each_pinned_region(&self, visit: &mut dyn FnMut(&Region<StepProfile>)) {
+        visit(&self.region);
     }
 }
 

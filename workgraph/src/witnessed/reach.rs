@@ -75,6 +75,19 @@ pub unsafe trait PinsRegion: RegionOwner {
     /// Whether holding `self` keeps the storage of `region` alive.
     fn pins_region(&self, region: &Self::Region) -> bool;
 
+    /// Enumerate every region [`Self::pins_region`] answers `true` for — the expansion step of the
+    /// debug-mode pin-cycle detector ([`Region::retain_reach`]). Purely diagnostic: no soundness
+    /// rests on it, which is why it is compiled only under `debug_assertions`.
+    ///
+    /// Two obligations, neither a safety one. It must not **mint** a region as a side effect — a
+    /// walk that asks "what do you pin?" would otherwise create the very storage it is surveying,
+    /// so an owner with a lazily-minted region peeks (`minted()`) rather than forcing. And it must
+    /// not **under-report**: a region omitted here is an edge the detector cannot follow, which
+    /// hides a ring rather than reporting one. There is deliberately no default body for the same
+    /// reason — a silently-empty default would make every unimplemented owner a blind spot.
+    #[cfg(debug_assertions)]
+    fn for_each_pinned_region(&self, visit: &mut dyn FnMut(&Self::Region));
+
     /// Whether this owner's storage outlives every region that could retain it, so an owning pin on
     /// it buys nothing and taking one only risks a cycle. `false` by default — the safe answer, an
     /// extra pin never dangles. A workload overrides it for its eternal tier
@@ -532,6 +545,15 @@ impl<F: PinsRegion> PinBundle<F> {
     /// embedder's white-box tests (mirroring `Scheduler::anchor_of`'s gate).
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn members(&self) -> &[Rc<F>] {
+        &self.members
+    }
+
+    /// The bundle's members for the debug-mode pin-cycle detector
+    /// ([`Region::retain_reach`]) — the crate-internal twin of [`Self::members`], which is a
+    /// `test-hooks` surface and so absent from an ordinary debug build of an embedder. Same
+    /// gate as the detector that reads it, and no wider a surface: the members are only walked.
+    #[cfg(debug_assertions)]
+    pub(in crate::witnessed) fn detector_members(&self) -> &[Rc<F>] {
         &self.members
     }
 }

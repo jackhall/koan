@@ -44,6 +44,10 @@ pub use reach::{PinsRegion, ReachDescription, StepCoverage};
 
 mod host;
 pub use host::RegionHost;
+/// The pin-ring detector's whole embedder surface — present in any debug build, with no feature
+/// wiring, and compiled out of a release one along with the detector itself.
+#[cfg(debug_assertions)]
+pub use host::{PinCycleReport, pin_cycle_reports, reset_pin_cycle_reports};
 #[cfg(any(test, feature = "test-hooks"))]
 pub use host::{RegionMetrics, region_metrics, reset_region_metrics};
 

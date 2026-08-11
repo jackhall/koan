@@ -14,7 +14,11 @@
 //!
 //! No cycle gate: a stored value holds no owning `Rc` back to a region (a closure / future / module
 //! is a bare borrow into its defining region, kept alive by its carrier's witness set), so storing
-//! it where requested can never form an allocation back-edge.
+//! it where requested can never form an allocation back-edge. The *retention* graph is where a ring
+//! is expressible — two regions' union bundles holding each other's owners — and the self and
+//! eternal rules cut the two shapes that arise by construction. A debug-build detector
+//! ([`Region::retain_reach`]) reports whatever is left, online at the fold that closes the ring; it
+//! is diagnostic and compiles out of a release build entirely.
 //!
 //! The Koan instantiation (`KoanRegion = Region<KoanStorageProfile>`) lives in the embedder's arena
 //! module (Koan's `machine::core::arena`). See
@@ -233,12 +237,89 @@ impl<W: StorageProfile> Region<W> {
     /// The fold is [`PinBundle::absorb`], so retaining the same region twice costs one `Rc` in total
     /// and a retention subsumed by an outer member costs none — the field stays a single antichain
     /// rather than a bundle per retention.
-    pub(crate) fn retain_reach(&self, bundle: PinBundle<W::FrameOwner>) {
+    ///
+    /// The eternal rule is applied **before** the debug-mode ring detector below runs, so what the
+    /// detector walks is the retention that actually lands here: a member the rule strips closes no
+    /// ring, because no pin on it is ever taken.
+    pub(crate) fn retain_reach(&self, bundle: PinBundle<W::FrameOwner>)
+    where
+        W::FrameOwner: RegionOwner<Region = Region<W>>,
+    {
         #[cfg(any(test, feature = "test-hooks"))]
         super::host::note_reach_retention_fold();
-        self.retained_reach
-            .borrow_mut()
-            .absorb(bundle.without_eternal());
+        let retained = bundle.without_eternal();
+        #[cfg(debug_assertions)]
+        self.detect_pin_cycle(&retained);
+        self.retained_reach.borrow_mut().absorb(retained);
+    }
+
+    /// **The pin-ring detector**: report every way `incoming`'s members lead liveness back to this
+    /// region, run just before the retention that would close the ring is installed. Diagnostic
+    /// only — it reports and returns; nothing here changes what is retained.
+    ///
+    /// It runs *online*, at the fold, because a mutual pin is by construction unreachable from any
+    /// live root once the external references drop — that disconnection **is** the leak — so a
+    /// walk started later can never find it. This is also the one moment both ends are in hand: the
+    /// region doing the retaining, and the members it is about to hold.
+    ///
+    /// The graph walked has two edge kinds, both of which transmit liveness: *retention* (a
+    /// region's union bundle owns an `Rc` on a member) and *chain* (an owner pins its own region
+    /// and every ancestor's, [`PinsRegion::for_each_pinned_region`]). A ring exists iff, from a
+    /// member about to be retained here, that closure reaches an owner pinning **this** region.
+    ///
+    /// No `RefCell` hazard against the `borrow_mut` the caller takes next: a path arriving back at
+    /// this region is caught by the `pins_region(self)` test *before* its bundle would be expanded,
+    /// so `self.retained_reach` is never borrowed inside the walk. Iterative rather than recursive
+    /// because the retention graph's depth is a property of the workload, not of this crate.
+    #[cfg(debug_assertions)]
+    fn detect_pin_cycle(&self, incoming: &PinBundle<W::FrameOwner>)
+    where
+        W::FrameOwner: RegionOwner<Region = Region<W>>,
+    {
+        use std::collections::HashSet;
+
+        let identity = |owner: &Rc<W::FrameOwner>| Rc::as_ptr(owner) as usize;
+        for member in incoming.detector_members() {
+            // One walk per newly retained member, so a report names the member that closed the
+            // ring rather than the whole bundle it arrived in.
+            let mut visited: HashSet<*const Region<W>> = HashSet::new();
+            let mut stack: Vec<(Rc<W::FrameOwner>, Vec<usize>)> =
+                vec![(Rc::clone(member), vec![identity(member)])];
+            while let Some((owner, path)) = stack.pop() {
+                if owner.pins_region(self) {
+                    super::host::note_pin_cycle(super::host::PinCycleReport {
+                        retainer: identity(&self.host_owner()),
+                        path,
+                    });
+                    break;
+                }
+                // The successors are pushed from *inside* the visit, because a visited region is
+                // only named for the length of the call — it is a `&Self::Region` under the
+                // trait's `for<'_>` quantifier, so nothing borrowed from it may be collected and
+                // walked afterwards. What crosses back out is owned: `Rc` members and addresses.
+                owner.for_each_pinned_region(&mut |region| {
+                    if !visited.insert(region as *const Region<W>) {
+                        return;
+                    }
+                    for next in region.retained_reach.borrow().detector_members() {
+                        let mut extended = path.clone();
+                        extended.push(identity(next));
+                        stack.push((Rc::clone(next), extended));
+                    }
+                });
+            }
+        }
+    }
+
+    /// This region's owner, upgraded — the blame target a ring report names. Infallible wherever a
+    /// retention runs: a live region is live storage inside its owner, so anything reaching this
+    /// region holds the owner alive too (the same argument [`ReachDescription::host_owner`] rests
+    /// on).
+    #[cfg(debug_assertions)]
+    fn host_owner(&self) -> Rc<W::FrameOwner> {
+        self.host
+            .upgrade()
+            .expect("a region is storage inside its owner: reaching one means the owner is live")
     }
 
     /// Number of distinct owners in the region's union bundle — white-box retention introspection,

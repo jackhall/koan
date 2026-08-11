@@ -11,6 +11,9 @@ use std::rc::{Rc, Weak};
 #[cfg(any(test, feature = "test-hooks"))]
 use std::cell::Cell;
 
+#[cfg(debug_assertions)]
+use std::cell::RefCell;
+
 use super::{PinsRegion, Region, RegionOwner, StorageProfile};
 
 /// A region owner whose region is minted on first use. Held behind an `Rc` at every call site: the
@@ -153,6 +156,66 @@ unsafe impl<P: StorageProfile> PinsRegion for RegionHost<P> {
     fn needs_no_pin(&self) -> bool {
         self.eternal
     }
+
+    /// The chain [`Self::pins_region`] walks, reported as regions rather than as an answer to one
+    /// query. A host whose own region is unminted contributes nothing — nothing can be retained in
+    /// a region that does not exist — and `minted()` is what keeps the survey from minting one.
+    #[cfg(debug_assertions)]
+    fn for_each_pinned_region(&self, visit: &mut dyn FnMut(&Region<P>)) {
+        let mut node = self;
+        loop {
+            if let Some(minted) = node.minted() {
+                visit(minted);
+            }
+            match &node.outer {
+                Some(outer) => node = outer,
+                None => return,
+            }
+        }
+    }
+}
+
+/// One detected **pin ring**: a chain of region owners along which liveness flows back to the region
+/// whose retention closed it, so neither end can ever be freed. Recorded by the debug-mode detector
+/// at [`Region::retain_reach`](super::Region::retain_reach) — the one moment both ends of the ring
+/// are in hand.
+///
+/// Addresses are `Rc::as_ptr` owner identities rather than references: a report outlives the walk
+/// that produced it, and a ring by definition holds its own members alive, so the identities stay
+/// meaningful for as long as the leak they describe.
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinCycleReport {
+    /// The owner of the region whose retention closed the ring — where the blame lands.
+    pub retainer: usize,
+    /// The owner chain walked from the newly retained member (first) to the owner whose own pins
+    /// reach back to the retaining region (last).
+    pub path: Vec<usize>,
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static PIN_CYCLES: RefCell<Vec<PinCycleReport>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Record one detected ring. Called from the detector alone.
+#[cfg(debug_assertions)]
+pub(super) fn note_pin_cycle(report: PinCycleReport) {
+    PIN_CYCLES.with(|log| log.borrow_mut().push(report));
+}
+
+/// Every pin ring detected on this thread since the last reset, oldest first. Cloned out, so a
+/// reader cannot narrow the log in place.
+#[cfg(debug_assertions)]
+pub fn pin_cycle_reports() -> Vec<PinCycleReport> {
+    PIN_CYCLES.with(|log| log.borrow().clone())
+}
+
+/// Empty the ring log for this thread. Callers reset before a measured run so
+/// [`pin_cycle_reports`] reads back that run's own detections only.
+#[cfg(debug_assertions)]
+pub fn reset_pin_cycle_reports() {
+    PIN_CYCLES.with(|log| log.borrow_mut().clear());
 }
 
 /// Snapshot of the thread-local region counters — region mints, plus the reach side table's intern

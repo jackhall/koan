@@ -309,6 +309,18 @@ mod tests {
         fn needs_no_pin(&self) -> bool {
             self.eternal
         }
+
+        #[cfg(debug_assertions)]
+        fn for_each_pinned_region(&self, visit: &mut dyn FnMut(&Region<TestProfile>)) {
+            let mut node = self;
+            loop {
+                visit(&node.region);
+                match &node.outer {
+                    Some(outer) => node = outer,
+                    None => return,
+                }
+            }
+        }
     }
 
     fn root_frame() -> Rc<TestFrame> {
