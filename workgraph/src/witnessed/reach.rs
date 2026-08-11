@@ -627,6 +627,15 @@ impl<F: PinsRegion> StepCoverage<F> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// The owners this coverage pins — white-box introspection under [`PinBundle::members`]'s own
+    /// gate, for an embedder auditing what a fold *pinned* against what its product actually
+    /// references. Read-only, so it adds no pin arithmetic to the narrowed surface the type exists
+    /// to be.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn members(&self) -> &[Rc<F>] {
+        self.0.members()
+    }
 }
 
 impl<F: PinsRegion> Clone for StepCoverage<F> {

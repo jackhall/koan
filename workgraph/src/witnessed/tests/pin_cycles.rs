@@ -40,6 +40,16 @@ fn retain(holder: &Rc<CycleFrame>, member: &Rc<CycleFrame>) {
         .retain_reach(PinBundle::singleton(Rc::clone(member)));
 }
 
+/// Dismantle a ring the test built on purpose. A reported ring is a **real** leak — that is the
+/// whole point of detecting it — so every host in one stays allocated to process exit and the Miri
+/// leak audit reports it. A test that constructs a ring owes this teardown; one that constructs an
+/// acyclic graph does not, because ordinary `Drop` reclaims it.
+fn dismantle(frames: &[&Rc<CycleFrame>]) {
+    for frame in frames {
+        frame.region().release_retained_for_test();
+    }
+}
+
 /// The acceptance case: a mutual pin between two per-call regions is reported, and the one-way half
 /// of it is not. Blame names the region that closed the ring, and the path names the owners walked
 /// from the newly retained member back to it.
@@ -62,6 +72,8 @@ fn mutual_pin_is_reported() {
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].retainer, identity(&b));
     assert_eq!(reports[0].path, vec![identity(&a), identity(&b)]);
+
+    dismantle(&[&a, &b]);
 }
 
 /// The ring closes through a **chain** edge rather than a retention one: A retains a child of B, and
@@ -86,6 +98,8 @@ fn chain_mediated_ring_is_reported() {
         vec![identity(&a), identity(&child_of_b)],
         "the walk reaches B's region through the child's outer chain"
     );
+
+    dismantle(&[&a, &b]);
 }
 
 /// The negative: a retention *chain* — A retains B, B retains C, C retains a leaf whose own ancestor

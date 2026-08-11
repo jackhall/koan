@@ -322,6 +322,19 @@ impl<W: StorageProfile> Region<W> {
             .expect("a region is storage inside its owner: reaching one means the owner is live")
     }
 
+    /// Drop everything this region retains — **the ring slate's teardown, and nothing else.**
+    ///
+    /// A detected pin ring is a genuine leak by construction: the two regions own each other's
+    /// owners, so neither ever drops and the process-exit leak detector reports every host in the
+    /// ring. A test that builds one deliberately must therefore dismantle it, which is why this
+    /// exists and why it is `cfg(test)`-only: no production caller ever releases a region's
+    /// retention early, because the retention's whole contract is that it lives exactly as long as
+    /// the region does.
+    #[cfg(test)]
+    pub(in crate::witnessed) fn release_retained_for_test(&self) {
+        *self.retained_reach.borrow_mut() = PinBundle::empty();
+    }
+
     /// Number of distinct owners in the region's union bundle — white-box retention introspection,
     /// gated behind `test-hooks` like the other reach white-box readers. Exposes a count, not the
     /// bundle, so it cannot be used to narrow a claim.
