@@ -8,10 +8,10 @@ already has no dependency on scheduling, but the cell half — nodes holding
 erased continuations witnessed by memory anchors — lives inside
 [node_store.rs](../src/scheduler/node_store.rs)'s slot table,
 interleaved with DAG-only state: `SlotState` terminality, dep edges,
-notify/park bookkeeping, retention holds, splice aliases. There is no crate
+notify/park bookkeeping, terminal delivery, splicing. There is no crate
 an embedder can take that offers "cells with continuations, safe memory, and
 inter-cell values" without also taking acyclicity, terminal `Result`
-semantics, and the retention protocol.
+semantics, and the delivery protocol.
 
 **Acceptance criteria.**
 
@@ -25,8 +25,8 @@ semantics, and the retention protocol.
 - The witnessed memory substrate (regions, brands, carriers, reach sets, the
   delivery envelope, the step construction context) ships in `cellgraph`.
 - `workgraph`'s `Workload` is the cell contract plus the terminal error
-  type; dep edges, park/notify, cycle detection, terminal storage, retention
-  holds, and splicing appear only in `workgraph`.
+  type; the edge slab, park/notify, cycle detection, the finalize delivery
+  walk, and alias splicing appear only in `workgraph`.
 
 **Directions.**
 
@@ -41,9 +41,10 @@ semantics, and the retention protocol.
 
 ## Dependencies
 
-**Requires:** none — the embedder-surface narrowing the carve rides on is
-shipped: reach folding is crate-private and a mint performs its own retention
-([reach.md § The library boundary](../design/reach.md#the-library-boundary)).
+**Requires:**
+
+- [Delivery at finalize](delivery-at-finalize.md) — the carve happens against
+  the settled slot/edge substrate, not the shape that flip rewrites.
 
 **Unblocks:**
 

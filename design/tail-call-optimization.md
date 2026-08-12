@@ -116,14 +116,14 @@ released. Freeing under a live borrow is therefore impossible. *Enforced by* the
 run loop's ordering: graph edits apply after a step returns, never mid-step.
 
 **Lemma 2 — the retiring region outlives argument adoption.** The retiring
-incarnation seals its carried arguments as carriers hosted in its own region; the
-reinstalled incarnation adopts them into its fresh region on its first step.
-Frame-retention holds the retiring region's owner until every standing
-destination has released — here, until the one successor incarnation adopts
-(release at destination-count zero,
-[reach.md § Retention model](../workgraph/design/reach.md#retention-model)).
-So the free is ordered *after* the adoption copy, never before, and the single
-consumer of tail position makes the release prompt.
+incarnation seals its carried arguments as carriers hosted in its own region;
+the reinstalled incarnation adopts them into its fresh region inside the
+replace itself, while the apply path still holds the retiring anchor
+([reach.md § Retention model](../workgraph/design/reach.md#retention-model)).
+So the free (copy verdict) or the transfer into the new incarnation's anchor
+bundle (pin verdict) is ordered *after* the adoption by construction — a local
+variable across the install call, and the single consumer of tail position
+makes the turnover prompt.
 
 **Lemma 3 — cross-region references are pinned, never raw.** Two kinds of
 cross-region reference arise, each with its own pin:
@@ -160,18 +160,18 @@ frees exactly the region nothing else holds.
 
 A loop's result can be consumed by a bare-name forward — `let x = <loop>` where
 another node references `x`. That reference resolves to the loop node and, while the
-loop is still iterating, parks: the loop node is not `is_result_ready` until it
-finalizes (intermediate hops reinstall it, never finalize it), so the forward takes
-the `Alias` path and `splice_forward` moves its consumers onto the loop node's
-notify list. A tail hop reinstalls the slot **without touching its notify list**, so
-those consumers survive every iteration and fire on the final terminal, resolving
-their alias to the loop node's stable id. **This composes only because node identity
-is stable**: an alias taken mid-loop names the same slot at loop exit. A fresh-id
-design would strand it.
+loop is still iterating, parks: the loop node's edges install parked, not filled
+(intermediate hops reinstall it, never finalize it), so the forward takes
+the `Alias` path and `splice_forward` re-points its parked edges at the loop
+node. A tail hop reinstalls the slot **without touching its notify list**, so
+those edges survive every iteration and fill on the final terminal. **This
+composes only because node identity is stable**: an edge re-pointed mid-loop
+names the same slot at loop exit. A fresh-id design would strand it.
 
 The loop's **final** result may therefore fan out to several consumers (the binding
-plus any forwards); retention holds the final incarnation's region until every one
-has pulled. This is a different quantity from Lemma 2's retiring→successor handoff,
+plus any forwards); the finalize walk delivers into each edge's destination, and a
+pin verdict keeps the final incarnation's region alive from those destinations'
+own union bundles. This is a different quantity from Lemma 2's retiring→successor handoff,
 which is always exactly one consumer — the fan-out is on the loop's terminal, not on
 the intra-loop argument adoption.
 

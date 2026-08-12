@@ -18,7 +18,7 @@ rather than reconstructing it from five docs and ten source files.
 ## The protocol, in three parts
 
 - [Region lifecycle: allocation and lift](lifecycle.md) — which carriers anchor a
-  per-call region, the lift-time anchor decision, consumer-pull node-output lift,
+  per-call region, the lift-time anchor decision, node-output delivery,
   and why the allocation engine needs no cycle gate.
 - [Frame management](frames.md) — active-frame propagation and the outer-frame
   chain for builtin-built frames.

@@ -1,13 +1,14 @@
 # Collapse the Deps owned/park currency
 
-**Problem.** With the scheduler on one wire kind, koan's `Deps` / `DepResults`
-currency still carries the two-list `[park..., owned...]` layout with split
-positional addressing — `park(i)` / `owned(j)` accessors, `Slot::Park`
-indexing in [literal.rs](../../src/machine/execute/dispatch/literal.rs), and the
+**Problem.** Koan's `Deps` / `DepResults` currency carries the two-list
+`[park..., owned...]` layout with split positional addressing — `park(i)` /
+`owned(j)` accessors, `Slot::Park` indexing in
+[literal.rs](../../src/machine/execute/dispatch/literal.rs), and the
 `resolved.own(...)` / `park_on(...)` builder split
-([scheduler-library.md § the boundary](../../design/scheduler-library.md)) —
-a distinction no scheduler semantics consume. Two index spaces persist for one
-dep list.
+([scheduler-library.md](../../design/scheduler-library.md)) — but under
+edge-centric delivery the scheduler consumes no park/owned distinction: deps
+arrive as ordinary residents regardless of role. Two index spaces persist for
+one dep list.
 
 **Acceptance criteria.**
 
@@ -24,7 +25,7 @@ dep list.
 
 **Requires:**
 
-- [Adopt wire-refcounted scheduler retention](wire-refcount-migration.md) — the
-  scheduler must stop consuming the split first.
+- [Delivery at finalize](../../workgraph/roadmap/delivery-at-finalize.md) —
+  the scheduler must stop consuming the split first.
 
 **Unblocks:** none — leaf.

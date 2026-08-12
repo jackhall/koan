@@ -154,7 +154,8 @@ result by folding its delivered dep carriers — so
 terminal. `seal_at_step` pairs it with the producing frame into a delivery
 envelope, and [`finalize_terminal`](../src/machine/execute/finalize.rs) hands that
 envelope on whole — value and coverage stay one value all the way to
-`Scheduler::finalize`, which derives the retention hold's reach from it. An error
+`Scheduler::finalize`, whose delivery walk adopts it into each edge's
+destination region. An error
 carries no value and finalizes bare. The type / region construction operands are computed carriers
 too — the newtype / tagged-union / `CATCH` build folds a delivered type-identity
 carrier in as the destination operand under the binding's stored reach

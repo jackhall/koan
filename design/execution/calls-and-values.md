@@ -91,9 +91,8 @@ recursive tree-walker can't get cheaply.
 
 ### What amortizes
 
-- **Slot recycling.** The step-end wire release reclaims sub-slots eagerly
-  during [`run_step`](../../src/machine/execute/run_loop.rs), and `alloc_node`
-  pulls
+- **Slot recycling.** Sub-slots reclaim at their own finalize, the moment
+  their notify drains, and `alloc_node` pulls
   from the free-list before extending the underlying vectors. A
   steady-state recursive body reuses the same slot indices across
   iterations; `body_subexpression_slots_recycle_across_calls` pins the
@@ -261,9 +260,9 @@ slot, and at the slot's Done step the scheduler's contract layer checks it again
 `T` — [`TypeMismatch`](../../src/machine/core/kerror.rs) with a `<return>`
 arg on a miss — then re-stamps it to `T` **in place**, in the producer's own
 region, so a downstream consumer dispatches on the declared shape regardless
-of which arm ran. (Nothing relocates at Done; the value escapes only at the
-per-consumer bind seam — see
-[per-call-region/lifecycle.md § Consumer-pull node-output lift](../per-call-region/lifecycle.md#consumer-pull-node-output-lift).) Enforcement is runtime
+of which arm ran. (The check and re-stamp run before delivery distributes the
+value — see
+[per-call-region/lifecycle.md § Node-output delivery](../per-call-region/lifecycle.md#node-output-delivery).) Enforcement is runtime
 and per-arm (the arm that runs is the arm that's checked), the same
 discipline FN return types follow — see
 [typing/ktype/slots-and-signatures.md § Function signatures](../typing/ktype/slots-and-signatures.md#function-signatures).

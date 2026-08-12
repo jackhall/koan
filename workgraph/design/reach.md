@@ -43,7 +43,7 @@ posture and connected by *transform verbs* — never by wrapping one in another:
 
 | State | Reach members | Posture | Where it lives |
 |---|---|---|---|
-| [`Delivered`](../src/witnessed/delivered.rs) | **owned** — region owners in an inline set | in transit, borrows nothing | retention holds, cell slots, dep terminals, and the pull / adopt / relocate verbs |
+| [`Delivered`](../src/witnessed/delivered.rs) | **owned** — region owners in an inline set | in transit, borrows nothing | the finalize delivery walk, step products, and the adopt / relocate verbs |
 | [`Sealed`](../src/witnessed.rs) | **weak** — a reference to the region-hosted description | at rest, borrows nothing | embedder binding tables, parked cell slots, resting cells inline in embedder values |
 | [`Opened<'b>`](../src/witnessed.rs) | weak, read under a pin | in use at a step lifetime `'b` | within a step |
 
@@ -58,8 +58,8 @@ posture and connected by *transform verbs* — never by wrapping one in another:
   the pin it borrows is what makes reading the `Weak` members sound.
 
 **The embedder has no pin vocabulary.** `PinBundle` is crate-private to the
-library. Every owned pin lives in a library-owned holder — a retention hold, a
-region's union bundle, a step's coverage — and the only shape one crosses the
+library. Every owned pin lives in a library-owned holder — a region's union
+bundle, a step's coverage — and the only shape one crosses the
 boundary in is `StepCoverage`, an opaque holder the embedder may hold, thread and
 drop but cannot compute with: union, subsumption, narrowing and member removal
 have no public surface. An embedder therefore cannot assemble, widen or narrow a
@@ -72,10 +72,10 @@ container supplies the home owner the verb needs and the embedder never has to
 recover a producer region from a member set.
 
 `Delivered` stays **nameable** by the embedder, and is the one state that is. An
-in-transit envelope has to appear in the embedder's own type positions — a parked
-cell slot, a dep terminal, a finish callback's result — and a step's dep slice
-must *own* its envelopes across a step that mutably borrows the scheduler, so an
-`Opened<'b>` borrowed from the retention hold would not type. Nameable is not
+in-transit envelope has to appear in the embedder's own type positions — a
+step's finished terminal handed to `finalize`, a relocation product carried
+across a step that mutably borrows the scheduler — so an `Opened<'b>` borrowed
+from some library holder would not type. Nameable is not
 transparent: the envelope's pins have no public accessor, no constructor takes a
 bare bundle, and every operation on them is a verb on the envelope itself.
 
@@ -206,9 +206,9 @@ envelope — so dropping a member costs a `retain` over storage already paid for
 rather than a filtered copy and a second round of refcount traffic. Where owned pins
 live:
 
-- **A `Delivered` carrier's inline set.** A walking value — a cell slot's terminal
-  lifted for a pull, a dep crossing steps — carries its own pins, so every fan-out
-  consumer holds its own liveness. Duplicating a `Delivered` duplicates its pins.
+- **A `Delivered` carrier's inline set.** A walking value — a terminal in the
+  finalize delivery walk, a relocation product crossing a step — carries its own
+  pins for exactly its transit. Duplicating a `Delivered` duplicates its pins.
   The set has no public accessor: it exists only for the library verbs the envelope
   exposes.
 - **The region union bundle.** A region owns **one** deduped `PinBundle<F>`
@@ -225,12 +225,6 @@ live:
   exactly as tight as a per-entry bundle whenever entries never outlive the region
   — and a region is a library type, which is what keeps the union out of the
   embedder's hands.
-- **The retention hold.** A finalized cell slot's hold pairs the producer region
-  owner with owned pins for every *other* region the terminal reaches —
-  `{ owner, reach }` under the slot's standing-destination count — released
-  together at destination-count zero (§ Retention model). `owner` is the home pin; `reach` never re-pins that same
-  region (the self rule). This is the parked terminal's ownership; the slot's
-  resting `Sealed` carrier is inert data without it.
 - **Transient pins.** Short function-scope holds that open carriers — a run loop's
   per-step combined pin, an embedder's in-flight check — hold explicit owners for
   exactly their scope. They never treat a description as a pin: a description pins
@@ -255,8 +249,8 @@ implementors:
    that cover the same reach (an `Opened<'b>` under a step pin; an entry read under
    its region's own bundle). "Enveloped" is a lifetime claim the borrow checker can
    see, not a convention.
-4. The open and lift doors — and every constructor that stores ownership (the
-   retention hold, a region's adopt) — take the pin (or the enveloping borrow) by
+4. The open and lift doors — and every constructor that stores ownership (a
+   region's adopt) — take the pin (or the enveloping borrow) by
    signature. A `Sealed` carrier plus no coverage is inert data, and stays inert:
    no operation turns its description into pins without a live pin
    (§ Description and pins).
@@ -378,32 +372,35 @@ last-holder drop, never at some later death.
   step with its carrier, so the seal at the step boundary supplies pins it holds. A
   product with empty reach carries the empty set, which pins nothing and allocates
   nothing.
-- **Finalize → park → pull.** The finalize boundary reseals the terminal to
-  `Sealed` at rest in the slot and hands its owned pins to the scheduler, which
-  houses them in the slot's retention hold — `{ owner, reach, pulls }`. A consumer
-  pull lifts a fresh `Delivered` for travel by cloning `(owner, reach)` out of the
-  hold. The hold releases both at pull-count zero — the same instant the bare
-  `owner` release already implies, since the held owner pins the reach members
-  transitively (owner → region → its union bundle) for exactly that interval.
-  Housing the pins in the hold makes the parked terminal's coverage owned rather
-  than transitive; it does not lengthen it.
+- **Finalize → deliver.** The producer hands `finalize` its terminal as a
+  `Delivered` envelope, and the delivery walk adopts it into each distinct
+  destination region ([dag-scheduler.md § Delivery at
+  finalize](dag-scheduler.md#delivery-at-finalize)): the mint at each
+  destination unions the envelope's pins into that region's union bundle, so
+  every consumer's liveness is its own region's, on its own death schedule. The
+  envelope's inline set covers the transit and drops when the walk ends; the
+  scheduler houses no pins of its own.
 - **Fan-out.** Duplicating a `Delivered` clones its inline pins (§ The pin bundle),
   so each fan-out consumer owns its hold; a consumer that re-homes the value
   get-or-mints a description against its own destination.
 
 ## Retention model
 
-The lifetime of a **producer region** is the scheduler's retention: the scheduler
-holds the producer's region owner — paired with the terminal's owned reach pins,
-`{ owner, reach }` under the slot's standing-destination count — until every
-standing destination has released. A destination stands from the moment a
-consumer wires to the slot (or the run takes a root destination on it) until
-that consumer's wire release — run at its end of step and at its death alike;
-release of both halves is a function of standing destinations only, never of
-any value's reach
-([dag-scheduler.md § Refcount reclamation](dag-scheduler.md#refcount-reclamation)).
-A walking terminal carries this hold inside its `Delivered` carrier, so the
-pins travel with the value to each consumer.
+The scheduler keeps no pin holder of its own — no hold, no count whose zero
+releases pins. Retaining a node and retaining its region are different things:
+regions are governed by pins, nodes are the scheduler's own bookkeeping, and
+slot lifecycle touches no pin
+([dag-scheduler.md § Delivery at finalize](dag-scheduler.md#delivery-at-finalize)).
+What pins the scheduler does hold at rest live transitively inside the anchor
+regions it owns, placed by the ordinary adopt at delivery and released by
+ordinary region death (the holder rule).
+
+The lifetime of a **producer region** is therefore decided at delivery: the
+finalize walk adopts the terminal into each distinct destination region, and
+the retention predicate's verdict (§ The library boundary) either copies the
+value out — freeing the producer region at finalize, the earliest possible
+instant — or transfers the producer's owner into the destination's union
+bundle, where it lives exactly as long as the destination region itself.
 
 - A **pass-through** value stays hosted in its birth region and rides onward by
   reference; the birth region is retained across the whole chain and freed once the
@@ -415,15 +412,17 @@ pins travel with the value to each consumer.
   that keeps this small is precision at the mint — a region-pure value's set is
   empty and pins nothing.
 
-**Slot reinstallation** consumes retention directly: reinstalling a slot's work
-retires the outgoing incarnation's region, which retention holds until the
-reinstalled incarnation adopts its sealed arguments, ordering the free after the
-adoption.
+**Slot reinstallation** rides the same delivery: the loop-carried arguments
+adopt into the new incarnation inside the replace itself, while the apply path
+still has the displaced anchor in hand — a copy verdict frees the retiring
+region at the replace, a pin verdict transfers it by hold into the new
+incarnation's anchor bundle, ordering the free after the adoption with a local
+variable rather than a scheduler-held hold.
 
 Home = residence, by construction: a value is never moved out of its producer
-region by any channel, so a `Delivered`'s home member, the producer's retention
-hold, and the value's residence region are one and the same region. A carrier whose
-home member does not name its value's residence cannot be built.
+region by any channel, so a `Delivered`'s home member and the value's residence
+region are one and the same region. A carrier whose home member does not name
+its value's residence cannot be built.
 
 ## Debug audits
 
@@ -486,8 +485,8 @@ what its product embeds. Koan's use of it is
   allocation capability by signature; the in-place restamp verb
   [`restamp_in_place`](../src/witnessed/delivered.rs) (re-tags a delivered value's
   top node in its own producer region, composing to a witness identical to the
-  input's); the scheduler's retention (release at destination-count zero); and **every
-  owned pin** — the region union bundles, the retention holds, the step coverages.
+  input's); and **every
+  owned pin** — the region union bundles, the step coverages.
   `PinBundle` is crate-private, an envelope's pins have no accessor, and the fold
   into a region's union bundle is crate-private as well, so the whole ownership tier
   is unreachable from outside even though `Delivered` itself is nameable (§ The
@@ -517,9 +516,3 @@ memory-versus-CPU tradeoff — a predicate that answers conservatively costs
 retention, never soundness, so a workload may tune it freely in either direction
 without the library having to trust an ownership decision it cannot see.
 
-## Open work
-
-- [Wire-refcounted retention and reclamation](../roadmap/wire-refcount-retention.md)
-  — implements the standing-destination accounting § Retention model describes;
-  until it ships, the in-tree dep graph still carries the split accounting it
-  replaces.

@@ -38,7 +38,7 @@ decided as a whole.
   away, every survivor is rebuilt at its consumer's brand and the region
   deallocates at frame death.
 - **Transfer** is the default otherwise: survivors keep their borrows and the
-  region rides the frame-retention hold, per
+  region rides the consumer's pin, per
   [design/value-substrates.md § Escape](../../design/value-substrates.md#escape-pin-by-default).
 - Evacuation is all-or-nothing per region: the region deallocates only when every
   survivor leaves — no partial evacuation that pays the copy and keeps the pin.

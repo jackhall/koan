@@ -342,15 +342,12 @@ A bare-identifier slot resolving to a producer returns `Outcome::Forward` and is
 spliced out (above). The other parking fast-lane handlers (the `fn_value`
 `FunctionValueCall` head-placeholder park) and the eager-resolve pass return a
 `ParkThenContinue` with a `Continuation::Resume` for a re-resolve, whose harness
-calls `DepGraph::add_park_edge` — recording a `DepEdge::Notify(producer)` in the
-consumer's `dep_edges` entry alongside the `DepEdge::Owned(child)`
-entries that mark sub-slots the consumer owns. The bare-name splice likewise wires
-the moved consumers through `add_park_edge` against the resolved producer. `add_park_edge` and its
-`add_owned_edge` sibling each install the forward `notify_list[producer]`
-wake and the `pending_deps[consumer]` bump atomically with the backward
-record, so a park-edge install is one atomic +1 across the three vectors.
-`free()` recurses only into `Owned` arms, so a consumer's reclamation
-cannot transit a park edge into a sibling producer's subtree. Same-scope
+installs the park edge through the scheduler's single wiring door; the
+bare-name splice likewise re-points the moved edges at the resolved producer.
+An edge install lands the forward `notify` wake and the consumer's `pending`
+bump atomically with the edge record, so a park-edge install is one atomic
+step, and a consumer's teardown releases only the edges it holds — its
+reclamation cannot transit a park edge into a sibling producer's subtree. Same-scope
 rebind of a value name surfaces as `KErrorKind::Rebind`; an `FN` overload
 indistinguishable from an existing one surfaces as
 `KErrorKind::DuplicateOverload`. Type bindings share this placeholder

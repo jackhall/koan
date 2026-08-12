@@ -267,31 +267,23 @@ run inside the brand with the destination in scope: an owned region set composes
 reach into the destination's own arena. All keep their `unsafe` retype inside the module, so callers
 carry none; `yoke` in fact routes only the safe `erase`, carrying no retype of its own.
 
-The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
-`SealedTerminal<W>` = `Retained<W::Value, Carrier<W::Frame>>`
-([`node_store.rs`](../workgraph/src/scheduler/node_store.rs)) — the opaque dormant form of a
-`Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` / the envelope merge) and re-anchors
-only through a rank-2 destination verb. `finalize` bundles the erased value under a
-[`CarrierWitness`](../src/machine/core/carrier_witness.rs) — the **reference-only** carrier, a
+The value channel is borrow-checked end to end. `finalize` takes the workload's finished terminal
+as a [`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope bundling the erased value under
+a [`CarrierWitness`](../src/machine/core/carrier_witness.rs) — the **reference-only** carrier, a
 reference to the value's reach description and nothing else, pinning nothing itself; the description
 is where both of the value's region facts live, its host region and the regions its borrows reach —
-and seals it **as-is** (a declared return is checked and re-stamped in place first): there is no
-Done-boundary relocation or sever gate. What keeps the
-producer frame alive is the scheduler's **frame-retention hold**, materialized at finalize under the
-standing-destination count and released at destination-count zero
-([dag-scheduler.md § Refcount reclamation](../workgraph/design/dag-scheduler.md#refcount-reclamation)); a walking terminal carries that hold inside its
-[`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope's pin bundle. Because that liveness
-is a refcount protocol rather than a lexical extent, a terminal rests in `Retained` — the tier with
-**no read verb at all**, which re-enters circulation only through `Delivered::lift` under the owner
-the hold was keeping. A value read therefore goes through the envelope's own bundled coverage, which
-copies
-the value out inside a `for<'b>` brand: the fabricated content lifetime is un-nameable, so nothing
-branded escapes into the result. The driver exposes two accessors over it:
-[`read_result_with`](../src/machine/execute/runtime.rs) hands the value to a closure that copies out
-what it needs, and the borrow-free `result_error` reports a slot's success or failure without reading
-the value at all — the [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) a decide sees exposes
-only the probe, since a resolved value rides the scope channel rather than a slot read. Neither lets a
-re-anchored reference ride the `&self` borrow up-stack. The continuation — droppable, so it rests on
+sealed **as-is** (a declared return is checked and re-stamped in place first): there is no
+Done-boundary relocation or sever gate. The envelope is internal transit: the delivery walk adopts
+the terminal into each edge's destination region, once per distinct destination
+([dag-scheduler.md § Delivery at finalize](../workgraph/design/dag-scheduler.md#delivery-at-finalize)),
+with the retention predicate deciding per destination whether the value deep-copies out — freeing
+the producer frame at finalize — or stays resident in the producer's region, that frame transferred
+into the destination region's union bundle. A filled edge keeps its resident in `Retained` — the
+opaque dormant tier with **no read verb at all**, which hides every transform and re-anchors only
+through a rank-2 destination verb — re-entering circulation only through `Delivered::lift` under
+the destination's own liveness, inside a `for<'b>` brand whose fabricated content lifetime is
+un-nameable, so nothing branded escapes into a result and no re-anchored reference rides a `&self`
+borrow up-stack. The continuation — droppable, so it rests on
 the substrate's **owned tier** as a `SealedPinned` sealed against the slot's anchor `Rc` at the
 scheduler's install door — re-anchors through the run-loop step's single consuming open:
 [`run_step`](../src/machine/execute/run_loop.rs) opens it beside the active-scope operand at one
@@ -308,27 +300,22 @@ what discharges that bound. The brand is invariant, so no shortening is availabl
 reaches step code instead is the covariance of what it *mints*. Program storage therefore reaches a
 builtin body with no carrier, no pin and no `unsafe`
 ([witnessed-memory.md](../workgraph/design/witnessed-memory.md)). The
-consumer-pull lift and the `Outcome::Forward` ready pull re-anchor their reads at a *node* lifetime,
-not a fabricated `'run`: each dep terminal is a lifetime-free
-[`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope riding the step as plain data, and a
-reader opens it under the envelope's own pins (`Delivered::open_at`) at the borrow of the guard it
-binds — so a dep value reaches no shared step brand and no in-band dep carrier exists. A dep that
-must *land* in the consumer's region crosses the envelope's own transfer fold, whose brand is where
-[`copy_carried`](../src/machine/execute/lift.rs) copies it into the consumer `dest` region with a
-plain `'b → 'b` structural alloc — the composite spine sharing its `Rc` payloads,
-a closure / future / module riding its bare `&'b` borrow into the source region — and the
-`Outcome::Forward` pull lands in that same region at the step brand, so every dep value is born at a
-brand its own carrier supplied, never through a free reattach. There is **no value-path `unsafe`** left: the
-relocation allocs at the destination region's own lifetime, so the lift hook is a safe
-`deep_clone` through the destination's own fold door. The relocation seam
-[`Delivered::transfer_into`](../workgraph/src/witnessed/delivered.rs) wraps this as a mint — the
-relocated value re-sealed with its reach (and, for a value borrowing into the dying producer, that
-producer) minted against `dest` — description into its reach table, pins to the holder — and the
-storage-bound drain / forward path routes it via
-[`relocate_terminal`](../src/machine/execute/runtime.rs), which pairs the dep's envelope
-(`dep_delivered`) with a `Residence::Copied` transfer. The consumer-less root drain in
-[`run_program`](../src/machine/execute/runtime/interpret.rs) relocates each top-level terminal into the
-run-global root region the same way.
+dep channel re-anchors at a *node* lifetime, not a fabricated `'run`: a dep is delivered before its
+consumer's step starts, arriving as an ordinary resident of the consumer's region — no envelope
+rides the step, and no in-band dep carrier exists. The landing crosses the delivery adopt's own
+fold, whose brand is where [`copy_carried`](../src/machine/execute/lift.rs) copies a
+copy-verdict value into the destination region with a plain `'b → 'b` structural alloc — the
+composite spine sharing its `Rc` payloads, a closure / future / module riding its bare `&'b` borrow
+into the source region — so every dep value is born at a brand its own carrier supplied, never
+through a free reattach. There is **no value-path `unsafe`**: the relocation allocs at the
+destination region's own lifetime, so the lift hook is a safe `deep_clone` through the
+destination's own fold door, and the adopt is a mint — the relocated value re-sealed with its reach
+(and, for a value borrowing into the dying producer, that producer) minted against the destination,
+description into its reach table, pins to the destination's union bundle. The run's roots are
+Koan-held edges destined into the run-global root region, so top-level terminals are delivered
+there at finalize and the drain boundary in
+[`run_program`](../src/machine/execute/runtime/interpret.rs) reads each as a resident of a region
+the run owns, releasing the root edges when it is done.
 
 A relocated closure / future / module survives its producer's dying frame because the copy keeps its
 bare borrow and the *consumer* keeps that borrow's region alive. Both channels carry the regions they
@@ -688,39 +675,32 @@ edges](../workgraph/design/dag-scheduler.md#pushnotify-dependency-edges)) keeps 
 state in a
 [`NodeStore`](../workgraph/src/scheduler/node_store.rs)
 sub-struct that owns `slots: SlotVec<SlotState<'run>>` (each slot a `PreRun(Node)`
-/ `Running` / `Done(Result<Carried, KError>)` / `Aliased(NodeId)` / `Free`) and
-`free_list: Vec<NodeId>`, behind the slot lifecycle
-`alloc_slot → take_for_run → reinstall* → finalize → free_one`. `alloc_slot` is
+/ `Running` / `Free`) and `free_list: Vec<NodeId>`, behind the slot lifecycle
+`alloc_slot → take_for_run → reinstall* → finalize`. `alloc_slot` is
 the only path that picks an index (pulling from `free_list` before extending
-`slots`), `finalize` is the only path that lands a terminal `Done`, and
-`free_one` is the only path that returns a slot to `Free` and pushes its index
-onto `free_list`. Dependency bookkeeping lives alongside it in a
+`slots`), and `finalize` is the only path that ends a slot: it delivers the
+terminal into each live edge's destination region and reclaims the slot the
+moment its notify drains
+([dag-scheduler.md § Delivery at finalize](../workgraph/design/dag-scheduler.md#delivery-at-finalize)).
+Dependency bookkeeping lives alongside it in a
 [`DepGraph`](../workgraph/src/scheduler/dep_graph.rs) sub-struct
-that holds one `DepRow` per slot, bundling three coordinated fields:
-`notify: Vec<NodeId>` (this producer's dependent list), `pending: usize` (this
-consumer's unresolved-dep counter), and `edges: Vec<DepEdge>` (this slot's
-backward edges to producers, tagged `DepEdge::Owned(NodeId)` for sub-slots
-the consumer is responsible for reclaiming and `DepEdge::Notify(NodeId)` for
-sibling producers the consumer only parked on for wake notification). Housing
-the three in one row is what makes their coherence structural: the rows are
-private, keyed by `NodeId`, and mutated only through `DepGraph`'s atomic-update
-methods, so the invariant (every forward edge in a producer's `notify` matched
-by a backward `edges` entry and a +1 in `pending` on the consumer) is enforced
-by the surface rather than by convention.
+that holds one `DepRow` per slot — `notify: Vec<EdgeId>` (this producer's
+waiting edges) and `pending: usize` (this consumer's unfilled-inbound-edge
+counter) — with the edges themselves in their own slab, each naming its
+producer, its owner, and its destination region. Housing the row fields
+together is what makes their coherence structural: the rows are private and
+mutated only through `DepGraph`'s atomic-update methods, so the invariant
+(every edge in a producer's `notify` matched by a +1 in `pending` on its
+consumer) is enforced by the surface rather than by convention.
 
-Transient-node reclamation runs through the step-end wire release from the
-unified node handler `KoanRuntime::run_step`, *after* the finish closure returns
-its `Outcome` but *before* the harness applies it. So
-when a dispatch splice finish has rewritten `working_expr.parts` to
-`WorkingPart::Spliced`, the freed slots are back on the free-list before
-the harness dispatches the bound expression — its `alloc_node` can recycle them
-immediately. The release decrements each wired producer's standing-destination
-count; a producer at zero is reclaimed and releases its own wires recursively,
-while a producer another destination still counts — a sibling park producer, or
-one the run holds a root destination on — survives, so reclaiming a consumer
-cannot reach into a shared subtree. A mid-run slot is skipped via the `NodeStore::is_live` guard, so
-a release whose decrements dive into another in-flight user-fn call leaves that
-subtree for that call's own reclamation.
+Transient-node reclamation is delivery itself: a slot reclaims at finalize the
+moment its notify drains, so when a dispatch splice finish has rewritten
+`working_expr.parts` to `WorkingPart::Spliced`, the spliced slots' indices are
+back on the free-list as their producers deliver — the follow-on dispatch's
+`alloc_node` recycles them without a separate release pass. A consumer's own
+teardown releases the edges it holds; a producer whose consumers died before it
+fired skips their released edges in its walk and reclaims all the same, so no
+party's death schedule reaches into another's subtree.
 
 ## Verification
 

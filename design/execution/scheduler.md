@@ -79,8 +79,9 @@ data, and a single harness method applies them. The three pieces:
   `&'view Scheduler<KoanWorkload>` (never `&mut`) together with the driver's per-step
   ambient context. It exposes only the reads a decide needs: the
   static-over-the-step ones (`current_scope`, `chain_deref`, `in_contract_chain`,
-  `build_bare_outcomes`) and the live reads of *pre-existing* producers
-  (`is_result_ready`, `would_create_cycle`, `read_result`). It permits scope
+  `build_bare_outcomes`) and the live cycle guard on *pre-existing* producers
+  (`would_create_cycle`) — readiness is not a view read: install returns
+  filled-or-parked when the harness applies the outcome. It permits scope
   binding (interior-mutable `&Scope`) but no graph write. The scheduler's `queues`
   / `deps` / `store` fields stay `pub(in crate::scheduler)`; the dispatch shape
   modules (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields
@@ -92,8 +93,8 @@ data, and a single harness method applies them. The three pieces:
   variant names a `KFunction` or a `KExpression`. Its single lifetime `'step` is the
   per-step cart-scale frame lifetime the `Done` value is born at — the `Done` carrier rides it as a
   [`StepCarried`](../../src/machine/execute/step_carried.rs), confined to the step until it exits
-  through `seal_at_step` into finalize; the consumer pull-lifts it
-  across each dep edge ([per-call-region/lifecycle.md § Consumer-pull node-output lift](../per-call-region/lifecycle.md#consumer-pull-node-output-lift)).
+  through `seal_at_step` into finalize; the delivery walk adopts it
+  across each dep edge ([per-call-region/lifecycle.md § Node-output delivery](../per-call-region/lifecycle.md#node-output-delivery)).
   Four variants: `Done` (the node's terminal value at `'step`, or an
   error), `Continue` (replace this slot's work and frame,
   re-run, no park), `ParkThenContinue` (park on deps, then run a
@@ -129,19 +130,20 @@ data, and a single harness method applies them. The three pieces:
   `dispatch_body`, `submit_dep_finish_in_own_scope`), `submit_expression`, and the
   aggregate-literal lowering are all `&mut self` methods on `KoanRuntime`. The
   unified node handler
-  ([`run_step`](../../src/machine/execute/run_loop.rs)) collects the slot's
-  resolved dep terminals, builds a `SchedulerView`, runs the `cont` closure,
-  reclaims the owned-dep suffix, and hands the outcome to `apply_outcome`.
+  ([`run_step`](../../src/machine/execute/run_loop.rs)) receives the slot's
+  deps as residents of its region — delivered at each producer's finalize, so
+  step start is zero graph work — builds a `SchedulerView`, runs the `cont`
+  closure, and hands the outcome to `apply_outcome`.
 
 The scheduler reaches the driver only through its method contract, and every
-method names only `NodeId` and the workload's associated types — no signature
-names a `KExpression`, `Scope`, or AST type. `pop_next` / `take_for_run` /
-`replace` drive a slot's lifecycle; `alloc_node`, `install_edges` and
-`splice_forward` wire the graph — `install_edges` being the single door for
-wiring an already-allocated slot, routing the same scheduler-internal,
-alias-resolving wire primitive `alloc_node` uses;
-`finalize` and the wire release terminalize and reclaim; `read*` /
-`is_result_ready` / `would_create_cycle` / `unresolved` are the reads. No trait
+method names only `EdgeId` and the workload's associated types — no signature
+names a `KExpression`, `Scope`, or AST type, and node identities stay
+library-internal. `pop_next` / `take_for_run` / `replace` drive a slot's
+lifecycle; `alloc_node`, `install_edges` and `splice_forward` wire the graph —
+`install_edges` being the single door for wiring an already-allocated slot,
+routing the same scheduler-internal wire primitive `alloc_node` uses, and
+install returning filled-or-parked per edge; `finalize` delivers and reclaims;
+`would_create_cycle` / `unresolved` are the reads. No trait
 wraps `Scheduler`: those are inherent methods capped `pub(crate)`, so only the
 Koan driver reaches them, and the `queues` / `deps` / `store` fields stay
 `pub(in crate::scheduler)`. A builtin invoked mid-dispatch
@@ -185,23 +187,19 @@ What is Koan's is *which* edges each dispatch shape installs:
 
 - **Owned** deps are the sub-Dispatches a slot spawns for its own nested
   sub-expressions — the deps of the working-copy splice, a body block's leading
-  statements. Their spawning consumer holds their only standing destination, so
-  they reclaim when it releases its wires.
+  statements. Their edges name the spawning consumer's region as destination.
 - **Park** deps are Koan's wait-on-someone-else's-producer cases: a dispatch
   decide's park-on-producer when a name resolves to a still-running binding
-  producer, and a dep-finish's `Existing` sibling parks. Their producer keeps
-  other standing destinations (its own spawner's wire, or the run's root
-  destination),
-  which is why a reader's release leaves it alive.
+  producer, and a dep-finish's `Existing` sibling parks. A placeholder park
+  names the *original* destination scope's region on its edge — delivery dedups
+  per distinct destination, so the eventual binding write and the placeholder
+  share one adopt.
 
-To the scheduler both are the same wire; the owned/park split is Koan's `Deps`
-currency labeling — positional addressing plus the classification below.
-
-The classification behind the choice — ready / already-errored / would-cycle /
-must-park — is Koan policy over the library's dependence primitives, and lives in
-[`producer_disposition`](../../src/machine/execute/dispatch.rs) (with its
-consumer-less `producer_standing` twin for leaf-park sites with no consumer id in
-scope).
+To the scheduler both are the same edge; the owned/park split is Koan's `Deps`
+currency labeling — positional addressing plus dispatch classification, which
+is install-and-inspect: install returns filled-or-parked, and the
+already-errored and would-cycle arms are Koan policy read off the installed
+edge ([dispatch.rs](../../src/machine/execute/dispatch.rs)).
 
 Every consumer wakes the same way: at pop time its pending count is zero, so every
 dep is terminal, and [`run_step`](../../src/machine/execute/run_loop.rs) reads each
@@ -227,9 +225,9 @@ Koan's half is the trigger: the bare-name decide returns
 is already ready, the harness finalizes the slot with the producer's terminal
 directly ([`NodeStep::Done`](../../src/machine/execute/nodes.rs)); otherwise the
 slot's step yields [`NodeStep::Alias(producer)`](../../src/machine/execute/nodes.rs)
-and the library takes over — moving the parked consumers onto the producer's notify
-list, marking the slot aliased, and resolving reads and late edge installs through
-the alias chain
+and the library takes over — re-pointing the slot's parked edges at the
+producer once, so no aliased slot survives as a residual and no alias chain is
+walked on reads
 ([workgraph/design/dag-scheduler.md § Alias splice](../../workgraph/design/dag-scheduler.md#alias-splice)).
 Nothing in Koan has to be alias-aware.
 
@@ -315,21 +313,18 @@ a sub-Dispatch that the parent slot parks on as an owned dep. Without
 reclamation those slots accumulate per body iteration, so realistic recursive
 code is O(n) scheduler memory even when its data footprint is O(1).
 
-Reclamation is the library's refcount release
-([workgraph/design/dag-scheduler.md § Refcount reclamation](../../workgraph/design/dag-scheduler.md#refcount-reclamation)),
-and Koan's part is the *timing*: it runs in
-[`run_step`](../../src/machine/execute/run_loop.rs) after the `cont` closure returns
-its `Outcome` and before the harness applies it — so a dispatch splice finish's
-freed indices are on the free list before the harness dispatches the spliced body.
-By that point the consumer has read its dep results and either spliced them into
-`working_expr.parts` as `Spliced` cells (the eager-subs splice finish) or handed
-them to its dep-finish / catch finish, so its owned dep slots are unreachable.
+Reclamation is delivery itself
+([workgraph/design/dag-scheduler.md § Delivery at finalize](../../workgraph/design/dag-scheduler.md#delivery-at-finalize)):
+each sub-Dispatch's slot reclaims at its own finalize, the moment its notify
+drains — its value is already a resident of the parent's region by then, so the
+slot has nothing left to hold. A dispatch splice finish's dep indices are on
+the free list before the harness dispatches the spliced body, with no separate
+release pass in [`run_step`](../../src/machine/execute/run_loop.rs); the
+consumer's teardown releases only the `EdgeId`s it still holds.
 
 The net effect: recursive bodies whose only persistent state is the call result run
 in O(1) scheduler memory across iterations, with the per-iteration fanout (the
-body's transient sub-Dispatches) recycled through the library's free list. A
-release whose decrements reach into another in-flight user-fn call stops at that
-call's still-counted slots, leaving that subtree for its own reclamation. See also
+body's transient sub-Dispatches) recycled through the library's free list. See also
 [memory-model.md § Performance notes](../memory-model.md).
 
 Per-top-level-dispatch persistent slots (the entry slot returned to the user,

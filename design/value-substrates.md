@@ -283,8 +283,8 @@ routes to the same rebuild-through-a-destination-door path a substrate carrier t
 ## Escape: pin by default
 
 An escaping value — a return, an argument bind, a root-drain terminal —
-**keeps its borrows and pins its birth region**. The consumer takes the
-producer's frame-retention hold (`Rc<FrameStorage>`) and mints the value's
+**keeps its borrows and pins its birth region**. The delivery adopt hands the
+consumer the producer's frame owner (`Rc<FrameStorage>`) and mints the value's
 reach pair against its own scope — description into the reach table, pins
 onto the binding entry — the same protocol every closure and module already
 rides ([memory-model.md § Region lifetime erasure](memory-model.md#region-lifetime-erasure)).

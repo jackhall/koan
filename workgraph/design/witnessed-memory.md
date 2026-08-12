@@ -238,8 +238,8 @@ The witness `yoke` takes is a *single-region* type — a lone region owner — s
 mint pins exactly one region by construction, not by narrowing a set that might be
 empty or hold several. A minted leaf lifts to the **reference-only** carrier an
 aggregate stores through a distinct [`into_reference_only`](../src/witnessed.rs)
-lift: its own region is kept alive externally, by containment or a retention hold,
-so that carrier holds no pin. Keeping the lift separate from `yoke` is what keeps
+lift: its own region is kept alive externally, by containment or a holder's
+owned pins, so that carrier holds no pin. Keeping the lift separate from `yoke` is what keeps
 minting a one-region act, leaving the combining of regions to the merge.
 
 **`merge_into` — fold many region-resident values into one.** A value built from

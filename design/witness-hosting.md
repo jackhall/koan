@@ -29,9 +29,9 @@ generic over `Reattachable` families, so a function is a family rather than a
 carrier variant, and both ride the same three carrier states
 ([reach.md § The carrier states](../workgraph/design/reach.md#the-carrier-states)).
 
-Koan's own type positions name `Delivered` where a value is in transit: a parked
-node slot, a dep terminal, a finish's result. At rest a binding entry holds a
-`Sealed`; inside a step a read is an `Opened<'b>`.
+Koan's own type positions name `Delivered` where a value is in transit: a
+finish's result handed to `finalize`, a relocation product crossing a step. At
+rest a binding entry holds a `Sealed`; inside a step a read is an `Opened<'b>`.
 [`StepCarried`](../src/machine/execute/step_carried.rs) types the step's own Done-arm
 carrier at the `'step` lifetime, wrapping an `Unhosted` — the envelope minus its home
 pin, since the host is the finalizing node's anchor owner and no door that builds a
@@ -88,15 +88,16 @@ consumer binds the delivered value into a scope. There is no second escape chann
   carries no relocation destination. Under TCO the obligation rides the tail chain
   keep-first and the check fires once, at the chain's end, exactly as
   [tail-call-optimization.md](tail-call-optimization.md) schedules it.
-- An **undeclared return** ends the same way: the value stays in its producer frame;
-  the scheduler's retention hold keeps that frame alive until every consumer pulls
+- An **undeclared return** ends the same way: the value stays in its producer
+  frame, whose lifetime delivery decides per destination — copied out at
+  finalize, or the frame transferred into the destination region's union bundle
   ([reach.md § Retention model](../workgraph/design/reach.md#retention-model)).
 - At the bind seam the consumer prices **copy against pin**
   ([`adopt_disposition`](../src/machine/core/scope/reach.rs), the single home of the
   adoption rules, running the cost model of
   [value-substrates.md § Cost-driven copy](value-substrates.md#cost-driven-copy-the-optimization)):
   *copy* rebuilds the value in the destination region and lets the producer frame
-  free at retention discharge; *pin* leaves the value in the producer's region and
+  free at finalize; *pin* leaves the value in the producer's region and
   unions its pins into the destination region's union bundle, making that region the
   value's residence for the destination's life. Both are always legal; the choice is
   pure cost.
@@ -114,7 +115,7 @@ dies. The canonical example, spelled out:
 FN count : n = MATCH (n) (0 -> 0) (_ -> count : n - 1)
 ```
 
-Each tail hop retires its frame per retention. Bindings are bind-once and a tail
+Each tail hop retires its frame at the replace. Bindings are bind-once and a tail
 call is not known to re-enter the same function with a congruent slot set, so each
 hop's `it` bind lands in a fresh scope: a loop-carried bind that priced to **pin**
 would chain — iteration N+1's region bundle pins frame N, whose own region bundle
@@ -122,12 +123,12 @@ pins frame N−1, transitively. Every pin in that chain is droppable (each dies 
 its scope's region), but a pinned loop holds O(N) retired regions until
 [region evacuation](../roadmap/untyped_arena/region-evacuation.md) collapses the
 chain at frame death. The bind seam therefore keeps its copy-bias for loop-carried
-binds: the copy frees the producer at retention discharge, preserving the O(1)
+binds: the copy frees the producer at the replace, preserving the O(1)
 region turnover TCO depends on.
 
 Home = residence, by construction: a value is never moved out of its producer region
-by any channel, so a `Delivered`'s home member, the producer's retention hold, and
-the value's residence region are one and the same region.
+by any channel, so a `Delivered`'s home member and the value's residence region are
+one and the same region.
 
 ## Scope and bindings above the substrate
 

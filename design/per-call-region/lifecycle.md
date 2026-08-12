@@ -1,6 +1,6 @@
 # Region lifecycle: allocation and lift
 
-Which frame pins a per-call region, the consumer-pull node-output lift, and how an escaping
+Which frame pins a per-call region, node-output delivery, and how an escaping
 value is kept alive. Part of the [per-call region protocol](README.md).
 
 ## Carriers
@@ -30,37 +30,35 @@ frame's storage when a builtin-built frame's child scope's `outer` points into p
 distinct from escaping-value liveness: `outer` keeps a region alive for an *outer-scope lookup* the
 new frame's child scope performs at run time.
 
-## Consumer-pull node-output lift
+## Node-output delivery
 
 A node continuation produces its value at the node's own per-call frame
 lifetime `'step` ([`Outcome<'step>`](../../src/machine/execute/outcome.rs)), the
 single cart-scale lifetime the decide surface carries: the value is born in the producer's frame (a builtin allocates
-it there) or arrives as a dep already lifted into that frame. The scheduler
+it there) or arrives as a dep already delivered into that frame. The scheduler
 relocates it across each dep edge — never the producer.
 
-- **Producer Done keeps the terminal in its own frame.** The producer does
-  not lift at Done. Its [`SlotState::Done`](../../src/machine/execute/run_loop.rs)
-  co-stores the terminal with the backing `Rc<CallFrame>`, pinning the
-  producer frame until the slot is freed — frame death moves from Done to
-  free. The stored `'run` view is re-exposed against that held `Rc` (the same
-  held-Rc seam as [§ Seed-side re-anchor](scope-handles.md#seed-side-re-anchor)); honest `'step`
-  typing rides the continuation in/out and the pull-lift destination, not
-  storage. The single workload `NodeLift` hook
+- **Delivery at finalize distributes the terminal the moment it exists.** The
+  finalize walk adopts it into each edge's destination region, once per
+  distinct destination
+  ([dag-scheduler.md § Delivery at finalize](../../workgraph/design/dag-scheduler.md#delivery-at-finalize)):
+  a copy verdict rebuilds the value there and frees the producer frame at
+  finalize; a pin verdict leaves the value resident in the producer frame and
+  transfers that frame into the destination's union bundle. The single workload
+  `NodeLift` hook
   ([`src/machine/execute/lift.rs`](../../src/machine/execute/lift.rs)) owns the
   `KObject`-invariant copy; the scheduler loop names no `KObject` / `KType`.
-- **Consumers pull-lift at read.** When a consumer runs
-  ([`run_step`](../../src/machine/execute/run_loop.rs)) it lifts each dep
-  from the producer's frame into its own call region, promoting the producer's
-  output to the consuming node's lifetime. A value read by N consumers is
-  lifted N times — once per consumer — and each copy dies with its consumer's
-  frame. One mechanism serves parked-then-woken, late-parking, and
-  bare-name-forward consumers alike.
-- **Roots drain to the run region.** A consumer-less terminal — a top-level
-  statement result — has no consumer to pull it, so
-  [`run_program`](../../src/machine/execute/runtime/interpret.rs) lifts each into
-  the run region at the drain boundary and re-homes the slot, releasing the
-  pinned producer frame. The `run_one` test helper reads roots through the
-  frame pin instead, so it is not a drain boundary.
+- **Consumers receive residents.** When a consumer runs
+  ([`run_step`](../../src/machine/execute/run_loop.rs)) each dep is already an
+  ordinary resident of its own call region, at the consuming node's lifetime. A
+  value delivered to N consumer regions is adopted N times — once per distinct
+  destination — and each copy dies with its destination region. One mechanism
+  serves parked-then-woken, late-wired, and bare-name-forward consumers alike.
+- **Roots deliver to the run region.** A top-level statement result's root edge
+  is held by [`run_program`](../../src/machine/execute/runtime/interpret.rs)
+  and destined into the run region, so the terminal lands there at finalize;
+  the drain boundary reads residents of the run's own region and releases the
+  root edges when it is done.
 - **Return-contract enforcement is a separate layer** — the
   [`NodeFinalize`](../../src/machine/execute/finalize.rs) workload hook, peer of
   `NodeLift` — run once at producer Done before the pin: it reattaches the
@@ -70,22 +68,22 @@ relocates it across each dep edge — never the producer.
   Declared or not, it seals the
   [`CarrierWitness`](../../src/machine/core/carrier_witness.rs) — the
   reference-only carrier, pinning nothing — **as-is**: there is no Done-boundary
-  relocation or sever gate. The producer frame's lifetime is the scheduler's frame-retention
-  hold, materialized at finalize under the standing-destination count and
-  released at destination-count zero, so a region-pure and a frame-borrowing
-  terminal alike leave the frame to retention. The bare `NodeLift` hook is thereby reusable for any
+  relocation or sever gate. The producer frame's lifetime is decided by
+  delivery at finalize: a copy verdict frees it there, a pin verdict transfers
+  it into each destination region's union bundle
+  ([reach.md § Retention model](../../workgraph/design/reach.md#retention-model)) —
+  so a region-pure and a frame-borrowing terminal alike leave the frame to the
+  delivery walk. The bare `NodeLift` hook is thereby reusable for any
   delivery edge.
 
 Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none
 of these transitions can be a coercion — each cross-frame move is a genuine
-`NodeLift` copy (or the held-Rc re-exposure at storage). The consumer-pull dep relocation runs
-inside the dep envelope's own transfer fold: each dep terminal *is* a lifetime-free delivery
-envelope riding the step as plain data, and the transfer's brand is where
-[`copy_carried`](../../src/machine/execute/lift.rs) copies it into the consumer `dest` region with a
-plain `'b → 'b` structural alloc — the
-spine sharing its `Rc` payloads, a closure / future / module riding its bare borrow. The
-storage-bound drain / forward path wraps the same copy as
-[`relocate_terminal`](../../src/machine/execute/runtime.rs) over `Sealed::transfer_into`. There is no
+`NodeLift` copy (or the held-Rc re-exposure at storage). The dep relocation runs inside the
+delivery adopt's own fold at the producer's finalize: the fold's brand is where
+[`copy_carried`](../../src/machine/execute/lift.rs) copies a copy-verdict value into the
+destination region with a plain `'b → 'b` structural alloc — the
+spine sharing its `Rc` payloads, a closure / future / module riding its bare borrow — so the dep is
+already a resident of the consumer's region when its step starts. There is no
 fabricated lifetime and no value-path `unsafe`: the value lands at the destination region's own
 lifetime. (The single-lifetime `Outcome` makes the up/down decide-surface bridges unnecessary — the
 splice slot and dep value share one lifetime.) The seam is pinned in the Miri slate by
