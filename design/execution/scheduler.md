@@ -140,7 +140,7 @@ names a `KExpression`, `Scope`, or AST type. `pop_next` / `take_for_run` /
 `splice_forward` wire the graph — `install_edges` being the single door for
 wiring an already-allocated slot, routing the same scheduler-internal,
 alias-resolving wire primitive `alloc_node` uses;
-`finalize` and the wire-release verb terminalize and reclaim; `read*` /
+`finalize` and the wire release terminalize and reclaim; `read*` /
 `is_result_ready` / `would_create_cycle` / `unresolved` are the reads. No trait
 wraps `Scheduler`: those are inherent methods capped `pub(crate)`, so only the
 Koan driver reaches them, and the `queues` / `deps` / `store` fields stay
@@ -190,7 +190,8 @@ What is Koan's is *which* edges each dispatch shape installs:
 - **Park** deps are Koan's wait-on-someone-else's-producer cases: a dispatch
   decide's park-on-producer when a name resolves to a still-running binding
   producer, and a dep-finish's `Existing` sibling parks. Their producer keeps
-  other standing destinations (its own spawner's wire, or the run's root pull),
+  other standing destinations (its own spawner's wire, or the run's root
+  destination),
   which is why a reader's release leaves it alive.
 
 To the scheduler both are the same wire; the owned/park split is Koan's `Deps`

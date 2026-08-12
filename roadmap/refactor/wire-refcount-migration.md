@@ -7,20 +7,21 @@ per the crate-boundary protocol
 
 **Problem.** The run loop drives the superseded verb set: `run_step` threads an
 `owned_deps` list into `reclaim_deps`
-([run_loop.rs](../../src/machine/execute/run_loop.rs)) although the release verb
-needs no per-kind list, and no koan code releases root pulls — the drain
-boundary ([interpret.rs](../../src/machine/execute/runtime/interpret.rs))
-re-homes consumer-less terminals but leaves entry slots unrooted, so top-level
-slots rely on the accounting the workgraph expand deletes. Until this ships,
-koan sits on whatever compatibility surface the expand left behind.
+([run_loop.rs](../../src/machine/execute/run_loop.rs)) although the wire
+release needs no per-kind list, and no koan code releases root destinations —
+the drain boundary
+([interpret.rs](../../src/machine/execute/runtime/interpret.rs)) re-homes
+consumer-less terminals but leaves entry slots unrooted, so top-level slots
+rely on the accounting the workgraph expand deletes. Until this ships, koan
+sits on whatever compatibility surface the expand left behind.
 
 **Acceptance criteria.**
 
-- `run_step` releases each consumer's wires through the scheduler's single
-  release verb at step end; the `owned_deps` list plumbing is gone from the run
+- `run_step` drops each consumer's wires through the scheduler's single wire
+  release at step end; the `owned_deps` list plumbing is gone from the run
   loop.
-- Submit paths root each top-level entry slot with a run-held destination, and
-  the drain boundary releases them.
+- Submit paths take the run's root destination on each top-level entry slot,
+  and the drain boundary releases them.
 - The contract half: no superseded verb survives on workgraph's public surface —
   `reclaim_deps`'s owned-list form, `free`'s discharge triage, and any
   compatibility shim the expand kept for koan are deleted.

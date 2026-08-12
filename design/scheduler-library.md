@@ -72,8 +72,9 @@ a concept, not a final identifier.
   dep edges, and eventually a terminal.
 - **Dep** — a producer another slot waits on. To the scheduler every dep is
   one **wire**: a wake edge while the producer is pending, and one standing
-  destination on its retention count until the consumer releases it. The
-  **park**/**owned** labels are Koan's `Deps`-currency roles (positional
+  destination on its standing-destination count until the consumer releases it
+  ([workgraph/design/dag-scheduler.md § Refcount reclamation](../workgraph/design/dag-scheduler.md#refcount-reclamation)).
+  The **park**/**owned** labels are Koan's `Deps`-currency roles (positional
   addressing and dispatch classification), not scheduler semantics.
 - **Terminal** — a slot's finished result: a sealed carrier, or the
   workload's error.

@@ -278,7 +278,8 @@ is where both of the value's region facts live, its host region and the regions 
 and seals it **as-is** (a declared return is checked and re-stamped in place first): there is no
 Done-boundary relocation or sever gate. What keeps the
 producer frame alive is the scheduler's **frame-retention hold**, materialized at finalize under the
-standing-destination count and released at destination-count zero; a walking terminal carries that hold inside its
+standing-destination count and released at destination-count zero
+([dag-scheduler.md § Refcount reclamation](../workgraph/design/dag-scheduler.md#refcount-reclamation)); a walking terminal carries that hold inside its
 [`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope's pin bundle. Because that liveness
 is a refcount protocol rather than a lexical extent, a terminal rests in `Retained` — the tier with
 **no read verb at all**, which re-enters circulation only through `Delivered::lift` under the owner
@@ -716,8 +717,8 @@ the harness dispatches the bound expression — its `alloc_node` can recycle the
 immediately. The release decrements each wired producer's standing-destination
 count; a producer at zero is reclaimed and releases its own wires recursively,
 while a producer another destination still counts — a sibling park producer, or
-one the run roots — survives, so reclaiming a consumer cannot reach into a
-shared subtree. A mid-run slot is skipped via the `NodeStore::is_live` guard, so
+one the run holds a root destination on — survives, so reclaiming a consumer
+cannot reach into a shared subtree. A mid-run slot is skipped via the `NodeStore::is_live` guard, so
 a release whose decrements dive into another in-flight user-fn call leaves that
 subtree for that call's own reclamation.
 

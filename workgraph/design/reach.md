@@ -397,9 +397,10 @@ The lifetime of a **producer region** is the scheduler's retention: the schedule
 holds the producer's region owner — paired with the terminal's owned reach pins,
 `{ owner, reach }` under the slot's standing-destination count — until every
 standing destination has released. A destination stands from the moment a
-consumer wires to the slot (or the run roots it) until that consumer's
-end-of-step release or death; release of both halves is a function of standing
-destinations only, never of any value's reach
+consumer wires to the slot (or the run takes a root destination on it) until
+that consumer's wire release — run at its end of step and at its death alike;
+release of both halves is a function of standing destinations only, never of
+any value's reach
 ([dag-scheduler.md § Refcount reclamation](dag-scheduler.md#refcount-reclamation)).
 A walking terminal carries this hold inside its `Delivered` carrier, so the
 pins travel with the value to each consumer.
@@ -515,3 +516,10 @@ bundle assembled by hand. It is also where the embedder makes its own
 memory-versus-CPU tradeoff — a predicate that answers conservatively costs
 retention, never soundness, so a workload may tune it freely in either direction
 without the library having to trust an ownership decision it cannot see.
+
+## Open work
+
+- [Wire-refcounted retention and reclamation](../roadmap/wire-refcount-retention.md)
+  — implements the standing-destination accounting § Retention model describes;
+  until it ships, the in-tree dep graph still carries the split accounting it
+  replaces.

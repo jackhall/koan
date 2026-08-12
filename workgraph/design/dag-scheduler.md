@@ -12,6 +12,9 @@ consumer API (the dependence primitives, `Deps`, `Await`, the step construction
 context); [reach.md](reach.md) owns what a terminal's carrier proves and who owns
 its pins.
 
+This doc describes the settled design. Where the in-tree code has not caught up
+to a section yet, § Open work at the bottom carries the tracking item.
+
 ## Slots and the node-store lifecycle
 
 Node state lives in [`NodeStore`](../src/scheduler/node_store.rs), which owns a
@@ -61,12 +64,14 @@ side channel — a continuation that re-resolves reads its producers itself, not
 "who woke me" list. `DepGraph::drain_notify` returns the per-consumer `hit_zero`
 flag so the enqueue-on-zero runs off a single drain.
 
-A dep edge is a **wire**, and there is one kind. While the producer is pending,
-the wire is the wake edge above; from the moment it is installed it is also one
-**standing destination** on the producer's retention count (§ Refcount
-reclamation, § Terminals and retention). The scheduler records no ownership
-distinction between deps — who outlives whom falls out of who still holds a
-wire, not out of an edge tag.
+A dep edge is a **wire**, and there is one kind. A wire does two jobs. While
+the producer is pending, it is the wake edge above. And from the moment it is
+installed until its consumer releases it, it is one **standing destination** of
+the producer — an entry in the producer's standing-destination count, the
+refcount that decides when the producer is reclaimed (§ Refcount reclamation)
+and when its retention hold releases (§ Terminals and retention). The scheduler
+records no ownership distinction between deps — who outlives whom falls out of
+who still holds a wire, not out of an edge tag.
 
 ## The dep row and its invariants
 
@@ -82,11 +87,11 @@ three invariants:
   the row, so a slot's wake fields cannot desync — Inv-A holds by construction.
 - **Inv-B (destination coherence).** For every producer slot `p`, its
   standing-destination count equals the number of installed-and-unreleased wires
-  to `p` (alias-resolved) plus any run-held root pull on it. Every wire
-  increments the count at installation, unconditionally — no wiring path
-  branches on producer readiness for accounting — and each is released exactly
-  once, by its consumer's end-of-step release or that consumer's death, which
-  are the same verb.
+  to `p` (alias-resolved) plus any root destination the run holds on it
+  (§ Refcount reclamation). Every wire increments the count at installation,
+  unconditionally — no wiring path branches on producer readiness for
+  accounting — and each is released exactly once, at its consumer's end of step
+  or at that consumer's death, both of which run the same wire release.
 - **Inv-C (lazy notify-scrub on free).** A slot `c` is only freed once every
   producer's `drain_notify` has run and removed `c` from every `rows[*].notify`.
   The free path relies on Inv-A and Inv-C still holding rather than scrubbing
@@ -97,7 +102,7 @@ Inv-B is what makes reclamation a local decision: a slot's count reaching zero
 the reclaim needs no edge tags and no knowledge of who allocated what.
 
 The rows are private and mutated only through a small surface — row
-installation, the wire primitive, `drain_notify`, the release verb,
+installation, the wire primitive, `drain_notify`, the wire release,
 `splice_notify` — so every change preserves the per-row invariants atomically.
 `Scheduler::alloc_node` orchestrates across the two sub-structs:
 `NodeStore::alloc_slot` picks the index (popping the free list or extending) and
@@ -156,28 +161,31 @@ slots accumulate per iteration, so a loop-shaped workload costs O(n) scheduler
 memory even when its data footprint is O(1).
 
 Reclamation is refcount-driven: a slot is reclaimed exactly when its
-standing-destination count decrements to zero. A consumer's end of step —
-success and death alike — releases every wire it holds through one verb; each
-release decrements a producer's count, and a producer that hits zero (and is not
-mid-run, via `NodeStore::is_live`) is reclaimed on the spot — retention hold
-released, anchor dropped, slot recycled onto the free list, and its own wires
-released recursively. The recursion stops wherever a count stays positive: a
-producer another consumer still wires, or one the run still roots, survives —
-reclaiming one consumer can never reach into a shared producer's subtree, and no
-path force-kills a still-counted slot. The success-path release runs after a
-step's continuation returns its outcome and *before* the outcome is applied, so
-freed indices are on the free list before the step's follow-on work is
-submitted.
+standing-destination count decrements to zero. There is one verb, the **wire
+release**: a consumer runs it once at its end of step, and it also runs when a
+consumer dies on an error path — the two cases are the same code. The wire
+release drops every wire the consumer holds; each drop decrements that
+producer's count, and a producer that hits zero (and is not mid-run, via
+`NodeStore::is_live`) is reclaimed on the spot — retention hold released, anchor
+dropped, slot recycled onto the free list, and its own wires released
+recursively. The recursion stops wherever a count stays positive: a producer
+another consumer still wires, or one the run still holds a root destination on,
+survives — reclaiming one consumer can never reach into a shared producer's
+subtree, and no path force-kills a still-counted slot. The success-path release
+runs after a step's continuation returns its outcome and *before* the outcome is
+applied, so freed indices are on the free list before the step's follow-on work
+is submitted.
 
 The net effect: a loop whose only persistent state is its carried result runs in
 O(1) scheduler memory across iterations, with the per-iteration fanout recycled
 through the free list that `alloc_slot` pulls from before extending the vectors.
 
-Top-level roots have no consumer to wire them; the **run itself** holds one
-destination on each entry slot, released at the drain boundary — so root
-terminals stay readable until the embedder is done with the run, and each
-submission's persistent slots are reclaimed at drain rather than accumulating
-past it.
+Top-level roots have no consumer to wire them, so they get their standing
+destination another way: the **run itself** holds one destination on each entry
+slot — its **root destination** — which the embedder releases at the drain
+boundary. Root terminals therefore stay readable until the embedder is done
+with the run, and each submission's persistent slots are reclaimed at drain
+rather than accumulating past it.
 
 ## Terminals and retention
 
@@ -200,9 +208,9 @@ coverage dropped.
 
 Retention is destination-driven and reach-independent: `finalize` materializes
 the producer's `{ owner, reach }` hold under the slot's already-standing
-destination count — the wires installed since its birth plus any run-held root
-pull — and both halves release when that count decrements to zero (§ Refcount
-reclamation). There is no seed arithmetic at finalize and no separate late-wire
+destination count — the wires installed since its birth plus any root
+destination the run holds — and both halves release when that count decrements
+to zero (§ Refcount reclamation). There is no seed arithmetic at finalize and no separate late-wire
 channel: a destination stands from wiring to release, so a wired consumer's
 `dep_delivered` can never observe a released hold — the read verb's hold lookup
 is total. Release is a function of standing destinations only — never of any
@@ -220,5 +228,6 @@ envelope.
 ## Open work
 
 - [Wire-refcounted retention and reclamation](../roadmap/wire-refcount-retention.md)
-  — implements the single-wire accounting above (unconditional counting, the one
-  release verb, refcount reclamation, run-held root pulls).
+  — implements the single-wire accounting above (unconditional counting, the
+  wire release, refcount reclamation, root destinations). Until it ships, the
+  in-tree dep graph still carries the split accounting this design replaces.
