@@ -11,12 +11,16 @@
 //!   lazily-captured body is a TRY-catchable `NestedBinder` error.
 //! - [`ambient_bracket`] — the slot-step bracket restores ambient values on
 //!   unwind, not just on normal return.
+//! - [`edge_wiring`] — install-and-inspect: a park whose source edge names an already-terminal
+//!   producer is ruled on at the install door, and the rows it wrote before short-circuiting still
+//!   discharge.
 
 mod ambient_bracket;
 mod combined_binder_submission;
 mod dep_finish;
 mod dispatch;
 mod dispatch_shapes;
+mod edge_wiring;
 mod execute;
 mod index_gated;
 mod lexical_provenance;

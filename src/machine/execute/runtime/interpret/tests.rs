@@ -4,10 +4,12 @@
 //! - [`dict`] — dict literal integration, scalar keys, sub-expression keys/values.
 //! - [`errors`] — KError surfacing (unbound name, dispatch failure, frame chain).
 //! - [`tagged`] — tagged-union construction via TYPE tokens and LET-bound types.
+//! - [`roots`] — the run's roots are koan-held edges, released before the harness tears down.
 
 mod basics;
 mod dict;
 mod errors;
+mod roots;
 mod tagged;
 
 use std::cell::RefCell;
