@@ -21,6 +21,7 @@
 use std::rc::Rc;
 
 use dep_graph::DepGraph;
+use edge_slab::EdgeSlab;
 use node_store::NodeStore;
 use nodes::{NodeWork, StoredWork, seal_work};
 use work_queues::WorkQueues;
@@ -28,6 +29,7 @@ use work_queues::WorkQueues;
 mod alloc;
 mod dep_graph;
 mod deps;
+mod edge_slab;
 mod lifecycle;
 mod node_id;
 mod node_store;
@@ -36,8 +38,9 @@ mod splice;
 mod work_queues;
 mod workload;
 
-/// The Miri slate for the owned-tier continuation slot: a parked droppable continuation dropped
-/// unopened under the seal's own pin, and the park → wake → open → run round trip.
+/// The scheduler's white-box slates: the owned-tier continuation slot under Miri (a parked
+/// droppable continuation dropped unopened under the seal's own pin, and the park → wake → open →
+/// run round trip) and the edge slab's alloc/release recycling and install branches.
 #[cfg(test)]
 mod tests;
 
@@ -50,6 +53,7 @@ pub use deps::{Deps, ResolvedDeps};
 // `pub` (not `pub(crate)`) like [`NodeId`]: it appears in the `pub` `AwaitContinue` builtin-finish
 // type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
 pub use deps::DepResults;
+pub use edge_slab::{EdgeId, InstalledEdge};
 pub use node_id::NodeId;
 pub use workload::{Anchor, DeliveredTerminal, Live, OwnerOf, SealedTerminal, Terminal, Workload};
 
@@ -65,6 +69,7 @@ pub struct Scheduler<W: Workload> {
     pub(in crate::scheduler) queues: WorkQueues,
     pub(in crate::scheduler) deps: DepGraph<W>,
     pub(in crate::scheduler) store: NodeStore<W>,
+    pub(in crate::scheduler) edges: EdgeSlab<OwnerOf<W>>,
 }
 
 impl<W: Workload> Scheduler<W> {
@@ -73,6 +78,7 @@ impl<W: Workload> Scheduler<W> {
             queues: WorkQueues::new(),
             deps: DepGraph::new(),
             store: NodeStore::new(),
+            edges: EdgeSlab::new(),
         }
     }
 
@@ -273,6 +279,35 @@ impl<W: Workload> Scheduler<W> {
             self.add_owned_edge(producer, consumer);
         }
     }
+
+    /// Wire one edge from `producer` toward a destination region, named by its owner: holding
+    /// `destination` at this call is the wiring-time proof the caller pins that region
+    /// ([design/dag-scheduler.md § Edges and the boundary](../design/dag-scheduler.md#edges-and-the-boundary)),
+    /// which is why the door takes an owner and performs no coverage check of its own. The standing
+    /// half of the lattice — the destination stays covered for the edge's life — rides the releasing
+    /// owner's teardown verb.
+    ///
+    /// Returns **filled-or-parked**: filled when the producer (alias resolved) has already
+    /// finalized, so the consumer reads its value rather than waiting on a slot that will not fire;
+    /// parked otherwise. The edge stores the destination as a raw pointer plus a debug-only weak
+    /// shadow of its owner; the deref that reads it is the delivery walk's
+    /// ([delivery-at-finalize](../roadmap/delivery-at-finalize.md)).
+    pub fn install_edge(
+        &mut self,
+        producer: NodeId,
+        destination: &Rc<OwnerOf<W>>,
+    ) -> InstalledEdge {
+        let producer = self.resolve_alias(producer);
+        let pending = (!self.store.is_result_ready(producer)).then_some(producer);
+        self.edges.install(pending, destination)
+    }
+
+    /// Release one edge. Rides its owner's teardown verb — a consumer or frame teardown calls this
+    /// with the names it still holds; an [`EdgeId`] is a name, not a lifecycle handle its holder
+    /// manages. Panics in debug builds on a name whose edge was already released.
+    pub fn release_edge(&mut self, id: EdgeId) {
+        self.edges.release(id);
+    }
 }
 
 impl<W: Workload> Default for Scheduler<W> {
@@ -282,8 +317,8 @@ impl<W: Workload> Default for Scheduler<W> {
 }
 
 /// `#[cfg(any(test, feature = "test-hooks"))]` forwarders that let the driver's white-box tests
-/// poke slot/edge state without exposing the `store` / `deps` / `queues` fields. Each wraps an
-/// already-test-only primitive on the inner store or dep graph. The `test-hooks` feature widens
+/// poke slot/edge state without exposing the `store` / `deps` / `queues` / `edges` fields. Each
+/// wraps an already-test-only primitive on the inner store, dep graph, or edge slab. The `test-hooks` feature widens
 /// this for an embedder compiling as a dependent crate, where `cfg(test)` is off.
 #[cfg(any(test, feature = "test-hooks"))]
 impl<W: Workload> Scheduler<W> {
@@ -329,6 +364,32 @@ impl<W: Workload> Scheduler<W> {
     }
     pub fn free_list_len(&self) -> usize {
         self.store.free_list_len()
+    }
+    /// The producer a parked edge waits on, `None` for a filled one.
+    pub fn edge_producer(&self, id: EdgeId) -> Option<NodeId> {
+        self.edges.producer_of(id)
+    }
+    /// Re-point a parked edge at another producer — the alias splice's half of edge wiring.
+    pub fn rewrite_edge_producer(&mut self, id: EdgeId, producer: NodeId) {
+        self.edges.rewrite_producer(id, producer);
+    }
+    /// Whether the edge's recorded destination is `owner`'s region — pointer identity, no deref.
+    pub fn edge_destination_is(&self, id: EdgeId, owner: &Rc<OwnerOf<W>>) -> bool {
+        std::ptr::eq(
+            self.edges.destination_region(id),
+            crate::witnessed::RegionOwner::region(&**owner) as *const _,
+        )
+    }
+    /// The destination owner behind the edge's debug shadow, upgraded — `None` once it has died.
+    #[cfg(debug_assertions)]
+    pub fn edge_destination_owner(&self, id: EdgeId) -> Option<Rc<OwnerOf<W>>> {
+        self.edges.destination_owner(id)
+    }
+    pub fn edge_free_list_len(&self) -> usize {
+        self.edges.free_list_len()
+    }
+    pub fn edge_slab_len(&self) -> usize {
+        self.edges.len()
     }
     pub fn set_dep_edges(&mut self, id: NodeId, edges: Vec<DepEdge>) {
         self.deps.set_dep_edges(id, edges);
