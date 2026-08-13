@@ -16,15 +16,20 @@ its pins.
 **Edges are first-class and are the sole boundary currency.** An edge is one
 consumer→producer relationship, living in its own slab — a state vector plus a
 free list of recyclable indices, mirroring the node store — addressed by
-`EdgeId`. The embedder holds `EdgeId`s for everything it wires: parked deps,
-dispatch placeholders, scope bindings, and the run's roots alike. `NodeId` is
-crate-internal; the embedder never sees one.
+`EdgeId`. An `EdgeId` is a *name*, not the edge: holding one grants the crate's
+wiring and read verbs, and confers no ownership and no lifecycle duty. The
+embedder wires everything through such names — parked deps, dispatch
+placeholders, scope bindings, and the run's roots alike — while the edges
+themselves stay in the slab. `NodeId` is crate-internal; the embedder never
+sees one.
 
-**Edge validity is self-owned.** An edge is valid until its *owner* releases it —
-the consumer node, or the embedder-side holder of the `EdgeId`. Release rides the
-owner's teardown verb, so you can only misuse your own handle after you dropped
-it, which is locally auditable; no edge's validity depends on remote state.
-Debug-only generation stamps on slab indices make a stale `EdgeId` loud.
+**Edge validity is self-owned.** An edge is valid until its *owner* releases
+it, and an owner is always a teardown-bearing structure — the consumer node,
+or the frame (a scope's, the run's) whose teardown verb carries the release.
+A live edge therefore implies a live owner by construction, misuse is locally
+auditable, and no edge's validity depends on remote state. Debug-only
+generation stamps on slab indices make a stale `EdgeId` — a name outliving
+its edge — loud.
 
 **Every edge stores a destination-region reference — a raw pointer, not a
 refcounted handle.** The destination is not always the consumer's own region (a
@@ -45,9 +50,12 @@ Together: destination outlives owner outlives edge, so the stored region pointer
 is valid whenever the edge is, with one crate-internal deref site whose safety
 argument is exactly that lattice. A dead destination is unrepresentable while an
 edge lives, and the only skip in the delivery walk is a released edge. The
-release-with-owner rule is soundness, not hygiene: for embedder-held `EdgeId`s
-it is a contract on the embedder (release before the destination's frame tears
-down), and a violation dangles rather than self-healing. Debug builds carry a
+release-with-owner rule is soundness, not hygiene, and the embedder's half is
+a pin rule with a structural witness: the install door takes the destination
+as its owner (`&Rc`), so a wiring call can only name a region the caller pins
+at that moment, and the destination must stay covered by the releasing owner's
+liveness for the edge's life — a violation dangles rather than self-healing.
+Debug builds carry a
 weak shadow of the destination on each edge, asserted live at deref, so a
 dangling delivery is loud while release builds stay refcount-free.
 
@@ -203,10 +211,11 @@ errored dep. The first errored dep short-circuits the resolve, and the
 consumer's own terminal carries the error with whatever label the embedder
 attached.
 
-Top-level roots have no consumer node: the embedder holds each entry's root
-`EdgeId` itself, destined into a run frame it owns, and releases it at the
-drain boundary. Root terminals are ordinary residents of the embedder's own
-regions by then, so a drain-boundary read is a resident read, not a graph read.
+Top-level roots have no consumer node: each entry's root edge is owned by the
+run frame it destines into, and the drain boundary — that frame's teardown —
+releases it; the embedder keeps only the root `EdgeId` it reads through. Root
+terminals are ordinary residents of the embedder's own regions by then, so a
+drain-boundary read is a resident read, not a graph read.
 
 ## Late wiring and install
 
@@ -224,8 +233,9 @@ filled-or-parked**, folding readiness probes into the install verb:
 
 Late wiring is not a code path the embedder chooses — it is the install verb's
 filled branch, taken whenever the producer finalized before the consumer's
-wiring. The only discipline the filled branch needs is local ownership: the
-embedder wires from `EdgeId`s it holds, so the edge being read is live.
+wiring. The only discipline the filled branch needs is the ownership rule
+itself: a wiring call names an edge whose owner still stands, so the edge
+being read is live, and a stale name trips the slab's generation stamps.
 
 ## Alias splice
 
@@ -240,8 +250,8 @@ runs on reads, and the graph logic lives in one module
 terminal, the spliced slot's edges take the install verb's filled branch
 instead. Post-fill the resident value *is* the value — the surgery window
 closes at delivery, which is the right semantics. Reinstall and relocation
-surgery cannot invalidate the embedder's handles for the same reason: the
-embedder holds edges, not topology.
+surgery cannot invalidate the embedder's names for the same reason: the
+embedder holds `EdgeId`s, not topology.
 
 The wire primitive is scheduler-internal. An embedder wiring an
 already-allocated slot goes through the single public door,

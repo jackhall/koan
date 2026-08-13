@@ -20,8 +20,9 @@ but no edge slab exists in-tree.
 - Each edge stores its producer `NodeId` (pre-fill, rewritable), a raw
   destination-region pointer, and a `cfg(debug_assertions)`-only weak shadow of
   the destination.
-- An install verb wires an edge given a producer and a destination region and
-  returns filled-or-parked
+- An install verb wires an edge given a producer and a destination — passed as
+  the destination region's owner, `&Rc<OwnerOf<W>>` — and returns
+  filled-or-parked
   ([dag-scheduler.md § Late wiring and install](../design/dag-scheduler.md#late-wiring-and-install));
   its signature takes the destination from day one, ahead of any deref.
 - `RegionHandle::new(&Region)` mints the adopt capability crate-privately;
@@ -33,11 +34,12 @@ but no edge slab exists in-tree.
 
 **Directions.**
 
-- Destination coverage — open. Whether the wiring signature makes a non-covered
-  destination unconstructible, or the wiring door checks the covered-by-owner
-  condition at install. The containment lattice
+- Destination coverage — decided. The install signature takes the destination
+  as its owner (`&Rc<OwnerOf<W>>`): holding the owner at the call is the
+  wiring-time pin proof, so there is no destination wrapper type and no
+  install-time coverage check. The standing half of the containment lattice
   ([dag-scheduler.md § Edges and the boundary](../design/dag-scheduler.md#edges-and-the-boundary))
-  is established here either way.
+  rides the releasing owner's teardown verb.
 - Slab shape — decided per
   [dag-scheduler.md § Edges and the boundary](../design/dag-scheduler.md#edges-and-the-boundary):
   mirror `NodeStore`; a filled edge stores its resident terminal as an erased

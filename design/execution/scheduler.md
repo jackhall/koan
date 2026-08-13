@@ -320,7 +320,7 @@ drains — its value is already a resident of the parent's region by then, so th
 slot has nothing left to hold. A dispatch splice finish's dep indices are on
 the free list before the harness dispatches the spliced body, with no separate
 release pass in [`run_step`](../../src/machine/execute/run_loop.rs); the
-consumer's teardown releases only the `EdgeId`s it still holds.
+consumer's teardown releases only the edges it still names.
 
 The net effect: recursive bodies whose only persistent state is the call result run
 in O(1) scheduler memory across iterations, with the per-iteration fanout (the

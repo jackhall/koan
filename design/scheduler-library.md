@@ -71,11 +71,13 @@ a concept, not a final identifier.
 - **Slot / node** — one unit of scheduled work, with a crate-internal
   identity; the embedder never holds a node.
 - **Edge** — one consumer→producer relationship, the sole boundary currency
-  (`EdgeId`): the embedder holds edges for parked deps, dispatch placeholders,
-  scope bindings, and the run's roots alike. An edge is a wake entry while the
-  producer is pending and holds the delivered resident after; it is valid
-  until its owner releases it, and every edge names the destination region its
-  value is delivered into
+  (`EdgeId`): the embedder wires parked deps, dispatch placeholders, scope
+  bindings, and the run's roots alike through `EdgeId`s — names granting the
+  library's wiring and read verbs, never ownership of the edge. An edge is a
+  wake entry while the producer is pending and holds the delivered resident
+  after; it is valid until its owner (a consumer node, or the frame whose
+  teardown carries the release) releases it, and every edge names the
+  destination region its value is delivered into
   ([workgraph/design/dag-scheduler.md § Edges and the boundary](../workgraph/design/dag-scheduler.md#edges-and-the-boundary)).
 - **Dep** — a producer another slot waits on, held as an edge. The
   **park**/**owned** labels are Koan's `Deps`-currency roles (positional
