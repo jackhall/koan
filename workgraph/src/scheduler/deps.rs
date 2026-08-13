@@ -10,9 +10,11 @@
 //!
 //! - [`Deps`] is the write side — the builder production code assembles a dep list with. It keeps
 //!   parks and owned entries in two vecs so the split is structural, never a `park_count` a caller
-//!   must thread; [`ResolvedDeps`] is the realized form ([`NodeWork`](super::nodes::NodeWork) stores
-//!   it) and [`Deps<R>`] the pre-realization form (`R = DepRequest` before the harness turns each
-//!   owned request into its producer id).
+//!   must thread. It is generic in the owned-entry type `R` (`DepRequest` before the harness
+//!   realizes each request to a producer id).
+//! - [`ResolvedDeps`] is the realized list [`NodeWork`](super::nodes::NodeWork) stores: parks and
+//!   owned entries alike are producer ids. Its own struct rather than `Deps<NodeId>`, because the
+//!   two sides' park currencies differ.
 //! - [`DepResults`] is the read side — a `[park..., owned...]` result slice plus its park-prefix
 //!   length, addressed through [`park`](DepResults::park) / [`owned`](DepResults::owned) accessors so
 //!   a finish never re-derives the prefix arithmetic.
@@ -89,8 +91,85 @@ impl<R> Deps<R> {
         &self.owned
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.parks.is_empty() && self.owned.is_empty()
+    }
+
+    /// Decompose into `(parks, owned)` for the realization loop, which turns each owned `DepRequest`
+    /// into a producer id and wires the parks through the install door.
+    pub fn into_parts(self) -> (Vec<NodeId>, Vec<R>) {
+        (self.parks, self.owned)
+    }
+}
+
+/// A realized dep list — parks and owned deps are all producer ids. This is what
+/// [`NodeWork`](super::nodes::NodeWork) stores, and what the run loop pulls each dep's terminal
+/// through at step start.
+///
+/// Deliberately *not* `Deps<NodeId>`: the two currencies have parted. [`Deps`] is the embedder's
+/// write side, whose parks are edges the embedder holds; a realized list's parks are the producer
+/// ids the door resolved them to, scheduler-internal from that point on.
+pub struct ResolvedDeps {
+    /// Park producers, deduped, in first-occurrence order.
+    parks: Vec<NodeId>,
+    /// Owned producers, in insertion order.
+    owned: Vec<NodeId>,
+}
+
+impl ResolvedDeps {
+    pub fn new() -> Self {
+        ResolvedDeps {
+            parks: Vec::new(),
+            owned: Vec::new(),
+        }
+    }
+
+    /// Add a dedup'ing park on `id`, returning its stable park index — [`Deps::park_on`]'s realized
+    /// twin, with the same positional contract.
+    pub fn park_on(&mut self, id: NodeId) -> usize {
+        if let Some(pos) = self.parks.iter().position(|p| *p == id) {
+            return pos;
+        }
+        let pos = self.parks.len();
+        self.parks.push(id);
+        pos
+    }
+
+    /// Append a park producer **without deduping** — the install door's push, one entry per park the
+    /// embedder handed it. Alignment is the point: the embedder's own park indices address its edge
+    /// list, and two distinct edges can resolve to one producer (a splice), so collapsing here would
+    /// slide every later [`DepResults::park`] read by one.
+    pub(crate) fn push_park(&mut self, id: NodeId) {
+        self.parks.push(id);
+    }
+
+    /// Add an owned dep, returning its index *within* the owned vec (not within the concatenated
+    /// `[park..., owned...]` delivery order).
+    pub fn own(&mut self, id: NodeId) -> usize {
+        let pos = self.owned.len();
+        self.owned.push(id);
+        pos
+    }
+
+    /// Build a park-only realized list from a producer sequence (re-dedup'ing harmlessly).
+    pub fn from_parks(ids: impl IntoIterator<Item = NodeId>) -> Self {
+        let mut deps = ResolvedDeps::new();
+        for id in ids {
+            deps.park_on(id);
+        }
+        deps
+    }
+
+    pub fn parks(&self) -> &[NodeId] {
+        &self.parks
+    }
+
+    pub fn owned(&self) -> &[NodeId] {
+        &self.owned
+    }
+
     /// The park-prefix length — the split point of the `[park..., owned...]` delivery order.
-    pub(crate) fn park_count(&self) -> usize {
+    fn park_count(&self) -> usize {
         self.parks.len()
     }
 
@@ -98,18 +177,6 @@ impl<R> Deps<R> {
         self.parks.is_empty() && self.owned.is_empty()
     }
 
-    /// Decompose into `(parks, owned)` for the realization loop, which turns each owned `DepRequest`
-    /// into a producer id and rebuilds a [`ResolvedDeps`] from the same parks.
-    pub fn into_parts(self) -> (Vec<NodeId>, Vec<R>) {
-        (self.parks, self.owned)
-    }
-}
-
-/// A realized dep list — parks and owned deps are all producer ids. This is what
-/// [`NodeWork`](super::nodes::NodeWork) stores and the apply harness installs edges from.
-pub type ResolvedDeps = Deps<NodeId>;
-
-impl ResolvedDeps {
     /// The producer ids in delivery order: parks first, then owned. The run loop reads each dep's
     /// terminal in this order so a finish's [`DepResults`] lines up.
     pub fn all_ids(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -121,6 +188,12 @@ impl ResolvedDeps {
     /// the prefix length never leaves the scheduler.
     pub fn results<'a, T>(&self, items: &'a [T]) -> DepResults<'a, T> {
         DepResults::new(items, self.park_count())
+    }
+}
+
+impl Default for ResolvedDeps {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

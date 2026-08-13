@@ -39,12 +39,12 @@ pub struct EdgeId {
 /// The destination half of an edge: the region delivery lands in, named raw — validity is the
 /// containment lattice (destination outlives owner outlives edge), not a refcount.
 ///
-/// `#[allow(dead_code)]`: the install door records the destination ahead of any deref, and the one
+/// `#[allow(dead_code)]` on `region`: the install door records it ahead of any deref, and the one
 /// deref site is the delivery walk's
-/// ([delivery-at-finalize](../../roadmap/delivery-at-finalize.md)). Until then only the white-box
-/// probes below read either field, so a plain `--lib` build (no `cfg(test)`) sees none.
-#[allow(dead_code)]
+/// ([delivery-at-finalize](../../roadmap/delivery-at-finalize.md)). Until then only
+/// [`inherit`](Self::inherit) and the white-box probes below read it.
 struct Destination<F: RegionOwner> {
+    #[allow(dead_code)]
     region: *const F::Region,
     /// Debug-only liveness shadow of the destination's owner, asserted live at that same deref.
     /// `Weak`, deliberately: a strong `Rc` would pin the destination and mask a lattice violation
@@ -63,22 +63,36 @@ impl<F: RegionOwner> Destination<F> {
             shadow: Rc::downgrade(owner),
         }
     }
+
+    /// Copy a live edge's destination onto a second edge — the wire-from-a-source path, which names
+    /// no owner of its own. Sound on the containment lattice: the source edge stands, so its owner
+    /// stands, so the region it names is covered; the new edge's own owner sits below that owner on
+    /// the same lattice. Not a `Clone` impl — `F` carries no `Clone` bound, and copying a raw
+    /// destination is a wiring act, not a general duplication.
+    fn inherit(&self) -> Self {
+        Destination {
+            region: self.region,
+            #[cfg(debug_assertions)]
+            shadow: self.shadow.clone(),
+        }
+    }
 }
 
-/// `#[allow(dead_code)]` for the same reason [`Destination`] carries one: the slab's own verbs read
-/// the discriminant, and the payload's readers — the delivery deref and the splice's producer
-/// rewrite — arrive with the items that add them.
-#[allow(dead_code)]
 enum EdgeState<F: RegionOwner> {
     /// Wired before its producer finalized. The producer is the scheduler's to rewrite while the
-    /// edge is parked (the alias splice); post-fill an edge has no producer to name.
+    /// edge is parked (the alias splice).
     Parked {
         producer: NodeId,
         destination: Destination<F>,
     },
     /// The producer finalized. The resident is read through the slot machinery, so a filled edge
-    /// records only that it is past parking.
-    Filled { destination: Destination<F> },
+    /// records the producer it reads through — the field and that routing retire together at
+    /// [delivery-at-finalize](../../roadmap/delivery-at-finalize.md), when the resident lands on the
+    /// edge itself.
+    Filled {
+        producer: NodeId,
+        destination: Destination<F>,
+    },
     /// Reclaimed; the index sits on the free list.
     Free,
 }
@@ -123,21 +137,65 @@ impl<F: RegionOwner> EdgeSlab<F> {
         }
     }
 
-    /// Wire one edge toward `destination`, named by its region's owner. `producer_if_pending` is
-    /// the producer to park on, or `None` when it has already finalized — the readiness probe is
+    /// Wire one edge to `producer` toward `destination`, named by its region's owner. `ready` is
+    /// whether the producer has already finalized — alias resolution and the readiness probe are
     /// the caller's, so this file owns only the slab's own arithmetic.
     pub(in crate::scheduler) fn install(
         &mut self,
-        producer_if_pending: Option<NodeId>,
+        producer: NodeId,
+        ready: bool,
         destination: &Rc<F>,
     ) -> InstalledEdge {
-        let destination = Destination::of_owner(destination);
-        match producer_if_pending {
-            Some(producer) => InstalledEdge::Parked(self.alloc(EdgeState::Parked {
+        self.wire(producer, ready, Destination::of_owner(destination))
+    }
+
+    /// Wire one edge to `producer` toward the destination `source` already names — the
+    /// wire-from-a-source path, whose destination is inherited rather than supplied (see
+    /// [`Destination::inherit`] for why that is sound).
+    pub(in crate::scheduler) fn install_inheriting(
+        &mut self,
+        source: EdgeId,
+        producer: NodeId,
+        ready: bool,
+    ) -> InstalledEdge {
+        let destination = match &self.entries[self.slot_index(source)] {
+            EdgeState::Parked { destination, .. } | EdgeState::Filled { destination, .. } => {
+                destination.inherit()
+            }
+            EdgeState::Free => panic!("a released edge names no destination"),
+        };
+        self.wire(producer, ready, destination)
+    }
+
+    /// The state-selecting half both install doors share, so the parked/filled split is decided in
+    /// one place.
+    fn wire(
+        &mut self,
+        producer: NodeId,
+        ready: bool,
+        destination: Destination<F>,
+    ) -> InstalledEdge {
+        if ready {
+            InstalledEdge::Filled(self.alloc(EdgeState::Filled {
                 producer,
                 destination,
-            })),
-            None => InstalledEdge::Filled(self.alloc(EdgeState::Filled { destination })),
+            }))
+        } else {
+            InstalledEdge::Parked(self.alloc(EdgeState::Parked {
+                producer,
+                destination,
+            }))
+        }
+    }
+
+    /// The producer behind either live state. Pre-flip the resident is read through the slot
+    /// machinery, so every edge-keyed read verb routes through here to the `NodeId` verb underneath
+    /// it; the routing retires with the `Filled` producer field at
+    /// [delivery-at-finalize](../../roadmap/delivery-at-finalize.md).
+    pub(in crate::scheduler) fn producer_through(&self, id: EdgeId) -> NodeId {
+        match &self.entries[self.slot_index(id)] {
+            EdgeState::Parked { producer, .. } | EdgeState::Filled { producer, .. } => *producer,
+            EdgeState::Free => panic!("a released edge names no producer"),
         }
     }
 
@@ -189,8 +247,10 @@ impl<F: RegionOwner> EdgeSlab<F> {
     /// Re-point a parked edge at another producer — the alias splice's half of the wiring. Only a
     /// pre-fill edge has a producer to rewrite.
     ///
-    /// Exercised by the white-box tests below; the splice path is the production caller once parked
-    /// edges ride the slab ([edge-wiring-migration](../../../roadmap/refactor/edge-wiring-migration.md)).
+    /// Exercised by the white-box tests below. Pre-flip a slab edge parked on a spliced-out slot
+    /// reads through the alias walk instead, so the production caller — the one-shot re-point that
+    /// retires the alias rows — arrives with
+    /// [delivery-at-finalize](../../roadmap/delivery-at-finalize.md).
     #[cfg(any(test, feature = "test-hooks"))]
     pub(in crate::scheduler) fn rewrite_producer(&mut self, id: EdgeId, producer: NodeId) {
         let index = self.slot_index(id);
@@ -202,7 +262,8 @@ impl<F: RegionOwner> EdgeSlab<F> {
 
     // --- Test-only probes over slab state the wiring verbs otherwise keep to themselves. ---
 
-    /// The producer a parked edge waits on, or `None` for a filled one.
+    /// The producer a parked edge waits on, `None` once it is filled — the parked/filled split
+    /// itself, which [`producer_through`](Self::producer_through) deliberately erases.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(in crate::scheduler) fn producer_of(&self, id: EdgeId) -> Option<NodeId> {
         match &self.entries[self.slot_index(id)] {
@@ -216,7 +277,7 @@ impl<F: RegionOwner> EdgeSlab<F> {
     #[cfg(any(test, feature = "test-hooks"))]
     pub(in crate::scheduler) fn destination_region(&self, id: EdgeId) -> *const F::Region {
         match &self.entries[self.slot_index(id)] {
-            EdgeState::Parked { destination, .. } | EdgeState::Filled { destination } => {
+            EdgeState::Parked { destination, .. } | EdgeState::Filled { destination, .. } => {
                 destination.region
             }
             EdgeState::Free => panic!("a released edge names no destination"),
@@ -227,7 +288,7 @@ impl<F: RegionOwner> EdgeSlab<F> {
     #[cfg(all(debug_assertions, any(test, feature = "test-hooks")))]
     pub(in crate::scheduler) fn destination_owner(&self, id: EdgeId) -> Option<Rc<F>> {
         match &self.entries[self.slot_index(id)] {
-            EdgeState::Parked { destination, .. } | EdgeState::Filled { destination } => {
+            EdgeState::Parked { destination, .. } | EdgeState::Filled { destination, .. } => {
                 destination.shadow.upgrade()
             }
             EdgeState::Free => panic!("a released edge names no destination"),

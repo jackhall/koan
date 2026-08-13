@@ -13,7 +13,7 @@ use crate::witnessed::PinBundle;
 
 use super::nodes::NodeWork;
 use super::workload::OwnerOf;
-use super::{NodeId, Workload};
+use super::{EdgeId, NodeId, Workload};
 
 /// Backward edge in `dep_edges[consumer]`. Kind only matters at reclaim:
 /// `free` recurses into `Owned` children but stops at `Notify` so the walk
@@ -76,6 +76,11 @@ struct DepRow<W: Workload> {
     /// Backward edges from this consumer to its producers; `free` recurses
     /// only into `Owned`.
     edges: Vec<DepEdge>,
+    /// The slab edges this consumer's parks were wired through — minted by the install door, one per
+    /// park, and owned by this slot. Released wherever the row's dep bookkeeping clears (`reclaim_deps`
+    /// on the success path, `free` on every other), which is what makes *an edge never outlives its
+    /// owner* structural here rather than a duty the embedder carries.
+    park_edges: Vec<EdgeId>,
     /// The slot's memory anchor, held from alloc until finalize/free — the scheduler-owned per-slot
     /// `Rc<W::Frame>` this item makes scheduler-side. `None` for a slot with no anchor installed
     /// yet (freshly recycled, before `install_anchor`).
@@ -105,6 +110,7 @@ impl<W: Workload> Default for DepRow<W> {
             notify: Vec::new(),
             pending: 0,
             edges: Vec::new(),
+            park_edges: Vec::new(),
             anchor: None,
             retain: None,
             owed: Vec::new(),
@@ -151,6 +157,10 @@ impl<W: Workload> DepGraph<W> {
             row.notify.clear();
             row.pending = pending;
             row.edges = owned_edges;
+            debug_assert!(
+                row.park_edges.is_empty(),
+                "a recycled row's park edges were released with the slot that owned them",
+            );
             row.anchor = None;
             row.retain = None;
             row.owed.clear();
@@ -160,6 +170,7 @@ impl<W: Workload> DepGraph<W> {
                 notify: Vec::new(),
                 pending,
                 edges: owned_edges,
+                park_edges: Vec::new(),
                 anchor: None,
                 retain: None,
                 owed: Vec::new(),
@@ -191,6 +202,18 @@ impl<W: Workload> DepGraph<W> {
         let row = self.row_mut(consumer);
         row.pending += 1;
         row.edges.push(DepEdge::Notify(producer));
+    }
+
+    /// Record a slab edge the install door minted for one of `consumer`'s parks, so the slot owns it
+    /// and releases it at death.
+    pub(super) fn record_park_edge(&mut self, consumer: NodeId, edge: EdgeId) {
+        self.row_mut(consumer).park_edges.push(edge);
+    }
+
+    /// Take the slab edges `consumer` owns, draining them so the release happens exactly once even
+    /// when a reclaim is followed by a free.
+    pub(super) fn take_park_edges(&mut self, consumer: NodeId) -> Vec<EdgeId> {
+        std::mem::take(&mut self.row_mut(consumer).park_edges)
     }
 
     /// Seed a finalized producer's retention hold with the region owner (projected from the slot's
@@ -324,6 +347,13 @@ impl<W: Workload> DepGraph<W> {
     /// Clear the slot's memory anchor outright — a dying slot (`free`) releases it.
     pub(super) fn clear_anchor(&mut self, id: NodeId) {
         self.row_mut(id).anchor = None;
+    }
+
+    /// The outstanding destination count on `producer`'s retention hold, `None` once released — the
+    /// probe a late-pull accounting assertion reads.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn retained_pulls(&self, producer: NodeId) -> Option<usize> {
+        self.row(producer).retain.as_ref().map(|hold| hold.pulls)
     }
 
     #[cfg(any(test, feature = "test-hooks"))]

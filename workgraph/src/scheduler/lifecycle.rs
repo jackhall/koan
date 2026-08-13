@@ -83,6 +83,7 @@ impl<W: Workload> Scheduler<W> {
             self.deps.discharge_owed(id);
             self.deps.drop_retain(id);
             self.deps.clear_anchor(id);
+            self.release_park_edges(id);
             for child in self.deps.owned_children(id) {
                 stack.push(child);
             }
@@ -102,8 +103,18 @@ impl<W: Workload> Scheduler<W> {
         // finds none and cannot double-discharge.
         self.deps.discharge_owed(id);
         self.deps.clear_dep_edges(id);
+        self.release_park_edges(id);
         for d in deps {
             self.free(d);
+        }
+    }
+
+    /// Release the slab edges this slot's parks were wired through — the owner-side half of *an edge
+    /// never outlives its owner*, run wherever the slot's dep bookkeeping clears. The take drains, so
+    /// a reclaim followed by a free releases each edge exactly once.
+    fn release_park_edges(&mut self, id: NodeId) {
+        for edge in self.deps.take_park_edges(id) {
+            self.edges.release(edge);
         }
     }
 }

@@ -282,6 +282,69 @@ impl<W: Workload> Scheduler<W> {
         }
     }
 
+    /// **The one door a consumer's dep list is wired through.** The embedder hands the park *sources*
+    /// it holds — edges its own bindings named — plus the producers it owns; the door mints the
+    /// consumer's own slab edge per park (inheriting each source's destination, so a park on a
+    /// placeholder delivers into the region that placeholder named), routes every dep through the
+    /// scheduler-internal wire primitive, and hands back the realized list for
+    /// [`NodeWork`](nodes::NodeWork) plus each park's **filled-or-parked** verdict. The producer
+    /// `NodeId`s never leave the scheduler: resolving a source edge to one is this door's job.
+    ///
+    /// The returned `Vec<InstalledEdge>` is index-aligned with `parks`. A *filled* verdict is the
+    /// caller's to act on — its producer is terminal, so an errored one propagates at once rather
+    /// than waiting for a wake that will not come.
+    ///
+    /// It serves an already-allocated consumer slot, which is why it takes the dep list separately
+    /// from the work; the submit-time sibling is
+    /// [`alloc_node_with_parks`](Self::alloc_node_with_parks), which initializes a fresh row and its
+    /// wires as one atomic step. Two doors, one primitive — so no wiring path can skew a row's
+    /// invariants.
+    pub fn install_deps(
+        &mut self,
+        consumer: NodeId,
+        parks: &[EdgeId],
+        owned: &[NodeId],
+    ) -> (ResolvedDeps, Vec<InstalledEdge>) {
+        let mut resolved = ResolvedDeps::new();
+        let mut installed = Vec::with_capacity(parks.len());
+        for &source in parks {
+            let (verdict, producer) = self.mint_park_edge(source);
+            self.adopt_park_edge(consumer, verdict.edge_id(), producer);
+            resolved.push_park(producer);
+            installed.push(verdict);
+        }
+        for &producer in owned {
+            self.add_owned_edge(producer, consumer);
+            resolved.own(producer);
+        }
+        (resolved, installed)
+    }
+
+    /// Mint a consumer's own slab edge off one park source, resolving the source to its producer.
+    /// The consumer slot need not exist yet — [`adopt_park_edge`](Self::adopt_park_edge) binds the
+    /// minted edge to it — which is what lets the submit-time door wire before it allocates.
+    pub(in crate::scheduler) fn mint_park_edge(
+        &mut self,
+        source: EdgeId,
+    ) -> (InstalledEdge, NodeId) {
+        let installed = self.install_edge_from(source);
+        let producer = self.edges.producer_through(installed.edge_id());
+        (installed, producer)
+    }
+
+    /// Bind a minted park edge to the consumer that owns it (which releases it at death) and route
+    /// its producer through the park-edge primitive — the notify row when the producer is pre-terminal,
+    /// the late-pull count when it has already finalized.
+    pub(in crate::scheduler) fn adopt_park_edge(
+        &mut self,
+        consumer: NodeId,
+        edge: EdgeId,
+        producer: NodeId,
+    ) {
+        self.deps.record_park_edge(consumer, edge);
+        self.add_park_edge(producer, consumer);
+    }
+
     /// Wire one edge from `producer` toward a destination region, named by its owner: holding
     /// `destination` at this call is the wiring-time proof the caller pins that region
     /// ([design/dag-scheduler.md § Edges and the boundary](../design/dag-scheduler.md#edges-and-the-boundary)),
@@ -300,8 +363,24 @@ impl<W: Workload> Scheduler<W> {
         destination: &Rc<OwnerOf<W>>,
     ) -> InstalledEdge {
         let producer = self.resolve_alias(producer);
-        let pending = (!self.store.is_result_ready(producer)).then_some(producer);
-        self.edges.install(pending, destination)
+        let ready = self.store.is_result_ready(producer);
+        self.edges.install(producer, ready, destination)
+    }
+
+    /// Wire a second edge to the producer behind `source`, **inheriting `source`'s destination
+    /// region**: the consumer parking on an embedder's placeholder edge lands its delivery in the
+    /// region that placeholder already named, not in the consumer's own
+    /// ([design/dag-scheduler.md § Edges and the boundary](../design/dag-scheduler.md#edges-and-the-boundary)).
+    /// Sound on the containment lattice without naming an owner here: `source` stands, so its owner
+    /// stands, so the region it names is covered — and the new edge's own owner sits below that
+    /// owner on the same lattice.
+    ///
+    /// Returns filled-or-parked like [`install_edge`](Self::install_edge), re-resolving the
+    /// producer's alias: `source` may have been wired before the producer was spliced out.
+    pub fn install_edge_from(&mut self, source: EdgeId) -> InstalledEdge {
+        let producer = self.resolve_alias(self.edges.producer_through(source));
+        let ready = self.store.is_result_ready(producer);
+        self.edges.install_inheriting(source, producer, ready)
     }
 
     /// Release one edge. Rides its owner's teardown verb — a consumer or frame teardown calls this
@@ -309,6 +388,57 @@ impl<W: Workload> Scheduler<W> {
     /// manages. Panics in debug builds on a name whose edge was already released.
     pub fn release_edge(&mut self, id: EdgeId) {
         self.edges.release(id);
+    }
+}
+
+/// The edge-keyed reads and rewires: an embedder holding an [`EdgeId`] reaches its producer's
+/// terminal through these rather than through a `NodeId` it kept. Pre-flip the resident lives in the
+/// producer's slot, so each routes edge → producer → the slot verb underneath it; the routing
+/// retires when delivery lands the resident on the edge
+/// ([delivery-at-finalize](../roadmap/delivery-at-finalize.md)).
+impl<W: Workload> Scheduler<W> {
+    /// [`result_error`](Self::result_error) through an edge.
+    pub fn edge_result_error(&self, id: EdgeId) -> Result<(), &W::Error> {
+        self.result_error(self.edges.producer_through(id))
+    }
+
+    /// [`read_result_with`](Self::read_result_with) through an edge.
+    pub fn read_edge_result_with<R>(
+        &self,
+        id: EdgeId,
+        f: impl for<'b> FnOnce(Live<'b, W>) -> R,
+    ) -> Result<R, &W::Error> {
+        self.read_result_with(self.edges.producer_through(id), f)
+    }
+
+    /// [`dep_delivered`](Self::dep_delivered) through an edge.
+    #[allow(clippy::type_complexity)]
+    pub fn edge_delivered(
+        &self,
+        id: EdgeId,
+    ) -> Result<Delivered<W::Value, Carrier<OwnerOf<W>>, OwnerOf<W>>, &W::Error> {
+        self.dep_delivered(self.edges.producer_through(id))
+    }
+
+    /// [`rehome_terminal`](Self::rehome_terminal) through an edge.
+    pub fn rehome_terminal_via_edge(
+        &mut self,
+        id: EdgeId,
+        output: Result<DeliveredTerminal<W>, W::Error>,
+    ) {
+        self.rehome_terminal(self.edges.producer_through(id), output);
+    }
+
+    /// [`would_create_cycle`](Self::would_create_cycle) against the producer behind `source` — the
+    /// one pre-wiring query a read-only decide still asks, since parking on an ancestor deadlocks
+    /// rather than errors.
+    pub fn would_create_cycle_from(&self, source: EdgeId, consumer: NodeId) -> bool {
+        self.would_create_cycle(self.edges.producer_through(source), consumer)
+    }
+
+    /// [`splice_forward`](Self::splice_forward) onto the producer behind `source`.
+    pub fn splice_forward_from(&mut self, slot: NodeId, source: EdgeId) {
+        self.splice_forward(slot, self.edges.producer_through(source));
     }
 }
 
@@ -349,6 +479,10 @@ impl<W: Workload> Scheduler<W> {
         pulls: usize,
     ) {
         self.deps.seed_retain(id, owner, foreign.0, pulls);
+    }
+    /// The outstanding destination count on the slot's retention hold, `None` once released.
+    pub fn retained_pulls(&self, id: NodeId) -> Option<usize> {
+        self.deps.retained_pulls(id)
     }
     pub fn result_is_none(&self, id: NodeId) -> bool {
         self.store.result_is_none(id)
