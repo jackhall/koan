@@ -9,13 +9,17 @@ impl<W: Workload> Scheduler<W> {
     /// and queue it if its deps are already satisfied. `anchor` is the slot's per-slot memory anchor
     /// (the workload mints it from its own active/run frame); the scheduler stores it and hands it
     /// back but calls only [`Anchor::owner`](super::Anchor::owner). `framed` is whether the workload
-    /// had an active frame (`false` selects the fresh-top-level queue for a dep-free / park-free slot,
-    /// matching the in-flight-vs-fresh split). This allocator never names a workload type — it only
+    /// had an active frame (`false` selects the fresh-top-level queue for a dep-free slot, matching
+    /// the in-flight-vs-fresh split). This allocator never names a workload type — it only
     /// wires the slot's deps and installs its anchor. The work arrives with its continuation live;
     /// this is one of the erase doors that seals it against `anchor`.
     ///
+    /// Owned deps only: a realized park is minted by the install door from the source edge an
+    /// embedder holds, so a fresh slot that parks routes through
+    /// [`alloc_node_with_parks`](Self::alloc_node_with_parks) instead.
+    ///
     /// Edge installation here is *not*
-    /// [`install_edges`](super::Scheduler::install_edges) — a fresh slot's row and its edges are
+    /// [`install_deps`](super::Scheduler::install_deps) — a fresh slot's row and its edges are
     /// initialized as one atomic step, and the slot **owns** the sub-work it spawns, so an
     /// already-finalized owned dep still records its backward `Owned` edge (the ownership record the
     /// error-path cascade walks). Only the pending counts filter by readiness.
@@ -25,6 +29,10 @@ impl<W: Workload> Scheduler<W> {
         anchor: Rc<W::Frame>,
         framed: bool,
     ) -> NodeId {
+        debug_assert!(
+            work.deps.parks().is_empty(),
+            "a realized park is the install door's to write; this door takes owned deps only",
+        );
         let owned_edges = work_owned_edges(&work);
         let no_owned = owned_edges.is_empty();
         let pending_owned: Vec<NodeId> = owned_edges
@@ -32,22 +40,11 @@ impl<W: Workload> Scheduler<W> {
             .map(|e| e.node_id())
             .filter(|p| !self.is_result_ready(*p))
             .collect();
-        let pending_park: Vec<NodeId> = work
-            .deps
-            .parks()
-            .iter()
-            .copied()
-            .filter(|p| !self.is_result_ready(*p))
-            .collect();
-        let no_park = work.deps.parks().is_empty();
         let id = self.store.alloc_slot(seal_work(work, &anchor));
         self.deps.install_for_slot(id, owned_edges, &pending_owned);
         self.deps.install_anchor(id, anchor);
-        for p in &pending_park {
-            self.deps.add_park_edge(*p, id);
-        }
-        if pending_owned.is_empty() && pending_park.is_empty() {
-            if !framed && no_owned && no_park {
+        if pending_owned.is_empty() {
+            if !framed && no_owned {
                 self.queues.push_fresh(id);
             } else {
                 self.queues.push_in_flight_submit(id);

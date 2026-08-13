@@ -10,8 +10,9 @@
 //!
 //! - [`Deps`] is the write side — the builder production code assembles a dep list with. It keeps
 //!   parks and owned entries in two vecs so the split is structural, never a `park_count` a caller
-//!   must thread. It is generic in the owned-entry type `R` (`DepRequest` before the harness
-//!   realizes each request to a producer id).
+//!   must thread. Its parks are [`EdgeId`]s — the *edges the embedder holds*, which the install door
+//!   resolves to producers. It is generic in the owned-entry type `R` (`DepRequest` before the
+//!   harness realizes each request to a producer id).
 //! - [`ResolvedDeps`] is the realized list [`NodeWork`](super::nodes::NodeWork) stores: parks and
 //!   owned entries alike are producer ids. Its own struct rather than `Deps<NodeId>`, because the
 //!   two sides' park currencies differ.
@@ -22,15 +23,19 @@
 //! Everything here is plain or type-parameter-generic (`NodeId`, `usize`, `R`, `T`) — it names no
 //! Koan value, error, or AST type.
 
-use super::NodeId;
+use super::{EdgeId, NodeId};
 
 /// The dep-list builder: the one way production code assembles a node's dep list. Parks and owned
 /// entries live in separate vecs, so `[park..., owned...]` is structural — there is no `park_count`
 /// for a caller to thread or get wrong. Generic in the owned-entry type `R`: a `DepRequest` before
 /// the apply harness realizes each owned request to its producer id, `NodeId` after ([`ResolvedDeps`]).
+///
+/// A park is named by the **source edge** the embedder holds, not by a producer: the install door
+/// ([`Scheduler::install_deps`](super::Scheduler::install_deps)) mints the consumer's own edge off
+/// each source and resolves it, so the producer currency never leaves the scheduler.
 pub struct Deps<R> {
-    /// Park producers, deduped, in first-occurrence order.
-    parks: Vec<NodeId>,
+    /// Park sources, deduped, in first-occurrence order.
+    parks: Vec<EdgeId>,
     /// Owned entries, in insertion order.
     owned: Vec<R>,
 }
@@ -43,10 +48,12 @@ impl<R> Deps<R> {
         }
     }
 
-    /// Add a dedup'ing park edge on `id`. Returns `id`'s park index — the existing position when `id`
-    /// is already parked, else the newly-pushed one. Positional reads (a literal cell keyed on its
-    /// park slot) stay correct when two consumers share one producer because the index is stable.
-    pub fn park_on(&mut self, id: NodeId) -> usize {
+    /// Add a dedup'ing park on the source edge `id`. Returns `id`'s park index — the existing
+    /// position when `id` is already parked, else the newly-pushed one. Positional reads (a literal
+    /// cell keyed on its park slot) stay correct when one expression names the same edge twice
+    /// because the index is stable. Dedup is by [`EdgeId`] equality: two *distinct* edges naming one
+    /// producer stay two parks, so every index the caller was handed keeps addressing its own slot.
+    pub fn park_on(&mut self, id: EdgeId) -> usize {
         if let Some(pos) = self.parks.iter().position(|p| *p == id) {
             return pos;
         }
@@ -63,9 +70,9 @@ impl<R> Deps<R> {
         pos
     }
 
-    /// Build a park-only dep list from an id sequence (re-dedup'ing harmlessly). The park-and-replay
-    /// shapes that own no sub-work (`park_resume`) start here.
-    pub fn from_parks(ids: impl IntoIterator<Item = NodeId>) -> Self {
+    /// Build a park-only dep list from a source-edge sequence (re-dedup'ing harmlessly). The
+    /// park-and-replay shapes that own no sub-work (`park_resume`) start here.
+    pub fn from_parks(ids: impl IntoIterator<Item = EdgeId>) -> Self {
         let mut deps = Deps::new();
         for id in ids {
             deps.park_on(id);
@@ -83,7 +90,7 @@ impl<R> Deps<R> {
         deps
     }
 
-    pub fn parks(&self) -> &[NodeId] {
+    pub fn parks(&self) -> &[EdgeId] {
         &self.parks
     }
 
@@ -95,9 +102,9 @@ impl<R> Deps<R> {
         self.parks.is_empty() && self.owned.is_empty()
     }
 
-    /// Decompose into `(parks, owned)` for the realization loop, which turns each owned `DepRequest`
-    /// into a producer id and wires the parks through the install door.
-    pub fn into_parts(self) -> (Vec<NodeId>, Vec<R>) {
+    /// Decompose into `(park sources, owned)` for the realization loop, which turns each owned
+    /// `DepRequest` into a producer id and hands the park sources to the install door.
+    pub fn into_parts(self) -> (Vec<EdgeId>, Vec<R>) {
         (self.parks, self.owned)
     }
 }
@@ -108,7 +115,8 @@ impl<R> Deps<R> {
 ///
 /// Deliberately *not* `Deps<NodeId>`: the two currencies have parted. [`Deps`] is the embedder's
 /// write side, whose parks are edges the embedder holds; a realized list's parks are the producer
-/// ids the door resolved them to, scheduler-internal from that point on.
+/// ids the door resolved them to, scheduler-internal from that point on — which is why the only
+/// way to put one here is [`push_park`](Self::push_park), the door's own crate-private append.
 pub struct ResolvedDeps {
     /// Park producers, deduped, in first-occurrence order.
     parks: Vec<NodeId>,
@@ -122,17 +130,6 @@ impl ResolvedDeps {
             parks: Vec::new(),
             owned: Vec::new(),
         }
-    }
-
-    /// Add a dedup'ing park on `id`, returning its stable park index — [`Deps::park_on`]'s realized
-    /// twin, with the same positional contract.
-    pub fn park_on(&mut self, id: NodeId) -> usize {
-        if let Some(pos) = self.parks.iter().position(|p| *p == id) {
-            return pos;
-        }
-        let pos = self.parks.len();
-        self.parks.push(id);
-        pos
     }
 
     /// Append a park producer **without deduping** — the install door's push, one entry per park the
@@ -149,15 +146,6 @@ impl ResolvedDeps {
         let pos = self.owned.len();
         self.owned.push(id);
         pos
-    }
-
-    /// Build a park-only realized list from a producer sequence (re-dedup'ing harmlessly).
-    pub fn from_parks(ids: impl IntoIterator<Item = NodeId>) -> Self {
-        let mut deps = ResolvedDeps::new();
-        for id in ids {
-            deps.park_on(id);
-        }
-        deps
     }
 
     pub fn parks(&self) -> &[NodeId] {

@@ -43,7 +43,7 @@ pub(crate) fn classify_name_lookup(
     }
 }
 
-/// Re-run `resolve` after the parked producers finished. `Done` yields the type; `Park` is the
+/// Re-run `resolve` after the parked binders finished. `Done` yields the type; `Park` is the
 /// protocol error; `Unbound` is a hard miss.
 pub(crate) fn resolve_at_wake<'a>(
     scope: &Scope<'a>,
@@ -57,7 +57,8 @@ pub(crate) fn resolve_at_wake<'a>(
     }
 }
 
-/// Resolve now; park on the producers and re-resolve at wake when the name is still finalizing.
+/// Resolve now; park on the binders' claim edges and re-resolve at wake when the name is still
+/// finalizing.
 /// `resolve` runs once synchronously and (on the park arm) once more at dep-finish against the
 /// wake-side scope.
 pub(crate) fn resolve_or_await<'a>(
@@ -72,12 +73,12 @@ pub(crate) fn resolve_or_await<'a>(
         // receives: `FinishCtx::for_scope` reconstructs the step context over the scope's own frame,
         // matching the wake side's provenance, so both arms allocate in the same region.
         TypeResolution::Done(kt) => on_resolved(&FinishCtx::for_scope(scope, types), kt),
-        TypeResolution::Park(producers) => {
+        TypeResolution::Park(sources) => {
             let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
                 let kt = crate::try_action!(resolve_at_wake(fctx.scope, slot, resolve));
                 on_resolved(fctx, kt)
             });
-            Action::await_deps(Deps::from_parks(producers), finish)
+            Action::await_deps(Deps::from_parks(sources), finish)
         }
         TypeResolution::Unbound(detail) => Action::done(Err(unbound_error(slot, &detail))),
     }

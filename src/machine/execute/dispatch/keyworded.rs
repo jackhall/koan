@@ -4,20 +4,20 @@
 use crate::machine::core::{BlockEntry, FramePlacement};
 use crate::machine::model::WorkingExpression;
 use crate::machine::{DispatchOutcome, KError, KErrorKind, NameOutcome, NodeId};
+use crate::scheduler::EdgeId;
 
 use super::super::ignore_results;
 use super::super::nodes::{ChainOp, NodeWork};
 use super::super::obligation::with_obligation;
-use super::ProducerDisposition;
 use super::ctx::SchedulerView;
 use super::{
     BareCarrier, DepRequest, Outcome, PartWalkResult, Resolved, bare_name_of, park_resume,
-    propagate_dep_error, stage_eager_part, staged_slot_placeholder, working_frame,
+    park_resume_labelled, stage_eager_part, staged_slot_placeholder, working_frame,
 };
-use crate::scheduler::ResolvedDeps;
+use crate::scheduler::{Deps, ResolvedDeps};
 
 /// Entry from the dispatch router. Resolved-no-parks-no-subs terminates inline; all other
-/// outcomes install a park (an overload / bare-name producer wait, or eager subs) and re-enter
+/// outcomes install a park (an overload / bare-name claim wait, or eager subs) and re-enter
 /// through a [`park_resume`] closure that re-runs this function on wake.
 pub(super) fn initial<'step>(
     ctx: &SchedulerView<'_, 'step, '_>,
@@ -56,8 +56,8 @@ pub(super) fn initial<'step>(
         DispatchOutcome::Deferred => {
             return install_eager_only(ctx, expr);
         }
-        DispatchOutcome::ParkOnProducers(producers) => {
-            return install_overload_park(ctx, producers, expr, id);
+        DispatchOutcome::ParkOnProducers(sources) => {
+            return install_overload_park(ctx, sources, expr, id);
         }
     };
     // Binder name claims / pending overload slots were installed at statement submission from the
@@ -89,7 +89,7 @@ fn walk_and_invoke<'step>(
     expr: WorkingExpression<'step>,
     bare_outcomes: &[Option<NameOutcome>],
     id: NodeId,
-    park: impl FnOnce(Vec<NodeId>, WorkingExpression<'step>) -> Outcome<'step>,
+    park: impl FnOnce(Vec<EdgeId>, WorkingExpression<'step>) -> Outcome<'step>,
 ) -> Outcome<'step> {
     let walk = match part_walk(ctx, expr.parts, bare_outcomes, &resolved.slots, id) {
         Ok(w) => w,
@@ -97,15 +97,15 @@ fn walk_and_invoke<'step>(
     };
     let PartWalkResult {
         new_parts,
-        producers_to_wait,
+        sources_to_wait,
         staged_subs,
     } = walk;
     // The walk spliced / staged into a fresh run; freeze it back onto this node so `span`, `file`
     // and the binder plan ride through to the invoke and to any re-resolve.
     let new_expr = expr.respliced(ctx.current_scope().brand(), new_parts);
-    if !producers_to_wait.is_empty() {
+    if !sources_to_wait.is_empty() {
         let _ = staged_subs;
-        return park(producers_to_wait, new_expr);
+        return park(sources_to_wait, new_expr);
     }
     if staged_subs.is_empty() {
         return super::exec::invoke_continue(ctx, resolved.function, new_expr);
@@ -162,8 +162,8 @@ pub(super) fn finish<'step>(
                 reason: "no matching function".to_string(),
             })))
         }
-        DispatchOutcome::ParkOnProducers(producers) => {
-            install_overload_park(ctx, producers, working_expr, id)
+        DispatchOutcome::ParkOnProducers(sources) => {
+            install_overload_park(ctx, sources, working_expr, id)
         }
         DispatchOutcome::UnboundName(name) => {
             Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
@@ -171,15 +171,15 @@ pub(super) fn finish<'step>(
     }
 }
 
-/// Park the post-eager-subs re-resolve on the bare-name producers its splice walk leaned on; the
+/// Park the post-eager-subs re-resolve on the bare-name claims its splice walk leaned on; the
 /// wake re-runs [`finish`] against the partly-spliced expression.
 fn park_finish<'step>(
-    producers: Vec<NodeId>,
+    sources: Vec<EdgeId>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let carrier = working_expr.summarize();
     park_resume(
-        producers,
+        sources,
         Some(carrier),
         Box::new(move |ctx, id| finish(ctx, working_expr, id)),
     )
@@ -209,30 +209,24 @@ pub(super) fn redispatch_continue<'step>(
     }
 }
 
-/// Park on forward-reference overload producers, filtering `producers` for cycles and
-/// already-errored terminals; on wake `resume` re-runs [`initial`] against the original `expr`.
-/// Visibility is widened for `single_poll::type_call`, which reuses this path for
-/// forward-reference type-binder parks.
+/// Park on forward-reference overload claims, dropping any whose edge would close a wake cycle
+/// (the one pre-wiring question a decide still asks the graph); on wake `resume` re-runs
+/// [`initial`] against the original `expr`. Visibility is widened for `single_poll::type_call`,
+/// which reuses this path for forward-reference type-binder parks.
+///
+/// Whether a claim's binder has already terminalized is *not* asked here — the harness rules on
+/// that when it installs the park, and the `<dispatch-park>` frame rides along on
+/// `dep_error_frame` so a propagated error keeps this site's label.
 pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     ctx: &SchedulerView<'_, 'step, '_>,
-    producers: Vec<NodeId>,
+    sources: Vec<EdgeId>,
     expr: WorkingExpression<'step>,
     id: NodeId,
 ) -> Outcome<'step> {
-    // Classify each candidate through the shared park ladder; a ready-errored producer short-circuits,
-    // a ready-Ok or would-cycle producer is skipped, and a still-finalizing one joins the park set
-    // (deduped by `park_on`).
-    let mut to_wait = ResolvedDeps::new();
-    for p in producers {
-        match ctx.producer_disposition(p, id) {
-            ProducerDisposition::Errored(e) => {
-                let frame = working_frame("<dispatch-park>", &expr);
-                return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
-            }
-            ProducerDisposition::Ready | ProducerDisposition::Cycle => {}
-            ProducerDisposition::Park => {
-                to_wait.park_on(p);
-            }
+    let mut to_wait = Deps::<()>::new();
+    for source in sources {
+        if !ctx.would_create_cycle_from(source, id) {
+            to_wait.park_on(source);
         }
     }
     if to_wait.is_empty() {
@@ -244,9 +238,11 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     // Summarize the *original* `expr` for the deadlock report — no splice has happened yet — then
     // hand `expr` itself to the resume closure.
     let carrier = expr.summarize();
-    park_resume(
+    let frame = working_frame("<dispatch-park>", &expr);
+    park_resume_labelled(
         to_wait.parks().to_vec(),
         Some(carrier),
+        Some(frame),
         Box::new(move |ctx, id| initial(ctx, expr, id)),
     )
 }
@@ -271,16 +267,16 @@ fn install_eager_only<'step>(
     install_eager_subs_track(ctx, new_expr, staged_subs)
 }
 
-/// Park on bare-name forward-reference producers. `working_expr` is partly spliced — Resolved wrap
+/// Park on bare-name forward-reference claims. `working_expr` is partly spliced — Resolved wrap
 /// slots already substituted for `Spliced(obj)`; Parked wrap and ref-name slots keep their original
 /// bare-name token — so on wake `resume` re-runs [`initial`] against it.
 fn install_bare_name_park<'step>(
-    producers: Vec<NodeId>,
+    sources: Vec<EdgeId>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let carrier = working_expr.summarize();
     park_resume(
-        producers,
+        sources,
         Some(carrier),
         Box::new(move |ctx, id| initial(ctx, working_expr, id)),
     )
@@ -298,25 +294,25 @@ fn install_eager_subs_track<'step>(
     ctx.install_eager_subs(working_expr, staged_subs, None)
 }
 
-/// Park the walk on `producer`, or error if the edge would close a cycle. The one place the
+/// Park the walk on `source`, or error if the edge would close a cycle. The one place the
 /// walk's cycle-check → `SchedulerDeadlock` → dedup-push ladder lives — called from both the
 /// wrap-slot and ref-name arms of [`part_walk`].
-fn park_walk_producer(
+fn park_walk_source(
     ctx: &SchedulerView<'_, '_, '_>,
-    producer: NodeId,
+    source: EdgeId,
     id: NodeId,
     part: &crate::machine::model::ExpressionPart<'_>,
-    producers_to_wait: &mut Vec<NodeId>,
+    sources_to_wait: &mut Vec<EdgeId>,
 ) -> Result<(), KError> {
-    if ctx.would_create_cycle(producer, id) {
+    if ctx.would_create_cycle_from(source, id) {
         let name = bare_name_of(part).unwrap_or_default();
         return Err(KError::new(KErrorKind::SchedulerDeadlock {
             pending: 1,
             sample: format!("cycle in type alias `{name}`"),
         }));
     }
-    if !producers_to_wait.contains(&producer) {
-        producers_to_wait.push(producer);
+    if !sources_to_wait.contains(&source) {
+        sources_to_wait.push(source);
     }
     Ok(())
 }
@@ -341,7 +337,7 @@ fn part_walk<'step>(
     let ref_name_set = &slots.ref_name_indices;
     let eager_filter = slots.eager_indices.as_deref();
     let mut new_parts: Vec<Spanned<WorkingPart<'step>>> = Vec::with_capacity(parts.len());
-    let mut producers_to_wait: Vec<NodeId> = Vec::new();
+    let mut sources_to_wait: Vec<EdgeId> = Vec::new();
     let mut staged_subs: Vec<(usize, DepRequest<'step>)> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         let span = part.span;
@@ -370,7 +366,7 @@ fn part_walk<'step>(
                     span,
                 }),
                 BareCarrier::Parked(p) => {
-                    park_walk_producer(ctx, p, id, &name_part, &mut producers_to_wait)?;
+                    park_walk_source(ctx, p, id, &name_part, &mut sources_to_wait)?;
                     new_parts.push(*part);
                 }
                 BareCarrier::Unbound(name) => {
@@ -382,7 +378,7 @@ fn part_walk<'step>(
         if ref_name_set.contains(&i) {
             if let (true, Some(NameOutcome::Parked(p))) = (bare_name, &bare_outcomes[i]) {
                 let name_part = ast.expect("bare_name implies an AST slot");
-                park_walk_producer(ctx, *p, id, &name_part, &mut producers_to_wait)?;
+                park_walk_source(ctx, *p, id, &name_part, &mut sources_to_wait)?;
             }
             new_parts.push(*part);
             continue;
@@ -401,7 +397,7 @@ fn part_walk<'step>(
     }
     Ok(PartWalkResult {
         new_parts,
-        producers_to_wait,
+        sources_to_wait,
         staged_subs,
     })
 }

@@ -1,9 +1,11 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::runtime::KoanWorkload;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{ScopeId, ScopeRefFamily, assemble_body_chain};
-use crate::machine::{CallFrame, KError, LexicalFrame, NodeId};
+use crate::machine::{CallFrame, KError, LexicalFrame};
+use crate::scheduler::EdgeId;
 use crate::witnessed::SealedExtern;
 
 use super::StepCarried;
@@ -22,6 +24,15 @@ pub(super) use crate::scheduler::nodes::{NodeWork, StoredWork};
 pub(super) struct SlotFrame {
     pub(super) cart: Rc<CallFrame>,
     pub(super) payload: NodePayload,
+    /// The edges **this slot owns** and releases when it terminalizes: the binder claims its
+    /// submission stamped onto its scope
+    /// ([`Scope::install_placeholder`](crate::machine::Scope::install_placeholder) /
+    /// `install_pending_overload`), and the classification edges a bare-name forward wires to read
+    /// its producer through. Both are named after allocation — minting an edge needs the id the
+    /// allocation hands back — so the list fills in rather than arriving with the anchor, and a tail
+    /// replace that mints a fresh anchor carries it over: ownership tracks the slot, not the anchor.
+    /// Empty for most slots.
+    owned_edges: RefCell<Vec<EdgeId>>,
 }
 
 impl crate::scheduler::Anchor for SlotFrame {
@@ -42,7 +53,21 @@ impl SlotFrame {
         Rc::new(SlotFrame {
             cart,
             payload: NodePayload { scope, chain },
+            owned_edges: RefCell::new(Vec::new()),
         })
+    }
+
+    /// Take ownership of `edges` on this slot's behalf — the submission's binder claims, or a
+    /// forward's classification edge as the harness wires it.
+    pub(super) fn own_edges(&self, edges: impl IntoIterator<Item = EdgeId>) {
+        self.owned_edges.borrow_mut().extend(edges);
+    }
+
+    /// Take the slot's owned edges, leaving it holding none — so the retirement that releases them,
+    /// and the tail replace that hands them to a fresh anchor, are both exactly-once by
+    /// construction.
+    pub(super) fn take_owned_edges(&self) -> Vec<EdgeId> {
+        std::mem::take(&mut *self.owned_edges.borrow_mut())
     }
 }
 
@@ -56,8 +81,8 @@ impl SlotFrame {
 ///
 /// The value terminal rides the step brand `'step` as a [`StepCarried`], confined to the step tail's
 /// rank-2 open (`run_loop.rs`) until it exits through
-/// [`StepCarried::seal_at_step`] into finalize; the other arms carry no value (an error, a producer
-/// [`NodeId`], or a tail-replace payload), so `'step` names only the `DoneWitnessed` carrier's brand.
+/// [`StepCarried::seal_at_step`] into finalize; the other arms carry no value (an error, an
+/// [`EdgeId`], or a tail-replace payload), so `'step` names only the `DoneWitnessed` carrier's brand.
 // `Replace` is intrinsically the large variant (`NodeWork` plus the frame/chain tail-call
 // payload); boxing the hot tail-call path to balance the variants is the wrong trade.
 #[allow(clippy::large_enum_variant)]
@@ -71,10 +96,11 @@ pub(super) enum NodeStep<'step> {
     /// The finalized **error** terminal. An error carries no value, so it needs no witness and
     /// finalizes bare, labelled with the frame-gated contract's trace frame.
     Error(KError),
-    /// A ready bare-name forward: this slot's terminal *is* `producer`'s. `run_step` relocates
-    /// `producer`'s terminal into this slot's region (carrying its own witness) and finalizes — no
-    /// re-check, the producer already enforced its own contract. (`Alias` is the not-yet-ready twin.)
-    ForwardReady(NodeId),
+    /// A ready bare-name forward: this slot's terminal *is* the terminal behind `edge`. `run_step`
+    /// relocates it into this slot's region (carrying its own witness) and finalizes — no re-check,
+    /// the producer already enforced its own contract — then releases `edge`, the probe the harness
+    /// classified through. (`Alias` is the not-yet-ready twin.)
+    ForwardReady(EdgeId),
     Replace {
         work: NodeWork<'step, KoanWorkload>,
         frame: Option<Rc<CallFrame>>,
@@ -86,11 +112,11 @@ pub(super) enum NodeStep<'step> {
         /// tail re-projects `Yoked` from its own cart).
         overlay_scope: Option<SealedExtern<ScopeRefFamily>>,
     },
-    /// The slot is spliced out as an alias of `producer` (a bare-name forward whose producer was not
-    /// yet ready). The slot's consumers have already been moved onto `producer`'s notify list; this
-    /// just marks the slot so `read_result_with` follows through to `producer`. See
+    /// The slot is spliced out as an alias of the producer behind `edge` (a bare-name forward whose
+    /// producer was not yet ready). The splice moves the slot's consumers onto that producer's
+    /// notify list and marks the slot so `read_result_with` follows through. See
     /// [`Outcome::Forward`](super::outcome::Outcome::Forward).
-    Alias(NodeId),
+    Alias(EdgeId),
 }
 
 /// The lexical-chain reshape a [`NodeStep::Replace`] applies, decided at the

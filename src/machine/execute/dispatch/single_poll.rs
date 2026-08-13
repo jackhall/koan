@@ -20,8 +20,8 @@ use super::super::run_loop::dest_brand;
 use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::SchedulerView;
 use super::{
-    Await, DepRequest, Outcome, ProducerStanding, TypeChannel, become_dispatch,
-    forward_to_producer, park_resume, type_channel,
+    Await, DepRequest, Outcome, TypeChannel, become_dispatch, forward_to_producer, park_resume,
+    type_channel,
 };
 use crate::scheduler::Deps;
 
@@ -39,7 +39,7 @@ pub(super) fn bare_identifier<'step, 'b>(
         Some(NameLookup::Bound(delivered)) => {
             Outcome::Done(Ok(StepCarried::born_delivered(delivered)))
         }
-        Some(NameLookup::Parked(producer)) => forward_to_producer(producer),
+        Some(NameLookup::Parked(source)) => forward_to_producer(source),
         None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name.to_string())))),
     }
 }
@@ -50,7 +50,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     t: TypeIdentifier<'step>,
 ) -> Outcome<'step> {
     // The leaf wants the raw resident carrier, not the sealed envelope, so it consumes the shared
-    // type-channel + first-producer surface rather than the full sealing ladder.
+    // type-channel + first-source surface rather than the full sealing ladder.
     match type_channel(s, &t, ctx.active_chain(), ctx.types()) {
         // A resolved type leaf is carried in place under `s` (the scope it was resolved
         // against): a `KType` is a `Copy` registry handle, so the read is a plain handle copy
@@ -60,23 +60,16 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         }
         TypeChannel::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS through the
-        // bridge, so a bare leaf parks on exactly one producer. A bare leaf has no consumer id in
-        // scope, so its standing is read consumer-less — no cycle arm.
-        TypeChannel::Parked(producer) => match ctx.producer_standing(producer) {
-            ProducerStanding::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
-            // Ready-and-bound: the referent finalized between resolve and this check, so
-            // re-resolve directly — the memoized bridge now admits.
-            ProducerStanding::Ready => bare_type_leaf(ctx, s, t),
-            // The producer's terminal is not the type carrier (a finalize-combine returns its own
-            // value), so on wake `resume` re-resolves the leaf through the now-sealed memo rather
-            // than lifting the producer's value. No spliced expression to render, so carrier is
-            // `None`.
-            ProducerStanding::Park => park_resume(
-                vec![producer],
-                None,
-                Box::new(move |ctx, _idx| ctx.with_current_scope(|s| bare_type_leaf(ctx, s, t))),
-            ),
-        },
+        // bridge, so a bare leaf parks on exactly one binder edge. The binder's terminal is not the
+        // type carrier (a finalize-combine returns its own value), so on wake `resume` re-resolves
+        // the leaf through the now-sealed memo rather than lifting that value; a binder that
+        // errored propagates through the park the harness installs. No spliced expression to
+        // render, so carrier is `None`.
+        TypeChannel::Parked(source) => park_resume(
+            vec![source],
+            None,
+            Box::new(move |ctx, _idx| ctx.with_current_scope(|s| bare_type_leaf(ctx, s, t))),
+        ),
     }
 }
 
@@ -204,8 +197,8 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
 /// invocable case.
 ///
 /// A `Parked` head (a still-finalizing `LET <Type-class> = …` binding, including a
-/// recursive/forward type) parks on its producer and re-runs `type_call` on wake. A name
-/// with no producer and no binding is `UnboundName`.
+/// recursive/forward type) parks on the binder's claim edge and re-runs `type_call` on wake. A name
+/// with no claim and no binding is `UnboundName`.
 pub(super) fn type_call<'step>(
     ctx: &SchedulerView<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
@@ -220,26 +213,16 @@ pub(super) fn type_call<'step>(
     let scope = ctx.current_scope();
     let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
         Some(NameLookup::Bound(kt)) => kt,
-        Some(NameLookup::Parked(producer)) => {
-            // A terminal producer has already installed `types[name]`, so the `Bound` arm would win;
-            // reaching here with one (Ready or errored) means a mid-write/errored binder, surfaced as
-            // `UnboundName` since the resume re-runs the fast lane. No consumer id in scope, so the
-            // standing is read consumer-less — no cycle arm.
-            match ctx.producer_standing(producer) {
-                ProducerStanding::Errored(_) | ProducerStanding::Ready => {
-                    return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
-                        head_t.render(),
-                    ))));
-                }
-                ProducerStanding::Park => {
-                    let carrier = expr.summarize();
-                    return park_resume(
-                        vec![producer],
-                        Some(carrier),
-                        Box::new(move |ctx, _idx| type_call(ctx, expr)),
-                    );
-                }
-            }
+        Some(NameLookup::Parked(source)) => {
+            // A finalized binder has already installed `types[name]`, so the `Bound` arm would win;
+            // reaching here means the claim still stands, so park on it and re-run the fast lane on
+            // wake — where either the identity is bound or the name is genuinely `UnboundName`.
+            let carrier = expr.summarize();
+            return park_resume(
+                vec![source],
+                Some(carrier),
+                Box::new(move |ctx, _idx| type_call(ctx, expr)),
+            );
         }
         None => {
             return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));

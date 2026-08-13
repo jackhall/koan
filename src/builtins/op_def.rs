@@ -43,9 +43,10 @@ use crate::machine::{
     Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal, FinishCtx, OwnedDispatch, arg_held,
     require_kexpression,
 };
-use crate::machine::{Body, CarrierWitness, KError, KErrorKind, NodeId, Scope};
+use crate::machine::{Body, CarrierWitness, KError, KErrorKind, Scope};
 use crate::scheduler::DepResults;
 use crate::scheduler::Deps;
+use crate::scheduler::EdgeId;
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
@@ -107,11 +108,11 @@ enum TypeCapture<'a> {
     Sub { owned_pos: usize },
 }
 
-/// Route one classified type slot into a [`TypeCapture`], accumulating its park producers and its
+/// Route one classified type slot into a [`TypeCapture`], accumulating its park sources and its
 /// sub-dispatch — whose owned position the capture records — into the deferral lists.
 fn capture_type_slot<'a>(
     state: ReturnTypeState<'a>,
-    parks: &mut Vec<NodeId>,
+    parks: &mut Vec<EdgeId>,
     subs: &mut Vec<KExpression<'a>>,
 ) -> Result<TypeCapture<'a>, KError> {
     match state {
@@ -217,7 +218,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
         None
     };
 
-    let mut parks: Vec<NodeId> = Vec::new();
+    let mut parks: Vec<EdgeId> = Vec::new();
     let mut subs: Vec<KExpression<'a>> = Vec::new();
     let operand_capture =
         crate::try_action!(capture_type_slot(operand_state, &mut parks, &mut subs));

@@ -73,6 +73,27 @@ impl<'run> KoanRuntime<'run> {
         Ok(())
     }
 
+    /// Release the edges this slot owns, and first drop any pending binding arm still naming one.
+    /// Runs wherever the slot stops being able to release them — every terminal, and the splice
+    /// that retires the slot as an alias. A successful binder's write path finalizes its own claim
+    /// in place, so the clear usually finds nothing; the release is owed either way, and the clear
+    /// is what keeps a table from ever holding an [`EdgeId`](crate::scheduler::EdgeId) whose edge is
+    /// gone. `take` empties the anchor, so a slot's edges are retired exactly once.
+    fn retire_slot_edges(
+        &mut self,
+        scope: &crate::machine::Scope<'_>,
+        anchor: &super::nodes::SlotFrame,
+    ) {
+        let edges = anchor.take_owned_edges();
+        if edges.is_empty() {
+            return;
+        }
+        scope.clear_placeholders_for_edges(&edges, &mut WriteGate::for_run_loop());
+        for edge in edges {
+            self.sched.release_edge(edge);
+        }
+    }
+
     /// The unified node handler, owning one slot step start to finish: collect the resolved dep
     /// terminals, then bracket the step's ambient frame context around running the continuation
     /// against a read-only [`SchedulerView`], reclaiming the owned-dep suffix, and applying the
@@ -103,6 +124,9 @@ impl<'run> KoanRuntime<'run> {
         // handle, and its lexical chain. Read as values up front so nothing holds a scope borrow
         // across the step's `&mut self` work or a tail hop's frame swap.
         let cart = Rc::clone(&anchor.cart);
+        // A second handle to the same anchor, for the apply that runs inside the step open: the
+        // harness records the edges it wires there onto the slot that owns them.
+        let step_anchor = Rc::clone(&anchor);
         let node_scope = anchor.payload.scope;
         let prev_chain_carrier = anchor.payload.chain.clone();
         let (deps, sealed_continuation, _carrier) = work.into_run_parts();
@@ -236,7 +260,7 @@ impl<'run> KoanRuntime<'run> {
                         // brand rides along: an owned dep the outcome names may still have to bump
                         // its own dispatch node (an aggregate literal's elements, a body block's
                         // statements) into this region as it is realized.
-                        rt.apply_outcome(outcome, scope.brand(), id)
+                        rt.apply_outcome(outcome, scope.brand(), id, &step_anchor)
                     },
                 );
                 // The producer's per-call frame, gated to a *dying* producer (a frameless / run-frame
@@ -260,37 +284,33 @@ impl<'run> KoanRuntime<'run> {
                         // `finalize_terminal` hands the envelope on whole; the scheduler seeds the
                         // retention hold from its coverage, so no pull re-derives the reach and no
                         // call site here names one.
-                        match self.finalize_terminal(
+                        let finalized = self.finalize_terminal(
                             envelope,
                             anchor.owner(),
                             frame.and(post.obligation.as_ref()),
-                        ) {
+                        );
+                        self.retire_slot_edges(scope, &anchor);
+                        match finalized {
                             Ok(delivered) => self.sched.finalize(id, Ok(delivered)),
-                            Err(error) => {
-                                scope.clear_placeholders_for_producer(
-                                    id,
-                                    &mut WriteGate::for_run_loop(),
-                                );
-                                self.sched.finalize(id, Err(error));
-                            }
+                            Err(error) => self.sched.finalize(id, Err(error)),
                         }
                     }
                     NodeStep::Error(error) => {
                         // An error finalizes bare (no value, no witness); the frame-gated
                         // obligation still labels it with the callee's trace frame.
                         let error = finalize_error(error, frame.and(post.obligation.as_ref()));
-                        scope.clear_placeholders_for_producer(id, &mut WriteGate::for_run_loop());
+                        self.retire_slot_edges(scope, &anchor);
                         // A terminal error carries no value and so reaches nothing; the producer
                         // frame still retains until its (short-circuiting) destinations pull.
                         self.sched.finalize(id, Err(error));
                     }
-                    NodeStep::ForwardReady(producer) => {
-                        // Relocate `producer`'s terminal into this slot's region via merge-transfer;
-                        // no contract re-check (the producer enforced its own). Framed: the dest
-                        // brand is `yoke`d into the anchor's own region owner, witnessed by it.
-                        // Frameless: the dest region is externally pinned for the step, so a confined
-                        // empty-set `resident` carries it. A ready-but-errored producer relocates to
-                        // an `Err`.
+                    NodeStep::ForwardReady(edge) => {
+                        // Relocate the terminal behind `edge` into this slot's region via
+                        // merge-transfer; no contract re-check (the producer enforced its own).
+                        // Framed: the dest brand is `yoke`d into the anchor's own region owner,
+                        // witnessed by it. Frameless: the dest region is externally pinned for the
+                        // step, so a confined empty-set `resident` carries it. A ready-but-errored
+                        // producer relocates to an `Err`.
                         let dest = match frame {
                             Some(_) => dest_brand(Rc::clone(anchor.owner())),
                             None => {
@@ -299,15 +319,13 @@ impl<'run> KoanRuntime<'run> {
                         };
                         // The relocation's product envelope crosses back whole; the retention hold
                         // seeds from its own coverage, so no pull re-derives the reach.
-                        match self.relocate_terminal(producer, dest) {
+                        // The forward's own classification edge is on the slot's owned list, so the
+                        // retirement below releases it — after the relocation has read through it.
+                        let relocated = self.relocate_terminal(edge, dest);
+                        self.retire_slot_edges(scope, &anchor);
+                        match relocated {
                             Ok(delivered) => self.sched.finalize(id, Ok(delivered)),
-                            Err(error) => {
-                                scope.clear_placeholders_for_producer(
-                                    id,
-                                    &mut WriteGate::for_run_loop(),
-                                );
-                                self.sched.finalize(id, Err(error));
-                            }
+                            Err(error) => self.sched.finalize(id, Err(error)),
                         }
                     }
                     NodeStep::Replace {
@@ -345,15 +363,13 @@ impl<'run> KoanRuntime<'run> {
                                 // the end of this arm: its storage stays pinned by `combined` until the
                                 // step open above exits, and by the loop-carried argument carriers
                                 // beyond that.
-                                self.sched.replace(
-                                    id,
-                                    new_work,
-                                    Some(super::nodes::SlotFrame::new(
-                                        f,
-                                        NodeScope::Yoked,
-                                        new_chain,
-                                    )),
-                                );
+                                let fresh =
+                                    super::nodes::SlotFrame::new(f, NodeScope::Yoked, new_chain);
+                                // The claims belong to the slot, not to the anchor it happens to be
+                                // wearing: hand them to the incoming one so the terminal that
+                                // eventually retires them still finds them.
+                                fresh.own_edges(anchor.take_owned_edges());
+                                self.sched.replace(id, new_work, Some(fresh));
                             }
                             None => {
                                 // A frameless Replace keeps the prior cart. A tail entering an overlay
@@ -364,11 +380,13 @@ impl<'run> KoanRuntime<'run> {
                                 // `ParkThenContinue` (same cart, scope, and chain) keeps the anchor.
                                 let scope = overlay_scope.map_or(node_scope, NodeScope::YokedChild);
                                 let anchor_arg = if overlay_scope.is_some() || chain_changed {
-                                    Some(super::nodes::SlotFrame::new(
+                                    let fresh = super::nodes::SlotFrame::new(
                                         Rc::clone(&prev_frame),
                                         scope,
                                         new_chain,
-                                    ))
+                                    );
+                                    fresh.own_edges(anchor.take_owned_edges());
+                                    Some(fresh)
                                 } else {
                                     None
                                 };
@@ -376,11 +394,13 @@ impl<'run> KoanRuntime<'run> {
                             }
                         }
                     }
-                    NodeStep::Alias(producer) => {
+                    NodeStep::Alias(edge) => {
                         // The slot spliced itself out as a bare-name forward: move its consumers onto
-                        // `producer` and alias it for reads — not re-queued; `producer`'s fire wakes
-                        // them. See `scheduler::splice`.
-                        self.sched.splice_forward(id, producer);
+                        // the producer behind `edge` and alias it for reads — not re-queued; that
+                        // producer's fire wakes them. See `scheduler::splice`. An alias never
+                        // terminalizes, so this is where its owned edges are retired.
+                        self.sched.splice_forward_from(id, edge);
+                        self.retire_slot_edges(scope, &anchor);
                     }
                 }
             },

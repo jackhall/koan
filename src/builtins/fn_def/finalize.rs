@@ -19,7 +19,8 @@ use crate::machine::model::KExpression;
 use crate::machine::model::KType;
 use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
 use crate::machine::model::{SignatureDraft, SignatureElement};
-use crate::machine::{BindingIndex, Body, CarrierWitness, KError, KErrorKind, NodeId, Scope};
+use crate::machine::{BindingIndex, Body, CarrierWitness, KError, KErrorKind, Scope};
+use crate::scheduler::EdgeId;
 use crate::witnessed::Witnessed;
 
 use super::return_type::{
@@ -50,7 +51,7 @@ pub(crate) enum FnKind<'a> {
 pub(crate) enum ParamListResult<'a> {
     Done(Vec<SignatureElement<'a>>),
     Pending {
-        park_producers: Vec<NodeId>,
+        park_producers: Vec<EdgeId>,
         sub_dispatches: Vec<(usize, KExpression<'a>)>,
     },
 }
@@ -68,9 +69,9 @@ pub(crate) enum FnPlan<'a> {
 /// plus the two parking lists.
 pub(crate) struct DeferredInputs<'a> {
     pub capture: ReturnTypeCapture<'a>,
-    /// Existing sibling slots this dep-finish reads at finish-time but does NOT
-    /// own. Installed as `Notify` (park) edges; must not cascade-free.
-    pub park_producers: Vec<NodeId>,
+    /// The binder claim edges this dep-finish reads at finish-time but does NOT
+    /// own. Wired as `Notify` (park) edges off those sources; must not cascade-free.
+    pub park_producers: Vec<EdgeId>,
     /// `Some` only when the return-type slot is an `Expression(_)` carrier that
     /// doesn't reference any FN parameter (resolves once at FN-def time, not
     /// per call). Scheduled ahead of `sub_dispatches` in the owned-sub region.
@@ -147,7 +148,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
             },
         ) => {
             // The return-type sub is scheduled ahead of the signature subs, so it is owned index 0
-            // regardless of how many producers are parked.
+            // regardless of how many claims are parked.
             FnPlan::Deferred(DeferredInputs {
                 capture: ReturnTypeCapture::ReturnTypeExpr { owned_pos: 0 },
                 park_producers,
@@ -318,7 +319,7 @@ pub(crate) fn fn_action<'a>(
 /// elaboration in the finish closure.
 ///
 /// Dep order is `[park ++ rt? ++ subs]`, so the owned indices `splice_layout` and
-/// `ReturnTypeExpr` record stay stable regardless of how many producers are parked.
+/// `ReturnTypeExpr` record stay stable regardless of how many claims are parked.
 pub(crate) fn defer<'a>(
     scope: &'a Scope<'a>,
     signature_expr: KExpression<'a>,

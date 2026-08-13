@@ -9,8 +9,9 @@ use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeferredReturn, ReturnType};
 use crate::machine::model::{Held, KExpression, Record, TypeIdentifier};
 use crate::machine::model::{KObject, KType};
-use crate::machine::{KError, KErrorKind, NodeId, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 use crate::scheduler::DepResults;
+use crate::scheduler::EdgeId;
 use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
@@ -30,7 +31,7 @@ pub(crate) enum ReturnTypeState<'a> {
     Done(KType),
     Pending {
         te: TypeIdentifier<'a>,
-        producers: Vec<NodeId>,
+        producers: Vec<EdgeId>,
     },
     Deferred(DeferredReturn<'a>),
     /// `Expression(_)` carrier (e.g. `-> :(Mo.Ty)`) that doesn't reference any FN

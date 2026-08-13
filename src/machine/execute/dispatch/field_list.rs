@@ -29,8 +29,9 @@ use crate::machine::model::{
     ResultFeed, parse_typed_field_list_via_elaborator,
 };
 use crate::machine::model::{KType, Record, TypeRegistry};
-use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
+use crate::machine::{KError, KErrorKind, Scope, TraceFrame};
 use crate::scheduler::Deps;
+use crate::scheduler::EdgeId;
 
 use super::super::StepCarried;
 use super::super::TerminalDepFinish;
@@ -149,7 +150,7 @@ fn compose_field_list<'step, 'f>(
 /// `[park_producers ++ owned_subs]` dep vector once through [`into_parts`](Self::into_parts).
 pub(crate) struct FieldListDeferral<'a> {
     parts: FieldParts<'a>,
-    park_producers: Vec<NodeId>,
+    park_producers: Vec<EdgeId>,
     sub_dispatches: Vec<WorkingExpression<'a>>,
     context: FieldListContext,
     name_kind: FieldNameKind,
@@ -165,7 +166,7 @@ impl<'a> FieldListDeferral<'a> {
     /// diagnostic and field-name policy. The elaborator-rebuild optionals default empty/absent.
     pub(crate) fn new(
         parts: FieldParts<'a>,
-        park_producers: Vec<NodeId>,
+        park_producers: Vec<EdgeId>,
         sub_dispatches: Vec<WorkingExpression<'a>>,
         context: FieldListContext,
         name_kind: FieldNameKind,

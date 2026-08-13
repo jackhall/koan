@@ -18,10 +18,10 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::machine::NodeId;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::core::{DeclarationSite, LexicalFrame, NameLookup, Scope};
 use crate::machine::model::ast::TypeIdentifier;
+use crate::scheduler::EdgeId;
 
 use super::declaration_window::{DeclWindow, WindowView};
 use super::kkind::KKind;
@@ -34,13 +34,13 @@ use super::registry::TypeRegistry;
 mod tests;
 
 /// Outcome of resolving a `TypeIdentifier` to a `T`, shared across layers: both model and execute
-/// use `TypeResolution<KType>` now that `KType` is a `Copy` handle. `Park` carries the producer
-/// `NodeId`s a still-finalizing referent waits on; `Unbound` the miss diagnostic. The payload-free
+/// use `TypeResolution<KType>` now that `KType` is a `Copy` handle. `Park` carries the binder
+/// [`EdgeId`]s a still-finalizing referent waits on; `Unbound` the miss diagnostic. The payload-free
 /// arms let a layer lift `Done` through [`Self::and_then_done`] and forward the rest unchanged.
 #[derive(Debug)]
 pub enum TypeResolution<T> {
     Done(T),
-    Park(Vec<NodeId>),
+    Park(Vec<EdgeId>),
     Unbound(String),
 }
 
@@ -51,7 +51,7 @@ impl<T> TypeResolution<T> {
     pub fn and_then_done<U>(self, f: impl FnOnce(T) -> TypeResolution<U>) -> TypeResolution<U> {
         match self {
             TypeResolution::Done(payload) => f(payload),
-            TypeResolution::Park(producers) => TypeResolution::Park(producers),
+            TypeResolution::Park(sources) => TypeResolution::Park(sources),
             TypeResolution::Unbound(message) => TypeResolution::Unbound(message),
         }
     }
@@ -152,10 +152,10 @@ fn park_until_seal(el: &Elaborator<'_, '_>, view: WindowView<'_, '_>) -> TypeRes
             "a co-declared type name resolved outside the body that announced it".to_string(),
         );
     };
-    let mut producers: Vec<NodeId> = Vec::new();
+    let mut producers: Vec<EdgeId> = Vec::new();
     for (name, member_owner) in view.unfilled_members() {
         let declarer = member_owner.unwrap_or(name);
-        match owner.bindings().type_placeholder_producer(&declarer) {
+        match owner.bindings().type_placeholder_edge(&declarer) {
             Some(node_id) => {
                 if !producers.contains(&node_id) {
                     producers.push(node_id);
@@ -233,7 +233,7 @@ pub fn elaborate_type_identifier(
         // producer and re-elaborate when it terminalizes. A forward reference is filtered by the
         // chain before reaching here — a position error, not a park. Mutual recursion across the
         // cut co-declares the types in one module body, answered by the window above.
-        Some(NameLookup::Parked(id)) => return TypeResolution::Park(vec![id]),
+        Some(NameLookup::Parked(edge)) => return TypeResolution::Park(vec![edge]),
         None => {}
     }
     // Not a type binding, and there is no value side to consult: the token-class partition

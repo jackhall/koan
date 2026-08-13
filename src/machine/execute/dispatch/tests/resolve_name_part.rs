@@ -2,9 +2,7 @@ use crate::builtins::test_support::TestRun;
 use crate::machine::BindingIndex;
 use crate::machine::NameOutcome;
 use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
-use crate::machine::execute::dispatch::{
-    ProducerDisposition, producer_disposition, resolve_name_part,
-};
+use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
@@ -26,13 +24,7 @@ fn resolve_name_part_identifier_resolved() {
         )
         .unwrap();
     let part = ExpressionPart::Identifier("x");
-    match resolve_name_part(
-        scope,
-        &part,
-        test_run.runtime.scheduler(),
-        None,
-        &test_run.types,
-    ) {
+    match resolve_name_part(scope, &part, None, &test_run.types) {
         Ok(NameOutcome::Resolved(delivered)) => assert!(
             matches!(delivered.open_at().value(), Carried::Object(KObject::Number(n)) if *n == 7.0),
             "expected NameOutcome::Resolved(Number(7.0))",
@@ -48,13 +40,7 @@ fn resolve_name_part_type_resolved() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number"));
-    match resolve_name_part(
-        scope,
-        &part,
-        test_run.runtime.scheduler(),
-        None,
-        &test_run.types,
-    ) {
+    match resolve_name_part(scope, &part, None, &test_run.types) {
         Ok(NameOutcome::Resolved(ref delivered))
             if matches!(delivered.open_at().value(), Carried::Type(KType::NUMBER)) => {}
         other => {
@@ -84,25 +70,22 @@ fn resolve_name_part_parked() {
         ),
         scope,
     );
+    let claim = test_run
+        .runtime
+        .install_claim_edge_for_test(producer, scope);
     scope
         .install_placeholder(
             "fwd".to_string(),
-            producer,
+            claim,
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let part = ExpressionPart::Identifier("fwd");
-    match resolve_name_part(
-        scope,
-        &part,
-        test_run.runtime.scheduler(),
-        None,
-        &test_run.types,
-    ) {
-        Ok(NameOutcome::Parked(p)) => assert_eq!(p, producer),
-        _ => panic!("expected NameOutcome::Parked(producer)"),
+    match resolve_name_part(scope, &part, None, &test_run.types) {
+        Ok(NameOutcome::Parked(p)) => assert_eq!(p, claim),
+        _ => panic!("expected NameOutcome::Parked(claim)"),
     }
 }
 
@@ -113,22 +96,16 @@ fn resolve_name_part_unbound() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let part = ExpressionPart::Identifier("missing");
-    match resolve_name_part(
-        scope,
-        &part,
-        test_run.runtime.scheduler(),
-        None,
-        &test_run.types,
-    ) {
+    match resolve_name_part(scope, &part, None, &test_run.types) {
         Ok(NameOutcome::Unbound(name)) => assert_eq!(name, "missing"),
         _ => panic!("expected NameOutcome::Unbound"),
     }
 }
 
-/// The consumer-ful dependence check returns `Cycle` when a slot would park on itself — the
-/// cycle arm `resolve_name_part` no longer carries (it screens consumer-less) lives here.
+/// The one pre-wiring question a decide still asks: parking a slot on its own claim edge would
+/// close a wake cycle, so the walk drops that source rather than proposing the edge.
 #[test]
-fn producer_disposition_self_park_is_cycle() {
+fn self_park_source_would_create_cycle() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -142,8 +119,11 @@ fn producer_disposition_self_park_is_cycle() {
         ),
         scope,
     );
-    match producer_disposition(test_run.runtime.scheduler(), slot, slot) {
-        ProducerDisposition::Cycle => {}
-        _ => panic!("expected ProducerDisposition::Cycle"),
-    }
+    let claim = test_run.runtime.install_claim_edge_for_test(slot, scope);
+    assert!(
+        test_run
+            .runtime
+            .scheduler()
+            .would_create_cycle_from(claim, slot)
+    );
 }

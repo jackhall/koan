@@ -36,6 +36,22 @@ pub struct EdgeId {
     generation: u32,
 }
 
+impl EdgeId {
+    /// Fabricate a name for a white-box test that drives no slab — a binding table asserted on
+    /// directly, with no scheduler behind it. Gated so it cannot reach production code, and widened
+    /// past `cfg(test)` for an embedder's own white-box tests, which compile against this crate as
+    /// a dependency. The generation is the fresh-index stamp, so a fabricated name never collides
+    /// with a released one.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub const fn for_test(index: usize) -> Self {
+        EdgeId {
+            index,
+            #[cfg(debug_assertions)]
+            generation: 0,
+        }
+    }
+}
+
 /// The destination half of an edge: the region delivery lands in, named raw — validity is the
 /// containment lattice (destination outlives owner outlives edge), not a refcount.
 ///

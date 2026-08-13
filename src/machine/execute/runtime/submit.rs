@@ -27,7 +27,7 @@ use super::super::nodes::{NodeScope, NodeWork, SlotFrame};
 use super::super::outcome::dep_error_frame;
 use super::super::{WitnessedDepFinish, seal_witnessed, short_circuit};
 use super::{KoanRuntime, KoanWorkload};
-use crate::scheduler::ResolvedDeps;
+use crate::scheduler::{Deps, EdgeId, ResolvedDeps};
 
 /// A bare dep-finish node that waits on the resolved `deps`, short-circuits on the first errored dep
 /// under the [`dep_error_frame`] label, else hands the resolved values to a value-only `finish`.
@@ -114,9 +114,14 @@ impl<'run> KoanRuntime<'run> {
 
     /// Submit `work` against the executing slot's own [`NodeScope`] handle, read back from the
     /// ambient payload. Backs the re-dispatch-against-my-own-scope path.
+    /// `parks` are binder edges the classifier already resolved (an aggregate literal whose cell is
+    /// a still-finalizing name). They ride beside the work rather than inside it: the door resolves
+    /// each to its producer and writes the realized list into the stored work, so the slot's row
+    /// and its wires land as one step.
     pub(in crate::machine::execute) fn submit_in_own_scope(
         &mut self,
         work: NodeWork<KoanWorkload>,
+        parks: &[EdgeId],
     ) -> NodeId {
         // Clone the payload off the ambient before taking `&mut self` for the submit.
         let payload = self
@@ -125,7 +130,8 @@ impl<'run> KoanRuntime<'run> {
             .clone();
         let (cart, framed) = self.submission_cart();
         let anchor = SlotFrame::new(cart, payload.scope, payload.chain);
-        self.sched.alloc_node(work, anchor, framed)
+        self.sched
+            .alloc_node_with_parks(work, parks, anchor, framed)
     }
 
     /// Submit each `statement` as a fresh lexical block over `scope`, minting a frame `(scope_id,
@@ -265,14 +271,25 @@ impl<'run> KoanRuntime<'run> {
 
     /// Schedule an `AwaitDeps` against the slot's own scope whose finish folds the resolved deps into
     /// a witnessed aggregate carrier, naming every region the result reaches. `deps` carries park
-    /// producers (read, not owned) and owned subs (cascade-freed on success); the finish addresses
-    /// them through a [`DepResults`](crate::scheduler::DepResults) view.
+    /// *sources* (binder edges the cell classifier resolved — read, not owned) and owned subs
+    /// (cascade-freed on success); the finish addresses them through a
+    /// [`DepResults`](crate::scheduler::DepResults) view, at the very park indices the builder
+    /// handed back at classify time.
+    ///
+    /// No apply-time inspect here: an already-errored park surfaces at the slot's first poll,
+    /// through the step-start pull and the short-circuit [`awaiting_witnessed`] bakes into the
+    /// continuation.
     pub(in crate::machine::execute) fn submit_dep_finish_witnessed_in_own_scope<'a>(
         &mut self,
-        deps: ResolvedDeps,
+        deps: Deps<NodeId>,
         finish: WitnessedDepFinish<'a>,
     ) -> NodeId {
-        self.submit_in_own_scope(awaiting_witnessed(deps, finish))
+        let (parks, owned) = deps.into_parts();
+        let mut resolved = ResolvedDeps::new();
+        for id in owned {
+            resolved.own(id);
+        }
+        self.submit_in_own_scope(awaiting_witnessed(resolved, finish), &parks)
     }
 }
 

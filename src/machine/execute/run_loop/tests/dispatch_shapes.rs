@@ -552,10 +552,11 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
         working(scope, parse_one(&program, "producer_target {y = 1}")),
         scope,
     );
+    let claim = runtime.install_claim_edge_for_test(producer, scope);
     scope
         .install_placeholder(
             "f".to_string(),
-            producer,
+            claim,
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),

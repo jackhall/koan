@@ -125,7 +125,7 @@ fn seal_outcome_into_carrier<'a>(
 }
 
 /// A resolved repr finalizes synchronously; a bare-leaf name resolves against the scope chain,
-/// parks on an in-flight producer (a `DepRequest::Existing` dep-finish), or errors; a raw sigil repr
+/// parks on an in-flight binder's claim edge, or errors; a raw sigil repr
 /// sub-dispatches via [`defer_resolved_sigil`].
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
@@ -497,7 +497,7 @@ mod tests {
 
     /// A NEWTYPE whose repr names a genuinely unknown type errors — and drops the pending
     /// arm its dispatch claimed, so a later construction of the same
-    /// name fails cleanly (unbound) rather than tripping over a leaked producer `NodeId`.
+    /// name fails cleanly (unbound) rather than tripping over a leaked binder `EdgeId`.
     #[test]
     fn unknown_repr_errors_without_leaking_placeholder() {
         let program = program_storage();
@@ -620,7 +620,7 @@ mod tests {
             Some(node_handle),
             "next seals to the member's own handle (a self-reference)",
         );
-        assert!(scope.bindings().type_placeholder_producer("Node").is_none());
+        assert!(scope.bindings().type_placeholder_edge("Node").is_none());
     }
 
     /// A `:(LIST OF Self)` field threads the self-reference through the deferred sigil-field path:
@@ -648,7 +648,7 @@ mod tests {
             Some(types.list(tree_handle)),
             "children seals its self-reference to List of the member's own handle",
         );
-        assert!(scope.bindings().type_placeholder_producer("Tree").is_none());
+        assert!(scope.bindings().type_placeholder_edge("Tree").is_none());
     }
 
     /// A record type nested as a field type elaborates *inline* through the shared field
@@ -678,12 +678,7 @@ mod tests {
             ),
             _ => panic!("expected `inner` to be a record type, got {inner_ty:?}"),
         }
-        assert!(
-            scope
-                .bindings()
-                .type_placeholder_producer("Outer")
-                .is_none()
-        );
+        assert!(scope.bindings().type_placeholder_edge("Outer").is_none());
     }
 
     /// A `:{…}` nested inside a *sub-dispatched* sigil — the one field-list position whose body
@@ -724,7 +719,7 @@ mod tests {
             ),
             _ => panic!("expected the list element to be a record type, got {element:?}"),
         }
-        assert!(scope.bindings().type_placeholder_producer("Tree").is_none());
+        assert!(scope.bindings().type_placeholder_edge("Tree").is_none());
     }
 
     /// The declaration-window sibling cell read back from a *different step* than the one that

@@ -163,7 +163,12 @@ impl<W: Workload> Scheduler<W> {
 
     /// An errored sub counts as ready — parents short-circuit on it. Follows a bare-name-forward
     /// alias to the real producer (see [`splice`](self::splice)).
-    pub fn is_result_ready(&self, id: NodeId) -> bool {
+    ///
+    /// Scheduler-internal: readiness is not a standalone question an embedder asks. It reaches the
+    /// same classification by *installing* — [`install_edge`](Self::install_edge) /
+    /// [`install_deps`](Self::install_deps) return filled-or-parked — so no consumer can read a
+    /// producer's standing without wiring the edge that makes the read sound.
+    pub(in crate::scheduler) fn is_result_ready(&self, id: NodeId) -> bool {
         self.store.is_result_ready(self.resolve_alias(id))
     }
 
@@ -242,7 +247,14 @@ impl<W: Workload> Scheduler<W> {
     /// same reason: the relocation's product carries its own reach. The envelope's coverage is
     /// *dropped* here rather than re-seeded — the value moved into a region that outlives the
     /// scheduler, so the transit pins have nothing left to keep alive.
-    pub fn rehome_terminal(&mut self, id: NodeId, output: Result<DeliveredTerminal<W>, W::Error>) {
+    ///
+    /// Crate-internal: an embedder holds root *edges*, so it re-homes through
+    /// [`rehome_terminal_via_edge`](Self::rehome_terminal_via_edge).
+    pub(crate) fn rehome_terminal(
+        &mut self,
+        id: NodeId,
+        output: Result<DeliveredTerminal<W>, W::Error>,
+    ) {
         let target = self.resolve_alias(id);
         // The re-homed terminal has no per-call producer frame to retain — its value moved into a
         // surviving region — so any hold seeded at its finalize is released here (its count is zero
@@ -256,30 +268,6 @@ impl<W: Workload> Scheduler<W> {
     /// (`DepGraph::would_create_cycle`).
     pub fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
         self.deps.would_create_cycle(producer, consumer)
-    }
-
-    /// Install a resolved dep list's edges against `consumer`: each park a `Notify` edge (the
-    /// consumer reads the producer but does not own it), each owned dep an `Owned` edge (cascade-freed
-    /// on success). Both kinds resolve a bare-name-forward alias first, and an already-finalized
-    /// producer takes no edge at all — its value is read directly, so the consumer never parks on a
-    /// slot that will not fire — but its pull on the producer's retained frame is counted, to be
-    /// discharged after the read.
-    ///
-    /// **The one door an embedder wires a consumer slot's dep edges through** (slab edges have
-    /// their own door, [`install_edge`](Self::install_edge)). It serves an already-allocated
-    /// consumer slot, which is why it takes the dep list separately from the work. The submit-time
-    /// path does not route here: [`alloc_node`](Self::alloc_node) initializes a fresh row and its
-    /// edges as one atomic step, and takes ownership of the sub-work it spawns — so an
-    /// already-finalized *owned* dep still records its backward edge there, because that edge is
-    /// the ownership record the error-path cascade walks. The two are deliberately not the same
-    /// operation.
-    pub fn install_edges(&mut self, deps: &ResolvedDeps, consumer: NodeId) {
-        for &producer in deps.parks() {
-            self.add_park_edge(producer, consumer);
-        }
-        for &producer in deps.owned() {
-            self.add_owned_edge(producer, consumer);
-        }
     }
 
     /// **The one door a consumer's dep list is wired through.** The embedder hands the park *sources*

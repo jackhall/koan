@@ -1,38 +1,35 @@
 //! The dispatch-side bare-name resolution surface.
 //!
-//! One ladder — bare name → value channel / type channel → producer screening →
-//! seal — owned by [`resolve_bare_carrier`]. Its [`BareCarrier`] result carries
-//! exactly the states a consumer observes (sealed / parked / unbound); a producer
-//! error is absorbed at the resolution surface as `Err`, so no consumer carries an
-//! arm for a pre-excluded state. [`resolve_name_part`] is the admission-cache twin: it caches the
-//! same delivered carrier, which [`resolve_dispatch`](super::resolve_dispatch) opens under the
-//! envelope's own pins for `accepts_carried`, sharing the type channel and screening with the
-//! ladder.
+//! One ladder — bare name → value channel / type channel → seal — owned by
+//! [`resolve_bare_carrier`]. Its [`BareCarrier`] result carries exactly the states a *lookup*
+//! observes: sealed, parked on the claim's edge, or unbound. It asks nothing about the parked
+//! binder's standing — a decide holds no `&mut Scheduler`, so it cannot wire the edge that would
+//! make such a read sound; the harness rules on the park when it installs it
+//! ([`InstalledEdge`](crate::scheduler::InstalledEdge)). [`resolve_name_part`] is the
+//! admission-cache twin: it caches the same delivered carrier, which
+//! [`resolve_dispatch`](super::resolve_dispatch) opens under the envelope's own pins for
+//! `accepts_carried`, sharing the type channel with the ladder.
 
 use std::rc::Rc;
 
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{ExpressionPart, KType, TypeIdentifier, TypeRegistry};
-use crate::machine::{
-    DeliveredCarried, KError, LexicalFrame, NameLookup, NameOutcome, NodeId, Scope,
-};
+use crate::machine::{DeliveredCarried, KError, LexicalFrame, NameLookup, NameOutcome, Scope};
 
-use super::super::runtime::KoanWorkload;
-use super::{ProducerStanding, producer_standing};
 use crate::machine::model::Carried;
-use crate::scheduler::Scheduler;
+use crate::scheduler::EdgeId;
 
-/// Type-channel resolution with the first-producer fold applied once. Folds
+/// Type-channel resolution with the first-source fold applied once. Folds
 /// [`resolve_type_identifier`](Scope::resolve_type_identifier)'s [`TypeResolution`]:
-/// a `Done` carries the sealed handle, a `Park` narrows to its first producer (an
-/// empty producer list is a miss, so it renders `Unbound`), and an `Unbound` forwards.
+/// a `Done` carries the sealed handle, a `Park` narrows to its first source edge (an
+/// empty park list is a miss, so it renders `Unbound`), and an `Unbound` forwards.
 pub(in crate::machine::execute) enum TypeChannel {
     Done(KType),
-    Parked(NodeId),
+    Parked(EdgeId),
     Unbound(String),
 }
 
-/// Resolve the type channel for `t`, folding the park-producer list to its first
+/// Resolve the type channel for `t`, folding the park-source list to its first
 /// element. A visible type alias has already resolved its RHS, so a leaf parks on
 /// at most one binder; an empty list renders the miss diagnostic.
 pub(in crate::machine::execute) fn type_channel(
@@ -44,8 +41,8 @@ pub(in crate::machine::execute) fn type_channel(
     match scope.resolve_type_identifier(t, chain, types) {
         TypeResolution::Done(kt) => TypeChannel::Done(kt),
         TypeResolution::Unbound(n) => TypeChannel::Unbound(n),
-        TypeResolution::Park(producers) => match producers.first() {
-            Some(producer) => TypeChannel::Parked(*producer),
+        TypeResolution::Park(sources) => match sources.first() {
+            Some(source) => TypeChannel::Parked(*source),
             None => TypeChannel::Unbound(t.render()),
         },
     }
@@ -56,7 +53,7 @@ pub(in crate::machine::execute) fn type_channel(
 /// (`literal.rs`) without ceremony.
 pub(in crate::machine::execute) enum BareCarrier {
     Sealed(DeliveredCarried),
-    Parked(NodeId),
+    Parked(EdgeId),
     Unbound(String),
 }
 
@@ -64,24 +61,22 @@ pub(in crate::machine::execute) enum BareCarrier {
 /// or leaf `Type`); anything else is unreachable.
 ///
 /// An `Identifier` reads the value channel: a bound name seals its binding-scope
-/// carrier (value and reach as one unit), a still-finalizing name screens on its
-/// producer, a miss is `Unbound`. A `Type` reads the type channel: a resolved leaf
-/// seals its resident type carrier, a still-finalizing referent screens, a miss
-/// forwards. [`screen`] is the one place producer standing folds into the ladder.
+/// carrier (value and reach as one unit), a still-finalizing name yields its claim's edge, a miss
+/// is `Unbound`. A `Type` reads the type channel: a resolved leaf seals its resident type carrier,
+/// a still-finalizing referent yields its edge, a miss forwards. The result is `Err` only when the
+/// lookup itself failed — a *producer* error reaches the consumer through the park the harness
+/// installs, never through a probe here.
 pub(in crate::machine::execute) fn resolve_bare_carrier(
     scope: &Scope<'_>,
     part: &ExpressionPart<'_>,
     chain: Option<&Rc<LexicalFrame>>,
-    scheduler: &Scheduler<KoanWorkload>,
     types: &TypeRegistry,
 ) -> Result<BareCarrier, KError> {
     match part {
         ExpressionPart::Identifier(name) => {
             match scope.resolve_value_delivered(name, chain.map(|c| &**c)) {
                 Some(NameLookup::Bound(delivered)) => Ok(BareCarrier::Sealed(delivered)),
-                Some(NameLookup::Parked(producer)) => {
-                    screen(scheduler, producer, (*name).to_string())
-                }
+                Some(NameLookup::Parked(source)) => Ok(BareCarrier::Parked(source)),
                 None => Ok(BareCarrier::Unbound((*name).to_string())),
             }
         }
@@ -91,37 +86,21 @@ pub(in crate::machine::execute) fn resolve_bare_carrier(
             TypeChannel::Done(kt) => Ok(BareCarrier::Sealed(
                 scope.deliver_resident(Carried::Type(kt)),
             )),
-            TypeChannel::Parked(producer) => screen(scheduler, producer, t.render()),
+            TypeChannel::Parked(source) => Ok(BareCarrier::Parked(source)),
             TypeChannel::Unbound(n) => Ok(BareCarrier::Unbound(n)),
         },
         _ => unreachable!("resolve_bare_carrier only called on bare-name parts"),
     }
 }
 
-/// Fold a parked name's producer standing into the ladder result. A ready-errored
-/// producer absorbs into `Err`; a ready-Ok producer means the name finalized to a
-/// non-shadowing value, so it is `Unbound`; a still-finalizing one parks.
-fn screen(
-    scheduler: &Scheduler<KoanWorkload>,
-    producer: NodeId,
-    name: String,
-) -> Result<BareCarrier, KError> {
-    match producer_standing(scheduler, producer) {
-        ProducerStanding::Errored(e) => Err(e.clone_for_propagation()),
-        ProducerStanding::Ready => Ok(BareCarrier::Unbound(name)),
-        ProducerStanding::Park => Ok(BareCarrier::Parked(producer)),
-    }
-}
-
 /// Resolve a bare-name `ExpressionPart` (`Identifier` or leaf `Type`) into the
 /// admission-cache currency. The value channel lifts the binding into a delivery envelope, which
-/// admission opens under its own pins to call `accepts_carried`; the type channel and screening are
-/// shared with the ladder. A producer error absorbs into `Err`, surfacing before `resolve_dispatch`
-/// is consulted.
+/// admission opens under its own pins to call `accepts_carried`; the type channel is shared with
+/// the ladder. A still-finalizing name yields its claim's edge, which the harness rules on when it
+/// installs the park.
 pub(in crate::machine::execute) fn resolve_name_part(
     scope: &Scope<'_>,
     part: &ExpressionPart<'_>,
-    scheduler: &Scheduler<KoanWorkload>,
     active_chain: Option<&Rc<LexicalFrame>>,
     types: &TypeRegistry,
 ) -> Result<NameOutcome, KError> {
@@ -132,7 +111,7 @@ pub(in crate::machine::execute) fn resolve_name_part(
     };
     let chain = active_chain.map(|c| &**c);
     match scope.resolve_value_delivered(name, chain) {
-        Some(NameLookup::Parked(producer)) => return screen_outcome(scheduler, producer, name),
+        Some(NameLookup::Parked(source)) => return Ok(NameOutcome::Parked(source)),
         // An Identifier part reads the value channel; a Type part takes the type ladder below.
         Some(NameLookup::Bound(delivered)) if is_type.is_none() => {
             return Ok(NameOutcome::Resolved(delivered));
@@ -141,8 +120,7 @@ pub(in crate::machine::execute) fn resolve_name_part(
     }
     match is_type {
         // The bare-leaf type token routes through the memoized, park-capable bridge, reusing the
-        // same first-producer fold and ready/errored/park screen the value-side placeholder arm
-        // applies.
+        // same first-source fold the value-side placeholder arm applies.
         Some(t) => match type_channel(scope, t, active_chain.cloned(), types) {
             // A `KType` is a `Copy` registry handle with no reach, so the admission cache carries
             // it in the same envelope currency under an empty foreign bundle.
@@ -150,23 +128,9 @@ pub(in crate::machine::execute) fn resolve_name_part(
                 scope.deliver_resident(Carried::Type(kt)),
             )),
             TypeChannel::Unbound(n) => Ok(NameOutcome::Unbound(n)),
-            TypeChannel::Parked(producer) => screen_outcome(scheduler, producer, name),
+            TypeChannel::Parked(source) => Ok(NameOutcome::Parked(source)),
         },
         None => Ok(NameOutcome::Unbound(name.to_string())),
-    }
-}
-
-/// Fold a parked name's producer standing into a [`NameOutcome`] — the
-/// admission-cache twin of [`screen`].
-fn screen_outcome(
-    scheduler: &Scheduler<KoanWorkload>,
-    producer: NodeId,
-    name: &str,
-) -> Result<NameOutcome, KError> {
-    match producer_standing(scheduler, producer) {
-        ProducerStanding::Errored(e) => Err(e.clone_for_propagation()),
-        ProducerStanding::Ready => Ok(NameOutcome::Unbound(name.to_string())),
-        ProducerStanding::Park => Ok(NameOutcome::Parked(producer)),
     }
 }
 

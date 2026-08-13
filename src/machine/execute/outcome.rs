@@ -12,7 +12,7 @@
 //! - [`Outcome::Continue`] — the node lives; replace its work and run again immediately (no park).
 //! - [`Outcome::ParkThenContinue`] — park on deps; on resolve run a [`Continuation`] that yields
 //!   another outcome.
-//! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
+//! - [`Outcome::Forward`] — splice the slot out as an alias of the producer an edge names.
 
 use crate::machine::DeliveredCarried;
 use crate::machine::core::{BlockEntry, FramePlacement};
@@ -22,6 +22,7 @@ use crate::machine::model::Carried;
 #[cfg(test)]
 use crate::machine::Scope;
 use crate::machine::{KError, NodeId, TraceFrame};
+use crate::scheduler::EdgeId;
 use crate::scheduler::{DepResults, Deps};
 use crate::witnessed::reattachable;
 
@@ -66,11 +67,13 @@ pub(in crate::machine::execute) enum Outcome<'step> {
         continuation: Continuation<'step>,
         dep_error_frame: Option<TraceFrame>,
     },
-    /// The slot's result *is* `producer`'s result (a bare name resolving to a binding): the harness
-    /// splices the slot out rather than installing a forwarding node — finalizing directly if
-    /// `producer` is ready, else aliasing the slot onto `producer` and moving its consumers to
-    /// `producer`'s notify list. The single-producer invariant holds with no duplicate forwarding slot.
-    Forward(NodeId),
+    /// The slot's result *is* the result behind `source` (a bare name resolving to a binding): the
+    /// harness splices the slot out rather than installing a forwarding node. It classifies by
+    /// *wiring* a second edge off `source` — finalizing directly through it when that install comes
+    /// back filled, else releasing it and aliasing the slot onto the producer, moving its consumers
+    /// to that producer's notify list. The single-producer invariant holds with no duplicate
+    /// forwarding slot.
+    Forward(EdgeId),
 }
 
 #[cfg(test)]

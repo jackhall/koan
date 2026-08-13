@@ -15,7 +15,7 @@
 //!   *resolved* producer. A consumer that wires to the slot *after* the splice therefore waits on —
 //!   and is woken by — the real producer, not the dead alias. A resolved producer that has already
 //!   finalized adds no edge at all: its value is read directly when the consumer runs. Both are
-//!   scheduler-internal; [`Scheduler::install_edges`] is the public door that routes them.
+//!   scheduler-internal; [`Scheduler::install_deps`] is the public door that routes them.
 
 use super::{NodeId, Scheduler, Workload};
 
@@ -39,7 +39,10 @@ impl<W: Workload> Scheduler<W> {
     /// onto `producer`'s notify list and mark `slot` an alias. `producer` is resolved first so
     /// aliases never chain. Late parkers are handled by [`Self::add_owned_edge`] / `add_park_edge`
     /// resolving the alias when they wire in.
-    pub fn splice_forward(&mut self, slot: NodeId, producer: NodeId) {
+    ///
+    /// Crate-internal: an embedder names the producer by an edge, so it splices through
+    /// [`splice_forward_from`](Self::splice_forward_from).
+    pub(crate) fn splice_forward(&mut self, slot: NodeId, producer: NodeId) {
         let producer = self.resolve_alias(producer);
         self.deps.splice_notify(slot, producer);
         self.store.alias(slot, producer);
@@ -52,8 +55,8 @@ impl<W: Workload> Scheduler<W> {
     /// increment) to be discharged after the consumer's read.
     ///
     /// Scheduler-internal, like its `add_park_edge` sibling: an embedder wires a slot's dep edges
-    /// through the one public door, [`Scheduler::install_edges`], which routes both kinds off a
-    /// [`ResolvedDeps`](super::ResolvedDeps).
+    /// through the one public door, [`Scheduler::install_deps`], which routes both kinds off the
+    /// park sources and owned producers it hands in.
     pub(in crate::scheduler) fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
         let producer = self.resolve_alias(producer);
         if self.store.is_result_ready(producer) {

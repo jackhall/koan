@@ -12,6 +12,7 @@ use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Scalar;
 use crate::machine::model::values::Carried;
+use crate::scheduler::{EdgeId, NodeId};
 use workgraph::witnessed::Sealed;
 
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
@@ -188,7 +189,7 @@ fn write_type_finalizes_pending_arm_in_place() {
     bindings
         .install_placeholder(
             "Bar",
-            NodeId::for_test(7),
+            EdgeId::for_test(7),
             BindingIndex::BUILTIN,
             BindKind::Type,
             &mut crate::machine::WriteGate::for_test(),
@@ -196,7 +197,7 @@ fn write_type_finalizes_pending_arm_in_place() {
         .expect("placeholder install should succeed on fresh bindings");
     assert_eq!(
         bindings.pending_names(),
-        vec![("Bar".to_string(), BindKind::Type, NodeId::for_test(7))],
+        vec![("Bar".to_string(), BindKind::Type, EdgeId::for_test(7))],
     );
     bindings
         .write_type(
@@ -376,19 +377,19 @@ fn value_write_finalizes_the_pending_arm_in_place() {
     bindings
         .install_placeholder(
             "x",
-            NodeId::for_test(11),
+            EdgeId::for_test(11),
             BindingIndex::value(2),
             BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("value claim should succeed on fresh bindings");
     assert_eq!(
-        bindings.pending_value("x").map(|p| p.producer),
-        Some(NodeId::for_test(11)),
+        bindings.pending_value("x").map(|p| p.edge),
+        Some(EdgeId::for_test(11)),
     );
     assert!(matches!(
         bindings.lookup_value("x", None),
-        Some(NameLookup::Parked(id)) if id == NodeId::for_test(11),
+        Some(NameLookup::Parked(id)) if id == EdgeId::for_test(11),
     ));
 
     let val: &KObject = region.alloc_scalar(Scalar::Number(5.0));
@@ -411,7 +412,7 @@ fn value_write_finalizes_the_pending_arm_in_place() {
 
 /// A `types` slot holds a bound identity and a pending producer at once: a parallel nominal
 /// finalize pre-installs the name's external identity while its producer is still in flight.
-/// `lookup_type` answers the bound identity (it prefers the bound arm), `type_placeholder_producer`
+/// `lookup_type` answers the bound identity (it prefers the bound arm), `type_placeholder_edge`
 /// still surfaces the producer for the finalize gate to park on, and the producer-failure sweep
 /// drops only the pending arm — the bound identity survives.
 #[test]
@@ -430,24 +431,24 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
     bindings
         .install_placeholder(
             "Wrapper",
-            NodeId::for_test(9),
+            EdgeId::for_test(9),
             BindingIndex::BUILTIN,
             BindKind::Type,
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("the in-flight producer claims the same slot");
+        .expect("the in-flight binder claims the same slot");
 
     assert!(matches!(
         bindings.lookup_type("Wrapper", None),
         Some(NameLookup::Bound(kt)) if kt == KType::NUMBER,
     ));
     assert_eq!(
-        bindings.type_placeholder_producer("Wrapper"),
-        Some(NodeId::for_test(9)),
+        bindings.type_placeholder_edge("Wrapper"),
+        Some(EdgeId::for_test(9)),
     );
 
-    bindings.clear_placeholders_for_producer(
-        NodeId::for_test(9),
+    bindings.clear_placeholders_for_edges(
+        &[EdgeId::for_test(9)],
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(bindings.pending_names().is_empty());
@@ -511,11 +512,11 @@ fn bump_backed_tables_full_churn() {
             &types,
         );
         let sealed_key = f.open(|f| f.signature.untyped_key());
-        for producer in [NodeId::for_test(7), NodeId::for_test(8)] {
+        for claim in [EdgeId::for_test(7), EdgeId::for_test(8)] {
             scope
                 .install_pending_overload(
                     sealed_key.clone(),
-                    producer,
+                    claim,
                     BindingIndex::value(1),
                     &mut gate,
                 )
@@ -535,14 +536,14 @@ fn bump_backed_tables_full_churn() {
         scope
             .install_pending_overload(
                 purged_key.clone(),
-                NodeId::for_test(9),
+                EdgeId::for_test(9),
                 BindingIndex::value(2),
                 &mut gate,
             )
             .expect("the purged binder claims its bucket");
         scope
             .bindings()
-            .clear_placeholders_for_producer(NodeId::for_test(9), &mut gate);
+            .clear_placeholders_for_edges(&[EdgeId::for_test(9)], &mut gate);
         assert!(
             scope
                 .bindings()

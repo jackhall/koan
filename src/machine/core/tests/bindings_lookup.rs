@@ -4,12 +4,13 @@
 //! lookups the index-gated resolver walks.
 
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
-use crate::machine::core::kfunction::{Body, KFunction, NodeId};
+use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{BindingIndex, FrameStorageExt, NameLookup, run_root_storage};
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
+use crate::scheduler::EdgeId;
 
 use super::{body_no_op, unit_signature};
 use crate::machine::model::Scalar;
@@ -75,7 +76,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
     scope
         .install_placeholder(
             "placeholder".to_string(),
-            NodeId::for_test(2),
+            EdgeId::for_test(2),
             BindingIndex::value(5),
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
@@ -88,7 +89,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
             .is_none()
     );
     match scope.bindings().lookup_value("placeholder", Some(9)) {
-        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId::for_test(2)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, EdgeId::for_test(2)),
         _ => panic!("placeholder must be visible past its install index"),
     }
 }
@@ -227,14 +228,14 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
     scope
         .install_pending_overload(
             key.clone(),
-            NodeId::for_test(11),
+            EdgeId::for_test(11),
             BindingIndex::value(2),
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let visible = scope.bindings().lookup_function(&key, Some(5));
     assert!(visible.overloads.is_empty());
-    assert_eq!(visible.pending, Some(NodeId::for_test(11)));
+    assert_eq!(visible.pending, Some(EdgeId::for_test(11)));
     // Filtered out: no overloads and no visible pending — the old `None`.
     let hidden = scope.bindings().lookup_function(&key, Some(1));
     assert!(hidden.overloads.is_empty());
@@ -267,14 +268,14 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     scope
         .install_pending_overload(
             key.clone(),
-            NodeId::for_test(99),
+            EdgeId::for_test(99),
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let lookup = scope.bindings().lookup_function(&key, Some(9));
     assert_eq!(lookup.overloads.len(), 1);
-    assert_eq!(lookup.pending, Some(NodeId::for_test(99)));
+    assert_eq!(lookup.pending, Some(EdgeId::for_test(99)));
 }
 
 #[test]
@@ -310,7 +311,7 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
 /// carries and spans all of them; a sibling producer's claim and a finalized overload both
 /// survive, and a bucket the purge empties loses its key.
 #[test]
-fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
+fn clear_placeholders_purges_every_bucket_the_binder_claimed() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -336,24 +337,24 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
     }
     .untyped_key();
 
-    // NodeId::for_test(7) is one binder declaring two inner-call buckets; NodeId::for_test(8) is a sibling sharing one.
-    for (key, producer, idx) in [
-        (&sealed_key, NodeId::for_test(7), 2),
-        (&other_key, NodeId::for_test(7), 2),
-        (&other_key, NodeId::for_test(8), 3),
+    // Edge 7 is one binder declaring two inner-call buckets; edge 8 is a sibling sharing one.
+    for (key, claim, idx) in [
+        (&sealed_key, EdgeId::for_test(7), 2),
+        (&other_key, EdgeId::for_test(7), 2),
+        (&other_key, EdgeId::for_test(8), 3),
     ] {
         scope
             .install_pending_overload(
                 key.clone(),
-                producer,
+                claim,
                 BindingIndex::value(idx),
                 &mut crate::machine::WriteGate::for_test(),
             )
             .unwrap();
     }
 
-    scope.clear_placeholders_for_producer(
-        NodeId::for_test(7),
+    scope.clear_placeholders_for_edges(
+        &[EdgeId::for_test(7)],
         &mut crate::machine::WriteGate::for_test(),
     );
 
@@ -364,9 +365,9 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
         bindings
             .pending_overload_entries(&other_key)
             .iter()
-            .map(|p| p.producer)
+            .map(|p| p.edge)
             .collect::<Vec<_>>(),
-        vec![NodeId::for_test(8)],
+        vec![EdgeId::for_test(8)],
     );
     // The finalized overload sharing a bucket with a purged claim survives.
     assert_eq!(
@@ -375,8 +376,8 @@ fn clear_placeholders_for_producer_purges_every_bucket_the_producer_claimed() {
     );
 
     // Purging the last claim in a bucket that holds nothing else drops the key.
-    bindings.clear_placeholders_for_producer(
-        NodeId::for_test(8),
+    bindings.clear_placeholders_for_edges(
+        &[EdgeId::for_test(8)],
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(

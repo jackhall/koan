@@ -22,7 +22,7 @@ use super::SubmitContext;
 use super::ctx::{SchedulerView, current_dest_frame, with_current_node_scope};
 use super::stage_eager_part;
 use super::{BareCarrier, resolve_bare_carrier};
-use crate::scheduler::{DepResults, ResolvedDeps};
+use crate::scheduler::{DepResults, Deps};
 
 /// Build-time accumulator family for an aggregate fold: the destination region plus the cells folded
 /// in so far. Each cell carrier is `transfer_into`-folded in — relocating the value and unioning its
@@ -51,7 +51,7 @@ enum Slot {
 
 impl Slot {
     /// Add `id` as an owned sub-dependency and return the `Owned` slot that reads its result.
-    fn owned(deps: &mut ResolvedDeps, id: NodeId) -> Self {
+    fn owned(deps: &mut Deps<NodeId>, id: NodeId) -> Self {
         Slot::Owned(deps.own(id))
     }
 }
@@ -213,7 +213,7 @@ impl<'step> KoanRuntime<'step> {
     /// reaches by construction.
     fn schedule_aggregate(
         &mut self,
-        deps: ResolvedDeps,
+        deps: Deps<NodeId>,
         rows: Vec<AggRow>,
         assemble: AggAssemble,
     ) -> NodeId {
@@ -271,7 +271,7 @@ impl<'step> KoanRuntime<'step> {
         brand: RegionBrand<'a>,
         items: &[ExpressionPart<'a>],
     ) -> NodeId {
-        let mut deps = ResolvedDeps::new();
+        let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(items.len());
         for &part in items {
             let value = self.classify_aggregate_part(brand, part, &mut deps);
@@ -292,7 +292,7 @@ impl<'step> KoanRuntime<'step> {
         brand: RegionBrand<'a>,
         pairs: &[(ExpressionPart<'a>, ExpressionPart<'a>)],
     ) -> NodeId {
-        let mut deps = ResolvedDeps::new();
+        let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(pairs.len());
         for &(k, v) in pairs {
             let key = self.classify_aggregate_part(brand, k, &mut deps);
@@ -325,7 +325,7 @@ impl<'step> KoanRuntime<'step> {
         fields: &[(&'a str, ExpressionPart<'a>)],
     ) -> NodeId {
         let mut names: Vec<String> = Vec::with_capacity(fields.len());
-        let mut deps = ResolvedDeps::new();
+        let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(fields.len());
         for &(name, value) in fields {
             let value = self.classify_aggregate_part(brand, value, &mut deps);
@@ -350,7 +350,7 @@ impl<'step> KoanRuntime<'step> {
         &mut self,
         brand: RegionBrand<'a>,
         part: ExpressionPart<'a>,
-        deps: &mut ResolvedDeps,
+        deps: &mut Deps<NodeId>,
     ) -> Slot {
         let part = match stage_eager_part(brand, part) {
             Ok(dep) => return Slot::owned(deps, self.realize_eager_dep(brand, dep)),
@@ -396,23 +396,17 @@ impl<'step> KoanRuntime<'step> {
         &mut self,
         brand: RegionBrand<'a>,
         part: &ExpressionPart<'a>,
-        deps: &mut ResolvedDeps,
+        deps: &mut Deps<NodeId>,
     ) -> Slot {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         // `BareCarrier` is lifetime-free, so the whole result escapes the branded-scope closure and
         // the `&mut self` fallback runs after the read closes.
         let resolved = with_current_node_scope(&self.ambient, |s| {
-            resolve_bare_carrier(
-                s,
-                part,
-                active_chain,
-                &self.sched,
-                self.ambient.type_registry(),
-            )
+            resolve_bare_carrier(s, part, active_chain, self.ambient.type_registry())
         });
         match resolved {
             Ok(BareCarrier::Sealed(cell)) => Slot::Static(cell),
-            Ok(BareCarrier::Parked(producer)) => Slot::Park(deps.park_on(producer)),
+            Ok(BareCarrier::Parked(source)) => Slot::Park(deps.park_on(source)),
             // Unbound / producer-errored: fall back to a sub-Dispatch so the `BareIdentifier` fast
             // lane's error path surfaces them uniformly.
             Ok(BareCarrier::Unbound(_)) | Err(_) => {

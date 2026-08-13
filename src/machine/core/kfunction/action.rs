@@ -24,7 +24,7 @@ use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KType, Record, TypeNode};
 use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{
-    BindingIndex, DeclarationSite, DeliveredCarried, KError, KErrorKind, NodeHandle, NodeId,
+    BindingIndex, DeclarationSite, DeliveredCarried, KError, KErrorKind, NodeHandle,
 };
 use crate::scheduler::DepResults;
 use crate::scheduler::Deps;
@@ -550,7 +550,7 @@ impl<'a> Action<'a> {
 
 /// The one owned-dep shape a builtin declares in an [`Action::AwaitDeps`]:
 /// a sub-expression the harness dispatches and the consumer owns
-/// (cascade-freed when it succeeds). Parks are `NodeId`s the `Deps` builder
+/// (cascade-freed when it succeeds). Parks are `EdgeId`s the `Deps` builder
 /// holds structurally, so a builtin cannot install an Owned edge on a
 /// producer it does not own — that shape is unrepresentable here.
 pub struct OwnedDispatch<'a> {
@@ -577,8 +577,8 @@ impl<'a> OwnedDispatch<'a> {
 ///
 /// The builtin `AwaitDeps` currency does not flow through `DepRequest`: parks are structural in the
 /// [`Deps`](crate::scheduler::Deps) builder and owned entries are [`OwnedDispatch`]. `DepRequest`'s
-/// roles are `Catch`'s single `watched` dep (`Existing` for a producer already in scope,
-/// `Dispatch` for a watched sub-expression) and the dispatcher-side `Outcome` currency: `Dispatch`
+/// roles are `Catch`'s single `watched` dep (a `Dispatch` of the watched sub-expression) and the
+/// dispatcher-side `Outcome` currency: `Dispatch`
 /// staged subs, the `ListLit` / `DictLit` / `RecordLit` literal lowerings that schedule an aggregate
 /// literal as one owned producer, and `BodyBlock` fanning a non-tail statement block out to one owned
 /// producer per statement (see [`BodyPlacement`] for where they bind). A finish addresses the realized
@@ -589,7 +589,6 @@ pub enum DepRequest<'a> {
         expr: WorkingExpression<'a>,
         placement: DepPlacement<'a>,
     },
-    Existing(NodeId),
     ListLit(&'a [ExpressionPart<'a>]),
     DictLit(&'a [(ExpressionPart<'a>, ExpressionPart<'a>)]),
     RecordLit(&'a [(&'a str, ExpressionPart<'a>)]),

@@ -46,7 +46,7 @@ pub(crate) use kfunction::action::{
 pub(crate) use kfunction::block_tail::{BlockBody, BlockScope, BlockSeed, block_tail};
 pub(crate) use kfunction::body::{ReturnContract, body_statement_refs, split_body_statements};
 pub(crate) use kfunction::exec::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
-pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction, NodeId};
+pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction};
 pub use lexical_frame::{LexicalFrame, assemble_body_chain};
 pub use ref_carriers::{ModuleRefFamily, ScopeRefFamily};
 pub use run_id::RunId;

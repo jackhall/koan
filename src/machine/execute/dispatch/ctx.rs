@@ -30,11 +30,8 @@ use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
 use super::super::obligation::ReturnObligation;
 use super::super::runtime::KoanWorkload;
-use super::{
-    Await, BareCarrier, DepRequest, Outcome, ProducerDisposition, ProducerStanding,
-    resolve_bare_carrier, resolve_name_part,
-};
-use crate::scheduler::{Deps, Scheduler};
+use super::{Await, BareCarrier, DepRequest, Outcome, resolve_bare_carrier, resolve_name_part};
+use crate::scheduler::{Deps, EdgeId, Scheduler};
 
 /// Run `f` with a [`NodeScope`] handle's scope opened at a `for<'b>` brand. A `Yoked` slot
 /// re-projects from the active cart through [`CallFrame::with_scope`]; a `YokedChild` slot opens its
@@ -240,25 +237,13 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
         self.ambient.current_obligation_duplicate()
     }
 
-    pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
-        self.sched.would_create_cycle(producer, consumer)
-    }
-
-    /// Read `producer`'s standing consumer-less (ready → errored → park) at a leaf-park site with no
-    /// consumer id in scope, where a cycle can never be classified. Each caller keeps its own policy
-    /// per arm.
-    pub(super) fn producer_standing(&self, producer: NodeId) -> ProducerStanding<'_> {
-        super::producer_standing(self.sched, producer)
-    }
-
-    /// Classify whether this slot (`consumer`) can depend on `producer` — the shared park ladder
-    /// (ready → errored → would-cycle → park). Each caller keeps its own policy per arm.
-    pub(super) fn producer_disposition(
-        &self,
-        producer: NodeId,
-        consumer: NodeId,
-    ) -> ProducerDisposition<'_> {
-        super::producer_disposition(self.sched, producer, consumer)
+    /// Would parking `consumer` on the producer behind `source` close a wake cycle? The **one**
+    /// pre-wiring question a decide still asks the graph: a cycle deadlocks rather than errors, so
+    /// it has to be ruled out before the edge is proposed. Every other classification — ready,
+    /// errored, still-finalizing — is the install's answer, read by the harness off
+    /// [`InstalledEdge`](crate::scheduler::InstalledEdge), never probed here.
+    pub(super) fn would_create_cycle_from(&self, source: EdgeId, consumer: NodeId) -> bool {
+        self.sched.would_create_cycle_from(source, consumer)
     }
 
     /// Build the per-part `bare_outcomes` cache: one `resolve_name_part` per bare-name part,
@@ -274,14 +259,8 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
             .iter()
             .map(|p| match p.value.as_ast() {
                 Some(ast @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => {
-                    resolve_name_part(
-                        self.current_scope(),
-                        &ast,
-                        self.sched,
-                        active_chain,
-                        self.types(),
-                    )
-                    .map(Some)
+                    resolve_name_part(self.current_scope(), &ast, active_chain, self.types())
+                        .map(Some)
                 }
                 _ => Ok(None),
             })
@@ -296,18 +275,12 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
     ) -> Result<BareCarrier, KError> {
         // The bare-name ladder reads a parser token, so a wrap slot hands its AST part straight in.
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
-        resolve_bare_carrier(
-            self.current_scope(),
-            part,
-            active_chain,
-            self.sched,
-            self.types(),
-        )
+        resolve_bare_carrier(self.current_scope(), part, active_chain, self.types())
     }
 
     /// Install each staged eager dep and decide the eager-subs outcome. Every dep is already
-    /// `DepRequest` currency — `Existing` parks on its pre-existing producer, every other variant
-    /// is a fresh owned edge the harness submits. Nothing is read and spliced inline here — that
+    /// `DepRequest` currency — every variant is a fresh owned edge the harness submits. Nothing is
+    /// read and spliced inline here — that
     /// would embed a producer's frame-local terminal, which its per-call frame frees at Done (it
     /// never lifts), so it would dangle. The finish rebuilds `working_expr` with the resolved
     /// carriers in its staged slots — one rebuild for the whole batch, the parts run being frozen

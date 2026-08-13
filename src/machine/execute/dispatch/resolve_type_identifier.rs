@@ -22,10 +22,10 @@
 //! **declared** reference — a SIG-declared or abstract slot, identified by the declaring scope id
 //! its node records.
 
-use crate::machine::core::NodeId;
 use crate::machine::core::{LexicalFrame, Scope, ScopeId};
 use crate::machine::model::TypeIdentifier;
 use crate::machine::model::{KType, TypeNode, TypeRegistry, TypeResolution};
+use crate::scheduler::EdgeId;
 
 impl<'step> Scope<'step> {
     /// Layer-2 scope-bound TypeIdentifier resolution: elaborates against `self` and admits
@@ -43,7 +43,7 @@ impl<'step> Scope<'step> {
         // A referenced type still in flight demotes this `Done` to a `Park`; `Park` /
         // `Unbound` forward unchanged.
         elaborate_type_identifier(&mut elaborator, te, types).and_then_done(|kt| {
-            let pending = FinalizeGate { scope: self, types }.pending_producers(kt);
+            let pending = FinalizeGate { scope: self, types }.pending_sources(kt);
             if pending.is_empty() {
                 TypeResolution::Done(kt)
             } else {
@@ -57,7 +57,7 @@ impl<'step> Scope<'step> {
 /// *"no not-yet-sealed type may reach a consumer"* as a type.
 ///
 /// Admits a `KType` iff every top-level user-type it references is finalized in its owning scope
-/// (no type-side placeholder left there); otherwise returns the producer `NodeId`s the caller
+/// (no type-side placeholder left there); otherwise returns the binder [`EdgeId`]s the caller
 /// parks on.
 ///
 /// Both probes read the type placeholder straight from the kind-tagged map — not via
@@ -70,10 +70,10 @@ struct FinalizeGate<'view, 'step> {
 
 impl FinalizeGate<'_, '_> {
     /// Producer `NodeId`s the caller must park on; empty iff the gate admits.
-    fn pending_producers(&self, kt: KType) -> Vec<NodeId> {
-        let mut pending: Vec<NodeId> = Vec::new();
+    fn pending_sources(&self, kt: KType) -> Vec<EdgeId> {
+        let mut pending: Vec<EdgeId> = Vec::new();
         for UserTypeRef { scope_id, name } in user_type_refs(kt, self.types) {
-            if let Some(node_id) = self.declared_producer(scope_id, &name)
+            if let Some(node_id) = self.declared_source(scope_id, &name)
                 && !pending.contains(&node_id)
             {
                 pending.push(node_id);
@@ -82,11 +82,11 @@ impl FinalizeGate<'_, '_> {
         pending
     }
 
-    /// The in-flight producer of the scope that declared a SIG / abstract slot: find
+    /// The in-flight claim edge of the scope that declared a SIG / abstract slot: find
     /// that scope by id, park iff it still holds a type placeholder for `name`.
-    fn declared_producer(&self, scope_id: ScopeId, name: &str) -> Option<NodeId> {
+    fn declared_source(&self, scope_id: ScopeId, name: &str) -> Option<EdgeId> {
         let owner = self.scope.ancestors().find(|s| s.id == scope_id)?;
-        owner.bindings().type_placeholder_producer(name)
+        owner.bindings().type_placeholder_edge(name)
     }
 }
 

@@ -132,7 +132,7 @@ impl<'run> KoanRuntime<'run> {
                 // past scheduler teardown with nothing folded here. The product envelope's coverage
                 // is the transit copy, dropped by `rehome_terminal`: what the run region now holds
                 // is the mint, not these pins.
-                if let Ok(delivered) = self.relocate_terminal_via_edge(
+                if let Ok(delivered) = self.relocate_terminal(
                     edge,
                     root.deliver_resident::<DestHandleFamily>(root.brand().handle()),
                 ) {
