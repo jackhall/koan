@@ -12,6 +12,7 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::{KError, KErrorKind, Scope, WriteGate};
 use crate::parse::{parse, parse_with_path};
+use crate::scheduler::EdgeId;
 
 /// The run-root seeding door. The run-global root is unreachable by any node until the program
 /// starts, so the builtin registration is a construction-time write: this mints the
@@ -71,8 +72,9 @@ pub fn interpret_with_writer_path(
 
 impl<'run> KoanRuntime<'run> {
     /// Drive a parsed program to completion: enter each top-level statement as a root via
-    /// [`enter_block`](Self::enter_block), run the scheduler to quiescence, then surface the
-    /// first error or the untyped-resolution rejection below.
+    /// [`enter_block`](Self::enter_block), wire one root edge apiece, run the scheduler to
+    /// quiescence through [`drive_roots`](Self::drive_roots), then release those edges — on the
+    /// error path too, so no name outlives the run frame it was destined at.
     pub(in crate::machine::execute) fn run_program(
         &mut self,
         root: &'run Scope<'run>,
@@ -84,17 +86,42 @@ impl<'run> KoanRuntime<'run> {
             .into_iter()
             .map(|expr| WorkingExpression::from_ast(root.brand(), expr))
             .collect();
-        let top_level = self.enter_block(root.id, statements, root);
+        // The run's roots leave submission as edges. Each names the run frame's region as its
+        // destination — where the drain below re-homes a root that reaches a per-call region — and
+        // holding that owner across the install is the wiring-time proof the region is pinned. The
+        // submit-time `NodeId`s are transient currency and go out of scope right here.
+        let run_owner = root
+            .region_owner()
+            .upgrade()
+            .expect("the run root's region owner is held for the whole run");
+        let roots: Vec<EdgeId> = self
+            .enter_block(root.id, statements, root)
+            .into_iter()
+            .map(|id| self.sched.install_edge(id, &run_owner).edge_id())
+            .collect();
+        let outcome = self.drive_roots(root, &roots);
+        // Koan is the roots' owner, so koan releases them — before the harness (and with it the run
+        // frame these edges name) tears down.
+        for &edge in &roots {
+            self.sched.release_edge(edge);
+        }
+        outcome
+    }
+
+    /// Run to quiescence, drain the roots into the run region, and rule on their resolution — the
+    /// fallible middle of [`run_program`](Self::run_program), split out so every exit from it passes
+    /// through the root-edge release.
+    fn drive_roots(&mut self, root: &'run Scope<'run>, roots: &[EdgeId]) -> Result<(), KError> {
         self.execute()?;
         // Each top-level statement is a consumer-less root: its terminal stays pinned in the
         // producer's per-call frame, since no consumer ever pull-lifts it. Relocate every root that
         // reaches a per-call region into the run region so it lives run-long and its per-call frame
         // releases; a root whose whole reach is eternal storage — the run region itself — and an
         // errored terminal need no re-home, because nothing they name dies with a per-call frame.
-        for &id in &top_level {
+        for &edge in roots {
             let reaches_per_call = self
                 .sched
-                .dep_delivered(id)
+                .edge_delivered(edge)
                 .is_ok_and(|delivered| delivered.open_at().pins_beyond_eternal());
             if reaches_per_call {
                 // The dest rides an empty-set `resident`: the run region outlives everything and is
@@ -105,11 +132,11 @@ impl<'run> KoanRuntime<'run> {
                 // past scheduler teardown with nothing folded here. The product envelope's coverage
                 // is the transit copy, dropped by `rehome_terminal`: what the run region now holds
                 // is the mint, not these pins.
-                if let Ok(delivered) = self.relocate_terminal(
-                    id,
+                if let Ok(delivered) = self.relocate_terminal_via_edge(
+                    edge,
                     root.deliver_resident::<DestHandleFamily>(root.brand().handle()),
                 ) {
-                    self.sched.rehome_terminal(id, Ok(delivered));
+                    self.sched.rehome_terminal_via_edge(edge, Ok(delivered));
                 }
             }
         }
@@ -118,9 +145,9 @@ impl<'run> KoanRuntime<'run> {
         // A bare top-level expression is an untyped resolution boundary: an unstamped
         // empty `[]` / `{}` reaching it has no element type to infer, so reject rather
         // than silently resolve to `List<Any>` / `Dict<Any, Any>`.
-        for id in top_level {
+        for &edge in roots {
             // Copy out the empty-container verdict from inside the open — the carrier never escapes.
-            let is_unannotated_empty = match self.read_result_with(id, |value| {
+            let is_unannotated_empty = match self.sched.read_edge_result_with(edge, |value| {
                 value
                     .as_object()
                     .is_some_and(|o| o.is_unstamped_empty_container())

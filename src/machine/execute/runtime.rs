@@ -42,7 +42,7 @@ use super::{
     short_circuit,
 };
 use crate::machine::model::CarriedFamily;
-use crate::scheduler::{Deps, ResolvedDeps, Scheduler, Workload};
+use crate::scheduler::{Deps, EdgeId, ResolvedDeps, Scheduler, Workload};
 use crate::witnessed::Delivered;
 
 mod interpret;
@@ -189,6 +189,18 @@ impl<'run> KoanRuntime<'run> {
         // the claim off the value it is storing. The destination's own region-lifetime retention
         // rides the transfer's mint, so a caller that only needs the value to outlive teardown drops
         // the envelope.
+        Ok(relocate_seam(&delivered, dest))
+    }
+
+    /// [`relocate_terminal`](Self::relocate_terminal) reached through an edge the caller holds —
+    /// the drain's form, where the run's roots are named by the root edges `run_program` installed
+    /// and no producer `NodeId` survives submission. Same seam, same envelope contract.
+    pub(in crate::machine::execute) fn relocate_terminal_via_edge(
+        &self,
+        edge: EdgeId,
+        dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
+    ) -> Result<DeliveredCarried, KError> {
+        let delivered = self.sched.edge_delivered(edge).map_err(|e| e.clone())?;
         Ok(relocate_seam(&delivered, dest))
     }
 
