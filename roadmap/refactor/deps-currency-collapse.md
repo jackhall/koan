@@ -4,11 +4,14 @@
 `[park..., owned...]` layout with split positional addressing — `park(i)` /
 `owned(j)` accessors, `Slot::Park` indexing in
 [literal.rs](../../src/machine/execute/dispatch/literal.rs), and the
-`resolved.own(...)` / `park_on(...)` builder split
+`own(...)` / `park_on(...)` builder split
 ([scheduler-library.md](../../design/scheduler-library.md)) — but under
 edge-centric delivery the scheduler consumes no park/owned distinction: deps
 arrive as ordinary residents regardless of role. Two index spaces persist for
-one dep list.
+one dep list, and the two sides now differ in currency as well: a `Deps` park
+is a source `EdgeId` the embedder holds, an owned entry a request the harness
+realizes to a producer, and `ResolvedDeps` is a separate producer-keyed struct
+the install door writes.
 
 **Acceptance criteria.**
 

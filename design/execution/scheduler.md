@@ -79,9 +79,9 @@ data, and a single harness method applies them. The three pieces:
   `&'view Scheduler<KoanWorkload>` (never `&mut`) together with the driver's per-step
   ambient context. It exposes only the reads a decide needs: the
   static-over-the-step ones (`current_scope`, `chain_deref`, `in_contract_chain`,
-  `build_bare_outcomes`) and the live cycle guard on *pre-existing* producers
-  (`would_create_cycle`) — readiness is not a view read: install returns
-  filled-or-parked when the harness applies the outcome. It permits scope
+  `build_bare_outcomes`) and the live cycle guard on the producer behind a claim
+  edge (`would_create_cycle_from`) — readiness is not a view read: install
+  returns filled-or-parked when the harness applies the outcome. It permits scope
   binding (interior-mutable `&Scope`) but no graph write. The scheduler's `queues`
   / `deps` / `store` fields stay `pub(in crate::scheduler)`; the dispatch shape
   modules (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields
@@ -99,9 +99,9 @@ data, and a single harness method applies them. The three pieces:
   error), `Continue` (replace this slot's work and frame,
   re-run, no park), `ParkThenContinue` (park on deps, then run a
   [`Continuation`](../../src/machine/execute/outcome.rs) that yields another
-  outcome), and `Forward` (the slot's result *is* a named producer's — the
-  harness splices the slot out as an alias of that producer rather than
-  installing a forwarding node; see
+  outcome), and `Forward` (the slot's result *is* the result behind a named
+  edge — the harness splices the slot out as an alias of that producer rather
+  than installing a forwarding node; see
   [Bare-name forward splice](#bare-name-forward-splice)). The dispatch→execution
   hand-off is itself a dep-free `Continue`: a decide that picks a call folds the
   resolved call into a `Continue` whose frame placement installs the per-call
@@ -139,11 +139,14 @@ The scheduler reaches the driver only through its method contract, and every
 method names only `EdgeId` and the workload's associated types — no signature
 names a `KExpression`, `Scope`, or AST type, and node identities stay
 library-internal. `pop_next` / `take_for_run` / `replace` drive a slot's
-lifecycle; `alloc_node`, `install_edges` and `splice_forward` wire the graph —
-`install_edges` being the single door for wiring an already-allocated slot,
-routing the same scheduler-internal wire primitive `alloc_node` uses, and
+lifecycle; `alloc_node` / `alloc_node_with_parks`, `install_deps`,
+`install_edge` / `install_edge_from` and `splice_forward_from` wire the graph —
+`install_deps` being the single door for wiring an already-allocated slot,
+routing the same scheduler-internal wire primitive the allocators use, and
 install returning filled-or-parked per edge; `finalize` delivers and reclaims;
-`would_create_cycle` / `unresolved` are the reads. No trait
+`would_create_cycle_from` / `unresolved` and the edge-keyed terminal reads
+(`edge_result_error`, `read_edge_result_with`, `edge_delivered`) are the reads.
+No trait
 wraps `Scheduler`: those are inherent methods capped `pub(crate)`, so only the
 Koan driver reaches them, and the `queues` / `deps` / `store` fields stay
 `pub(in crate::scheduler)`. A builtin invoked mid-dispatch
@@ -189,17 +192,31 @@ What is Koan's is *which* edges each dispatch shape installs:
   sub-expressions — the deps of the working-copy splice, a body block's leading
   statements. Their edges name the spawning consumer's region as destination.
 - **Park** deps are Koan's wait-on-someone-else's-producer cases: a dispatch
-  decide's park-on-producer when a name resolves to a still-running binding
-  producer, and a dep-finish's `Existing` sibling parks. A placeholder park
-  names the *original* destination scope's region on its edge — delivery dedups
-  per distinct destination, so the eventual binding write and the placeholder
-  share one adopt.
+  decide that resolves a name to a still-running binder, an aggregate literal
+  cell whose name is still finalizing, a deferred head. Koan names each of
+  these by the claim `EdgeId` the binder installed — never by a producer — and
+  the door mints the consumer's own edge off it, *inheriting the source's
+  destination*. So a placeholder park names the **original destination scope's
+  region**, and delivery dedups per distinct destination: the eventual binding
+  write and the placeholder share one adopt.
+- **Claim** edges are the binder's own: one per channel a statement's
+  binder plan stamps, wired at submission toward the scope the name enters
+  ([name-placeholders.md § Submission-time binder install](name-placeholders.md#submission-time-binder-install-and-the-position-rule)).
+  The submitting slot owns them and retires them at its terminal.
+- **Root** edges are the run's: `run_program` wires one per top-level statement
+  toward the run frame's region, reads the drain boundary through them, and
+  releases every one before the harness tears the run frame down
+  ([interpret.rs](../../src/machine/execute/runtime/interpret.rs)).
 
-To the scheduler both are the same edge; the owned/park split is Koan's `Deps`
-currency labeling — positional addressing plus dispatch classification, which
-is install-and-inspect: install returns filled-or-parked, and the
-already-errored and would-cycle arms are Koan policy read off the installed
-edge ([dispatch.rs](../../src/machine/execute/dispatch.rs)).
+To the scheduler park and owned deps are the same edge; the owned/park split is
+Koan's `Deps` currency labeling — positional addressing plus dispatch
+classification, which is **install-and-inspect**: a decide holds no
+`&mut Scheduler`, so it never probes a producer's standing; it emits the park
+and the harness rules on the door's filled-or-parked return, propagating an
+already-errored producer's terminal at apply under the park site's own trace
+label. The would-cycle guard is the one question that stays pre-wiring, because
+parking on an ancestor deadlocks rather than errors
+([dispatch.rs](../../src/machine/execute/dispatch.rs)).
 
 Every consumer wakes the same way: at pop time its pending count is zero, so every
 dep is terminal, and [`run_step`](../../src/machine/execute/run_loop.rs) reads each
@@ -221,11 +238,15 @@ the slot is **spliced out** as an alias of the producer, which stays the sole
 producer.
 
 Koan's half is the trigger: the bare-name decide returns
-[`Outcome::Forward(producer)`](../../src/machine/execute/outcome.rs). If `producer`
-is already ready, the harness finalizes the slot with the producer's terminal
-directly ([`NodeStep::Done`](../../src/machine/execute/nodes.rs)); otherwise the
-slot's step yields [`NodeStep::Alias(producer)`](../../src/machine/execute/nodes.rs)
-and the library takes over — re-pointing the slot's parked edges at the
+[`Outcome::Forward(source)`](../../src/machine/execute/outcome.rs), naming the
+binder's claim edge. The harness classifies it the same way it classifies a
+park — by *wiring*: it installs a second edge off `source`, which the slot owns
+for the rest of the step. A **filled** install means the producer is terminal,
+so the harness relocates that terminal through the new edge and finalizes
+([`NodeStep::ForwardReady(edge)`](../../src/machine/execute/nodes.rs)); a
+**parked** one yields
+[`NodeStep::Alias(source)`](../../src/machine/execute/nodes.rs) and the library
+takes over — re-pointing the slot's parked edges at the
 producer once, so no aliased slot survives as a residual and no alias chain is
 walked on reads
 ([workgraph/design/dag-scheduler.md § Alias splice](../../workgraph/design/dag-scheduler.md#alias-splice)).

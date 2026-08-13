@@ -222,7 +222,10 @@ drain-boundary read is a resident read, not a graph read.
 
 Slots reclaim at finalize, so a late edge cannot fill from a slot — but the
 embedder always wires from an `EdgeId` it holds. **Install returns
-filled-or-parked**, folding readiness probes into the install verb:
+filled-or-parked** — every wiring verb (`install_edge`, `install_edge_from`,
+`install_deps`, and the allocators underneath them) hands back an
+`InstalledEdge::{Filled, Parked}` — folding readiness probes into the install
+verb:
 
 - Wiring a new consumer to a *filled* edge reads that edge's resident value and
   adopts it into the new edge's destination — or, when the new edge names the
@@ -237,6 +240,17 @@ filled branch, taken whenever the producer finalized before the consumer's
 wiring. The only discipline the filled branch needs is the ownership rule
 itself: a wiring call names an edge whose owner still stands, so the edge
 being read is live, and a stale name trips the slab's generation stamps.
+
+Because the verdict rides the verb, the crate exposes **no standalone readiness
+or producer-standing probe**: readiness is not a question an embedder asks, it
+is what wiring answers, so no consumer can read a producer's state without
+having wired the edge that makes the read sound. A `Filled` verdict is the
+caller's to act on rather than something a later poll rediscovers — an errored
+producer never notifies again, so a park on one would wait forever, and the
+embedder propagates at once instead. The one graph question that stays
+pre-wiring is `would_create_cycle` (and its edge-keyed form): parking on an
+ancestor deadlocks rather than errors, so it has to be answerable before the
+edge exists.
 
 ## Alias splice
 
@@ -256,10 +270,19 @@ embedder holds `EdgeId`s, not topology.
 
 The wire primitive is scheduler-internal. An embedder wiring an
 already-allocated slot goes through the single public door,
-`Scheduler::install_edges`, which routes a `ResolvedDeps` list through it; a
-fresh slot's row and its wires are initialized as one atomic step by
-`alloc_node`, which routes the same primitive. One primitive, two doors — so no
-wiring path can skew a row's invariants.
+`Scheduler::install_deps`, which resolves the embedder's dep list — park
+*source edges* plus owned producers — through it; a fresh slot's row and its
+wires are initialized as one atomic step by `alloc_node` (owned deps only) and
+`alloc_node_with_parks` (its sibling for a slot whose parks arrive with the
+work), both routing the same primitive. One primitive, two doors — so no wiring
+path can skew a row's invariants.
+
+Every park mints the consumer its *own* slab edge off the source, inheriting the
+source's destination region, and the consumer's row owns it: release rides the
+row's dep bookkeeping (`reclaim_deps` on the success path, `free` on every
+other), draining so a reclaim followed by a free releases each edge exactly
+once. That is Inv-B made structural for parks rather than a duty the embedder
+carries.
 
 ## Open work
 

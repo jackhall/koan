@@ -317,9 +317,9 @@ pub(in crate::machine::execute) fn park_resume<'step>(
     park_resume_labelled(sources, carrier, None, resume)
 }
 
-/// [`park_resume`] carrying an explicit dep-error frame — for the sites whose deleted
-/// ready-errored arm attached one, so an error surfacing at install time keeps the same trace
-/// label it had when the decide screened for it.
+/// [`park_resume`] carrying an explicit dep-error frame — the park sites that label their
+/// propagation (`<dispatch-park>`, `<operator-chain>`) reach for this one, so an error the install
+/// surfaces is framed at the site that asked for the park rather than arriving bare.
 pub(in crate::machine::execute) fn park_resume_labelled<'step>(
     sources: Vec<EdgeId>,
     carrier: Option<String>,

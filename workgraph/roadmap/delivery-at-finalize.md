@@ -70,10 +70,8 @@ the finalize walk and keeps no scheduler-held pins.
 
 ## Dependencies
 
-**Requires:**
-
-- [Koan wires through edges](../../roadmap/refactor/edge-wiring-migration.md) —
-  the wide migration precedes the flip.
+**Requires:** none — koan already speaks edges and wires through the install
+door, so the flip lands deep-and-narrow.
 
 **Unblocks:**
 

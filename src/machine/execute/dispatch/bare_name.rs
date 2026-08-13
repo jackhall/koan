@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{ExpressionPart, KType, TypeIdentifier, TypeRegistry};
-use crate::machine::{DeliveredCarried, KError, LexicalFrame, NameLookup, NameOutcome, Scope};
+use crate::machine::{DeliveredCarried, LexicalFrame, NameLookup, NameOutcome, Scope};
 
 use crate::machine::model::Carried;
 use crate::scheduler::EdgeId;
@@ -63,31 +63,29 @@ pub(in crate::machine::execute) enum BareCarrier {
 /// An `Identifier` reads the value channel: a bound name seals its binding-scope
 /// carrier (value and reach as one unit), a still-finalizing name yields its claim's edge, a miss
 /// is `Unbound`. A `Type` reads the type channel: a resolved leaf seals its resident type carrier,
-/// a still-finalizing referent yields its edge, a miss forwards. The result is `Err` only when the
-/// lookup itself failed — a *producer* error reaches the consumer through the park the harness
-/// installs, never through a probe here.
+/// a still-finalizing referent yields its edge, a miss forwards. The ladder is total: every part
+/// lands on one of the three rungs, because a *producer* error reaches the consumer through the
+/// park the harness installs, never through a probe here.
 pub(in crate::machine::execute) fn resolve_bare_carrier(
     scope: &Scope<'_>,
     part: &ExpressionPart<'_>,
     chain: Option<&Rc<LexicalFrame>>,
     types: &TypeRegistry,
-) -> Result<BareCarrier, KError> {
+) -> BareCarrier {
     match part {
         ExpressionPart::Identifier(name) => {
             match scope.resolve_value_delivered(name, chain.map(|c| &**c)) {
-                Some(NameLookup::Bound(delivered)) => Ok(BareCarrier::Sealed(delivered)),
-                Some(NameLookup::Parked(source)) => Ok(BareCarrier::Parked(source)),
-                None => Ok(BareCarrier::Unbound((*name).to_string())),
+                Some(NameLookup::Bound(delivered)) => BareCarrier::Sealed(delivered),
+                Some(NameLookup::Parked(source)) => BareCarrier::Parked(source),
+                None => BareCarrier::Unbound((*name).to_string()),
             }
         }
         ExpressionPart::Type(t) => match type_channel(scope, t, chain.cloned(), types) {
             // A `KType` is a `Copy` registry handle — no foreign reach — so the resident type
             // carrier seals under an empty foreign bundle.
-            TypeChannel::Done(kt) => Ok(BareCarrier::Sealed(
-                scope.deliver_resident(Carried::Type(kt)),
-            )),
-            TypeChannel::Parked(source) => Ok(BareCarrier::Parked(source)),
-            TypeChannel::Unbound(n) => Ok(BareCarrier::Unbound(n)),
+            TypeChannel::Done(kt) => BareCarrier::Sealed(scope.deliver_resident(Carried::Type(kt))),
+            TypeChannel::Parked(source) => BareCarrier::Parked(source),
+            TypeChannel::Unbound(n) => BareCarrier::Unbound(n),
         },
         _ => unreachable!("resolve_bare_carrier only called on bare-name parts"),
     }
@@ -103,7 +101,7 @@ pub(in crate::machine::execute) fn resolve_name_part(
     part: &ExpressionPart<'_>,
     active_chain: Option<&Rc<LexicalFrame>>,
     types: &TypeRegistry,
-) -> Result<NameOutcome, KError> {
+) -> NameOutcome {
     let (name, is_type) = match part {
         ExpressionPart::Identifier(n) => (*n, None),
         ExpressionPart::Type(t) => (t.as_str(), Some(t)),
@@ -111,10 +109,10 @@ pub(in crate::machine::execute) fn resolve_name_part(
     };
     let chain = active_chain.map(|c| &**c);
     match scope.resolve_value_delivered(name, chain) {
-        Some(NameLookup::Parked(source)) => return Ok(NameOutcome::Parked(source)),
+        Some(NameLookup::Parked(source)) => return NameOutcome::Parked(source),
         // An Identifier part reads the value channel; a Type part takes the type ladder below.
         Some(NameLookup::Bound(delivered)) if is_type.is_none() => {
-            return Ok(NameOutcome::Resolved(delivered));
+            return NameOutcome::Resolved(delivered);
         }
         Some(NameLookup::Bound(_)) | None => {}
     }
@@ -124,13 +122,13 @@ pub(in crate::machine::execute) fn resolve_name_part(
         Some(t) => match type_channel(scope, t, active_chain.cloned(), types) {
             // A `KType` is a `Copy` registry handle with no reach, so the admission cache carries
             // it in the same envelope currency under an empty foreign bundle.
-            TypeChannel::Done(kt) => Ok(NameOutcome::Resolved(
-                scope.deliver_resident(Carried::Type(kt)),
-            )),
-            TypeChannel::Unbound(n) => Ok(NameOutcome::Unbound(n)),
-            TypeChannel::Parked(source) => Ok(NameOutcome::Parked(source)),
+            TypeChannel::Done(kt) => {
+                NameOutcome::Resolved(scope.deliver_resident(Carried::Type(kt)))
+            }
+            TypeChannel::Unbound(n) => NameOutcome::Unbound(n),
+            TypeChannel::Parked(source) => NameOutcome::Parked(source),
         },
-        None => Ok(NameOutcome::Unbound(name.to_string())),
+        None => NameOutcome::Unbound(name.to_string()),
     }
 }
 

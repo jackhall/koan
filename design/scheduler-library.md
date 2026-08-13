@@ -214,28 +214,47 @@ Working names throughout; shapes are the commitment, identifiers are not.
 
 **The install door — the generic building block.**
 
-Wiring goes through one public door, `Scheduler::install_edges`, and **install
+Wiring goes through one public door, `Scheduler::install_deps`, and **install
 returns filled-or-parked** per edge: *filled* means the producer had already
 finalized and the value was delivered into the edge's destination at install;
 *parked* means the consumer waits and the wake fires at the producer's
 finalize. The "can I depend on this producer?" classification — ready /
 already-errored / must-park — is install-and-inspect, not a separate probe
-ladder; the would-cycle guard stays a pre-wiring query. Every arm's meaning is
-a Koan dispatch decision, so the classification lives Koan-side over
-`KoanWorkload` / `KError` ([dispatch.rs](../src/machine/execute/dispatch.rs)),
-built on the install door. The library names no Koan type and stays smaller.
+ladder: the library exposes **no** standalone readiness or
+producer-standing probe, so no consumer can read a producer's state without
+wiring the edge that makes the read sound. The would-cycle guard stays a
+pre-wiring query, because parking on an ancestor deadlocks rather than errors.
+Every arm's meaning is a Koan dispatch decision, so the classification lives
+Koan-side over `KoanWorkload` / `KError`
+([runtime.rs](../src/machine/execute/runtime.rs) rules on the door's return
+when it applies an outcome), built on the install door. The library names no
+Koan type and stays smaller.
+
+The door has one submit-time sibling, `alloc_node_with_parks`: a fresh slot's
+row and its wires initialize as one atomic step, so parks that arrive with the
+work do not need a second wiring call. Both route the same
+scheduler-internal wire primitive.
 
 **`Deps` — the dep-list builder.**
 
 ```rust
 let mut deps = Deps::new();
-deps.park_on(producer);                    // dedup'd park entry
+deps.park_on(source);                      // dedup'd park entry, by source EdgeId
 let arg = deps.own(request);               // owned entry, returns owned index
 ```
 
 `Deps` owns the `[park..., owned...]` layout internally. A finish addresses
 results through a `DepResults` view — `park(i)` / `owned(j)` accessors — never
 by arithmetic over a shared vector.
+
+The two sides of the list are in **different currencies, deliberately**. A park
+is named by the source `EdgeId` the embedder holds — the door mints the
+consumer's own edge off it and resolves the producer internally — while an owned
+dep is sub-work the embedder is spawning and hands over directly. Dedup is by
+`EdgeId`, so two distinct edges naming one producer stay two parks and every
+index the builder handed back keeps addressing its own slot. The realized list
+the door writes into the stored work (`ResolvedDeps`) is producer-keyed on both
+sides and is scheduler-internal from that point on.
 
 **`Await` — the envelope builder.**
 
@@ -319,11 +338,16 @@ picture:
   scope takes the value's carrier and mints its reach pair against the
   scope's region — description into the table, pins onto the binding entry —
   policy code composing library values, never inspecting them.
+- **Koan's held names are edges.** Parked deps, dispatch placeholders, the
+  scope tables' pending arms, and the run's roots are all `EdgeId`s, and every
+  one of them is wired through the install door
+  ([execution/scheduler.md § Which edges Koan installs](execution/scheduler.md#which-edges-koan-installs)).
+  Each edge has an owner that releases it: the consumer slot for a park, the
+  submitting slot for a binder claim, `run_program` itself for a root — which it
+  releases before the run frame those edges name is torn down.
 
 ## Open work
 
-- [Koan wires through edges](../roadmap/refactor/edge-wiring-migration.md) —
-  koan adopts `EdgeId`s and the install door.
 - [Collapse the Deps owned/park currency](../roadmap/refactor/deps-currency-collapse.md)
   — one dep list, one index space.
 - [Carving the cellgraph crate](../workgraph/roadmap/cellgraph-extraction.md)

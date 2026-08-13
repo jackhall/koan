@@ -25,8 +25,9 @@ use super::is_eager_working_part;
 /// Cached outcome of resolving a bare-name part (`Identifier` or leaf `Type`).
 /// Built once per dispatch into a slice paralleling `expr.parts` (`None` for
 /// non-bare-name parts) and consumed by strict admission and the relaxed pass.
-/// A producer error absorbs into the builder's `Err` before the cache is built,
-/// so it never appears as an outcome here.
+/// These three arms are exhaustive — the ladder that builds them is total, and a
+/// producer's error is not one of them: it reaches the consumer through the park
+/// the harness installs, never through a probe at cache-build time.
 pub enum NameOutcome {
     /// The bound value lifted into a delivery envelope pinned by its binding scope — admission
     /// opens it under those pins to classify the value, so a speculative probe re-anchors nothing

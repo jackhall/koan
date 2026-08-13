@@ -24,10 +24,7 @@ pub(super) fn initial<'step>(
     expr: WorkingExpression<'step>,
     id: NodeId,
 ) -> Outcome<'step> {
-    let bare_outcomes = match ctx.build_bare_outcomes(expr.parts) {
-        Ok(outcomes) => outcomes,
-        Err(e) => return Outcome::Done(Err(e.with_frame(working_frame("<wrap-resolve>", &expr)))),
-    };
+    let bare_outcomes = ctx.build_bare_outcomes(expr.parts);
     let chain = ctx.chain_deref();
     // Resolve dispatch against the cart scope at `'step`: the `Resolved` carries the picked function
     // already at the cart lifetime, so it rides straight into `invoke_continue` with no re-anchor.
@@ -130,14 +127,7 @@ pub(super) fn finish<'step>(
     working_expr: WorkingExpression<'step>,
     id: NodeId,
 ) -> Outcome<'step> {
-    let bare_outcomes = match ctx.build_bare_outcomes(working_expr.parts) {
-        Ok(outcomes) => outcomes,
-        Err(e) => {
-            return Outcome::Done(Err(
-                e.with_frame(working_frame("<wrap-resolve>", &working_expr))
-            ));
-        }
-    };
+    let bare_outcomes = ctx.build_bare_outcomes(working_expr.parts);
     let scope = ctx.current_scope();
     match scope.resolve_dispatch(
         &working_expr,
@@ -354,7 +344,7 @@ fn part_walk<'step>(
                 new_parts.push(*part);
                 continue;
             };
-            match ctx.resolve_bare_carrier(&name_part)? {
+            match ctx.resolve_bare_carrier(&name_part) {
                 // A resolved bound name splices inline as its binding-scope carrier — value and reach
                 // as one cell — rested into this scope's own region. A name bound here rests for
                 // free (the self rule strips this region from what is retained); one bound further

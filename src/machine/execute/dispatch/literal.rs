@@ -389,9 +389,9 @@ impl<'step> KoanRuntime<'step> {
 
     /// Shared eager-resolve for the Identifier and leaf-Type branches. A bound name seals its
     /// binding-scope carrier — value and reach as one cell, witnessed by its binding scope's home
-    /// frame — straight into a static slot; a still-finalizing name parks. Unbound / producer-errored
-    /// names fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path (and the
-    /// dep-finish's dep-error short-circuit) handles them uniformly.
+    /// frame — straight into a static slot; a still-finalizing name parks on its claim edge. An
+    /// unbound name falls back to a sub-Dispatch so the `BareIdentifier` fast lane's error path
+    /// (and the dep-finish's dep-error short-circuit) handles it uniformly.
     fn resolve_aggregate_bare_name<'a>(
         &mut self,
         brand: RegionBrand<'a>,
@@ -405,11 +405,11 @@ impl<'step> KoanRuntime<'step> {
             resolve_bare_carrier(s, part, active_chain, self.ambient.type_registry())
         });
         match resolved {
-            Ok(BareCarrier::Sealed(cell)) => Slot::Static(cell),
-            Ok(BareCarrier::Parked(source)) => Slot::Park(deps.park_on(source)),
-            // Unbound / producer-errored: fall back to a sub-Dispatch so the `BareIdentifier` fast
-            // lane's error path surfaces them uniformly.
-            Ok(BareCarrier::Unbound(_)) | Err(_) => {
+            BareCarrier::Sealed(cell) => Slot::Static(cell),
+            BareCarrier::Parked(source) => Slot::Park(deps.park_on(source)),
+            // Unbound: fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path
+            // surfaces it uniformly.
+            BareCarrier::Unbound(_) => {
                 let expr =
                     WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(*part))]);
                 Slot::owned(

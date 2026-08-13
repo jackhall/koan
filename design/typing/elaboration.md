@@ -362,10 +362,14 @@ admission rule per cache entry on a bare-name part:
 | `Parked` / `Unbound`     | Admit via shape-only `arg.matches(part)`. The post-pick splice/park walk is the only place that produces precise per-slot `ParkOnProducers` / `UnboundName` diagnostics, so admission must not reject and lose them. |
 | `None` (non-bare part)   | Fall back to shape-only `arg.matches(part)`.                                     |
 
-A producer error never reaches this table: it is absorbed as an `Err` when the
-cache is built, short-circuiting before admission runs. Cycle detection is
-likewise deferred — the cache carries no consumer id — so neither state is a
-`NameOutcome` variant admission must screen.
+A producer error never reaches this table, and no fourth row is hiding: the
+cache-building ladder is **total**, so every bare-name part lands on one of the
+three rungs above. A producer's error is not a rung — it reaches this consumer
+through the park the harness installs, ruled on at wiring time rather than
+probed here
+([classify-and-apply.md](../execution/classify-and-apply.md)).
+Cycle detection is likewise deferred — the cache carries no consumer id — so
+neither state is a `NameOutcome` variant admission must screen.
 
 **Binder declaration slots bypass the cache.** A slot typed `KType::Identifier`
 or `KType::OfKind(KKind::ProperType)` owns the name (`x` in `LET x = …`, `Ty` in

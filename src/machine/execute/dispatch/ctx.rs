@@ -21,8 +21,7 @@ use crate::machine::model::FoldDirection;
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{
-    CallFrame, DeliveredCarried, KError, LexicalFrame, NameOutcome, NodeHandle, NodeId, Scope,
-    SplicedCell,
+    CallFrame, DeliveredCarried, LexicalFrame, NameOutcome, NodeHandle, NodeId, Scope, SplicedCell,
 };
 use crate::source::{Span, Spanned};
 
@@ -247,32 +246,28 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
     }
 
     /// Build the per-part `bare_outcomes` cache: one `resolve_name_part` per bare-name part,
-    /// `None` otherwise. The first part whose producer already errored short-circuits to `Err`,
-    /// so the propagated error surfaces before `resolve_dispatch` is consulted; cycle detection
-    /// is deferred to the splice walk.
+    /// `None` otherwise. Every part resolves — a producer's error reaches this consumer through
+    /// the park the harness installs, not through the cache; cycle detection is deferred to the
+    /// splice walk.
     pub(super) fn build_bare_outcomes(
         &self,
         parts: &[Spanned<WorkingPart<'step>>],
-    ) -> Result<Vec<Option<NameOutcome>>, KError> {
+    ) -> Vec<Option<NameOutcome>> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         parts
             .iter()
             .map(|p| match p.value.as_ast() {
-                Some(ast @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => {
-                    resolve_name_part(self.current_scope(), &ast, active_chain, self.types())
-                        .map(Some)
-                }
-                _ => Ok(None),
+                Some(ast @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => Some(
+                    resolve_name_part(self.current_scope(), &ast, active_chain, self.types()),
+                ),
+                _ => None,
             })
             .collect()
     }
 
     /// Reach the bare-name ladder for a single part, supplying the current scope, chain,
     /// scheduler, and type registry — the wrap-slot resolve `part_walk` runs.
-    pub(super) fn resolve_bare_carrier(
-        &self,
-        part: &ExpressionPart<'step>,
-    ) -> Result<BareCarrier, KError> {
+    pub(super) fn resolve_bare_carrier(&self, part: &ExpressionPart<'step>) -> BareCarrier {
         // The bare-name ladder reads a parser token, so a wrap slot hands its AST part straight in.
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         resolve_bare_carrier(self.current_scope(), part, active_chain, self.types())

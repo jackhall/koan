@@ -25,7 +25,7 @@ fn resolve_name_part_identifier_resolved() {
         .unwrap();
     let part = ExpressionPart::Identifier("x");
     match resolve_name_part(scope, &part, None, &test_run.types) {
-        Ok(NameOutcome::Resolved(delivered)) => assert!(
+        NameOutcome::Resolved(delivered) => assert!(
             matches!(delivered.open_at().value(), Carried::Object(KObject::Number(n)) if *n == 7.0),
             "expected NameOutcome::Resolved(Number(7.0))",
         ),
@@ -41,14 +41,13 @@ fn resolve_name_part_type_resolved() {
     let scope = test_run.scope;
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number"));
     match resolve_name_part(scope, &part, None, &test_run.types) {
-        Ok(NameOutcome::Resolved(ref delivered))
+        NameOutcome::Resolved(ref delivered)
             if matches!(delivered.open_at().value(), Carried::Type(KType::NUMBER)) => {}
         other => {
             let kind = match other {
-                Ok(NameOutcome::Resolved(_)) => "Resolved(other)",
-                Ok(NameOutcome::Parked(_)) => "Parked",
-                Ok(NameOutcome::Unbound(_)) => "Unbound",
-                Err(_) => "Err",
+                NameOutcome::Resolved(_) => "Resolved(other)",
+                NameOutcome::Parked(_) => "Parked",
+                NameOutcome::Unbound(_) => "Unbound",
             };
             panic!("expected Resolved(Type(Number)), got {kind}");
         }
@@ -84,7 +83,7 @@ fn resolve_name_part_parked() {
         .unwrap();
     let part = ExpressionPart::Identifier("fwd");
     match resolve_name_part(scope, &part, None, &test_run.types) {
-        Ok(NameOutcome::Parked(p)) => assert_eq!(p, claim),
+        NameOutcome::Parked(p) => assert_eq!(p, claim),
         _ => panic!("expected NameOutcome::Parked(claim)"),
     }
 }
@@ -97,7 +96,7 @@ fn resolve_name_part_unbound() {
     let scope = test_run.scope;
     let part = ExpressionPart::Identifier("missing");
     match resolve_name_part(scope, &part, None, &test_run.types) {
-        Ok(NameOutcome::Unbound(name)) => assert_eq!(name, "missing"),
+        NameOutcome::Unbound(name) => assert_eq!(name, "missing"),
         _ => panic!("expected NameOutcome::Unbound"),
     }
 }
