@@ -43,8 +43,6 @@ koan-side split in
 
 **Requires:**
 
-- [Edge slab and the install door](../../workgraph/roadmap/edge-slab-and-install.md) —
-  the surface this item adopts.
 
 **Unblocks:**
 

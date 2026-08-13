@@ -265,12 +265,14 @@ impl<W: Workload> Scheduler<W> {
     /// slot that will not fire — but its pull on the producer's retained frame is counted, to be
     /// discharged after the read.
     ///
-    /// **The one door an embedder wires edges through.** It serves an already-allocated consumer
-    /// slot, which is why it takes the dep list separately from the work. The submit-time path does
-    /// not route here: [`alloc_node`](Self::alloc_node) initializes a fresh row and its edges as one
-    /// atomic step, and takes ownership of the sub-work it spawns — so an already-finalized *owned*
-    /// dep still records its backward edge there, because that edge is the ownership record the
-    /// error-path cascade walks. The two are deliberately not the same operation.
+    /// **The one door an embedder wires a consumer slot's dep edges through** (slab edges have
+    /// their own door, [`install_edge`](Self::install_edge)). It serves an already-allocated
+    /// consumer slot, which is why it takes the dep list separately from the work. The submit-time
+    /// path does not route here: [`alloc_node`](Self::alloc_node) initializes a fresh row and its
+    /// edges as one atomic step, and takes ownership of the sub-work it spawns — so an
+    /// already-finalized *owned* dep still records its backward edge there, because that edge is
+    /// the ownership record the error-path cascade walks. The two are deliberately not the same
+    /// operation.
     pub fn install_edges(&mut self, deps: &ResolvedDeps, consumer: NodeId) {
         for &producer in deps.parks() {
             self.add_park_edge(producer, consumer);
@@ -318,8 +320,9 @@ impl<W: Workload> Default for Scheduler<W> {
 
 /// `#[cfg(any(test, feature = "test-hooks"))]` forwarders that let the driver's white-box tests
 /// poke slot/edge state without exposing the `store` / `deps` / `queues` / `edges` fields. Each
-/// wraps an already-test-only primitive on the inner store, dep graph, or edge slab. The `test-hooks` feature widens
-/// this for an embedder compiling as a dependent crate, where `cfg(test)` is off.
+/// wraps an already-test-only primitive on the inner store, dep graph, or edge slab. The
+/// `test-hooks` feature widens this for an embedder compiling as a dependent crate, where
+/// `cfg(test)` is off.
 #[cfg(any(test, feature = "test-hooks"))]
 impl<W: Workload> Scheduler<W> {
     pub fn clear_node(&mut self, id: NodeId) {

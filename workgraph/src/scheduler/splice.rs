@@ -51,8 +51,8 @@ impl<W: Workload> Scheduler<W> {
     /// destination of the producer's retained frame, so its pull is counted here (the late-park
     /// increment) to be discharged after the consumer's read.
     ///
-    /// Scheduler-internal, like its `add_park_edge` sibling: an embedder wires edges through the
-    /// one public door, [`Scheduler::install_edges`], which routes both kinds off a
+    /// Scheduler-internal, like its `add_park_edge` sibling: an embedder wires a slot's dep edges
+    /// through the one public door, [`Scheduler::install_edges`], which routes both kinds off a
     /// [`ResolvedDeps`](super::ResolvedDeps).
     pub(in crate::scheduler) fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
         let producer = self.resolve_alias(producer);

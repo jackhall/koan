@@ -14,7 +14,8 @@ its pins.
 ## Edges and the boundary
 
 **Edges are first-class and are the sole boundary currency.** An edge is one
-consumer→producer relationship, living in its own slab — a state vector plus a
+consumer→producer relationship, living in its own slab
+([`edge_slab.rs`](../src/scheduler/edge_slab.rs)) — a state vector plus a
 free list of recyclable indices, mirroring the node store — addressed by
 `EdgeId`. An `EdgeId` is a *name*, not the edge: holding one grants the crate's
 wiring and read verbs, and confers no ownership and no lifecycle duty. The
@@ -262,8 +263,6 @@ wiring path can skew a row's invariants.
 
 ## Open work
 
-- [Edge slab and the install door](../roadmap/edge-slab-and-install.md) — the
-  additive expand: the slab, the install verb, the containment lattice.
 - [Delivery at finalize](../roadmap/delivery-at-finalize.md) — the flip from
   consumer-pull to delivery in the finalize walk.
 - [Delivery at replace for reinstallation](../roadmap/reinstall-delivery-at-replace.md)
