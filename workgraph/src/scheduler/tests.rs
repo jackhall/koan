@@ -7,17 +7,22 @@
 //! - [`delivery`] — the finalize walk's timelines: copy and pin verdicts, a consumer that dies
 //!   before its producer fires, a late wire onto a delivered edge, and root-edge release.
 //! - [`edges`] — the edge slab's alloc/release recycling and the install door's branches.
+//! - [`reinstall`] — the replace boundary's timelines: a loop-carried argument relocated into the
+//!   incoming anchor's region, under both verdicts.
 
 use std::rc::Rc;
+use std::rc::Weak;
 
+use super::nodes::NodeWork;
 use super::workload::{DeliveredTerminal, DeliveryDestination};
-use super::{Anchor, Workload};
+use super::{Anchor, NodeId, ResolvedDeps, Scheduler, Workload};
 use crate::witnessed::doctest_fixture::{FixtureProfile, RegionCart};
 use crate::witnessed::reattachable;
 
 mod continuation;
 mod delivery;
 mod edges;
+mod reinstall;
 
 /// The inter-node value family: a **borrow into a region**, which is what makes a delivery verdict
 /// observable — a plain `u32` would carry no region and copy-or-pin would be unobservable.
@@ -122,4 +127,39 @@ impl Workload for PinWorkload {
     ) -> DeliveredTerminal<Self> {
         deliver_with::<Self>(terminal, dest, true)
     }
+}
+
+/// Allocate one dep-free slot over a **fresh region of its own**, handing back the slot, its anchor,
+/// and a weak probe on the region owner — so a test can drop every strong hold it has and ask
+/// whether the region is still alive.
+fn alloc_slot<W>(sched: &mut Scheduler<W>) -> (NodeId, Rc<TestAnchor>, Weak<RegionCart>)
+where
+    W: Workload<
+            Value = U32Value,
+            Profile = FixtureProfile,
+            Frame = TestAnchor,
+            Continuation = DynContinuation,
+        >,
+{
+    let anchor = TestAnchor::fresh();
+    let probe = Rc::downgrade(anchor.owner());
+    let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
+    let id = sched.alloc_node(
+        NodeWork::new(ResolvedDeps::new(), continuation, None),
+        &[],
+        Rc::clone(&anchor),
+        false,
+    );
+    (id, anchor, probe)
+}
+
+/// Build the terminal `id`'s step would produce: a `u32` bumped into that slot's own region and
+/// enveloped as a resident of it. This is the value delivery relocates out.
+fn terminal<W>(anchor: &TestAnchor, payload: u32) -> DeliveredTerminal<W>
+where
+    W: Workload<Value = U32Value, Profile = FixtureProfile, Frame = TestAnchor>,
+{
+    let handle = anchor.handle();
+    let resident: &u32 = handle.allocator().value(payload);
+    handle.deliver_resident::<U32Value>(resident)
 }

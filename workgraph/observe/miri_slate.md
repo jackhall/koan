@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-61 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+63 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -301,6 +301,22 @@ and the error terminal that reaches every waiting edge and frees the producer re
 - `a_late_wire_onto_a_delivered_edge_shares_the_resident`
 - `a_root_edge_holds_its_value_until_the_drain_releases_it`
 - `an_error_terminal_reaches_every_waiting_edge`
+
+**Slot reinstallation — the replace boundary** ([src/scheduler.rs](../src/scheduler.rs)) — a slot
+replaced over a fresh anchor turns over its own memory, and the scheduler holds nothing across it:
+`replace` hands the displaced anchor straight back, so ordering the retiring region's free is a
+local variable in the embedder's apply path rather than a row field spanning a step. What makes
+that sound is that the relocation runs on the *deciding* side — whatever the next incarnation reads
+is moved into the incoming anchor's region before the install — and these two timelines drive the
+real `Scheduler` through it under both verdicts: a copy frees the retiring region where the
+displaced anchor falls, a pin transfers it into the incoming anchor's union bundle and frees it
+with that incarnation. Either way the reinstalled continuation reads its loop-carried argument back
+after every direct hold on the retiring region is gone, which is where tree borrows catches a free
+that reordered ahead of the relocation. The `unsafe` routed is the shared `retype` in
+`witnessed.rs`, through the relocation's envelope verbs and the reinstalled seal's own open.
+
+- `copy_verdict_frees_the_retiring_region_at_the_replace`
+- `pin_verdict_transfers_the_retiring_region_into_the_new_anchor_bundle`
 
 **`StepContext::alloc_with` — finish-surface fold** ([src/witnessed/step_ctx.rs](../src/witnessed/step_ctx.rs))
 — guarantee 5 made structural: every listed dep's envelope folds into the result's carrier by

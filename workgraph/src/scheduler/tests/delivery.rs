@@ -16,47 +16,9 @@
 //! delivers by copy and `PinWorkload` by pin, so the verdict is the only thing that varies.
 
 use std::rc::Rc;
-use std::rc::Weak;
 
-use super::super::nodes::NodeWork;
-use super::super::{EdgeId, NodeId, ResolvedDeps, Scheduler, Workload};
+use super::super::{EdgeId, NodeId, Scheduler, Workload};
 use super::*;
-use crate::witnessed::doctest_fixture::RegionCart;
-
-/// Allocate one dep-free slot over a **fresh region of its own**, handing back the slot, its anchor,
-/// and a weak probe on the region owner — so a test can drop every strong hold it has and ask
-/// whether the region is still alive.
-fn alloc_slot<W>(sched: &mut Scheduler<W>) -> (NodeId, Rc<TestAnchor>, Weak<RegionCart>)
-where
-    W: Workload<
-            Value = U32Value,
-            Profile = FixtureProfile,
-            Frame = TestAnchor,
-            Continuation = DynContinuation,
-        >,
-{
-    let anchor = TestAnchor::fresh();
-    let probe = Rc::downgrade(anchor.owner());
-    let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
-    let id = sched.alloc_node(
-        NodeWork::new(ResolvedDeps::new(), continuation, None),
-        &[],
-        Rc::clone(&anchor),
-        false,
-    );
-    (id, anchor, probe)
-}
-
-/// Build the terminal `id`'s step would produce: a `u32` bumped into that slot's own region and
-/// enveloped as a resident of it. This is the value delivery relocates out.
-fn terminal<W>(anchor: &TestAnchor, payload: u32) -> DeliveredTerminal<W>
-where
-    W: Workload<Value = U32Value, Profile = FixtureProfile, Frame = TestAnchor>,
-{
-    let handle = anchor.handle();
-    let resident: &u32 = handle.allocator().value(payload);
-    handle.deliver_resident::<U32Value>(resident)
-}
 
 /// Run a slot's step and finalize it with `output` — take the work (`PreRun` → `Running`), then
 /// deliver. The two together are what a driver's step boundary does.
