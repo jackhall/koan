@@ -68,8 +68,9 @@ a concept, not a final identifier.
   reach set always represents the true union; no caller can assert or
   assemble one by hand. [reach.md](../workgraph/design/reach.md) owns the
   representation, the resident/walking carrier forms, and the holder rule.
-- **Slot / node** — one unit of scheduled work, with a crate-internal
-  identity; the embedder never holds a node.
+- **Slot / node** — one unit of scheduled work, named by a `NodeId`. That name
+  is a **drive-loop currency**: the harness pops, steps, wires, and does graph
+  surgery with it, and nothing below the drive loop ever sees one.
 - **Edge** — one consumer→producer relationship, the sole boundary currency
   (`EdgeId`): the embedder wires parked deps, dispatch placeholders, scope
   bindings, and the run's roots alike through `EdgeId`s — names granting the
@@ -338,13 +339,30 @@ picture:
   scope takes the value's carrier and mints its reach pair against the
   scope's region — description into the table, pins onto the binding entry —
   policy code composing library values, never inspecting them.
-- **Koan's held names are edges.** Parked deps, dispatch placeholders, the
-  scope tables' pending arms, and the run's roots are all `EdgeId`s, and every
-  one of them is wired through the install door
+- **Koan's held names are edges, and only the drive loop spells them.** Parked
+  deps, dispatch placeholders, the scope tables' pending arms, and the run's
+  roots are all edges, wired through the install door
   ([execution/scheduler.md § Which edges Koan installs](execution/scheduler.md#which-edges-koan-installs)).
-  Each edge has an owner that releases it: the consumer slot for a park, the
+  Each has an owner that releases it: the consumer slot for a park, the
   submitting slot for a binder claim, `run_program` itself for a root — which it
-  releases before the run frame those edges name is torn down.
+  releases before the run frame those edges name is torn down. Below the drive
+  loop the same name travels as a
+  [`ProducerId`](../src/machine/execute/producer_id.rs) — *who will produce the
+  value this name does not hold yet* — an opaque token the binding tables, the
+  scope registry, the type resolver, and the builtins store, compare, and hand
+  back but cannot open. Both conversions are `pub(in crate::machine::execute)`,
+  which is why the type is hosted in the drive loop rather than in
+  `machine::core`: `pub(in path)` names an ancestor module, so only the layer
+  that owns a scheduler can be named as the one allowed to spend a producer.
+  Parking from outside it goes through the single exported verb `park_deps`, so
+  "where does an edge escape?" has one answer.
+- **Koan's declaration identity is Koan's own.** A binding entry answers
+  "same declaration re-entering, or a second declaration of this name?" from a
+  [`StatementId`](../src/machine/core/statement_id.rs) — a never-recycled
+  process-global counter minted once per submitted statement — not from a slot
+  or edge name ([typing/user-types.md](typing/user-types.md)). The library owes
+  the binding tables nothing: its recycling policy for slot and edge indices is
+  free to change without touching Koan's redeclaration semantics.
 
 ## Open work
 

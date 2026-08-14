@@ -126,7 +126,7 @@ nor the reverse.
   in-flight type producer even after a seal pre-installs the name's identity
   into `types` — the slot's `BoundWithPending` arm — reads the pending claim's
   edge directly through
-  [`Bindings::type_placeholder_edge`](../../src/machine/core/bindings.rs),
+  [`Bindings::type_placeholder_producer`](../../src/machine/core/bindings.rs),
   bypassing the bound-first preference. Declaration identity itself is not read
   here: it is decided at the install door by
   [`Bindings::try_register_type_upsert`](../../src/machine/core/bindings.rs), which

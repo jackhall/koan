@@ -28,7 +28,5 @@ the install door writes.
 
 **Requires:**
 
-- [Delivery at finalize](../../workgraph/roadmap/delivery-at-finalize.md) —
-  the scheduler must stop consuming the split first.
 
 **Unblocks:** none — leaf.

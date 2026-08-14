@@ -592,7 +592,7 @@ unsafe impl<F: PinsRegion, B: Reattachable> ComposeWitness<B> for PinBundle<F> {
 /// thread and drop — but not compute with. It is the "step's coverage" of
 /// design/reach.md § Threading, and the shape every owned pin crosses the library
 /// boundary in: a step carries one from the fold that composed it to the seal that consumes it, a
-/// finalize hands one to the retention hold, a region retains one for its life.
+/// finalize hands one to the delivery walk, a region retains one for its life.
 ///
 /// The point is what it *lacks*. `PinBundle`'s arithmetic — `union`, `without_region`, `retaining`,
 /// `insert`, `absorb` — is crate-private, so an embedder cannot narrow a claim, strip a member, or

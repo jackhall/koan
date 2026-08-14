@@ -58,9 +58,10 @@ pub(in crate::machine::execute) enum Outcome<'step> {
         chain: ChainOp,
         block_entry: BlockEntry<'step>,
     },
-    /// Park the slot on `deps` and run `continuation` when they resolve. A dep is either a park
-    /// (`Notify` edge, kept alive) or an owned entry (realizes to a harness-owned sub-slot,
-    /// cascade-freed); a [`Continuation::Resume`]'s deps are all parks. `dep_error_frame` labels the
+    /// Park the slot on `deps` and run `continuation` when they resolve. A dep is either a park (an
+    /// edge the door mints off a source this slot only reads) or an owned entry (realizes to a
+    /// harness-owned sub-slot, which reclaims at its own finalize); a [`Continuation::Resume`]'s
+    /// deps are all parks. `dep_error_frame` labels the
     /// dep-error short-circuit that runs before the finish.
     ParkThenContinue {
         deps: Deps<DepRequest<'step>>,

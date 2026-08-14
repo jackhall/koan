@@ -320,7 +320,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 };
             }
             // Leading statements become owned siblings in the block (one `BodyBlock` dep); the slot
-            // parks on them so they run — and cascade-free — before the tail continues. Where they
+            // parks on them so they run — and reclaim — before the tail continues. Where they
             // bind is what `block_entry` names: the block frame's own scope (MATCH / TRY arms via a
             // pre-built `FreshChild` cart, FN-body tails re-entering the already-installed cart with
             // `Inherit`), or a caller-allocated overlay under the inherited call-site cart (USING).
@@ -627,7 +627,7 @@ impl<'run> KoanRuntime<'run> {
                 // Wire the whole dep list through the one door: it mints this slot's own edge per
                 // park source (inheriting the source's destination, so a park on a placeholder
                 // delivers into the scope that placeholder named), installs each owned dep's
-                // `Owned` edge (cascade-freed on resolve), and hands back the realized list plus
+                // edge destined at this slot's own anchor region, and hands back the realized list plus
                 // each park's filled-or-parked verdict. (`Catch` declares no deps here — it
                 // realizes and owns its single watched dep in the `cont` match below.)
                 let (resolved, installed) = self.sched.install_deps(id, &parks, &owned);

@@ -71,7 +71,8 @@ pub(crate) enum FnPlan<'a> {
 pub(crate) struct DeferredInputs<'a> {
     pub capture: ReturnTypeCapture<'a>,
     /// The binder claim edges this dep-finish reads at finish-time but does NOT
-    /// own. Wired as `Notify` (park) edges off those sources; must not cascade-free.
+    /// own. Entered as parks, never as owned deps: the door mints this slot's own
+    /// edge off each source, and nothing here retires the producer behind it.
     pub park_producers: Vec<ProducerId>,
     /// `Some` only when the return-type slot is an `Expression(_)` carrier that
     /// doesn't reference any FN parameter (resolves once at FN-def time, not

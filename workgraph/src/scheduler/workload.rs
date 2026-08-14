@@ -15,15 +15,15 @@ pub type Live<'node, W> = <<W as Workload>::Value as Reattachable>::At<'node>;
 /// inspects it beyond this projection, and projects its region owner where retention and delivery
 /// need the true owner type. Koan's anchor is the per-call slot frame; its owner is `FrameStorage`.
 pub trait Anchor: 'static {
-    /// The projected region-owner type — the retention-hold, delivery-envelope, and reach-set
-    /// member type. Koan's is `FrameStorage`. [`PinsRegion`] is the reach-set member contract; the
+    /// The projected region-owner type — the delivery-envelope and reach-set member type. Koan's
+    /// is `FrameStorage`. [`PinsRegion`] is the reach-set member contract; the
     /// scheduler retains and drops the `Rc` but calls no method on it.
     type Owner: PinsRegion + 'static;
     /// The anchor's region owner, projected for retention and delivery.
     fn owner(&self) -> &Rc<Self::Owner>;
 }
 
-/// The anchor's projected region-owner type — the retention-hold and delivery-envelope member type.
+/// The anchor's projected region-owner type — the delivery-envelope and reach-set member type.
 pub type OwnerOf<W> = <<W as Workload>::Frame as Anchor>::Owner;
 
 /// A finalized terminal as the workload's finalize hook delivers it: the erased inter-node value

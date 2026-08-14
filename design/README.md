@@ -28,7 +28,7 @@ Root concerns:
 
 - [execution/](execution/README.md) — the three-stage
   parse → dispatch → execute pipeline, the deferred-dispatch
-  scheduler with `pending_deps` / notify-list wakeups, tail-call
+  scheduler with edge-parked deps and notify-list wakeups, tail-call
   rewriting, and the per-call `KoanRegion` lifecycle.
 - [memory-model.md](memory-model.md) — value ownership through
   `KoanRegion` / `CallFrame`, the storage shape, lexical scoping,

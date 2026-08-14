@@ -258,8 +258,8 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     /// host of the carrier's description.
     ///
     /// **Crate-private**, because it takes the two as separate arguments and checks neither against
-    /// the other. Every caller holds them as one unit already: the scheduler's retention hold
-    /// (`owner` + `reach` in one record) for a delivered dep, a composition's freshly minted product
+    /// the other. Every caller holds them as one unit already: an edge's resident plus the
+    /// destination host the slab reads back for it, a composition's freshly minted product
     /// and the destination residence it was minted into, or [`RegionHandle::deliver_resident`] /
     /// [`RegionHandle::deliver_yoked`], which read both off one handle. An embedder reaches the
     /// envelope through those, never through this.

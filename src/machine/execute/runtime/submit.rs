@@ -274,7 +274,7 @@ impl<'run> KoanRuntime<'run> {
     /// Schedule an `AwaitDeps` against the slot's own scope whose finish folds the resolved deps into
     /// a witnessed aggregate carrier, naming every region the result reaches. `deps` carries park
     /// *sources* (binder edges the cell classifier resolved — read, not owned) and owned subs
-    /// (cascade-freed on success); the finish addresses them through a
+    /// (whose slots reclaim at their own finalize); the finish addresses them through a
     /// [`DepResults`](crate::scheduler::DepResults) view, at the very park indices the builder
     /// handed back at classify time.
     ///

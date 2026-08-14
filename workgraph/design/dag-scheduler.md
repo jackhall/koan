@@ -22,10 +22,11 @@ wiring and read verbs, and confers no ownership and no lifecycle duty. The
 embedder wires everything through such names — parked deps, dispatch
 placeholders, scope bindings, and the run's roots alike — while the edges
 themselves stay in the slab. `NodeId` is a drive-loop currency: the embedder's
-driver pops, steps, wires, and may do graph surgery with it (each id carries an
-allocation stamp, so equality survives slot recycling), but everything deeper —
-an embedder's scopes, bindings, frames — speaks edge names and slot stamps,
-never node ids.
+driver pops, steps, wires, and may do graph surgery with it, but everything
+deeper — an embedder's scopes, bindings, frames — never sees one. What crosses
+into those layers is an edge name, and an embedder that needs an identity of its
+own for something the DAG layer does not index (koan's declaration identity, for
+one) mints it itself rather than borrowing a slot's.
 
 **Edge validity is self-owned.** An edge is valid until its *owner* releases
 it, and an owner is always a teardown-bearing structure — the consumer node,
@@ -85,12 +86,12 @@ body. A loop-shaped workload's per-iteration fanout recycles through the free
 list that `alloc_slot` pulls from before extending the vectors, so scheduler
 memory stays O(1) across iterations.
 
-Because indices recycle, a `NodeId` is an index **plus an allocation stamp**,
-bumped once per reclaim — reclamation being the only event that retires an
-incarnation. Two ids for one index from different allocations therefore compare
-unequal, so an embedder keying a decision on slot identity is safe across reuse.
-The stamp is not a debug aid: it carries in release builds, because the
-decisions that read it do.
+Because indices recycle, a `NodeId` names a **position**, not an incarnation: two
+ids for one index from different allocations compare equal, and an id is
+meaningful only for as long as the incarnation that minted it lives. Nothing is
+asked to hold one longer. The drive loop pops, steps, wires, and finalizes with
+an id inside a single step; a holder that needs identity to survive reclamation
+mints its own, as koan does with `StatementId` and `ProducerId`.
 
 Reinstallation is what makes a chain of tail-shaped continuations cost one slot
 rather than one per hop: the slot's work is replaced in place and re-run, no new
@@ -309,7 +310,5 @@ edges the consumer still owns at its terminal are released by its own teardown.
 
 ## Open work
 
-- [Delivery at finalize](../roadmap/delivery-at-finalize.md) — the flip from
-  consumer-pull to delivery in the finalize walk.
 - [Delivery at replace for reinstallation](../roadmap/reinstall-delivery-at-replace.md)
   — retiring the row-level handoff hold.

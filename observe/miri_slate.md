@@ -442,15 +442,13 @@ both the wake and the re-dispatch.
 
 - `park_and_replay_minimal_program_for_miri`
 
-**`Carried` slot read + dep re-anchor — pinned `open_with`** ([workgraph/src/scheduler/node_store.rs](../workgraph/src/scheduler/node_store.rs))
-— the scheduler stores a finalized terminal as a `Witnessed<W::Value, Carrier<W::Frame>>` — the
-reference-only carrier, pinning nothing — beside the retention hold finalize seeds, and
-`read_result_with` re-anchors under that retained frame owner (`open_with`); a slot with no retained
-owner (a drained root re-homed into the run region) is externally pinned, so its read opens under
-the empty pin. The consumer-pull dep terminals travel as delivery envelopes — `dep_delivered`
-duplicates the slot's envelope per consumer, opened in the consumer `dest` region at `'b`.
-`node_store.rs`'s own residual `unsafe` is
-only the test-family `Reattachable` markers. Exercised end-to-end by every scheduler-driving program;
+**`Carried` edge read + dep re-anchor — pinned `open_with`** ([workgraph/src/scheduler/edge_slab.rs](../workgraph/src/scheduler/edge_slab.rs))
+— a finalized terminal rests on its edge as a reference-only carrier, pinning nothing, in the
+destination region the edge names; `Scheduler::read_edge_result_with` re-anchors it under that
+region's own owner, upgraded off the edge's host back-link (`open_with`). Deps reach a step the same
+way: `run_step` duplicates each dep's resident straight off its edge — a `Copy` cell whose pointee
+already lives in a region the step's coverage pins — and re-brands it once at `'b`, so no envelope
+crosses to a consumer. Exercised end-to-end by every scheduler-driving program;
 the listed test pins the hardest shape — a tail-chain return-type **coarsening** re-homed in the
 contract's scope, re-read after the run drains the root into the run region.
 

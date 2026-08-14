@@ -201,7 +201,8 @@ absent, overwrites idempotently when the same declaration re-enters, and surface
 member node, so construction reads fields / variant types straight off the member's
 schema; there is no second-namespace write to keep in sync.
 
-**A declaration is identified by the node that installed it.** Each `types` entry
+**A declaration is identified by the statement that installed it — an identity
+Koan mints for itself.** Each `types` entry
 stores, beside its type, a [`DeclarationSite`](../../src/machine/core/bindings.rs): the
 [`Installer`](../../src/machine/core/bindings.rs) naming the statement that installed it,
 paired with its lexical [`BindingIndex`](../../src/machine/core/bindings.rs).
@@ -214,7 +215,10 @@ parallel finalize whose re-elaboration cannot differ — and raises
 one scope is submitted as a distinct statement and is a `Rebind`, and so is a re-run of the
 same declaration text over a persistent scope, whose
 [`StatementId`](../../src/machine/core/statement_id.rs) is minted from a never-recycled
-process-global counter and so can never collide with an earlier run's. The `BindingIndex` in the entry has one job
+process-global counter and so can never collide with an earlier run's. Nothing here
+names a scheduler slot or edge: the counter is Koan's own, so the scheduler's
+index-recycling policy is not load-bearing for redeclaration semantics
+([scheduler-library.md](../scheduler-library.md)). The `BindingIndex` in the entry has one job
 left — the visibility gate `idx < cutoff` reads it — and under a detached submission
 chain it is `0`, naming no statement, because identity no longer rests on it. The
 single-home invariant — Type-classed name lookups go through `Scope::resolve_type` only

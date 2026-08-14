@@ -215,12 +215,12 @@ owns every claim edge its submission stamped, and the run loop retires that list
 wherever the slot stops being able to release it — at every terminal (value,
 error, and the bare-name forward's relocation alike) and at the alias splice that
 retires the slot without a terminal. Retirement is
-`clear_placeholders_for_edges` — drop every pending arm naming one of the slot's
-edges — followed by the release of the edges themselves, so no table ever holds
-an `EdgeId` whose edge is gone. The list is taken, not read, so a slot's claims
+`clear_placeholders_for_producers` — drop every pending arm naming one of the
+slot's edges — followed by the release of the edges themselves, so no table ever
+holds a name whose edge is gone. The list is taken, not read, so a slot's claims
 retire exactly once even when a tail replace has moved them onto a fresh anchor.
 
-The sweep keys on the `edge` every `PendingBinding` already carries, so it spans
+The sweep keys on the `producer` every `PendingBinding` already carries, so it spans
 all three claim-bearing tables alike: no table's key participates, a `types` slot
 that also holds a bound identity keeps the identity and loses only its pending
 arm, and a bucket-keyed binder's claim dies in every inner-call bucket it

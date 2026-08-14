@@ -27,7 +27,5 @@ hold pins the retiring region longer than anything needs
 
 **Requires:**
 
-- [Delivery at finalize](delivery-at-finalize.md) — delivery-at-wiring is the
-  mechanism the replace-time adoption rides on.
 
 **Unblocks:** none — leaf.

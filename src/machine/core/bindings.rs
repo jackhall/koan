@@ -1010,7 +1010,7 @@ impl<'a> Bindings<'a> {
         }
     }
 
-    /// Install a dispatch-time pending-overload entry: `bucket → edge`.
+    /// Install a dispatch-time pending-overload entry: `bucket → producer`.
     /// The bucket key MUST equal what `KExpression::untyped_key` would compute
     /// for a *call* to the eventual overload (not the binder call itself).
     ///
@@ -1242,26 +1242,30 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
-    /// Drop every pending arm naming one of `edges`, in all three claim-bearing tables — the
+    /// Drop every pending arm naming one of the given producers, in all three claim-bearing tables — the
     /// retirement companion to the installs, run when the claiming slot terminalizes. The success
     /// write paths finalize a binder's own claim in place, so this normally finds only what a
     /// failed body left behind; running it on every terminal is what guarantees no arm survives
-    /// naming a [`ProducerId`] whose edge its owner is about to release. A `types` slot that also holds a bound
-    /// identity keeps it — only the pending arm is dropped. One bucket-keyed binder claims a slot
-    /// in every inner-call bucket it declares, so the `functions` walk purges across all of them
-    /// and drops a bucket the purge empties.
+    /// naming a [`ProducerId`] whose edge its owner is about to release. A `types` slot that also
+    /// holds a bound identity keeps it — only the pending arm is dropped. One bucket-keyed binder
+    /// claims a slot in every inner-call bucket it declares, so the `functions` walk purges across
+    /// all of them and drops a bucket the purge empties.
     ///
-    /// The purge keys on the [`PendingBinding::edge`] each slot already carries; no table's
-    /// key participates. `edges` is a slot's own claim list, so it is short and a linear scan of it
-    /// per slot is the whole cost.
+    /// The purge keys on the [`PendingBinding::producer`] each slot already carries; no table's
+    /// key participates. The argument is a slot's own claim list, so it is short and a linear scan
+    /// of it per slot is the whole cost.
     ///
     /// This is the one path that strands bump bytes: a removed key's text and an emptied bucket's
     /// buffer are abandoned rather than freed. It is bounded by the number of binders that fail —
     /// every success path overwrites its claim where it sits — so a table's peak occupancy stays
     /// its final binding count plus that error tail.
-    pub fn clear_placeholders_for_producers(&self, edges: &[ProducerId], _gate: &mut WriteGate) {
+    pub fn clear_placeholders_for_producers(
+        &self,
+        producers: &[ProducerId],
+        _gate: &mut WriteGate,
+    ) {
         let mut tables = self.tables.borrow_mut();
-        let named = |p: &PendingBinding| edges.contains(&p.producer);
+        let named = |p: &PendingBinding| producers.contains(&p.producer);
         let claims = |slot: Option<PendingBinding>| slot.as_ref().is_some_and(named);
         tables.data.retain(|_, slot| !claims(slot.pending()));
         tables.types.retain(|_, slot| match slot {

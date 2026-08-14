@@ -519,7 +519,7 @@ pub enum ActionKind<'a> {
     /// Tail-replace into `tail`, carrying `contract` (see [`TailContract`]), in a cart per
     /// `frame_placement`. When `leading` (the body's non-tail statements) is non-empty the slot
     /// first parks on them as owned deps and tail-replaces only once they resolve — so they run,
-    /// and cascade-free, before the tail continues. `block_entry` names the lexical block the tail
+    /// and reclaim, before the tail continues. `block_entry` names the lexical block the tail
     /// enters (see [`BlockEntry`]); the harness derives the body-statement chains and the tail's
     /// `body_index` from it + `leading`.
     Tail {
@@ -554,10 +554,11 @@ impl<'a> Action<'a> {
 }
 
 /// The one owned-dep shape a builtin declares in an [`Action::AwaitDeps`]:
-/// a sub-expression the harness dispatches and the consumer owns
-/// (cascade-freed when it succeeds). Parks are `EdgeId`s the `Deps` builder
-/// holds structurally, so a builtin cannot install an Owned edge on a
-/// producer it does not own — that shape is unrepresentable here.
+/// a sub-expression the harness dispatches on the consumer's behalf, whose
+/// slot reclaims at its own finalize. Parks live in the other half of the
+/// [`Deps`](crate::scheduler::Deps) builder, structurally, so a builtin cannot
+/// hand a producer it merely reads in as sub-work it owns — that shape is
+/// unrepresentable here.
 pub struct OwnedDispatch<'a> {
     pub expr: WorkingExpression<'a>,
     pub placement: DepPlacement<'a>,

@@ -187,8 +187,8 @@ pub(super) enum NodeStep<'step> {
         overlay_scope: Option<SealedExtern<ScopeRefFamily>>,
     },
     /// The slot is spliced out as an alias of the producer behind `edge` (a bare-name forward whose
-    /// producer was not yet ready). The splice moves the slot's consumers onto that producer's
-    /// notify list and marks the slot so `read_result_with` follows through. See
+    /// producer was not yet ready). The splice re-points the slot's parked edges at that producer,
+    /// moves them onto its notify list, and reclaims the slot — nothing survives as a residual. See
     /// [`Outcome::Forward`](super::outcome::Outcome::Forward).
     Alias(EdgeId),
 }

@@ -45,6 +45,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [One kind-blind reader per shape slot](metaprogramming/one-reader-per-shape-slot.md)
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Collapse the Deps owned/park currency](refactor/deps-currency-collapse.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)

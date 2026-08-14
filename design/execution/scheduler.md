@@ -193,12 +193,18 @@ What is Koan's is *which* edges each dispatch shape installs:
   statements. Their edges name the spawning consumer's region as destination.
 - **Park** deps are Koan's wait-on-someone-else's-producer cases: a dispatch
   decide that resolves a name to a still-running binder, an aggregate literal
-  cell whose name is still finalizing, a deferred head. Koan names each of
-  these by the claim `EdgeId` the binder installed — never by a producer — and
-  the door mints the consumer's own edge off it, *inheriting the source's
-  destination*. So a placeholder park names the **original destination scope's
-  region**, and delivery dedups per distinct destination: the eventual binding
-  write and the placeholder share one adopt.
+  cell whose name is still finalizing, a deferred head. Koan names each of these
+  by the claim edge the binder installed — never by a slot — and the door mints
+  the consumer's own edge off it, *inheriting the source's destination*. So a
+  placeholder park names the **original destination scope's region**, and
+  delivery dedups per distinct destination: the eventual binding write and the
+  placeholder share one adopt. The layers that *carry* such a name — the scope
+  tables' pending arms, the type resolver's `Park` answer, a decide's park list
+  — hold it as an opaque
+  [`ProducerId`](../../src/machine/execute/producer_id.rs) and reach the
+  scheduler only through `park_deps`; the `EdgeId` behind it is spelled in the
+  drive loop alone
+  ([scheduler-library.md](../scheduler-library.md)).
 - **Claim** edges are the binder's own: one per channel a statement's
   binder plan stamps, wired at submission toward the scope the name enters
   ([name-placeholders.md § Submission-time binder install](name-placeholders.md#submission-time-binder-install-and-the-position-rule)).

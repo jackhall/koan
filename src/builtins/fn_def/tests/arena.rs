@@ -109,7 +109,7 @@ fn leading_statements_run_before_tail_across_chain() {
 }
 
 /// Tail chain whose bodies each carry a value-discarded leading `PRINT` stays TCO-flat: the
-/// leading statements are owned deps that cascade-free as each call resolves, so they never
+/// leading statements are owned deps whose slots reclaim as each call resolves, so they never
 /// accumulate their own slots. The chain peaks at two slots — the tail-replaced main slot plus a
 /// single leading-PRINT slot recycled through the free-list across all four calls. Fire-and-forget
 /// leading would instead leave one orphan PRINT slot per call aliasing its frame (`runtime.len()`
@@ -145,7 +145,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
     assert_eq!(
         runtime.len(),
         2,
-        "leading statements are owned and cascade-free, so each PRINT slot is recycled via the \
+        "leading statements are owned and reclaim at their own finalize, so each PRINT slot is recycled via the \
          free-list rather than orphaned — the chain peaks at the main slot plus one reused \
          leading slot (a leak would climb to 5), got {}",
         runtime.len(),

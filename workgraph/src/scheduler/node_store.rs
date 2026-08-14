@@ -144,12 +144,12 @@ impl<W: Workload> NodeStore<W> {
     /// Reclaim the slot and return its index to circulation — what every finalize does once its
     /// delivery walk has drained. Pairs with the row's own anchor clear in `DepGraph`.
     ///
-    /// The index goes back stamped one generation on, so the id the next `alloc_slot` hands out is
-    /// unequal to every id that named this slot before it. Reclamation is the only event that
-    /// retires an incarnation, so it is the only place the stamp moves.
+    /// The id goes straight back on the free list, so the next `alloc_slot` hands out one equal to
+    /// the id that just died. Nothing holds a `NodeId` across a reclaim, so there is no incarnation
+    /// to tell apart.
     pub(super) fn free_one(&mut self, id: NodeId) {
         self.slots[id] = SlotState::Free;
-        self.free_list.push(id.next_generation());
+        self.free_list.push(id);
     }
 
     /// Scan for slots still parked (`PreRun`) after the work queues drained — each

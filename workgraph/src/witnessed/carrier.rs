@@ -5,8 +5,8 @@
 //!
 //! The carrier **owns no pin**: cloning is a reference-copy, and a carrier's death releases nothing.
 //! What keeps its description (and the value it describes) alive is external —
-//! the container's liveness when resident, the scheduler's frame-retention hold (travelling as the
-//! [`Delivered`](super::Delivered) envelope) when walking — so every re-anchor of the erased reach
+//! the container's liveness when resident, the [`Delivered`](super::Delivered) envelope's own pin
+//! bundle while a terminal walks to its destinations — so every re-anchor of the erased reach
 //! reference happens under a named pin. The description a carrier references is never owned by it:
 //! [`ReachDescription::mint_resident`] is the only way one comes to exist, and it always
 //! lands in the value's home region's own side table, so whatever covers the home region covers the
