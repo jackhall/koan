@@ -293,6 +293,15 @@ impl<W: Workload> Scheduler<W> {
     ///   description is retained by the destination for the region's life.
     /// - `source` **parked** — its producer is necessarily pre-terminal (unfilled ⇒ undelivered ⇒
     ///   slot alive), so the new edge parks on it too and registers on its notify list.
+    ///
+    /// Inheriting the destination is what makes the filled branch a *share*: the resident already
+    /// sits in the region the new edge names, so duplicating the cell is the whole of the work. The
+    /// door has no cross-destination form. A consumer wanting the terminal in a region `source` does
+    /// not name would need the filled branch to lift that resident under its own owner (reached
+    /// through the region host back-link) and adopt across — a second destination for one delivery,
+    /// on a lattice that currently derives the new edge's coverage from `source`'s owner standing.
+    /// Wiring from a name is how an embedder joins a delivery already aimed somewhere; an embedder
+    /// that needs its own destination names one, through [`install_edge`](Self::install_edge).
     pub fn install_edge_from(&mut self, source: EdgeId) -> InstalledEdge {
         match self.edges.producer_of(source) {
             Some(producer) => {
@@ -392,9 +401,6 @@ impl<W: Workload> Scheduler<W> {
     }
     pub fn notify_list_iter(&self) -> impl Iterator<Item = (NodeId, &Vec<EdgeId>)> {
         self.deps.notify_list_iter()
-    }
-    pub fn free_list_snapshot(&self) -> Vec<NodeId> {
-        self.store.free_list_snapshot()
     }
     pub fn free_list_len(&self) -> usize {
         self.store.free_list_len()

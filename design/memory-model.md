@@ -326,9 +326,8 @@ child scope's own region (composed by the module store fold
 everything its members reach. The embedding or binding site mints that
 carrier's reach into its own arena (`transfer_into` at an `attr` / `FROM` projection,
 [`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs) at a `let` / user-fn arg / `USING`
-bind), and the
-root drain mints the rehomed terminal's full reach against the run-root scope, the root region
-owning the pins — so a
+bind), and delivery mints a root terminal's full reach against the run frame's own region — the
+destination its root edge names, whose union bundle owns the pins — so a
 multi-region value keeps *every* region it reaches, read straight off its carrier rather than
 reconstructed from the value. A minted description is **exact**: it names the value's whole reach,
 never a reach narrowed against what some destination already pins. Acyclicity comes from the self
@@ -674,7 +673,7 @@ The push/notify scheduler ([execution/README.md § Push/notify dependency
 edges](../workgraph/design/dag-scheduler.md#pushnotify-dependency-edges)) keeps its slot-table
 state in a
 [`NodeStore`](../workgraph/src/scheduler/node_store.rs)
-sub-struct that owns `slots: SlotVec<SlotState<'run>>` (each slot a `PreRun(Node)`
+sub-struct that owns `slots: SlotVec<SlotState<W>>` (each slot a `PreRun(StoredWork)`
 / `Running` / `Free`) and `free_list: Vec<NodeId>`, behind the slot lifecycle
 `alloc_slot → take_for_run → reinstall* → finalize`. `alloc_slot` is
 the only path that picks an index (pulling from `free_list` before extending

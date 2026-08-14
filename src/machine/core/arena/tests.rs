@@ -325,8 +325,8 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
 }
 
 /// A value `yoke`d into a frame's region comes back reference-only: the yoke brand proves it is
-/// region-derived, and the carrier pins nothing — liveness is the caller's held frame owner (the
-/// scheduler's retention hold in production), which the pinned read names. The region-pure /
+/// region-derived, and the carrier pins nothing — liveness is the caller's held frame owner (in
+/// production, the region the value resides in), which the pinned read names. The region-pure /
 /// single-frame shape the object and type families' common case takes.
 #[test]
 fn fold_witnessed_yokes_a_reference_only_value() {

@@ -15,8 +15,9 @@ use super::scope::Scope;
 /// frame owner — a reference to the value's hosted reach description and nothing else. The
 /// description carries both of the value's region facts: its *host* is the region the value lives
 /// in, its *members* are the regions the value's borrows reach, home among them exactly when the
-/// value genuinely borrows into its own region. The carrier pins nothing; liveness is the
-/// scheduler's retention hold (walking) or the containing region (resident). Every site that only
+/// value genuinely borrows into its own region. The carrier pins nothing; liveness is always the
+/// containing region — the producer's own while the delivery walk carries the terminal, the
+/// destination's the moment the walk adopts it in. Every site that only
 /// *threads* this type as the `W` witness parameter of `Witnessed<T, W>` / `Sealed<T, W>` is
 /// unaffected by this alias; a site that constructs or inspects a carrier routes the library's
 /// `Carrier` surface directly.

@@ -85,6 +85,13 @@ body. A loop-shaped workload's per-iteration fanout recycles through the free
 list that `alloc_slot` pulls from before extending the vectors, so scheduler
 memory stays O(1) across iterations.
 
+Because indices recycle, a `NodeId` is an index **plus an allocation stamp**,
+bumped once per reclaim — reclamation being the only event that retires an
+incarnation. Two ids for one index from different allocations therefore compare
+unequal, so an embedder keying a decision on slot identity is safe across reuse.
+The stamp is not a debug aid: it carries in release builds, because the
+decisions that read it do.
+
 Reinstallation is what makes a chain of tail-shaped continuations cost one slot
 rather than one per hop: the slot's work is replaced in place and re-run, no new
 node allocated. Because the reinstall applies *after* a step returns, never
@@ -142,8 +149,8 @@ invariants:
   scrubbing itself.
 
 The rows are private and mutated only through a small surface — row
-installation, the wire primitive, the finalize walk, edge release,
-`splice_notify` — so every change preserves the per-row invariants atomically.
+installation, the wire primitive, the finalize walk, edge release, the splice's
+notify re-point — so every change preserves the per-row invariants atomically.
 `Scheduler::alloc_node` orchestrates across the two sub-structs:
 `NodeStore::alloc_slot` picks the index (popping the free list or extending) and
 the dep graph's row installation branches privately on whether the slot is
@@ -180,7 +187,15 @@ pins into the destination's union bundle), with the embedder's retention
 predicate (`still_borrows`, derived on the product after the fold) deciding
 deepcopy vs pin exactly as [reach.md § The library
 boundary](reach.md#the-library-boundary) specifies. Then decrement the
-consumer's `pending`. Errors deliver per-edge, cloned per destination
+consumer's `pending`.
+
+The adopt itself is the workload's, through the trait's one behavioural hook:
+`Workload::deliver(&terminal, dest)` receives the in-transit envelope and a
+**destination operand** — a bare handle on the destination region, minted off
+the slab's single deref and sealed the way a value is. The walk decides *when*
+and *where*; the embedder decides what the crossing costs, and the product it
+returns rests at the destination. That is the whole of the seam: no other
+scheduler verb asks the embedder a question about a value. Errors deliver per-edge, cloned per destination
 (`W::Error: Clone`).
 
 **Adoption is per distinct destination, not per edge.** The walk buckets live
@@ -230,10 +245,14 @@ filled-or-parked** — every wiring verb (`install_edge`, `install_edge_from`,
 `InstalledEdge::{Filled, Parked}` — folding readiness probes into the install
 verb:
 
-- Wiring a new consumer to a *filled* edge reads that edge's resident value and
-  adopts it into the new edge's destination — or, when the new edge names the
-  *same* destination region, shares the resident (the same per-destination
-  dedup the finalize walk applies). No slot involved, never a notify entry.
+- Wiring a new consumer to a *filled* edge **shares that edge's resident**. A
+  wire-from-a-source inherits the source's destination region, so both edges
+  name one region and the value is already resting in it: the share is the
+  per-destination dedup the finalize walk applies, arriving structurally rather
+  than as a shortcut on a general adopt. No slot involved, never a notify entry,
+  and no second relocation. A consumer whose own region differs from the
+  destination it inherits reads the resident there — the same read a parked
+  edge's consumer takes, since a park inherits the same way.
 - Wiring to an *unfilled* edge parks on that edge's producer, which is
   necessarily pre-terminal (unfilled ⇒ undelivered ⇒ slot alive) — the validity
   argument needs no discipline.
@@ -261,8 +280,8 @@ The push/notify model assumes a **single producer slot per result**. A slot whos
 result *is* another producer's result would otherwise become a second producer of
 it. Instead the slot is **spliced out** and the producer stays sole: pre-fill, an
 edge's producer pointer is the scheduler's to rewrite, so the splice re-points
-the slot's parked edges at the real producer once (`DepGraph::splice_notify`)
-and the slot reclaims. No aliased slot survives as a residual, no alias walk
+the slot's parked edges at the real producer once and moves them onto its notify
+list, and the slot reclaims. No aliased slot survives as a residual, no alias walk
 runs on reads, and the graph logic lives in one module
 ([`splice.rs`](../src/scheduler/splice.rs)). If the producer is already
 terminal, the spliced slot's edges take the install verb's filled branch
@@ -281,11 +300,12 @@ work), both routing the same primitive. One primitive, two doors — so no wirin
 path can skew a row's invariants.
 
 Every park mints the consumer its *own* slab edge off the source, inheriting the
-source's destination region, and the consumer's row owns it: release rides the
-row's dep bookkeeping (`reclaim_deps` on the success path, `free` on every
-other), draining so a reclaim followed by a free releases each edge exactly
-once. That is Inv-B made structural for parks rather than a duty the embedder
-carries.
+source's destination region, and the consumer owns it under the ordinary
+ownership rule (§ Edges and the boundary): the scheduler keeps no dep-side
+release bookkeeping, because a consumer holds its edges only as long as it needs
+their residents. A step's deps are read at step start and released right there —
+the values live in the destination regions, not in the edges — and whatever
+edges the consumer still owns at its terminal are released by its own teardown.
 
 ## Open work
 

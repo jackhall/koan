@@ -10,8 +10,9 @@ pub(crate) mod core;
 pub(crate) mod execute;
 pub mod model;
 
+pub use crate::scheduler::NodeId;
 pub(crate) use core::kfunction::Body;
-pub use core::kfunction::{KFunction, NodeId};
+pub use core::kfunction::KFunction;
 /// The reach-tightness report's reader surface — present only under the `region-audit` gate, which
 /// is also what compiles the audit itself in.
 #[cfg(any(test, feature = "region-audit"))]

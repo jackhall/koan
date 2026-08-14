@@ -718,11 +718,16 @@ impl<'run> KoanRuntime<'run> {
             Outcome::Forward(source) => {
                 // The slot's result *is* the result behind `source`. Classification is the install's,
                 // not a probe's: wiring a second edge off `source` answers filled-or-parked and
-                // leaves a name this slot can read through. Filled: pull the terminal into this
-                // slot's own frame (the consumer-pull lift — the producer keeps its value in its
-                // frame, which would free out from under a bare copy), and consumers pull from here.
+                // leaves a name this slot can read through. Filled: the producer already delivered
+                // into the destination `source` names, and the new edge inherits that destination,
+                // so the terminal is resident where this slot reads it and nothing relocates.
                 // Parked: the probe edge has said all it can, so release it and `Alias` drives the
                 // splice — move consumers onto the producer and alias the slot.
+                // A forward is the one shape that wants no destination of its own: the slot is
+                // standing in for the producer, so landing the terminal where the producer's own
+                // consumers already look is the correct answer rather than a limitation. This is why
+                // `install_edge_from`'s share-only filled branch covers every koan call site — no
+                // site here asks for a delivery aimed at a region `source` does not already name.
                 // The classification edge joins the slot's owned list: the run loop releases it when
                 // the slot terminalizes (or splices out), which is what lets a checker micro-step
                 // re-emit `Forward` on an edge of its own rather than on a foreign claim its binder

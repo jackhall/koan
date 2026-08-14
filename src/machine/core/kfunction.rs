@@ -22,7 +22,6 @@ pub mod body;
 pub mod exec;
 pub mod pick;
 
-pub use crate::scheduler::NodeId;
 pub use action::ActionFn;
 pub use body::Body;
 pub use pick::ClassifiedSlots;

@@ -89,7 +89,7 @@ a concept, not a final identifier.
   frame owner plus the value's foreign pins. The carrier itself is
   **reference-only** (pins nothing); the envelope's bundle is what keeps its
   reach alive in flight, and the only verb that materializes a residence host
-  into a minted pair. A producer hands one to `finalize` / `rehome_terminal`;
+  into a minted pair. A producer hands one to `finalize`;
   from there it is internal transit inside the delivery walk, which adopts the
   terminal into each edge's destination region
   ([workgraph/design/dag-scheduler.md § Delivery at finalize](../workgraph/design/dag-scheduler.md#delivery-at-finalize)).

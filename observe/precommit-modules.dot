@@ -445,6 +445,7 @@ digraph {
     "koan::fold_fixture" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::builtins::test_support" [label="uses", style="dashed"];
@@ -468,7 +469,6 @@ digraph {
     "koan::machine::core::arena::frame" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan::machine::core::arena" [label="uses", style="dashed"];
-    "koan::machine::core::arena::frame" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::arena::step_allocator" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::arena::step_allocator" -> "koan::machine" [label="uses", style="dashed"];

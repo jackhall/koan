@@ -137,7 +137,7 @@ impl<'run> KoanRuntime<'run> {
         // **Step start is a read, not a graph walk.** Every dep was delivered into its edge's
         // destination when its producer finalized, so each resident is duplicated straight off the
         // edge — a `Copy` cell whose pointee already lives in a region this step covers. An errored
-        // dep short-circuits into the slice, as before.
+        // dep short-circuits into the slice.
         let residents: Vec<Result<SealedTerminal<KoanWorkload>, KError>> = deps
             .all_ids()
             .map(|e| self.sched.edge_resident(e))
@@ -279,9 +279,9 @@ impl<'run> KoanRuntime<'run> {
                         // re-stamps an obligation-coarsened value into the obligation's home region
                         // through the received envelope.
                         let envelope = carrier.seal_at_step(Rc::clone(anchor.owner()));
-                        // `finalize_terminal` hands the envelope on whole; the scheduler seeds the
-                        // retention hold from its coverage, so no pull re-derives the reach and no
-                        // call site here names one.
+                        // `finalize_terminal` hands the envelope on whole; the delivery walk reads
+                        // its coverage to adopt into each destination, so no consumer re-derives the
+                        // reach and no call site here names one.
                         let finalized = self.finalize_terminal(
                             envelope,
                             anchor.owner(),

@@ -31,18 +31,17 @@ pub type OwnerOf<W> = <<W as Workload>::Frame as Anchor>::Owner;
 /// frameless / run-region value). The store seals it for dormant storage between steps.
 pub type Terminal<W> = Witnessed<<W as Workload>::Value, Carrier<OwnerOf<W>>>;
 
-/// A finalized terminal in its dormant [`Sealed`] form — what a result slot stores and a
-/// consumer pull duplicates, read back under the retention hold ([`Sealed::open_with`]).
+/// A finalized terminal in its dormant [`Retained`] form — what a delivered edge holds and what
+/// [`Scheduler::edge_resident`](super::Scheduler::edge_resident) duplicates, read back under the
+/// destination region's own pin.
 pub type SealedTerminal<W> = Retained<<W as Workload>::Value, Carrier<OwnerOf<W>>>;
 
 /// A terminal **in transit**: the carrier bundled with the owned coverage pinning every region it
-/// reaches, its own residence among them. This is the currency of both terminal doors — the value
-/// the workload's finalize hook returns ([`Scheduler::finalize`](super::Scheduler::finalize),
-/// [`Scheduler::rehome_terminal`](super::Scheduler::rehome_terminal)) and the one a consumer pulls
-/// ([`Scheduler::dep_delivered`](super::Scheduler::dep_delivered)). Value and reach travel as one
-/// value derived from one envelope, so neither door can be handed a coverage belonging to some
-/// other terminal, and the retention hold's foreign bundle is derived here rather than beside the
-/// call.
+/// reaches, its own residence among them. This is the currency of the terminal door — the value the
+/// workload's finalize hook returns ([`Scheduler::finalize`](super::Scheduler::finalize)) and the
+/// operand [`Workload::deliver`] adopts inside the walk. Value and reach travel as one value derived
+/// from one envelope, so the door cannot be handed a coverage belonging to some other terminal, and
+/// the transit bundle covering the walk's adopts is derived here rather than beside the call.
 pub type DeliveredTerminal<W> = Delivered<<W as Workload>::Value, Carrier<OwnerOf<W>>, OwnerOf<W>>;
 
 /// A **destination operand**: a bare handle on the region a delivery lands in, sealed into the
@@ -76,9 +75,10 @@ where
     type Profile: StorageProfile<FrameOwner = OwnerOf<Self>> + 'static;
     /// The per-slot memory anchor the scheduler manages by `Rc` (minted by the workload). The
     /// scheduler stores it, hands it back from [`take_for_run`](super::Scheduler::take_for_run), and
-    /// calls only [`Anchor::owner`] — projecting the region owner it retains for delivery-driven
-    /// frame retention. It holds an `Rc<Self::Frame>` for a finalized producer until every
-    /// destination has pulled the terminal, releasing at pull-count zero
+    /// calls only [`Anchor::owner`] — projecting the region owner the delivery envelope and the
+    /// destination operands are typed against. The row holds the anchor from alloc until finalize:
+    /// delivery moves the terminal into its destinations, so the slot's reclaim drops the anchor
+    /// unconditionally and the scheduler keeps no pin of its own
     /// (design/reach.md § Retention model).
     type Frame: Anchor;
     /// The per-node continuation: a one-lifetime [`Reattachable`] family the scheduler rests on the

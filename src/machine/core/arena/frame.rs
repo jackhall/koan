@@ -10,9 +10,9 @@ use std::rc::Rc;
 
 use super::{KoanRegion, KoanStorageProfile, RegionBrand};
 use crate::machine::CarrierWitness;
-use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::{Scope, ScopeId, ScopeRefFamily, scope_frame};
 use crate::machine::model::types::TypeRegistry;
+use crate::scheduler::NodeId;
 use crate::witnessed::{
     Delivered, ReachDescription, RegionHandle, RegionHost, SealedExtern, StepCoverage,
 };

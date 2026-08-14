@@ -3,8 +3,8 @@
 //!
 //! There is no terminal state. A finalizing slot's value is delivered into its consumers'
 //! destination regions by the walk in [`lifecycle`](super::lifecycle), so the slot itself has
-//! nothing left to hold and reclaims immediately — which is why `Done` and `Aliased` are not
-//! at-rest states here.
+//! nothing left to hold and reclaims immediately: `Free` is the only state a finished slot rests
+//! in, and a slot whose result *is* another producer's is spliced out rather than kept as an alias.
 //!
 //! ## Invariants
 //!
@@ -205,11 +205,6 @@ impl<W: Workload> NodeStore<W> {
             SlotState::PreRun(work) => &work.deps,
             _ => panic!("only a pre-run slot holds a realized dep list"),
         }
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn free_list_snapshot(&self) -> Vec<NodeId> {
-        self.free_list.clone()
     }
 
     #[cfg(any(test, feature = "test-hooks"))]

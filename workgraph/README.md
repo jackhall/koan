@@ -29,9 +29,10 @@ crate reads as a standalone library rather than as one of koan's internals.
     their transform verbs, the holder rule, the mint rules (self, subsumption,
     eternal), and the delivery-driven retention model.
   - [dag-scheduler.md](design/dag-scheduler.md) — what the DAG layer adds over
-    the cell substrate: the node-store lifecycle, push/notify dep edges and the
-    dep-row invariants, the two-band work queue, alias splicing, and cascade
-    reclamation.
+    the cell substrate: the edge slab and its containment lattice, the
+    node-store lifecycle, push/notify dep edges and the dep-row invariants, the
+    two-band work queue, alias splicing, and delivery at finalize with the
+    unconditional slot reclaim behind it.
   - [cellgraph.md](design/cellgraph.md) — the computation-cell substrate
     beneath the DAG layer (working name `cellgraph`): cells with a
     continuation, a memory anchor, and inter-cell values; no acyclicity, no

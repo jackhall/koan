@@ -63,14 +63,13 @@ use crate::machine::core::RunId;
 use crate::machine::core::carrier_witness::{
     GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
 };
-use crate::machine::core::kfunction::NodeId;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{KType, UntypedKey};
 use crate::machine::model::{
     StoredDispatchTokenElement, StoredElement, StoredKeyProbe, UntypedKeyProbe, owned_untyped_key,
     restore_stored_key, store_untyped_key,
 };
-use crate::scheduler::EdgeId;
+use crate::scheduler::{EdgeId, NodeId};
 use crate::witnessed::BumpBackedMap;
 use crate::witnessed::{BumpAllocator, Sealed};
 

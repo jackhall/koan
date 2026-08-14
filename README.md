@@ -241,11 +241,10 @@ src/
     │       ├── exec.rs              run_user_fn — innermost body executor; returns a scheduler-unaware ExecOutcome
     │       ├── action.rs            Action — the scheduler-aware currency a builtin returns: the WriteOp effects it decided plus its ActionKind continuation (types only)
     │       ├── block_tail.rs        the one "run a block, return the tail" constructor — the sole Action::Tail site, configured by EVAL / MATCH / TRY arms / USING
-    │       ├── pick.rs              per-bucket tournament selecting the most-specific overload
-    │       └── scheduler_handle.rs  NodeId — stable DAG node handle
+    │       └── pick.rs              per-bucket tournament selecting the most-specific overload
     ├── execute.rs
     └── execute/
-        ├── scheduler.rs   Scheduler struct — read views + inherent write primitives (the AST-free store the harness drives); dep_graph/, node_store/, submit/, work_queues/, finish/ (run_step — one node handler), execute/ (the pop loop), splice/ (bare-name forward alias) submodules, tests under it
+        ├── run_loop.rs    the pop loop plus run_step — the one node handler: read each dep's resident off its edge, run the step under one rank-2 brand, retire the slot's edges (the scheduler itself is the workgraph crate)
         ├── nodes.rs       node types: the NodeWork (live) / StoredWork (sealed) re-exports from the scheduler, plus SlotFrame / NodeStep / NodeScope / NodePayload / ChainOp
         ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / ParkThenContinue / Invoke / Redispatch / Forward) + Continuation + the Await envelope builder (sole ParkThenContinue-with-finish constructor) + cont combinators (short_circuit / catch_cont / ignore_results); AST-free (carries DepRequest as an opaque type)
         ├── runtime.rs     KoanRuntime — owns the Scheduler, the sole &mut holder: the execute loop, apply_outcome (sole graph writer), submit_dispatch, literal lowering; plus run_action (lowers a builtin Action to an Outcome, pure); interpret/ (program entry points + run_program) and submit/ (the AST-aware submission wrappers — enter_block / dispatch_in_scope / dispatch_in_own_scope / dispatch_body / submit_dep_finish_in_own_scope) submodules
