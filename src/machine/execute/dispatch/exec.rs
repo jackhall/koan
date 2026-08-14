@@ -218,24 +218,26 @@ fn body_continue<'step>(
     obligation: Option<ReturnObligation>,
 ) -> Outcome<'step> {
     let work_frame = Rc::clone(&frame);
-    let continuation = ignore_results(Box::new(move |view: &SchedulerView<'_, 'step, '_>, _idx| {
-        // The body crosses into the scheduler here, one working node per statement: each is a
-        // slice copy of the parsed run into the installed cart's own region.
-        let brand = view.current_scope().brand();
-        super::super::runtime::run_action(
-            view,
-            Action::tail(
-                leading
-                    .into_iter()
-                    .map(|e| WorkingExpression::from_ast(brand, e))
-                    .collect(),
-                WorkingExpression::from_ast(brand, tail),
-                contract,
-                FramePlacement::Inherit,
-                BlockEntry::FrameScope(work_frame),
-            ),
-        )
-    }));
+    let continuation = ignore_results(Box::new(
+        move |view: &SchedulerView<'_, 'step, '_>, _idx| {
+            // The body crosses into the scheduler here, one working node per statement: each is a
+            // slice copy of the parsed run into the installed cart's own region.
+            let brand = view.current_scope().brand();
+            super::super::runtime::run_action(
+                view,
+                Action::tail(
+                    leading
+                        .into_iter()
+                        .map(|e| WorkingExpression::from_ast(brand, e))
+                        .collect(),
+                    WorkingExpression::from_ast(brand, tail),
+                    contract,
+                    FramePlacement::Inherit,
+                    BlockEntry::FrameScope(work_frame),
+                ),
+            )
+        },
+    ));
     let continuation = match obligation {
         Some(obligation) => with_obligation(obligation, continuation),
         None => continuation,
@@ -265,7 +267,7 @@ fn carriers_from_expr<'step>(
         .parts
         .iter()
         .map(|part| match &part.value {
-            WorkingPart::Spliced { cell } => Some(view.lift_spliced(cell)),
+            WorkingPart::Spliced { cell } => Some(view.current_scope().lift_spliced(cell)),
             _ => None,
         })
         .collect()

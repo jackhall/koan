@@ -214,9 +214,11 @@ fn no_mint_categories_add_no_region_mints() {
 }
 
 /// Adoption-before-free (Lemma 2): a loop-carried aggregate (a `List`) rebuilt at every hop from
-/// the previous hop's own carried value — so the spliced carrier genuinely pins the retiring
-/// incarnation's region across the hop, and the free is ordered strictly after the adoption reads
-/// it. Correctness (not a crash / wrong value) is the observable half of the guarantee under plain
+/// the previous hop's own carried value — so the spliced carrier genuinely borrows the retiring
+/// incarnation's region, and the free is ordered strictly after the adoption reads it. The ordering
+/// is a decide-side one: the adoption runs in the step that *emits* the replace, which still holds
+/// the region it is copying out of, and the retiring anchor falls at the install.
+/// Correctness (not a crash / wrong value) is the observable half of the guarantee under plain
 /// `cargo test`; the orchestrating Miri run is what confirms the ordering itself never
 /// use-after-frees.
 #[test]

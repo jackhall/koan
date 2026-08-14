@@ -43,7 +43,7 @@ fn finalize_with_error(sched: &mut Scheduler<TestWorkload>, id: NodeId) {
 /// Terminalize one node without touching the ready queue — the shape a slate holding several
 /// dep-free slots needs, where pop order is not the thing under test.
 fn finalize_in_place(sched: &mut Scheduler<TestWorkload>, id: NodeId) {
-    let (_work, _anchor, _handoff) = sched.take_for_run(id);
+    let (_work, _anchor) = sched.take_for_run(id);
     sched.finalize(id, Err(()));
 }
 
@@ -326,7 +326,7 @@ fn splice_repoints_parked_edges_and_reclaims_the_slot() {
     let destination = destination();
     let edge = sched.install_edge(forwarder, destination.owner());
 
-    let (_work, _anchor, _handoff) = sched.take_for_run(forwarder);
+    let (_work, _anchor) = sched.take_for_run(forwarder);
     sched.splice_forward(forwarder, real);
 
     assert_eq!(
@@ -360,7 +360,7 @@ fn splice_recycles_a_released_entry() {
     sched.release_edge(doomed);
     assert_eq!(sched.edge_free_list_len(), 0, "withheld while listed");
 
-    let (_work, _anchor, _handoff) = sched.take_for_run(forwarder);
+    let (_work, _anchor) = sched.take_for_run(forwarder);
     sched.splice_forward(forwarder, real);
 
     assert_eq!(

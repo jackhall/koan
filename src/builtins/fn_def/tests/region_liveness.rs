@@ -160,15 +160,16 @@ fn splicing_countdown(depth: usize) -> String {
     source
 }
 
-/// **A spliced cell outlives the hop that consumed it.** One hop is the whole no-use-after-free
-/// shape: the sub-result rests as a pin-less `Sealed` cell in the dispatching step's own region, and
-/// the step that adopts it is a *later incarnation of the same slot*, running against a freshly
-/// minted cart whose ancestor chain does not reach the retiring one — so the only thing spanning the
-/// hop is the run loop's TCO handoff hold, absorbed into the step's coverage and named as the pin
-/// for `SchedulerView::lift_spliced`'s `Sealed::open_at` + `Opened::lift_out`. Reading the result
-/// back is the check; tree borrows catches a use-after-free if that ordering ever breaks.
+/// **A spliced cell is adopted before the hop that retires it.** One hop is the whole
+/// no-use-after-free shape: the sub-result rests as a pin-less `Sealed` cell in the dispatching
+/// step's own region, and the incarnation that will run the body has a *freshly minted cart whose
+/// ancestor chain does not reach that region* — so if the adoption happened on the far side of the
+/// hop, nothing would be holding the cell up. It happens on the near side instead: the decide that
+/// folds the call (`enter_user_fn`) lifts the cell and binds it into the new cart while the resting
+/// region is still its own step's. Reading the result back is the check; tree borrows catches a
+/// use-after-free if that ordering ever breaks.
 #[test]
-fn a_spliced_cell_survives_its_tail_hop() {
+fn a_spliced_cell_is_adopted_before_its_tail_hop() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);

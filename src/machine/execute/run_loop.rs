@@ -56,13 +56,8 @@ impl<'run> KoanRuntime<'run> {
     /// frame is released. See design/memory-model.md.
     pub fn execute(&mut self) -> Result<(), KError> {
         while let Some(id) = self.sched.pop_next() {
-            // A framed tail replace's retiring incarnation frame rides into the step as part of its
-            // coverage: the reinstalled incarnation adopts the carried arguments here
-            // (`extract_carried_args`), reading them out of the retiring region — where the
-            // dispatching step rested them — which must stay live until it does. `None` for any
-            // non-reinstalled step, or a frameless replace, which turns over no region.
-            let (work, anchor, handoff) = self.sched.take_for_run(id);
-            self.run_step(id, work, anchor, handoff);
+            let (work, anchor) = self.sched.take_for_run(id);
+            self.run_step(id, work, anchor);
         }
         // Slots still parked after drain are on a dependency that can never fire —
         // surface the cycle rather than panic on the top-level result read.
@@ -126,7 +121,6 @@ impl<'run> KoanRuntime<'run> {
         id: NodeId,
         work: StoredWork<KoanWorkload>,
         anchor: Rc<super::nodes::SlotFrame>,
-        handoff: Option<Rc<super::nodes::SlotFrame>>,
     ) {
         // Source the step's context off the scheduler-held anchor: the cart, the slot's scope
         // handle, and its lexical chain. Read as values up front so nothing holds a scope borrow
@@ -164,14 +158,7 @@ impl<'run> KoanRuntime<'run> {
         // open so it outlives `'b`, and held across it, so re-anchoring the zipped carriers to `'b`
         // cannot dangle. Sourced off the scheduler-returned anchor, not a `storage_rc()` of the cart
         // the scheduler already holds.
-        let mut combined: FrameCoverage = FrameCoverage::of(Rc::clone(anchor.owner()));
-        // A framed tail replace's retiring incarnation, held for this step alone. It covers the
-        // splice cells this slot's previous incarnation rested into that region — the reads
-        // `SchedulerView::lift_spliced` takes — and is released when the coverage drops at return,
-        // ordering the retiring region's free after the adoption.
-        if let Some(retiring) = &handoff {
-            combined.absorb(FrameCoverage::of(Rc::clone(retiring.owner())));
-        }
+        let combined: FrameCoverage = FrameCoverage::of(Rc::clone(anchor.owner()));
         // Re-brand each delivered resident **once**, here, against the step's coverage: a retained
         // cell proves no liveness of its own, and `combined` is exactly the pin covering every
         // region a dep landed in. From this point the step's readers open pin-free — a dep value
@@ -346,13 +333,7 @@ impl<'run> KoanRuntime<'run> {
                                 );
                                 // The slot's scope is always this `f` cart's own child, so mint a
                                 // payload-less `NodeScope::Yoked` re-projected at the read boundary —
-                                // no persisted `&'run` to dangle across the tail hop. The scheduler
-                                // parks the displaced incarnation as the reinstalled slot's handoff, so
-                                // the retiring region outlives the adoption of the carried arguments
-                                // (wired by the TCO handoff). `prev_frame` (the retiring cart) drops at
-                                // the end of this arm: its storage stays pinned by `combined` until the
-                                // step open above exits, and by the loop-carried argument carriers
-                                // beyond that.
+                                // no persisted `&'run` to dangle across the tail hop.
                                 // The claims and the statement identity belong to the slot, not to
                                 // the anchor it happens to be wearing, so the incoming anchor takes
                                 // them over from the retiring one: the terminal that eventually
@@ -367,7 +348,14 @@ impl<'run> KoanRuntime<'run> {
                                     new_chain,
                                     anchor.as_ref(),
                                 );
-                                self.sched.replace(id, new_work, Some(fresh));
+                                // The retiring incarnation's anchor comes back out of the install
+                                // rather than resting on the slot's row: the callee's arguments were
+                                // relocated into `f`'s region by the decide that emitted this
+                                // replace, so nothing the reinstalled incarnation reads lives in the
+                                // region this drops. It is bound across the install call and falls
+                                // here with `prev_frame` (the retiring cart), whose storage stays
+                                // pinned by `combined` until the step open above exits.
+                                let _retiring = self.sched.replace(id, new_work, Some(fresh));
                             }
                             None => {
                                 // A frameless Replace keeps the prior cart. A tail entering an overlay
@@ -387,7 +375,8 @@ impl<'run> KoanRuntime<'run> {
                                 } else {
                                     None
                                 };
-                                self.sched.replace(id, new_work, anchor_arg);
+                                // Frameless: no anchor swapped in, so nothing is displaced.
+                                let _ = self.sched.replace(id, new_work, anchor_arg);
                             }
                         }
                     }

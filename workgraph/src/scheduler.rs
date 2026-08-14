@@ -87,31 +87,28 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// Take a slot's stored work to run it (`PreRun` → `Running`), together with a clone of the
-    /// slot's memory anchor (kept on the row) and its pending TCO handoff — the displaced
-    /// incarnation's anchor a framed tail [`replace`](Self::replace) parked on it. The slot sits
-    /// empty until the driver finalizes or `replace`s it. The caller holds the returned handoff `Rc`
-    /// across the step: drop order frees the retiring region only after the reinstalled incarnation
-    /// adopts the carried arguments out of it (`None` for any slot with no pending handoff — a first
-    /// run, or a frameless replace).
-    // The (work, anchor, handoff) triple reads clearer inline than split into a named alias.
-    #[allow(clippy::type_complexity)]
-    pub fn take_for_run(
-        &mut self,
-        id: NodeId,
-    ) -> (StoredWork<W>, Rc<W::Frame>, Option<Rc<W::Frame>>) {
-        (
-            self.store.take_for_run(id),
-            self.deps.anchor_clone(id),
-            self.deps.take_handoff(id),
-        )
+    /// slot's memory anchor (kept on the row). The slot sits empty until the driver finalizes or
+    /// `replace`s it.
+    pub fn take_for_run(&mut self, id: NodeId) -> (StoredWork<W>, Rc<W::Frame>) {
+        (self.store.take_for_run(id), self.deps.anchor_clone(id))
     }
 
     /// Reinstall a tail-replaced slot's work and re-enqueue it if its deps are already satisfied —
     /// the whole `Replace` apply in one step. `anchor` is the reinstalled incarnation's memory anchor
     /// at a framed tail replace (`None` for a frameless `Inherit` replace, which turns over no
-    /// region); swapping it in parks the displaced anchor as the TCO handoff so the retiring region
-    /// is released only after the reinstalled incarnation adopts the carried arguments.
-    pub fn replace(&mut self, id: NodeId, work: NodeWork<'_, W>, anchor: Option<Rc<W::Frame>>) {
+    /// region).
+    ///
+    /// Returns the **displaced** anchor a framed replace retires. The scheduler keeps no hold of its
+    /// own past this call: an embedder relocates whatever the next incarnation reads into the new
+    /// anchor's region *before* replacing, so ordering the retiring region's free is a local
+    /// variable in the caller's own apply path, not a row field spanning a step
+    /// ([design/reach.md § Retention model](../design/reach.md#retention-model)).
+    pub fn replace(
+        &mut self,
+        id: NodeId,
+        work: NodeWork<'_, W>,
+        anchor: Option<Rc<W::Frame>>,
+    ) -> Option<Rc<W::Frame>> {
         // Seal the incoming continuation against the incarnation's *effective* anchor — the new one
         // at a framed replace, the row's current one at a frameless `Inherit` replace — so the
         // resting continuation is pinned by the anchor whose region it will read.
@@ -119,23 +116,13 @@ impl<W: Workload> Scheduler<W> {
             Some(new) => seal_work(work, new),
             None => seal_work(work, &self.deps.anchor_clone(id)),
         };
-        // On a framed replace, swap the row's anchor for the new incarnation's and park the displaced
-        // one as the reinstalled slot's TCO handoff hold; the run loop holds it across the reinstalled
-        // incarnation's first step, so the retiring region is released only after the carried
-        // arguments are adopted. On a frameless `Inherit` replace, keep the current anchor and clear
-        // any handoff — it turns over no region.
-        match anchor {
-            Some(new) => {
-                let displaced = self.deps.set_anchor(id, new);
-                self.deps.set_handoff(id, Some(displaced));
-            }
-            None => self.deps.set_handoff(id, None),
-        }
+        let displaced = anchor.map(|new| self.deps.set_anchor(id, new));
         self.store.reinstall(id, stored);
         // Replace return sites install their own edges, so the pending count is authoritative here.
         if self.deps.pending_count(id) == 0 {
             self.queues.push_after_replace(id);
         }
+        displaced
     }
 
     /// Slots still `PreRun` after the queue drained — each is parked on a dependency that can no

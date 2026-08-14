@@ -308,7 +308,7 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
         let result = match &results.all()[0] {
             // The watched producer's delivered resident, lifted back into an envelope owning its
             // whole reach — the finish adopts or opens it at its own step brand.
-            Ok(t) => Ok(view.lift_spliced(&t.cell)),
+            Ok(t) => Ok(view.current_scope().lift_spliced(&t.cell)),
             // Frameless: the recovery-site dispatch attaches its own frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };

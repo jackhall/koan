@@ -65,9 +65,9 @@ pub type SplicedCell<'home> = crate::witnessed::Sealed<'home, CarriedFamily, Car
 /// `Debug::fmt`) could not be given one.
 ///
 /// The coverage is the step's, not the reader's: a probe runs synchronously inside the step holding
-/// the expression, and that step holds the region the cell was rested into — its own cart for a
-/// decide, the run loop's TCO handoff hold across a framed tail hop. So the pointee outlives the read
-/// for a reason outside it, which is exactly what [`NoPins`] names. Stated once here so the
+/// the expression, and a cell rests in that step's own cart — the splice and every read of it happen
+/// on one side of a tail hop, never across one. So the pointee outlives the read for a reason
+/// outside it, which is exactly what [`NoPins`] names. Stated once here so the
 /// assertion has one home rather than one per call site. A reader that holds a scope names a pin
 /// instead: [`Scope::read_spliced`](crate::machine::core::Scope::read_spliced) for another verdict,
 /// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) when it goes on to *adopt* the

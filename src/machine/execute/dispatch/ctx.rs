@@ -20,9 +20,7 @@ use crate::machine::core::{FrameStorage, ProgramBrand, RunWriter, StepAllocator}
 use crate::machine::model::FoldDirection;
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
-use crate::machine::{
-    CallFrame, DeliveredCarried, Installer, LexicalFrame, NameOutcome, NodeId, Scope, SplicedCell,
-};
+use crate::machine::{CallFrame, Installer, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::{Span, Spanned};
 
 use super::super::ambient::AmbientContext;
@@ -136,15 +134,6 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
     /// This run's program storage capability — see the [`program`](Self::program) field.
     pub(in crate::machine::execute) fn program(&self) -> ProgramBrand<'program> {
         self.program
-    }
-
-    /// **Lift** a resting splice cell back into a delivery envelope owning its whole reach, under
-    /// the cell's own `'home` brand — the read door for a consumer that goes on to adopt the
-    /// value. The scope-level twin ([`Scope::lift_spliced`]) covers a read inside the region that did
-    /// the resting; this one also covers a read *after* a framed tail hop, where the resting region
-    /// survives only as the run loop's handoff hold.
-    pub(in crate::machine::execute) fn lift_spliced(&self, cell: &SplicedCell) -> DeliveredCarried {
-        cell.open_at().lift_out()
     }
 
     /// Append this step's next batch of binding writes to the run-loop-owned sink, preserving the
@@ -316,9 +305,9 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
                 // Lift the dep's resident cell back into a delivery envelope, then rest that envelope
                 // into this step's own region: the cell keeps the producer's carrier, the envelope's
                 // whole coverage moves into the region's union bundle. That is what keeps the value's
-                // backing retained across the `Replace` to the re-dispatch step where
-                // `extract_carried_args` adopts it — a framed tail hop's TCO handoff holds this
-                // retiring region across exactly that step.
+                // backing retained until the bind reads it — which happens in this same step, on the
+                // decide that folds the resolved call (`enter_user_fn`), so the cell is never read
+                // across a tail hop.
                 parts[*slot].value = WorkingPart::Spliced {
                     cell: scope.rest_delivered(&scope.lift_spliced(&terminal.cell)),
                 };

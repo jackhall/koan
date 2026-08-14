@@ -140,7 +140,9 @@ pub(super) fn literal_pass_through<'step>(
             // Lift the resting cell back into its producer's own delivery envelope under the step's
             // coverage: the whole claim — the producer's own region among its members — is re-owned
             // there, so the recovered carrier's reach is threaded, not re-derived.
-            Outcome::Done(Ok(StepCarried::born_delivered(ctx.lift_spliced(&cell))))
+            Outcome::Done(Ok(StepCarried::born_delivered(
+                ctx.current_scope().lift_spliced(&cell),
+            )))
         }
         // A quote is its body as data: bump the `KObject::KExpression` into this scope's region
         // through the door whose signature admits an expression and nothing else. The value is
@@ -184,7 +186,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         // homes the product in the consumer's own frame, which the step's seal re-pins — so
         // `born_delivered` releases it and the foreign coverage rides on.
         Ok(StepCarried::born_delivered(relocate_seam(
-            &view.lift_spliced(&deps.owned(0).cell),
+            &view.current_scope().lift_spliced(&deps.owned(0).cell),
             dest_brand(view.dest_frame()),
         )))
     });

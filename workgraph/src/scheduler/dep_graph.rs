@@ -1,7 +1,6 @@
 //! Per-slot dependency-graph state. Each slot's [`DepRow`] holds the two coordinated fields
 //! (`notify`, `pending`) that share the slot index — keeping them in one row makes Inv-A
-//! (wake-pending coherence) structural rather than enforced — plus the slot's memory anchor and its
-//! TCO handoff hold. See
+//! (wake-pending coherence) structural rather than enforced — plus the slot's memory anchor. See
 //! [design/dag-scheduler.md § The dep row and its invariants](../../design/dag-scheduler.md#the-dep-row-and-its-invariants).
 //!
 //! Both coordinated fields speak **edges**. `notify` lists the parked edges waiting on this slot as
@@ -14,7 +13,7 @@ use std::rc::Rc;
 
 use super::{EdgeId, NodeId, Workload};
 
-/// The two coordinated per-slot fields plus the slot's memory anchor and TCO handoff. Mutations go
+/// The two coordinated per-slot fields plus the slot's memory anchor. Mutations go
 /// through the row, so `notify` / `pending` cannot desync — Inv-A holds by construction.
 struct DepRow<W: Workload> {
     /// Every live parked edge on this slot **as a producer** — what the finalize walk delivers
@@ -29,13 +28,6 @@ struct DepRow<W: Workload> {
     /// `install_anchor`) or one that has finalized (delivery moved every value out, so the anchor's
     /// region is free to die).
     anchor: Option<Rc<W::Frame>>,
-    /// The **TCO handoff hold**: a framed tail replace's *displaced* incarnation anchor, parked
-    /// here by [`Scheduler::replace`](crate::scheduler::Scheduler::replace) so the retiring region
-    /// outlives the reinstalled incarnation's first step — where it adopts the loop-carried
-    /// arguments. The displaced anchor pins the retiring region transitively through its projected
-    /// owner. The run loop takes it just before running that step and drops it after, ordering the
-    /// retiring region's free after the adoption.
-    handoff: Option<Rc<W::Frame>>,
 }
 
 impl<W: Workload> Default for DepRow<W> {
@@ -44,7 +36,6 @@ impl<W: Workload> Default for DepRow<W> {
             notify: Vec::new(),
             pending: 0,
             anchor: None,
-            handoff: None,
         }
     }
 }
@@ -80,7 +71,6 @@ impl<W: Workload> DepGraph<W> {
             );
             row.pending = 0;
             row.anchor = None;
-            row.handoff = None;
         } else {
             self.rows.push(DepRow::default());
         }
@@ -154,8 +144,9 @@ impl<W: Workload> DepGraph<W> {
     }
 
     /// Swap the slot's memory anchor for `anchor` on a framed replace, returning the DISPLACED one
-    /// (the previous incarnation's anchor, which the caller parks as the TCO handoff). Every live
-    /// slot has an anchor, so the `.expect` is total on the replace path.
+    /// (the retiring incarnation's anchor, which the caller holds for as long as it needs the
+    /// retiring region and then drops). Every live slot has an anchor, so the `.expect` is total on
+    /// the replace path.
     pub(super) fn set_anchor(&mut self, id: NodeId, anchor: Rc<W::Frame>) -> Rc<W::Frame> {
         self.row_mut(id)
             .anchor
@@ -184,26 +175,6 @@ impl<W: Workload> DepGraph<W> {
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn anchor_of(&self, id: NodeId) -> Option<Rc<W::Frame>> {
         self.row(id).anchor.as_ref().map(Rc::clone)
-    }
-
-    /// Park a framed tail replace's displaced incarnation anchor on the reinstalled `slot` as its
-    /// TCO handoff hold (`None` clears it — a frameless `Inherit` replace turns over no region). The
-    /// run loop [`take_handoff`](Self::take_handoff)s it just before the reinstalled incarnation's
-    /// first step and holds it across that step, so the retiring region outlives the adoption of the
-    /// carried arguments.
-    pub(super) fn set_handoff(&mut self, slot: NodeId, displaced: Option<Rc<W::Frame>>) {
-        self.row_mut(slot).handoff = displaced;
-    }
-
-    /// Take the reinstalled `slot`'s pending TCO handoff hold (draining it, so a slot that replaces
-    /// again on this step re-parks a fresh one). The caller holds the returned `Rc` live across the
-    /// step and drops it after, ordering the retiring region's free after the adoption.
-    pub(super) fn take_handoff(&mut self, slot: NodeId) -> Option<Rc<W::Frame>> {
-        if slot.index() < self.rows.len() {
-            self.row_mut(slot).handoff.take()
-        } else {
-            None
-        }
     }
 
     pub(super) fn pending_count(&self, id: NodeId) -> usize {

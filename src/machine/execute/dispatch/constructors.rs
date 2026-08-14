@@ -436,7 +436,7 @@ fn finish_witnessed<'step>(
             // the payload cell's own stored run; the term's coverage is the holder-rule proof for
             // reading it, captured before the fold closure. `transfer_into` and `.coverage()` need
             // an owned envelope, so the term's resident cell is lifted back to one first.
-            let delivered = view.lift_spliced(&terminals[0].cell);
+            let delivered = view.current_scope().lift_spliced(&terminals[0].cell);
             let holder = delivered.coverage().clone();
             // The type operand is empty-reach, so the transfer composes the value's reach alone and
             // hands back the wrapped product as an envelope homed in the dest frame.
@@ -492,7 +492,8 @@ fn finish_witnessed<'step>(
             let fields = terminals.iter().fold(acc0, |acc, term| {
                 // `transfer_into` needs an owned envelope, so the term's resident cell is lifted
                 // back to one first.
-                view.lift_spliced(&term.cell)
+                view.current_scope()
+                    .lift_spliced(&term.cell)
                     .transfer_into::<RecordFieldsFamily, RecordFieldsFamily, _>(
                         acc,
                         // Each field cell is a pointer copy of the term's value, so it
@@ -580,7 +581,7 @@ fn finish_witnessed<'step>(
             // The tag keeps the value verbatim — see the `NewType` arm's holder. `transfer_into` and
             // `.coverage()` need an owned envelope, so the term's resident cell is lifted back to one
             // first.
-            let delivered = view.lift_spliced(&terminals[0].cell);
+            let delivered = view.current_scope().lift_spliced(&terminals[0].cell);
             let holder = delivered.coverage().clone();
             Ok(
                 delivered.transfer_into::<RegionTypeFamily, CarriedFamily, _>(
@@ -622,7 +623,7 @@ fn finish_witnessed<'step>(
             // The wrap keeps the value verbatim — see the `NewType` arm's holder. `transfer_into`
             // and `.coverage()` need an owned envelope, so the term's resident cell is lifted back
             // to one first.
-            let delivered = view.lift_spliced(&terminals[0].cell);
+            let delivered = view.current_scope().lift_spliced(&terminals[0].cell);
             let holder = delivered.coverage().clone();
             Ok(
                 delivered.transfer_into::<RegionTypeFamily, CarriedFamily, _>(
