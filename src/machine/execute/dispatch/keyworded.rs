@@ -1,7 +1,7 @@
 //! Keyworded dispatch shape: the catch-all for any expression with a
 //! keyword present, or a head that isn't a fast-lane shape.
 
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::{BlockEntry, FramePlacement};
 use crate::machine::model::WorkingExpression;
 use crate::machine::{DispatchOutcome, KError, KErrorKind, NameOutcome, NodeId};

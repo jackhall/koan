@@ -22,7 +22,7 @@
 //! **declared** reference — a SIG-declared or abstract slot, identified by the declaring scope id
 //! its node records.
 
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::{LexicalFrame, Scope, ScopeId};
 use crate::machine::model::TypeIdentifier;
 use crate::machine::model::{KType, TypeNode, TypeRegistry, TypeResolution};

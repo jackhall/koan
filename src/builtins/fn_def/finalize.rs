@@ -11,9 +11,10 @@
 
 use crate::machine::Action;
 use crate::machine::KFunction;
+use crate::machine::ProducerId;
 use crate::machine::StepCarried;
-use crate::machine::core::ProducerId;
 use crate::machine::core::bindings::WriteOp;
+use crate::machine::execute::park_deps;
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::KExpression;
@@ -330,7 +331,6 @@ pub(crate) fn defer<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::model::WorkingExpression;
     use crate::machine::{Action, AwaitContinue, DepPlacement, OwnedDispatch};
-    use crate::scheduler::Deps;
     let DeferredInputs {
         capture,
         park_producers,
@@ -342,12 +342,7 @@ pub(crate) fn defer<'a>(
     // Builds the structural split directly: parks first, then owned `[rt?, subs...]`, so the
     // return-type sub is owned index 0 and the signature subs follow. `splice_layout` records each
     // sub's owned index (and its signature part-index) for the finish.
-    let mut deps = Deps::from_parks(
-        park_producers
-            .iter()
-            .copied()
-            .map(ProducerId::scheduler_edge),
-    );
+    let mut deps = park_deps(park_producers.iter().copied());
     let mut owned_count = 0usize;
     if let Some(rt_expr) = return_type_sub {
         deps.own(OwnedDispatch {

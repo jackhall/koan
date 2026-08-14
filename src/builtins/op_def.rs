@@ -25,8 +25,9 @@
 //!
 //! Surface design: [design/operators.md](../../design/operators.md).
 
+use crate::machine::ProducerId;
 use crate::machine::WriteGate;
-use crate::machine::core::ProducerId;
+use crate::machine::execute::park_deps;
 
 use crate::machine::BindingIndex;
 use crate::machine::KFunction;
@@ -46,7 +47,6 @@ use crate::machine::{
 };
 use crate::machine::{Body, CarrierWitness, KError, KErrorKind, Scope};
 use crate::scheduler::DepResults;
-use crate::scheduler::Deps;
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
@@ -255,7 +255,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
     // Builds the structural `[park… ++ sub…]` split directly: parks first, then the subs owned in
     // declaration order — the order `capture_type_slot` recorded their positions in.
     let brand = ctx.scope.brand();
-    let mut deps = Deps::from_parks(parks.into_iter().map(ProducerId::scheduler_edge));
+    let mut deps = park_deps(parks);
     for expr in subs {
         deps.own(OwnedDispatch {
             expr: crate::machine::model::WorkingExpression::from_ast(brand, expr),

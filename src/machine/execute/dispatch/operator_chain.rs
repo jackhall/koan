@@ -23,7 +23,7 @@
 //! itself rather than purely rewriting syntax, since a shared middle operand must evaluate exactly
 //! once.
 
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::model::Part;

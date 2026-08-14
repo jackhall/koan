@@ -287,7 +287,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
 #[test]
 fn pending_overload_parks_only_on_exact_bucket_match() {
     let types = TypeRegistry::new();
-    use crate::machine::core::ProducerId;
+    use crate::machine::ProducerId;
     use crate::machine::model::{UntypedElement, UntypedKey};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -344,7 +344,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
 #[test]
 fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     let types = TypeRegistry::new();
-    use crate::machine::core::ProducerId;
+    use crate::machine::ProducerId;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     // Outer finalized overload that strictly Picks `(MARK <number>)`.
@@ -499,7 +499,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
 #[test]
 fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let types = TypeRegistry::new();
-    use crate::machine::core::ProducerId;
+    use crate::machine::ProducerId;
     use crate::machine::core::kfunction::{Body, KFunction};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -598,7 +598,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
 fn scope_install_pending<'a>(
     scope: &'a Scope<'a>,
     expr: &WorkingExpression<'a>,
-    claim: crate::machine::core::ProducerId,
+    claim: crate::machine::ProducerId,
 ) {
     scope
         .install_pending_overload(
@@ -617,7 +617,7 @@ fn scope_install_pending<'a>(
 #[test]
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let types = TypeRegistry::new();
-    use crate::machine::core::ProducerId;
+    use crate::machine::ProducerId;
     use crate::machine::model::{UntypedElement, UntypedKey};
     let region = run_root_storage();
     let scope = run_root_bare(&region);

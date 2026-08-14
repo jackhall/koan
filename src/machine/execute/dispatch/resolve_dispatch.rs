@@ -13,7 +13,7 @@
 //! name as an `:Identifier` / `:Any` slot.
 
 use crate::machine::DeliveredCarried;
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::{ClassifiedSlots, OpenedFunction};
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
 use crate::machine::model::TypeRegistry;

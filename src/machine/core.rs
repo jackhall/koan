@@ -8,7 +8,6 @@ mod carrier_witness;
 mod kerror;
 pub(crate) mod kfunction;
 mod lexical_frame;
-mod producer_id;
 /// The reach-tightness report — the over-pinning audit at the fold chokepoint, compiled only under
 /// the `region-audit` gate.
 #[cfg(any(test, feature = "region-audit"))]
@@ -49,7 +48,6 @@ pub(crate) use kfunction::body::{ReturnContract, body_statement_refs, split_body
 pub(crate) use kfunction::exec::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
 pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction};
 pub use lexical_frame::{LexicalFrame, assemble_body_chain};
-pub use producer_id::ProducerId;
 pub use ref_carriers::{ModuleRefFamily, ScopeRefFamily};
 pub(crate) use scope::AdoptSeam;
 pub use scope::Scope;

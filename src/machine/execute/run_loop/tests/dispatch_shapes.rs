@@ -9,7 +9,7 @@
 //! pool.
 
 use crate::builtins::test_support::{TestRun, parse_one};
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::{Action, BodyCtx, arg_object};
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::execute::dispatch::{

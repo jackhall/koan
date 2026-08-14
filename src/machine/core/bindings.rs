@@ -58,7 +58,7 @@ use std::cell::RefCell;
 use std::mem::ManuallyDrop;
 
 use crate::machine::CarrierWitness;
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::StatementId;
 use crate::machine::core::carrier_witness::{

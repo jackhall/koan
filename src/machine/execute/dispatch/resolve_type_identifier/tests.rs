@@ -165,7 +165,7 @@ mod bare_leaf_resolution {
     /// context.
     #[test]
     fn mid_window_member_parks_then_resolves() {
-        use crate::machine::core::ProducerId;
+        use crate::machine::ProducerId;
 
         use crate::machine::model::Record;
 
@@ -236,7 +236,7 @@ mod bare_leaf_resolution {
     /// window — so the outer body's placeholder is never what this reference waits on.
     #[test]
     fn a_same_named_declaration_in_an_outer_body_does_not_capture() {
-        use crate::machine::core::ProducerId;
+        use crate::machine::ProducerId;
 
         let region = run_root_storage();
         let root = run_root_bare(&region);

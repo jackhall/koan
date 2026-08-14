@@ -19,7 +19,7 @@
 
 use super::{Scope, ScopeKind};
 use crate::machine::DeliveredCarried;
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::bindings::powerset_probes;
 use crate::machine::core::bindings::{
     BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,

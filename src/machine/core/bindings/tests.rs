@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use super::*;
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::arena::RegionBrand;
 use crate::machine::core::arena::{FrameStorageExt, run_root_storage};
 use crate::machine::core::{FrameCoverage, FrameReach, FrameStorage};

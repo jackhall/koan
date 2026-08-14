@@ -19,7 +19,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{DepPlacement, FinishCtx};
 use crate::machine::core::{LexicalFrame, StepAllocator};

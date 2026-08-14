@@ -4,7 +4,7 @@
 //! lookups the index-gated resolver walks.
 
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{BindingIndex, FrameStorageExt, NameLookup, run_root_storage};
 use crate::machine::model::KObject;

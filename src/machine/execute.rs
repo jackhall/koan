@@ -14,6 +14,7 @@ mod lift;
 mod nodes;
 mod obligation;
 mod outcome;
+mod producer_id;
 // The write harness (KoanRuntime, sole &mut Scheduler) + the shared action harness and the
 // program entry points (interpret submodule). See runtime.rs.
 mod run_loop;
@@ -24,6 +25,8 @@ pub(in crate::machine::execute) use outcome::{
     CatchFinish, ContinuationFamily, TerminalDepFinish, WitnessedDepFinish, catch_continuation,
     ignore_results, seal_witnessed, short_circuit,
 };
+pub use producer_id::ProducerId;
+pub(crate) use producer_id::park_deps;
 pub(crate) use runtime::seed_run_root;
 pub use runtime::{KoanRuntime, interpret, interpret_with_writer, interpret_with_writer_path};
 pub use step_carried::{StepCarried, drive_step_allocator};

@@ -9,7 +9,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::bindings::{WriteGate, WriteOp};
 use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};

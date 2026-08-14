@@ -35,6 +35,7 @@ pub use core::{
     OpenedFunction, ProgramBrand, ProgramStorage, Scope, ScopeId, SealedFunction,
     SealedOperatorGroup, SplicedCell, WriteGate, program_storage, run_root_storage,
 };
+pub use execute::ProducerId;
 pub(crate) use execute::seed_run_root;
 pub(crate) use execute::{
     BrandCompose, DispatchOutcome, FieldListDeferral, NameOutcome, StepCarried, build_type_operand,

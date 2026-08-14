@@ -18,7 +18,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::core::{DeclarationSite, LexicalFrame, NameLookup, Scope};
 use crate::machine::model::ast::TypeIdentifier;

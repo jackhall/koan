@@ -11,7 +11,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::builtins::test_support::TestRun;
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::{KError, KErrorKind, TraceFrame};
 use crate::scheduler::ResolvedDeps;

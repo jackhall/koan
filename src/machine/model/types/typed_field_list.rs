@@ -6,8 +6,8 @@ use super::declaration_window::WindowView;
 use super::ktype::KType;
 use super::registry::TypeRegistry;
 use super::resolver::{Elaborator, TypeResolution, elaborate_type_identifier};
+use crate::machine::ProducerId;
 use crate::machine::Scope;
-use crate::machine::core::ProducerId;
 use crate::machine::model::Record;
 use crate::machine::model::ast::{
     ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,

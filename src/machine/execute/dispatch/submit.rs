@@ -13,7 +13,7 @@
 //! body (see
 //! [design/execution/name-placeholders.md](../../../../design/execution/name-placeholders.md)).
 
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::model::BinderKey;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope, WriteGate};

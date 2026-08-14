@@ -30,7 +30,7 @@ use super::super::nodes::NodeScope;
 use super::super::obligation::ReturnObligation;
 use super::super::runtime::KoanWorkload;
 use super::{Await, BareCarrier, DepRequest, Outcome, resolve_bare_carrier, resolve_name_part};
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::scheduler::{Deps, Scheduler};
 
 /// Run `f` with a [`NodeScope`] handle's scope opened at a `for<'b>` brand. A `Yoked` slot

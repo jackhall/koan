@@ -12,7 +12,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{ExpressionPart, KType, TypeIdentifier, TypeRegistry};
 use crate::machine::{DeliveredCarried, LexicalFrame, NameLookup, NameOutcome, Scope};

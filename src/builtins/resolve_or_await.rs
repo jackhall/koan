@@ -3,8 +3,8 @@
 //! Park-on-producer, re-resolve-on-wake, and the second-park protocol error live here, so every
 //! routing site states its own carrier shape and slot name and nothing else.
 
-use crate::machine::core::ProducerId;
 use crate::machine::core::RegionBrand;
+use crate::machine::execute::park_deps;
 use crate::machine::model::KExpression;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
@@ -79,10 +79,7 @@ pub(crate) fn resolve_or_await<'a>(
                 let kt = crate::try_action!(resolve_at_wake(fctx.scope, slot, resolve));
                 on_resolved(fctx, kt)
             });
-            Action::await_deps(
-                Deps::from_parks(sources.into_iter().map(ProducerId::scheduler_edge)),
-                finish,
-            )
+            Action::await_deps(park_deps(sources), finish)
         }
         TypeResolution::Unbound(detail) => Action::done(Err(unbound_error(slot, &detail))),
     }

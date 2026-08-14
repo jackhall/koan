@@ -1,6 +1,6 @@
 //! Signature parsing for the `FN` builtin.
 
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, SignatureElement};

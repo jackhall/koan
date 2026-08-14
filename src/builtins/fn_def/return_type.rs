@@ -4,7 +4,7 @@
 use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake, unbound_error};
 use crate::machine::DepTerminal;
 use crate::machine::LexicalFrame;
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeferredReturn, ReturnType};

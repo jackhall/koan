@@ -2,7 +2,7 @@
 
 use super::super::{BindingIndex, DeclarationSite, NameLookup};
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
-use crate::machine::core::ProducerId;
+use crate::machine::ProducerId;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::model::Carried;
