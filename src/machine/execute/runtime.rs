@@ -502,18 +502,17 @@ impl<'run> KoanRuntime<'run> {
         }
     }
 
-    /// Resolve a [`FramePlacement`] to the cart a [`Continue`](Outcome::Continue) installs: mint a
-    /// fresh TCO tail-call cart, take a builtin-minted fresh cart, or keep the current cart
+    /// Resolve a [`FramePlacement`] to the cart a [`Continue`](Outcome::Continue) installs: take the
+    /// decide-minted cart (a TCO tail-call cart or a builtin's fresh child), or keep the current one
     /// (`None`). The one place the placement → cart mapping lives — shared by the `Continue` body
     /// re-run and the folded invoke / re-resolve paths (which reach it through their own
-    /// `Continue`).
-    fn resolve_frame_placement<'x>(
-        &mut self,
-        placement: FramePlacement<'x>,
-    ) -> Option<Rc<CallFrame>> {
+    /// `Continue`). Both fresh placements arrive already built: the deciding step is where a
+    /// callee's arguments are relocated into the new cart, so it has to hold the cart itself.
+    fn resolve_frame_placement(&mut self, placement: FramePlacement) -> Option<Rc<CallFrame>> {
         match placement {
-            FramePlacement::FreshTail { outer } => Some(CallFrame::new(outer)),
-            FramePlacement::FreshChild { frame } => Some(frame),
+            FramePlacement::FreshTail { frame } | FramePlacement::FreshChild { frame } => {
+                Some(frame)
+            }
             FramePlacement::Inherit => None,
         }
     }

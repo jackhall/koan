@@ -14,55 +14,59 @@ use super::super::obligation::{ReturnObligation, with_obligation};
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanWorkload;
 use super::SchedulerView;
+use std::rc::Rc;
+
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
-use crate::machine::core::{Body, KFunction, OpenedFunction};
+use crate::machine::core::{Body, CallFrame, KFunction, OpenedFunction};
 use crate::machine::core::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
 use crate::machine::model::{Record, SignatureElement};
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
 use crate::scheduler::ResolvedDeps;
 
-/// Fold a resolved call into a [`Outcome::Continue`]: the producer installs the per-call cart and
-/// `invoke` runs against it on the next pop. A user fn's `Continue` carries
-/// [`FramePlacement::FreshTail`] (the harness mints the TCO cart fresh at apply); a builtin's
-/// carries [`FramePlacement::Inherit`] (it runs in the current frame). The decide handler owns
-/// `picked`, so the builtin-vs-user-fn frame decision is made here, not in the harness.
+/// Fold a resolved call into a [`Outcome::Continue`] — the dispatcher's one invoke entry, routing on
+/// the picked body:
+/// - **builtin** → [`FramePlacement::Inherit`] and a deferred [`invoke_builtin`], which runs the
+///   action harness (`BodyCtx` → `Action` → `run_action`) against the slot's current cart.
+/// - **user-defined** → [`enter_user_fn`], which mints the per-call cart and binds the arguments
+///   into it *here*, in the step that emits the replace.
+///
+/// Every call reaches here with its value parts already `Spliced`/literal-resolved (the eager-subs
+/// and synchronous bind paths splice them first), so there is no fall-through.
+///
+/// The invoke carries no contract of its own — `picked`'s return is resolved by `run_user_fn` (or
+/// skipped when this is a nested tail). So an invoke that lands inside an established chain wraps
+/// the continuation it installs with the ambient obligation, keeping the first caller's declared
+/// return alive across the frame-installing hop; the nested tail's own contract loses.
 pub(super) fn invoke_continue<'step>(
     view: &SchedulerView<'_, 'step, '_>,
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    let frame = match &picked.value().body {
-        Body::Builtin(_) => FramePlacement::Inherit,
-        _ => FramePlacement::FreshTail {
-            outer: picked.value().captured_scope(),
+    match &picked.value().body {
+        Body::Builtin(_) => Outcome::Continue {
+            work: builtin_work(picked, working_expr, view.current_obligation_duplicate()),
+            frame: FramePlacement::Inherit,
+            chain: ChainOp::Unchanged,
+            block_entry: BlockEntry::None,
         },
-    };
-    // The invoke step carries no contract of its own — `picked`'s return is resolved inside `invoke`
-    // (or skipped when this is a nested tail). So a fresh-tail invoke that lands inside an established
-    // chain wraps the invoke continuation with the ambient obligation, keeping the first caller's
-    // declared return alive across the frame-installing hop; the nested tail's own contract loses.
-    Outcome::Continue {
-        work: invoke_work(picked, working_expr, view.current_obligation_duplicate()),
-        frame,
-        chain: ChainOp::Unchanged,
-        block_entry: BlockEntry::None,
+        _ => enter_user_fn(view, picked, working_expr),
     }
 }
 
-/// A dep-free decide [`NodeWork`] whose closure runs the folded [`invoke`] against the cart the
-/// producer's `Continue` installed. `carrier` is the call's deadlock-summary sample. `obligation`
-/// wraps the invoke continuation (before the [`NodeWork::new`] erase) so a nested tail's invoke step
-/// re-deposits the established declared-return checker.
-fn invoke_work<'step>(
+/// A dep-free decide [`NodeWork`] whose closure runs [`invoke_builtin`] against the cart the slot
+/// already holds. `carrier` is the call's deadlock-summary sample. `obligation` wraps the
+/// continuation (before the [`NodeWork::new`] erase) so the replacement step re-deposits the
+/// established declared-return checker.
+fn builtin_work<'step>(
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
 ) -> NodeWork<'step, KoanWorkload> {
     let carrier = working_expr.summarize();
     let continuation = ignore_results(Box::new(move |view, _idx| {
-        invoke(view, picked, working_expr)
+        invoke_builtin(view, picked, working_expr)
     }));
     let continuation = match obligation {
         Some(obligation) => with_obligation(obligation, continuation),
@@ -71,61 +75,75 @@ fn invoke_work<'step>(
     NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier))
 }
 
-/// The single invoke entry for the dispatcher's bind sites — run a resolved call:
-/// - **builtin** → the action harness (`BodyCtx` → `Action` → `run_action`);
-/// - **user-defined** → the `exec` executor (`run_user_fn` + the `ExecOutcome` lowering).
-///
-/// Every call reaches here with its value parts already `Spliced`/literal-resolved (the eager-subs
-/// and synchronous bind paths splice them first), so there is no fall-through.
-pub(super) fn invoke<'step>(
+/// Run a resolved **builtin** call through the action harness. Frameless (`Inherit`), so the working
+/// expression and the slot's cart are the same region here as at the decide that folded the call —
+/// nothing crosses a region boundary and the read is an ordinary resident read.
+fn invoke_builtin<'step>(
     view: &SchedulerView<'_, 'step, '_>,
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    // Per-argument reach carriers, read back off the spliced cells (value and reach as one unit). A
-    // literal arg is region-pure and contributes no cell — on the user-defined lane below,
-    // `deliver_value_args` fills its slot with the empty-coverage envelope it resolves the literal
-    // into, so every value argument the frame bind sees is delivered.
-    let mut arg_carriers = carriers_from_expr(view, &working_expr);
     let function = picked.value();
-    if let Body::Builtin(f) = &function.body {
-        let f = *f;
-        let arg_carriers = map_arg_carriers(function, &arg_carriers);
-        let args = match function.bind_args(working_expr.parts, view.current_scope(), view.types())
-        {
-            Ok(args) => args,
-            Err(e) => return Outcome::Done(Err(e)),
-        };
-        return run_action_builtin(view, f, args, arg_carriers);
-    }
+    let Body::Builtin(f) = &function.body else {
+        unreachable!("invoke_builtin is installed only for a builtin body");
+    };
+    let f = *f;
+    // Per-argument reach carriers, read back off the spliced cells (value and reach as one unit). A
+    // literal arg is region-pure and contributes no cell — on the builtin lane nothing binds at a
+    // `for<'b>` brand, so an absent entry reads as "no foreign reach".
+    let arg_carriers = carriers_from_expr(view, &working_expr);
+    let arg_carriers = map_arg_carriers(function, &arg_carriers);
+    let args = match function.bind_args(working_expr.parts, view.current_scope(), view.types()) {
+        Ok(args) => args,
+        Err(e) => return Outcome::Done(Err(e)),
+    };
+    run_action_builtin(view, f, args, arg_carriers)
+}
 
+/// Enter a resolved **user-defined** call: mint the per-call cart and bind the call's arguments into
+/// it, then hand the body's statements on to the reinstalled incarnation as a [`Outcome::Continue`].
+///
+/// **This is the whole of the tail hop's region crossing, and it runs before the replace.** Every
+/// read of `working_expr` — the parts run, its cache, and the cells resting in it — happens here, in
+/// the step that still owns that region; `run_user_fn`'s bind deep-clones each argument into the
+/// fresh cart's region under the argument's own delivered reach, deliberately leaving the retiring
+/// frame out of the binding. So the reinstalled incarnation's first step reads nothing in the region
+/// the replace retires, and the scheduler needs no hold spanning the hop
+/// ([workgraph/design/reach.md § Retention model](../../../../workgraph/design/reach.md#retention-model)).
+/// The cart rides the [`FramePlacement::FreshTail`] rather than being minted at apply, which is what
+/// puts the bind on this side of the boundary.
+fn enter_user_fn<'step>(
+    view: &SchedulerView<'_, 'step, '_>,
+    picked: OpenedFunction<'step>,
+    working_expr: WorkingExpression<'step>,
+) -> Outcome<'step> {
+    let function = picked.value();
     // A uniquely-picked call is admitted shape-only by dispatch, so validate each argument against
     // its declared parameter type before the type-trusting `bind_by_name` — a non-satisfying typed
     // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
     if let Err(e) = function.validate_call_args(working_expr.parts, view.types()) {
         return Outcome::Done(Err(e));
     }
-
+    let mut arg_carriers = carriers_from_expr(view, &working_expr);
     if let Err(e) = deliver_value_args(view, &working_expr, &mut arg_carriers) {
         return Outcome::Done(Err(e));
     }
-
-    // The per-call frame the producer's `Continue` (`FreshTail`) already minted and installed
-    // as the slot's cart — `invoke` runs against it, so read it from the view rather than a param.
-    let frame = view
-        .current_frame()
-        .expect("a user-fn invoke runs against the Continue-installed per-call cart");
     // The single re-key onto parameter names: one walk of the signature over the slot-indexed
     // carriers, producing the argument record `run_user_fn` binds from. Each envelope's relocation
-    // at the bind door mints that binding's reach in this same per-call region, so every foreign
-    // region an argument borrows into is pinned for the call's life — no separate deposit here.
+    // at the bind door mints that binding's reach in the per-call region, so every foreign region an
+    // argument borrows into is pinned for the call's life — no separate deposit here.
     let named_carriers = map_arg_carriers(function, &arg_carriers);
+    // The callee's cart: chained off the closure's captured (definition) scope, so a closure's
+    // captured per-call frame survives the hop while the caller's cart does not.
+    let frame = CallFrame::new(function.captured_scope());
     let exec_frame = ExecFrame {
-        region: frame.clone(),
+        region: Rc::clone(&frame),
     };
     // A deferred-return FN dispatched as a tail call inside an established contract chain skips
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
     let in_chain = view.in_contract_chain();
+    let obligation = view.current_obligation_duplicate();
+    let carrier = working_expr.summarize();
     match run_user_fn(
         function,
         &named_carriers,
@@ -145,25 +163,13 @@ pub(super) fn invoke<'step>(
                     ret,
                 },
             };
-            // The frame is already the slot's installed cart, so the tail re-enters it with
-            // `Inherit` — a `FreshTail` here would mint a second cart, discarding the one already
-            // holding the bound params — and the block entry carries it so the lowering fans any
-            // leading statements into it.
-            // The body crosses into the scheduler here, one working node per statement: each is a
-            // slice copy of the parsed run into the installed cart's own region.
-            let brand = view.current_scope().brand();
-            super::super::runtime::run_action(
-                view,
-                Action::tail(
-                    leading
-                        .into_iter()
-                        .map(|e| WorkingExpression::from_ast(brand, *e))
-                        .collect(),
-                    WorkingExpression::from_ast(brand, *tail),
-                    TailContract::Eager(Some(contract)),
-                    FramePlacement::Inherit,
-                    BlockEntry::FrameScope(frame),
-                ),
+            body_continue(
+                frame,
+                leading.into_iter().copied().collect(),
+                *tail,
+                TailContract::Eager(Some(contract)),
+                carrier,
+                obligation,
             )
         }
         ExecOutcome::DeferredExprTail {
@@ -175,27 +181,70 @@ pub(super) fn invoke<'step>(
             // return-type expression run as body-chain siblings in the installed cart; the
             // lowering's finish reads the last result (the resolved type) into a `PerCall` contract
             // before tail-replacing into the body terminal, so the recursion — subsequent calls skip
-            // resolution — stays TCO-flat.
-            let brand = view.current_scope().brand();
-            let mut statements: Vec<WorkingExpression<'step>> = leading
-                .into_iter()
-                .map(|e| WorkingExpression::from_ast(brand, *e))
-                .collect();
-            statements.push(WorkingExpression::from_ast(brand, type_expr));
-            super::super::runtime::run_action(
-                view,
-                Action::tail(
-                    statements,
-                    WorkingExpression::from_ast(brand, *tail),
-                    TailContract::FromLastResult {
-                        func: picked.reseal(),
-                    },
-                    FramePlacement::Inherit,
-                    BlockEntry::FrameScope(frame),
-                ),
+            // resolution — stays TCO-flat. The type expression is a body sibling, so it joins the
+            // leading run.
+            let mut leading: Vec<KExpression<'step>> = leading.into_iter().copied().collect();
+            leading.push(type_expr);
+            body_continue(
+                frame,
+                leading,
+                *tail,
+                TailContract::FromLastResult {
+                    func: picked.reseal(),
+                },
+                carrier,
+                obligation,
             )
         }
         ExecOutcome::Errored(e) => Outcome::Done(Err(e)),
+    }
+}
+
+/// The reinstalled incarnation's work: lower the bound call's body into the cart the replace
+/// installs. The body statements arrive as borrowed AST (`'step` names the callee's own definition
+/// storage, which the fresh cart chains as an ancestor), and the working copies are frozen at the
+/// *reinstalled* step's brand — the cart's own region — which is why the lowering waits for that
+/// step instead of riding [`enter_user_fn`].
+///
+/// The tail re-enters the installed cart with `Inherit` — a second `FreshTail` here would mint
+/// another cart, discarding the one already holding the bound params — and the block entry carries
+/// it so the lowering fans any leading statements into it.
+fn body_continue<'step>(
+    frame: Rc<CallFrame>,
+    leading: Vec<KExpression<'step>>,
+    tail: KExpression<'step>,
+    contract: TailContract<'step>,
+    carrier: String,
+    obligation: Option<ReturnObligation>,
+) -> Outcome<'step> {
+    let work_frame = Rc::clone(&frame);
+    let continuation = ignore_results(Box::new(move |view: &SchedulerView<'_, 'step, '_>, _idx| {
+        // The body crosses into the scheduler here, one working node per statement: each is a
+        // slice copy of the parsed run into the installed cart's own region.
+        let brand = view.current_scope().brand();
+        super::super::runtime::run_action(
+            view,
+            Action::tail(
+                leading
+                    .into_iter()
+                    .map(|e| WorkingExpression::from_ast(brand, e))
+                    .collect(),
+                WorkingExpression::from_ast(brand, tail),
+                contract,
+                FramePlacement::Inherit,
+                BlockEntry::FrameScope(work_frame),
+            ),
+        )
+    }));
+    let continuation = match obligation {
+        Some(obligation) => with_obligation(obligation, continuation),
+        None => continuation,
+    };
+    Outcome::Continue {
+        work: NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier)),
+        frame: FramePlacement::FreshTail { frame },
+        chain: ChainOp::Unchanged,
+        block_entry: BlockEntry::None,
     }
 }
 

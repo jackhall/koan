@@ -459,7 +459,7 @@ impl<'a> Action<'a> {
         leading: Vec<WorkingExpression<'a>>,
         tail: WorkingExpression<'a>,
         contract: TailContract<'a>,
-        frame_placement: FramePlacement<'a>,
+        frame_placement: FramePlacement,
         block_entry: BlockEntry<'a>,
     ) -> Self {
         Action::from_kind(ActionKind::Tail {
@@ -526,7 +526,7 @@ pub enum ActionKind<'a> {
         leading: Vec<WorkingExpression<'a>>,
         tail: WorkingExpression<'a>,
         contract: TailContract<'a>,
-        frame_placement: FramePlacement<'a>,
+        frame_placement: FramePlacement,
         block_entry: BlockEntry<'a>,
     },
     /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`.
@@ -653,15 +653,19 @@ pub enum BlockEntry<'a> {
 }
 
 /// The cart a `Tail` runs in.
-pub enum FramePlacement<'a> {
-    /// Mint a fresh cart at apply through `CallFrame::new(outer)`, where `outer` is the callee
-    /// closure's captured (definition) scope. The TCO tail-call frame — FN-body invoke, deferred
-    /// `PerCall` tails. The only harness-constructed cart; the retiring caller cart drops at the
-    /// reinstall (its region retires once the sealed argument carriers that pin it release their
-    /// hold), while the fresh cart chains the captured scope's region owner so a closure's captured
-    /// per-call frame survives the hop. A top-level-defined recursive fn captures the run-root scope
-    /// and so chains nothing; see [`CallFrame::new`].
-    FreshTail { outer: &'a Scope<'a> },
+pub enum FramePlacement {
+    /// The TCO tail-call cart — FN-body invoke, deferred `PerCall` tails — minted by the decide
+    /// through `CallFrame::new(outer)`, where `outer` is the callee closure's captured (definition)
+    /// scope, so the fresh cart chains that scope's region owner and a closure's captured per-call
+    /// frame survives the hop. (A top-level-defined recursive fn captures the run-root scope and so
+    /// chains nothing; see [`CallFrame::new`].)
+    ///
+    /// Carrying the built cart rather than the scope to build it from is what puts the callee's
+    /// argument bind in the step that *emits* the replace: the arguments are relocated into this
+    /// region while the retiring one is still the deciding step's own, so the retiring cart drops at
+    /// the reinstall with nothing left reading it. Distinct from [`FreshChild`](Self::FreshChild),
+    /// which installs a cart the same way but does not retire the slot's current scope.
+    FreshTail { frame: Rc<CallFrame> },
     /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`), handed
     /// to the harness to install. The builtin owns construction because it may seed the cart before
     /// the tail dispatches — MATCH/TRY bind `it` into it via `CallFrame::with_scope`; EVAL builds it

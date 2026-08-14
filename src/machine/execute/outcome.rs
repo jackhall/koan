@@ -54,7 +54,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// [`with_obligation`](super::obligation::with_obligation)).
     Continue {
         work: NodeWork<'step, KoanWorkload>,
-        frame: FramePlacement<'step>,
+        frame: FramePlacement,
         chain: ChainOp,
         block_entry: BlockEntry<'step>,
     },

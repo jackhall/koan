@@ -54,7 +54,7 @@ pub(crate) type BlockSeed<'a> =
 /// and crosses to the scheduler here, at the point the tail is declared.
 pub(crate) fn block_tail<'a>(
     brand: RegionBrand<'a>,
-    frame_placement: FramePlacement<'a>,
+    frame_placement: FramePlacement,
     block: BlockScope<'a>,
     seed: Option<BlockSeed<'a>>,
     body: BlockBody<'a>,
