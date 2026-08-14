@@ -12,12 +12,12 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::ProducerId;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{ExpressionPart, KType, TypeIdentifier, TypeRegistry};
 use crate::machine::{DeliveredCarried, LexicalFrame, NameLookup, NameOutcome, Scope};
 
 use crate::machine::model::Carried;
-use crate::scheduler::EdgeId;
 
 /// Type-channel resolution with the first-source fold applied once. Folds
 /// [`resolve_type_identifier`](Scope::resolve_type_identifier)'s [`TypeResolution`]:
@@ -25,7 +25,7 @@ use crate::scheduler::EdgeId;
 /// empty park list is a miss, so it renders `Unbound`), and an `Unbound` forwards.
 pub(in crate::machine::execute) enum TypeChannel {
     Done(KType),
-    Parked(EdgeId),
+    Parked(ProducerId),
     Unbound(String),
 }
 
@@ -53,7 +53,7 @@ pub(in crate::machine::execute) fn type_channel(
 /// (`literal.rs`) without ceremony.
 pub(in crate::machine::execute) enum BareCarrier {
     Sealed(DeliveredCarried),
-    Parked(EdgeId),
+    Parked(ProducerId),
     Unbound(String),
 }
 

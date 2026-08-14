@@ -26,6 +26,7 @@
 //! Surface design: [design/operators.md](../../design/operators.md).
 
 use crate::machine::WriteGate;
+use crate::machine::core::ProducerId;
 
 use crate::machine::BindingIndex;
 use crate::machine::KFunction;
@@ -46,7 +47,6 @@ use crate::machine::{
 use crate::machine::{Body, CarrierWitness, KError, KErrorKind, Scope};
 use crate::scheduler::DepResults;
 use crate::scheduler::Deps;
-use crate::scheduler::EdgeId;
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
@@ -112,7 +112,7 @@ enum TypeCapture<'a> {
 /// sub-dispatch — whose owned position the capture records — into the deferral lists.
 fn capture_type_slot<'a>(
     state: ReturnTypeState<'a>,
-    parks: &mut Vec<EdgeId>,
+    parks: &mut Vec<ProducerId>,
     subs: &mut Vec<KExpression<'a>>,
 ) -> Result<TypeCapture<'a>, KError> {
     match state {
@@ -218,7 +218,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
         None
     };
 
-    let mut parks: Vec<EdgeId> = Vec::new();
+    let mut parks: Vec<ProducerId> = Vec::new();
     let mut subs: Vec<KExpression<'a>> = Vec::new();
     let operand_capture =
         crate::try_action!(capture_type_slot(operand_state, &mut parks, &mut subs));
@@ -255,7 +255,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
     // Builds the structural `[park… ++ sub…]` split directly: parks first, then the subs owned in
     // declaration order — the order `capture_type_slot` recorded their positions in.
     let brand = ctx.scope.brand();
-    let mut deps = Deps::from_parks(parks);
+    let mut deps = Deps::from_parks(parks.into_iter().map(ProducerId::scheduler_edge));
     for expr in subs {
         deps.own(OwnedDispatch {
             expr: crate::machine::model::WorkingExpression::from_ast(brand, expr),

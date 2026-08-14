@@ -11,6 +11,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::builtins::test_support::TestRun;
+use crate::machine::core::ProducerId;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::{KError, KErrorKind, TraceFrame};
 use crate::scheduler::ResolvedDeps;
@@ -55,7 +56,10 @@ fn park_on_errored_producer_propagates_producer_error() {
             ResolvedDeps::new(),
             ignore_results(Box::new(move |_view, _id| {
                 park_resume_labelled(
-                    vec![edge_ok, edge_err],
+                    vec![
+                        ProducerId::from_scheduler_edge(edge_ok),
+                        ProducerId::from_scheduler_edge(edge_err),
+                    ],
                     None,
                     Some(frame),
                     Box::new(move |_view, _id| {

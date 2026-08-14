@@ -19,6 +19,7 @@
 
 use super::{Scope, ScopeKind};
 use crate::machine::DeliveredCarried;
+use crate::machine::core::ProducerId;
 use crate::machine::core::bindings::powerset_probes;
 use crate::machine::core::bindings::{
     BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
@@ -26,7 +27,6 @@ use crate::machine::core::bindings::{
 use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::{Carried, KObject, KType, ReductionMode};
-use crate::scheduler::EdgeId;
 
 impl<'a> Scope<'a> {
     /// Spike guard: a bind after [`Self::close`] means the scope's defining block finished yet a
@@ -203,24 +203,25 @@ impl<'a> Scope<'a> {
     pub fn install_placeholder(
         &self,
         name: String,
-        edge: EdgeId,
+        producer: ProducerId,
         index: BindingIndex,
         kind: BindKind,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         self.assert_owns_bindings();
         self.bindings()
-            .install_placeholder(&name, edge, index, kind, gate)
+            .install_placeholder(&name, producer, index, kind, gate)
     }
 
     /// Retirement companion to both [`Self::install_placeholder`] and
     /// [`Self::install_pending_overload`]: drop any pending arm naming one of `edges`. Routes to
     /// the same target the installs used, and runs as the claiming slot terminalizes, so no arm
     /// survives naming an edge its owner is about to release — into a later run on a persistent
-    /// scope least of all. See [`Bindings::clear_placeholders_for_edges`].
-    pub fn clear_placeholders_for_edges(&self, edges: &[EdgeId], gate: &mut WriteGate) {
+    /// scope least of all. See [`Bindings::clear_placeholders_for_producers`].
+    pub fn clear_placeholders_for_producers(&self, edges: &[ProducerId], gate: &mut WriteGate) {
         self.assert_owns_bindings();
-        self.bindings().clear_placeholders_for_edges(edges, gate);
+        self.bindings()
+            .clear_placeholders_for_producers(edges, gate);
     }
 
     /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a pending slot to
@@ -232,13 +233,13 @@ impl<'a> Scope<'a> {
     pub fn install_pending_overload(
         &self,
         bucket: crate::machine::model::UntypedKey,
-        edge: EdgeId,
+        producer: ProducerId,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         self.assert_owns_bindings();
         self.bindings()
-            .install_pending_overload(bucket, edge, index, gate)
+            .install_pending_overload(bucket, producer, index, gate)
     }
 
     /// Construction-time single-probe operator-registry write. Test affordance: production

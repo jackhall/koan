@@ -22,10 +22,10 @@
 //! **declared** reference — a SIG-declared or abstract slot, identified by the declaring scope id
 //! its node records.
 
+use crate::machine::core::ProducerId;
 use crate::machine::core::{LexicalFrame, Scope, ScopeId};
 use crate::machine::model::TypeIdentifier;
 use crate::machine::model::{KType, TypeNode, TypeRegistry, TypeResolution};
-use crate::scheduler::EdgeId;
 
 impl<'step> Scope<'step> {
     /// Layer-2 scope-bound TypeIdentifier resolution: elaborates against `self` and admits
@@ -57,7 +57,7 @@ impl<'step> Scope<'step> {
 /// *"no not-yet-sealed type may reach a consumer"* as a type.
 ///
 /// Admits a `KType` iff every top-level user-type it references is finalized in its owning scope
-/// (no type-side placeholder left there); otherwise returns the binder [`EdgeId`]s the caller
+/// (no type-side placeholder left there); otherwise returns the binder [`ProducerId`]s the caller
 /// parks on.
 ///
 /// Both probes read the type placeholder straight from the kind-tagged map — not via
@@ -70,8 +70,8 @@ struct FinalizeGate<'view, 'step> {
 
 impl FinalizeGate<'_, '_> {
     /// Producer `NodeId`s the caller must park on; empty iff the gate admits.
-    fn pending_sources(&self, kt: KType) -> Vec<EdgeId> {
-        let mut pending: Vec<EdgeId> = Vec::new();
+    fn pending_sources(&self, kt: KType) -> Vec<ProducerId> {
+        let mut pending: Vec<ProducerId> = Vec::new();
         for UserTypeRef { scope_id, name } in user_type_refs(kt, self.types) {
             if let Some(node_id) = self.declared_source(scope_id, &name)
                 && !pending.contains(&node_id)
@@ -84,9 +84,9 @@ impl FinalizeGate<'_, '_> {
 
     /// The in-flight claim edge of the scope that declared a SIG / abstract slot: find
     /// that scope by id, park iff it still holds a type placeholder for `name`.
-    fn declared_source(&self, scope_id: ScopeId, name: &str) -> Option<EdgeId> {
+    fn declared_source(&self, scope_id: ScopeId, name: &str) -> Option<ProducerId> {
         let owner = self.scope.ancestors().find(|s| s.id == scope_id)?;
-        owner.bindings().type_placeholder_edge(name)
+        owner.bindings().type_placeholder_producer(name)
     }
 }
 

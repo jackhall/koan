@@ -165,7 +165,7 @@ mod bare_leaf_resolution {
     /// context.
     #[test]
     fn mid_window_member_parks_then_resolves() {
-        use crate::scheduler::EdgeId;
+        use crate::machine::core::ProducerId;
 
         use crate::machine::model::Record;
 
@@ -178,7 +178,7 @@ mod bare_leaf_resolution {
         scope
             .install_placeholder(
                 "Node".into(),
-                EdgeId::for_test(7),
+                ProducerId::for_test(7),
                 BindingIndex::value(0),
                 crate::machine::model::BindKind::Type,
                 &mut crate::machine::WriteGate::for_test(),
@@ -191,7 +191,7 @@ mod bare_leaf_resolution {
             TypeResolution::Park(producers) => {
                 assert_eq!(
                     producers,
-                    vec![EdgeId::for_test(7)],
+                    vec![ProducerId::for_test(7)],
                     "parks on the single producer"
                 );
             }
@@ -236,7 +236,7 @@ mod bare_leaf_resolution {
     /// window — so the outer body's placeholder is never what this reference waits on.
     #[test]
     fn a_same_named_declaration_in_an_outer_body_does_not_capture() {
-        use crate::scheduler::EdgeId;
+        use crate::machine::core::ProducerId;
 
         let region = run_root_storage();
         let root = run_root_bare(&region);
@@ -245,7 +245,7 @@ mod bare_leaf_resolution {
         outer
             .install_placeholder(
                 "Node".into(),
-                EdgeId::for_test(11),
+                ProducerId::for_test(11),
                 BindingIndex::value(0),
                 crate::machine::model::BindKind::Type,
                 &mut crate::machine::WriteGate::for_test(),

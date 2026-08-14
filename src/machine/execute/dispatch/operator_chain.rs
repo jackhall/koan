@@ -23,14 +23,13 @@
 //! itself rather than purely rewriting syntax, since a shared middle operand must evaluate exactly
 //! once.
 
+use crate::machine::core::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::model::Part;
 use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode, StoredElement};
 use crate::machine::{KError, KErrorKind, NodeId};
-use crate::scheduler::Deps;
-use crate::scheduler::EdgeId;
 use crate::source::{Span, Spanned};
 
 use super::ctx::SchedulerView;
@@ -364,14 +363,14 @@ fn park_on_pending_operators<'step, 'b>(
     id: NodeId,
     probe: &str,
 ) -> Outcome<'step> {
-    let mut to_wait = Deps::<()>::new();
+    let mut to_wait: Vec<ProducerId> = Vec::new();
     for source in pending_operator_sources(ctx, s, expr) {
         // Cycles are the only pre-wiring question left: parking on an ancestor deadlocks rather
         // than errors, so such a claim is dropped. An `OP` binder that already terminalized —
         // errored included — is the harness's to rule on when it installs the park, under the
         // `<operator-chain>` frame carried below.
-        if !ctx.would_create_cycle_from(source, id) {
-            to_wait.park_on(source);
+        if !ctx.would_create_cycle_from(source, id) && !to_wait.contains(&source) {
+            to_wait.push(source);
         }
     }
     if to_wait.is_empty() {
@@ -384,7 +383,7 @@ fn park_on_pending_operators<'step, 'b>(
     let parked_expr = *expr;
     let frame = working_frame("<operator-chain>", expr);
     park_resume_labelled(
-        to_wait.parks().to_vec(),
+        to_wait,
         Some(carrier),
         Some(frame),
         Box::new(move |ctx, id| ctx.with_current_scope(|s| run(ctx, s, &parked_expr, id))),
@@ -397,12 +396,12 @@ fn pending_operator_sources<'b>(
     ctx: &SchedulerView<'_, '_, '_>,
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'_>,
-) -> Vec<EdgeId> {
+) -> Vec<ProducerId> {
     let chain = ctx.chain_deref();
     let mut operators = chain_operators(expr);
     operators.sort_unstable();
     operators.dedup();
-    let mut sources: Vec<EdgeId> = Vec::new();
+    let mut sources: Vec<ProducerId> = Vec::new();
     for operator in operators {
         // Both shapes as stack runs over the operator's own borrowed text — a stored probe needs
         // no allocation at all, where an owned key would clone the symbol twice per scope walk.

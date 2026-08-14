@@ -9,6 +9,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::ProducerId;
 use crate::machine::core::bindings::{WriteGate, WriteOp};
 use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
@@ -78,8 +79,9 @@ impl<'run> KoanRuntime<'run> {
     /// Runs wherever the slot stops being able to release them — every terminal, and the splice
     /// that retires the slot as an alias. A successful binder's write path finalizes its own claim
     /// in place, so the clear usually finds nothing; the release is owed either way, and the clear
-    /// is what keeps a table from ever holding an [`EdgeId`](crate::scheduler::EdgeId) whose edge is
-    /// gone. `take` empties the anchor, so a slot's edges are retired exactly once.
+    /// is what keeps a table from ever holding a [`ProducerId`] whose edge is gone — the tables know
+    /// these names as producers, so the release list is read back as such. `take` empties the
+    /// anchor, so a slot's edges are retired exactly once.
     fn retire_slot_edges(
         &mut self,
         scope: &crate::machine::Scope<'_>,
@@ -89,7 +91,12 @@ impl<'run> KoanRuntime<'run> {
         if edges.is_empty() {
             return;
         }
-        scope.clear_placeholders_for_edges(&edges, &mut WriteGate::for_run_loop());
+        let producers: Vec<ProducerId> = edges
+            .iter()
+            .copied()
+            .map(ProducerId::from_scheduler_edge)
+            .collect();
+        scope.clear_placeholders_for_producers(&producers, &mut WriteGate::for_run_loop());
         for edge in edges {
             self.sched.release_edge(edge);
         }

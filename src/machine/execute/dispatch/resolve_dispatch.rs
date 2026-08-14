@@ -13,12 +13,12 @@
 //! name as an `:Identifier` / `:Any` slot.
 
 use crate::machine::DeliveredCarried;
+use crate::machine::core::ProducerId;
 use crate::machine::core::{ClassifiedSlots, OpenedFunction};
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
-use crate::scheduler::EdgeId;
 
 use super::is_eager_working_part;
 
@@ -33,7 +33,7 @@ pub enum NameOutcome {
     /// opens it under those pins to classify the value, so a speculative probe re-anchors nothing
     /// and retains nothing.
     Resolved(DeliveredCarried),
-    Parked(EdgeId),
+    Parked(ProducerId),
     Unbound(String),
 }
 
@@ -76,7 +76,7 @@ pub enum DispatchOutcome<'step> {
     /// FN's pending slot in `functions[key]`) and re-dispatch once they bind.
     /// Distinct from `Deferred`: waits on existing producers without
     /// scheduling new work.
-    ParkOnProducers(Vec<EdgeId>),
+    ParkOnProducers(Vec<ProducerId>),
     /// A bare-name arg resolves to nothing — no binding and no placeholder.
     /// The unbound name is the precise cause, so it surfaces here rather than
     /// as a dispatch miss.
@@ -226,7 +226,7 @@ fn decide_relaxed<'step, 'e>(
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
-    let mut parked: Vec<EdgeId> = Vec::new();
+    let mut parked: Vec<ProducerId> = Vec::new();
     let mut any_eager_lean = false;
     let mut dead_name: Option<String> = None;
     for f in bucket.candidates.iter() {
@@ -304,8 +304,8 @@ impl OverloadBucket<'_, '_> {
         expr: &WorkingExpression<'e>,
         bare_outcomes: &[Option<NameOutcome>],
         types: &TypeRegistry,
-    ) -> Vec<EdgeId> {
-        let mut producers: Vec<EdgeId> = Vec::new();
+    ) -> Vec<ProducerId> {
+        let mut producers: Vec<ProducerId> = Vec::new();
         for f in self.candidates.iter() {
             let Some(leans) = relaxed_admits(&f.value().signature, expr, bare_outcomes, types)
             else {
@@ -337,7 +337,7 @@ enum PickPass {
 /// not-yet-evaluated eager part; `Dead` an unbound bare name (no producer will
 /// ever bind it — only labels the `UnboundName` terminal, never waits).
 enum Lean {
-    Parked(EdgeId),
+    Parked(ProducerId),
     Eager,
     Dead(String),
 }

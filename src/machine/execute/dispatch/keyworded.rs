@@ -1,10 +1,10 @@
 //! Keyworded dispatch shape: the catch-all for any expression with a
 //! keyword present, or a head that isn't a fast-lane shape.
 
+use crate::machine::core::ProducerId;
 use crate::machine::core::{BlockEntry, FramePlacement};
 use crate::machine::model::WorkingExpression;
 use crate::machine::{DispatchOutcome, KError, KErrorKind, NameOutcome, NodeId};
-use crate::scheduler::EdgeId;
 
 use super::super::ignore_results;
 use super::super::nodes::{ChainOp, NodeWork};
@@ -14,7 +14,7 @@ use super::{
     BareCarrier, DepRequest, Outcome, PartWalkResult, Resolved, bare_name_of, park_resume,
     park_resume_labelled, stage_eager_part, staged_slot_placeholder, working_frame,
 };
-use crate::scheduler::{Deps, ResolvedDeps};
+use crate::scheduler::ResolvedDeps;
 
 /// Entry from the dispatch router. Resolved-no-parks-no-subs terminates inline; all other
 /// outcomes install a park (an overload / bare-name claim wait, or eager subs) and re-enter
@@ -86,7 +86,7 @@ fn walk_and_invoke<'step>(
     expr: WorkingExpression<'step>,
     bare_outcomes: &[Option<NameOutcome>],
     id: NodeId,
-    park: impl FnOnce(Vec<EdgeId>, WorkingExpression<'step>) -> Outcome<'step>,
+    park: impl FnOnce(Vec<ProducerId>, WorkingExpression<'step>) -> Outcome<'step>,
 ) -> Outcome<'step> {
     let walk = match part_walk(ctx, expr.parts, bare_outcomes, &resolved.slots, id) {
         Ok(w) => w,
@@ -164,7 +164,7 @@ pub(super) fn finish<'step>(
 /// Park the post-eager-subs re-resolve on the bare-name claims its splice walk leaned on; the
 /// wake re-runs [`finish`] against the partly-spliced expression.
 fn park_finish<'step>(
-    sources: Vec<EdgeId>,
+    sources: Vec<ProducerId>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let carrier = working_expr.summarize();
@@ -209,14 +209,14 @@ pub(super) fn redispatch_continue<'step>(
 /// `dep_error_frame` so a propagated error keeps this site's label.
 pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     ctx: &SchedulerView<'_, 'step, '_>,
-    sources: Vec<EdgeId>,
+    sources: Vec<ProducerId>,
     expr: WorkingExpression<'step>,
     id: NodeId,
 ) -> Outcome<'step> {
-    let mut to_wait = Deps::<()>::new();
+    let mut to_wait: Vec<ProducerId> = Vec::new();
     for source in sources {
-        if !ctx.would_create_cycle_from(source, id) {
-            to_wait.park_on(source);
+        if !ctx.would_create_cycle_from(source, id) && !to_wait.contains(&source) {
+            to_wait.push(source);
         }
     }
     if to_wait.is_empty() {
@@ -230,7 +230,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     let carrier = expr.summarize();
     let frame = working_frame("<dispatch-park>", &expr);
     park_resume_labelled(
-        to_wait.parks().to_vec(),
+        to_wait,
         Some(carrier),
         Some(frame),
         Box::new(move |ctx, id| initial(ctx, expr, id)),
@@ -261,7 +261,7 @@ fn install_eager_only<'step>(
 /// slots already substituted for `Spliced(obj)`; Parked wrap and ref-name slots keep their original
 /// bare-name token — so on wake `resume` re-runs [`initial`] against it.
 fn install_bare_name_park<'step>(
-    sources: Vec<EdgeId>,
+    sources: Vec<ProducerId>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let carrier = working_expr.summarize();
@@ -289,10 +289,10 @@ fn install_eager_subs_track<'step>(
 /// wrap-slot and ref-name arms of [`part_walk`].
 fn park_walk_source(
     ctx: &SchedulerView<'_, '_, '_>,
-    source: EdgeId,
+    source: ProducerId,
     id: NodeId,
     part: &crate::machine::model::ExpressionPart<'_>,
-    sources_to_wait: &mut Vec<EdgeId>,
+    sources_to_wait: &mut Vec<ProducerId>,
 ) -> Result<(), KError> {
     if ctx.would_create_cycle_from(source, id) {
         let name = bare_name_of(part).unwrap_or_default();
@@ -327,7 +327,7 @@ fn part_walk<'step>(
     let ref_name_set = &slots.ref_name_indices;
     let eager_filter = slots.eager_indices.as_deref();
     let mut new_parts: Vec<Spanned<WorkingPart<'step>>> = Vec::with_capacity(parts.len());
-    let mut sources_to_wait: Vec<EdgeId> = Vec::new();
+    let mut sources_to_wait: Vec<ProducerId> = Vec::new();
     let mut staged_subs: Vec<(usize, DepRequest<'step>)> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         let span = part.span;

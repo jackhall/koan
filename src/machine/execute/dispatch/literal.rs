@@ -428,7 +428,7 @@ impl<'step> KoanRuntime<'step> {
         });
         match resolved {
             BareCarrier::Sealed(cell) => Slot::Static(cell),
-            BareCarrier::Parked(source) => Slot::Park(deps.park_on(source)),
+            BareCarrier::Parked(source) => Slot::Park(deps.park_on(source.scheduler_edge())),
             // Unbound: fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path
             // surfaces it uniformly.
             BareCarrier::Unbound(_) => {

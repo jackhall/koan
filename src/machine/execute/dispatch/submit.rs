@@ -13,6 +13,7 @@
 //! body (see
 //! [design/execution/name-placeholders.md](../../../../design/execution/name-placeholders.md)).
 
+use crate::machine::core::ProducerId;
 use crate::machine::model::BinderKey;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope, WriteGate};
@@ -114,12 +115,23 @@ impl<'run> KoanRuntime<'run> {
             if let Some((name, kind)) = key.name {
                 let edge = claim(self);
                 edges.push(edge);
-                let _ = scope.install_placeholder(name, edge, bind_index, kind, &mut gate);
+                let _ = scope.install_placeholder(
+                    name,
+                    ProducerId::from_scheduler_edge(edge),
+                    bind_index,
+                    kind,
+                    &mut gate,
+                );
             }
             for bucket in key.buckets {
                 let edge = claim(self);
                 edges.push(edge);
-                let _ = scope.install_pending_overload(bucket, edge, bind_index, &mut gate);
+                let _ = scope.install_pending_overload(
+                    bucket,
+                    ProducerId::from_scheduler_edge(edge),
+                    bind_index,
+                    &mut gate,
+                );
             }
             // The slot owns every name it stamped: it releases them when it terminalizes, and hands
             // them on to a fresh anchor if a tail replace mints one.

@@ -1,11 +1,11 @@
 //! Signature parsing for the `FN` builtin.
 
+use crate::machine::core::ProducerId;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, SignatureElement};
 use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::scheduler::EdgeId;
 use crate::source::Spanned;
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
@@ -48,7 +48,7 @@ pub(crate) enum ParamListOutcome<'a> {
     /// sub-Dispatch carriers fed back through its `resolved` parameter — `signature` is raw AST
     /// throughout and never carries a scheduler-written slot.
     Pending {
-        park_producers: Vec<EdgeId>,
+        park_producers: Vec<ProducerId>,
         /// `(slot_idx_in_signature_parts, sub_expr_to_dispatch)`.
         sub_dispatches: Vec<(usize, KExpression<'a>)>,
     },
@@ -80,7 +80,7 @@ pub(crate) fn parse_fn_param_list<'a>(
     // The mint door re-homes all of them at the function's own region.
     let brand = elaborator.scope.brand();
     let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(parts.len());
-    let mut parks: Vec<EdgeId> = Vec::new();
+    let mut parks: Vec<ProducerId> = Vec::new();
     let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
     let mut first_err: Option<String> = None;
     let mut i = 0;

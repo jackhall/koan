@@ -21,10 +21,10 @@
 //! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
 //! names).
 
+use crate::machine::core::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
-use crate::scheduler::EdgeId;
 use crate::source::Spanned;
 
 use super::ignore_results;
@@ -204,7 +204,7 @@ pub(in crate::machine::execute) fn staged_slot_placeholder<'a>() -> Spanned<Work
 /// Result of a successful keyworded part walk.
 pub(in crate::machine::execute) struct PartWalkResult<'step> {
     pub new_parts: Vec<Spanned<WorkingPart<'step>>>,
-    pub sources_to_wait: Vec<EdgeId>,
+    pub sources_to_wait: Vec<ProducerId>,
     pub staged_subs: Vec<(usize, DepRequest<'step>)>,
 }
 
@@ -310,7 +310,7 @@ pub(in crate::machine::execute) fn propagate_dep_error(
 /// of the scheduler. `dep_error_frame` labels the propagation when one of those sources turns out
 /// to name an already-errored producer, which the harness rules on when it installs.
 pub(in crate::machine::execute) fn park_resume<'step>(
-    sources: Vec<EdgeId>,
+    sources: Vec<ProducerId>,
     carrier: Option<String>,
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
@@ -321,13 +321,13 @@ pub(in crate::machine::execute) fn park_resume<'step>(
 /// propagation (`<dispatch-park>`, `<operator-chain>`) reach for this one, so an error the install
 /// surfaces is framed at the site that asked for the park rather than arriving bare.
 pub(in crate::machine::execute) fn park_resume_labelled<'step>(
-    sources: Vec<EdgeId>,
+    sources: Vec<ProducerId>,
     carrier: Option<String>,
     dep_error_frame: Option<TraceFrame>,
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
     Outcome::ParkThenContinue {
-        deps: Deps::from_parks(sources),
+        deps: Deps::from_parks(sources.into_iter().map(ProducerId::scheduler_edge)),
         continuation: Continuation::Resume { carrier, resume },
         dep_error_frame,
     }
@@ -336,8 +336,10 @@ pub(in crate::machine::execute) fn park_resume_labelled<'step>(
 /// A bare-identifier slot whose name binds to the binder behind `source`: the slot's result *is*
 /// that producer's result, so the harness splices the slot out (no forwarding node) — see
 /// [`Outcome::Forward`].
-pub(in crate::machine::execute) fn forward_to_producer<'step>(source: EdgeId) -> Outcome<'step> {
-    Outcome::Forward(source)
+pub(in crate::machine::execute) fn forward_to_producer<'step>(
+    source: ProducerId,
+) -> Outcome<'step> {
+    Outcome::Forward(source.scheduler_edge())
 }
 
 /// Replace the slot with a fresh frameless `Dispatch` of `inner` — the decide reduced its

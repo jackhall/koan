@@ -12,6 +12,7 @@
 use crate::machine::Action;
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
+use crate::machine::core::ProducerId;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
@@ -20,7 +21,6 @@ use crate::machine::model::KType;
 use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
 use crate::machine::model::{SignatureDraft, SignatureElement};
 use crate::machine::{BindingIndex, Body, CarrierWitness, KError, KErrorKind, Scope};
-use crate::scheduler::EdgeId;
 use crate::witnessed::Witnessed;
 
 use super::return_type::{
@@ -51,7 +51,7 @@ pub(crate) enum FnKind<'a> {
 pub(crate) enum ParamListResult<'a> {
     Done(Vec<SignatureElement<'a>>),
     Pending {
-        park_producers: Vec<EdgeId>,
+        park_producers: Vec<ProducerId>,
         sub_dispatches: Vec<(usize, KExpression<'a>)>,
     },
 }
@@ -71,7 +71,7 @@ pub(crate) struct DeferredInputs<'a> {
     pub capture: ReturnTypeCapture<'a>,
     /// The binder claim edges this dep-finish reads at finish-time but does NOT
     /// own. Wired as `Notify` (park) edges off those sources; must not cascade-free.
-    pub park_producers: Vec<EdgeId>,
+    pub park_producers: Vec<ProducerId>,
     /// `Some` only when the return-type slot is an `Expression(_)` carrier that
     /// doesn't reference any FN parameter (resolves once at FN-def time, not
     /// per call). Scheduled ahead of `sub_dispatches` in the owned-sub region.
@@ -342,7 +342,12 @@ pub(crate) fn defer<'a>(
     // Builds the structural split directly: parks first, then owned `[rt?, subs...]`, so the
     // return-type sub is owned index 0 and the signature subs follow. `splice_layout` records each
     // sub's owned index (and its signature part-index) for the finish.
-    let mut deps = Deps::from_parks(park_producers.iter().copied());
+    let mut deps = Deps::from_parks(
+        park_producers
+            .iter()
+            .copied()
+            .map(ProducerId::scheduler_edge),
+    );
     let mut owned_count = 0usize;
     if let Some(rt_expr) = return_type_sub {
         deps.own(OwnedDispatch {

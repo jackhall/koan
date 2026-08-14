@@ -1,6 +1,7 @@
 use crate::builtins::test_support::TestRun;
 use crate::machine::BindingIndex;
 use crate::machine::NameOutcome;
+use crate::machine::core::ProducerId;
 use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::model::Scalar;
@@ -69,7 +70,8 @@ fn resolve_name_part_parked() {
         ),
         scope,
     );
-    let claim = test_run.runtime.install_edge_for_test(producer, scope);
+    let claim =
+        ProducerId::from_scheduler_edge(test_run.runtime.install_edge_for_test(producer, scope));
     scope
         .install_placeholder(
             "fwd".to_string(),

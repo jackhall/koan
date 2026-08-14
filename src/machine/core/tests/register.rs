@@ -2,6 +2,7 @@
 
 use super::super::{BindingIndex, DeclarationSite, NameLookup};
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
+use crate::machine::core::ProducerId;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::model::Carried;
@@ -9,7 +10,6 @@ use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::scheduler::EdgeId;
 
 use super::{body_no_op, unit_signature};
 use crate::machine::model::Scalar;
@@ -426,14 +426,14 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
     scope
         .install_placeholder(
             "x".to_string(),
-            EdgeId::for_test(7),
+            ProducerId::for_test(7),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     match scope.resolve("x") {
-        Some(NameLookup::Parked(id)) => assert_eq!(id, EdgeId::for_test(7)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, ProducerId::for_test(7)),
         _ => panic!("expected Placeholder"),
     }
 }
@@ -455,14 +455,14 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
     inner
         .install_placeholder(
             "x".to_string(),
-            EdgeId::for_test(3),
+            ProducerId::for_test(3),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     match inner.resolve("x") {
-        Some(NameLookup::Parked(id)) => assert_eq!(id, EdgeId::for_test(3)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, ProducerId::for_test(3)),
         other => panic!(
             "expected Placeholder from inner — outer's Value should not shadow it. Got {}",
             match other {
@@ -481,7 +481,7 @@ fn bind_value_direct_clears_own_placeholder() {
     scope
         .install_placeholder(
             "x".to_string(),
-            EdgeId::for_test(2),
+            ProducerId::for_test(2),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
@@ -606,7 +606,7 @@ fn visibility_placeholder_filtered_same_as_value() {
     scope
         .install_placeholder(
             "ph".to_string(),
-            EdgeId::for_test(2),
+            ProducerId::for_test(2),
             BindingIndex::value(5),
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),

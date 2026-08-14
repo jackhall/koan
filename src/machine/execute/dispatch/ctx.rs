@@ -30,7 +30,8 @@ use super::super::nodes::NodeScope;
 use super::super::obligation::ReturnObligation;
 use super::super::runtime::KoanWorkload;
 use super::{Await, BareCarrier, DepRequest, Outcome, resolve_bare_carrier, resolve_name_part};
-use crate::scheduler::{Deps, EdgeId, Scheduler};
+use crate::machine::core::ProducerId;
+use crate::scheduler::{Deps, Scheduler};
 
 /// Run `f` with a [`NodeScope`] handle's scope opened at a `for<'b>` brand. A `Yoked` slot
 /// re-projects from the active cart through [`CallFrame::with_scope`]; a `YokedChild` slot opens its
@@ -241,8 +242,9 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
     /// it has to be ruled out before the edge is proposed. Every other classification — ready,
     /// errored, still-finalizing — is the install's answer, read by the harness off
     /// [`InstalledEdge`](crate::scheduler::InstalledEdge), never probed here.
-    pub(super) fn would_create_cycle_from(&self, source: EdgeId, consumer: NodeId) -> bool {
-        self.sched.would_create_cycle_from(source, consumer)
+    pub(super) fn would_create_cycle_from(&self, source: ProducerId, consumer: NodeId) -> bool {
+        self.sched
+            .would_create_cycle_from(source.scheduler_edge(), consumer)
     }
 
     /// Build the per-part `bare_outcomes` cache: one `resolve_name_part` per bare-name part,

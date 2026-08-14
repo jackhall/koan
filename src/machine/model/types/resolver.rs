@@ -18,10 +18,10 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use crate::machine::core::ProducerId;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::core::{DeclarationSite, LexicalFrame, NameLookup, Scope};
 use crate::machine::model::ast::TypeIdentifier;
-use crate::scheduler::EdgeId;
 
 use super::declaration_window::{DeclWindow, WindowView};
 use super::kkind::KKind;
@@ -35,12 +35,13 @@ mod tests;
 
 /// Outcome of resolving a `TypeIdentifier` to a `T`, shared across layers: both model and execute
 /// use `TypeResolution<KType>` now that `KType` is a `Copy` handle. `Park` carries the binder
-/// [`EdgeId`]s a still-finalizing referent waits on; `Unbound` the miss diagnostic. The payload-free
+/// [`ProducerId`]s a still-finalizing referent waits on; `Unbound` the miss diagnostic. The
+/// payload-free
 /// arms let a layer lift `Done` through [`Self::and_then_done`] and forward the rest unchanged.
 #[derive(Debug)]
 pub enum TypeResolution<T> {
     Done(T),
-    Park(Vec<EdgeId>),
+    Park(Vec<ProducerId>),
     Unbound(String),
 }
 
@@ -152,10 +153,10 @@ fn park_until_seal(el: &Elaborator<'_, '_>, view: WindowView<'_, '_>) -> TypeRes
             "a co-declared type name resolved outside the body that announced it".to_string(),
         );
     };
-    let mut producers: Vec<EdgeId> = Vec::new();
+    let mut producers: Vec<ProducerId> = Vec::new();
     for (name, member_owner) in view.unfilled_members() {
         let declarer = member_owner.unwrap_or(name);
-        match owner.bindings().type_placeholder_edge(&declarer) {
+        match owner.bindings().type_placeholder_producer(&declarer) {
             Some(node_id) => {
                 if !producers.contains(&node_id) {
                     producers.push(node_id);

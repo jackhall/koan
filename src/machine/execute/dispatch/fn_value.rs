@@ -4,9 +4,9 @@
 //! immediately, an unbound name errors, and a still-finalizing head placeholder parks via a
 //! [`park_resume`] closure that re-runs the fast lane on resume.
 
+use crate::machine::core::ProducerId;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, NameLookup};
-use crate::scheduler::EdgeId;
 
 use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::SchedulerView;
@@ -67,7 +67,7 @@ fn dispatch_callable_value<'step>(
 /// Park the whole call on its head's still-finalizing binder edge `source` and re-run the fast
 /// lane on resume. The carrier surfaces the original (unspliced) call expression for the drain-end
 /// deadlock summary.
-fn install_head_park<'step>(source: EdgeId, expr: WorkingExpression<'step>) -> Outcome<'step> {
+fn install_head_park<'step>(source: ProducerId, expr: WorkingExpression<'step>) -> Outcome<'step> {
     let carrier = expr.summarize();
     park_resume(
         vec![source],

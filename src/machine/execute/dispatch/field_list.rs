@@ -19,6 +19,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::ProducerId;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{DepPlacement, FinishCtx};
 use crate::machine::core::{LexicalFrame, StepAllocator};
@@ -31,7 +32,6 @@ use crate::machine::model::{
 use crate::machine::model::{KType, Record, TypeRegistry};
 use crate::machine::{KError, KErrorKind, Scope, TraceFrame};
 use crate::scheduler::Deps;
-use crate::scheduler::EdgeId;
 
 use super::super::StepCarried;
 use super::super::TerminalDepFinish;
@@ -150,7 +150,7 @@ fn compose_field_list<'step, 'f>(
 /// `[park_producers ++ owned_subs]` dep vector once through [`into_parts`](Self::into_parts).
 pub(crate) struct FieldListDeferral<'a> {
     parts: FieldParts<'a>,
-    park_producers: Vec<EdgeId>,
+    park_producers: Vec<ProducerId>,
     sub_dispatches: Vec<WorkingExpression<'a>>,
     context: FieldListContext,
     name_kind: FieldNameKind,
@@ -166,7 +166,7 @@ impl<'a> FieldListDeferral<'a> {
     /// diagnostic and field-name policy. The elaborator-rebuild optionals default empty/absent.
     pub(crate) fn new(
         parts: FieldParts<'a>,
-        park_producers: Vec<EdgeId>,
+        park_producers: Vec<ProducerId>,
         sub_dispatches: Vec<WorkingExpression<'a>>,
         context: FieldListContext,
         name_kind: FieldNameKind,
@@ -223,7 +223,11 @@ impl<'a> FieldListDeferral<'a> {
             chain: self.chain,
             error_frame: self.error_frame,
         };
-        let mut deps = Deps::from_parks(self.park_producers);
+        let mut deps = Deps::from_parks(
+            self.park_producers
+                .into_iter()
+                .map(ProducerId::scheduler_edge),
+        );
         for expr in self.sub_dispatches {
             deps.own(OwnedDispatch {
                 expr,

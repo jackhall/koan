@@ -7,6 +7,7 @@ use super::ktype::KType;
 use super::registry::TypeRegistry;
 use super::resolver::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::Scope;
+use crate::machine::core::ProducerId;
 use crate::machine::model::Record;
 use crate::machine::model::ast::{
     ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,
@@ -14,7 +15,6 @@ use crate::machine::model::ast::{
 use crate::machine::model::values::Carried;
 pub use crate::parse::FieldNameKind;
 use crate::parse::parse_pair_list;
-use crate::scheduler::EdgeId;
 use crate::source::Spanned;
 use std::collections::HashSet;
 
@@ -67,7 +67,7 @@ pub enum FieldListOutcome<'a> {
     /// as a resolved cell ([`rewrite_threaded_self_refs`]), which is why the node is a
     /// [`WorkingExpression`] rather than raw AST.
     Pending {
-        park_producers: Vec<EdgeId>,
+        park_producers: Vec<ProducerId>,
         sub_dispatches: Vec<WorkingExpression<'a>>,
     },
     Err(String),
@@ -158,7 +158,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
     mut results: Option<&mut ResultFeed<'_, 'f>>,
     types: &TypeRegistry,
 ) -> FieldListOutcome<'a> {
-    let mut parks: Vec<EdgeId> = Vec::new();
+    let mut parks: Vec<ProducerId> = Vec::new();
     let mut sub_dispatches: Vec<WorkingExpression<'a>> = Vec::new();
     let FieldListContext {
         list: context_list,

@@ -9,6 +9,7 @@
 //! pool.
 
 use crate::builtins::test_support::{TestRun, parse_one};
+use crate::machine::core::ProducerId;
 use crate::machine::core::{Action, BodyCtx, arg_object};
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::execute::dispatch::{
@@ -548,7 +549,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
         working(scope, parse_one(&program, "producer_target {y = 1}")),
         scope,
     );
-    let claim = runtime.install_edge_for_test(producer, scope);
+    let claim = ProducerId::from_scheduler_edge(runtime.install_edge_for_test(producer, scope));
     scope
         .install_placeholder(
             "f".to_string(),

@@ -287,8 +287,8 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
 #[test]
 fn pending_overload_parks_only_on_exact_bucket_match() {
     let types = TypeRegistry::new();
+    use crate::machine::core::ProducerId;
     use crate::machine::model::{UntypedElement, UntypedKey};
-    use crate::scheduler::EdgeId;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let bucket_single: UntypedKey = vec![
@@ -298,7 +298,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     scope
         .install_pending_overload(
             bucket_single,
-            EdgeId::for_test(42),
+            ProducerId::for_test(42),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -313,7 +313,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     );
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&bare, Some(&chain), &[], &types) {
-        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![EdgeId::for_test(42)]),
+        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![ProducerId::for_test(42)]),
         other => panic!(
             "expected ParkOnProducers([42]) for matching bucket, got {}",
             std::any::type_name_of_val(&other)
@@ -344,7 +344,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
 #[test]
 fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     let types = TypeRegistry::new();
-    use crate::scheduler::EdgeId;
+    use crate::machine::core::ProducerId;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     // Outer finalized overload that strictly Picks `(MARK <number>)`.
@@ -379,13 +379,13 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         ],
     );
     // Inner pending sibling on the same bucket key, body not yet finalized.
-    scope_install_pending(inner, &expr, EdgeId::for_test(55));
+    scope_install_pending(inner, &expr, ProducerId::for_test(55));
 
     let chain = LexicalFrame::detached();
     match inner.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
-            vec![EdgeId::for_test(55)],
+            vec![ProducerId::for_test(55)],
             "inner pending must shadow the outer strict Pick",
         ),
         other => panic!(
@@ -499,8 +499,8 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
 #[test]
 fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let types = TypeRegistry::new();
+    use crate::machine::core::ProducerId;
     use crate::machine::core::kfunction::{Body, KFunction};
-    use crate::scheduler::EdgeId;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     // Finalized `(PICK <number>)` user overload that strictly Picks. Registered at a
@@ -537,7 +537,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     scope
         .install_pending_overload(
             expr.untyped_key(),
-            EdgeId::for_test(77),
+            ProducerId::for_test(77),
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -547,7 +547,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
-            vec![EdgeId::for_test(77)],
+            vec![ProducerId::for_test(77)],
             "finalized Pick must park on the in-flight pending sibling",
         ),
         other => panic!(
@@ -598,7 +598,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
 fn scope_install_pending<'a>(
     scope: &'a Scope<'a>,
     expr: &WorkingExpression<'a>,
-    claim: crate::scheduler::EdgeId,
+    claim: crate::machine::core::ProducerId,
 ) {
     scope
         .install_pending_overload(
@@ -617,15 +617,15 @@ fn scope_install_pending<'a>(
 #[test]
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let types = TypeRegistry::new();
+    use crate::machine::core::ProducerId;
     use crate::machine::model::{UntypedElement, UntypedKey};
-    use crate::scheduler::EdgeId;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let bucket: UntypedKey = vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];
     scope
         .install_pending_overload(
             bucket.clone(),
-            EdgeId::for_test(101),
+            ProducerId::for_test(101),
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -633,7 +633,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     scope
         .install_pending_overload(
             bucket.clone(),
-            EdgeId::for_test(102),
+            ProducerId::for_test(102),
             BindingIndex::value(4),
             &mut crate::machine::WriteGate::for_test(),
         )
@@ -658,7 +658,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
         DispatchOutcome::ParkOnProducers(ps) => {
             assert_eq!(
                 ps,
-                vec![EdgeId::for_test(101)],
+                vec![ProducerId::for_test(101)],
                 "consumer must park on earliest-index visible pending entry",
             );
         }
