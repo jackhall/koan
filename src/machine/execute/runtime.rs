@@ -518,18 +518,6 @@ impl<'run> KoanRuntime<'run> {
         }
     }
 
-    /// Close the active frame's scope iff this slot owns it: the per-call frame's body has finished
-    /// (a `Done` return, or a tail `Continue` retiring this iteration), so the scope
-    /// takes no further binds and its reach-set seals. A `Yoked` sub-expression slot owns no frame
-    /// (its `owner` never names this slot), so its `Done` is a no-op here.
-    fn close_owned_scope(&self, id: NodeId) {
-        if let Some(frame) = self.ambient.active_frame_ref()
-            && frame.owner() == Some(id)
-        {
-            frame.with_scope(|s| s.close());
-        }
-    }
-
     /// Interpret an [`Outcome`] into the scheduler effect it names and return the slot's
     /// [`NodeStep`]. This is the sole graph writer the dispatch side reaches — a decide handler
     /// never holds `&mut Scheduler`.
@@ -542,7 +530,7 @@ impl<'run> KoanRuntime<'run> {
     ) -> NodeStep<'step> {
         match outcome {
             Outcome::Done(result) => {
-                self.close_owned_scope(id);
+                anchor.close_opened_scope();
                 match result {
                     Ok(carrier) => NodeStep::DoneWitnessed(carrier),
                     Err(error) => NodeStep::Error(error),
@@ -560,13 +548,12 @@ impl<'run> KoanRuntime<'run> {
                 // A tail iteration (`FreshTail`) retires this scope before the fresh cart is
                 // installed for the next; other placements keep the current scope live.
                 if matches!(frame, FramePlacement::FreshTail { .. }) {
-                    self.close_owned_scope(id);
+                    anchor.close_opened_scope();
                 }
+                // A freshly installed frame is one this slot's body runs in and finalizes; the run
+                // loop's `Replace` arm mints the incoming anchor `opening` it, which is what makes
+                // this slot's own finish close that scope and no other slot's.
                 let frame = self.resolve_frame_placement(frame);
-                // The body re-dispatched into a freshly installed frame finalizes that frame's scope.
-                if let Some(installed) = frame.as_ref() {
-                    installed.set_owner(id);
-                }
                 // The chain reshape was decided at the `Continue` construction site while the
                 // contract variant was live (see [`ChainOp`]); the run loop assembles it against the
                 // post-step frame. An `Overlay` block entry also rides the tail slot's scope: erased

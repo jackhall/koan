@@ -347,11 +347,14 @@ impl<'run> KoanRuntime<'run> {
                                 // step open above exits, and by the loop-carried argument carriers
                                 // beyond that.
                                 // The claims and the statement identity belong to the slot, not to
-                                // the anchor it happens to be wearing, so the incoming anchor is
-                                // minted `replacing` the retiring one: the terminal that eventually
+                                // the anchor it happens to be wearing, so the incoming anchor takes
+                                // them over from the retiring one: the terminal that eventually
                                 // retires the edges still finds them, and a binding installed after
                                 // the hop is stamped with the same statement as one installed before.
-                                let fresh = super::nodes::SlotFrame::replacing(
+                                // `opening` rather than `replacing` because `f` is a cart minted for
+                                // this slot: the slot opens its scope here and closes it at its own
+                                // finish.
+                                let fresh = super::nodes::SlotFrame::opening(
                                     f,
                                     NodeScope::Yoked,
                                     new_chain,

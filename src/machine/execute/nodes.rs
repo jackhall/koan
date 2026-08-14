@@ -38,6 +38,14 @@ pub(super) struct SlotFrame {
     /// by a tail replace through [`replacing`](Self::replacing), so one statement keeps one id
     /// however many times it steps and however many anchors it wears.
     statement: StatementId,
+    /// Whether this slot **opened the scope of the cart it runs in** — true exactly for the slot a
+    /// [`opening`](Self::opening) replace installed a fresh cart for, whose body therefore finalizes
+    /// that cart's scope. A `Yoked` sub-expression slot sharing the cart, and a top-level slot
+    /// running in the run frame, both carry `false`, so their `Done` closes nothing. A bit rather
+    /// than a slot name: the question is only ever asked of the slot that holds the anchor, so
+    /// naming the owner would be answering "is this me?" with an identity comparison the anchor
+    /// already answers by construction.
+    opened_scope: bool,
 }
 
 impl crate::scheduler::Anchor for SlotFrame {
@@ -50,7 +58,8 @@ impl crate::scheduler::Anchor for SlotFrame {
 impl SlotFrame {
     /// Mint a slot anchor for a **freshly submitted** statement, from the cart plus the slot's
     /// scope handle and chain. The statement id is minted here, so submitting is the one act that
-    /// creates a declaration identity.
+    /// creates a declaration identity. A submission always runs in a cart some other act
+    /// established — the ambient one, or the run frame — so the fresh slot opened no scope.
     pub(super) fn new(
         cart: Rc<CallFrame>,
         scope: NodeScope,
@@ -61,15 +70,16 @@ impl SlotFrame {
             payload: NodePayload { scope, chain },
             owned_edges: RefCell::new(Vec::new()),
             statement: StatementId::next(),
+            opened_scope: false,
         })
     }
 
-    /// Mint the anchor a tail replace swaps in for `retiring`, taking over everything that belongs
-    /// to the **slot** rather than to the anchor wearing it: the owned edges, and the statement
-    /// identity. A tail hop continues one statement rather than submitting another, so inheriting
-    /// the id is what keeps a binding the replaced slot installs from looking like a second
-    /// declaration of its own name. Both hand-overs live in this one constructor, so a replace
-    /// cannot carry one and drop the other.
+    /// Mint the anchor a tail replace swaps in for `retiring` **in the cart it already runs in**,
+    /// taking over everything that belongs to the **slot** rather than to the anchor wearing it: the
+    /// owned edges, the statement identity, and whether the slot opened its cart's scope. A tail hop
+    /// continues one statement rather than submitting another, so inheriting the id is what keeps a
+    /// binding the replaced slot installs from looking like a second declaration of its own name.
+    /// Every hand-over lives in this one constructor, so a replace cannot carry one and drop another.
     pub(super) fn replacing(
         cart: Rc<CallFrame>,
         scope: NodeScope,
@@ -81,7 +91,39 @@ impl SlotFrame {
             payload: NodePayload { scope, chain },
             owned_edges: RefCell::new(retiring.take_owned_edges()),
             statement: retiring.statement,
+            opened_scope: retiring.opened_scope,
         })
+    }
+
+    /// [`replacing`](Self::replacing)'s twin for a replace that installs a **fresh `cart`**, which
+    /// this slot's body is what runs in: the slot opens that cart's scope here and closes it at its
+    /// own finish ([`close_opened_scope`](Self::close_opened_scope)). Installing the cart and
+    /// claiming its scope are the same act, so they are the same constructor — there is no way to
+    /// swap a fresh cart in and leave nobody to close it, nor to claim a scope a prior slot opened.
+    pub(super) fn opening(
+        cart: Rc<CallFrame>,
+        scope: NodeScope,
+        chain: Rc<LexicalFrame>,
+        retiring: &SlotFrame,
+    ) -> Rc<SlotFrame> {
+        Rc::new(SlotFrame {
+            cart,
+            payload: NodePayload { scope, chain },
+            owned_edges: RefCell::new(retiring.take_owned_edges()),
+            statement: retiring.statement,
+            opened_scope: true,
+        })
+    }
+
+    /// Close the scope of the cart this slot runs in, iff this slot opened it: the per-call frame's
+    /// body has finished (a `Done` return, or a tail `Continue` retiring this iteration), so the
+    /// scope takes no further binds and its reach-set seals. A slot that opened no scope — a `Yoked`
+    /// sub-expression sharing its parent's cart, a top-level slot in the run frame — finishes
+    /// without closing anything.
+    pub(super) fn close_opened_scope(&self) {
+        if self.opened_scope {
+            self.cart.with_scope(|s| s.close());
+        }
     }
 
     /// Take ownership of `edges` on this slot's behalf — the submission's binder claims, or a
