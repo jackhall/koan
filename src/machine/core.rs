@@ -13,9 +13,9 @@ mod lexical_frame;
 #[cfg(any(test, feature = "region-audit"))]
 pub mod reach_audit;
 mod ref_carriers;
-mod run_id;
 mod scope;
 mod scope_id;
+mod statement_id;
 
 #[cfg(test)]
 mod tests;
@@ -27,8 +27,8 @@ pub use arena::{
 };
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile};
 pub use bindings::{
-    BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
-    NodeHandle, WriteGate,
+    BindingIndex, Bindings, DeclarationSite, FunctionLookup, Installer, MemberResolution,
+    NameLookup, WriteGate,
 };
 pub use carrier_witness::{
     CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, OpenedFunction, SealedFunction,
@@ -49,7 +49,7 @@ pub(crate) use kfunction::exec::{ExecFrame, ExecOutcome, PerCallReturn, run_user
 pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction};
 pub use lexical_frame::{LexicalFrame, assemble_body_chain};
 pub use ref_carriers::{ModuleRefFamily, ScopeRefFamily};
-pub use run_id::RunId;
 pub(crate) use scope::AdoptSeam;
 pub use scope::Scope;
 pub use scope_id::ScopeId;
+pub use statement_id::StatementId;

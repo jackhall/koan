@@ -269,8 +269,8 @@ pub enum SealOutcome<'a> {
 ///
 /// [`TypeWritePolicy::UpsertEqual`] is what makes a re-entrant finalize of the same declaration
 /// idempotent: it recognizes the re-entry by its installing
-/// [`NodeHandle`](crate::machine::core::NodeHandle) matching the stored entry's, while a genuine
-/// redeclaration installs under a different node and surfaces as `Rebind`.
+/// [`Installer`](crate::machine::core::Installer) matching the stored entry's, while a genuine
+/// redeclaration installs under a different statement and surfaces as `Rebind`.
 pub fn seal_writes<'a>(view: WindowView<'_, 'a>, site: DeclarationSite) -> Vec<WriteOp<'a>> {
     view.installable()
         .into_iter()

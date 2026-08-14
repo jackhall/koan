@@ -214,7 +214,7 @@ mod bare_leaf_resolution {
         crate::machine::core::bindings::WriteOp::Type {
             name: "Node".into(),
             kt: member,
-            site: mock_declaration_site(7, 0),
+            site: mock_declaration_site(0),
             policy: crate::machine::core::bindings::TypeWritePolicy::UpsertEqual,
             builtin_shadow_guard: true,
         }

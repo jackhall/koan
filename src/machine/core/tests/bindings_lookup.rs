@@ -101,7 +101,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
     let _ = scope.register_type_direct(
         "Tee".into(),
         KType::NUMBER,
-        mock_declaration_site(1, 99),
+        mock_declaration_site(99),
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(matches!(
@@ -117,7 +117,7 @@ fn lookup_type_strict_less_than_hides_later_sibling() {
     let _ = scope.register_type_direct(
         "TyLate".into(),
         KType::NUMBER,
-        mock_declaration_site(1, 5),
+        mock_declaration_site(5),
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());

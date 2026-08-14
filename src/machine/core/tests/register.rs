@@ -630,7 +630,7 @@ fn visibility_type_side_gate_mirrors_value_side() {
     let _ = scope.register_type_direct(
         "TyLate".to_string(),
         KType::NUMBER,
-        mock_declaration_site(1, 5),
+        mock_declaration_site(5),
         &mut crate::machine::WriteGate::for_test(),
     );
     let consumer_before: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);

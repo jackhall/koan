@@ -33,7 +33,7 @@
 //! Every entry carries a [`BindingIndex`] naming its installing statement's lexical
 //! position, gated by the strict cutoff `idx < c`, so a forward reference (a
 //! later-positioned binding) is invisible — type binders included. A type entry pairs
-//! that index with its installing [`NodeHandle`] in a [`DeclarationSite`]: the handle
+//! that index with its installing [`Installer`] in a [`DeclarationSite`]: the installer
 //! alone answers the same-declaration question, and the index there does visibility
 //! only. `idx == 0` is the
 //! first position: FN parameters and MATCH/TRY `it` sit there, and the builtins are
@@ -59,7 +59,7 @@ use std::mem::ManuallyDrop;
 
 use crate::machine::CarrierWitness;
 use crate::machine::core::RegionBrand;
-use crate::machine::core::RunId;
+use crate::machine::core::StatementId;
 use crate::machine::core::carrier_witness::{
     GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
 };
@@ -69,7 +69,7 @@ use crate::machine::model::{
     StoredDispatchTokenElement, StoredElement, StoredKeyProbe, UntypedKeyProbe, owned_untyped_key,
     restore_stored_key, store_untyped_key,
 };
-use crate::scheduler::{EdgeId, NodeId};
+use crate::scheduler::EdgeId;
 use crate::witnessed::BumpBackedMap;
 use crate::witnessed::{BumpAllocator, Sealed};
 
@@ -371,45 +371,46 @@ impl BindingIndex {
 
 /// What installed a binding — the identity a same-declaration check compares.
 ///
-/// A scheduler-driven install names its slot, qualified by its run: [`NodeId`]s are
-/// scheduler-local and restart per runtime, so only the pair identifies a declaration
-/// statement across the lifetime of a persistent scope. An install that no slot drove
-/// carries no id at all rather than a reserved index, so it can never collide with a
-/// live slot — however many schedulers a run has.
+/// A statement-driven install names its statement, and nothing scheduler-shaped: a
+/// [`StatementId`] is minted by koan, never recycled, and stays unique for longer than the
+/// entry holding it lives. A slot or edge index could not stand in for it — both recycle, so
+/// a later declaration can be handed a freed index and compare equal to the entry it should
+/// be rebinding. An install no statement drove carries no id at all rather than a reserved
+/// counter value, so it can never collide with a live statement.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum NodeHandle {
-    /// Registered outside any scheduler — builtin installs, and bindings a scope takes on
-    /// at birth. All such installs share this one identity, so re-registering a name under
+pub enum Installer {
+    /// Registered by no statement — builtin installs, and bindings a scope takes on at
+    /// birth. All such installs share this one identity, so re-registering a name under
     /// [`TypeWritePolicy::UpsertEqual`] upserts rather than raising `Rebind`.
-    OffScheduler,
-    /// Installed by the slot `node` stepping in run `run`.
-    Slot { run: RunId, node: NodeId },
+    NoStatement,
+    /// Installed by the statement submitted as `statement`.
+    Statement(StatementId),
 }
 
-/// The identity of the declaration statement that installed a `types` entry: the installing
-/// slot (the identity signal — same-declaration checks compare only this) plus its lexical
-/// position (the visibility signal — `idx < cutoff` reads it; under a detached chain the
-/// index is 0 and deliberately names no statement).
+/// The identity of the declaration statement that installed a `types` entry: its
+/// [`Installer`] (the identity signal — same-declaration checks compare only this) plus its
+/// lexical position (the visibility signal — `idx < cutoff` reads it; under a detached chain
+/// the index is 0 and deliberately names no statement).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct DeclarationSite {
-    pub node: NodeHandle,
+    pub installer: Installer,
     pub index: BindingIndex,
 }
 
 impl DeclarationSite {
-    /// Off-scheduler builtin registration: no slot installed it.
+    /// Builtin registration: no statement installed it.
     pub const BUILTIN: DeclarationSite = DeclarationSite {
-        node: NodeHandle::OffScheduler,
+        installer: Installer::NoStatement,
         index: BindingIndex::BUILTIN,
     };
 
     /// A binding installed when its scope is **born**, rather than by a declaration statement
     /// running in it — a type-denoting FN parameter landing in the fresh per-call scope, an
-    /// ascription seeding the newborn view scope's type members. No slot installed it, so the
-    /// identity node is [`NodeHandle::OffScheduler`] and same-declaration checks never key on a
-    /// slot; the index is `value(0)`, the parameter position the visibility predicate admits.
+    /// ascription seeding the newborn view scope's type members. No statement installed it, so the
+    /// installer is [`Installer::NoStatement`] and same-declaration checks never key on a
+    /// statement; the index is `value(0)`, the parameter position the visibility predicate admits.
     pub const AT_CONSTRUCTION: DeclarationSite = DeclarationSite {
-        node: NodeHandle::OffScheduler,
+        installer: Installer::NoStatement,
         index: BindingIndex::value(0),
     };
 }
@@ -426,7 +427,7 @@ impl DeclarationSite {
 /// same O(1) hash probe a std map would run.
 struct Tables<'a> {
     /// Each bound type slot stores its type and its [`DeclarationSite`] — the installing
-    /// [`NodeHandle`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
+    /// [`Installer`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
     /// `KType` is a `Copy` handle into the run frame's registry, so a slot carries no reach: a
     /// read copies the handle under the home-frame pin alone, and the same handle names the same
     /// type in every region. A [`TypeSlot`] may carry an in-flight producer beside the bound
@@ -883,7 +884,7 @@ impl<'a> Bindings<'a> {
 
     /// Write `name` → `kt` into `types` under `policy`. [`TypeWritePolicy::Insert`] is strict
     /// insert-if-absent; [`TypeWritePolicy::UpsertEqual`] admits a re-entry of the *same*
-    /// declaration — declaration identity is the installing [`NodeHandle`], so an existing entry
+    /// declaration — declaration identity is the installing [`Installer`], so an existing entry
     /// whose handle differs from `site`'s is a different declaration of the name and `Rebind`s,
     /// while a same-handle hit is the same slot in the same run re-entering (a parallel nominal
     /// finalize), whose re-elaboration cannot differ, so it overwrites idempotently. Content plays
@@ -922,7 +923,9 @@ impl<'a> Bindings<'a> {
                     name: name.to_string(),
                 }));
             }
-            (TypeWritePolicy::UpsertEqual, Some(existing)) if existing.node != site.node => {
+            (TypeWritePolicy::UpsertEqual, Some(existing))
+                if existing.installer != site.installer =>
+            {
                 return Err(KError::new(KErrorKind::Rebind {
                     name: name.to_string(),
                 }));

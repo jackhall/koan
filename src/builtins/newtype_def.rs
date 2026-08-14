@@ -518,9 +518,8 @@ mod tests {
     }
 
     /// Two record-repr `NEWTYPE`s of one name in one scope are two declarations, not one: the
-    /// second statement installs under a distinct `NodeHandle`, so the seal mints a fresh singleton
-    /// and the install raises `Rebind`. `enter_block` is what gives the statements their distinct
-    /// installing nodes.
+    /// second statement is submitted under a distinct [`StatementId`], so the seal mints a fresh
+    /// singleton and the install raises `Rebind`.
     #[test]
     fn same_scope_record_repr_redeclare_rebinds() {
         let program = program_storage();
@@ -560,9 +559,9 @@ mod tests {
     }
 
     /// Byte-identical `NEWTYPE` redeclaration in one scope still raises `Rebind`. The two statements
-    /// seal to the same content digest, so a content-equality gate would unify them silently; node
-    /// identity keys the decision on the installing statement alone, so the second — a distinct
-    /// `NodeHandle` under `enter_block` — is a rebind despite identical content.
+    /// seal to the same content digest, so a content-equality gate would unify them silently;
+    /// statement identity keys the decision on the installing statement alone, so the second — a
+    /// distinct [`StatementId`] — is a rebind despite identical content.
     #[test]
     fn identical_content_newtype_redeclare_rebinds() {
         let program = program_storage();

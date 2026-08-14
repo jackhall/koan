@@ -15,6 +15,8 @@ use crate::machine::KFunction;
 use crate::machine::KoanRuntime;
 #[cfg(test)]
 use crate::machine::SealedFunction;
+#[cfg(test)]
+use crate::machine::core::StatementId;
 use crate::machine::core::{ProgramBrand, ProgramStorage, RegionBrand};
 #[cfg(test)]
 use crate::machine::model::Carried;
@@ -27,7 +29,7 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::{AdoptSeam, FrameStorage, KError, NameLookup, Scope};
 #[cfg(test)]
-use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
+use crate::machine::{BindingIndex, DeclarationSite, Installer};
 use crate::parse::parse;
 use crate::scheduler::{EdgeId, NodeId};
 #[cfg(test)]
@@ -35,17 +37,14 @@ use crate::witnessed::{RegionHandle, Sealed};
 
 use super::unseeded_scopes;
 
-/// Mint a test [`DeclarationSite`] with a fresh run and an explicit installing node and lexical
-/// index — the fixture stand-in for the run-qualified handle a scheduler-driven binder threads. A
-/// distinct `node` simulates a distinct declaration statement; reuse one returned site (not a
-/// second call) to simulate a parallel finalize of a single declaration.
+/// Mint a test [`DeclarationSite`] at lexical position `index`, under a freshly minted
+/// [`StatementId`] — the fixture stand-in for the identity a submitted binder threads. Every call
+/// names a *different* declaration statement; reuse one returned site (not a second call) to
+/// simulate a parallel finalize of a single declaration.
 #[cfg(test)]
-pub(crate) fn mock_declaration_site(node: usize, index: usize) -> DeclarationSite {
+pub(crate) fn mock_declaration_site(index: usize) -> DeclarationSite {
     DeclarationSite {
-        node: NodeHandle::Slot {
-            run: RunId::next(),
-            node: NodeId::for_test(node),
-        },
+        installer: Installer::Statement(StatementId::next()),
         index: BindingIndex::value(index),
     }
 }

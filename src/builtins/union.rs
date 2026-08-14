@@ -300,10 +300,10 @@ mod tests {
 
     /// `finalize_union` mints and seals a fresh union's members on first finalize, then a second
     /// finalize of the same declaration refills the already-sealed window and reaches the upsert
-    /// with the same installing `NodeHandle`, so the overwrite is idempotent — the type-only (no
+    /// under the same installing statement, so the overwrite is idempotent — the type-only (no
     /// value-side carrier) identity net.
     ///
-    /// Both calls pass the same `site`, simulating one declaration's parallel finalize: handle
+    /// Both calls pass the same `site`, simulating one declaration's parallel finalize: installer
     /// equality is what makes the second install idempotent rather than a `Rebind`. See
     /// [design/typing/type-identity.md](../../design/typing/type-identity.md).
     #[test]
@@ -330,7 +330,7 @@ mod tests {
         };
         // One declaration's identity: both finalize calls simulate a parallel finalize of the
         // same statement, so they share one site.
-        let site = mock_declaration_site(1, 0);
+        let site = mock_declaration_site(0);
         // First finalize: no prior binding, so a fresh set of pending members is minted and
         // sealed. The finalize writes nothing itself — the ops it hands back are what install the
         // identity, exactly as the run loop applies them after the declaring step returns.
@@ -377,9 +377,9 @@ mod tests {
     }
 
     /// Two `UNION`s of one name in one scope are two declarations, not one, even at equal arity:
-    /// each statement installs under its own `NodeHandle`, so the second finalize reaches the upsert
-    /// with a handle that differs from the stored entry's and the install raises `Rebind`.
-    /// `enter_block` is what gives the two statements their distinct nodes.
+    /// each statement is submitted under its own [`StatementId`], so the second finalize reaches
+    /// the upsert with an installer that differs from the stored entry's and the install raises
+    /// `Rebind`.
     #[test]
     fn same_scope_union_redeclare_rebinds() {
         let program = program_storage();
@@ -421,8 +421,9 @@ mod tests {
     /// `enter_block`) at equal arity. Every detached submission inherits no ambient payload and
     /// falls back to `LexicalFrame::detached`, whose lexical index is `0` for every statement — so
     /// the two declarations name no position to tell them apart, and their equal arity matched the
-    /// pre-node recovery probe as one declaration, silently returning the first union. Node identity
-    /// gives each `dispatch_in_scope` its own `NodeHandle`, so the second install raises `Rebind`.
+    /// pre-node recovery probe as one declaration, silently returning the first union. Statement
+    /// identity gives each `dispatch_in_scope` its own [`StatementId`], so the second install
+    /// raises `Rebind`.
     /// This is the item's headline gap: equal arity through the detached path.
     #[test]
     fn detached_chain_union_redeclare_rebinds() {
@@ -468,9 +469,9 @@ mod tests {
     }
 
     /// Byte-identical `UNION` redeclaration in one scope still raises `Rebind`. The two statements
-    /// seal to the same content digest, so a content-equality gate would unify them silently; node
-    /// identity keys the decision on the installing statement alone, so the second — a distinct
-    /// `NodeHandle` under `enter_block` — is a rebind despite identical content.
+    /// seal to the same content digest, so a content-equality gate would unify them silently;
+    /// statement identity keys the decision on the installing statement alone, so the second — a
+    /// distinct [`StatementId`] — is a rebind despite identical content.
     #[test]
     fn identical_content_union_redeclare_rebinds() {
         let program = program_storage();

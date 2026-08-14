@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use super::runtime::KoanWorkload;
 use crate::machine::core::ReturnContract;
-use crate::machine::core::{ScopeId, ScopeRefFamily, assemble_body_chain};
+use crate::machine::core::{ScopeId, ScopeRefFamily, StatementId, assemble_body_chain};
 use crate::machine::{CallFrame, KError, LexicalFrame};
 use crate::scheduler::EdgeId;
 use crate::witnessed::SealedExtern;
@@ -33,6 +33,11 @@ pub(super) struct SlotFrame {
     /// replace that mints a fresh anchor carries it over: ownership tracks the slot, not the anchor.
     /// Empty for most slots.
     owned_edges: RefCell<Vec<EdgeId>>,
+    /// The statement this slot is running — the identity a binding it installs is stamped with
+    /// ([`Installer::Statement`](crate::machine::Installer)). Fixed at construction and inherited
+    /// by a tail replace through [`replacing`](Self::replacing), so one statement keeps one id
+    /// however many times it steps and however many anchors it wears.
+    statement: StatementId,
 }
 
 impl crate::scheduler::Anchor for SlotFrame {
@@ -43,8 +48,9 @@ impl crate::scheduler::Anchor for SlotFrame {
 }
 
 impl SlotFrame {
-    /// Mint a slot anchor from the cart plus the slot's scope handle and chain — the one
-    /// constructor, so submission/replace mint sites stay one-liners.
+    /// Mint a slot anchor for a **freshly submitted** statement, from the cart plus the slot's
+    /// scope handle and chain. The statement id is minted here, so submitting is the one act that
+    /// creates a declaration identity.
     pub(super) fn new(
         cart: Rc<CallFrame>,
         scope: NodeScope,
@@ -54,6 +60,27 @@ impl SlotFrame {
             cart,
             payload: NodePayload { scope, chain },
             owned_edges: RefCell::new(Vec::new()),
+            statement: StatementId::next(),
+        })
+    }
+
+    /// Mint the anchor a tail replace swaps in for `retiring`, taking over everything that belongs
+    /// to the **slot** rather than to the anchor wearing it: the owned edges, and the statement
+    /// identity. A tail hop continues one statement rather than submitting another, so inheriting
+    /// the id is what keeps a binding the replaced slot installs from looking like a second
+    /// declaration of its own name. Both hand-overs live in this one constructor, so a replace
+    /// cannot carry one and drop the other.
+    pub(super) fn replacing(
+        cart: Rc<CallFrame>,
+        scope: NodeScope,
+        chain: Rc<LexicalFrame>,
+        retiring: &SlotFrame,
+    ) -> Rc<SlotFrame> {
+        Rc::new(SlotFrame {
+            cart,
+            payload: NodePayload { scope, chain },
+            owned_edges: RefCell::new(retiring.take_owned_edges()),
+            statement: retiring.statement,
         })
     }
 
@@ -61,6 +88,11 @@ impl SlotFrame {
     /// forward's classification edge as the harness wires it.
     pub(super) fn own_edges(&self, edges: impl IntoIterator<Item = EdgeId>) {
         self.owned_edges.borrow_mut().extend(edges);
+    }
+
+    /// The statement this slot is running.
+    pub(super) fn statement(&self) -> StatementId {
+        self.statement
     }
 
     /// Take the slot's owned edges, leaving it holding none — so the retirement that releases them,

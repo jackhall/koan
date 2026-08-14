@@ -156,14 +156,14 @@ fn announced_member_defers_until_the_window_seals() {
     let fill = |name: &str, repr: KType, site: DeclarationSite| {
         finalize_nominal_member(&window, name, |_| repr, site, scope.brand(), &types)
     };
-    match fill("Node", KType::NUMBER, mock_declaration_site(2, 2)) {
+    match fill("Node", KType::NUMBER, mock_declaration_site(2)) {
         SealOutcome::Deferred => {}
         other => panic!(
             "the first of two members must defer, got {}",
             outcome_tag(&other)
         ),
     }
-    let (sealed, writes) = match fill("Leaf", KType::STR, mock_declaration_site(3, 3)) {
+    let (sealed, writes) = match fill("Leaf", KType::STR, mock_declaration_site(3)) {
         SealOutcome::Sealed { kt, writes } => (kt, writes),
         other => panic!("the last fill must seal, got {}", outcome_tag(&other)),
     };
@@ -199,7 +199,7 @@ fn announced_member_defers_until_the_window_seals() {
         &other_window,
         "Leaf",
         |_| KType::BOOL,
-        mock_declaration_site(4, 4),
+        mock_declaration_site(4),
         scope.brand(),
         &types,
     ) {

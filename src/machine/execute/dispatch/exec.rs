@@ -266,7 +266,7 @@ fn run_action_builtin<'step>(
             chain,
             args: &args,
             arg_carriers: &arg_carriers,
-            node: view.node_handle(),
+            installer: view.installer(),
             ctx: view.step_ctx(),
             types: view.types(),
             out: view.out(),

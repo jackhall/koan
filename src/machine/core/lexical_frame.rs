@@ -51,10 +51,11 @@ impl LexicalFrame {
     /// fixtures) against an existing scope so previously-bound names resolve.
     ///
     /// Its per-statement index is `0` throughout, naming no statement — but declaration
-    /// identity is the installing [`NodeHandle`](super::NodeHandle), not the index, so
-    /// two declarations of one name submitted this way still carry distinct handles and
-    /// redeclaration still raises `Rebind`. The index-0 fallback is intended for these
-    /// reachable users alone; production always enters through `enter_block`.
+    /// identity is the installing [`Installer`](super::Installer), not the index, so
+    /// two declarations of one name submitted this way still carry distinct
+    /// [`StatementId`](super::StatementId)s and redeclaration still raises `Rebind`. The index-0
+    /// fallback is intended for these reachable users alone; production always enters through
+    /// `enter_block`.
     pub fn detached() -> Rc<Self> {
         Rc::new(LexicalFrame {
             scope_id: ScopeId::DETACHED,

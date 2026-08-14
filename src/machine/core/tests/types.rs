@@ -55,14 +55,14 @@ fn resolve_type_inner_scope_shadows_outer() {
     let _ = root.register_type_direct(
         "Foo".into(),
         KType::NUMBER,
-        mock_declaration_site(1, 1),
+        mock_declaration_site(1),
         &mut crate::machine::WriteGate::for_test(),
     );
     let child = root.alloc_child_under();
     let _ = child.register_type_direct(
         "Foo".into(),
         KType::STR,
-        mock_declaration_site(2, 1),
+        mock_declaration_site(1),
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(matches!(child.resolve_type("Foo"), Some(kt) if kt == KType::STR));

@@ -13,7 +13,7 @@ use crate::machine::core::bindings::{WriteGate, WriteOp};
 use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
 use crate::machine::{
-    CarrierWitness, FrameCoverage, KError, KErrorKind, KoanRegion, NodeHandle, NodeId,
+    CarrierWitness, FrameCoverage, Installer, KError, KErrorKind, KoanRegion, NodeId,
 };
 use crate::scheduler::SealedTerminal;
 use crate::witnessed::{Delivered, RegionHandleFamily};
@@ -223,10 +223,7 @@ impl<'run> KoanRuntime<'run> {
                                 &rt.ambient,
                                 scope,
                                 scope_frame(scope),
-                                NodeHandle::Slot {
-                                    run: rt.run,
-                                    node: id,
-                                },
+                                Installer::Statement(anchor.statement()),
                                 &step_effects,
                                 rt.program,
                             ),
@@ -349,12 +346,17 @@ impl<'run> KoanRuntime<'run> {
                                 // the end of this arm: its storage stays pinned by `combined` until the
                                 // step open above exits, and by the loop-carried argument carriers
                                 // beyond that.
-                                let fresh =
-                                    super::nodes::SlotFrame::new(f, NodeScope::Yoked, new_chain);
-                                // The claims belong to the slot, not to the anchor it happens to be
-                                // wearing: hand them to the incoming one so the terminal that
-                                // eventually retires them still finds them.
-                                fresh.own_edges(anchor.take_owned_edges());
+                                // The claims and the statement identity belong to the slot, not to
+                                // the anchor it happens to be wearing, so the incoming anchor is
+                                // minted `replacing` the retiring one: the terminal that eventually
+                                // retires the edges still finds them, and a binding installed after
+                                // the hop is stamped with the same statement as one installed before.
+                                let fresh = super::nodes::SlotFrame::replacing(
+                                    f,
+                                    NodeScope::Yoked,
+                                    new_chain,
+                                    anchor.as_ref(),
+                                );
                                 self.sched.replace(id, new_work, Some(fresh));
                             }
                             None => {
@@ -366,13 +368,12 @@ impl<'run> KoanRuntime<'run> {
                                 // `ParkThenContinue` (same cart, scope, and chain) keeps the anchor.
                                 let scope = overlay_scope.map_or(node_scope, NodeScope::YokedChild);
                                 let anchor_arg = if overlay_scope.is_some() || chain_changed {
-                                    let fresh = super::nodes::SlotFrame::new(
+                                    Some(super::nodes::SlotFrame::replacing(
                                         Rc::clone(&prev_frame),
                                         scope,
                                         new_chain,
-                                    );
-                                    fresh.own_edges(anchor.take_owned_edges());
-                                    Some(fresh)
+                                        anchor.as_ref(),
+                                    ))
                                 } else {
                                     None
                                 };

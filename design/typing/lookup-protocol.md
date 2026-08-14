@@ -130,7 +130,7 @@ nor the reverse.
   bypassing the bound-first preference. Declaration identity itself is not read
   here: it is decided at the install door by
   [`Bindings::try_register_type_upsert`](../../src/machine/core/bindings.rs), which
-  compares the installing [`NodeHandle`](../../src/machine/core/bindings.rs) against the
+  compares the installing [`Installer`](../../src/machine/core/bindings.rs) against the
   stored entry's. What this gate resolves is in-flight status, not identity: a nominal
   member named by a relative `Sibling` reference is in flight iff the scope carrying the
   very group window that reference resolves against still holds a pending arm for

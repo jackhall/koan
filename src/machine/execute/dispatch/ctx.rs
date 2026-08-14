@@ -21,7 +21,7 @@ use crate::machine::model::FoldDirection;
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{
-    CallFrame, DeliveredCarried, LexicalFrame, NameOutcome, NodeHandle, NodeId, Scope, SplicedCell,
+    CallFrame, DeliveredCarried, Installer, LexicalFrame, NameOutcome, NodeId, Scope, SplicedCell,
 };
 use crate::source::{Span, Spanned};
 
@@ -89,10 +89,10 @@ pub(in crate::machine::execute) struct SchedulerView<'program: 'step, 'step, 'vi
     /// The `Rc<FrameStorage>` owning the active scope's region — resolved once per step by the run
     /// loop while the step machinery holds it, so step code reads a live frame with no failure path.
     dest_frame: Rc<FrameStorage>,
-    /// The run-qualified slot stepping this view — `NodeHandle { run, node: id }`. A binder body
-    /// reads it through [`Self::node_handle`] to stamp the installing declaration's identity onto
-    /// its `types` entry.
-    node: NodeHandle,
+    /// The statement this view's slot is running, as an [`Installer`]. A binder body reads it
+    /// through [`Self::installer`] to stamp the installing declaration's identity onto its `types`
+    /// entry.
+    installer: Installer,
     /// The step's binding-write sink, owned by [`run_step`](super::super::run_loop) for the step's
     /// duration and drained by it after the continuation returns. **Private**, with one
     /// `pub(in crate::machine::execute)` deposit method, so only [`run_action`] can reach it: a
@@ -117,7 +117,7 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
         ambient: &'view AmbientContext,
         scope: &'step Scope<'step>,
         dest_frame: Rc<FrameStorage>,
-        node: NodeHandle,
+        installer: Installer,
         effects: &'view RefCell<Vec<WriteOp<'step>>>,
         program: ProgramBrand<'program>,
     ) -> Self {
@@ -126,7 +126,7 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
             ambient,
             scope,
             dest_frame,
-            node,
+            installer,
             effects,
             program,
         }
@@ -153,10 +153,10 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
         self.effects.borrow_mut().extend(ops);
     }
 
-    /// The run-qualified slot stepping this view — the installing declaration's identity a
-    /// binder body threads into its `types` entry via [`BodyCtx::declaration_site`].
-    pub(in crate::machine::execute) fn node_handle(&self) -> NodeHandle {
-        self.node
+    /// The installing declaration's identity — the statement this slot is running — which a binder
+    /// body threads into its `types` entry via [`BodyCtx::declaration_site`].
+    pub(in crate::machine::execute) fn installer(&self) -> Installer {
+        self.installer
     }
 
     /// Run `f` with the active slot's scope. The closure form is for handlers that consume their

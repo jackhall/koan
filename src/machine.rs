@@ -26,8 +26,8 @@ pub(crate) use core::{
     split_body_statements,
 };
 pub(crate) use core::{
-    AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, KoanRegion,
-    LexicalFrame, MemberResolution, NameLookup, NodeHandle, RegionTypeFamily, RunId, RunWriter,
+    AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, Installer,
+    KoanRegion, LexicalFrame, MemberResolution, NameLookup, RegionTypeFamily, RunWriter,
     TraceFrame,
 };
 pub use core::{

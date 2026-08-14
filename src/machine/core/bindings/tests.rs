@@ -12,7 +12,7 @@ use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Scalar;
 use crate::machine::model::values::Carried;
-use crate::scheduler::{EdgeId, NodeId};
+use crate::scheduler::EdgeId;
 use workgraph::witnessed::Sealed;
 
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
@@ -230,25 +230,27 @@ fn write_type_does_not_touch_data_or_functions() {
     assert!(bindings.functions().is_empty());
 }
 
-/// Declaration identity is run-qualified: two `UpsertEqual write`s of one name whose
-/// [`NodeHandle`]s share a `NodeId` but carry distinct [`RunId`]s are two declarations, because
-/// `NodeId`s are scheduler-local and restart per run — only the pair identifies a declaration
-/// statement across the lifetime of a persistent scope. The same-run re-entry (identical handle) is
-/// an idempotent parallel finalize; the cross-run re-entry (same node, later run) is a `Rebind`.
-/// This pins the accepted persistent-scope consequence directly at the decision door: a regression
-/// that compared only the `NodeId` — dropping the `RunId` from handle equality — would take the
-/// idempotent arm on the cross-run install and this test would fail.
+/// Declaration identity is the installing statement: two `UpsertEqual write`s of one name whose
+/// [`Installer`]s carry distinct [`StatementId`]s are two declarations, and a re-entry under the
+/// identical id is one declaration finalizing twice. `StatementId`s are minted from a
+/// never-recycled process-global counter, so this also settles the persistent-scope case for free:
+/// a later run over the same scope submits its statements under fresh ids and cannot collide with
+/// an entry an earlier run installed. A regression that let a recycled or restarted id stand in
+/// would take the idempotent arm on the second install and this test would fail.
 #[test]
-fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
+fn distinct_statement_redeclare_rebinds() {
     let storage = run_root_storage();
     let bindings = Bindings::new(storage.brand());
-    let first_run = RunId::next();
-    let second_run = RunId::next();
-    assert_ne!(first_run, second_run, "two runs must mint distinct RunIds");
-    // One scheduler-local NodeId, reused across both runs — as a per-run scheduler would restart it.
-    let node = NodeId::for_test(5);
-    let site = |run| DeclarationSite {
-        node: NodeHandle::Slot { run, node },
+    let first = StatementId::next();
+    let second = StatementId::next();
+    assert_ne!(
+        first, second,
+        "two submissions must mint distinct StatementIds"
+    );
+    // Both declarations sit at the same lexical position, so only the statement can tell them
+    // apart — the detached-chain shape, where every submission reports index 0.
+    let site = |statement| DeclarationSite {
+        installer: Installer::Statement(statement),
         index: BindingIndex::value(0),
     };
 
@@ -256,40 +258,39 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
         .write_type(
             "Maybe",
             KType::NUMBER,
-            site(first_run),
+            site(first),
             TypeWritePolicy::UpsertEqual,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("the first declaration should install");
 
-    // Same handle re-entering (a parallel finalize of the first declaration): idempotent overwrite.
+    // The same statement re-entering (a parallel finalize of it): idempotent overwrite.
     bindings
         .write_type(
             "Maybe",
             KType::NUMBER,
-            site(first_run),
+            site(first),
             TypeWritePolicy::UpsertEqual,
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("a same-handle parallel finalize should overwrite idempotently");
+        .expect("a same-statement parallel finalize should overwrite idempotently");
 
-    // A later run over the persistent scope reuses the NodeId but carries a fresh RunId, so its
-    // handle differs from the stored entry's and the install is a second declaration: Rebind.
+    // A second statement declaring the same name — a redeclaration, whatever its content: Rebind.
     let error = match bindings.write_type(
         "Maybe",
         KType::STR,
-        site(second_run),
+        site(second),
         TypeWritePolicy::UpsertEqual,
         &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
-        Ok(_) => panic!("a cross-run redeclaration of Maybe must Rebind, not overwrite"),
+        Ok(_) => panic!("a second declaration of Maybe must Rebind, not overwrite"),
     };
     assert!(
         matches!(&error.kind, KErrorKind::Rebind { name } if name == "Maybe"),
-        "expected Rebind naming Maybe across runs, got {error}",
+        "expected Rebind naming Maybe, got {error}",
     );
-    // The first run's entry survives the rejected cross-run install.
+    // The first statement's entry survives the rejected redeclaration.
     assert_eq!(
         bindings
             .types()
@@ -494,7 +495,7 @@ fn bump_backed_tables_full_churn() {
                 .write_type(
                     &format!("Ty{i}"),
                     KType::NUMBER,
-                    mock_declaration_site(i, i),
+                    mock_declaration_site(i),
                     TypeWritePolicy::Insert,
                     &mut gate,
                 )

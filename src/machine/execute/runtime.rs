@@ -26,7 +26,7 @@ use crate::machine::core::{ProgramBrand, RegionBrand, ScopeRefFamily};
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, Part, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::{
-    CallFrame, CarrierWitness, DeliveredCarried, FrameStorage, KError, KErrorKind, NodeId, RunId,
+    CallFrame, CarrierWitness, DeliveredCarried, FrameStorage, KError, KErrorKind, NodeId,
 };
 use crate::witnessed::SealedExtern;
 
@@ -91,10 +91,6 @@ pub struct KoanRuntime<'run> {
     /// executing slot's payload, and the contract-chain flag. The scheduler is a pure DAG runtime;
     /// this driver-side state floats across a single step. See [`ambient`](super::ambient).
     pub(in crate::machine::execute) ambient: super::ambient::AmbientContext,
-    /// This run's identity, minted once at construction. Qualifies a scheduler-local [`NodeId`]
-    /// into a [`NodeHandle`](crate::machine::NodeHandle) so a declaration statement stays
-    /// distinguishable from a same-positioned statement in a later run over one persistent scope.
-    pub(in crate::machine::execute) run: RunId,
     /// This run's program storage capability, handed to every step through its
     /// [`SchedulerView`](super::dispatch::SchedulerView). It also carries `'run`: the scheduler is
     /// value-erased (`Scheduler<KoanWorkload>`), so without this the run lifetime would live only in
@@ -115,7 +111,6 @@ impl<'run> KoanRuntime<'run> {
         Self {
             sched: Scheduler::new(),
             ambient: super::ambient::AmbientContext::default(),
-            run: RunId::next(),
             program,
             writer: Some(out),
         }

@@ -203,17 +203,18 @@ schema; there is no second-namespace write to keep in sync.
 
 **A declaration is identified by the node that installed it.** Each `types` entry
 stores, beside its type, a [`DeclarationSite`](../../src/machine/core/bindings.rs): the
-run-qualified [`NodeHandle`](../../src/machine/core/bindings.rs) of the scheduler slot
-that installed it, paired with its lexical [`BindingIndex`](../../src/machine/core/bindings.rs).
-The handle alone answers the same-declaration question:
+[`Installer`](../../src/machine/core/bindings.rs) naming the statement that installed it,
+paired with its lexical [`BindingIndex`](../../src/machine/core/bindings.rs).
+The installer alone answers the same-declaration question:
 [`finalize_nominal_member`](../../src/machine/model/types/resolver.rs) installs through
 [`register_type_upsert`](../../src/machine/core/scope.rs), which overwrites when the
-installing handle matches the stored entry's — the same scheduler slot in the same run
-re-entering, i.e. a parallel finalize whose re-elaboration cannot differ — and raises
-`Rebind` on any other handle. Content plays no part: a byte-identical redeclaration in
-one scope installs under a distinct node and is a `Rebind`, and so is a re-run of the
-same declaration text over a persistent scope, whose handle carries a fresh
-[`RunId`](../../src/machine/core/run_id.rs). The `BindingIndex` in the entry has one job
+installing statement matches the stored entry's — one declaration re-entering, i.e. a
+parallel finalize whose re-elaboration cannot differ — and raises
+`Rebind` on any other. Content plays no part: a byte-identical redeclaration in
+one scope is submitted as a distinct statement and is a `Rebind`, and so is a re-run of the
+same declaration text over a persistent scope, whose
+[`StatementId`](../../src/machine/core/statement_id.rs) is minted from a never-recycled
+process-global counter and so can never collide with an earlier run's. The `BindingIndex` in the entry has one job
 left — the visibility gate `idx < cutoff` reads it — and under a detached submission
 chain it is `0`, naming no statement, because identity no longer rests on it. The
 single-home invariant — Type-classed name lookups go through `Scope::resolve_type` only
