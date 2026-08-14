@@ -1,10 +1,9 @@
 //! The two scheduler-side dep-list currencies.
 //!
-//! A node's dep list is one logical vector laid out `[park_producers..., owned_subs...]`. *Park*
-//! deps are notify-only edges — the consumer reads the producer's value but does not own it, so a
-//! park producer is never cascade-freed with the consumer. *Owned* deps are sub-work the consumer
-//! spawned; they cascade-free when it succeeds. Dep results are delivered to a finish in that same
-//! `[park..., owned...]` order.
+//! A node's dep list is one logical vector laid out `[parks..., owned...]`. *Park* deps are edges
+//! wired off sources the embedder already holds, so their delivery lands wherever those sources
+//! named; *owned* deps are sub-work the consumer spawned, whose edges are destined at the consumer's
+//! own region. Dep results reach a finish in that same `[park..., owned...]` order.
 //!
 //! This module is the *only* owner of that layout arithmetic:
 //!
@@ -14,16 +13,17 @@
 //!   resolves to producers. It is generic in the owned-entry type `R` (`DepRequest` before the
 //!   harness realizes each request to a producer id).
 //! - [`ResolvedDeps`] is the realized list [`NodeWork`](super::nodes::NodeWork) stores: parks and
-//!   owned entries alike are producer ids. Its own struct rather than `Deps<NodeId>`, because the
-//!   two sides' park currencies differ.
+//!   owned entries alike are the consumer's **own** edges, minted by the install door. It is the
+//!   consumer's ownership record as well as its read list — the run loop reads each dep's resident
+//!   through these names and releases them when the step is done with them.
 //! - [`DepResults`] is the read side — a `[park..., owned...]` result slice plus its park-prefix
 //!   length, addressed through [`park`](DepResults::park) / [`owned`](DepResults::owned) accessors so
 //!   a finish never re-derives the prefix arithmetic.
 //!
-//! Everything here is plain or type-parameter-generic (`NodeId`, `usize`, `R`, `T`) — it names no
+//! Everything here is plain or type-parameter-generic (`EdgeId`, `usize`, `R`, `T`) — it names no
 //! Koan value, error, or AST type.
 
-use super::{EdgeId, NodeId};
+use super::EdgeId;
 
 /// The dep-list builder: the one way production code assembles a node's dep list. Parks and owned
 /// entries live in separate vecs, so `[park..., owned...]` is structural — there is no `park_count`
@@ -109,19 +109,19 @@ impl<R> Deps<R> {
     }
 }
 
-/// A realized dep list — parks and owned deps are all producer ids. This is what
-/// [`NodeWork`](super::nodes::NodeWork) stores, and what the run loop pulls each dep's terminal
-/// through at step start.
+/// A realized dep list — parks and owned deps alike are the consumer's **own** edges. This is what
+/// [`NodeWork`](super::nodes::NodeWork) stores, what the run loop reads each dep's delivered
+/// resident through, and the record that says which edges this slot releases when it is done.
 ///
-/// Deliberately *not* `Deps<NodeId>`: the two currencies have parted. [`Deps`] is the embedder's
-/// write side, whose parks are edges the embedder holds; a realized list's parks are the producer
-/// ids the door resolved them to, scheduler-internal from that point on — which is why the only
-/// way to put one here is [`push_park`](Self::push_park), the door's own crate-private append.
+/// Deliberately *not* `Deps<EdgeId>`: [`Deps`] is the embedder's write side, whose parks name
+/// *source* edges it holds; a realized list names the consumer's own edges, minted off those
+/// sources by the install door — which is why the only way to put one here is the door's own
+/// crate-private append.
 pub struct ResolvedDeps {
-    /// Park producers, deduped, in first-occurrence order.
-    parks: Vec<NodeId>,
-    /// Owned producers, in insertion order.
-    owned: Vec<NodeId>,
+    /// The consumer's park edges, one per source the embedder handed the door, in its order.
+    parks: Vec<EdgeId>,
+    /// The consumer's owned-dep edges, in realization order.
+    owned: Vec<EdgeId>,
 }
 
 impl ResolvedDeps {
@@ -132,27 +132,23 @@ impl ResolvedDeps {
         }
     }
 
-    /// Append a park producer **without deduping** — the install door's push, one entry per park the
-    /// embedder handed it. Alignment is the point: the embedder's own park indices address its edge
-    /// list, and two distinct edges can resolve to one producer (a splice), so collapsing here would
-    /// slide every later [`DepResults::park`] read by one.
-    pub(crate) fn push_park(&mut self, id: NodeId) {
+    /// Append a park edge **without deduping** — the install door's push, one entry per park the
+    /// embedder handed it. Alignment is the point: the embedder's own park indices address its
+    /// source list, so collapsing here would slide every later [`DepResults::park`] read by one.
+    pub(crate) fn push_park(&mut self, id: EdgeId) {
         self.parks.push(id);
     }
 
-    /// Add an owned dep, returning its index *within* the owned vec (not within the concatenated
-    /// `[park..., owned...]` delivery order).
-    pub fn own(&mut self, id: NodeId) -> usize {
-        let pos = self.owned.len();
+    /// Append an owned dep's edge — the install door's other push.
+    pub(crate) fn push_owned(&mut self, id: EdgeId) {
         self.owned.push(id);
-        pos
     }
 
-    pub fn parks(&self) -> &[NodeId] {
+    pub fn parks(&self) -> &[EdgeId] {
         &self.parks
     }
 
-    pub fn owned(&self) -> &[NodeId] {
+    pub fn owned(&self) -> &[EdgeId] {
         &self.owned
     }
 
@@ -165,15 +161,15 @@ impl ResolvedDeps {
         self.parks.is_empty() && self.owned.is_empty()
     }
 
-    /// The producer ids in delivery order: parks first, then owned. The run loop reads each dep's
-    /// terminal in this order so a finish's [`DepResults`] lines up.
-    pub fn all_ids(&self) -> impl Iterator<Item = NodeId> + '_ {
+    /// The edges in delivery order: parks first, then owned. The run loop reads each dep's resident
+    /// in this order so a finish's [`DepResults`] lines up, and releases them in it too.
+    pub fn all_ids(&self) -> impl Iterator<Item = EdgeId> + '_ {
         self.parks.iter().chain(self.owned.iter()).copied()
     }
 
-    /// Wrap a delivered `[park..., owned...]` result slice as a [`DepResults`] view carrying this
-    /// list's park prefix — the run loop's single crossing from the write side to the read side, so
-    /// the prefix length never leaves the scheduler.
+    /// Wrap a `[park..., owned...]` result slice as a [`DepResults`] view carrying this list's park
+    /// prefix — the single crossing from the write side to the read side, so the prefix length never
+    /// leaves the scheduler.
     pub fn results<'a, T>(&self, items: &'a [T]) -> DepResults<'a, T> {
         DepResults::new(items, self.park_count())
     }

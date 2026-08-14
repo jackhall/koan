@@ -22,6 +22,7 @@ use super::SubmitContext;
 use super::ctx::{SchedulerView, current_dest_frame, with_current_node_scope};
 use super::stage_eager_part;
 use super::{BareCarrier, resolve_bare_carrier};
+use crate::machine::Scope;
 use crate::scheduler::{DepResults, Deps};
 
 /// Build-time accumulator family for an aggregate fold: the destination region plus the cells folded
@@ -57,16 +58,20 @@ impl Slot {
 }
 
 /// The per-cell envelope the fold consumes: a static cell's source-built envelope, or a dep
-/// terminal's own delivery envelope (arriving witnessed from the pull, un-relocated —
-/// `transfer_into` relocates it once into the aggregate's region while minting its reach and
-/// residence host onto the accumulator's carrier). The dep arm hands back a
-/// [`duplicate`](crate::witnessed::Delivered::duplicate) of the terminal's envelope, never a fresh
-/// bundle pairing the read-out value with a separately-read reach.
-fn cell_carrier(slot: Slot, terminals: DepResults<'_, &DepTerminal>) -> DeliveredCarried {
+/// terminal's resident lifted back into one. The fold needs the reach *owned* — `transfer_into`
+/// relocates each cell into the aggregate's region while minting its reach and residence host onto
+/// the accumulator's carrier — so a dep arm lifts rather than reads, and the envelope it hands back
+/// is the cell's own description upgraded, never a fresh bundle pairing a read-out value with a
+/// separately-read reach.
+fn cell_carrier(
+    slot: Slot,
+    terminals: DepResults<'_, &DepTerminal<'_>>,
+    scope: &Scope<'_>,
+) -> DeliveredCarried {
     match slot {
         Slot::Static(delivered) => delivered,
-        Slot::Park(i) => terminals.park(i).delivered.duplicate(),
-        Slot::Owned(j) => terminals.owned(j).delivered.duplicate(),
+        Slot::Park(i) => scope.lift_spliced(&terminals.park(i).cell),
+        Slot::Owned(j) => scope.lift_spliced(&terminals.owned(j).cell),
     }
 }
 
@@ -128,18 +133,35 @@ fn fold_cells(
 /// `Bool`, so the two together leave a borrow-carrying key unrepresentable downstream of here.
 fn scalar_key(
     slot: &Slot,
-    terminals: DepResults<'_, &DepTerminal>,
+    terminals: DepResults<'_, &DepTerminal<'_>>,
     types: &TypeRegistry,
 ) -> Result<PendingKey, String> {
-    let envelope = match slot {
-        Slot::Static(delivered) => delivered,
-        Slot::Park(i) => &terminals.park(*i).delivered,
-        Slot::Owned(j) => &terminals.owned(*j).delivered,
+    // The reach probe and the key read are the same two verbs on either carrier — a static cell's
+    // envelope or a dep's resident cell — so each arm answers both inside its own borrow.
+    let (borrows, key) = match slot {
+        Slot::Static(delivered) => (
+            delivered.open_at().has_reach_members(),
+            delivered.open(|c| key_from_carried(c, types)),
+        ),
+        Slot::Park(i) => {
+            let cell = &terminals.park(*i).cell;
+            (
+                cell.open_at().has_reach_members(),
+                cell.open(|c| key_from_carried(c, types)),
+            )
+        }
+        Slot::Owned(j) => {
+            let cell = &terminals.owned(*j).cell;
+            (
+                cell.open_at().has_reach_members(),
+                cell.open(|c| key_from_carried(c, types)),
+            )
+        }
     };
-    if envelope.open_at().has_reach_members() {
+    if borrows {
         return Err("dict key must be owned data, but its value borrows a region".to_string());
     }
-    envelope.open(|c| key_from_carried(c, types))
+    key
 }
 
 fn key_from_carried(c: Carried<'_>, types: &TypeRegistry) -> Result<PendingKey, String> {
@@ -231,7 +253,7 @@ impl<'step> KoanRuntime<'step> {
                     })?;
                     keys.push(kkey);
                 }
-                cells.push(cell_carrier(row.value, terminals));
+                cells.push(cell_carrier(row.value, terminals, view.current_scope()));
             }
             let acc = fold_cells(view, cells.into_iter());
             // The accumulated envelope's coverage carries every region the folded `Held` views point

@@ -311,13 +311,14 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
             let scope = ctx.current_scope();
             let mut parts: Vec<Spanned<WorkingPart<'step>>> = working_expr.parts.to_vec();
             for (slot, terminal) in part_indices.iter().zip(terminals.owned_slice()) {
-                // Rest the dep's delivery envelope into this step's own region: the cell keeps the
-                // producer's carrier, the envelope's whole coverage moves into the region's union
-                // bundle. That is what keeps the value's backing retained across the `Replace` to the
-                // re-dispatch step where `extract_carried_args` adopts it — a framed tail hop's TCO
-                // handoff holds this retiring region across exactly that step.
+                // Lift the dep's resident cell back into a delivery envelope, then rest that envelope
+                // into this step's own region: the cell keeps the producer's carrier, the envelope's
+                // whole coverage moves into the region's union bundle. That is what keeps the value's
+                // backing retained across the `Replace` to the re-dispatch step where
+                // `extract_carried_args` adopts it — a framed tail hop's TCO handoff holds this
+                // retiring region across exactly that step.
                 parts[*slot].value = WorkingPart::Spliced {
-                    cell: scope.rest_delivered(&terminal.delivered),
+                    cell: scope.rest_delivered(&scope.lift_spliced(&terminal.cell)),
                 };
             }
             let spliced = working_expr.respliced(scope.brand(), parts);
@@ -377,13 +378,13 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
             for (i, operator) in operators.into_iter().enumerate() {
                 let left = Spanned {
                     value: WorkingPart::Spliced {
-                        cell: scope.rest_delivered(&cells[i].delivered),
+                        cell: scope.rest_delivered(&scope.lift_spliced(&cells[i].cell)),
                     },
                     span: operand_spans[i],
                 };
                 let right = Spanned {
                     value: WorkingPart::Spliced {
-                        cell: scope.rest_delivered(&cells[i + 1].delivered),
+                        cell: scope.rest_delivered(&scope.lift_spliced(&cells[i + 1].cell)),
                     },
                     span: operand_spans[i + 1],
                 };

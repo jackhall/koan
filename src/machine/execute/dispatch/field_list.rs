@@ -239,15 +239,15 @@ impl<'a> FieldListDeferral<'a> {
     pub(in crate::machine::execute) fn outcome(self, compose: BrandCompose<'a>) -> Outcome<'a> {
         let (rewalk, deps) = self.into_parts();
         let finish: TerminalDepFinish<'a> = Box::new(move |view, terminals| {
-            // The owned suffix — each sub-Dispatch's terminal read under its envelope's own pins — is
-            // the walk's feed; the parks are notify-only waits on a forward reference. The guards
-            // stay bound across the walk, so every value is read at one common borrow. Each field
-            // type the walk yields is cloned out as owned data, so the composed type needs no
-            // operand fold.
+            // The owned suffix — each sub-Dispatch's terminal, already resident in a region this
+            // step covers and read pin-free at its brand — is the walk's feed; the parks are
+            // notify-only waits on a forward reference. The opens stay bound across the walk, so
+            // every value is read at one common brand. Each field type the walk yields is cloned
+            // out as owned data, so the composed type needs no operand fold.
             let opened: Vec<_> = terminals
                 .owned_slice()
                 .iter()
-                .map(|t| t.delivered.open_at())
+                .map(|t| t.cell.open_at())
                 .collect();
             let owned: Vec<Carried<'_>> = opened.iter().map(|o| o.value()).collect();
             match compose_field_list(
@@ -284,15 +284,15 @@ impl<'a> FieldListDeferral<'a> {
         use crate::machine::core::{Action, AwaitContinue};
         let (rewalk, deps) = self.into_parts();
         let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-            // The owned suffix — each sub-Dispatch's terminal read under its envelope's own pins —
-            // feeds the re-walk; the parks are notify-only waits on a forward reference. The guards
-            // stay bound across the walk, so every value is read at one common borrow. Each field
-            // type the walk yields is cloned out as owned data, so the composed type needs no
-            // operand fold.
+            // The owned suffix — each sub-Dispatch's terminal, already resident in a region this
+            // step covers and read pin-free at its brand — feeds the re-walk; the parks are
+            // notify-only waits on a forward reference. The opens stay bound across the walk, so
+            // every value is read at one common brand. Each field type the walk yields is cloned
+            // out as owned data, so the composed type needs no operand fold.
             let opened: Vec<_> = results
                 .owned_slice()
                 .iter()
-                .map(|t| t.delivered.open_at())
+                .map(|t| t.cell.open_at())
                 .collect();
             let owned: Vec<Carried<'_>> = opened.iter().map(|o| o.value()).collect();
             Action::done_writing(

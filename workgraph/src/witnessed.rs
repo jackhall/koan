@@ -1315,6 +1315,24 @@ impl<T: Reattachable + DropFree, W> Retained<T, W> {
             witness: self.inner.witness().clone(),
         }
     }
+
+    /// **Re-brand this carrier at a live pin's borrow** — the public door back into [`Sealed`]'s
+    /// pin-free reads, for a holder that has a retained cell and a pin covering it for some `'b`.
+    /// Exactly [`open_at_with`](Self::open_at_with) followed by [`Opened::reseal`], so it grants no
+    /// capability that composition did not: the brand is the *pin's* borrow, so every read of the
+    /// returned seal is covered for as long as the pin is held and no longer.
+    ///
+    /// Where [`brand_to`](Self::brand_to) brands against a region that has taken the value's
+    /// coverage over for good, this brands against a pin the caller holds across a bounded stretch —
+    /// an embedder's step, whose coverage pins every region its deps reach. The cell keeps
+    /// referencing the description its producer stamped; nothing is minted and nothing moves.
+    pub fn brand_with<'b, Pin: Witness>(&'b self, pin: &'b Pin) -> Sealed<'b, T, W>
+    where
+        T::At<'static>: Copy,
+        W: Clone,
+    {
+        self.open_at_with(pin).reseal()
+    }
 }
 
 /// A seal over a bit-copy value family and a bit-copy witness — the reference-only [`Carrier`],

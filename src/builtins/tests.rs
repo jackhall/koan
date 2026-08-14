@@ -86,11 +86,12 @@ fn assert_accepted(setup: &str, source: &str) {
         ),
         test_run.scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, test_run.scope);
     test_run
         .runtime
         .execute()
         .expect("scheduler should succeed");
-    if let Err(error) = test_run.runtime.result_error(id) {
+    if let Err(error) = test_run.runtime.edge_result_error(edge) {
         panic!("`{source}` must be accepted, got {error}");
     }
 }

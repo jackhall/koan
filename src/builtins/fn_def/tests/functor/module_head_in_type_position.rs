@@ -91,11 +91,12 @@ fn deferred_type_of_param_return_contract_is_the_self_sig() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let error = match test_run.runtime.result_error(id) {
+    let error = match test_run.runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("BAD_ORD should fail the per-call return-type check"),
     };

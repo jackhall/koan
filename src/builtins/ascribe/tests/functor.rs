@@ -101,9 +101,9 @@ fn functor_application_mints_distinct_abstract_types() {
     let exprs = parse(program.brand(), src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+        ids.push(test_run.dispatch_watched_in(
             scope,
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
         ));
     }
     test_run
@@ -111,7 +111,7 @@ fn functor_application_mints_distinct_abstract_types() {
         .execute()
         .expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = test_run.runtime.result_error(*id) {
+        if let Err(e) = test_run.runtime.edge_result_error(*id) {
             panic!("expr {i} errored: {e}");
         }
     }
@@ -197,12 +197,12 @@ fn functor_rejects_structurally_unsatisfying_module() {
     );
     test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     test_run.run("LET arg = no_compare");
-    let root = test_run.runtime.dispatch_in_scope(
+    let root = test_run.dispatch_watched_in(
+        scope,
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "MAKESET arg"),
         ),
-        scope,
     );
     test_run
         .runtime
@@ -210,7 +210,7 @@ fn functor_rejects_structurally_unsatisfying_module() {
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let err = test_run
         .runtime
-        .result_error(root)
+        .edge_result_error(root)
         .expect_err("expected a DispatchFailed in the dispatch slot");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
@@ -379,9 +379,9 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     let exprs = parse(program.brand(), src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+        ids.push(test_run.dispatch_watched_in(
             scope,
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
         ));
     }
     test_run
@@ -389,7 +389,7 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
         .execute()
         .expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = test_run.runtime.result_error(*id) {
+        if let Err(e) = test_run.runtime.edge_result_error(*id) {
             panic!("expr {} errored: {}", i, e);
         }
     }

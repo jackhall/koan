@@ -203,14 +203,15 @@ fn deferred_return_tail_call_stays_tco_flat() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        test_run.runtime.result_error(id).is_ok(),
+        test_run.runtime.edge_result_error(edge).is_ok(),
         "AA Seq should succeed: {:?}",
-        test_run.runtime.result_error(id).err(),
+        test_run.runtime.edge_result_error(edge).err(),
     );
     assert_eq!(
         test_run.runtime.len(),
@@ -249,14 +250,15 @@ fn deferred_expression_return_tail_chain_stays_flat() {
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        test_run.runtime.result_error(id).is_ok(),
+        test_run.runtime.edge_result_error(edge).is_ok(),
         "AA should succeed: {:?}",
-        test_run.runtime.result_error(id).err(),
+        test_run.runtime.edge_result_error(edge).err(),
     );
     // Subsequent calls tail-replace rather than each spawning a dep-finish: a `FreshTail` mints
     // exactly one region per user-fn call (AA, BB, CC, DD), not a dep-finish's unbounded fanout.
@@ -297,11 +299,12 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match test_run.runtime.result_error(id) {
+    let err = match test_run.runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("BAD should fail per-call return-type check"),
     };

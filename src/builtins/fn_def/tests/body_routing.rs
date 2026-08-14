@@ -133,10 +133,11 @@ fn fn_def_parens_param_type_non_type_value_errors() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("non-type param type expression should error"),
     };
@@ -164,10 +165,11 @@ fn fn_def_sigil_return_type_non_type_value_errors() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("non-type return-type expression should error"),
     };

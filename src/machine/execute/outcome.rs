@@ -191,11 +191,9 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
         + 'a,
 >;
 
-/// The resolved dep terminal (value + reach carrier + pins, un-relocated) both finishes read —
-/// defined in core so the builtin-`Action` currency can name it, re-exported here. It is
-/// lifetime-free: a reader opens the envelope under its own pins at the borrow it binds, and the
-/// reach rides the envelope's own coverage, folded onto the scope reach-set only when the value is
-/// *bound* (`let` / user-fn arg).
+/// The resolved dep terminal both finishes read — a delivered resident of a region this step
+/// already covers, re-branded once at step start. Defined in core so the builtin-`Action` currency
+/// can name it, re-exported here.
 pub(in crate::machine::execute) use crate::machine::core::DepTerminal;
 
 /// The one continuation every node runs when its deps resolve — the unified currency
@@ -204,9 +202,9 @@ pub(in crate::machine::execute) use crate::machine::core::DepTerminal;
 /// the slot's own index, and returns an [`Outcome`]. The combinators below build the per-family
 /// behavior into the closure so the node itself never branches.
 pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
-    dyn for<'view> FnOnce(
+    dyn for<'view, 'd> FnOnce(
             &SchedulerView<'_, 'a, 'view>,
-            DepResults<'_, Result<DepTerminal, KError>>,
+            DepResults<'_, Result<DepTerminal<'d>, KError>>,
             NodeId,
         ) -> Outcome<'a>
         + 'a,
@@ -232,10 +230,10 @@ reattachable!(droppable ContinuationFamily => NodeContinuation<'r>);
 
 /// Walk the resolved dep results in delivery order, short-circuiting on the first errored dep (its
 /// error propagated under `dep_error_frame`); on success return every terminal by reference in order.
-fn all_or_first_error<'r>(
-    results: &DepResults<'r, Result<DepTerminal, KError>>,
+fn all_or_first_error<'r, 'd>(
+    results: &DepResults<'r, Result<DepTerminal<'d>, KError>>,
     dep_error_frame: &Option<TraceFrame>,
-) -> Result<Vec<&'r DepTerminal>, KError> {
+) -> Result<Vec<&'r DepTerminal<'d>>, KError> {
     let mut terminals = Vec::with_capacity(results.len());
     for r in results.all() {
         match r {
@@ -251,9 +249,9 @@ fn all_or_first_error<'r>(
 /// shape directly; a [`WitnessedDepFinish`] projects onto it through [`seal_witnessed`] — so
 /// [`short_circuit`] is the single loop that runs either.
 pub(in crate::machine::execute) type TerminalDepFinish<'a> = Box<
-    dyn for<'view> FnOnce(
+    dyn for<'view, 'd> FnOnce(
             &SchedulerView<'_, 'a, 'view>,
-            DepResults<'_, &DepTerminal>,
+            DepResults<'_, &DepTerminal<'d>>,
         ) -> Outcome<'a>
         + 'a,
 >;
@@ -280,9 +278,9 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
 /// region it reaches by construction. Returns `Result` so a shape error (a non-scalar dict key)
 /// short-circuits to [`Outcome::Done`].
 pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
-    dyn for<'view> FnOnce(
+    dyn for<'view, 'd> FnOnce(
             &SchedulerView<'_, 'a, 'view>,
-            DepResults<'_, &DepTerminal>,
+            DepResults<'_, &DepTerminal<'d>>,
         ) -> Result<StepCarried<'a>, KError>
         + 'a,
 >;
@@ -307,9 +305,9 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _id| {
         let result = match &results.all()[0] {
-            // The watched producer's own delivery envelope, duplicated (the producer keeps its
-            // terminal); the finish adopts or opens it at its own step brand.
-            Ok(t) => Ok(t.delivered.duplicate()),
+            // The watched producer's delivered resident, lifted back into an envelope owning its
+            // whole reach — the finish adopts or opens it at its own step brand.
+            Ok(t) => Ok(view.lift_spliced(&t.cell)),
             // Frameless: the recovery-site dispatch attaches its own frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };

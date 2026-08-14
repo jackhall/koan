@@ -15,6 +15,7 @@ use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
 use crate::machine::{
     CarrierWitness, FrameCoverage, KError, KErrorKind, KoanRegion, NodeHandle, NodeId,
 };
+use crate::scheduler::SealedTerminal;
 use crate::witnessed::{Delivered, RegionHandleFamily};
 
 use super::dispatch::SchedulerView;
@@ -133,45 +134,30 @@ impl<'run> KoanRuntime<'run> {
         // The step's open witness: a step-confined cart clone, dropped at return. The tail open
         // re-anchors the step's carriers to the brand `'b` this witness pins, and owns that reattach.
         let continuation_witness = Rc::clone(&cart);
-        // Consumer-pull: read each dep's terminal out of its producer frame so it can be re-anchored
-        // in this consumer's own scope region, where the value dies with the consumer and no surviving
-        // producer copy outlives its dying frame. The `dest` region is the scope's own region (right
-        // even for a transparent USING window). The lift delivers deps *un-relocated*; the copy into
-        // `dest` runs inside a construction fold's witnessed transfer, not here — the catch channel
-        // duplicates the watched carrier instead of copying.
-        let owned_deps: Vec<NodeId> = deps.owned().to_vec();
-        // Read each producer terminal out into the dep slice. A `DepTerminal` is exactly the
-        // producer's delivery envelope — value, reach, and the retained producer-frame pins as one
-        // lifetime-free unit — so the slice is plain step-local data: it rides no carrier and enters
-        // the step open through no channel of its own. A reader opens an envelope under its own pins
-        // (`Delivered::open_at`) at the borrow of the guard it binds, which is why no dep value ever
-        // has to reach the shared step brand.
-        let dep_sources: Vec<Result<DepTerminal, KError>> = deps
+        // **Step start is a read, not a graph walk.** Every dep was delivered into its edge's
+        // destination when its producer finalized, so each resident is duplicated straight off the
+        // edge — a `Copy` cell whose pointee already lives in a region this step covers. An errored
+        // dep short-circuits into the slice, as before.
+        let residents: Vec<Result<SealedTerminal<KoanWorkload>, KError>> = deps
             .all_ids()
-            .map(|d| {
-                // The producer's own carrier bundled with its retained producer-frame owner
-                // (duplicated so a construction finish folds the dep witnessed). One slot read; an
-                // errored slot short-circuits here.
-                let delivered = self.sched.dep_delivered(d).map_err(|e| e.clone())?;
-                Ok(DepTerminal { delivered })
-            })
+            .map(|e| self.sched.edge_resident(e))
             .collect();
-        // The step's open witness — the **step's coverage**: the anchor's projected region owner
-        // (pinning the continuation and dest region, plus their ancestor backings via the storage
-        // `outer` chain) widened by every region this step's deps reach. Assembled before the open so
-        // it outlives `'b`, and held across it, so re-anchoring the zipped carriers to `'b` cannot
-        // dangle. Each dep contributes its envelope's own coverage — its retained producer frame
-        // (sourced from the retention hold, since the reference-only carrier carries no pin of its
-        // own) riding as an ordinary member alongside every other region the value reaches —
-        // redundantly with the duplicated envelope held across the whole open in `dep_sources` (see
-        // the struct doc above). An errored dep carries no value the step reads, so it contributes
-        // nothing. The coverage is *only* a liveness pin: every value terminal rides `DoneWitnessed`
-        // with its own carrier naming its reach, so no terminal reads it. Sourced off the
-        // scheduler-returned anchor, not a `storage_rc()` of the cart the scheduler already holds.
-        let mut combined: FrameCoverage = FrameCoverage::of(Rc::clone(anchor.owner()));
-        for terminal in dep_sources.iter().flatten() {
-            combined.absorb(terminal.delivered.coverage().clone());
+        // The slot is done with its dep edges the moment their residents are in hand: the values live
+        // in the destination regions, not in the edges, so releasing here frees the slab entries
+        // while the step still runs. A `Replace` installs fresh edges for the next incarnation, so
+        // nothing is released twice.
+        for edge in deps.all_ids() {
+            self.sched.release_edge(edge);
         }
+        // The step's open witness — the **step's coverage**: the anchor's projected region owner,
+        // which pins the continuation and the dest region plus their ancestor backings via the
+        // storage `outer` chain. That is the whole of it, and it already covers every dep: an owned
+        // dep's edge is destined at this slot's own anchor region, and a park's inherits the region
+        // its source named — a scope region this anchor's `outer` chain pins. Assembled before the
+        // open so it outlives `'b`, and held across it, so re-anchoring the zipped carriers to `'b`
+        // cannot dangle. Sourced off the scheduler-returned anchor, not a `storage_rc()` of the cart
+        // the scheduler already holds.
+        let mut combined: FrameCoverage = FrameCoverage::of(Rc::clone(anchor.owner()));
         // A framed tail replace's retiring incarnation, held for this step alone. It covers the
         // splice cells this slot's previous incarnation rested into that region — the reads
         // `SchedulerView::lift_spliced` takes — and is released when the coverage drops at return,
@@ -179,6 +165,19 @@ impl<'run> KoanRuntime<'run> {
         if let Some(retiring) = &handoff {
             combined.absorb(FrameCoverage::of(Rc::clone(retiring.owner())));
         }
+        // Re-brand each delivered resident **once**, here, against the step's coverage: a retained
+        // cell proves no liveness of its own, and `combined` is exactly the pin covering every
+        // region a dep landed in. From this point the step's readers open pin-free — a dep value
+        // rides no shared step brand and needs no envelope of its own.
+        let dep_sources: Vec<Result<DepTerminal<'_>, KError>> = residents
+            .iter()
+            .map(|resident| match resident {
+                Ok(cell) => Ok(DepTerminal {
+                    cell: cell.brand_with(&combined),
+                }),
+                Err(error) => Err(error.clone()),
+            })
+            .collect();
         // The active scope as a carrier, per node-scope shape: `Yoked` takes the start cart's own
         // child-scope carrier; `YokedChild` reuses the carrier it already holds. `combined` pins both.
         let scope_carrier = match node_scope {
@@ -234,7 +233,6 @@ impl<'run> KoanRuntime<'run> {
                             deps.results(&dep_sources),
                             id,
                         );
-                        rt.sched.reclaim_deps(id, owned_deps);
                         // Apply the step's binding writes against the step scope, in the order the
                         // bodies decided them. This is the **only** path that mutates a published
                         // binding table: it runs after the continuation returned — so no koan frame
@@ -305,28 +303,16 @@ impl<'run> KoanRuntime<'run> {
                         self.sched.finalize(id, Err(error));
                     }
                     NodeStep::ForwardReady(edge) => {
-                        // Relocate the terminal behind `edge` into this slot's region via
-                        // merge-transfer; no contract re-check (the producer enforced its own).
-                        // Framed: the dest brand is `yoke`d into the anchor's own region owner,
-                        // witnessed by it. Frameless: the dest region is externally pinned for the
-                        // step, so a confined empty-set `resident` carries it. A ready-but-errored
-                        // producer relocates to an `Err`.
-                        let dest = match frame {
-                            Some(_) => dest_brand(Rc::clone(anchor.owner())),
-                            None => {
-                                scope.deliver_resident::<DestHandleFamily>(scope.brand().handle())
-                            }
-                        };
-                        // The relocation's product envelope crosses back whole; the retention hold
-                        // seeds from its own coverage, so no pull re-derives the reach.
-                        // The forward's own classification edge is on the slot's owned list, so the
-                        // retirement below releases it — after the relocation has read through it.
-                        let relocated = self.relocate_terminal(edge, dest);
+                        // The slot's result *is* the value already resting on `edge`. Delivery does
+                        // the rest: the scheduler lifts that resident back into an envelope under
+                        // its own destination's owner and runs this slot's ordinary walk over it, so
+                        // a forward costs one relocation per distinct onward destination and no
+                        // contract re-check (the producer enforced its own).
+                        //
+                        // Ordered before the retirement: the forward's own classification edge is on
+                        // this slot's owned list, and the read above goes through it.
+                        self.sched.finalize_forward(id, edge);
                         self.retire_slot_edges(scope, &anchor);
-                        match relocated {
-                            Ok(delivered) => self.sched.finalize(id, Ok(delivered)),
-                            Err(error) => self.sched.finalize(id, Err(error)),
-                        }
                     }
                     NodeStep::Replace {
                         work: new_work,

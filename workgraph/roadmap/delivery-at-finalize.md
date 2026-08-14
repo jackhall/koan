@@ -48,8 +48,13 @@ the finalize walk and keeps no scheduler-held pins.
   and declared-return sites in
   [runtime.rs](../../src/machine/execute/runtime.rs) become install-time
   delivery; drain-boundary root reads are resident reads of koan's own regions.
-- `NodeId` is fully crate-internal; the `Delivered` envelope leaves the
-  embedder surface (internal transit inside the walk).
+- `NodeId` is a drive-loop currency only — the embedder pops, steps, wires,
+  and may do graph surgery with it, and it carries a release-build allocation
+  stamp so equality survives finalize-time slot recycling. Koan's machine core
+  (scopes, bindings, frames) stores no `NodeId`; declaration identity rides
+  the stamp. The `Delivered` envelope leaves the embedder *read* surface
+  (internal transit inside the walk; `finalize` still receives one) — edges
+  hand out the sealed resident cell instead.
 - Workgraph Miri slate timelines: delivery under copy and pin verdicts,
   consumer death before its producer fires (released-edge skip), late wire to
   a filled edge (same- and cross-destination), root-edge release at the drain
@@ -64,6 +69,13 @@ the finalize walk and keeps no scheduler-held pins.
 - Per-destination dedup — decided, ruled 2026-08-12; the destination-free
   notify-only edge variant is rejected.
 - Error representation — decided: `W::Error: Clone`, satisfied by `KError`.
+- Delivery relocation — decided, 2026-08-13: a `Workload::deliver` hook runs
+  the embedder's relocation seam (deepcopy-vs-pin via `still_borrows`) at each
+  distinct destination; koan's impl is `relocate_seam`.
+- Owned-dep edges — decided, 2026-08-13: the install door mints them
+  internally, destined at the consumer's anchor region; submission wrappers
+  keep returning `NodeId`. The `Deps` currency collapse stays in
+  [deps-currency-collapse.md](../../roadmap/refactor/deps-currency-collapse.md).
 - Reinstall handoff — deferred to
   [reinstall-delivery-at-replace.md](reinstall-delivery-at-replace.md); the
   `handoff` hold stays vestigial-but-harmless through this item.

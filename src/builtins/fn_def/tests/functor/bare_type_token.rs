@@ -11,7 +11,7 @@ use crate::machine::{KError, KErrorKind};
 use crate::machine::{program_storage, run_root_storage};
 
 /// Tolerates the error surfacing either from `KoanRuntime::execute()` (resolve
-/// rejects at admission) or from `read_result_with` (auto-wrap committed and bind
+/// rejects at admission) or from `read_edge_result_with` (auto-wrap committed and bind
 /// later refused). Compare `TestRun::run_one_err`, which panics on the
 /// first path.
 fn run_expecting_dispatch_error<'a>(test_run: &mut TestRun<'a>, expr: KExpression<'a>) -> KError {
@@ -19,13 +19,14 @@ fn run_expecting_dispatch_error<'a>(test_run: &mut TestRun<'a>, expr: KExpressio
         crate::machine::model::WorkingExpression::from_ast(test_run.scope.brand(), expr),
         test_run.scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, test_run.scope);
     match test_run.runtime.execute() {
         Err(e) => e,
         Ok(()) => {
             let types = test_run.types.clone();
             match test_run
                 .runtime
-                .read_result_with(id, |v| v.ktype(&types).name(&types).to_string())
+                .read_edge_result_with(edge, |v| v.ktype(&types).name(&types).to_string())
             {
                 Err(e) => e.clone(),
                 Ok(type_name) => {
@@ -178,11 +179,12 @@ fn deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match test_run.runtime.result_error(id) {
+    let err = match test_run.runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("BUILD Str should fail the per-call return-type check"),
     };

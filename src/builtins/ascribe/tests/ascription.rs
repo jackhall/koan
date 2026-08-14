@@ -53,9 +53,9 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     let exprs = parse(program.brand(), src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(test_run.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+        ids.push(test_run.dispatch_watched_in(
             scope,
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
         ));
     }
     test_run
@@ -63,7 +63,7 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
         .execute()
         .expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = test_run.runtime.result_error(*id) {
+        if let Err(e) = test_run.runtime.edge_result_error(*id) {
             panic!("expr {} errored: {}", i, e);
         }
     }

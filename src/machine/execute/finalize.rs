@@ -162,39 +162,33 @@ pub(in crate::machine::execute) fn finalize_error(
 /// Discharge a tail-spliced slot's residual declared-return obligation against the spliced producer's
 /// delivered value — the checker micro-step's check, WITHOUT re-stamping (the value stays the
 /// producer's, re-stamped only later when the re-emitted `Forward` finalizes through
-/// [`NodeStep::ForwardReady`](super::nodes::NodeStep)). Reads the obligation's precomputed declared
-/// return and matches by channel under the delivery envelope's own host pin. Returns the labelled
-/// mismatch or `Ok(())`.
+/// [`NodeStep::ForwardReady`](super::nodes::NodeStep)). It inspects the value and its type and
+/// adopts nothing, so it takes the value live at its caller's read brand rather than a carrier of
+/// its own. Returns the labelled mismatch or `Ok(())`.
 pub(in crate::machine::execute) fn check_spliced_return(
     obligation: &ReturnObligation,
-    delivered: &DeliveredCarried,
+    carried: Carried<'_>,
     types: &TypeRegistry,
 ) -> Result<(), KError> {
     let Some((declared, per_call)) = obligation.declared() else {
         return Ok(());
     };
     let label = obligation.label();
-    let mismatch = delivered.open(|carried| {
-        let matched = match carried {
-            Carried::Object(object) => declared.matches_value(object, types),
-            Carried::Type(t) => declared.matches_type(t, types),
-            // Every delivered result is resolved; an unlowered name satisfies no contract.
-            Carried::UnresolvedType(_) => false,
-        };
-        if matched {
-            return None;
-        }
-        let got = match carried {
-            Carried::Object(object) => object.ktype().name(types),
-            Carried::Type(t) => t.name(types),
-            Carried::UnresolvedType(ti) => ti.render(),
-        };
-        Some(return_type_mismatch(declared, per_call, label, got, types))
-    });
-    match mismatch {
-        Some(error) => Err(error),
-        None => Ok(()),
+    let matched = match carried {
+        Carried::Object(object) => declared.matches_value(object, types),
+        Carried::Type(t) => declared.matches_type(t, types),
+        // Every delivered result is resolved; an unlowered name satisfies no contract.
+        Carried::UnresolvedType(_) => false,
+    };
+    if matched {
+        return Ok(());
     }
+    let got = match carried {
+        Carried::Object(object) => object.ktype().name(types),
+        Carried::Type(t) => t.name(types),
+        Carried::UnresolvedType(ti) => ti.render(),
+    };
+    Err(return_type_mismatch(declared, per_call, label, got, types))
 }
 
 #[cfg(test)]

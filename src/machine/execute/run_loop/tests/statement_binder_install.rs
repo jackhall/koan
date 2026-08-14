@@ -415,16 +415,17 @@ fn a_rejected_binding_write_is_the_binders_error_terminal() {
     );
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, exprs, scope);
+    let watched = super::watch_all(runtime, &ids, scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        runtime.result_error(ids[0]).is_ok(),
+        runtime.edge_result_error(watched[0]).is_ok(),
         "the first declaration should install, got {:?}",
-        runtime.result_error(ids[0]).err(),
+        runtime.edge_result_error(watched[0]).err(),
     );
     let error = runtime
-        .result_error(ids[1])
+        .edge_result_error(watched[1])
         .expect_err("the colliding overload must surface on its own binder slot");
     assert!(
         matches!(

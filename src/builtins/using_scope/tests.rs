@@ -182,6 +182,7 @@ fn using_block_bind_and_function_are_visible_to_later_statements_of_the_same_blo
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
     let ids = test_run.enter_source(
         "MODULE some_module = (LET val = 1)\n\
          USING some_module SCOPE (\n  \
@@ -190,14 +191,18 @@ fn using_block_bind_and_function_are_visible_to_later_statements_of_the_same_blo
          (DOUBLE localv)\n\
          )",
     );
+    let mut edges = Vec::new();
+    for id in &ids {
+        edges.push(test_run.runtime.install_edge_for_test(*id, scope));
+    }
     test_run
         .runtime
         .execute()
         .expect("scheduler should succeed");
     let tail = crate::builtins::test_support::extract_terminal(
         &test_run.runtime,
-        test_run.scope,
-        *ids.last().expect("two top-level statements"),
+        scope,
+        *edges.last().expect("two top-level statements"),
     );
     assert!(
         matches!(tail, Carried::Object(KObject::Number(n)) if *n == 10.0),
@@ -213,6 +218,7 @@ fn using_block_binds_are_unbound_immediately_after_the_block() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
     let ids = test_run.enter_source(
         "MODULE some_module = (LET val = 1)\n\
          USING some_module SCOPE (\n  \
@@ -222,13 +228,14 @@ fn using_block_binds_are_unbound_immediately_after_the_block() {
          )\n\
          third",
     );
+    let edge = test_run.runtime.install_edge_for_test(ids[2], scope);
     test_run
         .runtime
         .execute()
         .expect("scheduler should succeed");
     let error = test_run
         .runtime
-        .result_error(ids[2])
+        .edge_result_error(edge)
         .expect_err("the block's last bind must not reach the statement after the block");
     assert!(
         matches!(&error.kind, KErrorKind::UnboundName(name) if name == "third"),
@@ -244,6 +251,7 @@ fn using_block_forward_reference_stays_a_position_error() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
     let ids = test_run.enter_source(
         "MODULE some_module = (LET val = 1)\n\
          USING some_module SCOPE (\n  \
@@ -251,13 +259,14 @@ fn using_block_forward_reference_stays_a_position_error() {
          LET early = 5\n\
          )",
     );
+    let edge = test_run.runtime.install_edge_for_test(ids[1], scope);
     test_run
         .runtime
         .execute()
         .expect("scheduler should succeed");
     let error = test_run
         .runtime
-        .result_error(ids[1])
+        .edge_result_error(edge)
         .expect_err("reading a later sibling's bind from inside the block is an error");
     assert!(
         matches!(&error.kind, KErrorKind::UnboundName(name) if name == "early"),
@@ -400,11 +409,12 @@ fn using_on_non_module_fails_dispatch() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let err = runtime
-        .result_error(root)
+        .edge_result_error(edge)
         .expect_err("expected a DispatchFailed in the dispatch slot");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),

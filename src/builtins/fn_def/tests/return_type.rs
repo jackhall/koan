@@ -68,11 +68,12 @@ fn return_type_only_difference_is_a_duplicate_overload() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-node errors");
-    let err = match test_run.runtime.result_error(id) {
+    let err = match test_run.runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("return-type-only overload should be rejected as a duplicate"),
     };
@@ -95,11 +96,12 @@ fn fn_with_unknown_return_type_name_errors() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match test_run.runtime.result_error(id) {
+    let err = match test_run.runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("unknown type name should error"),
     };
@@ -123,11 +125,12 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match test_run.runtime.result_error(id) {
+    let err = match test_run.runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("LIE should fail return-type check"),
     };
@@ -186,11 +189,12 @@ fn fn_return_type_surface_name_preserved_in_error() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match test_run.runtime.result_error(id) {
+    let err = match test_run.runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("unknown type name should error"),
     };
@@ -234,11 +238,12 @@ fn keep_first_across_tail_chain_errors_against_outer_contract() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match test_run.runtime.result_error(id) {
+    let err = match test_run.runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => {
             panic!(
@@ -280,24 +285,25 @@ fn spliced_bare_name_tail_checks_declared_return() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let bad_ids: Vec<_> = parse(
+    let bad_edges: Vec<_> = parse(
         program.brand(),
         "FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = \"nope\"",
     )
     .expect("parse succeeds")
     .into_iter()
     .map(|e| {
-        test_run.runtime.dispatch_in_scope(
+        let id = test_run.runtime.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
             scope,
-        )
+        );
+        test_run.runtime.install_edge_for_test(id, scope)
     })
     .collect();
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match test_run.runtime.result_error(bad_ids[1]) {
+    let err = match test_run.runtime.edge_result_error(bad_edges[1]) {
         Err(e) => e,
         Ok(()) => panic!("the spliced Str tail must fail WRAP's -> Number check"),
     };
@@ -320,17 +326,18 @@ fn spliced_bare_name_tail_checks_declared_return() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let ok_ids: Vec<_> = parse(
+    let ok_edges: Vec<_> = parse(
         program.brand(),
         "FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = 7",
     )
     .expect("parse succeeds")
     .into_iter()
     .map(|e| {
-        test_run.runtime.dispatch_in_scope(
+        let id = test_run.runtime.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
             scope,
-        )
+        );
+        test_run.runtime.install_edge_for_test(id, scope)
     })
     .collect();
     test_run
@@ -338,9 +345,9 @@ fn spliced_bare_name_tail_checks_declared_return() {
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        test_run.runtime.result_error(ok_ids[1]).is_ok(),
+        test_run.runtime.edge_result_error(ok_edges[1]).is_ok(),
         "the matching spliced value passes the splice check: {:?}",
-        test_run.runtime.result_error(ok_ids[1]).err(),
+        test_run.runtime.edge_result_error(ok_edges[1]).err(),
     );
     assert!(
         matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),

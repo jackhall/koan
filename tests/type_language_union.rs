@@ -37,7 +37,7 @@ fn run_expect_err(program: &ProgramStorage, region: &Rc<FrameStorage>, src: &str
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let last = *ids.last().expect("at least one expression");
-    match test_run.runtime.result_error(last) {
+    match test_run.runtime.edge_result_error(last) {
         Ok(()) => panic!("expected a slot error, got success"),
         Err(e) => e.to_string(),
     }

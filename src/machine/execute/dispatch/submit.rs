@@ -74,7 +74,7 @@ impl<'run> KoanRuntime<'run> {
             let anchor = SlotFrame::new(cart, node_scope, chain);
             return self
                 .sched
-                .alloc_node(super::decide_error(error, carrier), anchor, framed);
+                .alloc_node(super::decide_error(error, carrier), &[], anchor, framed);
         }
 
         // Only a statement installs; the plan read above also gates the sub-dispatch rejection.
@@ -87,6 +87,7 @@ impl<'run> KoanRuntime<'run> {
         let anchor = SlotFrame::new(cart, node_scope, chain.clone());
         let id = self.sched.alloc_node(
             super::decide_tail(expr, None),
+            &[],
             std::rc::Rc::clone(&anchor),
             framed,
         );
@@ -106,14 +107,7 @@ impl<'run> KoanRuntime<'run> {
                 .upgrade()
                 .expect("a live scope reference implies a live region owner");
             let mut edges: Vec<EdgeId> = Vec::new();
-            let claim = |rt: &mut Self| {
-                let installed = rt.sched.install_edge(id, &destination);
-                debug_assert!(
-                    matches!(installed, crate::scheduler::InstalledEdge::Parked(_)),
-                    "a binder's placeholder edge is wired at submission, before its slot can run",
-                );
-                installed.edge_id()
-            };
+            let claim = |rt: &mut Self| rt.sched.install_edge(id, &destination);
             // The submission-channel stamp is run-loop-owned: dispatch submits the binder with no
             // koan frame on the stack, the same footing the apply loop writes on.
             let mut gate = WriteGate::for_run_loop();

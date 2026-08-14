@@ -312,8 +312,9 @@ fn fn_return_type_constructor_apply_root_scope() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().expect("scheduler should run");
-    match runtime.result_error(id) {
+    match runtime.edge_result_error(edge) {
         Ok(()) => {}
         Err(e) => panic!("FN with :(Number AS Wrap) return failed: {}", e),
     }
@@ -359,12 +360,16 @@ fn monad_signature_smoke() {
                 scope,
             ));
         }
+        let edges: Vec<_> = ids
+            .iter()
+            .map(|id| runtime.install_edge_for_test(*id, scope))
+            .collect();
         match runtime.execute() {
             Ok(()) => {}
             Err(e) => panic!("scheduler errored: {}", e),
         }
-        for (i, id) in ids.iter().enumerate() {
-            if let Err(e) = runtime.result_error(*id) {
+        for (i, edge) in edges.iter().enumerate() {
+            if let Err(e) = runtime.edge_result_error(*edge) {
                 panic!("expr {} errored: {}", i, e);
             }
         }

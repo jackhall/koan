@@ -1,120 +1,113 @@
-//! Slot terminalization and reclamation: the generic `finalize` / `free` / `reclaim_deps` the
-//! workload's driver calls at a step's Done boundary. See
-//! [design/dag-scheduler.md § The dep row and its invariants](../../design/dag-scheduler.md#the-dep-row-and-its-invariants).
+//! **Delivery at finalize** — the walk that distributes a producer's terminal into every
+//! destination waiting on it, and the slot reclaim that follows it unconditionally. See
+//! [design/dag-scheduler.md § Delivery at finalize](../../design/dag-scheduler.md#delivery-at-finalize).
 
-use std::rc::Rc;
+use crate::witnessed::{Delivered, RegionHandleFamily, Retained};
 
-use crate::witnessed::StepCoverage;
-
-use super::workload::DeliveredTerminal;
-use super::{Anchor, NodeId, Scheduler, Workload};
+use super::workload::{DeliveredTerminal, SealedTerminal};
+use super::{EdgeId, NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
-    /// Invariant: every consumer drained here is parked with a non-zero counter;
-    /// freed slots are scrubbed from every producer's `notify_list` before the
-    /// producer drains.
+    /// **The delivery walk.** The terminal arrives as a [`DeliveredTerminal`] — the carrier bundled
+    /// with the owned coverage the workload's finalize hook composed — and is distributed to every
+    /// live edge on this slot's notify list before the slot reclaims.
     ///
-    /// Wakes must all land before any queue push: a later wake re-reading the
-    /// slot must observe the prior transition. The terminal arrives as a
-    /// [`DeliveredTerminal`] — the carrier bundled with the owned coverage the workload's finalize
-    /// hook composed — so its reach is the reach of the value being stored, not a set paired with it
-    /// at the call.
+    /// Three things happen per edge, in one pass:
     ///
-    /// Seeds the slot's **frame-retention hold** unconditionally by projecting the region owner from
-    /// the slot's own anchor and pairing it with the terminal's own foreign bundle, derived here by
-    /// releasing the envelope's residence ([`Delivered::coverage_releasing_home`](crate::witnessed::Delivered::coverage_releasing_home)):
-    /// the hold owns that region as its `owner` field, so re-listing it would be a second `Rc` on the
-    /// very frame the hold's release frees. An error carries no value and so reaches nothing. The
-    /// region and every reached region stay retained until every destination — the consumers parked
-    /// here at finalize, plus any late parker — has pulled, released at pull-count zero.
+    /// - A **released** entry is skipped and its slab index recycled. That is the second half of
+    ///   Inv-C: release withholds a listed index from circulation precisely so this walk can be the
+    ///   one that returns it, which is what makes a consumer's death before its producer fires
+    ///   order-free.
+    /// - A **live** entry receives the terminal *at its own destination*. Adoption is per distinct
+    ///   destination region, not per edge: a linear look-back over the entries already visited finds
+    ///   an earlier edge naming the same region and shares its resident, so the second write into
+    ///   one region is free. The scan allocates nothing and keeps no state past the walk. An error
+    ///   terminal carries no value to adopt, so it simply clones per edge.
+    /// - Its **consumer's pending** drops by one, and a consumer that reaches zero is woken. Wakes
+    ///   all land before any queue push, so a later wake re-reading the slot observes the prior
+    ///   transition.
+    ///
+    /// The envelope is held across the whole walk, so its transit pins cover every adopt; it drops
+    /// when the walk ends. Then the slot's anchor is released and the slot reclaims —
+    /// unconditionally, with no retention condition of any kind, because delivery has already moved
+    /// everything this producer made into regions that outlive it.
     pub fn finalize(&mut self, id: NodeId, output: Result<DeliveredTerminal<W>, W::Error>) {
-        let (sealed, foreign) = match output {
-            Ok(envelope) => {
-                let foreign = envelope.coverage_releasing_home();
-                (Ok(envelope.into_cell()), foreign)
+        let mut notify = self.deps.take_notify(id);
+        // Inv-C's recycle point: drop every entry whose edge its owner already released, returning
+        // each index to circulation now that no list names it. Doing it up front leaves the walk
+        // below over live entries alone, so the look-back scan never has to re-test.
+        let edges = &mut self.edges;
+        notify.retain(|&edge| {
+            if edges.is_free(edge) {
+                edges.recycle_released(edge);
+                false
+            } else {
+                true
             }
-            Err(error) => (Err(error), StepCoverage::empty()),
-        };
-        self.store.finalize(id, sealed);
-        let drained = self.deps.drain_notify(id);
-        // The consumers parked on this producer at finalize are its known destinations; a late parker
-        // (wiring after this point) bumps the count through the ready-branch increment. Project the
-        // retention owner from the slot's own anchor, then drop the anchor — its cart/chain are dead
-        // weight once the slot is terminal; only the region survives, held by the retention hold
-        // alongside the terminal's threaded foreign bundle.
-        let anchor = self
-            .deps
-            .take_anchor(id)
-            .expect("a finalizing slot still holds its anchor");
-        self.deps
-            .seed_retain(id, Rc::clone(anchor.owner()), foreign.0, drained.len());
+        });
         let mut woken: Vec<NodeId> = Vec::new();
-        for (consumer, hit_zero) in drained {
-            if hit_zero {
+        for i in 0..notify.len() {
+            let edge = notify[i];
+            let resident = match self.shared_resident(&notify[..i], edge) {
+                Some(shared) => shared,
+                None => match &output {
+                    Ok(envelope) => Ok(self.adopt_at(edge, envelope)),
+                    Err(error) => Err(error.clone()),
+                },
+            };
+            self.edges.fill(edge, resident);
+            if let Some(consumer) = self.edges.consumer_of(edge)
+                && self.deps.decrement_pending(consumer)
+            {
                 woken.push(consumer);
             }
         }
         for consumer in woken {
             self.queues.push_woken(consumer);
         }
+        self.deps.clear_anchor(id);
+        self.store.free_one(id);
     }
 
-    /// Recurses only into `DepEdge::Owned` entries; `Notify` entries point at sibling
-    /// producers this slot merely parked on, and reclaiming a consumer must not reach
-    /// across a park edge into the producer's subtree.
+    /// Finalize `slot` with the terminal already resting on `edge` — the forward-a-ready-producer
+    /// path, where a slot's result *is* the value another edge already carries. The resident is
+    /// lifted back into an envelope under its own destination's owner, then delivered onward by the
+    /// ordinary walk, so a forward costs one relocation per distinct onward destination and no
+    /// special case in `finalize`.
     ///
-    /// Idempotent and safe to call on a still-live slot. A value opened by a read lives in a region
-    /// the carrier's frame pins, not in the slot, so freeing the slot cannot dangle it.
-    pub fn free(&mut self, id: NodeId) {
-        let mut stack: Vec<NodeId> = vec![id];
-        while let Some(id) = stack.pop() {
-            if self.store.is_live(id) {
-                continue;
-            }
-            if self.store.is_reclaimed(id) && self.deps.is_dep_edges_empty(id) {
-                continue;
-            }
-            // This slot is dying: its last possible pull on every producer it still depends on is
-            // now, so discharge each (its backward edges plus any late-park debt). Then release its
-            // own retention hold — an owned producer's owner is done with it, so its region dies here
-            // regardless of the remaining count — and release its memory anchor. All run before
-            // `owned_children` drains the edges.
-            self.deps.discharge_edges(id);
-            self.deps.discharge_owed(id);
-            self.deps.drop_retain(id);
-            self.deps.clear_anchor(id);
-            self.release_park_edges(id);
-            for child in self.deps.owned_children(id) {
-                stack.push(child);
-            }
-            self.store.free_one(id);
-        }
+    /// Scheduler-internal in currency but public in reach: the embedder names the source by an edge
+    /// and the slot by the id it is stepping, which is exactly what it holds.
+    pub fn finalize_forward(&mut self, slot: NodeId, edge: EdgeId) {
+        let output = match self.edges.resident_duplicate(edge) {
+            Ok(cell) => Ok(Delivered::lift(cell, self.edges.destination_host(edge))),
+            Err(error) => Err(error),
+        };
+        self.finalize(slot, output);
     }
 
-    /// Success-path eager free; the error path leaves deps for chain-free
-    /// at slot drop. Inv-B is what makes the slot's dep-edge clear sound
-    /// here — see
-    /// [design/dag-scheduler.md § The dep row and its invariants](../../design/dag-scheduler.md#the-dep-row-and-its-invariants).
-    pub fn reclaim_deps(&mut self, id: NodeId, deps: Vec<NodeId>) {
-        // The finalizing consumer has read its deps and won't read them again: discharge any
-        // late-park debt it owes (its edges' pulls on shared/persistent producers ride until those
-        // producers are themselves freed or the run tears down; its owned deps are released by the
-        // cascade `free` below). `clear_dep_edges` then drops the edges, so a later free of this slot
-        // finds none and cannot double-discharge.
-        self.deps.discharge_owed(id);
-        self.deps.clear_dep_edges(id);
-        self.release_park_edges(id);
-        for d in deps {
-            self.free(d);
-        }
+    /// The look-back half of per-destination dedup: an already-visited edge naming the same
+    /// destination region, whose resident this edge shares. `None` when this destination is new to
+    /// the walk and the terminal must be adopted into it.
+    fn shared_resident(
+        &self,
+        visited: &[EdgeId],
+        edge: EdgeId,
+    ) -> Option<Result<SealedTerminal<W>, W::Error>> {
+        let destination = self.edges.destination_region(edge);
+        visited
+            .iter()
+            .find(|&&earlier| std::ptr::eq(self.edges.destination_region(earlier), destination))
+            .map(|&earlier| self.edges.resident_duplicate(earlier))
     }
 
-    /// Release the slab edges this slot's parks were wired through — the owner-side half of *an edge
-    /// never outlives its owner*, run wherever the slot's dep bookkeeping clears. The take drains, so
-    /// a reclaim followed by a free releases each edge exactly once.
-    fn release_park_edges(&mut self, id: NodeId) {
-        for edge in self.deps.take_park_edges(id) {
-            self.edges.release(edge);
-        }
+    /// **Adopt** the terminal into `edge`'s destination region and leave it there at rest. The
+    /// destination operand is a bare handle on that region, minted off the slab's one deref;
+    /// [`Workload::deliver`] runs the embedder's relocation across it — deepcopy or pin, with the
+    /// retention claim the verdict implies — and the product rests in the destination, lodging its
+    /// coverage in that region's union bundle for the region's life.
+    fn adopt_at(&self, edge: EdgeId, envelope: &DeliveredTerminal<W>) -> SealedTerminal<W> {
+        let handle = self.edges.destination_handle(edge);
+        let dest = handle.deliver_resident::<RegionHandleFamily<W::Profile>>(handle);
+        Retained::from_sealed(W::deliver(envelope, dest).rest_into(handle))
     }
 }

@@ -69,9 +69,7 @@ fn resolve_name_part_parked() {
         ),
         scope,
     );
-    let claim = test_run
-        .runtime
-        .install_claim_edge_for_test(producer, scope);
+    let claim = test_run.runtime.install_edge_for_test(producer, scope);
     scope
         .install_placeholder(
             "fwd".to_string(),
@@ -118,7 +116,7 @@ fn self_park_source_would_create_cycle() {
         ),
         scope,
     );
-    let claim = test_run.runtime.install_claim_edge_for_test(slot, scope);
+    let claim = test_run.runtime.install_edge_for_test(slot, scope);
     assert!(
         test_run
             .runtime

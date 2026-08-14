@@ -85,17 +85,18 @@ pub(crate) fn resolve_or_await<'a>(
 }
 
 /// Read the type a sub-dispatch resolved to out of a dep-finish's owned results — a non-type
-/// result is the slot's canonical shape error. The value is read under the terminal envelope's own
-/// pins, at the borrow of the guard bound here; the resolved `KType` is a `Copy` handle that escapes
-/// that borrow, so a caller that seals it into a result carries it by value.
+/// result is the slot's canonical shape error. The value is read at the borrow of the guard bound
+/// here, over a dep resident in a region this step already covers, at the step's own brand; the
+/// resolved `KType` is a `Copy` handle that escapes that borrow, so a caller that seals it into a
+/// result carries it by value.
 pub(crate) fn expect_type_terminal(
-    results: &DepResults<'_, &DepTerminal>,
+    results: &DepResults<'_, &DepTerminal<'_>>,
     owned_pos: usize,
     slot: &str,
     types: &TypeRegistry,
 ) -> Result<KType, KError> {
     let terminal: &DepTerminal = results.owned(owned_pos);
-    let opened = terminal.delivered.open_at();
+    let opened = terminal.cell.open_at();
     match opened.value() {
         Carried::Type(kt) => Ok(kt),
         Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name(types))),

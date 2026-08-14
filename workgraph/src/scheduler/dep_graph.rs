@@ -1,106 +1,40 @@
-//! Per-slot dependency-graph state. Each slot's [`DepRow`] holds the three coordinated fields
-//! (`notify`, `pending`, `edges`) that share the slot index — keeping them in one row makes Inv-A
-//! (wake-pending coherence) structural rather than enforced — plus the slot's
-//! **delivery-driven frame-retention** bookkeeping (`retain`, `owed`). See
-//! [design/dag-scheduler.md § The dep row and its invariants](../../design/dag-scheduler.md#the-dep-row-and-its-invariants)
-//! for the Inv-A / Inv-B / Inv-C contract and
-//! [design/reach.md § Retention model](../../design/reach.md#retention-model)
-//! for the pull-count release rule.
+//! Per-slot dependency-graph state. Each slot's [`DepRow`] holds the two coordinated fields
+//! (`notify`, `pending`) that share the slot index — keeping them in one row makes Inv-A
+//! (wake-pending coherence) structural rather than enforced — plus the slot's memory anchor and its
+//! TCO handoff hold. See
+//! [design/dag-scheduler.md § The dep row and its invariants](../../design/dag-scheduler.md#the-dep-row-and-its-invariants).
+//!
+//! Both coordinated fields speak **edges**. `notify` lists the parked edges waiting on this slot as
+//! a producer — the walk `finalize` runs, delivering into each one's destination — and `pending`
+//! counts the unfilled edges this slot waits on as a consumer. The row holds no retention and no
+//! backward edge list: a delivered value lives in its destination region, so nothing here has to
+//! keep a producer alive past its own finalize.
 
 use std::rc::Rc;
 
-use crate::witnessed::PinBundle;
-
-use super::nodes::NodeWork;
-use super::workload::OwnerOf;
 use super::{EdgeId, NodeId, Workload};
 
-/// Backward edge in `dep_edges[consumer]`. Kind only matters at reclaim:
-/// `free` recurses into `Owned` children but stops at `Notify` so the walk
-/// cannot transit into unrelated subgraphs.
-#[derive(Copy, Clone, Debug)]
-pub enum DepEdge {
-    Owned(NodeId),
-    Notify(NodeId),
-}
-
-impl DepEdge {
-    pub(super) fn node_id(self) -> NodeId {
-        match self {
-            DepEdge::Owned(id) | DepEdge::Notify(id) => id,
-        }
-    }
-}
-
-/// Owned-edge sidecar built from a node's owned deps. Park edges are installed
-/// separately via `add_park_edge`.
-pub(super) fn work_owned_edges<W: Workload>(work: &NodeWork<W>) -> Vec<DepEdge> {
-    work.deps
-        .owned()
-        .iter()
-        .copied()
-        .map(DepEdge::Owned)
-        .collect()
-}
-
-/// The scheduler's frame-retention hold on one finalized producer slot: the producer frame's owner
-/// `Rc` plus the terminal's owned foreign [`PinBundle`], kept alive as one unit until every
-/// destination has pulled the terminal. `pulls` counts the outstanding destinations; both halves
-/// are dropped (releasing the frame and the reached regions) when a discharge brings `pulls` to
-/// zero. A seed of zero pulls does **not** release — it means "no current destination; wait for a
-/// late parker or an explicit free" — so only a decrement-to-zero triggers release. See
-/// [design/reach.md § Retention model](../../design/reach.md#retention-model).
-struct RetentionHold<F: crate::witnessed::PinsRegion> {
-    /// The retained producer frame's owner. Its Drop releases the frame; the pinned read of a
-    /// retained terminal re-anchors the value under a clone of it ([`DepGraph::retained_owner`]).
-    owner: Rc<F>,
-    /// The terminal's owned foreign pin bundle — pinning every other region the value reaches,
-    /// threaded from the finalize hook (never re-derived from the carrier's description). Cloned
-    /// alongside `owner` at each pull to rebuild the delivery envelope ([`DepGraph::retained_foreign`]).
-    /// The owner already pins these members transitively over exactly this interval, so housing the
-    /// bundle here rather than in the slot's `Done` state keeps the timeline bit-for-bit today's.
-    foreign: PinBundle<F>,
-    pulls: usize,
-}
-
-/// The three coordinated per-slot fields plus the slot's retention bookkeeping and its memory
-/// anchor. Mutations go through the row, so `notify` / `pending` / `edges` cannot desync — Inv-A
-/// holds by construction. The row carries both the anchor (`Rc<W::Frame>`) and the projected
-/// retention owner (`Rc<OwnerOf<W>>`); these are distinct types.
+/// The two coordinated per-slot fields plus the slot's memory anchor and TCO handoff. Mutations go
+/// through the row, so `notify` / `pending` cannot desync — Inv-A holds by construction.
 struct DepRow<W: Workload> {
-    /// Forward wake edges from this producer to its consumers.
-    notify: Vec<NodeId>,
-    /// Not-yet-observed deps for this consumer; zero routes via
+    /// Every live parked edge on this slot **as a producer** — what the finalize walk delivers
+    /// into. Root and placeholder edges are listed here alongside consumer-bearing ones, which is
+    /// what makes them receive delivery.
+    notify: Vec<EdgeId>,
+    /// Unfilled consumer-bearing edges this slot waits on **as a consumer**; zero routes via
     /// `WorkQueues::push_woken`.
     pending: usize,
-    /// Backward edges from this consumer to its producers; `free` recurses
-    /// only into `Owned`.
-    edges: Vec<DepEdge>,
-    /// The slab edges this consumer's parks were wired through — minted by the install door, one per
-    /// park, and owned by this slot. Released wherever the row's dep bookkeeping clears (`reclaim_deps`
-    /// on the success path, `free` on every other), which is what makes *an edge never outlives its
-    /// owner* structural here rather than a duty the embedder carries.
-    park_edges: Vec<EdgeId>,
-    /// The slot's memory anchor, held from alloc until finalize/free — the scheduler-owned per-slot
-    /// `Rc<W::Frame>` this item makes scheduler-side. `None` for a slot with no anchor installed
-    /// yet (freshly recycled, before `install_anchor`).
+    /// The slot's memory anchor, held from alloc until finalize — the scheduler-owned per-slot
+    /// `Rc<W::Frame>`. `None` for a slot with no anchor installed yet (freshly recycled, before
+    /// `install_anchor`) or one that has finalized (delivery moved every value out, so the anchor's
+    /// region is free to die).
     anchor: Option<Rc<W::Frame>>,
-    /// The frame-retention hold while this slot is a Done producer whose region is retained; `None`
-    /// for a live/frameless/released slot. Its owner `Rc` keeps the producer region alive until
-    /// every destination pulls.
-    retain: Option<RetentionHold<OwnerOf<W>>>,
-    /// Producers this consumer wired to **after** they had already finalized (the late-park path,
-    /// which installs no `notify` edge). Each entry is a retained producer whose `pulls` this
-    /// consumer bumped on wiring and must discharge once — after its read, or at its death.
-    owed: Vec<NodeId>,
     /// The **TCO handoff hold**: a framed tail replace's *displaced* incarnation anchor, parked
     /// here by [`Scheduler::replace`](crate::scheduler::Scheduler::replace) so the retiring region
     /// outlives the reinstalled incarnation's first step — where it adopts the loop-carried
     /// arguments. The displaced anchor pins the retiring region transitively through its projected
     /// owner. The run loop takes it just before running that step and drops it after, ordering the
-    /// retiring region's free after the adoption. Distinct from `retain`: `retain` holds *this
-    /// slot's own* Done producer region; `handoff` holds the *previous* incarnation's anchor across
-    /// the reinstall.
+    /// retiring region's free after the adoption.
     handoff: Option<Rc<W::Frame>>,
 }
 
@@ -109,11 +43,7 @@ impl<W: Workload> Default for DepRow<W> {
         DepRow {
             notify: Vec::new(),
             pending: 0,
-            edges: Vec::new(),
-            park_edges: Vec::new(),
             anchor: None,
-            retain: None,
-            owed: Vec::new(),
             handoff: None,
         }
     }
@@ -138,181 +68,87 @@ impl<W: Workload> DepGraph<W> {
         &mut self.rows[id.index()]
     }
 
-    /// Atomic init of the consumer's row (recycle or extend) plus the
-    /// per-producer notify backlinks. `pending_producers` is the
-    /// caller-filtered subset of `owned_edges` whose producers are not yet
-    /// terminal, so `DepGraph` stays oblivious to results storage. Returns
-    /// the installed pending count. A recycled row's stale retention state
-    /// (`retain` / `owed`) is cleared — a slot is only recycled after `free`
-    /// dropped its hold, so this is belt-and-suspenders.
-    pub(super) fn install_for_slot(
-        &mut self,
-        consumer: NodeId,
-        owned_edges: Vec<DepEdge>,
-        pending_producers: &[NodeId],
-    ) -> usize {
-        let pending = pending_producers.len();
+    /// Init the slot's row (recycle or extend) to the empty state. The slot's wires land separately
+    /// through [`wire_parked`](Self::wire_parked), which is what settles its pending count — so a
+    /// fresh slot's queue routing reads the row rather than a caller-computed number.
+    pub(super) fn install_for_slot(&mut self, consumer: NodeId) {
         if consumer.index() < self.rows.len() {
             let row = &mut self.rows[consumer.index()];
-            row.notify.clear();
-            row.pending = pending;
-            row.edges = owned_edges;
             debug_assert!(
-                row.park_edges.is_empty(),
-                "a recycled row's park edges were released with the slot that owned them",
+                row.notify.is_empty(),
+                "a recycled row's notify list was drained by the walk that reclaimed the slot",
             );
+            row.pending = 0;
             row.anchor = None;
-            row.retain = None;
-            row.owed.clear();
             row.handoff = None;
         } else {
-            self.rows.push(DepRow {
-                notify: Vec::new(),
-                pending,
-                edges: owned_edges,
-                park_edges: Vec::new(),
-                anchor: None,
-                retain: None,
-                owed: Vec::new(),
-                handoff: None,
-            });
+            self.rows.push(DepRow::default());
         }
-        for p in pending_producers {
-            self.row_mut(*p).notify.push(consumer);
-        }
-        pending
     }
 
-    /// Atomic +1 on the consumer's pending count, edges list, and the
-    /// producer's notify list. Caller guarantees `producer` is not yet
-    /// terminal.
-    pub(in crate::scheduler) fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
-        self.row_mut(producer).notify.push(consumer);
-        let row = self.row_mut(consumer);
-        row.pending += 1;
-        row.edges.push(DepEdge::Owned(producer));
-    }
-
-    /// Atomic +1 across the producer's notify list and the consumer's
-    /// pending count + edges; the backward entry is `Notify(producer)` so
-    /// `free` skips past it. Caller guarantees `producer` is not yet
-    /// terminal.
-    pub(in crate::scheduler) fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
-        self.row_mut(producer).notify.push(consumer);
-        let row = self.row_mut(consumer);
-        row.pending += 1;
-        row.edges.push(DepEdge::Notify(producer));
-    }
-
-    /// Record a slab edge the install door minted for one of `consumer`'s parks, so the slot owns it
-    /// and releases it at death.
-    pub(super) fn record_park_edge(&mut self, consumer: NodeId, edge: EdgeId) {
-        self.row_mut(consumer).park_edges.push(edge);
-    }
-
-    /// Take the slab edges `consumer` owns, draining them so the release happens exactly once even
-    /// when a reclaim is followed by a free.
-    pub(super) fn take_park_edges(&mut self, consumer: NodeId) -> Vec<EdgeId> {
-        std::mem::take(&mut self.row_mut(consumer).park_edges)
-    }
-
-    /// Seed a finalized producer's retention hold with the region owner (projected from the slot's
-    /// anchor), the terminal's owned foreign pin bundle (threaded from the finalize hook), and its
-    /// current destination count (the consumers parked on it at finalize). Called once per Done
-    /// producer.
-    pub(super) fn seed_retain(
+    /// **The one wire primitive.** Register a parked `edge` on its producer's notify list and, when
+    /// the edge names a consumer, count it against that consumer's pending. Every parked edge
+    /// registers — placeholder and root edges among them, which is what makes them receive
+    /// delivery — so the walk's list and the slab's parked set are the same set.
+    pub(in crate::scheduler) fn wire_parked(
         &mut self,
         producer: NodeId,
-        owner: Rc<OwnerOf<W>>,
-        foreign: PinBundle<OwnerOf<W>>,
-        pulls: usize,
+        edge: EdgeId,
+        consumer: Option<NodeId>,
     ) {
-        self.row_mut(producer).retain = Some(RetentionHold {
-            owner,
-            foreign,
-            pulls,
-        });
-    }
-
-    /// Record that `consumer` wired to an already-finalized retained `producer`: bump the producer's
-    /// outstanding pull count and remember the debt on the consumer, to be discharged once (after the
-    /// consumer's read, or at its death). No-op when `producer` carries no hold.
-    pub(super) fn owe_late_pull(&mut self, producer: NodeId, consumer: NodeId) {
-        if let Some(hold) = self.row_mut(producer).retain.as_mut() {
-            hold.pulls += 1;
-            self.row_mut(consumer).owed.push(producer);
+        self.list_parked(producer, edge);
+        if let Some(consumer) = consumer {
+            self.count_pending(consumer);
         }
     }
 
-    /// Discharge one destination pull on `producer`, releasing its frame (dropping the owner `Rc`)
-    /// when the count reaches zero. A `None` hold (frameless, or already released) is a no-op.
-    fn decrement_pull(&mut self, producer: NodeId) {
-        if let Some(hold) = self.row_mut(producer).retain.as_mut() {
-            debug_assert!(
-                hold.pulls > 0,
-                "retention over-discharge on slot {producer:?}"
-            );
-            hold.pulls = hold.pulls.saturating_sub(1);
-            if hold.pulls == 0 {
-                self.row_mut(producer).retain = None;
-            }
-        }
+    /// The listing half of [`wire_parked`](Self::wire_parked): put `edge` on `producer`'s notify
+    /// list. An edge is listed exactly once — a second entry would deliver into it twice.
+    fn list_parked(&mut self, producer: NodeId, edge: EdgeId) {
+        debug_assert!(
+            !self.row(producer).notify.contains(&edge),
+            "edge {edge:?} is already listed on slot {producer:?}",
+        );
+        self.row_mut(producer).notify.push(edge);
     }
 
-    /// Discharge every late-pull `consumer` owes (draining the debt so it discharges exactly once) —
-    /// the after-read / at-death discharge of the late-park increments.
-    pub(super) fn discharge_owed(&mut self, consumer: NodeId) {
-        let owed = std::mem::take(&mut self.row_mut(consumer).owed);
-        for producer in owed {
-            self.decrement_pull(producer);
-        }
+    /// The counting half of [`wire_parked`](Self::wire_parked): count one unfilled edge against
+    /// `consumer`'s pending. Called on its own where the edge was already listed at its mint and
+    /// only its consumer arrives later — the install door attaching a park to the slot that waits
+    /// on it.
+    pub(in crate::scheduler) fn count_pending(&mut self, consumer: NodeId) {
+        self.row_mut(consumer).pending += 1;
     }
 
-    /// Discharge one pull on each producer `consumer` still holds a backward edge to — the dying
-    /// consumer's last-possible-pull discharge (`free`). Reads the edge list without draining it;
-    /// the caller drains it separately (`owned_children`) for the reclaim recursion, and `free`
-    /// processes each slot once, so this fires exactly once per edge.
-    pub(super) fn discharge_edges(&mut self, consumer: NodeId) {
-        let producers: Vec<NodeId> = self
-            .row(consumer)
-            .edges
-            .iter()
-            .map(|e| e.node_id())
-            .collect();
-        for producer in producers {
-            self.decrement_pull(producer);
-        }
+    /// Take the producer's whole notify list — the finalize walk's drain. The row keeps none of it:
+    /// the walk fills or recycles every entry, and the slot reclaims behind it.
+    pub(super) fn take_notify(&mut self, producer: NodeId) -> Vec<EdgeId> {
+        std::mem::take(&mut self.row_mut(producer).notify)
     }
 
-    /// A clone of `producer`'s retained region owner, or `None` for a frameless / released producer —
-    /// the liveness pin a retention-pinned read holds live across [`Sealed::open_with`] while it
-    /// re-anchors the terminal's value.
-    pub(super) fn retained_owner(&self, producer: NodeId) -> Option<Rc<OwnerOf<W>>> {
-        self.row(producer)
-            .retain
-            .as_ref()
-            .map(|hold| Rc::clone(&hold.owner))
+    /// The producer's notify list, borrowed — the cycle walk's read.
+    pub(in crate::scheduler) fn notify_of(&self, producer: NodeId) -> &[EdgeId] {
+        &self.row(producer).notify
     }
 
-    /// A clone of `producer`'s retained foreign pin bundle, or `None` for a frameless / released
-    /// producer — the owned reach [`DepGraph`] threads back into the delivery envelope at each pull,
-    /// never re-derived from the carrier's description.
-    pub(super) fn retained_foreign(&self, producer: NodeId) -> Option<PinBundle<OwnerOf<W>>> {
-        self.row(producer)
-            .retain
-            .as_ref()
-            .map(|hold| hold.foreign.clone())
+    /// Decrement a consumer's pending count, returning whether it reached zero on this decrement —
+    /// the walk's per-edge wake test.
+    pub(super) fn decrement_pending(&mut self, consumer: NodeId) -> bool {
+        let row = self.row_mut(consumer);
+        debug_assert!(row.pending > 0, "pending under-run on slot {consumer:?}");
+        row.pending -= 1;
+        row.pending == 0
     }
 
-    /// Drop `producer`'s retention hold outright — the owned-producer prompt release (its owning
-    /// consumer is done with it) and the re-home drain's explicit clear. Releases the frame
-    /// regardless of the remaining pull count.
-    pub(super) fn drop_retain(&mut self, producer: NodeId) {
-        self.row_mut(producer).retain = None;
+    /// Append re-pointed entries to `producer`'s notify list — the splice's bulk half. Its caller
+    /// rewrote each edge's producer field first, so the entry and the list it sits on name the same
+    /// slot.
+    pub(in crate::scheduler) fn extend_notify(&mut self, producer: NodeId, moved: Vec<EdgeId>) {
+        self.row_mut(producer).notify.extend(moved);
     }
 
     /// Install the slot's memory anchor at alloc time (no previous anchor to displace). Every live
-    /// slot holds an anchor from here until `free` clears it.
+    /// slot holds an anchor from here until it finalizes.
     pub(super) fn install_anchor(&mut self, id: NodeId, anchor: Rc<W::Frame>) {
         self.row_mut(id).anchor = Some(anchor);
     }
@@ -338,22 +174,11 @@ impl<W: Workload> DepGraph<W> {
         )
     }
 
-    /// Take the slot's memory anchor by value — `finalize` does this to project the retention owner
-    /// from it, then drops the anchor (its cart/chain are dead weight once the slot is terminal).
-    pub(super) fn take_anchor(&mut self, id: NodeId) -> Option<Rc<W::Frame>> {
-        self.row_mut(id).anchor.take()
-    }
-
-    /// Clear the slot's memory anchor outright — a dying slot (`free`) releases it.
+    /// Drop the slot's memory anchor — what a finalizing slot does once its walk has drained.
+    /// Delivery moved every value the slot produced into its destinations, so the anchor's region
+    /// has nothing left to keep alive and its release is unconditional.
     pub(super) fn clear_anchor(&mut self, id: NodeId) {
         self.row_mut(id).anchor = None;
-    }
-
-    /// The outstanding destination count on `producer`'s retention hold, `None` once released — the
-    /// probe a late-pull accounting assertion reads.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn retained_pulls(&self, producer: NodeId) -> Option<usize> {
-        self.row(producer).retain.as_ref().map(|hold| hold.pulls)
     }
 
     #[cfg(any(test, feature = "test-hooks"))]
@@ -381,96 +206,12 @@ impl<W: Workload> DepGraph<W> {
         }
     }
 
-    /// True iff `producer` is forward-reachable from `consumer` — i.e.
-    /// parking `consumer` on `producer` would deadlock (e.g. `LET Ty = Ty`,
-    /// where the sub-Dispatch would park on its own ancestor). Caller surfaces
-    /// a structured error instead of installing the park edge.
-    pub(in crate::scheduler) fn would_create_cycle(
-        &self,
-        producer: NodeId,
-        consumer: NodeId,
-    ) -> bool {
-        if producer == consumer {
-            return true;
-        }
-        let mut stack: Vec<NodeId> = vec![consumer];
-        let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
-        while let Some(node) = stack.pop() {
-            if !visited.insert(node) {
-                continue;
-            }
-            for &next in &self.row(node).notify {
-                if next == producer {
-                    return true;
-                }
-                stack.push(next);
-            }
-        }
-        false
-    }
-
-    /// Drains the producer's notify list and returns every consumer paired
-    /// with a `hit_zero` flag indicating whether its pending count reached
-    /// zero on this decrement. The `hit_zero` channel lets the caller append
-    /// to a side-channel for every consumer while only enqueueing
-    /// counter-zero ones, off a single drain.
-    pub(super) fn drain_notify(&mut self, producer: NodeId) -> Vec<(NodeId, bool)> {
-        let notifees = std::mem::take(&mut self.row_mut(producer).notify);
-        let mut out = Vec::with_capacity(notifees.len());
-        for consumer in notifees {
-            let row = self.row_mut(consumer);
-            row.pending -= 1;
-            out.push((consumer, row.pending == 0));
-        }
-        out
-    }
-
-    /// Drains the slot's edges (so a repeat free is a no-op) and yields only
-    /// `Owned` children; `Notify` edges are dropped so the reclaim walk
-    /// cannot transit into the producer's subtree.
-    pub(super) fn owned_children(&mut self, id: NodeId) -> impl Iterator<Item = NodeId> + use<W> {
-        let edges = std::mem::take(&mut self.row_mut(id).edges);
-        edges.into_iter().filter_map(|e| match e {
-            DepEdge::Owned(id) => Some(id),
-            DepEdge::Notify(_) => None,
-        })
-    }
-
-    /// Eager-free on the success path. Inv-C ensures the slot's notify list
-    /// is already drained by the time the caller hits this.
-    pub(in crate::scheduler) fn clear_dep_edges(&mut self, id: NodeId) {
-        self.row_mut(id).edges.clear();
-    }
-
-    /// Move `from`'s notify list onto `into`'s — the bare-name-forward splice. `from`'s consumers
-    /// keep their pending counts and `from`-labelled edges; `into`'s fire now drains them (and their
-    /// reads of `from` follow the alias to `into`). Their pending counts are unchanged: each still
-    /// waits on one dep, now serviced by `into`'s single fire.
-    pub(in crate::scheduler) fn splice_notify(&mut self, from: NodeId, into: NodeId) {
-        let moved = std::mem::take(&mut self.row_mut(from).notify);
-        self.row_mut(into).notify.extend(moved);
-    }
-
     pub(super) fn pending_count(&self, id: NodeId) -> usize {
         self.row(id).pending
     }
 
-    pub(super) fn is_dep_edges_empty(&self, id: NodeId) -> bool {
-        self.row(id).edges.is_empty()
-    }
-
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn dep_edges_at(&self, id: NodeId) -> &[DepEdge] {
-        &self.row(id).edges
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn set_dep_edges(&mut self, id: NodeId, edges: Vec<DepEdge>) {
-        self.row_mut(id).edges = edges;
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn notify_list_iter(&self) -> impl Iterator<Item = (NodeId, &Vec<NodeId>)> {
+    pub(super) fn notify_list_iter(&self) -> impl Iterator<Item = (NodeId, &Vec<EdgeId>)> {
         self.rows
             .iter()
             .enumerate()

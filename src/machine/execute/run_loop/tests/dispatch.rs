@@ -104,10 +104,11 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         ],
     );
     let mut runtime = KoanRuntime::new(program.brand(), Box::new(std::io::sink()));
-    let id = runtime.dispatch_in_scope(working(&program, expr), inner);
+    let slot = runtime.dispatch_in_scope(working(&program, expr), inner);
+    let id = runtime.install_edge_for_test(slot, inner);
     runtime.execute().unwrap();
     let (matched, summary) = runtime
-        .read_result_with(id, |v| {
+        .read_edge_result_with(id, |v| {
             let obj = v.object();
             (
                 matches!(obj, KObject::KString(s) if *s == "inner_any"),
@@ -153,10 +154,11 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         vec![Spanned::bare(ExpressionPart::Identifier("foo"))],
     );
     let mut runtime = KoanRuntime::new(program.brand(), Box::new(std::io::sink()));
-    let id = runtime.dispatch_in_scope(working(&program, expr), scope);
+    let slot = runtime.dispatch_in_scope(working(&program, expr), scope);
+    let id = runtime.install_edge_for_test(slot, scope);
     runtime.execute().unwrap();
     let types = TypeRegistry::new();
-    let err = match runtime.read_result_with(id, |v| v.summarize(&types)) {
+    let err = match runtime.read_edge_result_with(id, |v| v.summarize(&types)) {
         Err(e) => e.clone(),
         Ok(summary) => panic!(
             "stateful BareIdentifier must surface UnboundName for an unbound name; \
@@ -205,11 +207,12 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         ],
     );
     let mut runtime = KoanRuntime::new(program.brand(), Box::new(std::io::sink()));
-    let id = runtime.dispatch_in_scope(working(&program, expr), scope);
+    let slot = runtime.dispatch_in_scope(working(&program, expr), scope);
+    let id = runtime.install_edge_for_test(slot, scope);
     runtime.execute().unwrap();
     assert!(
         runtime
-            .read_result_with(
+            .read_edge_result_with(
                 id,
                 |v| matches!(v.object(), KObject::KString(s) if *s == "lowercase")
             )

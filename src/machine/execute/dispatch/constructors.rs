@@ -425,22 +425,23 @@ fn finish_witnessed<'step>(
     match kind {
         CtorKind::NewType { identity } => {
             debug_assert_eq!(terminals.len(), 1);
-            // The repr check reads the payload under the terminal envelope's own pins; only the
-            // `collapse` verdict escapes the guard's borrow.
+            // The repr check reads the payload at the term's resident brand — a pin-free read, since
+            // the brand is the proof; only the `collapse` verdict escapes the guard's borrow.
             let collapse = {
-                let opened = terminals[0].delivered.open_at();
+                let opened = terminals[0].cell.open_at();
                 check_newtype_repr(*identity, opened.value().object(), view.types())?
             };
             let home = build_type_operand(view.dest_frame(), *identity);
             // The wrap keeps the value verbatim, so a payload substrate that stays foreign rides as
             // the payload cell's own stored run; the term's coverage is the holder-rule proof for
-            // reading it, captured before the fold closure.
-            let holder = terminals[0].delivered.coverage().clone();
+            // reading it, captured before the fold closure. `transfer_into` and `.coverage()` need
+            // an owned envelope, so the term's resident cell is lifted back to one first.
+            let delivered = view.lift_spliced(&terminals[0].cell);
+            let holder = delivered.coverage().clone();
             // The type operand is empty-reach, so the transfer composes the value's reach alone and
             // hands back the wrapped product as an envelope homed in the dest frame.
-            Ok(terminals[0]
-                .delivered
-                .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
+            Ok(
+                delivered.transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     // The wrap holds the value's borrow verbatim, so nothing is released.
                     |_product, _region| true,
@@ -454,7 +455,8 @@ fn finish_witnessed<'step>(
                         };
                         Carried::Object(region.alloc_object_folded(wrapped))
                     },
-                ))
+                ),
+            )
         }
         CtorKind::RecordNewType {
             identity,
@@ -464,9 +466,9 @@ fn finish_witnessed<'step>(
             // of the carriers, no probe `KObject::Record` built — see
             // `check_record_newtype_repr`'s doc), then fold the field carriers into the witnessed
             // record and wrap it.
-            // Each field value is read under its own envelope's pins; the guards stay bound across
-            // the probe build, and the deep clone is owned data that outlives them.
-            let opened: Vec<_> = terminals.iter().map(|t| t.delivered.open_at()).collect();
+            // Each field value is read at its own resident brand — a pin-free read; the guards stay
+            // bound across the probe build, and the deep clone is owned data that outlives them.
+            let opened: Vec<_> = terminals.iter().map(|t| t.cell.open_at()).collect();
             let probe = Record::from_pairs(
                 field_names
                     .iter()
@@ -488,7 +490,9 @@ fn finish_witnessed<'step>(
                 |region| (region.handle(), &[][..]),
             );
             let fields = terminals.iter().fold(acc0, |acc, term| {
-                term.delivered
+                // `transfer_into` needs an owned envelope, so the term's resident cell is lifted
+                // back to one first.
+                view.lift_spliced(&term.cell)
                     .transfer_into::<RecordFieldsFamily, RecordFieldsFamily, _>(
                         acc,
                         // Each field cell is a pointer copy of the term's value, so it
@@ -550,10 +554,11 @@ fn finish_witnessed<'step>(
                     schema.keys().cloned().collect::<Vec<_>>().join(", ")
                 )))
             })?;
-            // The schema check reads the payload under the terminal envelope's own pins; only the
-            // verdict (and, on mismatch, an owned rendered name) escapes the guard's borrow.
+            // The schema check reads the payload at the term's resident brand — a pin-free read;
+            // only the verdict (and, on mismatch, an owned rendered name) escapes the guard's
+            // borrow.
             {
-                let opened = terminals[0].delivered.open_at();
+                let opened = terminals[0].cell.open_at();
                 if !expected.matches_value(opened.value().object(), view.types()) {
                     return Err(KError::new(KErrorKind::TypeMismatch {
                         arg: "value".to_string(),
@@ -572,11 +577,13 @@ fn finish_witnessed<'step>(
             // naming registry-owned content — so the operand's reach stays empty.
             let home = build_type_operand(view.dest_frame(), *member);
             let tag = tag.clone();
-            // The tag keeps the value verbatim — see the `NewType` arm's holder.
-            let holder = terminals[0].delivered.coverage().clone();
-            Ok(terminals[0]
-                .delivered
-                .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
+            // The tag keeps the value verbatim — see the `NewType` arm's holder. `transfer_into` and
+            // `.coverage()` need an owned envelope, so the term's resident cell is lifted back to one
+            // first.
+            let delivered = view.lift_spliced(&terminals[0].cell);
+            let holder = delivered.coverage().clone();
+            Ok(
+                delivered.transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     // The tag holds the value's borrow verbatim, so nothing is released.
                     |_product, _region| true,
@@ -589,7 +596,8 @@ fn finish_witnessed<'step>(
                             identity_ty,
                         )))
                     },
-                ))
+                ),
+            )
         }
         CtorKind::ApplyConstructor { constructor } => {
             debug_assert_eq!(terminals.len(), 1);
@@ -611,11 +619,13 @@ fn finish_witnessed<'step>(
             };
             let home = build_type_operand(view.dest_frame(), identity);
             let types = view.types();
-            // The wrap keeps the value verbatim — see the `NewType` arm's holder.
-            let holder = terminals[0].delivered.coverage().clone();
-            Ok(terminals[0]
-                .delivered
-                .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
+            // The wrap keeps the value verbatim — see the `NewType` arm's holder. `transfer_into`
+            // and `.coverage()` need an owned envelope, so the term's resident cell is lifted back
+            // to one first.
+            let delivered = view.lift_spliced(&terminals[0].cell);
+            let holder = delivered.coverage().clone();
+            Ok(
+                delivered.transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     // The wrap holds the value's borrow verbatim, so nothing is released.
                     |_product, _region| true,
@@ -639,7 +649,8 @@ fn finish_witnessed<'step>(
                             type_id,
                         )))
                     },
-                ))
+                ),
+            )
         }
     }
 }

@@ -3,16 +3,17 @@
 //! error, scope, memory, or AST type.
 //!
 //! The execute loop drains via [`WorkQueues::pop_next`], which prioritizes in-flight slots
-//! (sub-work and notify-walk wakeups) ahead of fresh top-level dispatches. Owned edges never
-//! cycle — a new node's `NodeId` is strictly greater than every node it owns. Park (`Notify`)
-//! edges can point at an earlier producer, so a self-referential binding (`LET x = x`) forms
-//! a cycle that drains with both slots still `PreRun`; the driver detects the leftover parked
-//! slots (via [`Scheduler::unresolved`]) and surfaces a deadlock.
+//! (sub-work and delivery-walk wakeups) ahead of fresh top-level dispatches. An owned dep's edge
+//! never cycles — a new node's slot is allocated after every node it owns. A park edge can point at
+//! an earlier producer, so a self-referential binding (`LET x = x`) forms a cycle that drains with
+//! both slots still `PreRun`; the driver detects the leftover parked slots (via
+//! [`Scheduler::unresolved`]) and surfaces a deadlock.
 //!
 //! Generic over a single [`Workload`] `W`: an inter-node value `W::Value` passed along dep edges, a
-//! terminal error `W::Error`, a per-slot memory anchor `W::Frame` managed by `Rc` (whose projected
-//! region owner the scheduler retains for delivery), and a one-shot `W::Continuation`. The scheduler
-//! stores all of these and hands them back but inspects none beyond [`Anchor::owner`]. An embedder's
+//! terminal error `W::Error`, a per-slot memory anchor `W::Frame` managed by `Rc`, a storage profile
+//! `W::Profile` its destination regions are built over, and a one-shot `W::Continuation`. The
+//! scheduler stores all of these and hands them back but inspects none beyond [`Anchor::owner`] and
+//! the one behavioural hook, [`Workload::deliver`]. An embedder's
 //! interpreter instantiates the scheduler and drives it through the inherent-method contract; Koan's
 //! `machine` module is the first such instantiation.
 //!
@@ -48,20 +49,17 @@ mod tests;
 // `machine` and `scheduler`); imported here so the scheduler's carriers name it unqualified. A
 // private `use`: `witnessed` is the one public path to these types, and a `pub use` here would
 // double it for every one of them.
-use crate::witnessed::{Carrier, Delivered, DropFree, Reattachable};
+use crate::witnessed::{DropFree, Reattachable};
 pub use deps::{Deps, ResolvedDeps};
 // `pub` (not `pub(crate)`) like [`NodeId`]: it appears in the `pub` `AwaitContinue` builtin-finish
 // type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
 pub use deps::DepResults;
 pub use edge_slab::{EdgeId, InstalledEdge};
 pub use node_id::NodeId;
-pub use workload::{Anchor, DeliveredTerminal, Live, OwnerOf, SealedTerminal, Terminal, Workload};
-
-/// Re-exported for the driver's white-box reclaim tests (the only cross-module user of the edge
-/// kind); production driver code never names it. Widened to `test-hooks` so the embedder's own
-/// white-box tests (compiled as a dependent crate, where `cfg(test)` is off) can reach it too.
-#[cfg(any(test, feature = "test-hooks"))]
-pub use dep_graph::DepEdge;
+pub use workload::{
+    Anchor, DeliveredTerminal, DeliveryDestination, Live, OwnerOf, SealedTerminal, Terminal,
+    Workload,
+};
 
 /// A dynamic DAG of dispatch and execution work. See the module docs for the queue-priority and
 /// cycle-detection contract.
@@ -69,7 +67,7 @@ pub struct Scheduler<W: Workload> {
     pub(in crate::scheduler) queues: WorkQueues,
     pub(in crate::scheduler) deps: DepGraph<W>,
     pub(in crate::scheduler) store: NodeStore<W>,
-    pub(in crate::scheduler) edges: EdgeSlab<OwnerOf<W>>,
+    pub(in crate::scheduler) edges: EdgeSlab<W>,
 }
 
 impl<W: Workload> Scheduler<W> {
@@ -134,8 +132,7 @@ impl<W: Workload> Scheduler<W> {
             None => self.deps.set_handoff(id, None),
         }
         self.store.reinstall(id, stored);
-        // Replace return sites install their own edges (or clear the slot's dep edges for tail
-        // rewrites), so the pending count is authoritative here.
+        // Replace return sites install their own edges, so the pending count is authoritative here.
         if self.deps.pending_count(id) == 0 {
             self.queues.push_after_replace(id);
         }
@@ -143,7 +140,7 @@ impl<W: Workload> Scheduler<W> {
 
     /// Slots still `PreRun` after the queue drained — each is parked on a dependency that can no
     /// longer fire (a dependency cycle). `(count, sample)` for the deadlock error, or `None` when
-    /// every slot is terminal.
+    /// every slot has reclaimed.
     pub fn unresolved(&self) -> Option<(usize, String)> {
         self.store.unresolved()
     }
@@ -161,126 +158,51 @@ impl<W: Workload> Scheduler<W> {
         self.store.is_empty()
     }
 
-    /// An errored sub counts as ready — parents short-circuit on it. Follows a bare-name-forward
-    /// alias to the real producer (see [`splice`](self::splice)).
+    /// True iff `producer` is forward-reachable from `consumer` — i.e. parking `consumer` on
+    /// `producer` would deadlock (e.g. `LET Ty = Ty`, where the sub-Dispatch would park on its own
+    /// ancestor). Caller surfaces a structured error instead of installing the park edge.
     ///
-    /// Scheduler-internal: readiness is not a standalone question an embedder asks. It reaches the
-    /// same classification by *installing* — [`install_edge`](Self::install_edge) /
-    /// [`install_deps`](Self::install_deps) return filled-or-parked — so no consumer can read a
-    /// producer's standing without wiring the edge that makes the read sound.
-    pub(in crate::scheduler) fn is_result_ready(&self, id: NodeId) -> bool {
-        self.store.is_result_ready(self.resolve_alias(id))
-    }
-
-    /// Open a finalized terminal at a rank-2 brand and hand it to `f` as
-    /// `Result<Live<'b>, &W::Error>` — the destination-verb read, so the value nests inside the
-    /// access rather than riding the `&self` borrow up-stack. Follows a bare-name-forward alias.
-    pub fn read_result_with<R>(
-        &self,
-        id: NodeId,
-        f: impl for<'b> FnOnce(Live<'b, W>) -> R,
-    ) -> Result<R, &W::Error> {
-        let target = self.resolve_alias(id);
-        // The retained producer frame owner pins the value across the open (`None` for a frameless /
-        // run-region producer); held in `pin` for the duration of the read.
-        let pin = self.deps.retained_owner(target);
-        self.store.read_result_with(target, pin.as_ref(), f)
-    }
-
-    /// The terminal's error, or `Ok(())` for a value terminal — the borrow-free success/failure
-    /// probe that reads no value. Follows a bare-name-forward alias to the real producer.
-    pub fn result_error(&self, id: NodeId) -> Result<(), &W::Error> {
-        self.store.result_error(self.resolve_alias(id))
-    }
-
-    /// Duplicate a finalized terminal's sealed carrier (value + witness set), leaving the producer's
-    /// own seal intact — the consumer-pull lift hands each dep this so a construction finish folds it
-    /// witnessed, naming the reach on the carrier rather than reconstructing it. Follows a
-    /// bare-name-forward alias to the real producer (which holds the sole copy).
-    pub fn dep_carrier(&self, id: NodeId) -> Result<SealedTerminal<W>, &W::Error> {
-        self.store.dep_carrier(self.resolve_alias(id))
-    }
-
-    /// A finalized dep as a **delivery envelope**: its duplicated sealed carrier
-    /// ([`dep_carrier`](Self::dep_carrier)) paired with its retained producer-frame owner and the
-    /// terminal's owned foreign bundle, both cloned from the retention hold and unioned by the
-    /// envelope into one member set (the producer frame becomes an ordinary member there), so a
-    /// consumer reads the value under a pin sourced from the retention hold rather than threaded
-    /// per call site. Sound because the retention hold is active
-    /// while any consumer edge is undischarged (the pinning invariant) — and total for the same
-    /// reason: every finalize seeds a hold (the run frame's storage owns the run region), so a
-    /// pull-able dep always has a retained owner. Follows a bare-name-forward alias to the real
-    /// producer. Relocations ride the envelope too
-    /// ([`Delivered::transfer_into`](crate::witnessed::Delivered)); the scheduler exposes no
-    /// separate transfer verb.
-    // The three-parameter envelope over a witnessed `Result` reads clearer inline than split apart.
-    #[allow(clippy::type_complexity)]
-    pub fn dep_delivered(
-        &self,
-        id: NodeId,
-    ) -> Result<Delivered<W::Value, Carrier<OwnerOf<W>>, OwnerOf<W>>, &W::Error> {
-        let cell = self.dep_carrier(id)?;
-        let target = self.resolve_alias(id);
-        let host = self
-            .deps
-            .retained_owner(target)
-            .expect("a pull-able dep's retention hold is active (seeded at every finalize)");
-        // Clone the terminal's owned foreign bundle out of the hold — the reach was captured at
-        // finalize and threaded in, never re-derived from the carrier's description here.
-        let foreign = self
-            .deps
-            .retained_foreign(target)
-            .expect("a pull-able dep's retention hold carries its foreign bundle");
-        Ok(Delivered::hosted(
-            cell,
-            host,
-            crate::witnessed::StepCoverage(foreign),
-        ))
-    }
-
-    /// Re-home a finalized terminal (relocated into a surviving region, bundled with the witness set
-    /// of any per-call source it still reaches), dropping the pinned producer frame. The drain
-    /// boundary uses this for consumer-less roots. Resolves a bare-name alias so the real producer's
-    /// frame — not the alias slot — is released.
-    ///
-    /// Takes the same [`DeliveredTerminal`] currency [`finalize`](Self::finalize) does, and for the
-    /// same reason: the relocation's product carries its own reach. The envelope's coverage is
-    /// *dropped* here rather than re-seeded — the value moved into a region that outlives the
-    /// scheduler, so the transit pins have nothing left to keep alive.
-    ///
-    /// Crate-internal: an embedder holds root *edges*, so it re-homes through
-    /// [`rehome_terminal_via_edge`](Self::rehome_terminal_via_edge).
-    pub(crate) fn rehome_terminal(
-        &mut self,
-        id: NodeId,
-        output: Result<DeliveredTerminal<W>, W::Error>,
-    ) {
-        let target = self.resolve_alias(id);
-        // The re-homed terminal has no per-call producer frame to retain — its value moved into a
-        // surviving region — so any hold seeded at its finalize is released here (its count is zero
-        // by construction: a consumer-less root has no parked destination).
-        self.deps.drop_retain(target);
-        self.store
-            .rehome_terminal(target, output.map(Delivered::into_cell));
-    }
-
-    /// True iff `producer` is forward-reachable from `consumer`
-    /// (`DepGraph::would_create_cycle`).
+    /// The walk follows each slot's notify list to the consumers its edges name, skipping released
+    /// entries (Inv-C) and consumer-less ones (a root or placeholder edge continues no chain).
     pub fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
-        self.deps.would_create_cycle(producer, consumer)
+        if producer == consumer {
+            return true;
+        }
+        let mut stack: Vec<NodeId> = vec![consumer];
+        let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
+        while let Some(node) = stack.pop() {
+            if !visited.insert(node) {
+                continue;
+            }
+            for &edge in self.deps.notify_of(node) {
+                if self.edges.is_free(edge) {
+                    continue;
+                }
+                let Some(next) = self.edges.consumer_of(edge) else {
+                    continue;
+                };
+                if next == producer {
+                    return true;
+                }
+                stack.push(next);
+            }
+        }
+        false
     }
 
     /// **The one door a consumer's dep list is wired through.** The embedder hands the park *sources*
     /// it holds — edges its own bindings named — plus the producers it owns; the door mints the
-    /// consumer's own slab edge per park (inheriting each source's destination, so a park on a
-    /// placeholder delivers into the region that placeholder named), routes every dep through the
-    /// scheduler-internal wire primitive, and hands back the realized list for
-    /// [`NodeWork`](nodes::NodeWork) plus each park's **filled-or-parked** verdict. The producer
+    /// consumer's own slab edge per dep and hands back the realized list for
+    /// [`NodeWork`](nodes::NodeWork) plus each park's **filled-or-parked** verdict. Producer
     /// `NodeId`s never leave the scheduler: resolving a source edge to one is this door's job.
     ///
+    /// A park's edge inherits its source's destination, so a park on a placeholder delivers into the
+    /// region that placeholder named; an owned dep's edge is destined at the consumer's own anchor
+    /// region, which is where its sub-work's result belongs.
+    ///
     /// The returned `Vec<InstalledEdge>` is index-aligned with `parks`. A *filled* verdict is the
-    /// caller's to act on — its producer is terminal, so an errored one propagates at once rather
-    /// than waiting for a wake that will not come.
+    /// caller's to act on — its producer has already delivered, so an errored one propagates at once
+    /// rather than waiting for a wake that will not come.
     ///
     /// It serves an already-allocated consumer slot, which is why it takes the dep list separately
     /// from the work; the submit-time sibling is
@@ -296,41 +218,37 @@ impl<W: Workload> Scheduler<W> {
         let mut resolved = ResolvedDeps::new();
         let mut installed = Vec::with_capacity(parks.len());
         for &source in parks {
-            let (verdict, producer) = self.mint_park_edge(source);
-            self.adopt_park_edge(consumer, verdict.edge_id(), producer);
-            resolved.push_park(producer);
+            let verdict = self.install_edge_from(source);
+            self.edges.bind_consumer(verdict.edge_id(), consumer);
+            // The mint already listed a parked edge on its producer, so only the pending half of
+            // the wire is left: this consumer waits on one more unfilled edge. A filled verdict
+            // waits on nothing — its producer has already delivered.
+            if matches!(verdict, InstalledEdge::Parked(_)) {
+                self.deps.count_pending(consumer);
+            }
+            resolved.push_park(verdict.edge_id());
             installed.push(verdict);
         }
         for &producer in owned {
-            self.add_owned_edge(producer, consumer);
-            resolved.own(producer);
+            resolved.push_owned(self.wire_owned(consumer, producer));
         }
         (resolved, installed)
     }
 
-    /// Mint a consumer's own slab edge off one park source, resolving the source to its producer.
-    /// The consumer slot need not exist yet — [`adopt_park_edge`](Self::adopt_park_edge) binds the
-    /// minted edge to it — which is what lets the submit-time door wire before it allocates.
-    pub(in crate::scheduler) fn mint_park_edge(
-        &mut self,
-        source: EdgeId,
-    ) -> (InstalledEdge, NodeId) {
-        let installed = self.install_edge_from(source);
-        let producer = self.edges.producer_through(installed.edge_id());
-        (installed, producer)
-    }
-
-    /// Bind a minted park edge to the consumer that owns it (which releases it at death) and route
-    /// its producer through the park-edge primitive — the notify row when the producer is pre-terminal,
-    /// the late-pull count when it has already finalized.
-    pub(in crate::scheduler) fn adopt_park_edge(
-        &mut self,
-        consumer: NodeId,
-        edge: EdgeId,
-        producer: NodeId,
-    ) {
-        self.deps.record_park_edge(consumer, edge);
-        self.add_park_edge(producer, consumer);
+    /// Mint one owned dep's edge: `producer` is freshly allocated sub-work of `consumer`, so it is
+    /// pre-terminal by construction and the edge always parks. Its destination is the consumer's own
+    /// anchor region — the sub-result lands where the consumer will read it.
+    fn wire_owned(&mut self, consumer: NodeId, producer: NodeId) -> EdgeId {
+        debug_assert!(
+            self.store.is_live(producer),
+            "an owned dep is freshly allocated sub-work, so it cannot have run yet",
+        );
+        let destination = Rc::clone(self.deps.anchor_clone(consumer).owner());
+        let edge = self
+            .edges
+            .install_parked(producer, Some(consumer), &destination);
+        self.deps.wire_parked(producer, edge, Some(consumer));
+        edge
     }
 
     /// Wire one edge from `producer` toward a destination region, named by its owner: holding
@@ -340,19 +258,22 @@ impl<W: Workload> Scheduler<W> {
     /// half of the lattice — the destination stays covered for the edge's life — rides the releasing
     /// owner's teardown verb.
     ///
-    /// Returns **filled-or-parked**: filled when the producer (alias resolved) has already
-    /// finalized, so the consumer reads its value rather than waiting on a slot that will not fire;
-    /// parked otherwise. The edge stores the destination as a raw pointer plus a debug-only weak
-    /// shadow of its owner; the deref that reads it is the delivery walk's
-    /// ([delivery-at-finalize](../roadmap/delivery-at-finalize.md)).
-    pub fn install_edge(
-        &mut self,
-        producer: NodeId,
-        destination: &Rc<OwnerOf<W>>,
-    ) -> InstalledEdge {
-        let producer = self.resolve_alias(producer);
-        let ready = self.store.is_result_ready(producer);
-        self.edges.install(producer, ready, destination)
+    /// The edge always parks, and its producer must be live: a slot reclaims at its own finalize, so
+    /// a `NodeId` that names a terminal producer names nothing. Both production callers — the run's
+    /// roots and a binder's placeholder claim — wire immediately after allocating the slot. An edge
+    /// wired from a *name the embedder already holds* takes
+    /// [`install_edge_from`](Self::install_edge_from), which is where the filled branch lives.
+    ///
+    /// The edge carries no consumer: it wakes nobody and counts against no pending. It receives
+    /// delivery like every other listed edge, which is what makes a root or a placeholder readable.
+    pub fn install_edge(&mut self, producer: NodeId, destination: &Rc<OwnerOf<W>>) -> EdgeId {
+        debug_assert!(
+            self.store.is_live(producer),
+            "install_edge names a live producer; a terminal one has already reclaimed its slot",
+        );
+        let edge = self.edges.install_parked(producer, None, destination);
+        self.deps.wire_parked(producer, edge, None);
+        edge
     }
 
     /// Wire a second edge to the producer behind `source`, **inheriting `source`'s destination
@@ -363,70 +284,90 @@ impl<W: Workload> Scheduler<W> {
     /// stands, so the region it names is covered — and the new edge's own owner sits below that
     /// owner on the same lattice.
     ///
-    /// Returns filled-or-parked like [`install_edge`](Self::install_edge), re-resolving the
-    /// producer's alias: `source` may have been wired before the producer was spliced out.
+    /// Returns **filled-or-parked**, which is the whole of the readiness question
+    /// ([§ Late wiring and install](../design/dag-scheduler.md#late-wiring-and-install)):
+    ///
+    /// - `source` **filled** — its producer already delivered into the destination both edges name,
+    ///   so the new edge shares that resident. The per-destination dedup the walk applies, applied
+    ///   again here: the second write into one region is free, and the shared cell's reach
+    ///   description is retained by the destination for the region's life.
+    /// - `source` **parked** — its producer is necessarily pre-terminal (unfilled ⇒ undelivered ⇒
+    ///   slot alive), so the new edge parks on it too and registers on its notify list.
     pub fn install_edge_from(&mut self, source: EdgeId) -> InstalledEdge {
-        let producer = self.resolve_alias(self.edges.producer_through(source));
-        let ready = self.store.is_result_ready(producer);
-        self.edges.install_inheriting(source, producer, ready)
+        match self.edges.producer_of(source) {
+            Some(producer) => {
+                let edge = self.edges.install_parked_inheriting(source, producer, None);
+                self.deps.wire_parked(producer, edge, None);
+                InstalledEdge::Parked(edge)
+            }
+            None => {
+                let resident = self.edges.resident_duplicate(source);
+                InstalledEdge::Filled(self.edges.install_filled_inheriting(source, resident, None))
+            }
+        }
     }
 
     /// Release one edge. Rides its owner's teardown verb — a consumer or frame teardown calls this
     /// with the names it still holds; an [`EdgeId`] is a name, not a lifecycle handle its holder
-    /// manages. Panics in debug builds on a name whose edge was already released.
+    /// manages. A parked edge's slab index is withheld from circulation until the walk that still
+    /// lists it drops the entry (Inv-C). Panics in debug builds on a name whose index was recycled.
     pub fn release_edge(&mut self, id: EdgeId) {
         self.edges.release(id);
     }
 }
 
-/// The edge-keyed reads and rewires: an embedder holding an [`EdgeId`] reaches its producer's
-/// terminal through these rather than through a `NodeId` it kept. Pre-flip the resident lives in the
-/// producer's slot, so each routes edge → producer → the slot verb underneath it; the routing
-/// retires when delivery lands the resident on the edge
-/// ([delivery-at-finalize](../roadmap/delivery-at-finalize.md)).
+/// The edge-keyed reads: an embedder holding an [`EdgeId`] reaches the delivered terminal resting on
+/// it. There is no slot behind these — the producer reclaimed at its own finalize, and what the edge
+/// holds is an ordinary resident of the destination region the edge names.
 impl<W: Workload> Scheduler<W> {
-    /// [`result_error`](Self::result_error) through an edge.
+    /// The delivered terminal's error, or `Ok(())` for a value terminal — the borrow-free
+    /// success/failure probe that reads no value.
     pub fn edge_result_error(&self, id: EdgeId) -> Result<(), &W::Error> {
-        self.result_error(self.edges.producer_through(id))
+        self.edges.resident_error(id)
     }
 
-    /// [`read_result_with`](Self::read_result_with) through an edge.
+    /// Open the delivered terminal at a rank-2 brand and hand it to `f` as
+    /// `Result<Live<'b>, &W::Error>` — the destination-verb read, so the value nests inside the
+    /// access rather than riding the `&self` borrow up-stack. The pin is the destination region's
+    /// own owner, upgraded off its back-link: the value lives in that region, so the region's own
+    /// liveness is what covers the read.
     pub fn read_edge_result_with<R>(
         &self,
         id: EdgeId,
         f: impl for<'b> FnOnce(Live<'b, W>) -> R,
     ) -> Result<R, &W::Error> {
-        self.read_result_with(self.edges.producer_through(id), f)
+        let host = self.edges.destination_host(id);
+        Ok(self.edges.resident_ref(id)?.open_with(&host, f))
     }
 
-    /// [`dep_delivered`](Self::dep_delivered) through an edge.
-    #[allow(clippy::type_complexity)]
-    pub fn edge_delivered(
-        &self,
-        id: EdgeId,
-    ) -> Result<Delivered<W::Value, Carrier<OwnerOf<W>>, OwnerOf<W>>, &W::Error> {
-        self.dep_delivered(self.edges.producer_through(id))
-    }
-
-    /// [`rehome_terminal`](Self::rehome_terminal) through an edge.
-    pub fn rehome_terminal_via_edge(
-        &mut self,
-        id: EdgeId,
-        output: Result<DeliveredTerminal<W>, W::Error>,
-    ) {
-        self.rehome_terminal(self.edges.producer_through(id), output);
+    /// Duplicate the delivered terminal's sealed cell — value + reach description — leaving the
+    /// edge's own copy intact. The consumer's step-start read: the cell is `Copy`-shaped data whose
+    /// pointee lives in the destination region, so a consumer that holds that region takes this and
+    /// re-brands it ([`Retained::brand_with`](crate::witnessed::Retained::brand_with)) rather than
+    /// carrying pins of its own.
+    pub fn edge_resident(&self, id: EdgeId) -> Result<SealedTerminal<W>, W::Error> {
+        self.edges.resident_duplicate(id)
     }
 
     /// [`would_create_cycle`](Self::would_create_cycle) against the producer behind `source` — the
     /// one pre-wiring query a read-only decide still asks, since parking on an ancestor deadlocks
-    /// rather than errors.
+    /// rather than errors. A filled source can start no cycle: its producer is gone.
     pub fn would_create_cycle_from(&self, source: EdgeId, consumer: NodeId) -> bool {
-        self.would_create_cycle(self.edges.producer_through(source), consumer)
+        match self.edges.producer_of(source) {
+            Some(producer) => self.would_create_cycle(producer, consumer),
+            None => false,
+        }
     }
 
-    /// [`splice_forward`](Self::splice_forward) onto the producer behind `source`.
+    /// [`splice_forward`](Self::splice_forward) onto the producer behind `source`. A filled source
+    /// never reaches here — the slot's step took the install verb's filled branch and forwarded the
+    /// resident instead of emitting an alias.
     pub fn splice_forward_from(&mut self, slot: NodeId, source: EdgeId) {
-        self.splice_forward(slot, self.edges.producer_through(source));
+        let producer = self
+            .edges
+            .producer_of(source)
+            .expect("a spliced-out slot forwards a parked source; a filled one forwards its value");
+        self.splice_forward(slot, producer);
     }
 }
 
@@ -446,42 +387,10 @@ impl<W: Workload> Scheduler<W> {
     pub fn clear_node(&mut self, id: NodeId) {
         self.store.clear_node(id);
     }
-    pub fn set_result(
-        &mut self,
-        id: NodeId,
-        output: Result<Live<'_, W>, W::Error>,
-        carrier: crate::witnessed::Carrier<OwnerOf<W>>,
-    ) {
-        self.store.set_result(id, output, carrier);
-    }
-    /// Seed a retention hold on a synthetically-finalized slot ([`Self::set_result`] writes the
-    /// terminal but runs no finalize, so no hold exists) — [`Self::dep_delivered`] requires one for
-    /// every pull-able dep. `foreign` is the hold's owned foreign bundle: pass
-    /// [`StepCoverage::empty`](crate::witnessed::StepCoverage::empty) for a slot that reaches nothing, or a
-    /// real bundle to exercise the foreign half's pull-count-zero release timeline.
-    pub fn seed_retention(
-        &mut self,
-        id: NodeId,
-        owner: Rc<OwnerOf<W>>,
-        foreign: crate::witnessed::StepCoverage<OwnerOf<W>>,
-        pulls: usize,
-    ) {
-        self.deps.seed_retain(id, owner, foreign.0, pulls);
-    }
-    /// The outstanding destination count on the slot's retention hold, `None` once released.
-    pub fn retained_pulls(&self, id: NodeId) -> Option<usize> {
-        self.deps.retained_pulls(id)
-    }
-    pub fn result_is_none(&self, id: NodeId) -> bool {
-        self.store.result_is_none(id)
-    }
-    pub fn result_is_some(&self, id: NodeId) -> bool {
-        self.store.result_is_some(id)
-    }
     pub fn is_live(&self, id: NodeId) -> bool {
         self.store.is_live(id)
     }
-    pub fn notify_list_iter(&self) -> impl Iterator<Item = (NodeId, &Vec<NodeId>)> {
+    pub fn notify_list_iter(&self) -> impl Iterator<Item = (NodeId, &Vec<EdgeId>)> {
         self.deps.notify_list_iter()
     }
     pub fn free_list_snapshot(&self) -> Vec<NodeId> {
@@ -490,13 +399,9 @@ impl<W: Workload> Scheduler<W> {
     pub fn free_list_len(&self) -> usize {
         self.store.free_list_len()
     }
-    /// The producer a parked edge waits on, `None` for a filled one.
+    /// The producer a parked edge waits on, `None` for a delivered one.
     pub fn edge_producer(&self, id: EdgeId) -> Option<NodeId> {
         self.edges.producer_of(id)
-    }
-    /// Re-point a parked edge at another producer — the alias splice's half of edge wiring.
-    pub fn rewrite_edge_producer(&mut self, id: EdgeId, producer: NodeId) {
-        self.edges.rewrite_producer(id, producer);
     }
     /// Whether the edge's recorded destination is `owner`'s region — pointer identity, no deref.
     pub fn edge_destination_is(&self, id: EdgeId, owner: &Rc<OwnerOf<W>>) -> bool {
@@ -510,16 +415,22 @@ impl<W: Workload> Scheduler<W> {
     pub fn edge_destination_owner(&self, id: EdgeId) -> Option<Rc<OwnerOf<W>>> {
         self.edges.destination_owner(id)
     }
+    /// Whether the edge's slab entry is released — the stale-name probe a driver's reclamation
+    /// canary reads a surviving notify list against.
+    pub fn edge_is_free(&self, id: EdgeId) -> bool {
+        self.edges.is_free(id)
+    }
     pub fn edge_free_list_len(&self) -> usize {
         self.edges.free_list_len()
     }
     pub fn edge_slab_len(&self) -> usize {
         self.edges.len()
     }
-    pub fn set_dep_edges(&mut self, id: NodeId, edges: Vec<DepEdge>) {
-        self.deps.set_dep_edges(id, edges);
+    pub fn pending_count(&self, id: NodeId) -> usize {
+        self.deps.pending_count(id)
     }
-    pub fn dep_edges_at(&self, id: NodeId) -> &[DepEdge] {
-        self.deps.dep_edges_at(id)
+    /// The realized dep list the install door wrote onto a pre-run slot.
+    pub fn stored_deps(&self, id: NodeId) -> &ResolvedDeps {
+        self.store.stored_deps(id)
     }
 }

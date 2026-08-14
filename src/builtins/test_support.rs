@@ -29,7 +29,7 @@ use crate::machine::{AdoptSeam, FrameStorage, KError, NameLookup, Scope};
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
 use crate::parse::parse;
-use crate::scheduler::NodeId;
+use crate::scheduler::{EdgeId, NodeId};
 #[cfg(test)]
 use crate::witnessed::{RegionHandle, Sealed};
 
@@ -128,25 +128,25 @@ impl<'a> TestRun<'a> {
     }
 }
 
-/// Extract a top-level terminal at the scope lifetime `'a`. The terminal is opened at a rank-2 brand
-/// and its value **copied out** into `scope`'s region through the brand — a deep clone re-homed at
-/// `'a` (the same copy a witnessed transfer's fold runs across a dep edge), so nothing branded
-/// escapes the open and a region-pure terminal leaves its producer frame free to die. A returned
-/// closure / module's deep clone preserves the bare borrow into its per-call region, so (like the
-/// production drain) the copy's own reach is minted into `scope`'s region: the caller drops the
-/// scheduler right after this returns, and `scope` outlives it, so its reach-set keeps every region
-/// the result still reaches alive. Test-only — production code reads inside the open without a fixed
-/// escape lifetime.
+/// Extract a watched terminal at the scope lifetime `'a`. `edge` is the harness's own name for the
+/// result — installed against `scope`'s region before the run, so the producer delivered there — and
+/// what it holds is an ordinary resident of that region.
+///
+/// The resident is re-branded under the scope's own owner (the same brand the run loop mints for a
+/// step's deps), lifted back into an envelope, and its value **copied out** into `scope`'s region: a
+/// deep clone re-homed at `'a`, so nothing branded escapes the read. A returned closure / module's
+/// deep clone preserves the bare borrow into its per-call region, so the copy's own reach is minted
+/// into `scope`'s region — the caller drops the scheduler right after this returns, and `scope`
+/// outlives it, so its reach-set keeps every region the result still reaches alive. Test-only —
+/// production code reads inside the open without a fixed escape lifetime.
 #[cfg(test)]
 pub(crate) fn extract_terminal<'a>(
     runtime: &KoanRuntime<'a>,
     scope: &'a Scope<'a>,
-    id: NodeId,
+    edge: EdgeId,
 ) -> Carried<'a> {
-    // The witness and its retained host travel together as the delivery envelope, so the adoption
-    // has both of the value's region facts to work from.
     let delivered = runtime
-        .dep_delivered(id)
+        .edge_delivered(edge, scope)
         .expect("terminal should be a value, not an error");
     // Reuse the production relocation: a value that would otherwise keep region storage behind — a
     // substrate carrier, a bare string — is totally rebuilt into `scope`'s region through the seam
@@ -234,6 +234,16 @@ impl<'a> TestRun<'a> {
         self.runtime.enter_block(scope.id, statements, scope)
     }
 
+    /// [`TestRun::enter_source_in`] with a watch edge wired onto each statement's slot, so a test
+    /// can read what each one produced. Block submission, so the statements sit at successive
+    /// lexical positions on one chain — which is what the index-gated visibility rule reads.
+    pub fn enter_source_watched_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<EdgeId> {
+        self.enter_source_in(scope, source)
+            .into_iter()
+            .map(|id| self.runtime.install_edge_for_test(id, scope))
+            .collect()
+    }
+
     /// [`TestRun::enter_source_in`] against the bundle's own scope.
     pub fn enter_source(&mut self, source: &str) -> Vec<NodeId> {
         self.enter_source_in(self.scope, source)
@@ -243,8 +253,11 @@ impl<'a> TestRun<'a> {
     /// back one node id per statement. The statement-at-a-time peer of
     /// [`TestRun::enter_source_in`], for a test that reads each slot's own result; the caller
     /// drives `execute` itself.
-    pub fn dispatch_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<NodeId> {
-        parse(self.program_brand(), source)
+    /// Every statement is submitted before any watch edge is wired, so the submissions land
+    /// back to back — a claim a later statement installs is in place by the time an earlier one
+    /// steps, which is the ordering the visibility rule is written against.
+    pub fn dispatch_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<EdgeId> {
+        let slots: Vec<NodeId> = parse(self.program_brand(), source)
             .expect("parse should succeed")
             .into_iter()
             .map(|statement| {
@@ -252,7 +265,24 @@ impl<'a> TestRun<'a> {
                     crate::machine::model::WorkingExpression::from_ast(scope.brand(), statement);
                 self.runtime.dispatch_in_scope(working, scope)
             })
+            .collect();
+        slots
+            .into_iter()
+            .map(|id| self.runtime.install_edge_for_test(id, scope))
             .collect()
+    }
+
+    /// Dispatch `working` against `scope` and **watch** its result: the harness wires an edge onto
+    /// the fresh slot, destined at `scope`'s own region, exactly as `run_program` wires the run's
+    /// roots. Slots reclaim at finalize, so an edge is what a reader holds — a `NodeId` would name
+    /// nothing by the time `execute` returns.
+    pub fn dispatch_watched_in(
+        &mut self,
+        scope: &'a Scope<'a>,
+        working: crate::machine::model::WorkingExpression<'a>,
+    ) -> EdgeId {
+        let id = self.runtime.dispatch_in_scope(working, scope);
+        self.runtime.install_edge_for_test(id, scope)
     }
 
     /// Dispatch `expr` against `scope` with REPL-style "complete" visibility, so bindings from
@@ -264,12 +294,12 @@ impl<'a> TestRun<'a> {
         scope: &'a Scope<'a>,
         expr: KExpression<'a>,
     ) -> &'a KObject<'a> {
-        let id = self.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+        let edge = self.dispatch_watched_in(
             scope,
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
         );
         self.runtime.execute().expect("scheduler should succeed");
-        extract_terminal(&self.runtime, scope, id).object()
+        extract_terminal(&self.runtime, scope, edge).object()
     }
 
     /// [`TestRun::run_one_in`] against the bundle's own scope.
@@ -282,12 +312,12 @@ impl<'a> TestRun<'a> {
     /// carrier to its [`Carried::Type`] arm. Panics if the expression produced a runtime value.
     #[cfg(test)]
     pub(crate) fn run_one_type_in(&mut self, scope: &'a Scope<'a>, expr: KExpression<'a>) -> KType {
-        let id = self.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+        let edge = self.dispatch_watched_in(
             scope,
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
         );
         self.runtime.execute().expect("scheduler should succeed");
-        match extract_terminal(&self.runtime, scope, id) {
+        match extract_terminal(&self.runtime, scope, edge) {
             Carried::Type(kt) => kt,
             Carried::Object(obj) => panic!(
                 "expected a type result, got value {}",
@@ -308,14 +338,14 @@ impl<'a> TestRun<'a> {
 
     /// Like [`TestRun::run_one_in`] but returns the `KError` produced by the dispatched node.
     pub fn run_one_err_in(&mut self, scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
-        let id = self.runtime.dispatch_in_scope(
-            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
+        let edge = self.dispatch_watched_in(
             scope,
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
         );
         self.runtime
             .execute()
             .expect("scheduler should not surface errors directly");
-        match self.runtime.result_error(id) {
+        match self.runtime.edge_result_error(edge) {
             Ok(()) => panic!("expected error"),
             Err(e) => e.clone(),
         }
@@ -448,15 +478,6 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
 #[cfg(test)]
 pub(crate) fn marker<'a>(scope: &Scope<'a>, label: &'static str) -> &'a KObject<'a> {
     scope.brand().alloc_string(label)
-}
-
-/// The region-pure carrier a synthetic terminal needs: a description hosted in `scope`'s own region
-/// naming no members — exactly what a value allocated straight into that region carries.
-/// `Scheduler::set_result` writes a terminal onto a slot without running finalize, so the carrier
-/// the real finalize would have minted has to be handed in here.
-#[cfg(test)]
-pub(crate) fn resident_carrier(scope: &Scope<'_>) -> crate::machine::CarrierWitness {
-    crate::machine::CarrierWitness::new(scope.mint_retained(&[]))
 }
 
 /// Seal a resolved value into a region-pure `WorkingPart::Spliced` cell — the test-side peer of

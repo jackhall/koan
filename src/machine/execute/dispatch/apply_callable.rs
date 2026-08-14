@@ -221,19 +221,17 @@ fn apply_named_type_args<'step>(
             .owned_slice()
             .iter()
             .zip(&names)
-            .map(
-                |(terminal, name)| match terminal.delivered.open_at().value() {
-                    Carried::Type(kt) => Ok((name.clone(), kt)),
-                    Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
-                        arg: name.clone(),
-                        expected: "Type".to_string(),
-                        got: object.ktype().name(view.types()),
-                    })),
-                    Carried::UnresolvedType(ti) => {
-                        Err(KError::new(KErrorKind::UnboundName(ti.render())))
-                    }
-                },
-            )
+            .map(|(terminal, name)| match terminal.cell.open_at().value() {
+                Carried::Type(kt) => Ok((name.clone(), kt)),
+                Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
+                    arg: name.clone(),
+                    expected: "Type".to_string(),
+                    got: object.ktype().name(view.types()),
+                })),
+                Carried::UnresolvedType(ti) => {
+                    Err(KError::new(KErrorKind::UnboundName(ti.render())))
+                }
+            })
             .collect();
         Outcome::Done(supplied.and_then(|supplied| {
             let args = build_apply_args(identity, &param_names, supplied, view.types())?;

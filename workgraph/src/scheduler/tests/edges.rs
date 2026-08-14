@@ -1,16 +1,16 @@
 //! White-box slate for the **edge slab** and the install door: which branch install takes against a
-//! pending, finalized, or aliased producer, what it records about the destination, and the slab's
-//! alloc/release recycling with its debug generation stamps.
+//! pre-terminal or a delivered producer, what it records about the destination, the slab's
+//! alloc/release recycling with its debug generation stamps, and the splice's re-point.
 //!
 //! Runs under Miri alongside the rest of the lib slate, so the raw destination pointer install
-//! stores is minted and carried under the same borrow discipline delivery will read it under. The
-//! fixtures come from the parent module; `OwnerOf<TestWorkload>` is `Cart`, so a destination owner
-//! is just an `Rc<Cart>`.
+//! stores is minted and carried under the same borrow discipline delivery reads it under. The
+//! fixtures come from the parent module; the delivery *timelines* live in
+//! [`delivery`](super::delivery).
 
 use std::rc::Rc;
 
 use super::super::nodes::NodeWork;
-use super::super::{DepEdge, InstalledEdge, NodeId, ResolvedDeps, Scheduler};
+use super::super::{EdgeId, InstalledEdge, NodeId, ResolvedDeps, Scheduler};
 use super::*;
 
 /// A scheduler holding one dep-free, pre-terminal node — the pending producer every install test
@@ -23,17 +23,17 @@ fn pending_producer() -> (Scheduler<TestWorkload>, NodeId) {
 
 /// Allocate one dep-free node with a trivial continuation and its own anchor.
 fn alloc_dep_free(sched: &mut Scheduler<TestWorkload>) -> NodeId {
-    let anchor = Rc::new(TestAnchor(Rc::new(Cart(vec![1, 2, 3]))));
     let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
     sched.alloc_node(
         NodeWork::new(ResolvedDeps::new(), continuation, None),
-        anchor,
+        &[],
+        TestAnchor::fresh(),
         false,
     )
 }
 
-/// Drive a node to a terminal: pop it off the ready queue, take its work, and finalize it with an
-/// error — an `Err` terminal needs no carrier, and readiness is `Done(..)` either way.
+/// Drive a node to a terminal: pop it off the ready queue, then deliver an error — an `Err` terminal
+/// needs no value, and the walk's edge bookkeeping is the same either way.
 fn finalize_with_error(sched: &mut Scheduler<TestWorkload>, id: NodeId) {
     let ready = sched.pop_next().expect("a dep-free slot is ready");
     assert_eq!(ready, id, "the ready slot is the one just installed");
@@ -47,10 +47,10 @@ fn finalize_in_place(sched: &mut Scheduler<TestWorkload>, id: NodeId) {
     sched.finalize(id, Err(()));
 }
 
-/// A destination owner: a cart the caller pins for the whole test, standing in for the frame a
+/// A destination owner: an anchor the caller pins for the whole test, standing in for the frame a
 /// wiring call names.
-fn destination() -> Rc<Cart> {
-    Rc::new(Cart(vec![7, 8, 9]))
+fn destination() -> Rc<TestAnchor> {
+    TestAnchor::fresh()
 }
 
 /// **Install parks on a pre-terminal producer**, recording it as the producer the edge waits on.
@@ -59,37 +59,33 @@ fn install_parks_on_a_pending_producer() {
     let (mut sched, producer) = pending_producer();
     let destination = destination();
 
-    let installed = sched.install_edge(producer, &destination);
+    let edge = sched.install_edge(producer, destination.owner());
 
-    assert!(
-        matches!(installed, InstalledEdge::Parked(_)),
-        "a pre-terminal producer parks its edge",
-    );
     assert_eq!(
-        sched.edge_producer(installed.edge_id()),
+        sched.edge_producer(edge),
         Some(producer),
         "a parked edge names the producer it waits on",
     );
 }
 
 /// **Install records the destination it was handed**, as the owner's own region — the pointer the
-/// delivery deref will read, and the weak shadow that check is asserted against.
+/// delivery deref reads, and the weak shadow that deref is asserted against.
 #[test]
 fn install_records_the_destination_owner() {
     let (mut sched, producer) = pending_producer();
     let destination = destination();
 
-    let edge = sched.install_edge(producer, &destination).edge_id();
+    let edge = sched.install_edge(producer, destination.owner());
 
     assert!(
-        sched.edge_destination_is(edge, &destination),
+        sched.edge_destination_is(edge, destination.owner()),
         "the edge's destination is the region of the owner install was handed",
     );
     #[cfg(debug_assertions)]
     assert!(
         sched
             .edge_destination_owner(edge)
-            .is_some_and(|owner| Rc::ptr_eq(&owner, &destination)),
+            .is_some_and(|owner| Rc::ptr_eq(&owner, destination.owner())),
         "the debug shadow upgrades to the destination owner while it stands",
     );
     // The shadow is weak by construction: dropping the caller's hold kills the destination outright
@@ -104,33 +100,6 @@ fn install_records_the_destination_owner() {
     }
 }
 
-/// **Install fills against an already-finalized producer** — the late-wiring branch, taken whenever
-/// the producer finalized before the consumer wired in. The consumer reads the value rather than
-/// parking on a slot that will not fire again.
-#[test]
-fn install_fills_on_a_finalized_producer() {
-    let (mut sched, producer) = pending_producer();
-    finalize_with_error(&mut sched, producer);
-    let destination = destination();
-
-    let installed = sched.install_edge(producer, &destination);
-
-    assert!(
-        matches!(installed, InstalledEdge::Filled(_)),
-        "a finalized producer fills its edge",
-    );
-    assert_eq!(
-        sched.edge_producer(installed.edge_id()),
-        None,
-        "a filled edge is past parking, so it waits on no producer",
-    );
-    assert_eq!(
-        sched.edges.producer_through(installed.edge_id()),
-        producer,
-        "it still records the producer its resident is read through",
-    );
-}
-
 /// **Wiring from a source inherits that source's destination** — a consumer parking on a
 /// placeholder's edge delivers into the region the *placeholder* named, not one of its own. The
 /// derived edge is a second name on the same producer.
@@ -138,7 +107,7 @@ fn install_fills_on_a_finalized_producer() {
 fn install_edge_from_inherits_the_destination() {
     let (mut sched, producer) = pending_producer();
     let destination = destination();
-    let source = sched.install_edge(producer, &destination).edge_id();
+    let source = sched.install_edge(producer, destination.owner());
 
     let derived = sched.install_edge_from(source);
 
@@ -153,48 +122,54 @@ fn install_edge_from_inherits_the_destination() {
         "the derived edge waits on the source's producer",
     );
     assert!(
-        sched.edge_destination_is(derived.edge_id(), &destination),
+        sched.edge_destination_is(derived.edge_id(), destination.owner()),
         "the derived edge lands in the region the source named",
     );
 }
 
-/// **Wiring from a filled source fills too**, and reads through the same producer — the late-wiring
-/// branch reached through an edge rather than a producer id.
+/// **Wiring from a delivered source fills** — the late-wiring branch, taken whenever the producer
+/// delivered before the consumer wired in. There is no slot behind it: the producer reclaimed at its
+/// own finalize, and the resident the new edge carries is read off the source.
 #[test]
-fn install_edge_from_follows_a_filled_source() {
+fn install_edge_from_fills_on_a_delivered_source() {
     let (mut sched, producer) = pending_producer();
     let destination = destination();
-    let source = sched.install_edge(producer, &destination).edge_id();
+    let source = sched.install_edge(producer, destination.owner());
     finalize_with_error(&mut sched, producer);
 
     let derived = sched.install_edge_from(source);
 
     assert!(
         matches!(derived, InstalledEdge::Filled(_)),
-        "the producer finalized between the two installs, so the second fills",
+        "the producer delivered between the two installs, so the second fills",
     );
     assert_eq!(
-        sched.edges.producer_through(derived.edge_id()),
-        producer,
-        "a filled derived edge still names the producer it reads through",
+        sched.edge_producer(derived.edge_id()),
+        None,
+        "a delivered edge is past parking, so it waits on no producer",
+    );
+    assert!(
+        sched.edge_result_error(derived.edge_id()).is_err(),
+        "the derived edge carries the terminal the source received",
     );
 }
 
 /// **The door reports filled-or-parked per park and wires each accordingly**: a pre-terminal
-/// producer takes a notify edge, an already-finalized one takes none but counts its late pull. The
-/// realized list is index-aligned with the sources handed in.
+/// producer takes a notify entry and counts against the consumer's pending, a delivered one takes
+/// neither — its resident is already on the minted edge. The realized list is index-aligned with the
+/// sources handed in.
 #[test]
 fn install_deps_parks_and_fills() {
     let mut sched: Scheduler<TestWorkload> = Scheduler::new();
     let pending = alloc_dep_free(&mut sched);
-    let finalized = alloc_dep_free(&mut sched);
+    let delivered = alloc_dep_free(&mut sched);
     let consumer = alloc_dep_free(&mut sched);
     let destination = destination();
-    let on_pending = sched.install_edge(pending, &destination).edge_id();
-    let on_finalized = sched.install_edge(finalized, &destination).edge_id();
-    finalize_in_place(&mut sched, finalized);
+    let on_pending = sched.install_edge(pending, destination.owner());
+    let on_delivered = sched.install_edge(delivered, destination.owner());
+    finalize_in_place(&mut sched, delivered);
 
-    let (resolved, installed) = sched.install_deps(consumer, &[on_pending, on_finalized], &[]);
+    let (resolved, installed) = sched.install_deps(consumer, &[on_pending, on_delivered], &[]);
 
     assert!(
         matches!(installed[0], InstalledEdge::Parked(_)),
@@ -202,96 +177,92 @@ fn install_deps_parks_and_fills() {
     );
     assert!(
         matches!(installed[1], InstalledEdge::Filled(_)),
-        "the finalized producer's park is already satisfied",
+        "the delivered producer's park is already satisfied",
     );
     assert_eq!(
-        resolved.parks(),
-        [pending, finalized],
+        resolved.parks().len(),
+        2,
         "the realized parks line up with the sources, one entry each",
     );
-    let edges = sched.dep_edges_at(consumer);
     assert_eq!(
-        edges.len(),
+        sched.pending_count(consumer),
         1,
-        "only the pre-terminal producer takes a notify edge",
-    );
-    assert!(matches!(edges[0], DepEdge::Notify(p) if p == pending));
-    assert_eq!(
-        sched.retained_pulls(finalized),
-        Some(1),
-        "the filled park counts its late pull on the producer's retention hold",
+        "only the unfilled edge counts against the consumer's pending",
     );
 }
 
-/// **A consumer's park edges die with it** — the owner-side half of *an edge never outlives its
-/// owner*, on both the success path (`reclaim_deps`) and the death path (`free`).
+/// **An owned dep's edge is destined at the consumer's own region.** The embedder names no
+/// destination for sub-work it spawned — the door reads the consumer's anchor, so a sub-result lands
+/// exactly where its consumer will read it.
 #[test]
-fn park_edges_release_with_the_consumer() {
-    let (mut sched, producer) = pending_producer();
-    let destination = destination();
-    let source = sched.install_edge(producer, &destination).edge_id();
-
-    let reclaimed = alloc_dep_free(&mut sched);
-    sched.install_deps(reclaimed, &[source], &[]);
-    assert_eq!(sched.edge_free_list_len(), 0, "the park edge is live");
-    sched.reclaim_deps(reclaimed, Vec::new());
-    assert_eq!(
-        sched.edge_free_list_len(),
-        1,
-        "the success path releases the slot's park edge",
+fn install_deps_destines_owned_edges_at_the_consumer() {
+    let mut sched: Scheduler<TestWorkload> = Scheduler::new();
+    let sub = alloc_dep_free(&mut sched);
+    let consumer_anchor = TestAnchor::fresh();
+    let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
+    let consumer = sched.alloc_node(
+        NodeWork::new(ResolvedDeps::new(), continuation, None),
+        &[sub],
+        Rc::clone(&consumer_anchor),
+        false,
     );
 
-    let freed = alloc_dep_free(&mut sched);
-    sched.install_deps(freed, &[source], &[]);
+    assert_eq!(
+        sched.pending_count(consumer),
+        1,
+        "the owned dep's edge is unfilled, so the consumer waits on it",
+    );
+    let owned_edge = *sched
+        .stored_deps(consumer)
+        .owned()
+        .first()
+        .expect("the door recorded the owned dep's edge");
+    assert!(
+        sched.edge_destination_is(owned_edge, consumer_anchor.owner()),
+        "an owned dep delivers into its consumer's own region",
+    );
+    assert_eq!(sched.edge_producer(owned_edge), Some(sub));
+}
+
+/// **A released listed edge withholds its index until the walk drops it** (Inv-C), then recycles.
+/// The withholding is correctness, not hygiene: generation stamps are debug-only, so a release-build
+/// walk meeting a recycled index would deliver into a stranger's edge.
+#[test]
+fn a_released_parked_edge_recycles_at_the_walk() {
+    let (mut sched, producer) = pending_producer();
+    let destination = destination();
+    let edge = sched.install_edge(producer, destination.owner());
+
+    sched.release_edge(edge);
     assert_eq!(
         sched.edge_free_list_len(),
         0,
-        "the next consumer's park recycles the released index",
+        "the producer's notify list still names it, so the index is withheld",
     );
-    finalize_in_place(&mut sched, freed);
-    sched.free(freed);
+
+    finalize_with_error(&mut sched, producer);
     assert_eq!(
         sched.edge_free_list_len(),
         1,
-        "the death path releases it too",
+        "the walk dropped the entry, so the index returns to circulation",
     );
 }
 
-/// **Edge-keyed reads follow a bare-name-forward alias**, so an edge wired before its producer was
-/// spliced out still reaches the real result.
+/// **A delivered edge recycles at once**: the walk already dropped it from every notify list, so
+/// nothing names it and there is no reason to withhold the index.
 #[test]
-fn edge_reads_follow_the_alias() {
-    let mut sched: Scheduler<TestWorkload> = Scheduler::new();
-    let alias = alloc_dep_free(&mut sched);
-    let real = alloc_dep_free(&mut sched);
+fn a_released_delivered_edge_recycles_at_once() {
+    let (mut sched, producer) = pending_producer();
     let destination = destination();
-    let edge = sched.install_edge(alias, &destination).edge_id();
+    let edge = sched.install_edge(producer, destination.owner());
+    finalize_with_error(&mut sched, producer);
 
-    sched.splice_forward(alias, real);
-    finalize_in_place(&mut sched, real);
-
-    assert!(
-        sched.edge_result_error(edge).is_err(),
-        "the read follows the alias to the real producer's terminal",
-    );
-}
-
-/// **Install resolves a bare-name-forward alias**, so an edge wired to a spliced-out slot waits on
-/// the real producer rather than the dead alias.
-#[test]
-fn install_follows_an_alias_to_the_real_producer() {
-    let mut sched: Scheduler<TestWorkload> = Scheduler::new();
-    let alias = alloc_dep_free(&mut sched);
-    let real = alloc_dep_free(&mut sched);
-    sched.splice_forward(alias, real);
-    let destination = destination();
-
-    let installed = sched.install_edge(alias, &destination);
+    sched.release_edge(edge);
 
     assert_eq!(
-        sched.edge_producer(installed.edge_id()),
-        Some(real),
-        "the edge parks on the real producer, not the alias",
+        sched.edge_free_list_len(),
+        1,
+        "a delivered edge is on no list, so its index frees immediately",
     );
 }
 
@@ -302,14 +273,16 @@ fn released_edges_recycle_through_the_free_list() {
     let (mut sched, producer) = pending_producer();
     let destination = destination();
 
-    let first = sched.install_edge(producer, &destination).edge_id();
-    let second = sched.install_edge(producer, &destination).edge_id();
+    let first = sched.install_edge(producer, destination.owner());
+    let second = sched.install_edge(producer, destination.owner());
     assert_eq!(sched.edge_slab_len(), 2, "two edges, two indices");
 
+    // Deliver first, so `first` is unlisted and its release recycles at once.
+    finalize_with_error(&mut sched, producer);
     sched.release_edge(first);
     assert_eq!(sched.edge_free_list_len(), 1, "the released index is free");
 
-    let third = sched.install_edge(producer, &destination).edge_id();
+    let third = sched.install_edge_from(second).edge_id();
     assert_eq!(
         sched.edge_free_list_len(),
         0,
@@ -328,8 +301,8 @@ fn released_edges_recycle_through_the_free_list() {
     );
 }
 
-/// **A stale name is loud**: the generation stamp catches a name outliving its edge rather than
-/// silently renaming whatever recycled its index.
+/// **A stale name is loud**: the generation stamp catches a name outliving its index rather than
+/// silently renaming whatever recycled it.
 #[test]
 #[cfg(debug_assertions)]
 #[should_panic(expected = "stale EdgeId")]
@@ -337,43 +310,62 @@ fn a_stale_edge_id_is_loud() {
     let (mut sched, producer) = pending_producer();
     let destination = destination();
 
-    let edge = sched.install_edge(producer, &destination).edge_id();
+    let edge = sched.install_edge(producer, destination.owner());
+    finalize_with_error(&mut sched, producer);
     sched.release_edge(edge);
     sched.release_edge(edge);
 }
 
-/// **A parked edge's producer is the scheduler's to rewrite** — the alias splice re-points it
-/// without disturbing the destination.
+/// **The splice re-points a slot's parked edges once and reclaims the slot.** No alias survives as a
+/// residual: the edges name the real producer from here on, and its fire delivers to them directly.
 #[test]
-fn rewrite_producer_repoints_a_parked_edge() {
+fn splice_repoints_parked_edges_and_reclaims_the_slot() {
     let mut sched: Scheduler<TestWorkload> = Scheduler::new();
-    let first = alloc_dep_free(&mut sched);
-    let second = alloc_dep_free(&mut sched);
+    let forwarder = alloc_dep_free(&mut sched);
+    let real = alloc_dep_free(&mut sched);
     let destination = destination();
+    let edge = sched.install_edge(forwarder, destination.owner());
 
-    let edge = sched.install_edge(first, &destination).edge_id();
-    sched.rewrite_edge_producer(edge, second);
+    let (_work, _anchor, _handoff) = sched.take_for_run(forwarder);
+    sched.splice_forward(forwarder, real);
 
     assert_eq!(
         sched.edge_producer(edge),
-        Some(second),
-        "the parked edge waits on its rewritten producer",
+        Some(real),
+        "the parked edge waits on the real producer, not the retired slot",
     );
     assert!(
-        sched.edge_destination_is(edge, &destination),
-        "the rewrite leaves the destination alone",
+        sched.edge_destination_is(edge, destination.owner()),
+        "the re-point leaves the destination alone",
+    );
+
+    finalize_in_place(&mut sched, real);
+    assert!(
+        sched.edge_result_error(edge).is_err(),
+        "the real producer's fire delivers into the re-pointed edge",
     );
 }
 
-/// **A filled edge has no producer to rewrite** — post-fill the producer pointer is meaningless, so
-/// the attempt is a panic rather than a silent write.
+/// **A released entry on a spliced slot's list recycles at the splice**, the other half of Inv-C: the
+/// splice is the second place a notify list is dropped, so it must return indices exactly as the
+/// walk does.
 #[test]
-#[should_panic(expected = "only a pre-fill edge has a producer to rewrite")]
-fn rewrite_producer_rejects_a_filled_edge() {
-    let (mut sched, producer) = pending_producer();
-    finalize_with_error(&mut sched, producer);
+fn splice_recycles_a_released_entry() {
+    let mut sched: Scheduler<TestWorkload> = Scheduler::new();
+    let forwarder = alloc_dep_free(&mut sched);
+    let real = alloc_dep_free(&mut sched);
     let destination = destination();
+    let doomed: EdgeId = sched.install_edge(forwarder, destination.owner());
 
-    let edge = sched.install_edge(producer, &destination).edge_id();
-    sched.rewrite_edge_producer(edge, producer);
+    sched.release_edge(doomed);
+    assert_eq!(sched.edge_free_list_len(), 0, "withheld while listed");
+
+    let (_work, _anchor, _handoff) = sched.take_for_run(forwarder);
+    sched.splice_forward(forwarder, real);
+
+    assert_eq!(
+        sched.edge_free_list_len(),
+        1,
+        "the splice dropped the entry, so the index returns to circulation",
+    );
 }

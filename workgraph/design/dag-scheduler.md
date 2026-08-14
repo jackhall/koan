@@ -21,8 +21,11 @@ free list of recyclable indices, mirroring the node store — addressed by
 wiring and read verbs, and confers no ownership and no lifecycle duty. The
 embedder wires everything through such names — parked deps, dispatch
 placeholders, scope bindings, and the run's roots alike — while the edges
-themselves stay in the slab. `NodeId` is crate-internal; the embedder never
-sees one.
+themselves stay in the slab. `NodeId` is a drive-loop currency: the embedder's
+driver pops, steps, wires, and may do graph surgery with it (each id carries an
+allocation stamp, so equality survives slot recycling), but everything deeper —
+an embedder's scopes, bindings, frames — speaks edge names and slot stamps,
+never node ids.
 
 **Edge validity is self-owned.** An edge is valid until its *owner* releases
 it, and an owner is always a teardown-bearing structure — the consumer node,

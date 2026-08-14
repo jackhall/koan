@@ -33,18 +33,19 @@ use crate::scheduler::{Deps, EdgeId, ResolvedDeps};
 /// under the [`dep_error_frame`] label, else hands the resolved values to a value-only `finish`.
 /// Test-only; the run path routes the witnessed [`awaiting_witnessed`].
 #[cfg(test)]
-fn awaiting(deps: ResolvedDeps, finish: TerminalDepFinish<'_>) -> NodeWork<'_, KoanWorkload> {
-    NodeWork::new(deps, short_circuit(Some(dep_error_frame()), finish), None)
+fn awaiting(finish: TerminalDepFinish<'_>) -> NodeWork<'_, KoanWorkload> {
+    NodeWork::new(
+        ResolvedDeps::new(),
+        short_circuit(Some(dep_error_frame()), finish),
+        None,
+    )
 }
 
 /// Witnessed sibling of [`awaiting`]: the continuation folds the resolved deps into a witnessed
 /// aggregate carrier ([`seal_witnessed`] over [`short_circuit`]) rather than handing out bare values.
-fn awaiting_witnessed(
-    deps: ResolvedDeps,
-    finish: WitnessedDepFinish<'_>,
-) -> NodeWork<'_, KoanWorkload> {
+fn awaiting_witnessed(finish: WitnessedDepFinish<'_>) -> NodeWork<'_, KoanWorkload> {
     NodeWork::new(
-        deps,
+        ResolvedDeps::new(),
         short_circuit(Some(dep_error_frame()), seal_witnessed(finish)),
         None,
     )
@@ -122,6 +123,7 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         work: NodeWork<KoanWorkload>,
         parks: &[EdgeId],
+        owned: &[NodeId],
     ) -> NodeId {
         // Clone the payload off the ambient before taking `&mut self` for the submit.
         let payload = self
@@ -131,7 +133,7 @@ impl<'run> KoanRuntime<'run> {
         let (cart, framed) = self.submission_cart();
         let anchor = SlotFrame::new(cart, payload.scope, payload.chain);
         self.sched
-            .alloc_node_with_parks(work, parks, anchor, framed)
+            .alloc_node_with_parks(work, parks, owned, anchor, framed)
     }
 
     /// Submit each `statement` as a fresh lexical block over `scope`, minting a frame `(scope_id,
@@ -285,11 +287,7 @@ impl<'run> KoanRuntime<'run> {
         finish: WitnessedDepFinish<'a>,
     ) -> NodeId {
         let (parks, owned) = deps.into_parts();
-        let mut resolved = ResolvedDeps::new();
-        for id in owned {
-            resolved.own(id);
-        }
-        self.submit_in_own_scope(awaiting_witnessed(resolved, finish), &parks)
+        self.submit_in_own_scope(awaiting_witnessed(finish), &parks, &owned)
     }
 }
 
@@ -303,10 +301,11 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn add(
         &mut self,
         work: NodeWork<KoanWorkload>,
+        owned: &[NodeId],
         scope: &'run Scope<'run>,
     ) -> NodeId {
         let explicit_chain = self.ambient_or_detached_chain();
-        self.add_with_chain(work, scope, explicit_chain)
+        self.add_with_chain(work, owned, scope, explicit_chain)
     }
 
     /// Run-lifetime submission funnel: establish the run frame, decide the slot's [`NodeScope`]
@@ -314,6 +313,7 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn add_with_chain(
         &mut self,
         work: NodeWork<KoanWorkload>,
+        owned: &[NodeId],
         scope: &'run Scope<'run>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
@@ -324,17 +324,17 @@ impl<'run> KoanRuntime<'run> {
             .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
         let (cart, framed) = self.submission_cart();
         let anchor = SlotFrame::new(cart, scope_handle, chain);
-        self.sched.alloc_node(work, anchor, framed)
+        self.sched.alloc_node(work, owned, anchor, framed)
     }
 
-    /// Schedule a dep-finish slot against an explicit `scope`. `deps` carries the owned sub-Dispatches
-    /// (cascade-freed on success) and any park producers (read, not owned).
+    /// Schedule a dep-finish slot against an explicit `scope`. `owned` are the sub-Dispatches this
+    /// slot spawned; the door mints one edge apiece, destined at the slot's own region.
     pub(in crate::machine::execute) fn add_dep_finish(
         &mut self,
-        deps: ResolvedDeps,
+        owned: &[NodeId],
         scope: &'run Scope<'run>,
         finish: TerminalDepFinish<'run>,
     ) -> NodeId {
-        self.add(awaiting(deps, finish), scope)
+        self.add(awaiting(finish), owned, scope)
     }
 }

@@ -17,7 +17,12 @@ fn run_collecting_errors(test_run: &mut TestRun<'_>, source: &str) -> Vec<Result
     // These tests assert only on `Ok`/`Err`, never on the produced value, so discard the carrier —
     // the scheduler re-anchors a read to its own borrow and the value need not escape it.
     ids.into_iter()
-        .map(|id| test_run.runtime.result_error(id).map_err(|e| e.clone()))
+        .map(|id| {
+            test_run
+                .runtime
+                .edge_result_error(id)
+                .map_err(|e| e.clone())
+        })
         .collect()
 }
 

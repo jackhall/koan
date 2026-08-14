@@ -248,11 +248,12 @@ mod tests {
             ),
             scope,
         );
+        let root = runtime.install_edge_for_test(root, scope);
         runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err = runtime
-            .result_error(root)
+            .edge_result_error(root)
             .expect_err("a bare anonymous UNION (...) must fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
@@ -395,16 +396,20 @@ mod tests {
         .collect();
         let runtime = &mut test_run.runtime;
         let ids = runtime.enter_block(scope.id, exprs, scope);
+        let edges: Vec<_> = ids
+            .into_iter()
+            .map(|id| runtime.install_edge_for_test(id, scope))
+            .collect();
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
         assert!(
-            runtime.result_error(ids[0]).is_ok(),
+            runtime.edge_result_error(edges[0]).is_ok(),
             "the first declaration should succeed, got {:?}",
-            runtime.result_error(ids[0]).err(),
+            runtime.edge_result_error(edges[0]).err(),
         );
         let err = runtime
-            .result_error(ids[1])
+            .edge_result_error(edges[1])
             .expect_err("redeclaring Maybe in the same scope should error");
         assert!(
             matches!(&err.kind, KErrorKind::Rebind { name } if name == "Maybe"),
@@ -433,13 +438,14 @@ mod tests {
             ),
             scope,
         );
+        let first = runtime.install_edge_for_test(first, scope);
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
         assert!(
-            runtime.result_error(first).is_ok(),
+            runtime.edge_result_error(first).is_ok(),
             "the first declaration should succeed, got {:?}",
-            runtime.result_error(first).err(),
+            runtime.edge_result_error(first).err(),
         );
         let second = runtime.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
@@ -448,11 +454,12 @@ mod tests {
             ),
             scope,
         );
+        let second = runtime.install_edge_for_test(second, scope);
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
         let err = runtime
-            .result_error(second)
+            .edge_result_error(second)
             .expect_err("redeclaring Maybe through the detached chain should error");
         assert!(
             matches!(&err.kind, KErrorKind::Rebind { name } if name == "Maybe"),
@@ -480,16 +487,20 @@ mod tests {
         .collect();
         let runtime = &mut test_run.runtime;
         let ids = runtime.enter_block(scope.id, exprs, scope);
+        let edges: Vec<_> = ids
+            .into_iter()
+            .map(|id| runtime.install_edge_for_test(id, scope))
+            .collect();
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
         assert!(
-            runtime.result_error(ids[0]).is_ok(),
+            runtime.edge_result_error(edges[0]).is_ok(),
             "the first declaration should succeed, got {:?}",
-            runtime.result_error(ids[0]).err(),
+            runtime.edge_result_error(edges[0]).err(),
         );
         let err = runtime
-            .result_error(ids[1])
+            .edge_result_error(edges[1])
             .expect_err("an identical-content redeclaration of Maybe should error");
         assert!(
             matches!(&err.kind, KErrorKind::Rebind { name } if name == "Maybe"),

@@ -61,14 +61,15 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("the countdown should run to completion");
     assert!(
-        test_run.runtime.result_error(id).is_ok(),
+        test_run.runtime.edge_result_error(edge).is_ok(),
         "countdown should complete without error: {:?}",
-        test_run.runtime.result_error(id).err(),
+        test_run.runtime.edge_result_error(edge).err(),
     );
 
     // A MATCH-based tail loop peaks at two slots — the tail-replaced main slot plus the MATCH
@@ -137,14 +138,15 @@ fn tail_recursive_record_thread_stays_o1_in_regions() {
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("the record-threading loop should run to completion");
     assert!(
-        test_run.runtime.result_error(id).is_ok(),
+        test_run.runtime.edge_result_error(edge).is_ok(),
         "record-threading loop should complete without error: {:?}",
-        test_run.runtime.result_error(id).err(),
+        test_run.runtime.edge_result_error(edge).err(),
     );
 
     // Depth-independent: a MATCH-mediated tail hop holds a small constant of live per-call regions
@@ -190,14 +192,15 @@ fn no_mint_categories_add_no_region_mints() {
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), forward),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("bare-name forward should run");
     assert!(
-        test_run.runtime.result_error(id).is_ok(),
+        test_run.runtime.edge_result_error(edge).is_ok(),
         "bare-name forward should resolve cleanly: {:?}",
-        test_run.runtime.result_error(id).err(),
+        test_run.runtime.edge_result_error(edge).err(),
     );
 
     let minted = region_metrics().minted_total;

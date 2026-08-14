@@ -231,10 +231,11 @@ fn tail_call_enforces_first_callers_return_contract() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("FF -> Number tail-calling GG -> Str must fail FF's return contract"),
     };

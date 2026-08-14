@@ -48,9 +48,7 @@ fn sched_read_carried<'run>(
     expr: KExpression<'run>,
 ) -> Carried<'run> {
     let scope = test_run.scope;
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(working(scope, expr), scope);
+    let id = test_run.dispatch_watched_in(scope, working(scope, expr));
     test_run
         .runtime
         .execute()
@@ -195,16 +193,14 @@ fn function_value_call_named_args_missing_short_circuits() {
     let expr = parse_one(&program, "f {a = 1}");
     reset_resolve_dispatch_entry_count();
     let types = test_run.types.clone();
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(working(scope, expr), scope);
+    let id = test_run.dispatch_watched_in(scope, working(scope, expr));
     test_run
         .runtime
         .execute()
         .expect("scheduler should not surface errors directly");
     let err = match test_run
         .runtime
-        .read_result_with(id, |v| v.summarize(&types))
+        .read_edge_result_with(id, |v| v.summarize(&types))
     {
         Err(e) => e.clone(),
         Ok(summary) => panic!("expected MissingArg error, got value {summary}"),
@@ -552,7 +548,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
         working(scope, parse_one(&program, "producer_target {y = 1}")),
         scope,
     );
-    let claim = runtime.install_claim_edge_for_test(producer, scope);
+    let claim = runtime.install_edge_for_test(producer, scope);
     scope
         .install_placeholder(
             "f".to_string(),
@@ -563,8 +559,9 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
         )
         .expect("install_placeholder should succeed");
 
-    let f_call_id =
+    let f_call_slot =
         runtime.dispatch_in_scope(working(scope, parse_one(&program, "f {x = 7}")), scope);
+    let f_call_id = runtime.install_edge_for_test(f_call_slot, scope);
 
     reset_resolve_dispatch_entry_count();
     let _ = runtime.execute();
@@ -575,7 +572,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
          before any args-shape inspection — never entering resolve_dispatch",
     );
     assert!(
-        runtime.result_error(f_call_id).is_err(),
+        runtime.edge_result_error(f_call_id).is_err(),
         "the head-Placeholder arm must propagate the ready producer's error to the call slot",
     );
 }
@@ -676,9 +673,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
     let expr_a = parse_one(&program, "(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
-    test_run
-        .runtime
-        .dispatch_in_scope(working(scope, expr_a), scope);
+    test_run.dispatch_watched_in(scope, working(scope, expr_a));
     let _ = test_run.runtime.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
@@ -688,9 +683,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
     let expr_b = parse_one(&program, "(f IF x)");
     reset_resolve_dispatch_entry_count();
-    test_run
-        .runtime
-        .dispatch_in_scope(working(scope, expr_b), scope);
+    test_run.dispatch_watched_in(scope, working(scope, expr_b));
     let _ = test_run.runtime.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
@@ -718,7 +711,7 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
     let exprs = crate::parse::parse(test_run.program_brand(), "LET y = (FIRST [1 2 3])")
         .expect("parse succeeds");
     for e in exprs {
-        test_run.runtime.dispatch_in_scope(working(scope, e), scope);
+        test_run.dispatch_watched_in(scope, working(scope, e));
     }
     test_run
         .runtime
@@ -746,7 +739,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     let exprs = crate::parse::parse(test_run.program_brand(), "LET out = (DESCRIBE [1 2 3])")
         .expect("parse succeeds");
     for e in exprs {
-        test_run.runtime.dispatch_in_scope(working(scope, e), scope);
+        test_run.dispatch_watched_in(scope, working(scope, e));
     }
     test_run
         .runtime
@@ -810,16 +803,14 @@ fn operator_chain_undeclared_errors_cleanly() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.types.clone();
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(working(scope, parse_one(&program, "a % b % c")), scope);
+    let id = test_run.dispatch_watched_in(scope, working(scope, parse_one(&program, "a % b % c")));
     test_run
         .runtime
         .execute()
         .expect("scheduler drains without deadlock");
     let msg = match test_run
         .runtime
-        .read_result_with(id, |v| v.summarize(&types))
+        .read_edge_result_with(id, |v| v.summarize(&types))
     {
         Err(e) => e.to_string(),
         Ok(summary) => {
@@ -866,32 +857,30 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
 
     // Both dispatches ride the bundle's run frame: `inner` is a child of the run root, so the
     // single frame covers it and the registry walk is what distinguishes the two sites.
-    let inner_id = test_run
-        .runtime
-        .dispatch_in_scope(working(inner, parse_one(&program, "10 - 3 - 2")), inner);
+    let inner_id =
+        test_run.dispatch_watched_in(inner, working(inner, parse_one(&program, "10 - 3 - 2")));
     test_run
         .runtime
         .execute()
         .expect("scheduler drains without deadlock");
     let inner_result = test_run
         .runtime
-        .read_result_with(inner_id, |v| v.summarize(&types))
+        .read_edge_result_with(inner_id, |v| v.summarize(&types))
         .unwrap_or_else(|e| panic!("a registered FoldRight group must evaluate; got error {e}"));
     assert_eq!(
         inner_result, "9",
         "inside the declaring scope, 10 - 3 - 2 folds right to 9 (10 - (3 - 2)); got {inner_result}"
     );
 
-    let root_id = test_run
-        .runtime
-        .dispatch_in_scope(working(scope, parse_one(&program, "10 - 3 - 2")), scope);
+    let root_id =
+        test_run.dispatch_watched_in(scope, working(scope, parse_one(&program, "10 - 3 - 2")));
     test_run
         .runtime
         .execute()
         .expect("scheduler drains without deadlock");
     let root_result = test_run
         .runtime
-        .read_result_with(root_id, |v| v.summarize(&types))
+        .read_edge_result_with(root_id, |v| v.summarize(&types))
         .unwrap_or_else(|e| panic!("the builtin additive group must evaluate; got error {e}"));
     assert_eq!(
         root_result, "5",
@@ -926,32 +915,30 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
         .expect("register operator group");
     test_run.run("FN (~ xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
 
-    let infix_id = test_run
-        .runtime
-        .dispatch_in_scope(working(scope, parse_one(&program, "1 ~ 2 ~ 3 ~ 4")), scope);
+    let infix_id =
+        test_run.dispatch_watched_in(scope, working(scope, parse_one(&program, "1 ~ 2 ~ 3 ~ 4")));
     test_run
         .runtime
         .execute()
         .expect("scheduler drains without deadlock");
     let infix = test_run
         .runtime
-        .read_result_with(infix_id, |v| v.summarize(&types))
+        .read_edge_result_with(infix_id, |v| v.summarize(&types))
         .unwrap_or_else(|e| panic!("a registered Unary group must evaluate; got error {e}"));
     assert_eq!(
         infix, "[1, 2, 3, 4]",
         "the infix chain must hand the body the whole run as one list"
     );
 
-    let prefix_id = test_run
-        .runtime
-        .dispatch_in_scope(working(scope, parse_one(&program, "~ [1 2 3 4]")), scope);
+    let prefix_id =
+        test_run.dispatch_watched_in(scope, working(scope, parse_one(&program, "~ [1 2 3 4]")));
     test_run
         .runtime
         .execute()
         .expect("scheduler drains without deadlock");
     let prefix = test_run
         .runtime
-        .read_result_with(prefix_id, |v| v.summarize(&types))
+        .read_edge_result_with(prefix_id, |v| v.summarize(&types))
         .unwrap_or_else(|e| {
             panic!(
                 "the prefix form must dispatch to the same body as the infix chain; got error {e}"
@@ -1135,12 +1122,13 @@ fn non_callable_list_head_errors() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(working(scope, parse_one(&program, "[1 2 3] x")), scope);
+    let slot = runtime.dispatch_in_scope(working(scope, parse_one(&program, "[1 2 3] x")), scope);
+    let root = runtime.install_edge_for_test(slot, scope);
     runtime
         .execute()
         .expect("a non-callable head is slot-terminal, not a fatal execute error");
     let err = runtime
-        .result_error(root)
+        .edge_result_error(root)
         .expect_err("a non-callable head must finalize the slot with an error");
     match &err.kind {
         KErrorKind::DispatchFailed { reason, .. } => assert!(

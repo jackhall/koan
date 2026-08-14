@@ -29,33 +29,32 @@ impl Drop for DropProbe<'_> {
 }
 
 /// **The parked droppable continuation, dropped unopened.** The scheduler is torn down with the
-/// slot still `PreRun`, and by then the seal's bundled pin is the last `Rc` on the cart the
+/// slot still `PreRun`, and by then the seal's bundled pin is the last `Rc` on the region the
 /// continuation's captured probe dereferences in its destructor. `Scheduler`'s field order drops
 /// `deps` (which holds the slot's anchor row) before `store`, so the seal's own pin is what keeps
 /// the region alive while the glue runs — the whole point of co-locating the pin at the erase.
 /// Fails on UB, not values; the assertions only confirm the glue ran and the region then died.
 #[test]
 fn parked_continuation_drops_under_its_own_pin() {
-    let cart = Rc::new(Cart(vec![41, 42]));
-    let anchor = Rc::new(TestAnchor(Rc::clone(&cart)));
+    let anchor = TestAnchor::fresh();
     let seen = Rc::new(Cell::new(0u32));
-    let alive = Rc::downgrade(&cart);
+    let alive = Rc::downgrade(anchor.owner());
 
     let mut sched: Scheduler<TestWorkload> = Scheduler::new();
     {
         let probe = DropProbe {
-            last: &cart.0[1],
+            last: anchor.handle().allocator().value(42u32),
             seen: Rc::clone(&seen),
         };
         let continuation: Box<dyn FnOnce() -> u32 + '_> = Box::new(move || *probe.last);
         sched.alloc_node(
             NodeWork::new(ResolvedDeps::new(), continuation, None),
+            &[],
             Rc::clone(&anchor),
             false,
         );
     }
-    // The scheduler's own holds are now the only ones on the cart.
-    drop(cart);
+    // The scheduler's own holds are now the only ones on the region.
     drop(anchor);
     assert!(
         alive.upgrade().is_some(),
@@ -74,21 +73,20 @@ fn parked_continuation_drops_under_its_own_pin() {
 /// confirms the read landed on the right cell.
 #[test]
 fn parked_continuation_opens_and_runs_after_its_handles_drop() {
-    let cart = Rc::new(Cart(vec![7, 8, 9]));
-    let anchor = Rc::new(TestAnchor(Rc::clone(&cart)));
+    let anchor = TestAnchor::fresh();
 
     let mut sched: Scheduler<TestWorkload> = Scheduler::new();
     let id = {
-        let captured: &u32 = &cart.0[2];
+        let captured: &u32 = anchor.handle().allocator().value(9u32);
         let continuation: Box<dyn FnOnce() -> u32 + '_> = Box::new(move || *captured);
         sched.alloc_node(
             NodeWork::new(ResolvedDeps::new(), continuation, None),
+            &[],
             Rc::clone(&anchor),
             false,
         )
     };
     // Only the scheduler's holds remain — the seal's bundled pin and the slot's anchor row.
-    drop(cart);
     drop(anchor);
 
     let ready = sched.pop_next().expect("a dep-free slot is ready");

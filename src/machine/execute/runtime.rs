@@ -61,8 +61,19 @@ pub(in crate::machine::execute) struct KoanWorkload;
 impl Workload for KoanWorkload {
     type Value = CarriedFamily;
     type Error = KError;
+    type Profile = crate::machine::core::KoanStorageProfile;
     type Frame = super::nodes::SlotFrame;
     type Continuation = ContinuationFamily;
+
+    /// Koan's half of delivery: the value-level escape seam ([`relocate_seam`]) — the cost-driven
+    /// copy-or-pin verdict with the retention claim derived from the rebuilt product. The walk
+    /// decides which destinations a terminal lands in; this decides what the crossing costs.
+    fn deliver(
+        terminal: &DeliveredCarried,
+        dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
+    ) -> DeliveredCarried {
+        relocate_seam(terminal, dest)
+    }
 }
 
 /// The write harness: the sole holder of `&mut Scheduler` across the execute tree. It owns the
@@ -129,69 +140,58 @@ impl<'run> KoanRuntime<'run> {
 /// (terminal reads / slot count) so callers drive the whole run through the harness without ever
 /// borrowing the scheduler — the write methods are the inherent `&mut self` ones above.
 impl<'run> KoanRuntime<'run> {
-    /// Open a slot's terminal at a rank-2 brand and hand the value to `f`, returning its result or
-    /// the terminal's error — the destination-verb read. See [`Scheduler::read_result_with`].
-    pub fn read_result_with<R>(
-        &self,
-        id: NodeId,
-        f: impl for<'b> FnOnce(crate::machine::model::Carried<'b>) -> R,
-    ) -> Result<R, &KError> {
-        self.sched.read_result_with(id, f)
-    }
-
-    /// A slot terminal's error, or `Ok(())` on success — the value-free probe.
-    /// See [`Scheduler::result_error`].
-    pub fn result_error(&self, id: NodeId) -> Result<(), &KError> {
-        self.sched.result_error(id)
-    }
-
-    /// A slot's finalized terminal as a delivery envelope (sealed carrier + retained producer-frame
-    /// owner) — the test-harness [`extract_terminal`](crate::builtins::test_support) hook for
-    /// minting an extracted value's reach into a surviving scope's arena, mirroring the drain. See
-    /// [`Scheduler::dep_delivered`].
-    #[cfg(test)]
-    pub(crate) fn dep_delivered(
-        &self,
-        id: NodeId,
-    ) -> Result<crate::machine::DeliveredCarried, &KError> {
-        self.sched.dep_delivered(id)
-    }
-
-    /// Relocate `producer`'s terminal into `dest` through its delivery envelope
-    /// ([`Scheduler::dep_delivered`] + [`Delivered::transfer_into`](crate::witnessed::Delivered)),
-    /// re-sealing it under the composed carrier that names everything it reaches from `dest` — the
-    /// relocation re-anchors under the retained producer-frame pin (the envelope host), with **no
-    /// fabricated lifetime** at this call site. The spine is copied into `dest` natively at the
-    /// merge brand; the surviving closure / module borrows ride the
-    /// producer's reach, minted into `dest`'s arena. `dest` arrives as a witnessed carrier over the
-    /// destination brand — its backing is the consuming slot's live frame for a `Forward`-ready
-    /// pull, or the externally pinned run region a drained root re-homes into.
-    ///
-    /// The seam is the fused [`relocate_seam`]: the cost-driven verb decision — a top-level record
-    /// pins (its substrate borrow covered by the producer's minted reach) when the pin is cheaper
-    /// than the rebuild, a leaf borrows home, or the crossing is foreign; every other value
-    /// pointer-copies its top node — with the retention claim derived from the rebuilt product, so
-    /// a plain-data copy frees its producer at retention discharge while a rebuild still borrowing
-    /// home keeps it.
-    ///
-    /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as the
-    /// relocation's own product envelope, not at a step brand. The consumer-pull dep slice does not
-    /// route this — it opens in-band at the step brand in [`run_step`](Self::run_step), where the
-    /// continuation needs the values live at `'b`.
-    pub(in crate::machine::execute) fn relocate_terminal(
+    /// Open an edge's delivered terminal at a rank-2 brand and hand the value to `f`, returning its
+    /// result or the terminal's error — the destination-verb read. See
+    /// [`Scheduler::read_edge_result_with`].
+    pub fn read_edge_result_with<R>(
         &self,
         edge: EdgeId,
-        dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
+        f: impl for<'b> FnOnce(crate::machine::model::Carried<'b>) -> R,
+    ) -> Result<R, &KError> {
+        self.sched.read_edge_result_with(edge, f)
+    }
+
+    /// An edge's delivered terminal's error, or `Ok(())` on success — the value-free probe.
+    /// See [`Scheduler::edge_result_error`].
+    pub fn edge_result_error(&self, edge: EdgeId) -> Result<(), &KError> {
+        self.sched.edge_result_error(edge)
+    }
+
+    /// Re-brand the edge's delivered resident against `scope`'s own region owner and lift it back
+    /// into an envelope — the same two moves the run loop makes at step start, for a test harness
+    /// that goes on to copy the value out. The edge is destined at `scope`'s region, so holding that
+    /// owner across the brand is exactly what makes the lift's upgrade succeed.
+    #[cfg(test)]
+    pub(crate) fn edge_delivered(
+        &self,
+        edge: EdgeId,
+        scope: &crate::machine::Scope<'_>,
     ) -> Result<DeliveredCarried, KError> {
-        let delivered = self.sched.edge_delivered(edge).map_err(|e| e.clone())?;
-        // The destination is a bare region handle (empty reach), so the transfer composes the
-        // producer's reach alone. The product envelope is what crosses back whole — its residence is
-        // `dest`'s own frame and its members are the relocated terminal's reach, so whichever
-        // terminal door consumes it (`finalize`'s retention hold, `rehome_terminal`'s drop) reads
-        // the claim off the value it is storing. The destination's own region-lifetime retention
-        // rides the transfer's mint, so a caller that only needs the value to outlive teardown drops
-        // the envelope.
-        Ok(relocate_seam(&delivered, dest))
+        let resident = self.sched.edge_resident(edge)?;
+        let coverage = crate::machine::FrameCoverage::of(
+            scope
+                .region_owner()
+                .upgrade()
+                .expect("a live scope reference implies a live region owner"),
+        );
+        Ok(scope.lift_spliced(&resident.brand_with(&coverage)))
+    }
+
+    /// Wire an edge onto `producer`, destined at `scope`'s own region — the test harness's
+    /// stand-in for the root edge `run_program` installs, and for the placeholder edge a real
+    /// binder plan claims. Slots reclaim at finalize, so a test that reads a result holds an edge
+    /// exactly as production does; wiring it here, right after the dispatch that allocated the
+    /// slot, is the same pre-terminal wiring both production callers do.
+    pub(crate) fn install_edge_for_test(
+        &mut self,
+        producer: NodeId,
+        scope: &crate::machine::Scope<'_>,
+    ) -> EdgeId {
+        let destination = scope
+            .region_owner()
+            .upgrade()
+            .expect("a live scope reference implies a live region owner");
+        self.sched.install_edge(producer, &destination)
     }
 
     pub fn len(&self) -> usize {
@@ -203,40 +203,13 @@ impl<'run> KoanRuntime<'run> {
     }
 }
 
-/// Test-only forwarders: an immutable `&Scheduler` view (`resolve_name_part` fixtures) plus the
-/// AST-free poke surface (`free`, a slot's stored chain). No `&mut Scheduler` escapes — the
-/// accessor hands out `&Scheduler`, keeping the harness the sole writer.
+/// Test-only forwarders: an immutable `&Scheduler` view (`resolve_name_part` fixtures) plus a
+/// slot's stored chain. No `&mut Scheduler` escapes — the accessor hands out `&Scheduler`, keeping
+/// the harness the sole writer.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
-    /// Wire a binder claim edge by hand, as [`submit_expression`](Self::submit_expression) does for
-    /// a real binder plan — for a white-box test that stamps a placeholder onto a scope without
-    /// going through statement submission.
-    #[cfg(test)]
-    pub(in crate::machine::execute) fn install_claim_edge_for_test(
-        &mut self,
-        producer: NodeId,
-        scope: &crate::machine::Scope<'_>,
-    ) -> EdgeId {
-        let destination = scope
-            .region_owner()
-            .upgrade()
-            .expect("a live scope reference implies a live region owner");
-        self.sched.install_edge(producer, &destination).edge_id()
-    }
-
     pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<KoanWorkload> {
         &self.sched
-    }
-
-    /// Mutable scheduler access for the white-box scheduler tests that poke `store` / `deps` /
-    /// `queues` directly. Test-only — production drives every write through the harness's own
-    /// `&mut self` methods, so this is the one sanctioned `&mut Scheduler` outside them.
-    pub(in crate::machine::execute) fn scheduler_mut(&mut self) -> &mut Scheduler<KoanWorkload> {
-        &mut self.sched
-    }
-
-    pub(in crate::machine::execute) fn free(&mut self, id: NodeId) {
-        self.sched.free(id)
     }
 
     pub fn chain_of(&self, id: NodeId) -> Option<Rc<crate::machine::LexicalFrame>> {
@@ -371,13 +344,13 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 let contract = match contract {
                     TailContract::Eager(contract) => contract,
                     // The return-type expression is the last leading statement (all owned), so its
-                    // resolved value is the last owned terminal, read under that envelope's own pins.
-                    // The per-call type is re-homed into the captured-scope region — a strict ancestor
-                    // the cart keeps live — like the `Type` form's `PerCall.ret`.
+                    // resolved value is the last owned terminal, read in place in the region it was
+                    // delivered into. The per-call type is re-homed into the captured-scope region —
+                    // a strict ancestor the cart keeps live — like the `Type` form's `PerCall.ret`.
                     TailContract::FromLastResult { func } => {
                         let owned = terminals.owned_slice();
                         let terminal = owned[owned.len() - 1];
-                        let opened = terminal.delivered.open_at();
+                        let opened = terminal.cell.open_at();
                         let kt = match opened.value() {
                             Carried::Type(t) => t,
                             Carried::Object(other) => {
@@ -774,12 +747,13 @@ impl<'run> KoanRuntime<'run> {
                     // carries no value to check — `ForwardReady` relocates its error as the
                     // obligation-free path would.
                     InstalledEdge::Filled(edge) => {
-                        let checked = match self.sched.edge_delivered(edge) {
-                            Ok(delivered) => check_spliced_return(
-                                &obligation,
-                                &delivered,
-                                self.ambient.type_registry(),
-                            ),
+                        // The producer's value is already resident in the edge's destination; the
+                        // check reads it in place, under the region's own owner.
+                        let checked = match self.sched.read_edge_result_with(edge, |value| {
+                            check_spliced_return(&obligation, value, self.ambient.type_registry())
+                        }) {
+                            Ok(checked) => checked,
+                            // A ready-but-errored producer carries no value to check.
                             Err(_) => Ok(()),
                         };
                         match checked {
@@ -802,11 +776,10 @@ impl<'run> KoanRuntime<'run> {
                             // The single parked dep is the producer behind `edge`, delivered
                             // un-relocated at index 0.
                             let producer_terminal = terminals.all()[0];
-                            match check_spliced_return(
-                                &obligation,
-                                &producer_terminal.delivered,
-                                view.types(),
-                            ) {
+                            let checked = producer_terminal.cell.open(|value| {
+                                check_spliced_return(&obligation, value, view.types())
+                            });
+                            match checked {
                                 Ok(()) => Outcome::Forward(edge),
                                 Err(error) => Outcome::Done(Err(error)),
                             }

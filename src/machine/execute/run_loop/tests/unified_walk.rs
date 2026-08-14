@@ -23,10 +23,11 @@ fn self_referential_let_surfaces_unbound_name() {
     let exprs = working_all(&program, "LET Ty = Ty");
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, exprs, scope);
+    let watched = super::watch_all(runtime, &ids, scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(ids[0]) {
+    let err = match runtime.edge_result_error(watched[0]) {
         Err(e) => e.clone(),
         Ok(()) => panic!("self-referential LET should surface UnboundName"),
     };

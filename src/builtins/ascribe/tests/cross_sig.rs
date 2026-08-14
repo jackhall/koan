@@ -83,12 +83,12 @@ fn incomparable_distinct_sigs_are_ambiguous() {
     test_run.run("MODULE implementation = ((LET x = 1) (LET y = 2))");
     test_run.run("LET arg = implementation");
 
-    let root = test_run.runtime.dispatch_in_scope(
+    let root = test_run.dispatch_watched_in(
+        scope,
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "CHOOSE arg"),
         ),
-        scope,
     );
     test_run
         .runtime
@@ -96,7 +96,7 @@ fn incomparable_distinct_sigs_are_ambiguous() {
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = test_run
         .runtime
-        .result_error(root)
+        .edge_result_error(root)
         .expect_err("a module satisfying two mutually-satisfying distinct SIGs must be ambiguous");
     assert!(
         matches!(error.kind, KErrorKind::AmbiguousDispatch { .. }),

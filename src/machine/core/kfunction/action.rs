@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use super::body::ReturnContract;
 use crate::machine::core::bindings::WriteOp;
-use crate::machine::core::carrier_witness::SealedFunction;
+use crate::machine::core::carrier_witness::{SealedFunction, SplicedCell};
 use crate::machine::core::{
     CallFrame, FrameStorage, LexicalFrame, ProgramBrand, RegionBrand, RunWriter, Scope,
     StepAllocator,
@@ -378,33 +378,38 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
     }
 }
 
-/// A resolved dep terminal as a continuation receives it: the producer's own carrier bundled with
-/// its retained producer-frame owner as one [`DeliveredCarried`] envelope — a
-/// [`duplicate`](crate::witnessed::Delivered::duplicate), so the producer keeps its terminal for
-/// other consumers. The envelope is **lifetime-free** and self-witnessed: a value-reading finish
-/// (`resolve_or_await`, `fn_def`/`return_type`, dispatch constructors / literal) reads it under its
-/// own pins through [`Delivered::open_at`](crate::witnessed::Delivered::open_at), at the borrow of
-/// the guard it binds — so a dep's value rides no shared step brand and no in-band dep carrier
-/// exists. A **construction finish** folds the dep *witnessed* via the envelope's cell
-/// ([`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into)), its reach named on the
-/// result by construction; a finish that parks the carrier on the working expression across steps
-/// (the working-copy splice) **rests** the envelope into the finishing step's own region
-/// ([`Scope::rest_delivered`](crate::machine::core::Scope::rest_delivered)), leaving a
-/// [`Spliced`](WorkingPart::Spliced) cell whose backing that region's
-/// union bundle keeps retained through the `Replace` to the step that adopts it.
-/// Defined here in core (not the execute layer that resolves it) so the builtin-`Action` currency —
-/// [`AwaitContinue`] — can name it.
-pub struct DepTerminal {
-    pub delivered: DeliveredCarried,
+/// A resolved dep terminal as a continuation receives it: the delivered value **already resident in
+/// the region this step reads it from**, as a [`SplicedCell`] re-branded once at step start under
+/// the step's own coverage. There is no envelope and no per-dep pin: the producer's finalize walk
+/// adopted the value into this edge's destination — the consumer's own region for an owned dep, the
+/// region a placeholder named for a park — and both are covered for the step's whole life by the
+/// slot anchor's owner chain.
+///
+/// So a value-reading finish (`resolve_or_await`, `fn_def`/`return_type`, dispatch constructors /
+/// literal) opens the cell at its own borrow ([`Sealed::open_at`](crate::witnessed::Sealed::open_at))
+/// with no pin to thread; a **construction finish** that folds the dep into a longer-lived result
+/// lifts it back to an envelope first ([`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced)),
+/// which owns the reach the fold composes; and a finish that parks the carrier on the working
+/// expression across steps ([`Spliced`](WorkingPart::Spliced)) rests it into the finishing step's
+/// own region.
+///
+/// `'b` is the step's read borrow, not the value's home: the cell is `Copy` data whose pointee lives
+/// one level down, in the destination region. Defined here in core (not the execute layer that
+/// resolves it) so the builtin-`Action` currency — [`AwaitContinue`] — can name it.
+pub struct DepTerminal<'b> {
+    pub cell: SplicedCell<'b>,
 }
 
 /// A `AwaitDeps` finish: re-entered at wake with the resolved dep terminals as a [`DepResults`] view
-/// (addressed by `park` / `owned` position) of un-relocated [`DepTerminal`]s — each a delivery
-/// envelope carrying its value, its reach, and the pins to read them under — yielding another
-/// `Action` the harness recurses into. Reads only a `FinishCtx`, never the scheduler — exec's
-/// continuation pattern.
-pub type AwaitContinue<'a> =
-    Box<dyn for<'r> FnOnce(&FinishCtx<'a, 'r>, DepResults<'_, &DepTerminal>) -> Action<'a> + 'a>;
+/// (addressed by `park` / `owned` position) of [`DepTerminal`]s — each a resident cell of a region
+/// this step already covers — yielding another `Action` the harness recurses into. Reads only a
+/// `FinishCtx`, never the scheduler — exec's continuation pattern.
+///
+/// Higher-ranked in the dep brand `'d` as well as the ctx borrow: the residents are branded against
+/// the step's coverage at step start, and a stored finish must accept whatever borrow that is.
+pub type AwaitContinue<'a> = Box<
+    dyn for<'r, 'd> FnOnce(&FinishCtx<'a, 'r>, DepResults<'_, &DepTerminal<'d>>) -> Action<'a> + 'a,
+>;
 
 /// A `Catch` finish: re-entered with the watched slot's delivery envelope (value, reach, and
 /// retained producer pin as one unit, adopted or opened at the finish's own step brand) or the

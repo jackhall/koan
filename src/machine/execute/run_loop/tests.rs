@@ -11,9 +11,8 @@
 //!   lazily-captured body is a TRY-catchable `NestedBinder` error.
 //! - [`ambient_bracket`] — the slot-step bracket restores ambient values on
 //!   unwind, not just on normal return.
-//! - [`edge_wiring`] — install-and-inspect: a park whose source edge names an already-terminal
-//!   producer is ruled on at the install door, and the rows it wrote before short-circuiting still
-//!   discharge.
+//! - [`edge_wiring`] — install-and-inspect: a park whose source edge is already filled is ruled on
+//!   at the install door, and the producer's own error is what reaches the consumer.
 
 mod ambient_bracket;
 mod combined_binder_submission;
@@ -47,6 +46,20 @@ pub(super) fn working_all<'a>(
         .expect("parse should succeed")
         .into_iter()
         .map(|expr| WorkingExpression::from_ast(brand.region(), expr))
+        .collect()
+}
+
+/// Wire a watch edge onto every slot in `ids`, destined at `scope`'s own region — the bulk form of
+/// [`install_edge_for_test`](crate::machine::execute::KoanRuntime::install_edge_for_test), for a
+/// block submission that hands back one slot per statement. Slots reclaim at finalize, so a reader
+/// holds an edge; wiring here, before `execute`, is the same pre-terminal wiring production does.
+pub(super) fn watch_all(
+    runtime: &mut crate::machine::execute::KoanRuntime<'_>,
+    ids: &[crate::scheduler::NodeId],
+    scope: &crate::machine::Scope<'_>,
+) -> Vec<crate::scheduler::EdgeId> {
+    ids.iter()
+        .map(|&id| runtime.install_edge_for_test(id, scope))
         .collect()
 }
 

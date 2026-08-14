@@ -160,6 +160,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
@@ -167,7 +168,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     let types = test_run.types.clone();
     let res = test_run
         .runtime
-        .read_result_with(id, |v| format!("{:?}", v.ktype(&types)));
+        .read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types)));
     assert!(
         res.is_err(),
         "MAKEBAD must fail return-type check (mismatched pin), got Ok({:?})",
@@ -202,6 +203,7 @@ fn functor_return_with_matching_sharing_constraint_passes() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
@@ -209,7 +211,7 @@ fn functor_return_with_matching_sharing_constraint_passes() {
     let types = test_run.types.clone();
     let res = test_run
         .runtime
-        .read_result_with(id, |v| format!("{:?}", v.ktype(&types)));
+        .read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types)));
     assert!(
         res.is_ok(),
         "MAKEGOOD must pass return-type check — the unascribed body module structurally \

@@ -5,7 +5,7 @@
 //! the scheduler to quiescence, and rejects a bare top-level expression that resolved to an
 //! unstamped empty container. All values allocated by the program die when these return.
 
-use super::{DestHandleFamily, KoanRuntime};
+use super::KoanRuntime;
 use crate::builtins::{seed_builtins, unseeded_scopes};
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::TypeRegistry;
@@ -97,7 +97,7 @@ impl<'run> KoanRuntime<'run> {
         let roots: Vec<EdgeId> = self
             .enter_block(root.id, statements, root)
             .into_iter()
-            .map(|id| self.sched.install_edge(id, &run_owner).edge_id())
+            .map(|id| self.sched.install_edge(id, &run_owner))
             .collect();
         let outcome = self.drive_roots(root, &roots);
         // Koan is the roots' owner, so koan releases them — before the harness (and with it the run
@@ -113,33 +113,10 @@ impl<'run> KoanRuntime<'run> {
     /// through the root-edge release.
     fn drive_roots(&mut self, root: &'run Scope<'run>, roots: &[EdgeId]) -> Result<(), KError> {
         self.execute()?;
-        // Each top-level statement is a consumer-less root: its terminal stays pinned in the
-        // producer's per-call frame, since no consumer ever pull-lifts it. Relocate every root that
-        // reaches a per-call region into the run region so it lives run-long and its per-call frame
-        // releases; a root whose whole reach is eternal storage — the run region itself — and an
-        // errored terminal need no re-home, because nothing they name dies with a per-call frame.
-        for &edge in roots {
-            let reaches_per_call = self
-                .sched
-                .edge_delivered(edge)
-                .is_ok_and(|delivered| delivered.open_at().pins_beyond_eternal());
-            if reaches_per_call {
-                // The dest rides an empty-set `resident`: the run region outlives everything and is
-                // externally pinned, and yoking the run-root frame here would re-form a reference
-                // cycle into the drained value's witness.
-                // The relocation's own composition mints the rehomed terminal's reach into the run
-                // root region, which is the act that retains it there — so those regions stay alive
-                // past scheduler teardown with nothing folded here. The product envelope's coverage
-                // is the transit copy, dropped by `rehome_terminal`: what the run region now holds
-                // is the mint, not these pins.
-                if let Ok(delivered) = self.relocate_terminal(
-                    edge,
-                    root.deliver_resident::<DestHandleFamily>(root.brand().handle()),
-                ) {
-                    self.sched.rehome_terminal_via_edge(edge, Ok(delivered));
-                }
-            }
-        }
+        // Nothing to re-home. Each root edge was destined at the run frame's region, so its producer
+        // delivered there at finalize — under the seam's own copy-or-pin verdict — and the terminal
+        // has been an ordinary resident of the run region ever since. A drain-boundary read is a
+        // resident read.
         // Seal the run root's reach-set; it is run-global and never reopens.
         root.close();
         // A bare top-level expression is an untyped resolution boundary: an unstamped

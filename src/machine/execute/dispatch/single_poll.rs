@@ -184,7 +184,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         // homes the product in the consumer's own frame, which the step's seal re-pins — so
         // `born_delivered` releases it and the foreign coverage rides on.
         Ok(StepCarried::born_delivered(relocate_seam(
-            &deps.owned(0).delivered,
+            &view.lift_spliced(&deps.owned(0).cell),
             dest_brand(view.dest_frame()),
         )))
     });

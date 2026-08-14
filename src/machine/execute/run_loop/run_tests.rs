@@ -21,11 +21,12 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     }
     runtime.execute().unwrap();
     let id = runtime.dispatch_in_scope(parse_one(&program, "(x)"), scope);
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().unwrap();
     assert!(
         runtime
-            .read_result_with(
-                id,
+            .read_edge_result_with(
+                edge,
                 |v| matches!(v.object(), KObject::Number(n) if *n == 42.0)
             )
             .expect("value")
@@ -46,9 +47,10 @@ fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
         parse_all(&program, "LET y = (x)\nLET x = 1"),
         scope,
     );
+    let edge = runtime.install_edge_for_test(ids[0], scope);
     runtime.execute().unwrap();
     let err = runtime
-        .result_error(ids[0])
+        .edge_result_error(edge)
         .err()
         .cloned()
         .expect("forward-ref LET should error");
@@ -66,8 +68,9 @@ fn single_identifier_short_circuit_falls_through_when_unbound() {
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(parse_one(&program, "(missing)"), scope);
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().unwrap();
-    let err = match runtime.result_error(id) {
+    let err = match runtime.edge_result_error(edge) {
         Err(e) => e.clone(),
         Ok(()) => panic!("missing should error"),
     };
@@ -101,9 +104,10 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, parse_all(&program, "LET y = z\nLET z = 9"), scope);
+    let watched = super::tests::watch_all(runtime, &ids, scope);
     runtime.execute().unwrap();
     let err = runtime
-        .result_error(ids[0])
+        .edge_result_error(watched[0])
         .err()
         .cloned()
         .expect("forward-ref wrap-slot should error");
@@ -153,11 +157,12 @@ fn forward_keyword_function_reference_is_unbound() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(ids[0], scope);
     runtime
         .execute()
         .expect("a forward-FN dispatch failure is slot-terminal");
     let err = runtime
-        .result_error(ids[0])
+        .edge_result_error(edge)
         .expect_err("forward-FN call should fail dispatch");
     assert!(
         matches!(
@@ -234,15 +239,19 @@ fn replay_park_propagates_producer_error() {
     .into_iter()
     .map(|e| runtime.dispatch_in_scope(e, scope))
     .collect();
+    let edges: Vec<_> = ids
+        .iter()
+        .map(|&id| runtime.install_edge_for_test(id, scope))
+        .collect();
     runtime
         .execute()
         .expect("a producer error routes into the slot, not a fatal execute abort");
     assert!(
-        runtime.result_error(ids[1]).is_err(),
+        runtime.edge_result_error(edges[1]).is_err(),
         "the UNDEFINED_FN producer call must error",
     );
     assert!(
-        runtime.result_error(ids[0]).is_err(),
+        runtime.edge_result_error(edges[0]).is_err(),
         "y must inherit its dependency's error",
     );
     assert!(
@@ -288,14 +297,12 @@ fn let_type_to_value_name_rejected() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let id = test_run
-        .runtime
-        .dispatch_in_scope(parse_one(&program, "LET ty = Number"), scope);
+    let watch = test_run.dispatch_watched_in(scope, parse_one(&program, "LET ty = Number"));
     test_run.runtime.execute().unwrap();
     let types = test_run.types.clone();
     match test_run
         .runtime
-        .read_result_with(id, |v| format!("{:?}", v.ktype(&types)))
+        .read_edge_result_with(watch, |v| format!("{:?}", v.ktype(&types)))
     {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(msg)

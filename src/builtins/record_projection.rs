@@ -271,13 +271,14 @@ mod tests {
             ),
             scope,
         );
+        let edge = test_run.runtime.install_edge_for_test(root, scope);
         test_run
             .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err = test_run
             .runtime
-            .result_error(root)
+            .edge_result_error(edge)
             .expect_err("a non-record operand must fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
@@ -310,13 +311,14 @@ mod tests {
             ),
             scope,
         );
+        let edge = test_run.runtime.install_edge_for_test(root, scope);
         test_run
             .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let error = test_run
             .runtime
-            .result_error(root)
+            .edge_result_error(edge)
             .expect_err("the bare call must tie across both incomparable arms");
         assert!(
             matches!(error.kind, KErrorKind::AmbiguousDispatch { .. }),

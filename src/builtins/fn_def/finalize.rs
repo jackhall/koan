@@ -361,13 +361,13 @@ pub(crate) fn defer<'a>(
         owned_count += 1;
     }
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        // Extract each signature slot's resolved type under that dep envelope's own pins. A `KType`
-        // is an interned handle, so it escapes the open guard's borrow and the re-walk below feeds on
-        // owned data alone.
+        // Extract each signature slot's resolved type: each dep is resident in a region this step
+        // already covers, read at the step's own brand. A `KType` is an interned handle, so it
+        // escapes the open guard's borrow and the re-walk below feeds on owned data alone.
         let mut resolved: Vec<(usize, KType)> = Vec::with_capacity(splice_layout.len());
         for &(slot_idx, owned_pos) in &splice_layout {
             let terminal = results.owned(owned_pos);
-            let opened = terminal.delivered.open_at();
+            let opened = terminal.cell.open_at();
             match opened.value() {
                 Carried::Type(ktype) => resolved.push((slot_idx, ktype)),
                 other => {
