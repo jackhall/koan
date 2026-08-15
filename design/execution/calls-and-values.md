@@ -182,7 +182,7 @@ statements as dispatch nodes:
   (the all-`Expression` rule): the body's
   non-tail statements ride along as the `leading` field of an
   [`Action::Tail`](../../src/machine/core/kfunction/action.rs), and the slot
-  parks on them as owned deps before tail-replacing into the last statement.
+  waits on them as deps before tail-replacing into the last statement.
   Its `block_entry` names the body/arm scope; the harness derives the chain
   indices and the tail's `body_index` from `block_entry` + `leading`. TCO is
   preserved on the last statement. Single-statement bodies carry empty

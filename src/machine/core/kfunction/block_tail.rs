@@ -20,7 +20,7 @@ pub(crate) enum BlockBody<'a> {
     /// Tail-replace the whole expression, no split: splitting a single quoted expression would run a
     /// parenthesized group as a block.
     Single(KExpression<'a>),
-    /// Split into leading statements + a tail; the leading statements run as owned deps before the tail.
+    /// Split into leading statements + a tail; the leading statements run as deps before the tail.
     Block(KExpression<'a>),
 }
 

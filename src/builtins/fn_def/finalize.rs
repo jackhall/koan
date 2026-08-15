@@ -359,8 +359,8 @@ pub(crate) fn defer<'a>(
         // already covers, read at the step's own brand. A `KType` is an interned handle, so it
         // escapes the open guard's borrow and the re-walk below feeds on owned data alone.
         let mut resolved: Vec<(usize, KType)> = Vec::with_capacity(splice_layout.len());
-        for &(slot_idx, owned_pos) in &splice_layout {
-            let terminal = results[owned_pos];
+        for &(slot_idx, dep_index) in &splice_layout {
+            let terminal = results[dep_index];
             let opened = terminal.cell.open_at();
             match opened.value() {
                 Carried::Type(ktype) => resolved.push((slot_idx, ktype)),

@@ -79,7 +79,7 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
 /// A sigil-form return type that sub-dispatches at FN-def (no parameter reference)
 /// and a parameter slot that parks on a forward-LET binding both join the same
 /// dep-finish; the finish picks each sub-dispatch's `Carried::Type` terminal out
-/// of the owned dep results by its recorded position.
+/// of the dep results by the index the builder handed back when it appended the request.
 #[test]
 fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine() {
     let program = program_storage();

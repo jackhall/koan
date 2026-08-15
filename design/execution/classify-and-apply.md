@@ -181,7 +181,7 @@ The rails the dispatch driver feeds:
     path produces.
   - `HeadDeferred` (`(pick) {x = 1}`) and `TypeHeadDeferred`
     (`:(pick_type) {x = 1}`) — [`HeadDeferredState`](../../src/machine/execute/dispatch/head_deferred.rs)
-    sub-dispatches the head first (an owned dep; the park/resume pair mirrors
+    sub-dispatches the head first (as sub-work; the park/resume pair mirrors
     `CtorState`'s), then branches the resumed value's kind into a
     `ResolvedCallable`. `HeadDeferred` admits any function value or a
     constructible type; `TypeHeadDeferred` (the `:(...)` sigil guarantees a
@@ -323,9 +323,11 @@ The rails the dispatch driver feeds:
   [`dispatch/literal.rs`](../../src/machine/execute/dispatch/literal.rs))
   ride the same name-resolve rail: bare-name entries call the shared
   [`resolve_bare_carrier`](../../src/machine/execute/dispatch/bare_name.rs)
-  ladder directly and materialize as `Slot::Static` (sealed) or
-  `Slot::Park(i)` (parked producer), with the dep-finish driving a
-  single wake across all parked siblings.
+  ladder directly and materialize as `Slot::Static` (sealed) or `Slot::Dep`
+  (a producer the literal waits on), with the dep-finish driving a single wake
+  across all parked siblings. A `Slot::Dep` carries no index: the classify walk
+  appends one dep per such cell, so the finish's walk over the same rows reads
+  each result off a cursor in dep order.
 
 `Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /
 `eager_indices`) are disjoint by construction: each slot's

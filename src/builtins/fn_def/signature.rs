@@ -80,7 +80,7 @@ pub(crate) fn parse_fn_param_list<'a>(
     // The mint door re-homes all of them at the function's own region.
     let brand = elaborator.scope.brand();
     let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(parts.len());
-    let mut parks: Vec<ProducerId> = Vec::new();
+    let mut awaited: Vec<ProducerId> = Vec::new();
     let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
     let mut first_err: Option<String> = None;
     let mut i = 0;
@@ -112,7 +112,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                                     .push(SignatureElement::Argument(Argument { name, ktype: kt }));
                             }
                             TypeResolution::Park(producers) => {
-                                parks.extend(producers);
+                                awaited.extend(producers);
                             }
                             TypeResolution::Unbound(msg) if first_err.is_none() => {
                                 first_err =
@@ -187,9 +187,9 @@ pub(crate) fn parse_fn_param_list<'a>(
     if let Some(msg) = first_err {
         return ParamListOutcome::Err(msg);
     }
-    if !parks.is_empty() || !sub_dispatches.is_empty() {
+    if !awaited.is_empty() || !sub_dispatches.is_empty() {
         return ParamListOutcome::Pending {
-            awaited_producers: parks,
+            awaited_producers: awaited,
             sub_dispatches,
         };
     }

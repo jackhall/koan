@@ -192,7 +192,7 @@ impl<'a> WorkingPart<'a> {
 
     /// The [`KObject`] a **region-pure** slot denotes, at *any* lifetime — the lifetime-generic peer
     /// of [`resolve`](Self::resolve) for static-cell sites that fold. Only an AST arm is ever
-    /// region-pure; the scheduler's own arms are classified to owned sub-dispatches before any
+    /// region-pure; the scheduler's own arms are classified to sub-dispatches before any
     /// static cell.
     pub fn resolve_region_pure<'b>(&self, brand: RegionBrand<'b>) -> KObject<'b> {
         match self {

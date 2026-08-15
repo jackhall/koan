@@ -295,14 +295,16 @@ embedder holds `EdgeId`s, not topology.
 
 The wire primitive is scheduler-internal. An embedder wiring an
 already-allocated slot goes through the single public door,
-`Scheduler::install_deps`, which resolves the embedder's dep list — park
-*source edges* plus owned producers — through it; a fresh slot's row and its
-wires are initialized as one atomic step by `alloc_node` (owned deps only) and
-`alloc_node_with_parks` (its sibling for a slot whose parks arrive with the
-work), both routing the same primitive. One primitive, two doors — so no wiring
-path can skew a row's invariants.
+`Scheduler::install_deps`, which resolves the embedder's dep list — one *source
+edge* per dep, in dep order — through it; a fresh slot's row and its wires are
+initialized as one atomic step by its sibling `alloc_node`, which takes the same
+source slice and routes the same primitive. One primitive, two doors — so no
+wiring path can skew a row's invariants. Sub-work the embedder spawned is named
+no differently: it mints that producer a source edge destined where the result
+belongs, and the door inherits it, so there is one destination rule rather than a
+second wiring form.
 
-Every park mints the consumer its *own* slab edge off the source, inheriting the
+Every dep mints the consumer its *own* slab edge off the source, inheriting the
 source's destination region, and the consumer owns it under the ordinary
 ownership rule (§ Edges and the boundary): the scheduler keeps no dep-side
 release bookkeeping, because a consumer holds its edges only as long as it needs

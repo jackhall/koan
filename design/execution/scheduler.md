@@ -139,7 +139,7 @@ The scheduler reaches the driver only through its method contract, and every
 method names only `EdgeId` and the workload's associated types — no signature
 names a `KExpression`, `Scope`, or AST type, and node identities stay
 library-internal. `pop_next` / `take_for_run` / `replace` drive a slot's
-lifecycle; `alloc_node` / `alloc_node_with_parks`, `install_deps`,
+lifecycle; `alloc_node`, `install_deps`,
 `install_edge` / `install_edge_from` and `splice_forward_from` wire the graph —
 `install_deps` being the single door for wiring an already-allocated slot,
 routing the same scheduler-internal wire primitive the allocators use, and
@@ -164,9 +164,9 @@ A builtin or user-fn body, like every other step, returns an
 - `Done(Value)` — the body produced a final value; the slot finalizes.
 - `Done(Err)` — structured failure; see [error-handling.md](../error-handling.md).
 - `Continue` — the body wants to dispatch a fresh expression in its own slot
-  (TCO, see below); when the body has leading (non-tail) statements they
-  become owned deps the slot parks on, and the `Continue` fires only from the
-  resolving finish.
+  (TCO, see below); when the body has leading (non-tail) statements the slot
+  waits on them as deps, and the `Continue` fires only from the resolving
+  finish.
 
 When a body cannot produce its result inline — its expression has nested
 sub-expressions whose own evaluation hasn't run yet — the slot parks: its work is
@@ -188,10 +188,12 @@ coherent — is the library's
 ([workgraph/design/dag-scheduler.md](../../workgraph/design/dag-scheduler.md)).
 What is Koan's is *which* edges each dispatch shape installs:
 
-- **Owned** deps are the sub-Dispatches a slot spawns for its own nested
+- **Spawned** deps are the sub-Dispatches a slot spawns for its own nested
   sub-expressions — the deps of the working-copy splice, a body block's leading
-  statements. Their edges name the spawning consumer's region as destination.
-- **Park** deps are Koan's wait-on-someone-else's-producer cases: a dispatch
+  statements. The harness mints each one's *source* edge at the spawning slot's
+  own anchor region and releases it once the door has minted the slot's dep edge
+  off it, so a sub-result lands where its consumer will read it.
+- **Awaited** deps are Koan's wait-on-someone-else's-producer cases: a dispatch
   decide that resolves a name to a still-running binder, an aggregate literal
   cell whose name is still finalizing, a deferred head. Koan names each of these
   by the claim edge the binder installed — never by a slot — and the door mints
@@ -199,10 +201,10 @@ What is Koan's is *which* edges each dispatch shape installs:
   placeholder park names the **original destination scope's region**, and
   delivery dedups per distinct destination: the eventual binding write and the
   placeholder share one adopt. The layers that *carry* such a name — the scope
-  tables' pending arms, the type resolver's `Park` answer, a decide's park list
+  tables' pending arms, the type resolver's `Park` answer, a decide's dep list
   — hold it as an opaque
   [`ProducerId`](../../src/machine/execute/producer_id.rs) and reach the
-  scheduler only through `park_deps`; the `EdgeId` behind it is spelled in the
+  scheduler only through `deps_on`; the `EdgeId` behind it is spelled in the
   drive loop alone
   ([scheduler-library.md](../scheduler-library.md)).
 - **Claim** edges are the binder's own: one per channel a statement's
@@ -214,15 +216,15 @@ What is Koan's is *which* edges each dispatch shape installs:
   releases every one before the harness tears the run frame down
   ([interpret.rs](../../src/machine/execute/runtime/interpret.rs)).
 
-To the scheduler park and owned deps are the same edge; the owned/park split is
-Koan's `Deps` currency labeling — positional addressing plus dispatch
-classification, which is **install-and-inspect**: a decide holds no
-`&mut Scheduler`, so it never probes a producer's standing; it emits the park
-and the harness rules on the door's filled-or-parked return, propagating an
-already-errored producer's terminal at apply under the park site's own trace
-label. The would-cycle guard is the one question that stays pre-wiring, because
-parking on an ancestor deadlocks rather than errors
-([dispatch.rs](../../src/machine/execute/dispatch.rs)).
+Spawned and awaited deps are one currency: each is an edge the door mints off
+the source naming it, they share one list, and a finish reads their results in
+dep order. What the dispatch layer classifies is the producer's *standing*, and
+that is **install-and-inspect**: a decide holds no `&mut Scheduler`, so it never
+probes a producer; it emits the dep and the harness rules on the door's
+filled-or-parked return, propagating an already-errored producer's terminal at
+apply under the park site's own trace label. The would-cycle guard is the one
+question that stays pre-wiring, because parking on an ancestor deadlocks rather
+than errors ([dispatch.rs](../../src/machine/execute/dispatch.rs)).
 
 Every consumer wakes the same way: at pop time its pending count is zero, so every
 dep is terminal, and [`run_step`](../../src/machine/execute/run_loop.rs) reads each
@@ -312,7 +314,7 @@ builtins (`match_case`, and `run_user_fn` for user-fns) are tail by
 construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 `LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count
 assertions in the test suite. When a body has leading (non-tail) statements,
-they become owned deps the slot parks on (one body-block `DepRequest::BodyBlock`) and
+the slot waits on them as deps (one body-block `DepRequest::BodyBlock`) and
 the `Continue` tail fires only from the resolving finish — so the leading
 siblings run, and are reclaimed, before the tail-replace, so the tail hop
 [reinstalls the slot](../tail-call-optimization.md#the-design-reinstall-the-slot-turn-over-the-region)
@@ -336,7 +338,7 @@ memory** constant too.
 `Tail` reuses the outermost slot but bodies typically have internal
 sub-expressions — the predicate of an `IF`/`MATCH` guard, the argument
 expressions of a recursive call, list/dict literal elements. Each spawns
-a sub-Dispatch that the parent slot parks on as an owned dep. Without
+a sub-Dispatch that the parent slot waits on as a dep. Without
 reclamation those slots accumulate per body iteration, so realistic recursive
 code is O(n) scheduler memory even when its data footprint is O(1).
 

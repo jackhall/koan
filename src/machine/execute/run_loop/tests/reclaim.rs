@@ -10,7 +10,7 @@
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{program_storage, run_root_storage};
 
-/// Unconditional reclamation, end to end: run a program with nested blocks and owned sub-slots, then
+/// Unconditional reclamation, end to end: run a program with nested blocks and spawned sub-slots, then
 /// confirm the slot store's free list holds every index it ever minted. Finalize is the only event
 /// that ends a slot and it reclaims unconditionally, so quiescence means an entirely free store.
 #[test]

@@ -60,7 +60,7 @@ impl FieldListContext {
 pub enum FieldListOutcome<'a> {
     Done(Vec<(String, KType)>),
     /// `sub_dispatches` carries each sigil field's body as the scheduler's own node, in DFS walk
-    /// order — the currency an [`SubDispatch`](crate::machine::core::SubDispatch) takes. The
+    /// order — the currency a [`SubDispatch`](crate::machine::core::SubDispatch) takes. The
     /// caller schedules them in that order and, on the dep-finish re-walk, feeds the resolved
     /// `Carried::Type`s back through a [`ResultFeed`] — the walk re-descends in the same order, so
     /// no slot index is needed. A body naming a co-declared sibling carries that sibling's handle
@@ -158,7 +158,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
     mut results: Option<&mut ResultFeed<'_, 'f>>,
     types: &TypeRegistry,
 ) -> FieldListOutcome<'a> {
-    let mut parks: Vec<ProducerId> = Vec::new();
+    let mut awaited: Vec<ProducerId> = Vec::new();
     let mut sub_dispatches: Vec<WorkingExpression<'a>> = Vec::new();
     let FieldListContext {
         list: context_list,
@@ -182,7 +182,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
             FieldSlot::Type(t) => match elaborate_type_identifier(elaborator, &t, types) {
                 TypeResolution::Done(kt) => checked(kt),
                 TypeResolution::Park(producers) => {
-                    parks.extend(producers);
+                    awaited.extend(producers);
                     // Placeholder, discarded under Pending; lets the walk collect every
                     // parking producer in one pass.
                     Ok(KType::ANY)
@@ -242,7 +242,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                         awaited_producers,
                         sub_dispatches: inner_subs,
                     } => {
-                        parks.extend(awaited_producers);
+                        awaited.extend(awaited_producers);
                         sub_dispatches.extend(inner_subs);
                         Ok(KType::ANY)
                     }
@@ -304,7 +304,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                 }
             }
             // A nested record type `:{…}` elaborates inline through this same walker,
-            // sharing the elaborator and `results` feed; its parks / sub-dispatches merge
+            // sharing the elaborator and `results` feed; its awaited producers / sub-dispatches merge
             // into the outer set. No sub-Dispatch of the record node, no slot bookkeeping.
             FieldSlot::AstRecord(boxed) => {
                 match parse_typed_field_list_via_elaborator(
@@ -321,7 +321,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                         awaited_producers,
                         sub_dispatches: inner_subs,
                     } => {
-                        parks.extend(awaited_producers);
+                        awaited.extend(awaited_producers);
                         sub_dispatches.extend(inner_subs);
                         Ok(KType::ANY)
                     }
@@ -337,9 +337,9 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
     match parsed {
         Err(msg) => FieldListOutcome::Err(msg),
         Ok(fields) => {
-            if !parks.is_empty() || !sub_dispatches.is_empty() {
+            if !awaited.is_empty() || !sub_dispatches.is_empty() {
                 FieldListOutcome::Pending {
-                    awaited_producers: parks,
+                    awaited_producers: awaited,
                     sub_dispatches,
                 }
             } else {

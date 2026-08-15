@@ -80,9 +80,11 @@ a concept, not a final identifier.
   teardown carries the release) releases it, and every edge names the
   destination region its value is delivered into
   ([workgraph/design/dag-scheduler.md § Edges and the boundary](../workgraph/design/dag-scheduler.md#edges-and-the-boundary)).
-- **Dep** — a producer another slot waits on, held as an edge. The
-  **park**/**owned** labels are Koan's `Deps`-currency roles (positional
-  addressing and dispatch classification), not scheduler semantics.
+- **Dep** — a producer another slot waits on, held as an edge. Every dep is
+  named by a **source edge** and inherits that source's destination — one rule,
+  whether the source is a binding the embedder already held or one it minted
+  over sub-work it spawned. Whether a dep is realized yet is a Koan-side
+  distinction that dies at the apply harness; the scheduler sees only edges.
 - **Terminal** — a slot's finished result: a sealed carrier, or the
   workload's error.
 - **Delivery envelope** — *(working name `Delivered`)* a walking terminal's
@@ -231,31 +233,42 @@ Koan-side over `KoanWorkload` / `KError`
 when it applies an outcome), built on the install door. The library names no
 Koan type and stays smaller.
 
-The door has one submit-time sibling, `alloc_node_with_parks`: a fresh slot's
-row and its wires initialize as one atomic step, so parks that arrive with the
-work do not need a second wiring call. Both route the same
-scheduler-internal wire primitive.
+The door has one submit-time sibling, `alloc_node`: a fresh slot's row and its
+wires initialize as one atomic step, so deps that arrive with the work do not
+need a second wiring call. Both route the same scheduler-internal wire
+primitive, and both take the dep list as one slice of source edges.
+
+Because the door derives each dep's destination from its source rather than
+taking one, an embedder that wants sub-work's result in the consumer's own
+region says so by **minting that sub-work's source there**: the harness installs
+a transient edge on the freshly spawned producer, destined at the consumer's
+anchor region, hands it to the door, and releases it once the consumer's own
+edge has been minted off it. It costs one recycled slab entry per spawned dep
+and keeps the door the sole minter of a consumer's dep edges, so there is
+exactly one destination rule rather than a second wiring form for sub-work.
 
 **`Deps` — the dep-list builder.**
 
 ```rust
 let mut deps = Deps::new();
-deps.park_on(source);                      // dedup'd park entry, by source EdgeId
-let arg = deps.own(request);               // owned entry, returns owned index
+deps.on(source);                           // a dep the caller can name, by source EdgeId
+let arg = deps.request(request);           // sub-work the harness spawns; returns its dep index
 ```
 
-`Deps` owns the `[park..., owned...]` layout internally. A finish addresses
-results through a `DepResults` view — `park(i)` / `owned(j)` accessors — never
-by arithmetic over a shared vector.
+One vector, and **dep order is read order**: results reach a finish in the order
+the builder appended them, as one slice. A `Dep` entry is either a `Producer`
+(the caller holds the source edge) or a `Request` (the harness must spawn the
+work before it can name one) — realization phase, not a durable role, and the
+distinction dies at the apply harness. A caller reading its results in order
+ignores the index `request` hands back; the two that cannot — a slot recording
+where one particular result lands, or one waiting on deps it never reads — keep
+the index or the range they were given.
 
-The two sides of the list are in **different currencies, deliberately**. A park
-is named by the source `EdgeId` the embedder holds — the door mints the
-consumer's own edge off it and resolves the producer internally — while an owned
-dep is sub-work the embedder is spawning and hands over directly. Dedup is by
-`EdgeId`, so two distinct edges naming one producer stay two parks and every
-index the builder handed back keeps addressing its own slot. The realized list
-the door writes into the stored work (`ResolvedDeps`) is producer-keyed on both
-sides and is scheduler-internal from that point on.
+There is no dedup: an expression naming one source twice gets two deps, hence
+two edges off one producer. Both inherit that producer's destination, so the
+delivery walk's per-destination dedup collapses them to a single adopt. The
+realized list the door writes into the stored work (`ResolvedDeps`) is one edge
+list, scheduler-internal from that point on.
 
 **`Await` — the envelope builder.**
 
@@ -354,8 +367,9 @@ picture:
   which is why the type is hosted in the drive loop rather than in
   `machine::core`: `pub(in path)` names an ancestor module, so only the layer
   that owns a scheduler can be named as the one allowed to spend a producer.
-  Parking from outside it goes through the single exported verb `park_deps`, so
-  "where does an edge escape?" has one answer.
+  Depending on one from outside it goes through the single exported verb
+  `deps_on` (and its `extend_deps_on` companion, for a list built as slots are
+  classified), so "where does an edge escape?" has one answer.
 - **Koan's declaration identity is Koan's own.** A binding entry answers
   "same declaration re-entering, or a second declaration of this name?" from a
   [`StatementId`](../src/machine/core/statement_id.rs) — a never-recycled
@@ -366,8 +380,6 @@ picture:
 
 ## Open work
 
-- [Collapse the Deps owned/park currency](../roadmap/refactor/deps-currency-collapse.md)
-  — one dep list, one index space.
 - [Carving the cellgraph crate](../workgraph/roadmap/cellgraph-extraction.md)
   — the crate split beneath the DAG layer.
 - [Publishing the workgraph crate](../workgraph/roadmap/workgraph-extraction.md)

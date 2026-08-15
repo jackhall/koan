@@ -309,7 +309,7 @@ impl<'a> ExpressionPart<'a> {
             | ExpressionPart::RecordLiteral(_) => unreachable!(
                 "resolve_region_pure is only called on a region-pure static-cell part \
                  (keyword / bare identifier / type name / literal); borrow-bearing parts are \
-                 classified to owned sub-dispatches before any static cell"
+                 classified to sub-dispatches before any static cell"
             ),
         }
     }

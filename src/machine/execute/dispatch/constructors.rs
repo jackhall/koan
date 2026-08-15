@@ -419,8 +419,8 @@ fn finish_witnessed<'step>(
     kind: &CtorKind,
     terminals: &[&DepTerminal<'_>],
 ) -> Result<DeliveredCarried, KError> {
-    // A constructor parks on its value subs only (all owned, no park producers), so its results are
-    // exactly the whole dep list — read as one slice.
+    // A constructor's deps are its value subs and nothing else, so its results are exactly the whole
+    // dep list — read as one slice.
     match kind {
         CtorKind::NewType { identity } => {
             debug_assert_eq!(terminals.len(), 1);
