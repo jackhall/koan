@@ -99,11 +99,13 @@ node allocated. Because the reinstall applies *after* a step returns, never
 mid-step, the retiring incarnation's region is past every borrow into it by the
 time it is retired — the run-then-apply ordering supplies the safety, so a hop
 needs no in-place region reset. The loop-carried arguments adopt into the new
-incarnation inside the replace itself — terminal sources deliver at wiring —
-which runs while the outcome-apply path still has the displaced anchor in hand,
-so the ordering is a local variable held across the install call. A copy
-verdict frees the retiring region at the replace; a pin verdict transfers it by
-hold into the new incarnation's anchor bundle
+incarnation in the step that *emits* the replace, which still holds the
+retiring region as its own, so the reinstalled incarnation reads nothing that
+lives there. `replace` therefore keeps no hold of its own: it hands the
+displaced anchor straight back, and ordering the retiring region's free is a
+local variable in the caller's apply path rather than a row field spanning a
+step. A copy verdict frees the retiring region at the replace; a pin verdict
+transfers it by hold into the new incarnation's anchor bundle
 ([reach.md § Retention model](reach.md#retention-model)). A wiring-time
 destination pointer is safe across reinstall: a slot only reinstalls after
 running, which requires `pending == 0`, so it has no undelivered inbound edges,
@@ -307,8 +309,3 @@ release bookkeeping, because a consumer holds its edges only as long as it needs
 their residents. A step's deps are read at step start and released right there —
 the values live in the destination regions, not in the edges — and whatever
 edges the consumer still owns at its terminal are released by its own teardown.
-
-## Open work
-
-- [Delivery at replace for reinstallation](../roadmap/reinstall-delivery-at-replace.md)
-  — retiring the row-level handoff hold.

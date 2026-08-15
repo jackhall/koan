@@ -152,7 +152,7 @@ Koan driver reaches them, and the `queues` / `deps` / `store` fields stay
 `pub(in crate::scheduler)`. A builtin invoked mid-dispatch
 (e.g. `newtype_construct`) routes through the shared
 [`run_action`](../../src/machine/execute/runtime.rs) harness as a pure
-`Action → Outcome` lowering; `exec::invoke` reads the dispatcher's ambient
+`Action → Outcome` lowering; `exec::invoke_builtin` reads the dispatcher's ambient
 `current_frame` / `current_lexical_chain` off the view to build the builtin's
 `BodyCtx`.
 

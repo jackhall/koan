@@ -205,7 +205,7 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
     }
 
     /// Whether the executing slot already carries a kept return contract (a tail call within an
-    /// established chain) — `invoke` reads it so a deferred-return FN skips re-resolving its
+    /// established chain) — `enter_user_fn` reads it so a deferred-return FN skips re-resolving its
     /// keep-first-discarded return type.
     pub(in crate::machine::execute) fn in_contract_chain(&self) -> bool {
         self.ambient.in_contract_chain()

@@ -258,7 +258,7 @@ fn builtin_frame_under_per_call_parent_chains_region_owner() {
 /// A fresh-tail hop over a **per-call** captured scope chains that scope's region owner, so a
 /// closure capturing a per-call frame survives the hop that retires the caller — the same derivation
 /// as [`builtin_frame_under_per_call_parent_chains_region_owner`], reached through the fresh-tail
-/// path (`resolve_frame_placement`'s `FreshTail` mints via `CallFrame::new`). A top-level-defined
+/// path (`enter_user_fn` mints the `FreshTail` cart via `CallFrame::new`). A top-level-defined
 /// recursive fn instead captures the run-root scope and chains nothing (see
 /// [`builtin_frame_at_top_level_chains_nothing`]), keeping the common tail loop constant-space.
 #[test]

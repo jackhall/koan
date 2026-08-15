@@ -329,7 +329,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 BlockEntry::Overlay(overlay) => BodyPlacement::Overlay(overlay),
                 BlockEntry::None => unreachable!("a leading-carrying tail enters a block"),
             };
-            // `FreshTail` mints its cart only at apply time — after the leading statements would
+            // `FreshTail` installs its cart only at apply time — after the leading statements would
             // already have fanned out — so a leading-carrying tail cannot ride it.
             debug_assert!(
                 !matches!(frame_placement, FramePlacement::FreshTail { .. }),
