@@ -21,10 +21,10 @@ use std::rc::Rc;
 use std::rc::Weak;
 
 use super::super::nodes::NodeWork;
-use super::super::{NodeId, ResolvedDeps, Scheduler, Workload};
+use super::super::{NodeId, Scheduler, Workload};
 use super::*;
 use crate::witnessed::doctest_fixture::RegionCart;
-use crate::witnessed::{NoPins, RegionHandleFamily, SealedExtern};
+use crate::witnessed::{Delivered, NoPins, SealedExtern};
 
 /// Relocate a loop-carried argument into `into`'s region through the workload's own delivery hook —
 /// the embedder's act, run on the deciding side of a replace, and the one place the verdict is
@@ -41,10 +41,12 @@ where
         >,
 {
     let handle = into.handle();
-    let dest = handle.deliver_resident::<RegionHandleFamily<FixtureProfile>>(handle);
+    // The destination operand comes off the one public door — the same operand the delivery walk
+    // builds per distinct destination.
+    let dest = Delivered::destination(Rc::clone(into.owner()));
     let cell = W::deliver(argument, dest).rest_into(handle);
     let continuation: Box<dyn FnOnce() -> u32 + 'a> = Box::new(move || cell.open(|v| *v));
-    NodeWork::new(ResolvedDeps::new(), continuation, None)
+    NodeWork::new(continuation, None)
 }
 
 /// Run the reinstalled incarnation's step: take its work and open the continuation the way the run
@@ -55,7 +57,7 @@ where
     W: Workload<Continuation = DynContinuation>,
 {
     let (work, _anchor) = sched.take_for_run(id);
-    let (_deps, sealed, _carrier) = work.into_run_parts();
+    let sealed = work.continuation;
     sealed.open(
         SealedExtern::<UnitOperand>::erase(()),
         &NoPins,

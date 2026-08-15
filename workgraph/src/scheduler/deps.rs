@@ -9,10 +9,10 @@
 //!   entries are [`Dep`]s, which distinguish only *realization phase*: a dep the caller can already
 //!   name versus a request the harness must spawn work for. That distinction dies at the apply
 //!   boundary. Generic in the request type `R` (`DepRequest` before the harness realizes each one).
-//! - [`ResolvedDeps`] is the realized list [`NodeWork`](super::nodes::NodeWork) stores: every entry
-//!   is the consumer's **own** edge, minted by the install door. It is the consumer's ownership
-//!   record as well as its read list — the run loop reads each dep's resident through these names
-//!   and releases them when the step is done with them.
+//! - [`ResolvedDeps`] is the realized list the slot's dep row stores: every entry is the consumer's
+//!   **own** edge, minted by the install door. It is the consumer's ownership record as well as its
+//!   read list — the drain reads each dep's resident through these names at step start and releases
+//!   them there.
 //!
 //! Everything here is plain or type-parameter-generic (`EdgeId`, `usize`, `R`) — it names no Koan
 //! value, error, or AST type.
@@ -102,13 +102,14 @@ impl<R> Deps<R> {
     }
 }
 
-/// A realized dep list: every entry is the consumer's **own** edge. This is what
-/// [`NodeWork`](super::nodes::NodeWork) stores, what the run loop reads each dep's delivered
-/// resident through, and the record that says which edges this slot releases when it is done.
+/// A realized dep list: every entry is the consumer's **own** edge. It lives on the slot's dep row
+/// — written there by the install door, read at step start by the drain, which pulls each dep's
+/// delivered resident through it and releases the edges. Scheduler-internal currency: an embedder
+/// never holds one.
 ///
 /// Deliberately *not* `Deps<EdgeId>`: [`Deps`] is the embedder's write side, whose entries name
 /// *source* edges; a realized list names the consumer's own edges, minted off those sources by the
-/// install door — which is why the only way to put one here is the door's own crate-private append.
+/// install door — which is why the only way to put one here is the door's own append.
 pub struct ResolvedDeps {
     /// The consumer's edges, one per dep the embedder handed the door, in its order.
     ids: Vec<EdgeId>,
@@ -125,15 +126,7 @@ impl ResolvedDeps {
         self.ids.push(id);
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.ids.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.ids.len()
-    }
-
-    /// The edges in dep order. The run loop reads each dep's resident in this order, so a finish's
+    /// The edges in dep order. The drain reads each dep's resident in this order, so a finish's
     /// result slice lines up with the list the builder wrote, and releases them in it too.
     pub fn all_ids(&self) -> impl Iterator<Item = EdgeId> + '_ {
         self.ids.iter().copied()

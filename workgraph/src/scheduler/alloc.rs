@@ -19,9 +19,9 @@ impl<W: Workload> Scheduler<W> {
     /// submit-time sibling of that door, routing the same wire primitive.
     ///
     /// The slot is allocated before its edges because an edge is *the consumer's own* — minting one
-    /// names the consumer — so the row and the anchor go up first and the realized list is written
-    /// back onto the stored work. Queue routing then reads the row rather than arithmetic the caller
-    /// did on the side.
+    /// names the consumer — so the row and the anchor go up first and the realized list lands on the
+    /// slot's dep row. Queue routing then reads the row rather than arithmetic the caller did on the
+    /// side.
     pub fn alloc_node(
         &mut self,
         work: NodeWork<'_, W>,
@@ -29,15 +29,10 @@ impl<W: Workload> Scheduler<W> {
         anchor: Rc<W::Frame>,
         framed: bool,
     ) -> NodeId {
-        debug_assert!(
-            work.deps.is_empty(),
-            "a fresh slot's realized dep list is this door's to write; the work arrives with none",
-        );
         let id = self.store.alloc_slot(seal_work(work, &anchor));
         self.deps.install_for_slot(id);
         self.deps.install_anchor(id, anchor);
-        let (resolved, _verdicts) = self.install_deps(id, sources);
-        self.store.write_deps(id, resolved);
+        let _verdicts = self.install_deps(id, sources);
         if self.deps.pending_count(id) == 0 {
             if !framed && sources.is_empty() {
                 self.queues.push_fresh(id);

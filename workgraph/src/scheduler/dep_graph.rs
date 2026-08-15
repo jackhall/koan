@@ -11,9 +11,9 @@
 
 use std::rc::Rc;
 
-use super::{EdgeId, NodeId, Workload};
+use super::{EdgeId, NodeId, ResolvedDeps, Workload};
 
-/// The two coordinated per-slot fields plus the slot's memory anchor. Mutations go
+/// The coordinated per-slot fields plus the slot's memory anchor. Mutations go
 /// through the row, so `notify` / `pending` cannot desync — Inv-A holds by construction.
 struct DepRow<W: Workload> {
     /// Every live parked edge on this slot **as a producer** — what the finalize walk delivers
@@ -23,6 +23,11 @@ struct DepRow<W: Workload> {
     /// Unfilled consumer-bearing edges this slot waits on **as a consumer**; zero routes via
     /// `WorkQueues::push_woken`.
     pending: usize,
+    /// The slot's realized dep list — its **own** edges in dep order, written by the install door
+    /// and never assembled by hand. `Scheduler::drain` takes it at step start, reads each dep's
+    /// resident through it, and releases the edges; a mid-step install writes the next
+    /// incarnation's list onto the emptied row.
+    deps: ResolvedDeps,
     /// The slot's memory anchor, held from alloc until finalize — the scheduler-owned per-slot
     /// `Rc<W::Frame>`. `None` for a slot with no anchor installed yet (freshly recycled, before
     /// `install_anchor`) or one that has finalized (delivery moved every value out, so the anchor's
@@ -35,6 +40,7 @@ impl<W: Workload> Default for DepRow<W> {
         DepRow {
             notify: Vec::new(),
             pending: 0,
+            deps: ResolvedDeps::new(),
             anchor: None,
         }
     }
@@ -70,6 +76,7 @@ impl<W: Workload> DepGraph<W> {
                 "a recycled row's notify list was drained by the walk that reclaimed the slot",
             );
             row.pending = 0;
+            row.deps = ResolvedDeps::new();
             row.anchor = None;
         } else {
             self.rows.push(DepRow::default());
@@ -114,6 +121,19 @@ impl<W: Workload> DepGraph<W> {
     /// the walk fills or recycles every entry, and the slot reclaims behind it.
     pub(super) fn take_notify(&mut self, producer: NodeId) -> Vec<EdgeId> {
         std::mem::take(&mut self.row_mut(producer).notify)
+    }
+
+    /// Append one realized dep edge to the consumer's row — the install door's write, one entry per
+    /// source it was handed, in its order.
+    pub(in crate::scheduler) fn record_dep(&mut self, consumer: NodeId, edge: EdgeId) {
+        self.row_mut(consumer).deps.push(edge);
+    }
+
+    /// Take the slot's realized dep list — the step-start read. The row keeps none of it: the drain
+    /// reads each resident through the list and releases the edges, and a mid-step install writes
+    /// the next incarnation's list onto the emptied row.
+    pub(in crate::scheduler) fn take_deps(&mut self, id: NodeId) -> ResolvedDeps {
+        std::mem::take(&mut self.row_mut(id).deps)
     }
 
     /// The producer's notify list, borrowed — the cycle walk's read.
@@ -175,6 +195,13 @@ impl<W: Workload> DepGraph<W> {
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn anchor_of(&self, id: NodeId) -> Option<Rc<W::Frame>> {
         self.row(id).anchor.as_ref().map(Rc::clone)
+    }
+
+    /// The realized dep list the install door wrote onto the slot's row — the probe a wiring test
+    /// reads its own edges back through.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn stored_deps(&self, id: NodeId) -> Vec<EdgeId> {
+        self.row(id).deps.all_ids().collect()
     }
 
     pub(super) fn pending_count(&self, id: NodeId) -> usize {
