@@ -35,11 +35,12 @@ fn run_collect_err(source: &str) -> Option<KError> {
     let exprs = working_all(&program, source);
     let runtime = &mut test_run.runtime;
     let ids: Vec<_> = runtime.enter_block(scope.id, exprs, scope);
+    let watched = super::watch_all(runtime, &ids, scope);
     if let Err(e) = runtime.execute() {
         return Some(e);
     }
-    for id in ids {
-        if let Err(e) = runtime.result_error(id) {
+    for edge in watched {
+        if let Err(e) = runtime.edge_result_error(edge) {
             return Some(e.clone());
         }
     }

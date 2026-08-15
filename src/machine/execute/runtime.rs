@@ -26,11 +26,13 @@ use crate::machine::core::{ProgramBrand, RegionBrand, ScopeRefFamily};
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, Part, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::{
-    CallFrame, CarrierWitness, DeliveredCarried, FrameStorage, KError, KErrorKind, NodeId, RunId,
+    CallFrame, CarrierWitness, DeliveredCarried, FrameStorage, KError, KErrorKind, NodeId,
 };
 use crate::witnessed::SealedExtern;
 
-use super::dispatch::{BodyPlacement, DepRequest, SchedulerView, SubmitContext};
+use super::dispatch::{
+    BodyPlacement, DepRequest, SchedulerView, SubmitContext, propagate_dep_error,
+};
 use super::finalize::check_spliced_return;
 use super::lift::relocate_seam;
 use super::nodes::{ChainOp, NodeStep, NodeWork};
@@ -42,7 +44,7 @@ use super::{
     short_circuit,
 };
 use crate::machine::model::CarriedFamily;
-use crate::scheduler::{Deps, ResolvedDeps, Scheduler, Workload};
+use crate::scheduler::{Anchor, Dep, Deps, EdgeId, InstalledEdge, Scheduler, Workload};
 use crate::witnessed::Delivered;
 
 mod interpret;
@@ -59,8 +61,19 @@ pub(in crate::machine::execute) struct KoanWorkload;
 impl Workload for KoanWorkload {
     type Value = CarriedFamily;
     type Error = KError;
+    type Profile = crate::machine::core::KoanStorageProfile;
     type Frame = super::nodes::SlotFrame;
     type Continuation = ContinuationFamily;
+
+    /// Koan's half of delivery: the value-level escape seam ([`relocate_seam`]) — the cost-driven
+    /// copy-or-pin verdict with the retention claim derived from the rebuilt product. The walk
+    /// decides which destinations a terminal lands in; this decides what the crossing costs.
+    fn deliver(
+        terminal: &DeliveredCarried,
+        dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
+    ) -> DeliveredCarried {
+        relocate_seam(terminal, dest)
+    }
 }
 
 /// The write harness: the sole holder of `&mut Scheduler` across the execute tree. It owns the
@@ -78,10 +91,6 @@ pub struct KoanRuntime<'run> {
     /// executing slot's payload, and the contract-chain flag. The scheduler is a pure DAG runtime;
     /// this driver-side state floats across a single step. See [`ambient`](super::ambient).
     pub(in crate::machine::execute) ambient: super::ambient::AmbientContext,
-    /// This run's identity, minted once at construction. Qualifies a scheduler-local [`NodeId`]
-    /// into a [`NodeHandle`](crate::machine::NodeHandle) so a declaration statement stays
-    /// distinguishable from a same-positioned statement in a later run over one persistent scope.
-    pub(in crate::machine::execute) run: RunId,
     /// This run's program storage capability, handed to every step through its
     /// [`SchedulerView`](super::dispatch::SchedulerView). It also carries `'run`: the scheduler is
     /// value-erased (`Scheduler<KoanWorkload>`), so without this the run lifetime would live only in
@@ -102,7 +111,6 @@ impl<'run> KoanRuntime<'run> {
         Self {
             sched: Scheduler::new(),
             ambient: super::ambient::AmbientContext::default(),
-            run: RunId::next(),
             program,
             writer: Some(out),
         }
@@ -127,69 +135,58 @@ impl<'run> KoanRuntime<'run> {
 /// (terminal reads / slot count) so callers drive the whole run through the harness without ever
 /// borrowing the scheduler — the write methods are the inherent `&mut self` ones above.
 impl<'run> KoanRuntime<'run> {
-    /// Open a slot's terminal at a rank-2 brand and hand the value to `f`, returning its result or
-    /// the terminal's error — the destination-verb read. See [`Scheduler::read_result_with`].
-    pub fn read_result_with<R>(
+    /// Open an edge's delivered terminal at a rank-2 brand and hand the value to `f`, returning its
+    /// result or the terminal's error — the destination-verb read. See
+    /// [`Scheduler::read_edge_result_with`].
+    pub fn read_edge_result_with<R>(
         &self,
-        id: NodeId,
+        edge: EdgeId,
         f: impl for<'b> FnOnce(crate::machine::model::Carried<'b>) -> R,
     ) -> Result<R, &KError> {
-        self.sched.read_result_with(id, f)
+        self.sched.read_edge_result_with(edge, f)
     }
 
-    /// A slot terminal's error, or `Ok(())` on success — the value-free probe.
-    /// See [`Scheduler::result_error`].
-    pub fn result_error(&self, id: NodeId) -> Result<(), &KError> {
-        self.sched.result_error(id)
+    /// An edge's delivered terminal's error, or `Ok(())` on success — the value-free probe.
+    /// See [`Scheduler::edge_result_error`].
+    pub fn edge_result_error(&self, edge: EdgeId) -> Result<(), &KError> {
+        self.sched.edge_result_error(edge)
     }
 
-    /// A slot's finalized terminal as a delivery envelope (sealed carrier + retained producer-frame
-    /// owner) — the test-harness [`extract_terminal`](crate::builtins::test_support) hook for
-    /// minting an extracted value's reach into a surviving scope's arena, mirroring the drain. See
-    /// [`Scheduler::dep_delivered`].
+    /// Re-brand the edge's delivered resident against `scope`'s own region owner and lift it back
+    /// into an envelope — the same two moves the run loop makes at step start, for a test harness
+    /// that goes on to copy the value out. The edge is destined at `scope`'s region, so holding that
+    /// owner across the brand is exactly what makes the lift's upgrade succeed.
     #[cfg(test)]
-    pub(crate) fn dep_delivered(
+    pub(crate) fn edge_delivered(
         &self,
-        id: NodeId,
-    ) -> Result<crate::machine::DeliveredCarried, &KError> {
-        self.sched.dep_delivered(id)
+        edge: EdgeId,
+        scope: &crate::machine::Scope<'_>,
+    ) -> Result<DeliveredCarried, KError> {
+        let resident = self.sched.edge_resident(edge)?;
+        let coverage = crate::machine::FrameCoverage::of(
+            scope
+                .region_owner()
+                .upgrade()
+                .expect("a live scope reference implies a live region owner"),
+        );
+        Ok(scope.lift_spliced(&resident.brand_with(&coverage)))
     }
 
-    /// Relocate `producer`'s terminal into `dest` through its delivery envelope
-    /// ([`Scheduler::dep_delivered`] + [`Delivered::transfer_into`](crate::witnessed::Delivered)),
-    /// re-sealing it under the composed carrier that names everything it reaches from `dest` — the
-    /// relocation re-anchors under the retained producer-frame pin (the envelope host), with **no
-    /// fabricated lifetime** at this call site. The spine is copied into `dest` natively at the
-    /// merge brand; the surviving closure / module borrows ride the
-    /// producer's reach, minted into `dest`'s arena. `dest` arrives as a witnessed carrier over the
-    /// destination brand — its backing is the consuming slot's live frame for a `Forward`-ready
-    /// pull, or the externally pinned run region a drained root re-homes into.
-    ///
-    /// The seam is the fused [`relocate_seam`]: the cost-driven verb decision — a top-level record
-    /// pins (its substrate borrow covered by the producer's minted reach) when the pin is cheaper
-    /// than the rebuild, a leaf borrows home, or the crossing is foreign; every other value
-    /// pointer-copies its top node — with the retention claim derived from the rebuilt product, so
-    /// a plain-data copy frees its producer at retention discharge while a rebuild still borrowing
-    /// home keeps it.
-    ///
-    /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as the
-    /// relocation's own product envelope, not at a step brand. The consumer-pull dep slice does not
-    /// route this — it opens in-band at the step brand in [`run_step`](Self::run_step), where the
-    /// continuation needs the values live at `'b`.
-    pub(in crate::machine::execute) fn relocate_terminal(
-        &self,
+    /// Wire an edge onto `producer`, destined at `scope`'s own region — the test harness's
+    /// stand-in for the root edge `run_program` installs, and for the placeholder edge a real
+    /// binder plan claims. Slots reclaim at finalize, so a test that reads a result holds an edge
+    /// exactly as production does; wiring it here, right after the dispatch that allocated the
+    /// slot, is the same pre-terminal wiring both production callers do.
+    pub(crate) fn install_edge_for_test(
+        &mut self,
         producer: NodeId,
-        dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
-    ) -> Result<DeliveredCarried, KError> {
-        let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
-        // The destination is a bare region handle (empty reach), so the transfer composes the
-        // producer's reach alone. The product envelope is what crosses back whole — its residence is
-        // `dest`'s own frame and its members are the relocated terminal's reach, so whichever
-        // terminal door consumes it (`finalize`'s retention hold, `rehome_terminal`'s drop) reads
-        // the claim off the value it is storing. The destination's own region-lifetime retention
-        // rides the transfer's mint, so a caller that only needs the value to outlive teardown drops
-        // the envelope.
-        Ok(relocate_seam(&delivered, dest))
+        scope: &crate::machine::Scope<'_>,
+    ) -> EdgeId {
+        let destination = scope
+            .region_owner()
+            .upgrade()
+            .expect("a live scope reference implies a live region owner");
+        self.sched.install_edge(producer, &destination)
     }
 
     pub fn len(&self) -> usize {
@@ -201,24 +198,13 @@ impl<'run> KoanRuntime<'run> {
     }
 }
 
-/// Test-only forwarders: an immutable `&Scheduler` view (`resolve_name_part` fixtures) plus the
-/// AST-free poke surface (`free`, a slot's stored chain). No `&mut Scheduler` escapes — the
-/// accessor hands out `&Scheduler`, keeping the harness the sole writer.
+/// Test-only forwarders: an immutable `&Scheduler` view (`resolve_name_part` fixtures) plus a
+/// slot's stored chain. No `&mut Scheduler` escapes — the accessor hands out `&Scheduler`, keeping
+/// the harness the sole writer.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<KoanWorkload> {
         &self.sched
-    }
-
-    /// Mutable scheduler access for the white-box scheduler tests that poke `store` / `deps` /
-    /// `queues` directly. Test-only — production drives every write through the harness's own
-    /// `&mut self` methods, so this is the one sanctioned `&mut Scheduler` outside them.
-    pub(in crate::machine::execute) fn scheduler_mut(&mut self) -> &mut Scheduler<KoanWorkload> {
-        &mut self.sched
-    }
-
-    pub(in crate::machine::execute) fn free(&mut self, id: NodeId) {
-        self.sched.free(id)
     }
 
     pub fn chain_of(&self, id: NodeId) -> Option<Rc<crate::machine::LexicalFrame>> {
@@ -334,7 +320,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 };
             }
             // Leading statements become owned siblings in the block (one `BodyBlock` dep); the slot
-            // parks on them so they run — and cascade-free — before the tail continues. Where they
+            // parks on them so they run — and reclaim — before the tail continues. Where they
             // bind is what `block_entry` names: the block frame's own scope (MATCH / TRY arms via a
             // pre-built `FreshChild` cart, FN-body tails re-entering the already-installed cart with
             // `Inherit`), or a caller-allocated overlay under the inherited call-site cart (USING).
@@ -343,7 +329,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 BlockEntry::Overlay(overlay) => BodyPlacement::Overlay(overlay),
                 BlockEntry::None => unreachable!("a leading-carrying tail enters a block"),
             };
-            // `FreshTail` mints its cart only at apply time — after the leading statements would
+            // `FreshTail` installs its cart only at apply time — after the leading statements would
             // already have fanned out — so a leading-carrying tail cannot ride it.
             debug_assert!(
                 !matches!(frame_placement, FramePlacement::FreshTail { .. }),
@@ -353,13 +339,12 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 let contract = match contract {
                     TailContract::Eager(contract) => contract,
                     // The return-type expression is the last leading statement (all owned), so its
-                    // resolved value is the last owned terminal, read under that envelope's own pins.
-                    // The per-call type is re-homed into the captured-scope region — a strict ancestor
-                    // the cart keeps live — like the `Type` form's `PerCall.ret`.
+                    // resolved value is the last owned terminal, read in place in the region it was
+                    // delivered into. The per-call type is re-homed into the captured-scope region —
+                    // a strict ancestor the cart keeps live — like the `Type` form's `PerCall.ret`.
                     TailContract::FromLastResult { func } => {
-                        let owned = terminals.owned_slice();
-                        let terminal = owned[owned.len() - 1];
-                        let opened = terminal.delivered.open_at();
+                        let terminal = terminals[terminals.len() - 1];
+                        let opened = terminal.cell.open_at();
                         let kt = match opened.value() {
                             Carried::Type(t) => t,
                             Carried::Object(other) => {
@@ -400,7 +385,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     block_entry,
                 }
             });
-            Await::on(Deps::from_owned([DepRequest::BodyBlock {
+            Await::on(Deps::from_requests([DepRequest::BodyBlock {
                 statements: leading,
                 placement,
             }]))
@@ -409,15 +394,18 @@ pub(in crate::machine::execute) fn run_action<'step>(
         }
 
         ActionKind::AwaitDeps { deps, finish } => {
-            // The builtin assembled the structural `[park..., owned...]` split itself: parks keep
-            // first-occurrence order, owned insertion order, and the builder delivers results
-            // `[park..., owned...]`. This arm maps each owned sub-dispatch into the library dep
-            // currency and rebuilds the `Deps` envelope `Await::on` consumes; the wrapped finish
-            // recurses `run_action` on the `AwaitContinue`.
-            let (parks, owned) = deps.into_parts();
-            let mut lowered: Deps<DepRequest<'step>> = Deps::from_parks(parks);
-            for sub in owned {
-                lowered.own(sub.into_request());
+            // The builtin assembled the dep list itself, and results come back in that order. This
+            // arm maps each sub-dispatch request into the library dep currency, leaving the entries
+            // the builtin already named alone, and rebuilds the `Deps` envelope `Await::on`
+            // consumes; the wrapped finish recurses `run_action` on the `AwaitContinue`.
+            let mut lowered: Deps<DepRequest<'step>> = Deps::new();
+            for entry in deps.into_entries() {
+                match entry {
+                    Dep::Producer(source) => lowered.on(source),
+                    Dep::Request(sub) => {
+                        lowered.request(sub.into_request());
+                    }
+                }
             }
             let wrapped: TerminalDepFinish<'step> = Box::new(move |view, results| {
                 let fctx = FinishCtx {
@@ -482,8 +470,8 @@ impl<'run> KoanRuntime<'run> {
 
     /// Realize one staged eager dep as its producer node — the four shapes
     /// [`stage_eager_part`](super::dispatch::stage_eager_part) emits. `brand` is the realizing
-    /// step's, where an aggregate literal's per-element dispatch node is bumped. `Existing` /
-    /// `BodyBlock` never reach here (the stager doesn't produce them).
+    /// step's, where an aggregate literal's per-element dispatch node is bumped. `BodyBlock` never
+    /// reaches here (the stager doesn't produce it).
     pub(in crate::machine::execute) fn realize_eager_dep<'a>(
         &mut self,
         brand: RegionBrand<'a>,
@@ -494,54 +482,40 @@ impl<'run> KoanRuntime<'run> {
             DepRequest::ListLit(items) => self.schedule_list_literal(brand, items),
             DepRequest::DictLit(pairs) => self.schedule_dict_literal(brand, pairs),
             DepRequest::RecordLit(fields) => self.schedule_record_literal(brand, fields),
-            DepRequest::Existing(_) | DepRequest::BodyBlock { .. } => {
+            DepRequest::BodyBlock { .. } => {
                 unreachable!("eager staging emits only Dispatch / literal deps")
             }
         }
     }
 
     /// Realize a [`Catch`](Continuation::Catch)'s single watched [`DepRequest`] to a producer
-    /// `NodeId`. `Existing` is already a producer the builtin found in scope; a `Dispatch` realizes as
-    /// a single statement (an `InScope` watched expr enters a fresh single-statement block — see
-    /// [`Self::realize_dispatch`]). A `Catch` never watches a dispatcher-only lowering.
+    /// `NodeId`: a `Dispatch` realizes as a single statement (an `InScope` watched expr enters a
+    /// fresh single-statement block — see [`Self::realize_dispatch`]). A `Catch` never watches a
+    /// dispatcher-only lowering.
     fn realize_catch_dep<'a>(&mut self, dep: DepRequest<'a>) -> NodeId {
         match dep {
-            DepRequest::Existing(id) => id,
             DepRequest::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
             DepRequest::ListLit(_)
             | DepRequest::DictLit(_)
             | DepRequest::RecordLit(_)
             | DepRequest::BodyBlock { .. } => {
-                unreachable!("a Catch watches only a simple Dispatch/Existing dep")
+                unreachable!("a Catch watches only a simple Dispatch dep")
             }
         }
     }
 
-    /// Resolve a [`FramePlacement`] to the cart a [`Continue`](Outcome::Continue) installs: mint a
-    /// fresh TCO tail-call cart, take a builtin-minted fresh cart, or keep the current cart
+    /// Resolve a [`FramePlacement`] to the cart a [`Continue`](Outcome::Continue) installs: take the
+    /// decide-minted cart (a TCO tail-call cart or a builtin's fresh child), or keep the current one
     /// (`None`). The one place the placement → cart mapping lives — shared by the `Continue` body
     /// re-run and the folded invoke / re-resolve paths (which reach it through their own
-    /// `Continue`).
-    fn resolve_frame_placement<'x>(
-        &mut self,
-        placement: FramePlacement<'x>,
-    ) -> Option<Rc<CallFrame>> {
+    /// `Continue`). Both fresh placements arrive already built: the deciding step is where a
+    /// callee's arguments are relocated into the new cart, so it has to hold the cart itself.
+    fn resolve_frame_placement(&mut self, placement: FramePlacement) -> Option<Rc<CallFrame>> {
         match placement {
-            FramePlacement::FreshTail { outer } => Some(CallFrame::new(outer)),
-            FramePlacement::FreshChild { frame } => Some(frame),
+            FramePlacement::FreshTail { frame } | FramePlacement::FreshChild { frame } => {
+                Some(frame)
+            }
             FramePlacement::Inherit => None,
-        }
-    }
-
-    /// Close the active frame's scope iff this slot owns it: the per-call frame's body has finished
-    /// (a `Done` return, or a tail `Continue` retiring this iteration), so the scope
-    /// takes no further binds and its reach-set seals. A `Yoked` sub-expression slot owns no frame
-    /// (its `owner` never names this slot), so its `Done` is a no-op here.
-    fn close_owned_scope(&self, id: NodeId) {
-        if let Some(frame) = self.ambient.active_frame_ref()
-            && frame.owner() == Some(id)
-        {
-            frame.with_scope(|s| s.close());
         }
     }
 
@@ -553,10 +527,11 @@ impl<'run> KoanRuntime<'run> {
         outcome: Outcome<'step>,
         brand: RegionBrand<'step>,
         id: NodeId,
+        anchor: &super::nodes::SlotFrame,
     ) -> NodeStep<'step> {
         match outcome {
             Outcome::Done(result) => {
-                self.close_owned_scope(id);
+                anchor.close_opened_scope();
                 match result {
                     Ok(carrier) => NodeStep::DoneWitnessed(carrier),
                     Err(error) => NodeStep::Error(error),
@@ -574,13 +549,12 @@ impl<'run> KoanRuntime<'run> {
                 // A tail iteration (`FreshTail`) retires this scope before the fresh cart is
                 // installed for the next; other placements keep the current scope live.
                 if matches!(frame, FramePlacement::FreshTail { .. }) {
-                    self.close_owned_scope(id);
+                    anchor.close_opened_scope();
                 }
+                // A freshly installed frame is one this slot's body runs in and finalizes; the run
+                // loop's `Replace` arm mints the incoming anchor `opening` it, which is what makes
+                // this slot's own finish close that scope and no other slot's.
                 let frame = self.resolve_frame_placement(frame);
-                // The body re-dispatched into a freshly installed frame finalizes that frame's scope.
-                if let Some(installed) = frame.as_ref() {
-                    installed.set_owner(id);
-                }
                 // The chain reshape was decided at the `Continue` construction site while the
                 // contract variant was live (see [`ChainOp`]); the run loop assembles it against the
                 // post-step frame. An `Overlay` block entry also rides the tail slot's scope: erased
@@ -605,16 +579,23 @@ impl<'run> KoanRuntime<'run> {
                 continuation,
                 dep_error_frame,
             } => {
-                // Realize the builder's owned requests into producer ids, rebuilding a
-                // `ResolvedDeps` from the same parks. An `Existing` request realizes to itself; an
-                // `InScope`-placed `Dispatch` and a `BodyBlock` each fan out to one owned producer
-                // per statement (so those arms `own` per id, the rest own one). Parks keep their
-                // first-occurrence order, owned their realization order — the `[park..., owned...]`
-                // delivery order a finish addresses through [`DepResults`].
-                let (parks, owned_requests) = deps.into_parts();
-                let mut resolved = ResolvedDeps::from_parks(parks);
-                for dep in owned_requests {
-                    match dep {
+                // Realize the builder's dep list into one list of *sources*, in dep order — which is
+                // the order a finish reads its results back in. A dep the builtin could already name
+                // passes its source through untouched; a request is spawned here and then named the
+                // same way, by a source edge this arm mints.
+                let entries = deps.into_entries();
+                let entry_count = entries.len();
+                let mut sources: Vec<EdgeId> = Vec::with_capacity(entry_count);
+                let mut minted: Vec<EdgeId> = Vec::new();
+                for entry in entries {
+                    let request = match entry {
+                        Dep::Producer(source) => {
+                            sources.push(source);
+                            continue;
+                        }
+                        Dep::Request(request) => request,
+                    };
+                    let producers = match request {
                         // An `InScope` body fans out one producer per statement (multi-statement
                         // split); `OwnScope` realizes as a single producer via the shared
                         // [`Self::realize_dispatch`].
@@ -624,46 +605,68 @@ impl<'run> KoanRuntime<'run> {
                             ..
                         } => {
                             let statements = split_working_body(scope.brand(), expr);
-                            for id in self.enter_block(scope.id, statements, scope) {
-                                resolved.own(id);
-                            }
+                            self.enter_block(scope.id, statements, scope)
                         }
-                        dep @ (DepRequest::Dispatch { .. }
+                        request @ (DepRequest::Dispatch { .. }
                         | DepRequest::ListLit(_)
                         | DepRequest::DictLit(_)
                         | DepRequest::RecordLit(_)) => {
-                            resolved.own(self.realize_eager_dep(brand, dep));
+                            vec![self.realize_eager_dep(brand, request)]
                         }
-                        // A body block fans out one owned producer per statement: into a fresh
-                        // per-call frame's own scope (`dispatch_body`), or — under `Inherit` — into a
+                        // A body block fans out one producer per statement: into a fresh per-call
+                        // frame's own scope (`dispatch_body`), or — under `Inherit` — into a
                         // caller-allocated overlay via the same `enter_block` fan-out the leading
                         // statements of an `InScope` body use (USING).
                         DepRequest::BodyBlock {
                             statements,
                             placement: BodyPlacement::Frame(frame),
-                        } => {
-                            for id in self.dispatch_body(&frame, statements) {
-                                resolved.own(id);
-                            }
-                        }
+                        } => self.dispatch_body(&frame, statements),
                         DepRequest::BodyBlock {
                             statements,
                             placement: BodyPlacement::Overlay(overlay),
-                        } => {
-                            for id in self.enter_block(overlay.id, statements, overlay) {
-                                resolved.own(id);
-                            }
-                        }
-                        DepRequest::Existing(id) => {
-                            resolved.own(id);
-                        }
+                        } => self.enter_block(overlay.id, statements, overlay),
+                    };
+                    debug_assert!(
+                        producers.len() == 1 || entry_count == 1,
+                        "a request fanning out to several producers shifts every later dep's \
+                         position, so it may only be the sole entry in its list",
+                    );
+                    // Name each spawned producer by a source edge destined at this slot's own anchor
+                    // region — where a sub-result belongs. The door mints the slot's real dep edge
+                    // off it and inherits that destination, so sub-work needs no second wiring rule.
+                    for producer in producers {
+                        let source = self.sched.install_edge(producer, anchor.owner());
+                        sources.push(source);
+                        minted.push(source);
                     }
                 }
-                // Install the resolved list's edges against this slot: each park a `Notify` edge
-                // (kept alive), each owned dep an `Owned` edge (cascade-freed on resolve). (`Catch`
-                // declares no deps here, so `resolved` is empty — it realizes and owns its single
-                // watched dep in the `cont` match below.)
-                self.sched.install_edges(&resolved, id);
+                // Wire the whole dep list through the one door: it mints this slot's own edge per
+                // source, inheriting that source's destination — so a dep on a placeholder delivers
+                // into the scope that placeholder named, and a dep on sub-work into this slot's own
+                // region — and hands back the realized list plus each dep's filled-or-parked verdict.
+                // (`Catch` declares no deps here — it realizes its single watched dep in the `cont`
+                // match below.)
+                let (resolved, installed) = self.sched.install_deps(id, &sources);
+                // The sources minted just above carried producer + destination into the door and had
+                // no other job; this slot's own edges are installed, so let them go.
+                for source in minted {
+                    self.sched.release_edge(source);
+                }
+                // **Install-and-inspect**: a decide never probes a producer's standing, so a park
+                // whose producer had already finalized is classified here. An errored one is
+                // propagated now rather than waited on — a terminal slot never notifies again, so
+                // the park would never wake. The first error wins, matching the step-start pull's
+                // short-circuit. Rows and holds already installed discharge through this slot's
+                // ordinary death path.
+                for verdict in &installed {
+                    let InstalledEdge::Filled(edge) = verdict else {
+                        continue;
+                    };
+                    if let Err(dep_error) = self.sched.edge_result_error(*edge) {
+                        let error = propagate_dep_error(dep_error, dep_error_frame.clone());
+                        return self.apply_outcome(Outcome::Done(Err(error)), brand, id, anchor);
+                    }
+                }
                 // Lower each variant to its outermost live `NodeContinuation` alongside the deps it
                 // waits on and its deadlock-summary carrier, then wrap once below before erasing.
                 let (deps, continuation, carrier) = match continuation {
@@ -685,18 +688,20 @@ impl<'run> KoanRuntime<'run> {
                         None,
                     ),
                     // The action-harness catch carries its single watched dep unrealized (its
-                    // placement differs from a dep-finish body's fan-out); realize and own it here.
-                    // `catch_continuation` runs the finish without short-circuiting on a dep error.
+                    // placement differs from a dep-finish body's fan-out); realize it here and name
+                    // it the same way sub-work is named above, by a source destined at this slot's
+                    // region. `catch_continuation` runs the finish without short-circuiting on a
+                    // dep error.
                     Continuation::Catch { watched, finish } => {
                         let from = self.realize_catch_dep(watched);
-                        let mut watched_deps = ResolvedDeps::new();
-                        watched_deps.own(from);
-                        self.sched.install_edges(&watched_deps, id);
+                        let source = self.sched.install_edge(from, anchor.owner());
+                        let (watched_deps, _) = self.sched.install_deps(id, &[source]);
+                        self.sched.release_edge(source);
                         (watched_deps, catch_continuation(finish), None)
                     }
                     // The resume closure carries the evolving `working_expr` from here on; the
                     // `carrier` it travels with is only the deadlock-summary sample. A decide takes
-                    // no dep values, so `ignore_results` drops the (park-only) results view.
+                    // no dep values, so `ignore_results` drops the results slice.
                     Continuation::Resume { carrier, resume } => {
                         (resolved, ignore_results(resume), carrier)
                     }
@@ -717,16 +722,30 @@ impl<'run> KoanRuntime<'run> {
                     overlay_scope: None,
                 }
             }
-            Outcome::Forward(producer) => {
-                // The slot's result *is* `producer`'s. Ready: pull its terminal into this slot's own
-                // frame (the consumer-pull lift — the producer keeps its value in its frame, which
-                // would free out from under a bare copy), and consumers pull from here. Not ready:
-                // `Alias` drives `splice_forward` — move consumers onto `producer` and alias the slot.
+            Outcome::Forward(source) => {
+                // The slot's result *is* the result behind `source`. Classification is the install's,
+                // not a probe's: wiring a second edge off `source` answers filled-or-parked and
+                // leaves a name this slot can read through. Filled: the producer already delivered
+                // into the destination `source` names, and the new edge inherits that destination,
+                // so the terminal is resident where this slot reads it and nothing relocates.
+                // Parked: the probe edge has said all it can, so release it and `Alias` drives the
+                // splice — move consumers onto the producer and alias the slot.
+                // A forward is the one shape that wants no destination of its own: the slot is
+                // standing in for the producer, so landing the terminal where the producer's own
+                // consumers already look is the correct answer rather than a limitation. This is why
+                // `install_edge_from`'s share-only filled branch covers every koan call site — no
+                // site here asks for a delivery aimed at a region `source` does not already name.
+                // The classification edge joins the slot's owned list: the run loop releases it when
+                // the slot terminalizes (or splices out), which is what lets a checker micro-step
+                // re-emit `Forward` on an edge of its own rather than on a foreign claim its binder
+                // may have retired in the meantime.
+                let installed = self.sched.install_edge_from(source);
+                anchor.own_edges([installed.edge_id()]);
                 let Some(obligation) = self.ambient.current_obligation_duplicate() else {
-                    if self.sched.is_result_ready(producer) {
-                        return NodeStep::ForwardReady(producer);
-                    }
-                    return NodeStep::Alias(producer);
+                    return match installed {
+                        InstalledEdge::Filled(edge) => NodeStep::ForwardReady(edge),
+                        InstalledEdge::Parked(_) => NodeStep::Alias(source),
+                    };
                 };
                 // A residual declared-return obligation on this splice must be discharged before the
                 // rehomed terminal reaches any consumer. Take it out of the ambient so neither this
@@ -734,48 +753,56 @@ impl<'run> KoanRuntime<'run> {
                 // continuation re-observes it; `obligation` is captured (never re-deposited), so the
                 // check runs obligation-free.
                 self.ambient.take_obligation();
-                if self.sched.is_result_ready(producer) {
+                match installed {
                     // The producer resolved: run the declared-return check inline against its
                     // terminal, then behave as the obligation-free ready path. An errored producer
                     // carries no value to check — `ForwardReady` relocates its error as the
                     // obligation-free path would.
-                    let checked = match self.sched.dep_delivered(producer) {
-                        Ok(delivered) => check_spliced_return(
-                            &obligation,
-                            &delivered,
-                            self.ambient.type_registry(),
-                        ),
-                        Err(_) => Ok(()),
-                    };
-                    match checked {
-                        Ok(()) => NodeStep::ForwardReady(producer),
-                        Err(error) => self.apply_outcome(Outcome::Done(Err(error)), brand, id),
+                    InstalledEdge::Filled(edge) => {
+                        // The producer's value is already resident in the edge's destination; the
+                        // check reads it in place, under the region's own owner.
+                        let checked = match self.sched.read_edge_result_with(edge, |value| {
+                            check_spliced_return(&obligation, value, self.ambient.type_registry())
+                        }) {
+                            Ok(checked) => checked,
+                            // A ready-but-errored producer carries no value to check.
+                            Err(_) => Ok(()),
+                        };
+                        match checked {
+                            Ok(()) => NodeStep::ForwardReady(edge),
+                            Err(error) => {
+                                self.apply_outcome(Outcome::Done(Err(error)), brand, id, anchor)
+                            }
+                        }
                     }
-                } else {
                     // The producer is not yet resolved: park a checker micro-step on it (an
                     // already-terminal producer never re-notifies, so a park is sound only here). Its
                     // finish runs the declared-return check un-relocated and re-emits `Forward` on a
                     // pass — which re-enters this arm with no ambient obligation (the micro-step ran
                     // obligation-free) and, the producer now resolved, takes the plain `ForwardReady`
-                    // path. No re-check, no loop.
-                    let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
-                        // The single parked dep is `producer`, delivered un-relocated at index 0.
-                        let producer_terminal = terminals.all()[0];
-                        match check_spliced_return(
-                            &obligation,
-                            &producer_terminal.delivered,
-                            view.types(),
-                        ) {
-                            Ok(()) => Outcome::Forward(producer),
-                            Err(error) => Outcome::Done(Err(error)),
-                        }
-                    });
-                    let park = Outcome::ParkThenContinue {
-                        deps: Deps::from_parks([producer]),
-                        continuation: Continuation::FinishTerminal(finish),
-                        dep_error_frame: Some(dep_error_frame()),
-                    };
-                    self.apply_outcome(park, brand, id)
+                    // path. No re-check, no loop. Both the park and the re-emission name `edge`, this
+                    // slot's own name for the producer, which outlives the wait whatever the binder
+                    // that first published it does.
+                    InstalledEdge::Parked(edge) => {
+                        let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
+                            // The single parked dep is the producer behind `edge`, delivered
+                            // un-relocated at index 0.
+                            let producer_terminal = terminals[0];
+                            let checked = producer_terminal.cell.open(|value| {
+                                check_spliced_return(&obligation, value, view.types())
+                            });
+                            match checked {
+                                Ok(()) => Outcome::Forward(edge),
+                                Err(error) => Outcome::Done(Err(error)),
+                            }
+                        });
+                        let park = Outcome::ParkThenContinue {
+                            deps: Deps::from_producers([edge]),
+                            continuation: Continuation::FinishTerminal(finish),
+                            dep_error_frame: Some(dep_error_frame()),
+                        };
+                        self.apply_outcome(park, brand, id, anchor)
+                    }
                 }
             }
         }

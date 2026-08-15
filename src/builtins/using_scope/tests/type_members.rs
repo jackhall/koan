@@ -167,6 +167,7 @@ fn block_type_alias_types_a_later_statement_of_the_same_block() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
     let ids = test_run.enter_source(
         "MODULE some_module = ((UNION Color = (Red :Null Blue :Null)))\n\
          USING some_module SCOPE (\n  \
@@ -175,14 +176,18 @@ fn block_type_alias_types_a_later_statement_of_the_same_block() {
          (SHOW (Alias (Blue null)))\n\
          )",
     );
+    let mut edges = Vec::new();
+    for id in &ids {
+        edges.push(test_run.runtime.install_edge_for_test(*id, scope));
+    }
     test_run
         .runtime
         .execute()
         .expect("scheduler should succeed");
     let tail = extract_terminal(
         &test_run.runtime,
-        test_run.scope,
-        *ids.last().expect("two top-level statements"),
+        scope,
+        *edges.last().expect("two top-level statements"),
     );
     assert!(
         matches!(tail, Carried::Object(KObject::KString(s)) if *s == "a color"),

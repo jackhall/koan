@@ -32,11 +32,17 @@ parts. The cache carries no consumer id, so cycle detection is
 deferred to Step 3, where it runs only on slots the picked function
 classifies as references (a binder declaration slot like `x` in `LET x = …`
 has the dispatching slot as its own placeholder's producer, so an upfront
-cycle check would false-positive on declarations). A producer error is
-absorbed as the build's `Err` — a bare-name arg whose producer terminalized
-with an error can never resolve, so the build short-circuits and the error
-propagates with a `<wrap-resolve>` frame before any candidate work, rather
-than surviving as a cache entry a later sweep must screen.
+cycle check would false-positive on declarations). The cache carries no
+producer standing either: a decide reads a still-finalizing name as the claim
+`EdgeId` its binder stamped and nothing more. Whether that binder has already
+terminalized — errored included — is the install door's ruling when the harness
+wires the park, so it never becomes a cache state a later sweep must screen
+([Which edges Koan installs](scheduler.md#which-edges-koan-installs)).
+
+The ladder is **total**, and that is a type-level fact rather than a
+convention: `resolve_name_part` returns a `NameOutcome`, not a `Result`, so
+Step 1 has no failure channel and the build cannot short-circuit. Every
+bare-name part reaches Step 2 as exactly one of resolved / parked / unbound.
 
 Step 2 calls
 [`Scope::resolve_dispatch_with_chain`](../../src/machine/core/scope.rs) once,
@@ -175,7 +181,7 @@ The rails the dispatch driver feeds:
     path produces.
   - `HeadDeferred` (`(pick) {x = 1}`) and `TypeHeadDeferred`
     (`:(pick_type) {x = 1}`) — [`HeadDeferredState`](../../src/machine/execute/dispatch/head_deferred.rs)
-    sub-dispatches the head first (an owned dep; the park/resume pair mirrors
+    sub-dispatches the head first (as sub-work; the park/resume pair mirrors
     `CtorState`'s), then branches the resumed value's kind into a
     `ResolvedCallable`. `HeadDeferred` admits any function value or a
     constructible type; `TypeHeadDeferred` (the `:(...)` sigil guarantees a
@@ -249,22 +255,24 @@ The rails the dispatch driver feeds:
   Per-arm behavior:
 
   - **Wrap slot.** The arm matches the ladder's three-state
-    [`BareCarrier`](../../src/machine/execute/dispatch/bare_name.rs).
+    [`BareCarrier`](../../src/machine/execute/dispatch/bare_name.rs) — three
+    arms and no fourth, since `resolve_bare_carrier` is total like its
+    `resolve_name_part` twin.
     `Sealed(cell)` splices the sealed binding-scope carrier inline as
     `WorkingPart::Spliced { cell }` — value and reach as one unit.
-    `Parked(p)` cycle-checks
+    `Parked(source)` cycle-checks the producer behind the claim edge
     via [`DepGraph::would_create_cycle`](../../workgraph/src/scheduler/dep_graph.rs)
     and either surfaces `SchedulerDeadlock { sample: "cycle in type alias
-    `<name>`" }` on a self-park or pushes `p` onto the shared
-    `producers_to_wait` list. `Unbound(name)` surfaces a slot-terminal
+    `<name>`" }` on a self-park or pushes `source` onto the shared
+    `sources_to_wait` list. `Unbound(name)` surfaces a slot-terminal
     `UnboundName` (the parent binder's dep-finish reads it through
     `read_result(dep)` and short-circuits with the right framing — an
     `Err` from `execute` would break that catch). A producer error is not a
-    ladder state — the resolution surface absorbs it as an `Err` the walk
-    propagates, and a cycle never classifies against a cache built with no
-    consumer id.
+    ladder state and not a walk outcome either: it reaches this consumer through
+    the park the harness installs. The would-cycle guard is the one pre-wiring
+    question left, and it classifies only here, where a consumer id is in hand.
   - **Ref-name slot.** Literal-name slots keep the bare token, so
-    `Resolved` and `Unbound` are no-ops. `Parked(p)` runs the same
+    `Resolved` and `Unbound` are no-ops. `Parked(source)` runs the same
     cycle-check then push as the wrap arm. Only `Identifier` and leaf
     `Type` parts park here; non-bare-name parts are skipped by
     classification.
@@ -282,10 +290,10 @@ The rails the dispatch driver feeds:
   staged into a `DepRequest` vec (the dep currency the harness realizes)
   rather than submitted eagerly during the walk — the single
   `stage_eager_part` classifier owns the eager part-shape set and hands back
-  the staged `DepRequest` directly. After the loop, if `producers_to_wait` is non-empty the decide
+  the staged `DepRequest` directly. After the loop, if `sources_to_wait` is non-empty the decide
   returns a `ParkThenContinue` whose continuation is a `Continuation::Resume`
   (carrying a `ResumeFn` closure over the partly-spliced `working_expr`) — the
-  harness installs the park edges as `Notify` (via `add_park_edge`) and
+  harness mints this slot's own edge off each source through the install door and
   installs a resume dispatch decide, so the captured
   `working_expr` becomes the source of truth on wake — **without** submitting
   any staged subs. Eager submission would leak the sub-nodes on the re-resume
@@ -315,9 +323,11 @@ The rails the dispatch driver feeds:
   [`dispatch/literal.rs`](../../src/machine/execute/dispatch/literal.rs))
   ride the same name-resolve rail: bare-name entries call the shared
   [`resolve_bare_carrier`](../../src/machine/execute/dispatch/bare_name.rs)
-  ladder directly and materialize as `Slot::Static` (sealed) or
-  `Slot::Park(i)` (parked producer), with the dep-finish driving a
-  single wake across all parked siblings.
+  ladder directly and materialize as `Slot::Static` (sealed) or `Slot::Dep`
+  (a producer the literal waits on), with the dep-finish driving a single wake
+  across all parked siblings. A `Slot::Dep` carries no index: the classify walk
+  appends one dep per such cell, so the finish's walk over the same rows reads
+  each result off a cursor in dep order.
 
 `Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /
 `eager_indices`) are disjoint by construction: each slot's

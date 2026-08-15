@@ -56,11 +56,12 @@ fn let_t_cycle_errors() {
         .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
         .collect();
     let ids = runtime.enter_block(scope.id, exprs, scope);
+    let edge = runtime.install_edge_for_test(ids[0], scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
     let types = test_run.types.clone();
-    let res = runtime.read_result_with(ids[0], |v| format!("{:?}", v.ktype(&types)));
+    let res = runtime.read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types)));
     match res {
         // The bare-leaf RHS resolves through the memoized type-expr bridge, whose miss
         // surfaces the elaborator's `unknown type name` diagnostic naming `Ty`. The
@@ -97,11 +98,12 @@ fn let_type_class_with_non_type_value_errors() {
             ),
             scope,
         );
+        let edge = runtime.install_edge_for_test(id, scope);
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
         let types = test_run.types.clone();
-        match runtime.read_result_with(id, |v| format!("{:?}", v.ktype(&types))) {
+        match runtime.read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types))) {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
                     if name == "Foo" && got == expected),
@@ -133,10 +135,14 @@ fn let_type_class_with_type_value_still_binds() {
             scope,
         ));
     }
+    let edges: Vec<_> = ids
+        .iter()
+        .map(|id| runtime.install_edge_for_test(*id, scope))
+        .collect();
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = runtime.result_error(ids[0]);
+    let res = runtime.edge_result_error(edges[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let kt = scope
         .resolve_type("Foo")
@@ -164,10 +170,14 @@ fn let_identifier_lhs_with_non_type_still_binds() {
             scope,
         ));
     }
+    let edges: Vec<_> = ids
+        .iter()
+        .map(|id| runtime.install_edge_for_test(*id, scope))
+        .collect();
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = runtime.result_error(ids[0]);
+    let res = runtime.edge_result_error(edges[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let entry = scope.lookup("foo").expect("expected binding 'foo'");
     assert!(
@@ -198,11 +208,15 @@ fn let_parameterized_type_lhs_still_shape_errors() {
             scope,
         ));
     }
+    let edges: Vec<_> = ids
+        .iter()
+        .map(|id| runtime.install_edge_for_test(*id, scope))
+        .collect();
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
     let types = test_run.types.clone();
-    let res = runtime.read_result_with(ids[0], |v| format!("{:?}", v.ktype(&types)));
+    let res = runtime.read_edge_result_with(edges[0], |v| format!("{:?}", v.ktype(&types)));
     match res {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(_)),

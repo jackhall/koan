@@ -4,12 +4,13 @@
 //! immediately, an unbound name errors, and a still-finalizing head placeholder parks via a
 //! [`park_resume`] closure that re-runs the fast lane on resume.
 
+use crate::machine::ProducerId;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
-use crate::machine::{DeliveredCarried, KError, KErrorKind, NameLookup, NodeId};
+use crate::machine::{DeliveredCarried, KError, KErrorKind, NameLookup};
 
 use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::SchedulerView;
-use super::{Outcome, ProducerStanding, park_resume};
+use super::{Outcome, park_resume};
 
 pub(super) fn initial<'step>(
     ctx: &SchedulerView<'_, 'step, '_>,
@@ -26,16 +27,11 @@ pub(super) fn initial<'step>(
         // outlives the application and the re-anchored value is valid at `'step`. Same door the
         // deferred-head lane takes (`head_deferred::classify_head`).
         Some(NameLookup::Bound(delivered)) => dispatch_callable_value(ctx, expr, &delivered),
-        // Head placeholder. `Errored` means the binder failed before binding the head, so the name
-        // never became a value — propagate. `Ready` means the producer finalized without binding the
-        // head as a value, so the name is unbound. `Park` re-runs the fast lane on resume.
-        Some(NameLookup::Parked(producer)) => match ctx.producer_standing(producer) {
-            ProducerStanding::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
-            ProducerStanding::Ready => {
-                Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head.to_string()))))
-            }
-            ProducerStanding::Park => install_head_park(producer, expr),
-        },
+        // Head placeholder: park on the binder's claim and re-run the fast lane on resume. A binder
+        // that failed before binding the head propagates its error through this park (the harness
+        // rules on an already-terminal producer when it installs); one that bound the head wakes
+        // the resume onto the `Bound` arm above.
+        Some(NameLookup::Parked(source)) => install_head_park(source, expr),
         None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head.to_string())))),
     }
 }
@@ -68,13 +64,13 @@ fn dispatch_callable_value<'step>(
     apply_callable(ctx, callable, &expr)
 }
 
-/// Park the whole call on its still-finalizing head `producer` and re-run the fast lane on
-/// resume. The carrier surfaces the original (unspliced) call expression for the drain-end
+/// Park the whole call on its head's still-finalizing binder edge `source` and re-run the fast
+/// lane on resume. The carrier surfaces the original (unspliced) call expression for the drain-end
 /// deadlock summary.
-fn install_head_park<'step>(producer: NodeId, expr: WorkingExpression<'step>) -> Outcome<'step> {
+fn install_head_park<'step>(source: ProducerId, expr: WorkingExpression<'step>) -> Outcome<'step> {
     let carrier = expr.summarize();
     park_resume(
-        vec![producer],
+        vec![source],
         Some(carrier),
         Box::new(move |ctx, _idx| initial(ctx, expr)),
     )

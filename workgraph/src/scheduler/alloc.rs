@@ -1,53 +1,45 @@
 use std::rc::Rc;
 
-use super::dep_graph::work_owned_edges;
 use super::nodes::{NodeWork, seal_work};
-use super::{NodeId, Scheduler, Workload};
+use super::{EdgeId, NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
     /// Node-creation core: allocate a slot for `work`, wire its dep edges, install its memory anchor,
     /// and queue it if its deps are already satisfied. `anchor` is the slot's per-slot memory anchor
     /// (the workload mints it from its own active/run frame); the scheduler stores it and hands it
     /// back but calls only [`Anchor::owner`](super::Anchor::owner). `framed` is whether the workload
-    /// had an active frame (`false` selects the fresh-top-level queue for a dep-free / park-free slot,
-    /// matching the in-flight-vs-fresh split). This allocator never names a workload type — it only
-    /// wires the slot's deps and installs its anchor. The work arrives with its continuation live;
-    /// this is one of the erase doors that seals it against `anchor`.
+    /// had an active frame (`false` selects the fresh-top-level queue for a dep-free slot, matching
+    /// the in-flight-vs-fresh split). This allocator never names a workload type — it only wires the
+    /// slot's deps and installs its anchor. The work arrives with its continuation live; this is one
+    /// of the erase doors that seals it against `anchor`.
     ///
-    /// Edge installation here is *not*
-    /// [`install_edges`](super::Scheduler::install_edges) — a fresh slot's row and its edges are
-    /// initialized as one atomic step, and the slot **owns** the sub-work it spawns, so an
-    /// already-finalized owned dep still records its backward `Owned` edge (the ownership record the
-    /// error-path cascade walks). Only the pending counts filter by readiness.
+    /// `sources` are the **edges the embedder holds**, one per dep in dep order. The door mints the
+    /// slot's own edge off each, inheriting its destination — the same act
+    /// [`install_deps`](Self::install_deps) performs for an already-allocated slot. This is the
+    /// submit-time sibling of that door, routing the same wire primitive.
+    ///
+    /// The slot is allocated before its edges because an edge is *the consumer's own* — minting one
+    /// names the consumer — so the row and the anchor go up first and the realized list is written
+    /// back onto the stored work. Queue routing then reads the row rather than arithmetic the caller
+    /// did on the side.
     pub fn alloc_node(
         &mut self,
         work: NodeWork<'_, W>,
+        sources: &[EdgeId],
         anchor: Rc<W::Frame>,
         framed: bool,
     ) -> NodeId {
-        let owned_edges = work_owned_edges(&work);
-        let no_owned = owned_edges.is_empty();
-        let pending_owned: Vec<NodeId> = owned_edges
-            .iter()
-            .map(|e| e.node_id())
-            .filter(|p| !self.is_result_ready(*p))
-            .collect();
-        let pending_park: Vec<NodeId> = work
-            .deps
-            .parks()
-            .iter()
-            .copied()
-            .filter(|p| !self.is_result_ready(*p))
-            .collect();
-        let no_park = work.deps.parks().is_empty();
+        debug_assert!(
+            work.deps.is_empty(),
+            "a fresh slot's realized dep list is this door's to write; the work arrives with none",
+        );
         let id = self.store.alloc_slot(seal_work(work, &anchor));
-        self.deps.install_for_slot(id, owned_edges, &pending_owned);
+        self.deps.install_for_slot(id);
         self.deps.install_anchor(id, anchor);
-        for p in &pending_park {
-            self.deps.add_park_edge(*p, id);
-        }
-        if pending_owned.is_empty() && pending_park.is_empty() {
-            if !framed && no_owned && no_park {
+        let (resolved, _verdicts) = self.install_deps(id, sources);
+        self.store.write_deps(id, resolved);
+        if self.deps.pending_count(id) == 0 {
+            if !framed && sources.is_empty() {
                 self.queues.push_fresh(id);
             } else {
                 self.queues.push_in_flight_submit(id);

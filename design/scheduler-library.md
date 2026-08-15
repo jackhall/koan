@@ -68,8 +68,9 @@ a concept, not a final identifier.
   reach set always represents the true union; no caller can assert or
   assemble one by hand. [reach.md](../workgraph/design/reach.md) owns the
   representation, the resident/walking carrier forms, and the holder rule.
-- **Slot / node** — one unit of scheduled work, with a crate-internal
-  identity; the embedder never holds a node.
+- **Slot / node** — one unit of scheduled work, named by a `NodeId`. That name
+  is a **drive-loop currency**: the harness pops, steps, wires, and does graph
+  surgery with it, and nothing below the drive loop ever sees one.
 - **Edge** — one consumer→producer relationship, the sole boundary currency
   (`EdgeId`): the embedder wires parked deps, dispatch placeholders, scope
   bindings, and the run's roots alike through `EdgeId`s — names granting the
@@ -79,9 +80,11 @@ a concept, not a final identifier.
   teardown carries the release) releases it, and every edge names the
   destination region its value is delivered into
   ([workgraph/design/dag-scheduler.md § Edges and the boundary](../workgraph/design/dag-scheduler.md#edges-and-the-boundary)).
-- **Dep** — a producer another slot waits on, held as an edge. The
-  **park**/**owned** labels are Koan's `Deps`-currency roles (positional
-  addressing and dispatch classification), not scheduler semantics.
+- **Dep** — a producer another slot waits on, held as an edge. Every dep is
+  named by a **source edge** and inherits that source's destination — one rule,
+  whether the source is a binding the embedder already held or one it minted
+  over sub-work it spawned. Whether a dep is realized yet is a Koan-side
+  distinction that dies at the apply harness; the scheduler sees only edges.
 - **Terminal** — a slot's finished result: a sealed carrier, or the
   workload's error.
 - **Delivery envelope** — *(working name `Delivered`)* a walking terminal's
@@ -89,7 +92,7 @@ a concept, not a final identifier.
   frame owner plus the value's foreign pins. The carrier itself is
   **reference-only** (pins nothing); the envelope's bundle is what keeps its
   reach alive in flight, and the only verb that materializes a residence host
-  into a minted pair. A producer hands one to `finalize` / `rehome_terminal`;
+  into a minted pair. A producer hands one to `finalize`;
   from there it is internal transit inside the delivery walk, which adopts the
   terminal into each edge's destination region
   ([workgraph/design/dag-scheduler.md § Delivery at finalize](../workgraph/design/dag-scheduler.md#delivery-at-finalize)).
@@ -214,28 +217,58 @@ Working names throughout; shapes are the commitment, identifiers are not.
 
 **The install door — the generic building block.**
 
-Wiring goes through one public door, `Scheduler::install_edges`, and **install
+Wiring goes through one public door, `Scheduler::install_deps`, and **install
 returns filled-or-parked** per edge: *filled* means the producer had already
 finalized and the value was delivered into the edge's destination at install;
 *parked* means the consumer waits and the wake fires at the producer's
 finalize. The "can I depend on this producer?" classification — ready /
 already-errored / must-park — is install-and-inspect, not a separate probe
-ladder; the would-cycle guard stays a pre-wiring query. Every arm's meaning is
-a Koan dispatch decision, so the classification lives Koan-side over
-`KoanWorkload` / `KError` ([dispatch.rs](../src/machine/execute/dispatch.rs)),
-built on the install door. The library names no Koan type and stays smaller.
+ladder: the library exposes **no** standalone readiness or
+producer-standing probe, so no consumer can read a producer's state without
+wiring the edge that makes the read sound. The would-cycle guard stays a
+pre-wiring query, because parking on an ancestor deadlocks rather than errors.
+Every arm's meaning is a Koan dispatch decision, so the classification lives
+Koan-side over `KoanWorkload` / `KError`
+([runtime.rs](../src/machine/execute/runtime.rs) rules on the door's return
+when it applies an outcome), built on the install door. The library names no
+Koan type and stays smaller.
+
+The door has one submit-time sibling, `alloc_node`: a fresh slot's row and its
+wires initialize as one atomic step, so deps that arrive with the work do not
+need a second wiring call. Both route the same scheduler-internal wire
+primitive, and both take the dep list as one slice of source edges.
+
+Because the door derives each dep's destination from its source rather than
+taking one, an embedder that wants sub-work's result in the consumer's own
+region says so by **minting that sub-work's source there**: the harness installs
+a transient edge on the freshly spawned producer, destined at the consumer's
+anchor region, hands it to the door, and releases it once the consumer's own
+edge has been minted off it. It costs one recycled slab entry per spawned dep
+and keeps the door the sole minter of a consumer's dep edges, so there is
+exactly one destination rule rather than a second wiring form for sub-work.
 
 **`Deps` — the dep-list builder.**
 
 ```rust
 let mut deps = Deps::new();
-deps.park_on(producer);                    // dedup'd park entry
-let arg = deps.own(request);               // owned entry, returns owned index
+deps.on(source);                           // a dep the caller can name, by source EdgeId
+let arg = deps.request(request);           // sub-work the harness spawns; returns its dep index
 ```
 
-`Deps` owns the `[park..., owned...]` layout internally. A finish addresses
-results through a `DepResults` view — `park(i)` / `owned(j)` accessors — never
-by arithmetic over a shared vector.
+One vector, and **dep order is read order**: results reach a finish in the order
+the builder appended them, as one slice. A `Dep` entry is either a `Producer`
+(the caller holds the source edge) or a `Request` (the harness must spawn the
+work before it can name one) — realization phase, not a durable role, and the
+distinction dies at the apply harness. A caller reading its results in order
+ignores the index `request` hands back; the two that cannot — a slot recording
+where one particular result lands, or one waiting on deps it never reads — keep
+the index or the range they were given.
+
+There is no dedup: an expression naming one source twice gets two deps, hence
+two edges off one producer. Both inherit that producer's destination, so the
+delivery walk's per-destination dedup collapses them to a single adopt. The
+realized list the door writes into the stored work (`ResolvedDeps`) is one edge
+list, scheduler-internal from that point on.
 
 **`Await` — the envelope builder.**
 
@@ -319,13 +352,34 @@ picture:
   scope takes the value's carrier and mints its reach pair against the
   scope's region — description into the table, pins onto the binding entry —
   policy code composing library values, never inspecting them.
+- **Koan's held names are edges, and only the drive loop spells them.** Parked
+  deps, dispatch placeholders, the scope tables' pending arms, and the run's
+  roots are all edges, wired through the install door
+  ([execution/scheduler.md § Which edges Koan installs](execution/scheduler.md#which-edges-koan-installs)).
+  Each has an owner that releases it: the consumer slot for a park, the
+  submitting slot for a binder claim, `run_program` itself for a root — which it
+  releases before the run frame those edges name is torn down. Below the drive
+  loop the same name travels as a
+  [`ProducerId`](../src/machine/execute/producer_id.rs) — *who will produce the
+  value this name does not hold yet* — an opaque token the binding tables, the
+  scope registry, the type resolver, and the builtins store, compare, and hand
+  back but cannot open. Both conversions are `pub(in crate::machine::execute)`,
+  which is why the type is hosted in the drive loop rather than in
+  `machine::core`: `pub(in path)` names an ancestor module, so only the layer
+  that owns a scheduler can be named as the one allowed to spend a producer.
+  Depending on one from outside it goes through the single exported verb
+  `deps_on` (and its `extend_deps_on` companion, for a list built as slots are
+  classified), so "where does an edge escape?" has one answer.
+- **Koan's declaration identity is Koan's own.** A binding entry answers
+  "same declaration re-entering, or a second declaration of this name?" from a
+  [`StatementId`](../src/machine/core/statement_id.rs) — a never-recycled
+  process-global counter minted once per submitted statement — not from a slot
+  or edge name ([typing/user-types.md](typing/user-types.md)). The library owes
+  the binding tables nothing: its recycling policy for slot and edge indices is
+  free to change without touching Koan's redeclaration semantics.
 
 ## Open work
 
-- [Koan wires through edges](../roadmap/refactor/edge-wiring-migration.md) —
-  koan adopts `EdgeId`s and the install door.
-- [Collapse the Deps owned/park currency](../roadmap/refactor/deps-currency-collapse.md)
-  — one dep list, one index space.
 - [Carving the cellgraph crate](../workgraph/roadmap/cellgraph-extraction.md)
   — the crate split beneath the DAG layer.
 - [Publishing the workgraph crate](../workgraph/roadmap/workgraph-extraction.md)

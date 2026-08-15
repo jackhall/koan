@@ -22,7 +22,8 @@ use super::SubmitContext;
 use super::ctx::{SchedulerView, current_dest_frame, with_current_node_scope};
 use super::stage_eager_part;
 use super::{BareCarrier, resolve_bare_carrier};
-use crate::scheduler::{DepResults, ResolvedDeps};
+use crate::machine::Scope;
+use crate::scheduler::Deps;
 
 /// Build-time accumulator family for an aggregate fold: the destination region plus the cells folded
 /// in so far. Each cell carrier is `transfer_into`-folded in — relocating the value and unioning its
@@ -39,34 +40,57 @@ reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held
 
 /// One cell of a list / dict / record literal. A `Static` cell is wrapped into a delivery envelope
 /// **at its source** (when the literal is classified), so the layout is lifetime-free and every cell
-/// — static or dep — folds uniformly, each carrying the frame owner its value lives under. `Park(i)`
-/// / `Owned(j)` are the dep-finish's park / owned [`DepResults`] indices — the
-/// [`Deps`](crate::scheduler::Deps) builder hands them back at classify time and they read straight
-/// back through the view.
+/// — static or dep — folds uniformly, each carrying the frame owner its value lives under. A `Dep`
+/// cell carries no index: the classifier appends one dep per such cell as it walks the rows, so cell
+/// order *is* dep order and the finish's walk over those same rows reads results off a
+/// [`ResultFeed`] cursor.
 enum Slot {
     Static(DeliveredCarried),
-    Park(usize),
-    Owned(usize),
+    Dep,
 }
 
 impl Slot {
-    /// Add `id` as an owned sub-dependency and return the `Owned` slot that reads its result.
-    fn owned(deps: &mut ResolvedDeps, id: NodeId) -> Self {
-        Slot::Owned(deps.own(id))
+    /// Add `id` as a sub-dependency and return the cell that reads its result.
+    fn spawned(deps: &mut Deps<NodeId>, id: NodeId) -> Self {
+        deps.request(id);
+        Slot::Dep
+    }
+}
+
+/// Pops resolved dep terminals in dep order — the cursor that replaces a stored per-cell index. The
+/// classify walk and the finish walk visit the rows in the same order (a dict row's key before its
+/// value), so popping in that walk is exactly the alignment a stored index used to assert.
+struct ResultFeed<'t, 'd> {
+    terminals: &'t [&'t DepTerminal<'d>],
+    next: usize,
+}
+
+impl<'t, 'd> ResultFeed<'t, 'd> {
+    fn new(terminals: &'t [&'t DepTerminal<'d>]) -> Self {
+        ResultFeed { terminals, next: 0 }
+    }
+
+    fn pop(&mut self) -> &'t DepTerminal<'d> {
+        let terminal = self.terminals[self.next];
+        self.next += 1;
+        terminal
     }
 }
 
 /// The per-cell envelope the fold consumes: a static cell's source-built envelope, or a dep
-/// terminal's own delivery envelope (arriving witnessed from the pull, un-relocated —
-/// `transfer_into` relocates it once into the aggregate's region while minting its reach and
-/// residence host onto the accumulator's carrier). The dep arm hands back a
-/// [`duplicate`](crate::witnessed::Delivered::duplicate) of the terminal's envelope, never a fresh
-/// bundle pairing the read-out value with a separately-read reach.
-fn cell_carrier(slot: Slot, terminals: DepResults<'_, &DepTerminal>) -> DeliveredCarried {
+/// terminal's resident lifted back into one. The fold needs the reach *owned* — `transfer_into`
+/// relocates each cell into the aggregate's region while minting its reach and residence host onto
+/// the accumulator's carrier — so a dep arm lifts rather than reads, and the envelope it hands back
+/// is the cell's own description upgraded, never a fresh bundle pairing a read-out value with a
+/// separately-read reach.
+fn cell_carrier(
+    slot: Slot,
+    terminals: &mut ResultFeed<'_, '_>,
+    scope: &Scope<'_>,
+) -> DeliveredCarried {
     match slot {
         Slot::Static(delivered) => delivered,
-        Slot::Park(i) => terminals.park(i).delivered.duplicate(),
-        Slot::Owned(j) => terminals.owned(j).delivered.duplicate(),
+        Slot::Dep => scope.lift_spliced(&terminals.pop().cell),
     }
 }
 
@@ -128,18 +152,28 @@ fn fold_cells(
 /// `Bool`, so the two together leave a borrow-carrying key unrepresentable downstream of here.
 fn scalar_key(
     slot: &Slot,
-    terminals: DepResults<'_, &DepTerminal>,
+    terminals: &mut ResultFeed<'_, '_>,
     types: &TypeRegistry,
 ) -> Result<PendingKey, String> {
-    let envelope = match slot {
-        Slot::Static(delivered) => delivered,
-        Slot::Park(i) => &terminals.park(*i).delivered,
-        Slot::Owned(j) => &terminals.owned(*j).delivered,
+    // The reach probe and the key read are the same two verbs on either carrier — a static cell's
+    // envelope or a dep's resident cell — so each arm answers both inside its own borrow.
+    let (borrows, key) = match slot {
+        Slot::Static(delivered) => (
+            delivered.open_at().has_reach_members(),
+            delivered.open(|c| key_from_carried(c, types)),
+        ),
+        Slot::Dep => {
+            let cell = &terminals.pop().cell;
+            (
+                cell.open_at().has_reach_members(),
+                cell.open(|c| key_from_carried(c, types)),
+            )
+        }
     };
-    if envelope.open_at().has_reach_members() {
+    if borrows {
         return Err("dict key must be owned data, but its value borrows a region".to_string());
     }
-    envelope.open(|c| key_from_carried(c, types))
+    key
 }
 
 fn key_from_carried(c: Carried<'_>, types: &TypeRegistry) -> Result<PendingKey, String> {
@@ -213,7 +247,7 @@ impl<'step> KoanRuntime<'step> {
     /// reaches by construction.
     fn schedule_aggregate(
         &mut self,
-        deps: ResolvedDeps,
+        deps: Deps<NodeId>,
         rows: Vec<AggRow>,
         assemble: AggAssemble,
     ) -> NodeId {
@@ -223,15 +257,16 @@ impl<'step> KoanRuntime<'step> {
             // The value cells fold into the witnessed accumulator, paired back with the keys at `map`.
             let mut keys: Vec<PendingKey> = Vec::new();
             let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(n);
+            let mut feed = ResultFeed::new(terminals);
             for row in rows {
                 if let Some(key_slot) = row.key {
-                    let kkey = scalar_key(&key_slot, terminals, view.types()).map_err(|msg| {
+                    let kkey = scalar_key(&key_slot, &mut feed, view.types()).map_err(|msg| {
                         KError::new(KErrorKind::ShapeError(msg))
                             .with_frame(TraceFrame::bare("<dict>", "dict literal"))
                     })?;
                     keys.push(kkey);
                 }
-                cells.push(cell_carrier(row.value, terminals));
+                cells.push(cell_carrier(row.value, &mut feed, view.current_scope()));
             }
             let acc = fold_cells(view, cells.into_iter());
             // The accumulated envelope's coverage carries every region the folded `Held` views point
@@ -271,7 +306,7 @@ impl<'step> KoanRuntime<'step> {
         brand: RegionBrand<'a>,
         items: &[ExpressionPart<'a>],
     ) -> NodeId {
-        let mut deps = ResolvedDeps::new();
+        let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(items.len());
         for &part in items {
             let value = self.classify_aggregate_part(brand, part, &mut deps);
@@ -292,7 +327,7 @@ impl<'step> KoanRuntime<'step> {
         brand: RegionBrand<'a>,
         pairs: &[(ExpressionPart<'a>, ExpressionPart<'a>)],
     ) -> NodeId {
-        let mut deps = ResolvedDeps::new();
+        let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(pairs.len());
         for &(k, v) in pairs {
             let key = self.classify_aggregate_part(brand, k, &mut deps);
@@ -325,7 +360,7 @@ impl<'step> KoanRuntime<'step> {
         fields: &[(&'a str, ExpressionPart<'a>)],
     ) -> NodeId {
         let mut names: Vec<String> = Vec::with_capacity(fields.len());
-        let mut deps = ResolvedDeps::new();
+        let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(fields.len());
         for &(name, value) in fields {
             let value = self.classify_aggregate_part(brand, value, &mut deps);
@@ -350,10 +385,10 @@ impl<'step> KoanRuntime<'step> {
         &mut self,
         brand: RegionBrand<'a>,
         part: ExpressionPart<'a>,
-        deps: &mut ResolvedDeps,
+        deps: &mut Deps<NodeId>,
     ) -> Slot {
         let part = match stage_eager_part(brand, part) {
-            Ok(dep) => return Slot::owned(deps, self.realize_eager_dep(brand, dep)),
+            Ok(dep) => return Slot::spawned(deps, self.realize_eager_dep(brand, dep)),
             Err(part) => part,
         };
         match part {
@@ -364,7 +399,7 @@ impl<'step> KoanRuntime<'step> {
                 // rebuild, so `resolve_region_pure` cannot build it at the `yoke` brand below.
                 let wrapped =
                     WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]);
-                Slot::owned(
+                Slot::spawned(
                     deps,
                     self.dispatch_in_own_scope(wrapped, SubmitContext::SubDispatch {}),
                 )
@@ -389,36 +424,33 @@ impl<'step> KoanRuntime<'step> {
 
     /// Shared eager-resolve for the Identifier and leaf-Type branches. A bound name seals its
     /// binding-scope carrier — value and reach as one cell, witnessed by its binding scope's home
-    /// frame — straight into a static slot; a still-finalizing name parks. Unbound / producer-errored
-    /// names fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path (and the
-    /// dep-finish's dep-error short-circuit) handles them uniformly.
+    /// frame — straight into a static slot; a still-finalizing name parks on its claim edge. An
+    /// unbound name falls back to a sub-Dispatch so the `BareIdentifier` fast lane's error path
+    /// (and the dep-finish's dep-error short-circuit) handles it uniformly.
     fn resolve_aggregate_bare_name<'a>(
         &mut self,
         brand: RegionBrand<'a>,
         part: &ExpressionPart<'a>,
-        deps: &mut ResolvedDeps,
+        deps: &mut Deps<NodeId>,
     ) -> Slot {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         // `BareCarrier` is lifetime-free, so the whole result escapes the branded-scope closure and
         // the `&mut self` fallback runs after the read closes.
         let resolved = with_current_node_scope(&self.ambient, |s| {
-            resolve_bare_carrier(
-                s,
-                part,
-                active_chain,
-                &self.sched,
-                self.ambient.type_registry(),
-            )
+            resolve_bare_carrier(s, part, active_chain, self.ambient.type_registry())
         });
         match resolved {
-            Ok(BareCarrier::Sealed(cell)) => Slot::Static(cell),
-            Ok(BareCarrier::Parked(producer)) => Slot::Park(deps.park_on(producer)),
-            // Unbound / producer-errored: fall back to a sub-Dispatch so the `BareIdentifier` fast
-            // lane's error path surfaces them uniformly.
-            Ok(BareCarrier::Unbound(_)) | Err(_) => {
+            BareCarrier::Sealed(cell) => Slot::Static(cell),
+            BareCarrier::Parked(source) => {
+                deps.on(source.scheduler_edge());
+                Slot::Dep
+            }
+            // Unbound: fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path
+            // surfaces it uniformly.
+            BareCarrier::Unbound(_) => {
                 let expr =
                     WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(*part))]);
-                Slot::owned(
+                Slot::spawned(
                     deps,
                     self.dispatch_in_own_scope(expr, SubmitContext::SubDispatch {}),
                 )

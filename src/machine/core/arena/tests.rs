@@ -258,7 +258,7 @@ fn builtin_frame_under_per_call_parent_chains_region_owner() {
 /// A fresh-tail hop over a **per-call** captured scope chains that scope's region owner, so a
 /// closure capturing a per-call frame survives the hop that retires the caller — the same derivation
 /// as [`builtin_frame_under_per_call_parent_chains_region_owner`], reached through the fresh-tail
-/// path (`resolve_frame_placement`'s `FreshTail` mints via `CallFrame::new`). A top-level-defined
+/// path (`enter_user_fn` mints the `FreshTail` cart via `CallFrame::new`). A top-level-defined
 /// recursive fn instead captures the run-root scope and chains nothing (see
 /// [`builtin_frame_at_top_level_chains_nothing`]), keeping the common tail loop constant-space.
 #[test]
@@ -325,8 +325,8 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
 }
 
 /// A value `yoke`d into a frame's region comes back reference-only: the yoke brand proves it is
-/// region-derived, and the carrier pins nothing — liveness is the caller's held frame owner (the
-/// scheduler's retention hold in production), which the pinned read names. The region-pure /
+/// region-derived, and the carrier pins nothing — liveness is the caller's held frame owner (in
+/// production, the region the value resides in), which the pinned read names. The region-pure /
 /// single-frame shape the object and type families' common case takes.
 #[test]
 fn fold_witnessed_yokes_a_reference_only_value() {

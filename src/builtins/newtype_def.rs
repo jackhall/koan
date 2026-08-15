@@ -125,7 +125,7 @@ fn seal_outcome_into_carrier<'a>(
 }
 
 /// A resolved repr finalizes synchronously; a bare-leaf name resolves against the scope chain,
-/// parks on an in-flight producer (a `DepRequest::Existing` dep-finish), or errors; a raw sigil repr
+/// parks on an in-flight binder's claim edge, or errors; a raw sigil repr
 /// sub-dispatches via [`defer_resolved_sigil`].
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
@@ -497,7 +497,7 @@ mod tests {
 
     /// A NEWTYPE whose repr names a genuinely unknown type errors — and drops the pending
     /// arm its dispatch claimed, so a later construction of the same
-    /// name fails cleanly (unbound) rather than tripping over a leaked producer `NodeId`.
+    /// name fails cleanly (unbound) rather than tripping over a leaked binder `ProducerId`.
     #[test]
     fn unknown_repr_errors_without_leaking_placeholder() {
         let program = program_storage();
@@ -518,9 +518,8 @@ mod tests {
     }
 
     /// Two record-repr `NEWTYPE`s of one name in one scope are two declarations, not one: the
-    /// second statement installs under a distinct `NodeHandle`, so the seal mints a fresh singleton
-    /// and the install raises `Rebind`. `enter_block` is what gives the statements their distinct
-    /// installing nodes.
+    /// second statement is submitted under a distinct [`StatementId`], so the seal mints a fresh
+    /// singleton and the install raises `Rebind`.
     #[test]
     fn same_scope_record_repr_redeclare_rebinds() {
         let program = program_storage();
@@ -536,18 +535,22 @@ mod tests {
         .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
         .collect();
         let ids = test_run.runtime.enter_block(scope.id, exprs, scope);
+        let edges: Vec<_> = ids
+            .into_iter()
+            .map(|id| test_run.runtime.install_edge_for_test(id, scope))
+            .collect();
         test_run
             .runtime
             .execute()
             .expect("execute does not surface per-slot errors");
         assert!(
-            test_run.runtime.result_error(ids[0]).is_ok(),
+            test_run.runtime.edge_result_error(edges[0]).is_ok(),
             "the first declaration should succeed, got {:?}",
-            test_run.runtime.result_error(ids[0]).err(),
+            test_run.runtime.edge_result_error(edges[0]).err(),
         );
         let err = test_run
             .runtime
-            .result_error(ids[1])
+            .edge_result_error(edges[1])
             .expect_err("redeclaring Foo in the same scope should error");
         assert!(
             matches!(&err.kind, KErrorKind::Rebind { name } if name == "Foo"),
@@ -556,9 +559,9 @@ mod tests {
     }
 
     /// Byte-identical `NEWTYPE` redeclaration in one scope still raises `Rebind`. The two statements
-    /// seal to the same content digest, so a content-equality gate would unify them silently; node
-    /// identity keys the decision on the installing statement alone, so the second — a distinct
-    /// `NodeHandle` under `enter_block` — is a rebind despite identical content.
+    /// seal to the same content digest, so a content-equality gate would unify them silently;
+    /// statement identity keys the decision on the installing statement alone, so the second — a
+    /// distinct [`StatementId`] — is a rebind despite identical content.
     #[test]
     fn identical_content_newtype_redeclare_rebinds() {
         let program = program_storage();
@@ -574,18 +577,22 @@ mod tests {
         .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
         .collect();
         let ids = test_run.runtime.enter_block(scope.id, exprs, scope);
+        let edges: Vec<_> = ids
+            .into_iter()
+            .map(|id| test_run.runtime.install_edge_for_test(id, scope))
+            .collect();
         test_run
             .runtime
             .execute()
             .expect("execute does not surface per-slot errors");
         assert!(
-            test_run.runtime.result_error(ids[0]).is_ok(),
+            test_run.runtime.edge_result_error(edges[0]).is_ok(),
             "the first declaration should succeed, got {:?}",
-            test_run.runtime.result_error(ids[0]).err(),
+            test_run.runtime.edge_result_error(edges[0]).err(),
         );
         let err = test_run
             .runtime
-            .result_error(ids[1])
+            .edge_result_error(edges[1])
             .expect_err("an identical-content redeclaration of Foo should error");
         assert!(
             matches!(&err.kind, KErrorKind::Rebind { name } if name == "Foo"),
@@ -838,13 +845,14 @@ mod tests {
             ),
             scope,
         );
+        let root = test_run.runtime.install_edge_for_test(root, scope);
         test_run
             .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err = test_run
             .runtime
-            .result_error(root)
+            .edge_result_error(root)
             .expect_err("TAKES_NUM on Distance should fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
@@ -857,13 +865,14 @@ mod tests {
             ),
             scope,
         );
+        let root2 = test_run.runtime.install_edge_for_test(root2, scope);
         test_run
             .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err2 = test_run
             .runtime
-            .result_error(root2)
+            .edge_result_error(root2)
             .expect_err("TAKES_DIST on raw Number should fail dispatch");
         assert!(
             matches!(&err2.kind, KErrorKind::DispatchFailed { .. }),
@@ -1015,19 +1024,20 @@ mod tests {
                    MODULE int_list = ((NEWTYPE (Type AS Wrap)))\n\
                    LET view = (int_list :| Monad)";
         let exprs = crate::parse::parse(program.brand(), src).expect("parse should succeed");
-        let mut ids = Vec::new();
+        let mut edges = Vec::new();
         for expr in exprs {
-            ids.push(test_run.runtime.dispatch_in_scope(
+            let id = test_run.runtime.dispatch_in_scope(
                 crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
                 scope,
-            ));
+            );
+            edges.push(test_run.runtime.install_edge_for_test(id, scope));
         }
         test_run
             .runtime
             .execute()
             .expect("scheduler should succeed");
-        for (i, id) in ids.iter().enumerate() {
-            if let Err(e) = test_run.runtime.result_error(*id) {
+        for (i, edge) in edges.iter().enumerate() {
+            if let Err(e) = test_run.runtime.edge_result_error(*edge) {
                 panic!("expr {i} errored: {e}");
             }
         }
@@ -1197,13 +1207,14 @@ mod tests {
             ),
             scope,
         );
+        let root = test_run.runtime.install_edge_for_test(root, scope);
         test_run
             .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err = test_run
             .runtime
-            .result_error(root)
+            .edge_result_error(root)
             .expect_err("probe should fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),

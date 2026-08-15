@@ -307,10 +307,11 @@ mod tests {
             ),
             scope,
         );
+        let edge = runtime.install_edge_for_test(id, scope);
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        match runtime.result_error(id) {
+        match runtime.edge_result_error(edge) {
             Err(e) => assert!(
                 format!("{e}").contains("no abstract type slot"),
                 "expected unknown-slot rejection, got {e}",
@@ -354,10 +355,11 @@ mod tests {
             ),
             scope,
         );
+        let edge = runtime.install_edge_for_test(id, scope);
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        match runtime.result_error(id) {
+        match runtime.edge_result_error(edge) {
             Err(e) => {
                 let text = format!("{e}");
                 assert!(
@@ -404,10 +406,11 @@ mod tests {
             ),
             scope,
         );
+        let edge = runtime.install_edge_for_test(id, scope);
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        match runtime.result_error(id) {
+        match runtime.edge_result_error(edge) {
             Err(e) => assert!(
                 format!("{e}").contains("no abstract type slot"),
                 "expected lowercase-slot rejection, got {e}",

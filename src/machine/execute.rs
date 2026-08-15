@@ -1,8 +1,8 @@
 //! Execute — drives parsed `KExpression`s through a work-stealing scheduler to final
 //! `KObject`s. A statement crosses into the scheduler as a `WorkingExpression` — the dispatcher's
 //! own per-call node, whose slots the scheduler writes resolved sub-results into — and enters as a
-//! `Dispatch` node against a run-root scope; producer/consumer slots park on each other via
-//! `pending_deps` and wake on terminal writes.
+//! `Dispatch` node against a run-root scope; a consumer parks on a producer through an edge and
+//! wakes when the producer's finalize walk delivers into it.
 //!
 //! See [design/execution/README.md](../../design/execution/README.md) and
 //! [design/memory-model.md](../../design/memory-model.md).
@@ -14,6 +14,7 @@ mod lift;
 mod nodes;
 mod obligation;
 mod outcome;
+mod producer_id;
 // The write harness (KoanRuntime, sole &mut Scheduler) + the shared action harness and the
 // program entry points (interpret submodule). See runtime.rs.
 mod run_loop;
@@ -24,6 +25,8 @@ pub(in crate::machine::execute) use outcome::{
     CatchFinish, ContinuationFamily, TerminalDepFinish, WitnessedDepFinish, catch_continuation,
     ignore_results, seal_witnessed, short_circuit,
 };
+pub use producer_id::ProducerId;
+pub(crate) use producer_id::{deps_on, extend_deps_on};
 pub(crate) use runtime::seed_run_root;
 pub use runtime::{KoanRuntime, interpret, interpret_with_writer, interpret_with_writer_path};
 pub use step_carried::{StepCarried, drive_step_allocator};

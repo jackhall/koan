@@ -13,9 +13,11 @@
 //! body (see
 //! [design/execution/name-placeholders.md](../../../../design/execution/name-placeholders.md)).
 
+use crate::machine::ProducerId;
 use crate::machine::model::BinderKey;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope, WriteGate};
+use crate::scheduler::EdgeId;
 
 use super::super::nodes::{NodeScope, SlotFrame};
 use super::super::runtime::KoanRuntime;
@@ -73,7 +75,7 @@ impl<'run> KoanRuntime<'run> {
             let anchor = SlotFrame::new(cart, node_scope, chain);
             return self
                 .sched
-                .alloc_node(super::decide_error(error, carrier), anchor, framed);
+                .alloc_node(super::decide_error(error, carrier), &[], anchor, framed);
         }
 
         // Only a statement installs; the plan read above also gates the sub-dispatch rejection.
@@ -84,24 +86,56 @@ impl<'run> KoanRuntime<'run> {
 
         let (cart, framed) = self.submission_cart();
         let anchor = SlotFrame::new(cart, node_scope, chain.clone());
-        let id = self
-            .sched
-            .alloc_node(super::decide_tail(expr, None), anchor, framed);
+        let id = self.sched.alloc_node(
+            super::decide_tail(expr, None),
+            &[],
+            std::rc::Rc::clone(&anchor),
+            framed,
+        );
 
         // Stamp each cached binder's placeholder at the enclosing statement's lexical position — the
         // SAME `BindingIndex` the eventual `register_*` call at finalize installs. Installs are
         // best-effort: lenient when `data[name]` is already a KFunction or the same slot re-installs.
         if let Some(key) = installs {
             let bind_index = BindingIndex::value(chain.index);
+            // The claim's edge is destined at **this** scope's region — the scope the name is being
+            // introduced into — so a consumer parking on the claim inherits that destination and its
+            // delivery lands where the binding lives. Holding the owner across the install is the
+            // wiring-time proof the region is pinned; the slot was allocated on the line above, so
+            // the install cannot see a terminal producer.
+            let destination = scope
+                .region_owner()
+                .upgrade()
+                .expect("a live scope reference implies a live region owner");
+            let mut edges: Vec<EdgeId> = Vec::new();
+            let claim = |rt: &mut Self| rt.sched.install_edge(id, &destination);
             // The submission-channel stamp is run-loop-owned: dispatch submits the binder with no
             // koan frame on the stack, the same footing the apply loop writes on.
             let mut gate = WriteGate::for_run_loop();
             if let Some((name, kind)) = key.name {
-                let _ = scope.install_placeholder(name, id, bind_index, kind, &mut gate);
+                let edge = claim(self);
+                edges.push(edge);
+                let _ = scope.install_placeholder(
+                    name,
+                    ProducerId::from_scheduler_edge(edge),
+                    bind_index,
+                    kind,
+                    &mut gate,
+                );
             }
             for bucket in key.buckets {
-                let _ = scope.install_pending_overload(bucket, id, bind_index, &mut gate);
+                let edge = claim(self);
+                edges.push(edge);
+                let _ = scope.install_pending_overload(
+                    bucket,
+                    ProducerId::from_scheduler_edge(edge),
+                    bind_index,
+                    &mut gate,
+                );
             }
+            // The slot owns every name it stamped: it releases them when it terminalizes, and hands
+            // them on to a fresh anchor if a tail replace mints one.
+            anchor.own_edges(edges);
         }
         id
     }

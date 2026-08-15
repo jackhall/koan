@@ -79,7 +79,7 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
 /// A sigil-form return type that sub-dispatches at FN-def (no parameter reference)
 /// and a parameter slot that parks on a forward-LET binding both join the same
 /// dep-finish; the finish picks each sub-dispatch's `Carried::Type` terminal out
-/// of the owned dep results by its recorded position.
+/// of the dep results by the index the builder handed back when it appended the request.
 #[test]
 fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine() {
     let program = program_storage();
@@ -133,10 +133,11 @@ fn fn_def_parens_param_type_non_type_value_errors() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("non-type param type expression should error"),
     };
@@ -164,10 +165,11 @@ fn fn_def_sigil_return_type_non_type_value_errors() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("non-type return-type expression should error"),
     };

@@ -273,7 +273,7 @@ impl<'a> Scope<'a> {
 
     /// [`Self::resident`] handed out as a delivery envelope — the same value, the same member-less
     /// description, now pinned by this scope's own region owner. The resident twin of the
-    /// scheduler's [`dep_delivered`](crate::scheduler::Scheduler::dep_delivered): a spliced resident
+    /// scheduler's [`edge_resident`](crate::scheduler::Scheduler::edge_resident): a spliced resident
     /// cell travels self-covering by its own witness *and* pinned by its home, identical in shape to
     /// a delivered dep — there is no `pin: None` resident special case at the splice sites.
     ///

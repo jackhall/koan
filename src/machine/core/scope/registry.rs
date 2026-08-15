@@ -19,12 +19,13 @@
 
 use super::{Scope, ScopeKind};
 use crate::machine::DeliveredCarried;
+use crate::machine::ProducerId;
 use crate::machine::core::bindings::powerset_probes;
 use crate::machine::core::bindings::{
     BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
 };
 use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
-use crate::machine::core::{KError, KErrorKind, NodeId};
+use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::{Carried, KObject, KType, ReductionMode};
 
 impl<'a> Scope<'a> {
@@ -195,32 +196,32 @@ impl<'a> Scope<'a> {
         Ok(())
     }
 
-    /// Install a dispatch-time placeholder for `name` -> producer slot `idx`. See
+    /// Install a dispatch-time placeholder for `name` -> the binder slot's own `edge`. See
     /// [`Bindings::install_placeholder`] for the `Rebind` rules. Submission-channel: the stamp
     /// happens where dispatch submits the binder, which is already run-loop-owned — moving it to
     /// the op-apply position would let a concurrent sibling see `UnboundName` instead of parking.
     pub fn install_placeholder(
         &self,
         name: String,
-        idx: NodeId,
+        producer: ProducerId,
         index: BindingIndex,
         kind: BindKind,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         self.assert_owns_bindings();
         self.bindings()
-            .install_placeholder(&name, idx, index, kind, gate)
+            .install_placeholder(&name, producer, index, kind, gate)
     }
 
-    /// Error-path companion to both [`Self::install_placeholder`] and
-    /// [`Self::install_pending_overload`]: drop any pending arm
-    /// pointing at `producer`. Routes to the same target the installs used so a
-    /// failed binder body can't leak a scheduler-local producer into a later run on a
-    /// persistent scope. See [`Bindings::clear_placeholders_for_producer`].
-    pub fn clear_placeholders_for_producer(&self, producer: NodeId, gate: &mut WriteGate) {
+    /// Retirement companion to both [`Self::install_placeholder`] and
+    /// [`Self::install_pending_overload`]: drop any pending arm naming one of `edges`. Routes to
+    /// the same target the installs used, and runs as the claiming slot terminalizes, so no arm
+    /// survives naming an edge its owner is about to release — into a later run on a persistent
+    /// scope least of all. See [`Bindings::clear_placeholders_for_producers`].
+    pub fn clear_placeholders_for_producers(&self, edges: &[ProducerId], gate: &mut WriteGate) {
         self.assert_owns_bindings();
         self.bindings()
-            .clear_placeholders_for_producer(producer, gate);
+            .clear_placeholders_for_producers(edges, gate);
     }
 
     /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a pending slot to
@@ -232,13 +233,13 @@ impl<'a> Scope<'a> {
     pub fn install_pending_overload(
         &self,
         bucket: crate::machine::model::UntypedKey,
-        idx: NodeId,
+        producer: ProducerId,
         index: BindingIndex,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         self.assert_owns_bindings();
         self.bindings()
-            .install_pending_overload(bucket, idx, index, gate)
+            .install_pending_overload(bucket, producer, index, gate)
     }
 
     /// Construction-time single-probe operator-registry write. Test affordance: production

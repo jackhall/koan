@@ -1,6 +1,6 @@
 //! Head-deferred dispatch shapes — `HeadDeferred` and `TypeHeadDeferred`.
 //!
-//! Both evaluate the head (`parts[0]`) first as an owned sub-dispatch and park the
+//! Both evaluate the head (`parts[0]`) first as a sub-dispatch and park the
 //! slot on it; once it resolves, the finish classifies the value and applies it to
 //! `parts[1..]` via the shared apply-a-callable tail. The `type_only` flag selects
 //! the admitted arm set (see [`classify_head`]):
@@ -73,21 +73,24 @@ fn park_on_head<'step>(
     type_only: bool,
 ) -> Outcome<'step> {
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
-        let head_terminal = terminals.owned(0);
-        // Adopt the head's carrier copy-free: fold its reach so a callable's captured foreign
-        // environment outlives the application, and re-anchor the value at the consumer scope brand.
-        // The callable arm adopts as a callable, so it arrives fused to the reach it was minted
-        // under; every other head takes the whole-value adopt for its classification.
+        let head_terminal = terminals[0];
+        // The head dep is resident in a region this step already covers; lift it back to an
+        // owned envelope so its reach can fold into the classified callable, which outlives this
+        // finish. Adopt the head's carrier copy-free: fold its reach so a callable's captured
+        // foreign environment outlives the application, and re-anchor the value at the consumer
+        // scope brand. The callable arm adopts as a callable, so it arrives fused to the reach it
+        // was minted under; every other head takes the whole-value adopt for its classification.
+        let head_delivered = ctx.current_scope().lift_spliced(&head_terminal.cell);
         let callable = match ctx
             .current_scope()
-            .adopt_delivered_function(&head_terminal.delivered)
+            .adopt_delivered_function(&head_delivered)
             .filter(|_| !type_only)
         {
             Some(function) => ResolvedCallable::Function(function),
             None => {
                 let head = ctx
                     .current_scope()
-                    .adopt_carried(&head_terminal.delivered, AdoptSeam::Retaining);
+                    .adopt_carried(&head_delivered, AdoptSeam::Retaining);
                 match classify_head(head, type_only, ctx.types()) {
                     Ok(c) => c,
                     Err(e) => return Outcome::Done(Err(e)),
@@ -96,7 +99,7 @@ fn park_on_head<'step>(
         };
         apply_callable(ctx, callable, &expr)
     });
-    Await::on(Deps::from_owned([DepRequest::Dispatch {
+    Await::on(Deps::from_requests([DepRequest::Dispatch {
         expr: head,
         placement: DepPlacement::OwnScope,
     }]))

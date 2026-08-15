@@ -26,8 +26,8 @@ The mechanism:
   call.** A parameter or return type written as `:(LIST OF Number)`
   is dispatched directly as a sub-expression whose value
   is a `KType`. Bare type identifiers in FN signatures park on the
-  binding's scheduler placeholder via the same `notify_list` /
-  `pending_deps` machinery value-name forward references use; recursive
+  binding's placeholder edge through the same notify-list / pending-count
+  machinery value-name forward references use; recursive
   type definitions short-circuit self-references through the elaborator's
   threaded-set recognition rather than parking on their own placeholder
   ([elaboration.md](elaboration.md)).

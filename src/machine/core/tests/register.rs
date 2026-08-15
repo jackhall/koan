@@ -2,7 +2,8 @@
 
 use super::super::{BindingIndex, DeclarationSite, NameLookup};
 use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
-use crate::machine::core::kfunction::{Body, KFunction, NodeId};
+use crate::machine::ProducerId;
+use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
@@ -425,14 +426,14 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
     scope
         .install_placeholder(
             "x".to_string(),
-            NodeId::for_test(7),
+            ProducerId::for_test(7),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     match scope.resolve("x") {
-        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId::for_test(7)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, ProducerId::for_test(7)),
         _ => panic!("expected Placeholder"),
     }
 }
@@ -454,14 +455,14 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
     inner
         .install_placeholder(
             "x".to_string(),
-            NodeId::for_test(3),
+            ProducerId::for_test(3),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     match inner.resolve("x") {
-        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId::for_test(3)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, ProducerId::for_test(3)),
         other => panic!(
             "expected Placeholder from inner — outer's Value should not shadow it. Got {}",
             match other {
@@ -480,7 +481,7 @@ fn bind_value_direct_clears_own_placeholder() {
     scope
         .install_placeholder(
             "x".to_string(),
-            NodeId::for_test(2),
+            ProducerId::for_test(2),
             BindingIndex::BUILTIN,
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
@@ -605,7 +606,7 @@ fn visibility_placeholder_filtered_same_as_value() {
     scope
         .install_placeholder(
             "ph".to_string(),
-            NodeId::for_test(2),
+            ProducerId::for_test(2),
             BindingIndex::value(5),
             crate::machine::model::BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
@@ -629,7 +630,7 @@ fn visibility_type_side_gate_mirrors_value_side() {
     let _ = scope.register_type_direct(
         "TyLate".to_string(),
         KType::NUMBER,
-        mock_declaration_site(1, 5),
+        mock_declaration_site(5),
         &mut crate::machine::WriteGate::for_test(),
     );
     let consumer_before: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);

@@ -82,7 +82,7 @@ fn chained_tail_calls_reuse_frames() {
 }
 
 /// Side-effect ordering across a tail chain whose bodies each open with a value-discarded
-/// leading `PRINT`. The leading statements are owned deps the slot parks on, so they run — and
+/// leading `PRINT`. The leading statements are deps the slot waits on, so they run — and
 /// finish — strictly before the tail continues: `a, b, c, d` (the leading PRINTs, in call order)
 /// then `ok` (DD's body terminal). A fire-and-forget leading would race the tail chain and emit
 /// the terminal first (`ok, a, b, c, d`).
@@ -109,7 +109,7 @@ fn leading_statements_run_before_tail_across_chain() {
 }
 
 /// Tail chain whose bodies each carry a value-discarded leading `PRINT` stays TCO-flat: the
-/// leading statements are owned deps that cascade-free as each call resolves, so they never
+/// leading statements are deps whose slots reclaim as each call resolves, so they never
 /// accumulate their own slots. The chain peaks at two slots — the tail-replaced main slot plus a
 /// single leading-PRINT slot recycled through the free-list across all four calls. Fire-and-forget
 /// leading would instead leave one orphan PRINT slot per call aliasing its frame (`runtime.len()`
@@ -145,7 +145,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
     assert_eq!(
         runtime.len(),
         2,
-        "leading statements are owned and cascade-free, so each PRINT slot is recycled via the \
+        "leading statements are owned and reclaim at their own finalize, so each PRINT slot is recycled via the \
          free-list rather than orphaned — the chain peaks at the main slot plus one reused \
          leading slot (a leak would climb to 5), got {}",
         runtime.len(),
@@ -231,10 +231,11 @@ fn tail_call_enforces_first_callers_return_contract() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("FF -> Number tail-calling GG -> Str must fail FF's return contract"),
     };

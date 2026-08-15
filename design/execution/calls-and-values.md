@@ -64,11 +64,12 @@ recursive tree-walker can't get cheaply.
 
 - **Per AST node touched.** Each nested `(...)` becomes its own slot.
   Cost: `NodeStore::alloc_slot` (pop a free-list index or extend three
-  parallel vectors), `DepGraph::install_for_slot` (write a `dep_edges`
-  entry + bump `pending_deps` on the parent + push into the producer's
-  `notify_list`), and a work-queue push. On the consumer side, the
-  symmetric drain: terminal write, `drain_notify`, decrement counters,
-  push the woken consumer onto the run-set. Compared to a recursive
+  parallel vectors), the install door (mint a slab edge per dep + bump the
+  consumer's `pending` count + push each edge onto the producer's `notify`
+  list), and a work-queue push. On the consumer side, the symmetric drain:
+  the finalize walk delivers into each listed edge's destination, decrements
+  each consumer's `pending`, and pushes the woken ones onto the run-set.
+  Compared to a recursive
   function call on a `&KExpression`, this is roughly an order of
   magnitude more bookkeeping per node.
 - **Per user-fn call.** The body executor copies each body statement onto
@@ -83,7 +84,8 @@ recursive tree-walker can't get cheaply.
   chunk). See
   [tail-call-optimization.md § Region liveness by node lifetime](../tail-call-optimization.md#region-liveness-by-node-lifetime).
 - **Per dep-result splice.** O(1) write into `expr.parts`.
-- **Per terminal.** Single `notify_list` drain. The cost scales with
+- **Per terminal.** Single `notify` drain, one adopt per distinct destination
+  region. The cost scales with
   the producer's dependent count, which is typically 1 (the consumer
   parked on it through a dep-finish or catch `cont`) but unbounded
   in principle (forward-reference parks, where the splice moves many
@@ -180,7 +182,7 @@ statements as dispatch nodes:
   (the all-`Expression` rule): the body's
   non-tail statements ride along as the `leading` field of an
   [`Action::Tail`](../../src/machine/core/kfunction/action.rs), and the slot
-  parks on them as owned deps before tail-replacing into the last statement.
+  waits on them as deps before tail-replacing into the last statement.
   Its `block_entry` names the body/arm scope; the harness derives the chain
   indices and the tail's `body_index` from `block_entry` + `leading`. TCO is
   preserved on the last statement. Single-statement bodies carry empty

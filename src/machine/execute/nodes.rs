@@ -1,9 +1,11 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::runtime::KoanWorkload;
 use crate::machine::core::ReturnContract;
-use crate::machine::core::{ScopeId, ScopeRefFamily, assemble_body_chain};
-use crate::machine::{CallFrame, KError, LexicalFrame, NodeId};
+use crate::machine::core::{ScopeId, ScopeRefFamily, StatementId, assemble_body_chain};
+use crate::machine::{CallFrame, KError, LexicalFrame};
+use crate::scheduler::EdgeId;
 use crate::witnessed::SealedExtern;
 
 use super::StepCarried;
@@ -22,6 +24,28 @@ pub(super) use crate::scheduler::nodes::{NodeWork, StoredWork};
 pub(super) struct SlotFrame {
     pub(super) cart: Rc<CallFrame>,
     pub(super) payload: NodePayload,
+    /// The edges **this slot owns** and releases when it terminalizes: the binder claims its
+    /// submission stamped onto its scope
+    /// ([`Scope::install_placeholder`](crate::machine::Scope::install_placeholder) /
+    /// `install_pending_overload`), and the classification edges a bare-name forward wires to read
+    /// its producer through. Both are named after allocation — minting an edge needs the id the
+    /// allocation hands back — so the list fills in rather than arriving with the anchor, and a tail
+    /// replace that mints a fresh anchor carries it over: ownership tracks the slot, not the anchor.
+    /// Empty for most slots.
+    owned_edges: RefCell<Vec<EdgeId>>,
+    /// The statement this slot is running — the identity a binding it installs is stamped with
+    /// ([`Installer::Statement`](crate::machine::Installer)). Fixed at construction and inherited
+    /// by a tail replace through [`replacing`](Self::replacing), so one statement keeps one id
+    /// however many times it steps and however many anchors it wears.
+    statement: StatementId,
+    /// Whether this slot **opened the scope of the cart it runs in** — true exactly for the slot a
+    /// [`opening`](Self::opening) replace installed a fresh cart for, whose body therefore finalizes
+    /// that cart's scope. A `Yoked` sub-expression slot sharing the cart, and a top-level slot
+    /// running in the run frame, both carry `false`, so their `Done` closes nothing. A bit rather
+    /// than a slot name: the question is only ever asked of the slot that holds the anchor, so
+    /// naming the owner would be answering "is this me?" with an identity comparison the anchor
+    /// already answers by construction.
+    opened_scope: bool,
 }
 
 impl crate::scheduler::Anchor for SlotFrame {
@@ -32,8 +56,10 @@ impl crate::scheduler::Anchor for SlotFrame {
 }
 
 impl SlotFrame {
-    /// Mint a slot anchor from the cart plus the slot's scope handle and chain — the one
-    /// constructor, so submission/replace mint sites stay one-liners.
+    /// Mint a slot anchor for a **freshly submitted** statement, from the cart plus the slot's
+    /// scope handle and chain. The statement id is minted here, so submitting is the one act that
+    /// creates a declaration identity. A submission always runs in a cart some other act
+    /// established — the ambient one, or the run frame — so the fresh slot opened no scope.
     pub(super) fn new(
         cart: Rc<CallFrame>,
         scope: NodeScope,
@@ -42,7 +68,80 @@ impl SlotFrame {
         Rc::new(SlotFrame {
             cart,
             payload: NodePayload { scope, chain },
+            owned_edges: RefCell::new(Vec::new()),
+            statement: StatementId::next(),
+            opened_scope: false,
         })
+    }
+
+    /// Mint the anchor a tail replace swaps in for `retiring` **in the cart it already runs in**,
+    /// taking over everything that belongs to the **slot** rather than to the anchor wearing it: the
+    /// owned edges, the statement identity, and whether the slot opened its cart's scope. A tail hop
+    /// continues one statement rather than submitting another, so inheriting the id is what keeps a
+    /// binding the replaced slot installs from looking like a second declaration of its own name.
+    /// Every hand-over lives in this one constructor, so a replace cannot carry one and drop another.
+    pub(super) fn replacing(
+        cart: Rc<CallFrame>,
+        scope: NodeScope,
+        chain: Rc<LexicalFrame>,
+        retiring: &SlotFrame,
+    ) -> Rc<SlotFrame> {
+        Rc::new(SlotFrame {
+            cart,
+            payload: NodePayload { scope, chain },
+            owned_edges: RefCell::new(retiring.take_owned_edges()),
+            statement: retiring.statement,
+            opened_scope: retiring.opened_scope,
+        })
+    }
+
+    /// [`replacing`](Self::replacing)'s twin for a replace that installs a **fresh `cart`**, which
+    /// this slot's body is what runs in: the slot opens that cart's scope here and closes it at its
+    /// own finish ([`close_opened_scope`](Self::close_opened_scope)). Installing the cart and
+    /// claiming its scope are the same act, so they are the same constructor — there is no way to
+    /// swap a fresh cart in and leave nobody to close it, nor to claim a scope a prior slot opened.
+    pub(super) fn opening(
+        cart: Rc<CallFrame>,
+        scope: NodeScope,
+        chain: Rc<LexicalFrame>,
+        retiring: &SlotFrame,
+    ) -> Rc<SlotFrame> {
+        Rc::new(SlotFrame {
+            cart,
+            payload: NodePayload { scope, chain },
+            owned_edges: RefCell::new(retiring.take_owned_edges()),
+            statement: retiring.statement,
+            opened_scope: true,
+        })
+    }
+
+    /// Close the scope of the cart this slot runs in, iff this slot opened it: the per-call frame's
+    /// body has finished (a `Done` return, or a tail `Continue` retiring this iteration), so the
+    /// scope takes no further binds and its reach-set seals. A slot that opened no scope — a `Yoked`
+    /// sub-expression sharing its parent's cart, a top-level slot in the run frame — finishes
+    /// without closing anything.
+    pub(super) fn close_opened_scope(&self) {
+        if self.opened_scope {
+            self.cart.with_scope(|s| s.close());
+        }
+    }
+
+    /// Take ownership of `edges` on this slot's behalf — the submission's binder claims, or a
+    /// forward's classification edge as the harness wires it.
+    pub(super) fn own_edges(&self, edges: impl IntoIterator<Item = EdgeId>) {
+        self.owned_edges.borrow_mut().extend(edges);
+    }
+
+    /// The statement this slot is running.
+    pub(super) fn statement(&self) -> StatementId {
+        self.statement
+    }
+
+    /// Take the slot's owned edges, leaving it holding none — so the retirement that releases them,
+    /// and the tail replace that hands them to a fresh anchor, are both exactly-once by
+    /// construction.
+    pub(super) fn take_owned_edges(&self) -> Vec<EdgeId> {
+        std::mem::take(&mut *self.owned_edges.borrow_mut())
     }
 }
 
@@ -56,8 +155,8 @@ impl SlotFrame {
 ///
 /// The value terminal rides the step brand `'step` as a [`StepCarried`], confined to the step tail's
 /// rank-2 open (`run_loop.rs`) until it exits through
-/// [`StepCarried::seal_at_step`] into finalize; the other arms carry no value (an error, a producer
-/// [`NodeId`], or a tail-replace payload), so `'step` names only the `DoneWitnessed` carrier's brand.
+/// [`StepCarried::seal_at_step`] into finalize; the other arms carry no value (an error, an
+/// [`EdgeId`], or a tail-replace payload), so `'step` names only the `DoneWitnessed` carrier's brand.
 // `Replace` is intrinsically the large variant (`NodeWork` plus the frame/chain tail-call
 // payload); boxing the hot tail-call path to balance the variants is the wrong trade.
 #[allow(clippy::large_enum_variant)]
@@ -71,10 +170,11 @@ pub(super) enum NodeStep<'step> {
     /// The finalized **error** terminal. An error carries no value, so it needs no witness and
     /// finalizes bare, labelled with the frame-gated contract's trace frame.
     Error(KError),
-    /// A ready bare-name forward: this slot's terminal *is* `producer`'s. `run_step` relocates
-    /// `producer`'s terminal into this slot's region (carrying its own witness) and finalizes — no
-    /// re-check, the producer already enforced its own contract. (`Alias` is the not-yet-ready twin.)
-    ForwardReady(NodeId),
+    /// A ready bare-name forward: this slot's terminal *is* the terminal behind `edge`. `run_step`
+    /// relocates it into this slot's region (carrying its own witness) and finalizes — no re-check,
+    /// the producer already enforced its own contract — then releases `edge`, the probe the harness
+    /// classified through. (`Alias` is the not-yet-ready twin.)
+    ForwardReady(EdgeId),
     Replace {
         work: NodeWork<'step, KoanWorkload>,
         frame: Option<Rc<CallFrame>>,
@@ -86,11 +186,11 @@ pub(super) enum NodeStep<'step> {
         /// tail re-projects `Yoked` from its own cart).
         overlay_scope: Option<SealedExtern<ScopeRefFamily>>,
     },
-    /// The slot is spliced out as an alias of `producer` (a bare-name forward whose producer was not
-    /// yet ready). The slot's consumers have already been moved onto `producer`'s notify list; this
-    /// just marks the slot so `read_result_with` follows through to `producer`. See
+    /// The slot is spliced out as an alias of the producer behind `edge` (a bare-name forward whose
+    /// producer was not yet ready). The splice re-points the slot's parked edges at that producer,
+    /// moves them onto its notify list, and reclaims the slot — nothing survives as a residual. See
     /// [`Outcome::Forward`](super::outcome::Outcome::Forward).
-    Alias(NodeId),
+    Alias(EdgeId),
 }
 
 /// The lexical-chain reshape a [`NodeStep::Replace`] applies, decided at the

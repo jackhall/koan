@@ -100,8 +100,9 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
 
     /// Build a value reachable only through the held frame's own region: reach = own region only,
     /// so the carrier references a description with empty members hosted in that same region — its
-    /// liveness is the frame the step loop holds (guarantee 4), then the retention hold once
-    /// finalized. `build` receives the region's [`RegionHandle`], the one allocation capability, and
+    /// liveness is the frame the step loop holds (guarantee 4), then each destination region the
+    /// finalize walk delivers into. `build` receives the region's [`RegionHandle`], the one
+    /// allocation capability, and
     /// the `for<'b>` brand on it admits only region-derived or owned references — so purity is
     /// structural rather than asserted: the value is yoked from the frame's own region and only then
     /// re-bundled under the pin-free carrier.

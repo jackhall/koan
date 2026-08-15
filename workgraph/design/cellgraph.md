@@ -80,9 +80,10 @@ Each absence is a design statement, not a gap:
   witnessed value and a bare owned error — is the DAG layer's terminal
   protocol. A cell substrate with long-lived cells cannot assume a cell ever
   produces a final answer.
-- **No retention protocol.** Delivery-driven frame retention ("a producer's
-  frame lives until every consumer has pulled") is defined in terms of dep
-  edges and terminals, so it lives with them.
+- **No delivery protocol.** Where a finished value lands, and what its crossing
+  costs ("adopt the terminal into every destination region waiting on it, once
+  per distinct destination"), is defined in terms of dep edges and terminals, so
+  it lives with them.
 - **No payload, contract, or shell types.** An embedder detail the substrate
   would only store and hand back is never its own contract type — it rides
   either the cell's memory anchor (`Frame`) or a continuation capture. Koan's

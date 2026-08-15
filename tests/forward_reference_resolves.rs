@@ -31,12 +31,12 @@ fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let ids = test_run.enter_source_in(scope, source);
+    let ids = test_run.enter_source_watched_in(scope, source);
     if let Err(e) = test_run.runtime.execute() {
         return Some(e);
     }
     for id in ids {
-        if let Err(e) = test_run.runtime.result_error(id) {
+        if let Err(e) = test_run.runtime.edge_result_error(id) {
             return Some(e.clone());
         }
     }
@@ -330,14 +330,14 @@ fn producer_error_propagates_to_parked_consumer() {
         .expect("a producer error routes into the slot, not a fatal execute abort");
     let err = test_run
         .runtime
-        .result_error(ids[0])
+        .edge_result_error(ids[0])
         .expect_err("execute should surface UNDEFINED_FN's dispatch failure");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for UNDEFINED_FN, got {err}",
     );
     assert!(
-        test_run.runtime.result_error(ids[1]).is_err(),
+        test_run.runtime.edge_result_error(ids[1]).is_err(),
         "y must inherit its dependency's error",
     );
 }

@@ -55,13 +55,14 @@ fn fn_typed_param_rejects_mismatched_call() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(root, scope);
     test_run
         .runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let err = test_run
         .runtime
-        .result_error(root)
+        .edge_result_error(edge)
         .expect_err("DOUBLE \"hi\" should fail dispatch");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
@@ -95,11 +96,12 @@ fn fn_param_without_annotation_is_rejected() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match test_run.runtime.result_error(id) {
+    let err = match test_run.runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("untyped parameter should error"),
     };
@@ -126,11 +128,12 @@ fn fn_param_with_unknown_type_name_is_rejected() {
         ),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match test_run.runtime.result_error(id) {
+    let err = match test_run.runtime.edge_result_error(edge) {
         Err(e) => e,
         Ok(()) => panic!("unknown param type should error"),
     };

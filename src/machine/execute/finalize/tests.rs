@@ -1,7 +1,7 @@
 //! Tests for [`finalize_terminal`](super::NodeFinalize::finalize_terminal)'s Done boundary: a
 //! terminal seals **as-is** — the boundary makes no memory decision — and the producer frame's
-//! lifetime rides the scheduler's retention hold (stood in for here by the delivery envelope's
-//! host `Rc`), released when the hold drops. The [`Weak`] census is the direct probe — a released
+//! lifetime rides the delivery envelope's own host `Rc`, which the walk holds while it adopts into
+//! each destination and releases when the envelope drops. The [`Weak`] census is the direct probe — a released
 //! frame's `FrameStorage` upgrades to `None` once the last strong holder drops.
 
 use std::cell::RefCell;
@@ -46,11 +46,11 @@ fn resident_scalar(
 }
 
 /// A region-pure scalar terminal (empty reach) seals as-is at the Done boundary and rides the
-/// retention hold: the envelope's host `Rc` (the hold's stand-in) keeps the producer's storage —
-/// hence the value — alive across the producer shell's drop, and releasing the hold releases the
-/// frame. Frame release is a function of deliveries only, never of the value's reach.
+/// envelope's own host pin: that `Rc` keeps the producer's storage — hence the value — alive across
+/// the producer shell's drop, and dropping the envelope releases the frame. Frame release is a
+/// function of deliveries only, never of the value's reach.
 #[test]
-fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
+fn region_pure_scalar_rides_the_envelope_and_releases_at_envelope_drop() {
     let program = program_storage();
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
@@ -65,10 +65,10 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     assert!(
         !delivered.open_at().has_reach_members(),
         "a region-pure scalar's reach names nothing — the carrier itself pins nothing, so \
-         liveness is retention's"
+         liveness is the envelope's"
     );
 
-    // The retention seed: the producer's storage rides the envelope out of the boundary, exactly as
+    // The delivery seed: the producer's storage rides the envelope out of the boundary, exactly as
     // the run loop hands it to the scheduler at finalize.
     let envelope = test_run
         .runtime
@@ -78,10 +78,10 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     drop(producer);
     assert!(
         weak.upgrade().is_some(),
-        "the retention hold keeps the producer's storage alive across the shell drop"
+        "the envelope's host pin keeps the producer's storage alive across the shell drop"
     );
     envelope.open(|carried| match carried {
-        Carried::Object(KObject::Number(n)) => assert_eq!(*n, 7.0, "value rides the hold"),
+        Carried::Object(KObject::Number(n)) => assert_eq!(*n, 7.0, "value rides the envelope"),
         other => panic!(
             "expected the retained Number, got {:?}",
             other.ktype(&test_run.types)
@@ -90,7 +90,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     drop(envelope);
     assert!(
         weak.upgrade().is_none(),
-        "releasing the hold releases the frame — a delivery fact, not a reach fact"
+        "dropping the envelope releases the frame — a delivery fact, not a reach fact"
     );
 }
 
@@ -131,9 +131,9 @@ fn delivery_envelope_foreign_bundle_releases_at_envelope_drop() {
 
 /// A value that genuinely borrows into its producer frame carries that home membership through the
 /// Done boundary unchanged — finalize seals as-is; membership is read only at a later copied re-home
-/// mint, never as a lifecycle input. The frame's lifetime is retention's either way.
+/// mint, never as a lifecycle input. The frame's lifetime is the envelope's either way.
 #[test]
-fn home_borrowing_value_keeps_its_home_membership_and_rides_retention() {
+fn home_borrowing_value_keeps_its_home_membership_and_rides_the_envelope() {
     let program = program_storage();
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
@@ -162,12 +162,12 @@ fn home_borrowing_value_keeps_its_home_membership_and_rides_retention() {
     drop(producer);
     assert!(
         weak.upgrade().is_some(),
-        "the retention hold — not the carrier — keeps the frame alive"
+        "the envelope's host pin — not the carrier — keeps the frame alive"
     );
     drop(envelope);
     assert!(
         weak.upgrade().is_none(),
-        "dropping the hold releases the frame"
+        "dropping the envelope releases the frame"
     );
 }
 
@@ -388,19 +388,19 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
     drop(producer);
     assert!(
         weak.upgrade().is_some(),
-        "the retention hold keeps the producer's storage alive for the adoption"
+        "the envelope's host pin keeps the producer's storage alive for the adoption"
     );
 
     let consumer_storage = run_root_storage();
     let consumer = run_root_bare(&consumer_storage);
     let adopted: Carried = consumer.adopt_carried(&cell, AdoptSeam::Retaining);
 
-    // Drop the hold: the consumer's minted arena set (the materialized host member) is now the
+    // Drop the envelope: the consumer's minted arena set (the materialized host member) is now the
     // sole owner of the producer's storage.
     drop(cell);
     assert!(
         weak.upgrade().is_some(),
-        "the consumer's minted reach pins the producer past the hold's release"
+        "the consumer's minted reach pins the producer past the envelope's release"
     );
     match adopted {
         Carried::Object(KObject::Number(n)) => {
@@ -440,7 +440,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     assert_eq!(
         Rc::strong_count(&storage),
         count_before + 1,
-        "the delivery pays exactly one frame-level bump — the retention hold"
+        "the delivery pays exactly one frame-level bump — the envelope's host pin"
     );
 
     let envelope = test_run

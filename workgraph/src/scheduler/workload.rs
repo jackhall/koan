@@ -1,7 +1,10 @@
 use std::rc::Rc;
 
 use super::{DropFree, Reattachable};
-use crate::witnessed::{Carrier, Delivered, PinsRegion, Retained, Witnessed};
+use crate::witnessed::{
+    Carrier, Delivered, PinsRegion, Region, RegionHandleFamily, RegionOwner, Retained,
+    StorageProfile, Witnessed,
+};
 
 /// The live (caller-lifetime) form of the inter-node value for a workload `W`, re-anchored from the
 /// scheduler's `Witnessed<W::Value, _>` slot at the borrow under which the producer frame stays
@@ -12,15 +15,15 @@ pub type Live<'node, W> = <<W as Workload>::Value as Reattachable>::At<'node>;
 /// inspects it beyond this projection, and projects its region owner where retention and delivery
 /// need the true owner type. Koan's anchor is the per-call slot frame; its owner is `FrameStorage`.
 pub trait Anchor: 'static {
-    /// The projected region-owner type — the retention-hold, delivery-envelope, and reach-set
-    /// member type. Koan's is `FrameStorage`. [`PinsRegion`] is the reach-set member contract; the
+    /// The projected region-owner type — the delivery-envelope and reach-set member type. Koan's
+    /// is `FrameStorage`. [`PinsRegion`] is the reach-set member contract; the
     /// scheduler retains and drops the `Rc` but calls no method on it.
     type Owner: PinsRegion + 'static;
     /// The anchor's region owner, projected for retention and delivery.
     fn owner(&self) -> &Rc<Self::Owner>;
 }
 
-/// The anchor's projected region-owner type — the retention-hold and delivery-envelope member type.
+/// The anchor's projected region-owner type — the delivery-envelope and reach-set member type.
 pub type OwnerOf<W> = <<W as Workload>::Frame as Anchor>::Owner;
 
 /// A finalized terminal as the workload's finalize hook delivers it: the erased inter-node value
@@ -28,36 +31,54 @@ pub type OwnerOf<W> = <<W as Workload>::Frame as Anchor>::Owner;
 /// frameless / run-region value). The store seals it for dormant storage between steps.
 pub type Terminal<W> = Witnessed<<W as Workload>::Value, Carrier<OwnerOf<W>>>;
 
-/// A finalized terminal in its dormant [`Sealed`] form — what a result slot stores and a
-/// consumer pull duplicates, read back under the retention hold ([`Sealed::open_with`]).
+/// A finalized terminal in its dormant [`Retained`] form — what a delivered edge holds and what
+/// [`Scheduler::edge_resident`](super::Scheduler::edge_resident) duplicates, read back under the
+/// destination region's own pin.
 pub type SealedTerminal<W> = Retained<<W as Workload>::Value, Carrier<OwnerOf<W>>>;
 
 /// A terminal **in transit**: the carrier bundled with the owned coverage pinning every region it
-/// reaches, its own residence among them. This is the currency of both terminal doors — the value
-/// the workload's finalize hook returns ([`Scheduler::finalize`](super::Scheduler::finalize),
-/// [`Scheduler::rehome_terminal`](super::Scheduler::rehome_terminal)) and the one a consumer pulls
-/// ([`Scheduler::dep_delivered`](super::Scheduler::dep_delivered)). Value and reach travel as one
-/// value derived from one envelope, so neither door can be handed a coverage belonging to some
-/// other terminal, and the retention hold's foreign bundle is derived here rather than beside the
-/// call.
+/// reaches, its own residence among them. This is the currency of the terminal door — the value the
+/// workload's finalize hook returns ([`Scheduler::finalize`](super::Scheduler::finalize)) and the
+/// operand [`Workload::deliver`] adopts inside the walk. Value and reach travel as one value derived
+/// from one envelope, so the door cannot be handed a coverage belonging to some other terminal, and
+/// the transit bundle covering the walk's adopts is derived here rather than beside the call.
 pub type DeliveredTerminal<W> = Delivered<<W as Workload>::Value, Carrier<OwnerOf<W>>, OwnerOf<W>>;
+
+/// A **destination operand**: a bare handle on the region a delivery lands in, sealed into the
+/// envelope the composition verbs take. The delivery walk builds one per distinct destination and
+/// hands it to [`Workload::deliver`].
+pub type DeliveryDestination<W> =
+    Delivered<RegionHandleFamily<<W as Workload>::Profile>, Carrier<OwnerOf<W>>, OwnerOf<W>>;
 
 /// The Koan-agnostic interface the generic DAG scheduler is parameterized over: the workload types
 /// it stores opaquely and never inspects. The Koan instantiation is `machine::execute::KoanWorkload`.
-pub trait Workload {
+///
+/// The one behavioural hook is [`deliver`](Workload::deliver): the delivery walk owns *when* and
+/// *where* a terminal lands, the embedder owns *how* it gets there.
+pub trait Workload: Sized
+where
+    <Self::Frame as Anchor>::Owner: RegionOwner<Region = Region<Self::Profile>>,
+{
     /// The inter-node value carried along dep edges. A one-lifetime [`Reattachable`] family: the
     /// scheduler stores it in a finalized terminal's `Witnessed<Self::Value, _>` (the value erased,
     /// bundled with the producer frame `Rc`) and re-anchors it to the read borrow through
     /// `Witnessed::read`. `At<'static>: Copy` lets a `&self` read copy the erased carrier out before
     /// re-anchoring it.
     type Value: Reattachable<At<'static>: Copy> + DropFree;
-    /// The terminal error type (stored in a finalized terminal; the scheduler only stores/borrows it).
-    type Error;
+    /// The terminal error type. `Clone` because delivery is per destination: an errored producer's
+    /// terminal lands on every live edge waiting on it, one clone apiece, where a value terminal is
+    /// adopted once per distinct destination region.
+    type Error: Clone;
+    /// The storage profile the destination regions are built over — what the walk's per-destination
+    /// handle and the [`deliver`](Self::deliver) operand are typed against. Koan's is
+    /// `KoanStorageProfile`.
+    type Profile: StorageProfile<FrameOwner = OwnerOf<Self>> + 'static;
     /// The per-slot memory anchor the scheduler manages by `Rc` (minted by the workload). The
     /// scheduler stores it, hands it back from [`take_for_run`](super::Scheduler::take_for_run), and
-    /// calls only [`Anchor::owner`] — projecting the region owner it retains for delivery-driven
-    /// frame retention. It holds an `Rc<Self::Frame>` for a finalized producer until every
-    /// destination has pulled the terminal, releasing at pull-count zero
+    /// calls only [`Anchor::owner`] — projecting the region owner the delivery envelope and the
+    /// destination operands are typed against. The row holds the anchor from alloc until finalize:
+    /// delivery moves the terminal into its destinations, so the slot's reclaim drops the anchor
+    /// unconditionally and the scheduler keeps no pin of its own
     /// (design/reach.md § Retention model).
     type Frame: Anchor;
     /// The per-node continuation: a one-lifetime [`Reattachable`] family the scheduler rests on the
@@ -67,4 +88,20 @@ pub trait Workload {
     /// either: the owned tier keeps the value's drop glue, so a continuation owning heap contents
     /// (a boxed closure) rests soundly and drops soundly if its slot is never opened.
     type Continuation: Reattachable;
+
+    /// **Adopt `terminal` at `dest`** — the delivery walk's per-destination relocation, and the one
+    /// place the scheduler asks the embedder a question about a value.
+    ///
+    /// The walk decides *which* destinations a terminal lands in (one adopt per distinct destination
+    /// region, fanned out to every edge in that bucket) and holds the source envelope's pins across
+    /// the whole walk. What crossing the boundary *costs* is the embedder's: a structural copy, a
+    /// pointer-preserving pin, and the retention claim each implies. Koan's impl is `relocate_seam`.
+    ///
+    /// The product is the terminal as it exists **at the destination** — its residence is `dest`'s
+    /// own region, its coverage what the relocation still reaches — so the walk rests it there and
+    /// keeps no pin of its own.
+    fn deliver(
+        terminal: &DeliveredTerminal<Self>,
+        dest: DeliveryDestination<Self>,
+    ) -> DeliveredTerminal<Self>;
 }

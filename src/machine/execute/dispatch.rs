@@ -21,6 +21,7 @@
 //! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
 //! names).
 
+use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
@@ -31,12 +32,12 @@ use super::nodes::{ChainOp, NodeWork};
 use super::obligation::{ReturnObligation, with_obligation};
 use super::runtime::KoanWorkload;
 use crate::machine::core::{BlockEntry, FramePlacement};
-use crate::scheduler::{Deps, ResolvedDeps, Scheduler};
+use crate::scheduler::{Deps, ResolvedDeps};
 
 // The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
 // dispatch-side view `Outcome` consumers reach through `super::dispatch`.
 pub(in crate::machine::execute) use crate::machine::core::{
-    BodyPlacement, DepPlacement, DepRequest, OwnedDispatch,
+    BodyPlacement, DepPlacement, DepRequest, SubDispatch,
 };
 
 pub(in crate::machine::execute) mod apply_callable;
@@ -76,72 +77,6 @@ pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_
 /// `dispatch::{DispatchShape, classify_dispatch_shape}` path.
 #[allow(unused_imports)]
 pub(crate) use crate::machine::model::{DispatchShape, classify_dispatch_shape};
-
-/// Consumer-less producer standing: ready → errored → park. Read at a leaf-park
-/// site with no consumer id in scope, where a cycle can never be classified —
-/// there is no `Cycle` arm. Each caller keeps its own per-arm policy.
-pub(super) enum ProducerStanding<'a> {
-    /// Ready, and its terminal is an error — the caller propagates a clone.
-    Errored(&'a KError),
-    /// Ready, and its terminal is a value (`Ok`).
-    Ready,
-    /// Still finalizing — park on it.
-    Park,
-}
-
-/// Read a producer's standing consumer-less, folding the workgraph generic
-/// primitives (`is_result_ready` / `result_error`) in ready → errored → park
-/// order.
-pub(super) fn producer_standing(
-    scheduler: &Scheduler<KoanWorkload>,
-    producer: NodeId,
-) -> ProducerStanding<'_> {
-    if scheduler.is_result_ready(producer) {
-        match scheduler.result_error(producer) {
-            Err(e) => ProducerStanding::Errored(e),
-            Ok(()) => ProducerStanding::Ready,
-        }
-    } else {
-        ProducerStanding::Park
-    }
-}
-
-/// Consumer-ful dependence classification: ready → errored → would-cycle → park.
-/// The extra arm over [`ProducerStanding`] is `Cycle` — parking on the producer
-/// would close a wake cycle back to `consumer`. Each caller keeps its own
-/// per-arm policy.
-pub(super) enum ProducerDisposition<'a> {
-    /// Ready, and its terminal is an error — the caller propagates a clone.
-    Errored(&'a KError),
-    /// Ready, and its terminal is a value (`Ok`).
-    Ready,
-    /// Still finalizing, and parking on it would close a wake cycle.
-    Cycle,
-    /// Still finalizing — park on it.
-    Park,
-}
-
-/// Classify whether `consumer` can depend on `producer`: ready → errored →
-/// would-cycle → park. The cycle check runs only when the producer is still
-/// finalizing (the [`ProducerStanding::Park`] branch), so a ready producer is
-/// never cycle-tested — the exact order of the shared park ladder.
-pub(super) fn producer_disposition(
-    scheduler: &Scheduler<KoanWorkload>,
-    producer: NodeId,
-    consumer: NodeId,
-) -> ProducerDisposition<'_> {
-    match producer_standing(scheduler, producer) {
-        ProducerStanding::Errored(e) => ProducerDisposition::Errored(e),
-        ProducerStanding::Ready => ProducerDisposition::Ready,
-        ProducerStanding::Park => {
-            if scheduler.would_create_cycle(producer, consumer) {
-                ProducerDisposition::Cycle
-            } else {
-                ProducerDisposition::Park
-            }
-        }
-    }
-}
 
 /// The staged form of one eager part shape. Private plumbing: exists so the
 /// six-shape set is written exactly once (in [`eager_shape`]) while staging
@@ -269,7 +204,7 @@ pub(in crate::machine::execute) fn staged_slot_placeholder<'a>() -> Spanned<Work
 /// Result of a successful keyworded part walk.
 pub(in crate::machine::execute) struct PartWalkResult<'step> {
     pub new_parts: Vec<Spanned<WorkingPart<'step>>>,
-    pub producers_to_wait: Vec<NodeId>,
+    pub sources_to_wait: Vec<ProducerId>,
     pub staged_subs: Vec<(usize, DepRequest<'step>)>,
 }
 
@@ -356,7 +291,10 @@ pub(super) fn body_shape_err<'step>(
 
 /// Clone a dep's terminal error and attach a caller-chosen frame.
 /// `frame = None` is the frameless variant.
-pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KError {
+pub(in crate::machine::execute) fn propagate_dep_error(
+    e: &KError,
+    frame: Option<TraceFrame>,
+) -> KError {
     let cloned = e.clone_for_propagation();
     match frame {
         Some(f) => cloned.with_frame(f),
@@ -366,25 +304,42 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
 
 // ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
 
-/// Park the slot on `producers` and re-run its `resume` decide on wake. `carrier` is the
-/// parked expression's pre-rendered summary for the deadlock report (`None` when the park
-/// carries no renderable form) — rendering it here keeps the AST out of the scheduler.
+/// Park the slot on `sources` — the binder edges its names resolved to — and re-run its `resume`
+/// decide on wake. `carrier` is the parked expression's pre-rendered summary for the deadlock
+/// report (`None` when the park carries no renderable form) — rendering it here keeps the AST out
+/// of the scheduler. `dep_error_frame` labels the propagation when one of those sources turns out
+/// to name an already-errored producer, which the harness rules on when it installs.
 pub(in crate::machine::execute) fn park_resume<'step>(
-    producers: Vec<NodeId>,
+    sources: Vec<ProducerId>,
     carrier: Option<String>,
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
+    park_resume_labelled(sources, carrier, None, resume)
+}
+
+/// [`park_resume`] carrying an explicit dep-error frame — the park sites that label their
+/// propagation (`<dispatch-park>`, `<operator-chain>`) reach for this one, so an error the install
+/// surfaces is framed at the site that asked for the park rather than arriving bare.
+pub(in crate::machine::execute) fn park_resume_labelled<'step>(
+    sources: Vec<ProducerId>,
+    carrier: Option<String>,
+    dep_error_frame: Option<TraceFrame>,
+    resume: ResumeFn<'step>,
+) -> Outcome<'step> {
     Outcome::ParkThenContinue {
-        deps: Deps::from_parks(producers),
+        deps: Deps::from_producers(sources.into_iter().map(ProducerId::scheduler_edge)),
         continuation: Continuation::Resume { carrier, resume },
-        dep_error_frame: None,
+        dep_error_frame,
     }
 }
 
-/// A bare-identifier slot whose name binds to `producer`: the slot's result *is* `producer`'s
-/// result, so the harness splices the slot out (no forwarding node) — see [`Outcome::Forward`].
-pub(in crate::machine::execute) fn forward_to_producer<'step>(producer: NodeId) -> Outcome<'step> {
-    Outcome::Forward(producer)
+/// A bare-identifier slot whose name binds to the binder behind `source`: the slot's result *is*
+/// that producer's result, so the harness splices the slot out (no forwarding node) — see
+/// [`Outcome::Forward`].
+pub(in crate::machine::execute) fn forward_to_producer<'step>(
+    source: ProducerId,
+) -> Outcome<'step> {
+    Outcome::Forward(source.scheduler_edge())
 }
 
 /// Replace the slot with a fresh frameless `Dispatch` of `inner` — the decide reduced its

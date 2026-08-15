@@ -413,11 +413,12 @@ bundle, where it lives exactly as long as the destination region itself.
   empty and pins nothing.
 
 **Slot reinstallation** rides the same delivery: the loop-carried arguments
-adopt into the new incarnation inside the replace itself, while the apply path
-still has the displaced anchor in hand — a copy verdict frees the retiring
+adopt into the new incarnation in the step that *emits* the replace, which
+still holds the retiring region as its own — a copy verdict frees the retiring
 region at the replace, a pin verdict transfers it by hold into the new
-incarnation's anchor bundle, ordering the free after the adoption with a local
-variable rather than a scheduler-held hold.
+incarnation's anchor bundle. `replace` hands the displaced anchor straight back
+rather than parking it, so the free is ordered by a local variable in the
+caller's apply path rather than by a scheduler-held hold spanning a step.
 
 Home = residence, by construction: a value is never moved out of its producer
 region by any channel, so a `Delivered`'s home member and the value's residence

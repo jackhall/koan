@@ -4,13 +4,12 @@
 //! the [`CallFrame`] shell over a refcounted `FrameStorage` that holds the per-call child [`Scope`].
 //! The region/brand substrate these build on lives in the parent `arena` module.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{KoanRegion, KoanStorageProfile, RegionBrand};
 use crate::machine::CarrierWitness;
-use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::{Scope, ScopeId, ScopeRefFamily, scope_frame};
 use crate::machine::model::types::TypeRegistry;
 use crate::witnessed::{
@@ -234,10 +233,6 @@ pub struct CallFrame {
     /// boundary skips the lift for a non-dying frame (lift exists to rescue values from a *dying*
     /// per-call region). Every per-call frame is `false`.
     non_dying: bool,
-    /// The slot this frame was installed for — the body that finalizes it. Set at install; checked at
-    /// that slot's `Done` / tail-`Continue` to close the frame's scope exactly when its body completes.
-    /// A `Yoked` sub-expression slot sharing the frame is not the owner, so its `Done` does not close.
-    owner: Cell<Option<NodeId>>,
     /// The run's subtype-verdict store, `Some` only on the run frame ([`Self::adopting`]). Per-call
     /// frames reach it through the execution context rather than owning one, so a verdict recorded
     /// anywhere in the run is visible everywhere in it; the map drops when the run frame does.
@@ -286,7 +281,6 @@ impl CallFrame {
             envelope,
             storage,
             non_dying: false,
-            owner: Cell::new(None),
             type_registry: None,
             writer: None,
         })
@@ -317,7 +311,6 @@ impl CallFrame {
             envelope,
             storage: scope_frame(scope),
             non_dying: true,
-            owner: Cell::new(None),
             type_registry: Some(Rc::new(TypeRegistry::new())),
             writer: Some(RunWriter::new(out)),
         })
@@ -340,17 +333,6 @@ impl CallFrame {
     /// reads this to skip the self-lift that a never-dying frame would otherwise perform.
     pub fn non_dying(&self) -> bool {
         self.non_dying
-    }
-
-    /// Record the slot that finalizes this frame's scope (the body installed into it). Read by the
-    /// finalize-time close so it seals exactly the scope whose body just completed.
-    pub fn set_owner(&self, slot: NodeId) {
-        self.owner.set(Some(slot));
-    }
-
-    /// The slot that finalizes this frame's scope, if installed.
-    pub fn owner(&self) -> Option<NodeId> {
-        self.owner.get()
     }
 
     /// This frame's own `FrameStorage` — the owner of the region its child scope lives in, which

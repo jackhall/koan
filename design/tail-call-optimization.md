@@ -76,15 +76,18 @@ for the frame's scope-handle and lexical-chain role.
 ## Loop-carried values
 
 A tail call carries values forward — its arguments, any closure it re-invokes.
-These are the reinstalled incarnation's **owned deps**: sealed as carriers in the
-retiring incarnation's region during its step, then adopted into the new
-incarnation's fresh region at its first step (`transfer_into`, the ordinary
-carrier-delivery path — see
+These are sealed as carriers in the retiring incarnation's region during its step
+and adopted into the new incarnation's fresh region *in that same step*: the
+decide that folds the resolved call
+([`enter_user_fn`](../src/machine/execute/dispatch/exec.rs)) mints the callee's
+cart and binds the arguments into it before it emits the replace, so the
+reinstalled incarnation's first step reads nothing in the region the replace
+retires (`transfer_into`, the ordinary carrier-delivery path — see
 [scheduler-library.md § The consumer API](scheduler-library.md#the-consumer-api)).
 Argument passing is not a TCO special case; it is the same one structural copy per
 value that any dep crossing a region boundary pays. The adoption is also what times
-the retiring region's free: it lives until the new incarnation has adopted (§
-Soundness, Lemma 2).
+the retiring region's free: it lives until the adoption has read it (§ Soundness,
+Lemma 2).
 
 ## Space and efficiency
 
@@ -116,14 +119,18 @@ released. Freeing under a live borrow is therefore impossible. *Enforced by* the
 run loop's ordering: graph edits apply after a step returns, never mid-step.
 
 **Lemma 2 — the retiring region outlives argument adoption.** The retiring
-incarnation seals its carried arguments as carriers hosted in its own region;
-the reinstalled incarnation adopts them into its fresh region inside the
-replace itself, while the apply path still holds the retiring anchor
+incarnation seals its carried arguments as carriers hosted in its own region and
+adopts them into the new incarnation's fresh cart in that same step, before it
+emits the replace — the cart rides the `FreshTail` placement already built
+rather than being minted at apply, which is what puts the bind on the near side
+of the hop
 ([reach.md § Retention model](../workgraph/design/reach.md#retention-model)).
 So the free (copy verdict) or the transfer into the new incarnation's anchor
-bundle (pin verdict) is ordered *after* the adoption by construction — a local
-variable across the install call, and the single consumer of tail position
-makes the turnover prompt.
+bundle (pin verdict) is ordered *after* the adoption by construction: the
+adoption runs while the region is still the deciding step's own, and the
+displaced anchor comes back out of the install as a local variable that falls at
+the end of the apply arm. The single consumer of tail position makes the
+turnover prompt.
 
 **Lemma 3 — cross-region references are pinned, never raw.** Two kinds of
 cross-region reference arise, each with its own pin:
@@ -171,9 +178,9 @@ names the same slot at loop exit. A fresh-id design would strand it.
 The loop's **final** result may therefore fan out to several consumers (the binding
 plus any forwards); the finalize walk delivers into each edge's destination, and a
 pin verdict keeps the final incarnation's region alive from those destinations'
-own union bundles. This is a different quantity from Lemma 2's retiring→successor handoff,
-which is always exactly one consumer — the fan-out is on the loop's terminal, not on
-the intra-loop argument adoption.
+own union bundles. This is a different quantity from Lemma 2's retiring→successor
+argument adoption, which is always exactly one consumer — the fan-out is on the
+loop's terminal, not on the intra-loop argument adoption.
 
 ### The kept-first return contract
 

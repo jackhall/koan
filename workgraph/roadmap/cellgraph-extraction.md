@@ -43,8 +43,6 @@ semantics, and the delivery protocol.
 
 **Requires:**
 
-- [Delivery at finalize](delivery-at-finalize.md) — the carve happens against
-  the settled slot/edge substrate, not the shape that flip rewrites.
 
 **Unblocks:**
 

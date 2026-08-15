@@ -1,6 +1,6 @@
 //! Signature parsing for the `FN` builtin.
 
-use crate::machine::NodeId;
+use crate::machine::ProducerId;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, SignatureElement};
@@ -43,12 +43,12 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
 pub(crate) enum ParamListOutcome<'a> {
     Done(Vec<SignatureElement<'a>>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules an
-    /// `AwaitDeps` over `park_producers` and any sub-Dispatches, then re-runs
+    /// `AwaitDeps` over `awaited_producers` and any sub-Dispatches, then re-runs
     /// `parse_fn_param_list` over the same (unmodified) `signature` with the resolved
     /// sub-Dispatch carriers fed back through its `resolved` parameter — `signature` is raw AST
     /// throughout and never carries a scheduler-written slot.
     Pending {
-        park_producers: Vec<NodeId>,
+        awaited_producers: Vec<ProducerId>,
         /// `(slot_idx_in_signature_parts, sub_expr_to_dispatch)`.
         sub_dispatches: Vec<(usize, KExpression<'a>)>,
     },
@@ -56,8 +56,8 @@ pub(crate) enum ParamListOutcome<'a> {
 }
 
 /// Type-name resolution rides on [`elaborate_type_identifier`], which returns
-/// `TypeResolution::Park(producers)` for type-binding names that have dispatched but not
-/// finalized. Parking producers and sub-Dispatches accumulate across the whole signature
+/// `TypeResolution::Park(sources)` for type-binding names that have dispatched but not
+/// finalized. Park sources and sub-Dispatches accumulate across the whole signature
 /// walk so the caller can register every blocker in one dep-finish.
 ///
 /// `resolved` is `None` on the first walk (every `Expression` / `SigiledTypeExpr` /
@@ -80,7 +80,7 @@ pub(crate) fn parse_fn_param_list<'a>(
     // The mint door re-homes all of them at the function's own region.
     let brand = elaborator.scope.brand();
     let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(parts.len());
-    let mut parks: Vec<NodeId> = Vec::new();
+    let mut awaited: Vec<ProducerId> = Vec::new();
     let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
     let mut first_err: Option<String> = None;
     let mut i = 0;
@@ -112,7 +112,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                                     .push(SignatureElement::Argument(Argument { name, ktype: kt }));
                             }
                             TypeResolution::Park(producers) => {
-                                parks.extend(producers);
+                                awaited.extend(producers);
                             }
                             TypeResolution::Unbound(msg) if first_err.is_none() => {
                                 first_err =
@@ -187,9 +187,9 @@ pub(crate) fn parse_fn_param_list<'a>(
     if let Some(msg) = first_err {
         return ParamListOutcome::Err(msg);
     }
-    if !parks.is_empty() || !sub_dispatches.is_empty() {
+    if !awaited.is_empty() || !sub_dispatches.is_empty() {
         return ParamListOutcome::Pending {
-            park_producers: parks,
+            awaited_producers: awaited,
             sub_dispatches,
         };
     }

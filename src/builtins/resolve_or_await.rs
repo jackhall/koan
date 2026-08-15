@@ -4,13 +4,14 @@
 //! routing site states its own carrier shape and slot name and nothing else.
 
 use crate::machine::core::RegionBrand;
+use crate::machine::execute::deps_on;
 use crate::machine::model::KExpression;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{Action, AwaitContinue, DepPlacement, DepTerminal, FinishCtx, OwnedDispatch};
+use crate::machine::{Action, AwaitContinue, DepPlacement, DepTerminal, FinishCtx, SubDispatch};
 use crate::machine::{KError, KErrorKind, NameLookup, Scope};
-use crate::scheduler::{DepResults, Deps};
+use crate::scheduler::Deps;
 
 /// `{slot}: {detail}` — the unbound / hard-miss shape.
 pub(crate) fn unbound_error(slot: &str, detail: &str) -> KError {
@@ -43,7 +44,7 @@ pub(crate) fn classify_name_lookup(
     }
 }
 
-/// Re-run `resolve` after the parked producers finished. `Done` yields the type; `Park` is the
+/// Re-run `resolve` after the parked binders finished. `Done` yields the type; `Park` is the
 /// protocol error; `Unbound` is a hard miss.
 pub(crate) fn resolve_at_wake<'a>(
     scope: &Scope<'a>,
@@ -57,7 +58,8 @@ pub(crate) fn resolve_at_wake<'a>(
     }
 }
 
-/// Resolve now; park on the producers and re-resolve at wake when the name is still finalizing.
+/// Resolve now; park on the binders' claim edges and re-resolve at wake when the name is still
+/// finalizing.
 /// `resolve` runs once synchronously and (on the park arm) once more at dep-finish against the
 /// wake-side scope.
 pub(crate) fn resolve_or_await<'a>(
@@ -72,29 +74,30 @@ pub(crate) fn resolve_or_await<'a>(
         // receives: `FinishCtx::for_scope` reconstructs the step context over the scope's own frame,
         // matching the wake side's provenance, so both arms allocate in the same region.
         TypeResolution::Done(kt) => on_resolved(&FinishCtx::for_scope(scope, types), kt),
-        TypeResolution::Park(producers) => {
+        TypeResolution::Park(sources) => {
             let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
                 let kt = crate::try_action!(resolve_at_wake(fctx.scope, slot, resolve));
                 on_resolved(fctx, kt)
             });
-            Action::await_deps(Deps::from_parks(producers), finish)
+            Action::await_deps(deps_on(sources), finish)
         }
         TypeResolution::Unbound(detail) => Action::done(Err(unbound_error(slot, &detail))),
     }
 }
 
-/// Read the type a sub-dispatch resolved to out of a dep-finish's owned results — a non-type
-/// result is the slot's canonical shape error. The value is read under the terminal envelope's own
-/// pins, at the borrow of the guard bound here; the resolved `KType` is a `Copy` handle that escapes
-/// that borrow, so a caller that seals it into a result carries it by value.
+/// Read the type a sub-dispatch resolved to out of a dep-finish's results — a non-type
+/// result is the slot's canonical shape error. The value is read at the borrow of the guard bound
+/// here, over a dep resident in a region this step already covers, at the step's own brand; the
+/// resolved `KType` is a `Copy` handle that escapes that borrow, so a caller that seals it into a
+/// result carries it by value.
 pub(crate) fn expect_type_terminal(
-    results: &DepResults<'_, &DepTerminal>,
-    owned_pos: usize,
+    results: &[&DepTerminal<'_>],
+    dep_index: usize,
     slot: &str,
     types: &TypeRegistry,
 ) -> Result<KType, KError> {
-    let terminal: &DepTerminal = results.owned(owned_pos);
-    let opened = terminal.delivered.open_at();
+    let terminal: &DepTerminal = results[dep_index];
+    let opened = terminal.cell.open_at();
     match opened.value() {
         Carried::Type(kt) => Ok(kt),
         Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name(types))),
@@ -125,11 +128,11 @@ pub(crate) fn dispatch_working_type_then<'a>(
     on_resolved: impl for<'r> FnOnce(&FinishCtx<'a, 'r>, KType) -> Action<'a> + 'a,
 ) -> Action<'a> {
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        let kt = crate::try_action!(expect_type_terminal(&results, 0, slot, fctx.types));
+        let kt = crate::try_action!(expect_type_terminal(results, 0, slot, fctx.types));
         on_resolved(fctx, kt)
     });
     Action::await_deps(
-        Deps::from_owned([OwnedDispatch {
+        Deps::from_requests([SubDispatch {
             expr,
             placement: DepPlacement::OwnScope,
         }]),

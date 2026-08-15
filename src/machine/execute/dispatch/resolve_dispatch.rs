@@ -12,26 +12,28 @@
 //! dead lean must not pre-empt an outer scope that could strict-pick the bare
 //! name as an `:Identifier` / `:Any` slot.
 
+use crate::machine::DeliveredCarried;
+use crate::machine::ProducerId;
 use crate::machine::core::{ClassifiedSlots, OpenedFunction};
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
-use crate::machine::{DeliveredCarried, NodeId};
 
 use super::is_eager_working_part;
 
 /// Cached outcome of resolving a bare-name part (`Identifier` or leaf `Type`).
 /// Built once per dispatch into a slice paralleling `expr.parts` (`None` for
 /// non-bare-name parts) and consumed by strict admission and the relaxed pass.
-/// A producer error absorbs into the builder's `Err` before the cache is built,
-/// so it never appears as an outcome here.
+/// These three arms are exhaustive — the ladder that builds them is total, and a
+/// producer's error is not one of them: it reaches the consumer through the park
+/// the harness installs, never through a probe at cache-build time.
 pub enum NameOutcome {
     /// The bound value lifted into a delivery envelope pinned by its binding scope — admission
     /// opens it under those pins to classify the value, so a speculative probe re-anchors nothing
     /// and retains nothing.
     Resolved(DeliveredCarried),
-    Parked(NodeId),
+    Parked(ProducerId),
     Unbound(String),
 }
 
@@ -74,7 +76,7 @@ pub enum DispatchOutcome<'step> {
     /// FN's pending slot in `functions[key]`) and re-dispatch once they bind.
     /// Distinct from `Deferred`: waits on existing producers without
     /// scheduling new work.
-    ParkOnProducers(Vec<NodeId>),
+    ParkOnProducers(Vec<ProducerId>),
     /// A bare-name arg resolves to nothing — no binding and no placeholder.
     /// The unbound name is the precise cause, so it surfaces here rather than
     /// as a dispatch miss.
@@ -224,7 +226,7 @@ fn decide_relaxed<'step, 'e>(
     bare_outcomes: &[Option<NameOutcome>],
     types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
-    let mut parked: Vec<NodeId> = Vec::new();
+    let mut parked: Vec<ProducerId> = Vec::new();
     let mut any_eager_lean = false;
     let mut dead_name: Option<String> = None;
     for f in bucket.candidates.iter() {
@@ -302,8 +304,8 @@ impl OverloadBucket<'_, '_> {
         expr: &WorkingExpression<'e>,
         bare_outcomes: &[Option<NameOutcome>],
         types: &TypeRegistry,
-    ) -> Vec<NodeId> {
-        let mut producers: Vec<NodeId> = Vec::new();
+    ) -> Vec<ProducerId> {
+        let mut producers: Vec<ProducerId> = Vec::new();
         for f in self.candidates.iter() {
             let Some(leans) = relaxed_admits(&f.value().signature, expr, bare_outcomes, types)
             else {
@@ -335,7 +337,7 @@ enum PickPass {
 /// not-yet-evaluated eager part; `Dead` an unbound bare name (no producer will
 /// ever bind it — only labels the `UnboundName` terminal, never waits).
 enum Lean {
-    Parked(NodeId),
+    Parked(ProducerId),
     Eager,
     Dead(String),
 }

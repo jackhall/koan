@@ -122,8 +122,9 @@ pub fn body_transparent<'a>(
     // composition mints it as the value's reach and retains it here. The view's self-sig is sealed
     // inside the fold, on the resident module (SIG-declared value slots read the source's concrete
     // types after substitution). Reusing the foreign source's child scope, the view borrows nothing
-    // into this home frame, so no home member is named and the dying home frame frees once its
-    // retention hold releases. Lifting the seal upgrades the description's members `Weak → Rc` for
+    // into this home frame, so no home member is named and the dying home frame frees at its own
+    // finalize, once the delivery walk has adopted the terminal onward. Lifting the seal upgrades
+    // the description's members `Weak → Rc` for
     // the terminal the step delivers onward.
     let sealed = ctx.scope.store_transparent_view(
         format!("{} :! {}", m.path, s_name),

@@ -1,76 +1,41 @@
 //! Bare-name forward splice — all the graph logic for eliminating a forwarding node.
 //!
 //! When a slot resolves to a downstream producer, its result *is* that producer's result. Rather
-//! than keep a forwarding node, the slot is **spliced out**: it becomes an alias of the producer,
-//! which stays the single producer of that result. This module owns every graph operation the
-//! splice needs, so the alias contract lives in one place:
+//! than keep a forwarding node, the slot is **spliced out**: its parked edges are re-pointed at the
+//! real producer, which stays the single producer of that result, and the slot reclaims. Nothing
+//! survives as a residual — no alias state, no alias walk on reads — because an edge's producer
+//! pointer is the scheduler's to rewrite for exactly as long as the edge is unfilled. Post-delivery
+//! the resident value *is* the value, so the surgery window closes at delivery, which is the right
+//! semantics.
 //!
-//! - [`Scheduler::splice_forward`] performs the splice — move the consumers already parked on the
-//!   slot onto the producer's notify list, and mark the slot an alias (in the node store) so reads
-//!   follow through.
-//! - [`Scheduler::resolve_alias`] walks an alias chain to the real producer. Reads
-//!   ([`Scheduler::read_result`] etc.) and edge-installs both resolve through it, so neither the
-//!   store nor the dep graph has to be alias-aware on its own.
-//! - [`Scheduler::add_owned_edge`] / [`Scheduler::add_park_edge`] install a dep edge against the
-//!   *resolved* producer. A consumer that wires to the slot *after* the splice therefore waits on —
-//!   and is woken by — the real producer, not the dead alias. A resolved producer that has already
-//!   finalized adds no edge at all: its value is read directly when the consumer runs. Both are
-//!   scheduler-internal; [`Scheduler::install_edges`] is the public door that routes them.
+//! See [design/dag-scheduler.md § Alias splice](../../design/dag-scheduler.md#alias-splice).
 
 use super::{NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
-    /// Follow a chain of bare-name-forward aliases to the slot that actually holds the result.
-    /// Aliases always point downstream to a real producer, so the walk terminates.
-    pub(crate) fn resolve_alias(&self, mut id: NodeId) -> NodeId {
-        let mut guard = 0;
-        while let Some(to) = self.store.alias_target(id) {
-            id = to;
-            guard += 1;
-            assert!(
-                guard <= self.len(),
-                "alias cycle while resolving forward at {id:?}"
-            );
-        }
-        id
-    }
-
-    /// Splice `slot` out as an alias of `producer`: move the consumers already parked on `slot`
-    /// onto `producer`'s notify list and mark `slot` an alias. `producer` is resolved first so
-    /// aliases never chain. Late parkers are handled by [`Self::add_owned_edge`] / `add_park_edge`
-    /// resolving the alias when they wire in.
-    pub fn splice_forward(&mut self, slot: NodeId, producer: NodeId) {
-        let producer = self.resolve_alias(producer);
-        self.deps.splice_notify(slot, producer);
-        self.store.alias(slot, producer);
-    }
-
-    /// Install an `Owned` read-edge from `producer` to `consumer`, following any alias on
-    /// `producer`. An already-finalized resolved producer adds no edge — the consumer reads its
-    /// value directly, so it never parks on a slot that will not fire — but it **is** a late
-    /// destination of the producer's retained frame, so its pull is counted here (the late-park
-    /// increment) to be discharged after the consumer's read.
+    /// Splice `slot` out onto `producer`: re-point every live edge waiting on `slot` at `producer`
+    /// and move them onto its notify list, then reclaim the slot. A released entry recycles here
+    /// exactly as it would in the walk (Inv-C) — the splice is the other place a notify list is
+    /// dropped.
     ///
-    /// Scheduler-internal, like its `add_park_edge` sibling: an embedder wires edges through the
-    /// one public door, [`Scheduler::install_edges`], which routes both kinds off a
-    /// [`ResolvedDeps`](super::ResolvedDeps).
-    pub(in crate::scheduler) fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
-        let producer = self.resolve_alias(producer);
-        if self.store.is_result_ready(producer) {
-            self.deps.owe_late_pull(producer, consumer);
-        } else {
-            self.deps.add_owned_edge(producer, consumer);
-        }
-    }
-
-    /// Park (`Notify`) sibling of [`Self::add_owned_edge`]: the consumer reads `producer` but does
-    /// not own it. Same alias-resolve and already-finalized late-park increment.
-    pub(in crate::scheduler) fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
-        let producer = self.resolve_alias(producer);
-        if self.store.is_result_ready(producer) {
-            self.deps.owe_late_pull(producer, consumer);
-        } else {
-            self.deps.add_park_edge(producer, consumer);
-        }
+    /// Crate-internal: an embedder names the producer by an edge, so it splices through
+    /// [`splice_forward_from`](Self::splice_forward_from).
+    pub(crate) fn splice_forward(&mut self, slot: NodeId, producer: NodeId) {
+        let mut moved = self.deps.take_notify(slot);
+        let edges = &mut self.edges;
+        moved.retain(|&edge| {
+            if edges.is_free(edge) {
+                edges.recycle_released(edge);
+                false
+            } else {
+                // The consumers' pending counts are unchanged: each still waits on one edge, now
+                // serviced by `producer`'s single fire.
+                edges.rewrite_producer(edge, producer);
+                true
+            }
+        });
+        self.deps.extend_notify(producer, moved);
+        self.deps.clear_anchor(slot);
+        self.store.free_one(slot);
     }
 }

@@ -61,14 +61,15 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("the countdown should run to completion");
     assert!(
-        test_run.runtime.result_error(id).is_ok(),
+        test_run.runtime.edge_result_error(edge).is_ok(),
         "countdown should complete without error: {:?}",
-        test_run.runtime.result_error(id).err(),
+        test_run.runtime.edge_result_error(edge).err(),
     );
 
     // A MATCH-based tail loop peaks at two slots — the tail-replaced main slot plus the MATCH
@@ -137,14 +138,15 @@ fn tail_recursive_record_thread_stays_o1_in_regions() {
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("the record-threading loop should run to completion");
     assert!(
-        test_run.runtime.result_error(id).is_ok(),
+        test_run.runtime.edge_result_error(edge).is_ok(),
         "record-threading loop should complete without error: {:?}",
-        test_run.runtime.result_error(id).err(),
+        test_run.runtime.edge_result_error(edge).err(),
     );
 
     // Depth-independent: a MATCH-mediated tail hop holds a small constant of live per-call regions
@@ -190,14 +192,15 @@ fn no_mint_categories_add_no_region_mints() {
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), forward),
         scope,
     );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
     test_run
         .runtime
         .execute()
         .expect("bare-name forward should run");
     assert!(
-        test_run.runtime.result_error(id).is_ok(),
+        test_run.runtime.edge_result_error(edge).is_ok(),
         "bare-name forward should resolve cleanly: {:?}",
-        test_run.runtime.result_error(id).err(),
+        test_run.runtime.edge_result_error(edge).err(),
     );
 
     let minted = region_metrics().minted_total;
@@ -211,9 +214,11 @@ fn no_mint_categories_add_no_region_mints() {
 }
 
 /// Adoption-before-free (Lemma 2): a loop-carried aggregate (a `List`) rebuilt at every hop from
-/// the previous hop's own carried value — so the spliced carrier genuinely pins the retiring
-/// incarnation's region across the hop, and the free is ordered strictly after the adoption reads
-/// it. Correctness (not a crash / wrong value) is the observable half of the guarantee under plain
+/// the previous hop's own carried value — so the spliced carrier genuinely borrows the retiring
+/// incarnation's region, and the free is ordered strictly after the adoption reads it. The ordering
+/// is a decide-side one: the adoption runs in the step that *emits* the replace, which still holds
+/// the region it is copying out of, and the retiring anchor falls at the install.
+/// Correctness (not a crash / wrong value) is the observable half of the guarantee under plain
 /// `cargo test`; the orchestrating Miri run is what confirms the ordering itself never
 /// use-after-frees.
 #[test]

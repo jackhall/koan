@@ -20,7 +20,7 @@ pub(crate) enum BlockBody<'a> {
     /// Tail-replace the whole expression, no split: splitting a single quoted expression would run a
     /// parenthesized group as a block.
     Single(KExpression<'a>),
-    /// Split into leading statements + a tail; the leading statements run as owned deps before the tail.
+    /// Split into leading statements + a tail; the leading statements run as deps before the tail.
     Block(KExpression<'a>),
 }
 
@@ -54,7 +54,7 @@ pub(crate) type BlockSeed<'a> =
 /// and crosses to the scheduler here, at the point the tail is declared.
 pub(crate) fn block_tail<'a>(
     brand: RegionBrand<'a>,
-    frame_placement: FramePlacement<'a>,
+    frame_placement: FramePlacement,
     block: BlockScope<'a>,
     seed: Option<BlockSeed<'a>>,
     body: BlockBody<'a>,

@@ -618,9 +618,10 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// `mint_retained(&[])` description, which names that residence off the handle itself.
     ///
     /// Because the default witness pins nothing, the carrier depends on an **external pin** for every
-    /// read: the active frame pins its region during the producing step, and once stored on a node the
-    /// scheduler's retention hold (the delivery envelope's host) carries that pin — reads open under
-    /// it, never bare. A value that *references* another region is the [`yoke`](Self::yoke) /
+    /// read: the active frame pins its region during the producing step, the delivery envelope's own
+    /// bundle while the terminal walks, and the destination region it is adopted into once it comes
+    /// to rest — reads open under one of those, never bare. A value that *references* another region
+    /// is the [`yoke`](Self::yoke) /
     /// envelope-merge path, which sources or folds that region's pin instead.
     ///
     /// Safe because the erase cannot fabricate a lifetime, and `W::default()` is the pins-nothing
@@ -996,8 +997,8 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Witnessed<T, Rc<F>> {
     /// own region, so the minted description's empty members are exact and its host is where the
     /// value genuinely lives; the mint composes no source, so its retention folds an empty bundle.
     /// What this drops is the *pin*, whose job moves to the caller's
-    /// ambient liveness — the active frame during the step, the scheduler's retention hold once the
-    /// value finalizes onto a node. Safe: the value stays erased throughout (no reattach); every
+    /// ambient liveness — the active frame during the step, the destination region once the finalize
+    /// walk delivers the value into it. Safe: the value stays erased throughout (no reattach); every
     /// later read names its coverage explicitly ([`Sealed::open_with`], the
     /// [`Delivered`](delivered::Delivered) envelope).
     pub fn into_reference_only<P>(self) -> Witnessed<T, Carrier<F>>
@@ -1201,15 +1202,15 @@ impl<'home, T: Reattachable + DropFree, W> Sealed<'home, T, W> {
     }
 }
 
-/// The **retention-held** dormant form: a carrier at rest with no home-region brand, because its
-/// home's liveness is not lexical. A finalized scheduler terminal lives here — what keeps its
-/// backing alive is the slot's retention hold, an `Rc` on the producer frame seeded at finalize and
-/// dropped at pull-count zero, which is a refcount protocol no lifetime can express.
+/// The **externally-held** dormant form: a carrier at rest with no home-region brand, because its
+/// home's liveness is not lexical. A delivered terminal lives here — it rests in the destination
+/// region its edge names, and what keeps its backing alive is that region's own life, which is a
+/// refcount protocol no lifetime can express.
 ///
 /// So `Retained` has **no read verb at all**. It stores, it duplicates, and it re-enters circulation
-/// only through [`Delivered::lift`](delivered::Delivered::lift), where the holder supplies the owner
-/// the retention hold has been keeping. Splitting it from [`Sealed`] is what lets `Sealed`'s reads
-/// be pin-free: a type that cannot prove liveness cannot borrow a verb from one that can.
+/// only through [`Delivered::lift`](delivered::Delivered::lift) or [`Self::open_with`], where the
+/// holder supplies the destination's owner. Splitting it from [`Sealed`] is what lets `Sealed`'s
+/// reads be pin-free: a type that cannot prove liveness cannot borrow a verb from one that can.
 pub struct Retained<T: Reattachable + DropFree, W> {
     inner: Witnessed<T, W>,
 }
@@ -1278,7 +1279,8 @@ impl<T: Reattachable + DropFree, W> Retained<T, W> {
     /// design: this is the door where "does this pin cover this carrier?" is unchecked, so both
     /// callers derive the pin from the structure that owns the retention rather than accepting one
     /// — [`Delivered`](delivered::Delivered) supplies its own bundled coverage, and the scheduler's
-    /// `read_result_with` supplies the slot's own retention-hold owner. An embedder never reaches
+    /// `read_edge_result_with` supplies the destination region's own owner, upgraded off the
+    /// edge's region host back-link, which is where the resident lives. An embedder never reaches
     /// it, which is the whole point of the [`Sealed`]/`Retained` split.
     pub(crate) fn open_with<Wx: Witness, R>(
         &self,
@@ -1314,6 +1316,24 @@ impl<T: Reattachable + DropFree, W> Retained<T, W> {
             value: self.inner.read_pinned(),
             witness: self.inner.witness().clone(),
         }
+    }
+
+    /// **Re-brand this carrier at a live pin's borrow** — the public door back into [`Sealed`]'s
+    /// pin-free reads, for a holder that has a retained cell and a pin covering it for some `'b`.
+    /// Exactly [`open_at_with`](Self::open_at_with) followed by [`Opened::reseal`], so it grants no
+    /// capability that composition did not: the brand is the *pin's* borrow, so every read of the
+    /// returned seal is covered for as long as the pin is held and no longer.
+    ///
+    /// Where [`brand_to`](Self::brand_to) brands against a region that has taken the value's
+    /// coverage over for good, this brands against a pin the caller holds across a bounded stretch —
+    /// an embedder's step, whose coverage pins every region its deps reach. The cell keeps
+    /// referencing the description its producer stamped; nothing is minted and nothing moves.
+    pub fn brand_with<'b, Pin: Witness>(&'b self, pin: &'b Pin) -> Sealed<'b, T, W>
+    where
+        T::At<'static>: Copy,
+        W: Clone,
+    {
+        self.open_at_with(pin).reseal()
     }
 }
 

@@ -1,5 +1,10 @@
 //! Slot-table state. A single `slots` vector of [`SlotState`] enums encodes the per-slot lifecycle:
-//! every slot moves through `alloc_slot -> take_for_run -> reinstall -> finalize -> free_one`.
+//! every slot moves through `alloc_slot -> take_for_run -> reinstall -> free_one`.
+//!
+//! There is no terminal state. A finalizing slot's value is delivered into its consumers'
+//! destination regions by the walk in [`lifecycle`](super::lifecycle), so the slot itself has
+//! nothing left to hold and reclaims immediately: `Free` is the only state a finished slot rests
+//! in, and a slot whose result *is* another producer's is spliced out rather than kept as an alias.
 //!
 //! ## Invariants
 //!
@@ -8,19 +13,13 @@
 //! - `slots` is wrapped in [`SlotVec<T>`], which only impls `Index<NodeId>` /
 //!   `IndexMut<NodeId>`, so a `NodeId` always names a live slot.
 //! - `free_one` is the sole pusher onto `free_list`. Outer `Scheduler`
-//!   orchestrates the notify-walk and cascade-free across this store and
+//!   orchestrates the delivery walk and the reclaim across this store and
 //!   `DepGraph`.
 
 use std::ops::{Index, IndexMut};
-use std::rc::Rc;
 
 use super::nodes::StoredWork;
-use super::workload::OwnerOf;
-use super::{Live, NodeId, SealedTerminal, Workload};
-// `Erased` / `Carrier` / `Witnessed` re-anchor a test-only result through `set_result`; the
-// production store path takes a pre-built `Witnessed`, so these imports are test-scoped.
-#[cfg(any(test, feature = "test-hooks"))]
-use crate::witnessed::{Carrier, Erased, Witnessed};
+use super::{NodeId, Workload};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -38,9 +37,6 @@ impl<T> SlotVec<T> {
     }
     fn is_empty(&self) -> bool {
         self.0.is_empty()
-    }
-    fn get(&self, id: NodeId) -> Option<&T> {
-        self.0.get(id.index())
     }
     fn iter(&self) -> impl Iterator<Item = &T> {
         self.0.iter()
@@ -63,22 +59,10 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
 enum SlotState<W: Workload> {
     PreRun(StoredWork<W>),
     /// Node work has been moved out by `take_for_run`. A matching
-    /// `reinstall` / `finalize` / `free_one` exits this state.
+    /// `reinstall` / `free_one` exits this state.
     Running,
-    /// A finalized terminal: a [`Sealed`] carrier bundling the value (erased to `'static`) with its
-    /// reference-only reach witness, sealed as-is — the carrier pins nothing. What keeps the value's
-    /// backing alive is the scheduler's retention hold on the producer frame (seeded at finalize,
-    /// released at pull-count zero), so every read re-anchors under that retained owner
-    /// (`Sealed::open_with`) and a drained root re-homed into the run region reads under the empty
-    /// pin. The error carries no frame (it owns its data).
-    Done(Result<SealedTerminal<W>, W::Error>),
-    /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
-    /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
-    /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
-    /// fire wakes them directly.
-    Aliased(NodeId),
-    /// Distinct from `Running` so the cascade-free walk's idempotency
-    /// guard can be precise about "already freed".
+    /// Reclaimed; the index sits on the free list. Every slot reaches this state at its own
+    /// finalize, once the delivery walk has drained — there is no terminal state in between.
     Free,
 }
 
@@ -142,114 +126,36 @@ impl<W: Workload> NodeStore<W> {
         }
     }
 
+    /// Write the slot's realized dep list — the install door's write-back. A fresh slot's edges are
+    /// *the slot's own*, so minting them needs the slot to exist; the work therefore lands first with
+    /// an empty list and the door fills it in once its wiring is settled.
+    pub(super) fn write_deps(&mut self, id: NodeId, deps: super::ResolvedDeps) {
+        match &mut self.slots[id] {
+            SlotState::PreRun(work) => work.deps = deps,
+            _ => panic!("only a pre-run slot takes its realized dep list"),
+        }
+    }
+
     /// Tail-call path: reuse the slot index for a new node's work.
     pub(super) fn reinstall(&mut self, id: NodeId, work: StoredWork<W>) {
         self.slots[id] = SlotState::PreRun(work);
     }
 
-    /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
-    /// boundary uses this to re-home a consumer-less root into a surviving region (`output` already
-    /// lifted there), releasing the per-call frame the producer kept it in.
-    pub(super) fn rehome_terminal(
-        &mut self,
-        id: NodeId,
-        output: Result<SealedTerminal<W>, W::Error>,
-    ) {
-        debug_assert!(
-            matches!(self.slots[id], SlotState::Done(..)),
-            "rehome_terminal expects a finalized slot",
-        );
-        // The terminal arrives already relocated and sealed under its surviving-source witness set
-        // (the run region drops out of the union), so just store it.
-        self.slots[id] = SlotState::Done(output);
-    }
-
-    /// Callers must pair this with the dep-graph notify-walk so consumers wake atomically with the
-    /// write. The terminal arrives already dormant — the cell of the delivery envelope
-    /// [`Scheduler::finalize`](super::Scheduler::finalize) split, carrying the witness set the
-    /// workload's finalize hook composed (the producer frame ∪ every region the value reaches; the
-    /// empty set for a frameless / run-region terminal) — so this just stores it. On `Err` the
-    /// erased error owns its data and carries no witness.
-    pub(super) fn finalize(&mut self, id: NodeId, output: Result<SealedTerminal<W>, W::Error>) {
-        self.slots[id] = SlotState::Done(output);
-    }
-
-    /// Duplicate the finalized terminal's sealed carrier — value + witness set — leaving the slot's
-    /// own seal intact for other consumers. The consumer-pull lift hands this to a construction finish
-    /// so the dep arrives **witnessed** (its reach named on the carrier), ready to fold via
-    /// [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into) — rather than the
-    /// value read out bare and re-paired with a separately-read witness in an asserted co-location
-    /// bundle.
-    pub(super) fn dep_carrier(&self, id: NodeId) -> Result<SealedTerminal<W>, &W::Error> {
-        match &self.slots[id] {
-            SlotState::Done(Ok(sealed), ..) => Ok(sealed.duplicate()),
-            SlotState::Done(Err(e), ..) => Err(e),
-            _ => panic!("result must be ready by the time its carrier is taken"),
-        }
-    }
-
-    /// Idempotent on already-`Free` slots when paired with the cascade-free
-    /// walk's `is_reclaimed` guard. Pairs with the `notify_list[id]` /
-    /// `dep_edges[id]` free-time clears in `DepGraph`.
+    /// Reclaim the slot and return its index to circulation — what every finalize does once its
+    /// delivery walk has drained. Pairs with the row's own anchor clear in `DepGraph`.
+    ///
+    /// The id goes straight back on the free list, so the next `alloc_slot` hands out one equal to
+    /// the id that just died. Nothing holds a `NodeId` across a reclaim, so there is no incarnation
+    /// to tell apart.
     pub(super) fn free_one(&mut self, id: NodeId) {
         self.slots[id] = SlotState::Free;
         self.free_list.push(id);
     }
 
-    /// The alias target of a spliced-out bare-name forward, or `None`. The single follow step the
-    /// `Scheduler`-level [`resolve_alias`](super::Scheduler::resolve_alias) walks; resolution lives
-    /// there (with `DepGraph`), not in the store.
-    pub(super) fn alias_target(&self, id: NodeId) -> Option<NodeId> {
-        match self.slots.get(id) {
-            Some(SlotState::Aliased(to)) => Some(*to),
-            _ => None,
-        }
-    }
-
-    /// Raw readiness — callers pass an already alias-resolved id.
-    pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
-        matches!(self.slots.get(id), Some(SlotState::Done(..)))
-    }
-
-    /// Read a finalized terminal at a **rank-2** brand: the value is opened through [`Sealed::open`]
-    /// and handed to `f` as `Result<Live<'b>, &W::Error>`, so the re-anchored carrier nests inside
-    /// the access rather than escaping up-stack. The destination-verb form of the value read — the
-    /// consumer copies out what it needs (a scalar, a cloned error) from inside the closure. Callers
-    /// pass an already alias-resolved id; the slot must be finalized.
-    pub(super) fn read_result_with<R>(
-        &self,
-        id: NodeId,
-        pin: Option<&Rc<OwnerOf<W>>>,
-        f: impl for<'b> FnOnce(Live<'b, W>) -> R,
-    ) -> Result<R, &W::Error> {
-        match &self.slots[id] {
-            // Re-anchor under the retained region owner (`open_with`) — the carrier's own witness is
-            // reference-only and pins nothing. A slot with no retained owner (a drained root re-homed
-            // into the run region) is externally pinned, so the read opens under the empty pin.
-            SlotState::Done(Ok(w), ..) => Ok(match pin {
-                Some(p) => w.open_with(p, f),
-                None => w.open_with(&crate::witnessed::PinBundle::<OwnerOf<W>>::empty(), f),
-            }),
-            SlotState::Done(Err(e), ..) => Err(e),
-            _ => panic!("result must be ready by the time it's read"),
-        }
-    }
-
-    /// The terminal's error, or `Ok(())` for a value terminal — the borrow-free probe the many
-    /// consumers that only branch on success/failure use, reading no value (no `open`). Callers pass
-    /// an already alias-resolved id; the slot must be finalized.
-    pub(super) fn result_error(&self, id: NodeId) -> Result<(), &W::Error> {
-        match &self.slots[id] {
-            SlotState::Done(Ok(_), ..) => Ok(()),
-            SlotState::Done(Err(e), ..) => Err(e),
-            _ => panic!("result must be ready by the time it's read"),
-        }
-    }
-
     /// Scan for slots still parked (`PreRun`) after the work queues drained — each
     /// is a node waiting on a dependency that can no longer fire (a dependency
     /// cycle). Returns `(count, sample)` where `sample` summarizes the first such
-    /// node, or `None` when every slot is terminal (`Done`) or reclaimed (`Free`).
+    /// node, or `None` when every slot has reclaimed.
     pub(super) fn unresolved(&self) -> Option<(usize, String)> {
         let mut count = 0usize;
         let mut expr_sample: Option<String> = None;
@@ -284,20 +190,6 @@ impl<W: Workload> NodeStore<W> {
         matches!(self.slots[id], SlotState::PreRun(_))
     }
 
-    /// Returns true for any non-`Done` state so the cascade-free walk does
-    /// not double-push onto `free_list`. Assumes `is_live` has already
-    /// excluded `PreRun` upstream.
-    pub(super) fn is_reclaimed(&self, id: NodeId) -> bool {
-        !matches!(self.slots[id], SlotState::Done(..))
-    }
-
-    /// Splice a bare-name forward out: the running slot becomes an alias of `producer` (a
-    /// downstream real producer). `read_result` / `is_result_ready` follow the alias; the slot's
-    /// consumers were already moved onto `producer`'s notify list, so this just records the redirect.
-    pub(super) fn alias(&mut self, id: NodeId, producer: NodeId) {
-        self.slots[id] = SlotState::Aliased(producer);
-    }
-
     // --- Test-only helpers for synthetic-state setup. ---
 
     #[cfg(any(test, feature = "test-hooks"))]
@@ -305,34 +197,14 @@ impl<W: Workload> NodeStore<W> {
         self.slots[id] = SlotState::Running;
     }
 
-    /// Write a synthetic terminal onto a slot. `carrier` is the value's reach description reference,
-    /// minted upstream by the caller — a description names the region its value lives in, which only
-    /// the embedder's own frame owner can supply, so the store never fabricates one.
+    /// The realized dep list the install door wrote onto a pre-run slot — the probe a wiring test
+    /// reads its own edges back through.
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn set_result(
-        &mut self,
-        id: NodeId,
-        output: Result<Live<'_, W>, W::Error>,
-        carrier: Carrier<OwnerOf<W>>,
-    ) {
-        self.slots[id] = SlotState::Done(output.map(Erased::erase).map(|e| {
-            crate::witnessed::Retained::from_witnessed(Witnessed::from_erased(e, carrier))
-        }));
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn result_is_some(&self, id: NodeId) -> bool {
-        matches!(self.slots[id], SlotState::Done(..))
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn result_is_none(&self, id: NodeId) -> bool {
-        !matches!(self.slots[id], SlotState::Done(..))
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn free_list_snapshot(&self) -> Vec<NodeId> {
-        self.free_list.clone()
+    pub(super) fn stored_deps(&self, id: NodeId) -> &super::ResolvedDeps {
+        match &self.slots[id] {
+            SlotState::PreRun(work) => &work.deps,
+            _ => panic!("only a pre-run slot holds a realized dep list"),
+        }
     }
 
     #[cfg(any(test, feature = "test-hooks"))]
@@ -358,31 +230,39 @@ mod tests {
         UnitCarrier => (),
     }
 
-    /// A minimal memory anchor projecting a trivial `PinsRegion` owner. The store tests seal work
-    /// against one, so it is constructible over an empty cart.
-    struct TestAnchor(std::rc::Rc<crate::witnessed::doctest_fixture::Cart>);
+    /// A minimal memory anchor projecting a trivial region owner. The store tests seal work against
+    /// one, so it is constructible over a fresh empty region.
+    struct TestAnchor(std::rc::Rc<crate::witnessed::doctest_fixture::RegionCart>);
     impl TestAnchor {
         fn new() -> std::rc::Rc<Self> {
-            std::rc::Rc::new(TestAnchor(std::rc::Rc::new(
-                crate::witnessed::doctest_fixture::Cart(Vec::new()),
-            )))
+            std::rc::Rc::new(TestAnchor(crate::witnessed::doctest_fixture::fresh_cart()))
         }
     }
     impl crate::scheduler::Anchor for TestAnchor {
-        type Owner = crate::witnessed::doctest_fixture::Cart;
+        type Owner = crate::witnessed::doctest_fixture::RegionCart;
         fn owner(&self) -> &std::rc::Rc<Self::Owner> {
             &self.0
         }
     }
 
     /// A minimal workload for the white-box store tests: every associated type is trivial, so the
-    /// generic store can be exercised without naming any Koan type.
+    /// generic store can be exercised without naming any Koan type. These tests only classify a
+    /// parked slot's deadlock sample, so the delivery hook is never reached — the scheduler-level
+    /// slates in [`tests::delivery`](super::super::tests) are what exercise it.
     struct TestWorkload;
     impl Workload for TestWorkload {
         type Value = U32Value;
         type Error = ();
+        type Profile = crate::witnessed::doctest_fixture::FixtureProfile;
         type Frame = TestAnchor;
         type Continuation = UnitCarrier;
+
+        fn deliver(
+            _terminal: &super::super::workload::DeliveredTerminal<Self>,
+            _dest: super::super::workload::DeliveryDestination<Self>,
+        ) -> super::super::workload::DeliveredTerminal<Self> {
+            unimplemented!("the deadlock-sample slate finalizes nothing")
+        }
     }
 
     fn sample_wait(carrier: Option<String>) -> StoredWork<TestWorkload> {

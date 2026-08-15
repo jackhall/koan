@@ -80,6 +80,12 @@ group just to silence the stale-anchor check.
   cart `Rc` as the witness to `SealedExtern::open`, a **safe** call, so ctx.rs carries no
   `unsafe`. The group pins that boundary end-to-end (every scheduler-driving slate test); the
   `unsafe` it routes lives in `witnessed.rs`.
+- `src/machine/execute/dispatch/exec.rs` — `enter_user_fn` mints the callee's cart and binds the
+  call's arguments into it through safe scope/envelope verbs (`Scope::lift_spliced`,
+  `run_user_fn`'s `bind_delivered_direct`); the file carries no `unsafe`. The group pins the tail
+  hop's **ordering** — every read of the retiring region happens on the deciding side of the
+  replace — which no signature states; the `unsafe` it routes is the shared `retype` in
+  `witnessed.rs`, reached through the `Sealed::open_at` the lift performs.
 - `src/machine/execute/lift.rs` — `copy_carried` structurally copies at the brand a step open
   supplies (safe allocs throughout).
   The group pins the escaping-value **retention** discipline — a surviving closure / module borrow
@@ -281,8 +287,10 @@ fold) totally rebuilds the value into the adopting scope's own region: the rebui
 borrows are minted into the adopter's composed reach before the product's `&'a` is fabricated,
 and the release predicate is release-exact over the rebuilt product — a retiring host the product
 no longer borrows is released with the retiring hold, so the retiring region frees strictly after
-the adoption copy reads it. The test rebuilds an aggregate from the previous hop's own
-carried value at every hop, so the spliced carrier genuinely pins the retiring region across the hop;
+the adoption copy reads it. The ordering is decide-side: the adoption runs in the step that *emits*
+the replace, which still holds the region it copies out of, and the retiring anchor comes back out of
+the install to fall there. The test rebuilds an aggregate from the previous hop's own carried value
+at every hop, so the spliced carrier genuinely borrows the retiring region;
 tree borrows catches a use-after-free if the free ever reorders before the adoption read. The
 record-embedding twin of this same adoption path — each hop threading a fresh `{acc = …}` record
 argument through `THREAD`'s `it`-bind, whose plain-data rebuild releases the retiring incarnation
@@ -292,19 +300,20 @@ bound with no Miri-only failure mode, and runs under plain `cargo test`
 
 - `loop_carried_aggregate_survives_tail_hop_adoption`
 
-**Resting splice cell read across a tail hop** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs)) —
+**Resting splice cell adopted before its tail hop** ([src/machine/execute/dispatch/exec.rs](../src/machine/execute/dispatch/exec.rs)) —
 a spliced sub-result rests as a pin-less `Sealed` cell in the *dispatching* step's own region
-(`Scope::rest_delivered`), and the step that adopts it is a **later incarnation of the same slot**,
-running against a freshly minted cart whose ancestor chain does not reach the retiring one. What spans
-the hop is the run loop's TCO handoff hold, absorbed into the step's coverage and named as the pin for
-`SchedulerView::lift_spliced`'s `Sealed::open_at` + `Opened::lift_out`. Tree borrows catches a
+(`Scope::rest_delivered`), and the incarnation that runs the body has a freshly minted cart whose
+ancestor chain does not reach that region — so an adoption on the far side of the hop would have
+nothing holding the cell up. `enter_user_fn` puts it on the near side: the decide that folds the
+resolved call lifts the cell (`Scope::lift_spliced`'s `Sealed::open_at` + `Opened::lift_out`) and
+binds it into the new cart while the resting region is still its own step's. Tree borrows catches a
 use-after-free if that ordering ever breaks, and one hop is the whole shape — the slate test runs a
 depth-1 loop and reads its result back. That the retention is also *per-iteration* — the peak
 live-region count flat in the loop's depth, where pins chained forward would grow it one region per
 hop — is a loud `region_metrics()` comparison across depths 3 and 11 with no Miri-only failure mode,
 and runs under plain `cargo test` (`a_splicing_tail_loop_holds_no_region_per_iteration`).
 
-- `a_spliced_cell_survives_its_tail_hop`
+- `a_spliced_cell_is_adopted_before_its_tail_hop`
 
 **MATCH / TRY-WITH branch frames inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
 MATCH and TRY build their per-branch frame and seed the `it` bind through
@@ -442,15 +451,13 @@ both the wake and the re-dispatch.
 
 - `park_and_replay_minimal_program_for_miri`
 
-**`Carried` slot read + dep re-anchor — pinned `open_with`** ([workgraph/src/scheduler/node_store.rs](../workgraph/src/scheduler/node_store.rs))
-— the scheduler stores a finalized terminal as a `Witnessed<W::Value, Carrier<W::Frame>>` — the
-reference-only carrier, pinning nothing — beside the retention hold finalize seeds, and
-`read_result_with` re-anchors under that retained frame owner (`open_with`); a slot with no retained
-owner (a drained root re-homed into the run region) is externally pinned, so its read opens under
-the empty pin. The consumer-pull dep terminals travel as delivery envelopes — `dep_delivered`
-duplicates the slot's envelope per consumer, opened in the consumer `dest` region at `'b`.
-`node_store.rs`'s own residual `unsafe` is
-only the test-family `Reattachable` markers. Exercised end-to-end by every scheduler-driving program;
+**`Carried` edge read + dep re-anchor — pinned `open_with`** ([workgraph/src/scheduler/edge_slab.rs](../workgraph/src/scheduler/edge_slab.rs))
+— a finalized terminal rests on its edge as a reference-only carrier, pinning nothing, in the
+destination region the edge names; `Scheduler::read_edge_result_with` re-anchors it under that
+region's own owner, upgraded off the edge's host back-link (`open_with`). Deps reach a step the same
+way: `run_step` duplicates each dep's resident straight off its edge — a `Copy` cell whose pointee
+already lives in a region the step's coverage pins — and re-brands it once at `'b`, so no envelope
+crosses to a consumer. Exercised end-to-end by every scheduler-driving program;
 the listed test pins the hardest shape — a tail-chain return-type **coarsening** re-homed in the
 contract's scope, re-read after the run drains the root into the run region.
 
@@ -541,9 +548,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-15: 823s — 21 tests, 0 leaks, 0 UB
+- 2026-08-14: 1299s — 21 tests, 0 leaks, 0 UB
+- 2026-08-13: 926s — 21 tests, 0 leaks, 0 UB
 - 2026-08-11: 604s — 21 tests, 0 leaks, 0 UB
 - 2026-08-11: 704s — 21 tests, 0 leaks, 0 UB
-- 2026-08-11: 546s — 21 tests, 0 leaks, 0 UB
-- 2026-08-11: 544s — 21 tests, 0 leaks, 0 UB
-- 2026-08-10: 1166s — 21 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

@@ -199,7 +199,8 @@ impl<'a> RegionBrand<'a> {
     /// pairs a value with a residence it did not derive: its host is this brand's own region owner
     /// and its members are empty, which is the exact claim for a value that reaches nothing beyond
     /// the region it lives in. The reading / defining frame pins that region for the step, and past
-    /// the step the scheduler's retention hold (the delivery envelope's host) carries the pin.
+    /// the step the value is an ordinary resident of whichever destination regions the finalize
+    /// delivery walk adopted it into — each of those regions' own owners carries the pin.
     ///
     /// A value that *does* reach somewhere takes [`Self::seal_reaching`] with the description
     /// [`Scope::mint_retained`](crate::machine::core::Scope) derived for it. The brand is the

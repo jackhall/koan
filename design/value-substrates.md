@@ -301,8 +301,10 @@ optimization below exists to bound exactly that cost.
 
 At the one relocation seam every crossing routes (the
 [`transfer_into`](../workgraph/src/witnessed/delivered.rs) fold and its
-[`copy_carried`](../src/machine/execute/lift.rs) hook — consumer pulls,
-forward pulls, seed binds, the root drain), the runtime chooses per value:
+[`copy_carried`](../src/machine/execute/lift.rs) hook — the finalize walk's
+per-destination adopt, which is where koan's `relocate_seam` is the scheduler's
+`Workload::deliver`; the container and callable folds; seed binds), the runtime
+chooses per value:
 
 - **Copy** — rebuild the value's entire reachable structure at the destination
   brand, releasing the producer pin. Cells that are region-borrow leaves

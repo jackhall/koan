@@ -98,21 +98,24 @@ nor the reverse.
 - [`Bindings::lookup_value`](../../src/machine/core/bindings.rs)
   reads the one `data[name]` slot, whose arm is bound xor pending. Returns
   `Some(NameLookup::Bound(&KObject))` for a finalized visible binding,
-  `Some(NameLookup::Parked(NodeId))` for a still-running visible
-  producer (the caller parks on it), or `None` on a miss — the caller keeps
+  `Some(NameLookup::Parked(EdgeId))` for a still-running visible
+  producer — the claim edge that binder installed, which the caller parks by
+  wiring its own edge off — or `None` on a miss, the caller keeping on
   walking ancestors. The terminal unbound disposition is not a lookup variant:
   it is materialized one level up on the resolution path, where
   [`NameOutcome`](../../src/machine/execute/dispatch/resolve_dispatch.rs) is the
-  merge point that adds the `Unbound` state. A producer error is absorbed at the
-  resolution surface as an `Err` rather than a `NameOutcome` variant, and a cycle
-  is classified only at a park site with a consumer id — neither is a state the
-  cache carries. A same-name type-side claim is invisible here — it lives in
-  `types`, and belongs to the type language.
+  merge point that adds the `Unbound` state. The producer's standing is not read
+  here at all — a lookup runs on a read-only view, and classifying a producer is
+  the install door's answer at wiring time
+  ([scheduler-library.md § The install door](../scheduler-library.md#the-consumer-api)),
+  so neither a producer error nor a cycle is a state the cache carries. A
+  same-name type-side claim is invisible here — it lives in `types`, and belongs
+  to the type language.
 - [`Bindings::lookup_type`](../../src/machine/core/bindings.rs) is the
   type-side symmetry: reads the one `types[name]` slot, preferring its bound arm
   over its pending one, surfacing the result as the same
   [`NameLookup`](../../src/machine/core/bindings.rs) shape instantiated for the type
-  channel (`NameLookup<KType>`) — `Bound(KType)`, `Parked(NodeId)`, or `None`. Every
+  channel (`NameLookup<KType>`) — `Bound(KType)`, `Parked(EdgeId)`, or `None`. Every
   single-scope lookup — value and type alike — shares this one
   bound-or-parked-or-miss shape; the value channel instantiates it at the resting
   carrier (`NameLookup<SealedValue>`), which fuses the value with its proven reach.
@@ -121,13 +124,13 @@ nor the reverse.
   hands the handle back by copy. The
   finalize gate that must park on an
   in-flight type producer even after a seal pre-installs the name's identity
-  into `types` — the slot's `BoundWithPending` arm — reads the pending producer
-  directly through
+  into `types` — the slot's `BoundWithPending` arm — reads the pending claim's
+  edge directly through
   [`Bindings::type_placeholder_producer`](../../src/machine/core/bindings.rs),
   bypassing the bound-first preference. Declaration identity itself is not read
   here: it is decided at the install door by
   [`Bindings::try_register_type_upsert`](../../src/machine/core/bindings.rs), which
-  compares the installing [`NodeHandle`](../../src/machine/core/bindings.rs) against the
+  compares the installing [`Installer`](../../src/machine/core/bindings.rs) against the
   stored entry's. What this gate resolves is in-flight status, not identity: a nominal
   member named by a relative `Sibling` reference is in flight iff the scope carrying the
   very group window that reference resolves against still holds a pending arm for

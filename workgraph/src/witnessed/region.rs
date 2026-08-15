@@ -548,7 +548,8 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     ///
     /// The witness is the reference-only [`Carrier`]: it names the reach without pinning it, so
     /// every read opens under an external pin — the active frame during the producing step, the
-    /// delivery envelope's retention hold afterwards. A value whose reach is genuinely empty takes
+    /// delivery envelope's own bundle while the terminal walks, the destination region once it has
+    /// been adopted there. A value whose reach is genuinely empty takes
     /// `mint_retained(&[])` for its description, the degenerate case of the same door.
     pub fn seal_reaching<'v: 'a, T: Reattachable + DropFree>(
         self,

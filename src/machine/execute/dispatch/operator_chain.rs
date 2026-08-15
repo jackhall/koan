@@ -23,19 +23,17 @@
 //! itself rather than purely rewriting syntax, since a shared middle operand must evaluate exactly
 //! once.
 
+use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::model::Part;
 use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode, StoredElement};
 use crate::machine::{KError, KErrorKind, NodeId};
-use crate::scheduler::ResolvedDeps;
 use crate::source::{Span, Spanned};
 
 use super::ctx::SchedulerView;
-use super::{
-    Outcome, ProducerDisposition, become_dispatch, park_resume, propagate_dep_error, working_frame,
-};
+use super::{Outcome, become_dispatch, park_resume_labelled, working_frame};
 
 /// The probe is `Some` for every `OperatorChain` (the classifier guarantees it), so a
 /// `None` probe is a classification bug.
@@ -285,7 +283,7 @@ fn reduce_unary<'step>(
 /// Reduces a `Pairwise`-mode run: `f x < g y < h z` must evaluate `g y` **once**, its value
 /// feeding both the `x<y` and `y<z` pairs, so — unlike the three modes above — this cannot be a
 /// pure syntactic rewrite (each operand there appears exactly once in the output tree; here a
-/// middle operand appears in two places). Every operand is staged as its own owned dep
+/// middle operand appears in two places). Every operand is staged as its own dep
 /// (whatever its part kind — a bare identifier, a literal, or a parenthesized sub-expression all
 /// dispatch through their normal lane via the one-part wrapper `install_pairwise_fold` builds);
 /// once every operand resolves, the finish splices each resolved cell into the up-to-two pair
@@ -350,7 +348,7 @@ pub(super) fn combine<'step>(
 /// Registry miss: an operator of this chain may still be *being declared*. An `OP` binder installs
 /// a pending-overload entry under each bucket key its body will register (see
 /// `builtins::op_def`), and the declaration's registry write lands only when its body finalizes —
-/// so a chain that misses the registry probes those same buckets for a visible pending producer and
+/// so a chain that misses the registry probes those same buckets for a visible pending claim and
 /// parks on it, re-running this arm on wake. With nothing pending, the miss is real and surfaces as
 /// the undeclared-operator diagnostic.
 ///
@@ -365,17 +363,14 @@ fn park_on_pending_operators<'step, 'b>(
     id: NodeId,
     probe: &str,
 ) -> Outcome<'step> {
-    let mut to_wait = ResolvedDeps::new();
-    for producer in pending_operator_producers(ctx, s, expr) {
-        match ctx.producer_disposition(producer, id) {
-            ProducerDisposition::Errored(e) => {
-                let frame = working_frame("<operator-chain>", expr);
-                return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
-            }
-            ProducerDisposition::Ready | ProducerDisposition::Cycle => {}
-            ProducerDisposition::Park => {
-                to_wait.park_on(producer);
-            }
+    let mut to_wait: Vec<ProducerId> = Vec::new();
+    for source in pending_operator_sources(ctx, s, expr) {
+        // Cycles are the only pre-wiring question left: parking on an ancestor deadlocks rather
+        // than errors, so such a claim is dropped. An `OP` binder that already terminalized —
+        // errored included — is the harness's to rule on when it installs the park, under the
+        // `<operator-chain>` frame carried below.
+        if !ctx.would_create_cycle_from(source, id) && !to_wait.contains(&source) {
+            to_wait.push(source);
         }
     }
     if to_wait.is_empty() {
@@ -386,25 +381,27 @@ fn park_on_pending_operators<'step, 'b>(
     }
     let carrier = expr.summarize();
     let parked_expr = *expr;
-    park_resume(
-        to_wait.parks().to_vec(),
+    let frame = working_frame("<operator-chain>", expr);
+    park_resume_labelled(
+        to_wait,
         Some(carrier),
+        Some(frame),
         Box::new(move |ctx, id| ctx.with_current_scope(|s| run(ctx, s, &parked_expr, id))),
     )
 }
 
 /// Every still-finalizing `OP` declaration visible from `s` that would register one of this
-/// chain's operators, deduped in walk order.
-fn pending_operator_producers<'b>(
+/// chain's operators, named by its claim edge and deduped in walk order.
+fn pending_operator_sources<'b>(
     ctx: &SchedulerView<'_, '_, '_>,
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'_>,
-) -> Vec<NodeId> {
+) -> Vec<ProducerId> {
     let chain = ctx.chain_deref();
     let mut operators = chain_operators(expr);
     operators.sort_unstable();
     operators.dedup();
-    let mut producers: Vec<NodeId> = Vec::new();
+    let mut sources: Vec<ProducerId> = Vec::new();
     for operator in operators {
         // Both shapes as stack runs over the operator's own borrowed text — a stored probe needs
         // no allocation at all, where an owned key would clone the symbol twice per scope walk.
@@ -419,15 +416,15 @@ fn pending_operator_producers<'b>(
         ] {
             for scope in s.ancestors() {
                 let cutoff = scope.binding_cutoff(chain);
-                if let Some(producer) = scope.bindings().lookup_function_stored(key, cutoff).pending
-                    && !producers.contains(&producer)
+                if let Some(source) = scope.bindings().lookup_function_stored(key, cutoff).pending
+                    && !sources.contains(&source)
                 {
-                    producers.push(producer);
+                    sources.push(source);
                 }
             }
         }
     }
-    producers
+    sources
 }
 
 fn undeclared_operator_reason(probe: &str) -> String {

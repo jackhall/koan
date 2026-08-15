@@ -108,9 +108,9 @@ own region, composed by
 everything its members reach. The embedding or binding site mints that
 carrier's reach — `merge` at an `attr` / `FROM` projection,
 [`Scope::adopt_for_binding`](../../src/machine/core/scope/reach.rs) at a `let` / user-fn arg / `USING`
-bind — and
-the [`run_program`](../../src/machine/execute/runtime/interpret.rs) root drain mints the rehomed
-terminal's full reach against the run-root scope, the root region owning the pins, so a value reaching
+bind — and delivery mints a
+[`run_program`](../../src/machine/execute/runtime/interpret.rs) root terminal's full reach against
+the run frame's own region, that region's union bundle owning the pins, so a value reaching
 several regions (a
 list of closures, a module over a functor-result region) keeps every one, read straight off its carrier
 rather than reconstructed from the value. The description is exact — every reached region is a member —

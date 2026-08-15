@@ -5,6 +5,7 @@
 use std::rc::Rc;
 
 use super::*;
+use crate::machine::ProducerId;
 use crate::machine::core::arena::RegionBrand;
 use crate::machine::core::arena::{FrameStorageExt, run_root_storage};
 use crate::machine::core::{FrameCoverage, FrameReach, FrameStorage};
@@ -188,7 +189,7 @@ fn write_type_finalizes_pending_arm_in_place() {
     bindings
         .install_placeholder(
             "Bar",
-            NodeId::for_test(7),
+            ProducerId::for_test(7),
             BindingIndex::BUILTIN,
             BindKind::Type,
             &mut crate::machine::WriteGate::for_test(),
@@ -196,7 +197,7 @@ fn write_type_finalizes_pending_arm_in_place() {
         .expect("placeholder install should succeed on fresh bindings");
     assert_eq!(
         bindings.pending_names(),
-        vec![("Bar".to_string(), BindKind::Type, NodeId::for_test(7))],
+        vec![("Bar".to_string(), BindKind::Type, ProducerId::for_test(7))],
     );
     bindings
         .write_type(
@@ -229,25 +230,27 @@ fn write_type_does_not_touch_data_or_functions() {
     assert!(bindings.functions().is_empty());
 }
 
-/// Declaration identity is run-qualified: two `UpsertEqual write`s of one name whose
-/// [`NodeHandle`]s share a `NodeId` but carry distinct [`RunId`]s are two declarations, because
-/// `NodeId`s are scheduler-local and restart per run — only the pair identifies a declaration
-/// statement across the lifetime of a persistent scope. The same-run re-entry (identical handle) is
-/// an idempotent parallel finalize; the cross-run re-entry (same node, later run) is a `Rebind`.
-/// This pins the accepted persistent-scope consequence directly at the decision door: a regression
-/// that compared only the `NodeId` — dropping the `RunId` from handle equality — would take the
-/// idempotent arm on the cross-run install and this test would fail.
+/// Declaration identity is the installing statement: two `UpsertEqual write`s of one name whose
+/// [`Installer`]s carry distinct [`StatementId`]s are two declarations, and a re-entry under the
+/// identical id is one declaration finalizing twice. `StatementId`s are minted from a
+/// never-recycled process-global counter, so this also settles the persistent-scope case for free:
+/// a later run over the same scope submits its statements under fresh ids and cannot collide with
+/// an entry an earlier run installed. A regression that let a recycled or restarted id stand in
+/// would take the idempotent arm on the second install and this test would fail.
 #[test]
-fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
+fn distinct_statement_redeclare_rebinds() {
     let storage = run_root_storage();
     let bindings = Bindings::new(storage.brand());
-    let first_run = RunId::next();
-    let second_run = RunId::next();
-    assert_ne!(first_run, second_run, "two runs must mint distinct RunIds");
-    // One scheduler-local NodeId, reused across both runs — as a per-run scheduler would restart it.
-    let node = NodeId::for_test(5);
-    let site = |run| DeclarationSite {
-        node: NodeHandle::Slot { run, node },
+    let first = StatementId::next();
+    let second = StatementId::next();
+    assert_ne!(
+        first, second,
+        "two submissions must mint distinct StatementIds"
+    );
+    // Both declarations sit at the same lexical position, so only the statement can tell them
+    // apart — the detached-chain shape, where every submission reports index 0.
+    let site = |statement| DeclarationSite {
+        installer: Installer::Statement(statement),
         index: BindingIndex::value(0),
     };
 
@@ -255,40 +258,39 @@ fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
         .write_type(
             "Maybe",
             KType::NUMBER,
-            site(first_run),
+            site(first),
             TypeWritePolicy::UpsertEqual,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("the first declaration should install");
 
-    // Same handle re-entering (a parallel finalize of the first declaration): idempotent overwrite.
+    // The same statement re-entering (a parallel finalize of it): idempotent overwrite.
     bindings
         .write_type(
             "Maybe",
             KType::NUMBER,
-            site(first_run),
+            site(first),
             TypeWritePolicy::UpsertEqual,
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("a same-handle parallel finalize should overwrite idempotently");
+        .expect("a same-statement parallel finalize should overwrite idempotently");
 
-    // A later run over the persistent scope reuses the NodeId but carries a fresh RunId, so its
-    // handle differs from the stored entry's and the install is a second declaration: Rebind.
+    // A second statement declaring the same name — a redeclaration, whatever its content: Rebind.
     let error = match bindings.write_type(
         "Maybe",
         KType::STR,
-        site(second_run),
+        site(second),
         TypeWritePolicy::UpsertEqual,
         &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
-        Ok(_) => panic!("a cross-run redeclaration of Maybe must Rebind, not overwrite"),
+        Ok(_) => panic!("a second declaration of Maybe must Rebind, not overwrite"),
     };
     assert!(
         matches!(&error.kind, KErrorKind::Rebind { name } if name == "Maybe"),
-        "expected Rebind naming Maybe across runs, got {error}",
+        "expected Rebind naming Maybe, got {error}",
     );
-    // The first run's entry survives the rejected cross-run install.
+    // The first statement's entry survives the rejected redeclaration.
     assert_eq!(
         bindings
             .types()
@@ -376,7 +378,7 @@ fn value_write_finalizes_the_pending_arm_in_place() {
     bindings
         .install_placeholder(
             "x",
-            NodeId::for_test(11),
+            ProducerId::for_test(11),
             BindingIndex::value(2),
             BindKind::Value,
             &mut crate::machine::WriteGate::for_test(),
@@ -384,11 +386,11 @@ fn value_write_finalizes_the_pending_arm_in_place() {
         .expect("value claim should succeed on fresh bindings");
     assert_eq!(
         bindings.pending_value("x").map(|p| p.producer),
-        Some(NodeId::for_test(11)),
+        Some(ProducerId::for_test(11)),
     );
     assert!(matches!(
         bindings.lookup_value("x", None),
-        Some(NameLookup::Parked(id)) if id == NodeId::for_test(11),
+        Some(NameLookup::Parked(id)) if id == ProducerId::for_test(11),
     ));
 
     let val: &KObject = region.alloc_scalar(Scalar::Number(5.0));
@@ -430,12 +432,12 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
     bindings
         .install_placeholder(
             "Wrapper",
-            NodeId::for_test(9),
+            ProducerId::for_test(9),
             BindingIndex::BUILTIN,
             BindKind::Type,
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("the in-flight producer claims the same slot");
+        .expect("the in-flight binder claims the same slot");
 
     assert!(matches!(
         bindings.lookup_type("Wrapper", None),
@@ -443,11 +445,11 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
     ));
     assert_eq!(
         bindings.type_placeholder_producer("Wrapper"),
-        Some(NodeId::for_test(9)),
+        Some(ProducerId::for_test(9)),
     );
 
-    bindings.clear_placeholders_for_producer(
-        NodeId::for_test(9),
+    bindings.clear_placeholders_for_producers(
+        &[ProducerId::for_test(9)],
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(bindings.pending_names().is_empty());
@@ -493,7 +495,7 @@ fn bump_backed_tables_full_churn() {
                 .write_type(
                     &format!("Ty{i}"),
                     KType::NUMBER,
-                    mock_declaration_site(i, i),
+                    mock_declaration_site(i),
                     TypeWritePolicy::Insert,
                     &mut gate,
                 )
@@ -511,11 +513,11 @@ fn bump_backed_tables_full_churn() {
             &types,
         );
         let sealed_key = f.open(|f| f.signature.untyped_key());
-        for producer in [NodeId::for_test(7), NodeId::for_test(8)] {
+        for claim in [ProducerId::for_test(7), ProducerId::for_test(8)] {
             scope
                 .install_pending_overload(
                     sealed_key.clone(),
-                    producer,
+                    claim,
                     BindingIndex::value(1),
                     &mut gate,
                 )
@@ -535,14 +537,14 @@ fn bump_backed_tables_full_churn() {
         scope
             .install_pending_overload(
                 purged_key.clone(),
-                NodeId::for_test(9),
+                ProducerId::for_test(9),
                 BindingIndex::value(2),
                 &mut gate,
             )
             .expect("the purged binder claims its bucket");
         scope
             .bindings()
-            .clear_placeholders_for_producer(NodeId::for_test(9), &mut gate);
+            .clear_placeholders_for_producers(&[ProducerId::for_test(9)], &mut gate);
         assert!(
             scope
                 .bindings()

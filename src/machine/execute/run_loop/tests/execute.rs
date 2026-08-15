@@ -20,23 +20,23 @@ fn dispatches_independent_expressions_in_order() {
         vec![let_expr(&program, "x", 1.0), let_expr(&program, "y", 2.0)],
         root,
     );
-    let id1 = ids[0];
-    let id2 = ids[1];
+    let edge1 = runtime.install_edge_for_test(ids[0], root);
+    let edge2 = runtime.install_edge_for_test(ids[1], root);
 
     runtime.execute().unwrap();
 
     assert!(
         runtime
-            .read_result_with(
-                id1,
+            .read_edge_result_with(
+                edge1,
                 |v| matches!(v.object(), KObject::Number(n) if *n == 1.0)
             )
             .expect("value")
     );
     assert!(
         runtime
-            .read_result_with(
-                id2,
+            .read_edge_result_with(
+                edge2,
                 |v| matches!(v.object(), KObject::Number(n) if *n == 2.0)
             )
             .expect("value")

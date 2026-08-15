@@ -33,9 +33,9 @@ enum Disposition {
 /// Peer of [`copy_carried`](super::lift::copy_carried): both are Done-boundary workload hooks.
 pub(in crate::machine::execute) trait NodeFinalize {
     /// Seal the slot's value terminal against its declared return. With no declared return (or a
-    /// framed producer with no obligation) the envelope travels on **as-is** — the scheduler's
-    /// retention hold keeps the producer frame alive until every destination pulls, so the value
-    /// keeps residing where it was born. A declared-return
+    /// framed producer with no obligation) the envelope travels on **as-is** — the delivery walk
+    /// that consumes it is what moves the value, so at this boundary it still resides where it was
+    /// born. A declared-return
     /// check runs one read pass over the delivered carrier; a satisfying non-union object re-stamps
     /// to the declared type **in place, in the producer's own region** ([`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place)) —
     /// no bytes move, residence is unchanged — while a union return and a type value pass through
@@ -49,8 +49,8 @@ pub(in crate::machine::execute) trait NodeFinalize {
     /// The terminal leaves as the envelope it arrived in (or the re-stamp's product envelope) — the
     /// [`DeliveredTerminal`](crate::scheduler::DeliveredTerminal) currency
     /// [`Scheduler::finalize`](crate::scheduler::Scheduler::finalize) consumes whole. Nothing here
-    /// splits the carrier from its coverage: the retention hold's foreign bundle is derived from
-    /// this very envelope inside the scheduler, so no call site can pair a terminal with a coverage
+    /// splits the carrier from its coverage: the walk derives each destination's adopt from this
+    /// very envelope inside the scheduler, so no call site can pair a terminal with a coverage
     /// that is not its own.
     fn finalize_terminal(
         &self,
@@ -70,12 +70,12 @@ impl NodeFinalize for KoanRuntime<'_> {
         // The terminal's owned member set is invariant across finalize: pass-through hands the
         // envelope on verbatim, and restamp re-stamps *in place in the producer's own region*, so
         // the product envelope's members are identical to the input's. Either way the coverage never
-        // leaves the envelope, so the reach the scheduler seeds its retention hold from is the reach
-        // of the value it stores.
+        // leaves the envelope, so the reach the scheduler's delivery walk adopts against is the
+        // reach of the value it stores.
         //
         // No per-call return obligation (frameless / run producer, or a framed producer with no
-        // obligation) or nothing declared: the envelope passes through untouched — retention owns
-        // the frame's lifetime, so the Done boundary makes no memory decision.
+        // obligation) or nothing declared: the envelope passes through untouched — the walk decides
+        // residence, so the Done boundary makes no memory decision.
         let Some(obligation) = contract else {
             return Ok(envelope);
         };
@@ -162,39 +162,33 @@ pub(in crate::machine::execute) fn finalize_error(
 /// Discharge a tail-spliced slot's residual declared-return obligation against the spliced producer's
 /// delivered value — the checker micro-step's check, WITHOUT re-stamping (the value stays the
 /// producer's, re-stamped only later when the re-emitted `Forward` finalizes through
-/// [`NodeStep::ForwardReady`](super::nodes::NodeStep)). Reads the obligation's precomputed declared
-/// return and matches by channel under the delivery envelope's own host pin. Returns the labelled
-/// mismatch or `Ok(())`.
+/// [`NodeStep::ForwardReady`](super::nodes::NodeStep)). It inspects the value and its type and
+/// adopts nothing, so it takes the value live at its caller's read brand rather than a carrier of
+/// its own. Returns the labelled mismatch or `Ok(())`.
 pub(in crate::machine::execute) fn check_spliced_return(
     obligation: &ReturnObligation,
-    delivered: &DeliveredCarried,
+    carried: Carried<'_>,
     types: &TypeRegistry,
 ) -> Result<(), KError> {
     let Some((declared, per_call)) = obligation.declared() else {
         return Ok(());
     };
     let label = obligation.label();
-    let mismatch = delivered.open(|carried| {
-        let matched = match carried {
-            Carried::Object(object) => declared.matches_value(object, types),
-            Carried::Type(t) => declared.matches_type(t, types),
-            // Every delivered result is resolved; an unlowered name satisfies no contract.
-            Carried::UnresolvedType(_) => false,
-        };
-        if matched {
-            return None;
-        }
-        let got = match carried {
-            Carried::Object(object) => object.ktype().name(types),
-            Carried::Type(t) => t.name(types),
-            Carried::UnresolvedType(ti) => ti.render(),
-        };
-        Some(return_type_mismatch(declared, per_call, label, got, types))
-    });
-    match mismatch {
-        Some(error) => Err(error),
-        None => Ok(()),
+    let matched = match carried {
+        Carried::Object(object) => declared.matches_value(object, types),
+        Carried::Type(t) => declared.matches_type(t, types),
+        // Every delivered result is resolved; an unlowered name satisfies no contract.
+        Carried::UnresolvedType(_) => false,
+    };
+    if matched {
+        return Ok(());
     }
+    let got = match carried {
+        Carried::Object(object) => object.ktype().name(types),
+        Carried::Type(t) => t.name(types),
+        Carried::UnresolvedType(ti) => ti.render(),
+    };
+    Err(return_type_mismatch(declared, per_call, label, got, types))
 }
 
 #[cfg(test)]

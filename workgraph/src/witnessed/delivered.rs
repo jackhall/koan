@@ -133,12 +133,12 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
         }
     }
 
-    /// Recover the dormant carrier, consuming the envelope and dropping its coverage — for a
-    /// consumer that has taken the coverage over by another route and no longer needs the transit
-    /// pins (the scheduler's finalize, which re-seeds them as the slot's retention hold; its
-    /// re-home, whose value moved into a region outliving the scheduler). Crate-internal precisely
-    /// because it drops the pins without saying where the retention went: the embedder-facing exit
-    /// is [`rest_into`](Self::rest_into), which lodges the coverage in the region it names.
+    /// Recover the dormant carrier, consuming the envelope and dropping its coverage — the
+    /// **shape probe** the witnessed slates read a built envelope's cell back out through. Not a
+    /// production door: it drops the pins without saying where the retention went, so the exits a
+    /// holder actually takes are [`rest_in`](Self::rest_in) / [`rest_into`](Self::rest_into), which
+    /// lodge the coverage in the region they name.
+    #[cfg(test)]
     pub(crate) fn into_cell(self) -> Retained<T, W> {
         self.cell
     }
@@ -258,8 +258,8 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     /// host of the carrier's description.
     ///
     /// **Crate-private**, because it takes the two as separate arguments and checks neither against
-    /// the other. Every caller holds them as one unit already: the scheduler's retention hold
-    /// (`owner` + `reach` in one record) for a delivered dep, a composition's freshly minted product
+    /// the other. Every caller holds them as one unit already: an edge's resident plus the
+    /// destination host the slab reads back for it, a composition's freshly minted product
     /// and the destination residence it was minted into, or [`RegionHandle::deliver_resident`] /
     /// [`RegionHandle::deliver_yoked`], which read both off one handle. An embedder reaches the
     /// envelope through those, never through this.

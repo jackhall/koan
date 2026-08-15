@@ -54,18 +54,28 @@ A placeholder has no table of its own. The
 [`Bindings`](../../src/machine/core/bindings.rs) façade on `Scope` holds four
 maps — `data`, `types`, `functions`, `operators` — and a still-finalizing binder
 occupies **a slot of the very table it will resolve into**, as a
-[`PendingBinding { producer, index }`](../../src/machine/core/bindings.rs) arm of
+[`PendingBinding { edge, index }`](../../src/machine/core/bindings.rs) arm of
 that slot. Three properties follow, and they are the reason for the shape: a name
 lookup is answered by one probe; finalization overwrites the claimed slot in
 place, so the key is stored once and the claim's bytes are never abandoned; and
 the exclusivity rule each table obeys is a fact of its slot enum.
+
+A claim's currency is an [`EdgeId`](../../workgraph/src/scheduler/edge_slab.rs),
+not a node identity: the binder's submission wires an edge from its own slot
+toward **the region of the scope the name is being introduced into**, and stamps
+that edge into the slot it claims. A consumer that finds the claim parks by
+wiring its *own* edge off it, inheriting the destination — which is what makes a
+placeholder park deliver into the scope the binding lives in rather than into the
+consumer's region ([scheduler.md § Which edges Koan installs](scheduler.md#which-edges-koan-installs)).
+The claim edge is owned by the slot that installed it, which releases it when it
+terminalizes, so a table can never hold a name whose edge is gone.
 
 *Name-keyed binders* (`LET`, `TYPE`, `MODULE`, `GROUP`, `SIG`, `UNION`,
 `NEWTYPE`) fill the **name channel** of the
 [`BinderKey`](../../src/machine/model/binder.rs) — the to-be-bound name the
 matching spec's name extractor pulls structurally out of the expression's parts.
 The
-claim stamps `producer NodeId` paired with the binder's
+claim stamps the binder slot's own `EdgeId` paired with its
 [`BindingIndex { idx }`](../../src/machine/core/bindings.rs) — the lexical
 statement index — into `data[name]` or `types[name]` per the binder's
 `BindKind`, gated by the strict `idx < cutoff` rule like every other binder. The
@@ -86,7 +96,7 @@ different rules:
   the type-identifier memo on that producer. The third arm makes the coexistence
   — and the impossibility of an empty slot — type-level facts. Reads go through
   the slot's `bound()` / `pending()` accessors; only the three transition sites
-  (the type write, the claim, the producer-failure sweep) match the arms
+  (the type write, the claim, the claim-retirement sweep) match the arms
   directly.
 
 *Bucket-keyed binders* (`FN`, `OP`) fill the **bucket channel** — every
@@ -140,9 +150,9 @@ as deferred/ambiguous either way.
 
 Bulk reads see bound state only. [`iter_data`](../../src/machine/core/bindings.rs)
 / `iter_types` / `iter_functions` and the module-view `bulk_install_from` skip
-pending arms and skip a bucket holding no sealed slot: a claim names a producer
-in its own scheduler run, so a copy of one would hand the target a park on a node
-that will never wake it.
+pending arms and skip a bucket holding no sealed slot: a claim names an edge of
+its own scheduler run, so a copy of one would hand the target a park on an edge
+that will never wake it — and that its owner has already released.
 
 Binder builtins opt in through the `binder: bool` flag they pass to
 [`register_builtin_full`](../../src/builtins.rs) (`LET`, `TYPE`, `MODULE`,
@@ -176,8 +186,8 @@ walks ancestors, the `Bindings::lookup_*` accessors apply the
 `chain_cutoff`-gated `visible` predicate per entry, and `KType`
 predicates accept or reject the candidate. The placeholder mechanism
 extends the value- and function-side lookups so a still-running visible
-producer surfaces as `NameLookup::Parked(NodeId)` /
-`FunctionLookup { pending: Some(_), .. }` rather than a miss —
+producer surfaces as `NameLookup::Parked(EdgeId)` /
+`FunctionLookup { pending: Some(EdgeId), .. }` rather than a miss —
 [`Bindings::lookup_value`](../../src/machine/core/bindings.rs) reads the arm of
 the one `data[name]` slot it probes, and
 [`Bindings::lookup_function`](../../src/machine/core/bindings.rs) surfaces
@@ -200,17 +210,28 @@ the iterator boundary. `bind_value` and `register_function` finalize their own
 claim by overwriting the slot that holds it, so no name is ever both bound and
 claimed on the value side, and a bucket's sealed entry sits where its claim was.
 
-The error path is the one place a claim dies without a write. When a producer's
-node finalizes with an error, `clear_placeholders_for_producer` drops every
-pending arm naming it — a `types` slot that also holds a bound
-identity keeps the identity and loses only its pending arm — so a binder body
-that failed before its write path cannot leak a scheduler-local `NodeId` into a
-later run on a persistent scope. The sweep keys on the `producer` every
-`PendingBinding` already carries, so it spans all three claim-bearing tables
-alike: no table's key participates, and a bucket-keyed binder's claim dies in
-every inner-call bucket it declared, the emptied bucket losing its key. A
-finalize therefore only ever overwrites its own live claim — the write path has
-no leftover-claim cleanup of its own, because the error path leaves none behind.
+**Claim retirement rides the slot's death, not just the error path.** A slot
+owns every claim edge its submission stamped, and the run loop retires that list
+wherever the slot stops being able to release it — at every terminal (value,
+error, and the bare-name forward's relocation alike) and at the alias splice that
+retires the slot without a terminal. Retirement is
+`clear_placeholders_for_producers` — drop every pending arm naming one of the
+slot's edges — followed by the release of the edges themselves, so no table ever
+holds a name whose edge is gone. The list is taken, not read, so a slot's claims
+retire exactly once even when a tail replace has moved them onto a fresh anchor.
+
+The sweep keys on the `producer` every `PendingBinding` already carries, so it spans
+all three claim-bearing tables alike: no table's key participates, a `types` slot
+that also holds a bound identity keeps the identity and loses only its pending
+arm, and a bucket-keyed binder's claim dies in every inner-call bucket it
+declared, the emptied bucket losing its key. On the success path the write has
+already overwritten the claim where it sat, so the sweep finds nothing — the
+write path needs no leftover-claim cleanup of its own. What the sweep really
+catches is the binder body that failed before its write path: its name was never
+introduced, so a sibling that had parked on the claim re-decides on wake against
+a scope where the name is absent and surfaces `UnboundName` rather than the
+binder's own failure. That is the cost of not leaving a claim behind for a
+*later* sibling to park on and never be woken by.
 
 ### Miri forward-splice and replay-park lifetime contract
 
@@ -238,21 +259,26 @@ that is not a binder. The dispatch-layer submission chokepoint
 reads that plan **once**, for a statement submission, and stamps its claims — a
 pending arm of `data[name]` / `types[name]` for the name channel, and a pending
 slot appended to `functions[bucket]` for each bucket key — on the dispatching
-scope, with the statement's freshly allocated node id and
-`BindingIndex::value(chain.index)`, before the slot is ever popped from the work
-queues. A later sibling that dispatches before the statement's slot pops finds the
-entry and parks rather than surfacing `UnboundName` / `DispatchFailed`. There is
-exactly one install site, at statement submission; nothing installs at
-dispatch/pick time. The binder logic lives in the dispatch layer, not the
-scheduler: the scheduler exposes only a generic slot allocator
-(`Scheduler::alloc_node`) and the `Scope::install_*` primitives, so no `NodeWork`
-variant or scheduler code names a `KExpression`.
+scope, at `BindingIndex::value(chain.index)` and before the slot is ever popped
+from the work queues. Each channel gets its **own** edge, wired from the freshly
+allocated slot toward the dispatching scope's region: the submission holds that
+region's owner across the install, which is the wiring-time proof the
+destination is pinned, and the slot takes ownership of every edge it stamped.
+Wiring before the slot can run is also why the install is always *parked* — a
+claim can never come back filled. A later sibling that dispatches before the
+statement's slot pops finds the entry and parks rather than surfacing
+`UnboundName` / `DispatchFailed`. There is exactly one install site, at statement
+submission; nothing installs at dispatch/pick time. The binder logic lives in the
+dispatch layer, not the scheduler: the scheduler exposes only a generic slot
+allocator (`Scheduler::alloc_node`), the install door, and the `Scope::install_*`
+primitives, so no `NodeWork` variant or scheduler code names a `KExpression`.
 
 A statement's plan is its own spine and nothing else, so the namespace a block
 introduces is legible from its statement keys alone — which is what
 order-independent sibling submission needs. A combined form stamps both channels
-at that one node id and one `BindingIndex`, so a sibling parked on the name and a
-sibling parked on the bucket wake on the same statement.
+from that one slot at one `BindingIndex` — two edges, one owner — so a sibling
+parked on the name and a sibling parked on the bucket wake on the same statement
+and their claims retire together.
 
 **The position rule.** Binding is a statement-level act. A binder may appear only
 where a parse-static install is sound:

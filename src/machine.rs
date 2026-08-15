@@ -10,8 +10,9 @@ pub(crate) mod core;
 pub(crate) mod execute;
 pub mod model;
 
+pub use crate::scheduler::NodeId;
 pub(crate) use core::kfunction::Body;
-pub use core::kfunction::{KFunction, NodeId};
+pub use core::kfunction::KFunction;
 /// The reach-tightness report's reader surface — present only under the `region-audit` gate, which
 /// is also what compiles the audit itself in.
 #[cfg(any(test, feature = "region-audit"))]
@@ -19,14 +20,14 @@ pub use core::reach_audit;
 pub(crate) use core::{
     Action, ActionFn, AwaitContinue, BlockBody, BlockEntry, BlockScope, BlockSeed, BodyCtx,
     CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx, FoldingBrand, FramePlacement,
-    GroupSeal, OverloadSeal, OwnedDispatch, ReturnContract, StepAllocator, TailContract, arg_held,
+    GroupSeal, OverloadSeal, ReturnContract, StepAllocator, SubDispatch, TailContract, arg_held,
     arg_object, arg_type, arg_unresolved_type, block_tail, body_statement_refs, kerror_ktype,
     require_bare_type_name, require_identifier_name, require_kexpression, require_ktype,
     split_body_statements,
 };
 pub(crate) use core::{
-    AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, KoanRegion,
-    LexicalFrame, MemberResolution, NameLookup, NodeHandle, RegionTypeFamily, RunId, RunWriter,
+    AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, Installer,
+    KoanRegion, LexicalFrame, MemberResolution, NameLookup, RegionTypeFamily, RunWriter,
     TraceFrame,
 };
 pub use core::{
@@ -34,6 +35,7 @@ pub use core::{
     OpenedFunction, ProgramBrand, ProgramStorage, Scope, ScopeId, SealedFunction,
     SealedOperatorGroup, SplicedCell, WriteGate, program_storage, run_root_storage,
 };
+pub use execute::ProducerId;
 pub(crate) use execute::seed_run_root;
 pub(crate) use execute::{
     BrandCompose, DispatchOutcome, FieldListDeferral, NameOutcome, StepCarried, build_type_operand,

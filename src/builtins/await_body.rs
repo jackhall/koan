@@ -7,10 +7,10 @@
 
 use crate::machine::Scope;
 use crate::machine::model::KExpression;
-use crate::machine::{Action, AwaitContinue, DepPlacement, FinishCtx, OwnedDispatch};
+use crate::machine::{Action, AwaitContinue, DepPlacement, FinishCtx, SubDispatch};
 use crate::scheduler::Deps;
 
-/// Dispatch `body` against `child` (one owned sub-slot per top-level statement, per
+/// Dispatch `body` against `child` (one sub-slot per top-level statement, per
 /// `DepPlacement::InScope`), then run `finish`. The child closes first: every bind into it resolved
 /// with the awaited deps and the finish only reads it, so the sealed reach rides any value that
 /// captures the scope.
@@ -24,7 +24,7 @@ pub(crate) fn await_body_in_scope<'a>(
         finish(fctx)
     });
     Action::await_deps(
-        Deps::from_owned([OwnedDispatch {
+        Deps::from_requests([SubDispatch {
             expr: crate::machine::model::WorkingExpression::from_ast(child.brand(), body),
             placement: DepPlacement::InScope(child),
         }]),

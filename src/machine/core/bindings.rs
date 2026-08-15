@@ -33,7 +33,7 @@
 //! Every entry carries a [`BindingIndex`] naming its installing statement's lexical
 //! position, gated by the strict cutoff `idx < c`, so a forward reference (a
 //! later-positioned binding) is invisible — type binders included. A type entry pairs
-//! that index with its installing [`NodeHandle`] in a [`DeclarationSite`]: the handle
+//! that index with its installing [`Installer`] in a [`DeclarationSite`]: the installer
 //! alone answers the same-declaration question, and the index there does visibility
 //! only. `idx == 0` is the
 //! first position: FN parameters and MATCH/TRY `it` sit there, and the builtins are
@@ -58,12 +58,12 @@ use std::cell::RefCell;
 use std::mem::ManuallyDrop;
 
 use crate::machine::CarrierWitness;
+use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
-use crate::machine::core::RunId;
+use crate::machine::core::StatementId;
 use crate::machine::core::carrier_witness::{
     GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
 };
-use crate::machine::core::kfunction::NodeId;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{KType, UntypedKey};
 use crate::machine::model::{
@@ -91,7 +91,8 @@ pub type SealedValue<'home> = Sealed<'home, CarriedFamily, CarrierWitness>;
 pub use crate::machine::model::BindKind;
 
 /// Outcome of a single-scope name lookup: the name is `Bound` to a `T`, or `Parked` on the
-/// producer `NodeId` of an earlier still-finalizing binder the consumer waits on. A miss is the
+/// [`ProducerId`] of an earlier still-finalizing binder for the name — the producer a consumer
+/// wires its own park off, whose delivery is destined at this scope's region. A miss is the
 /// enclosing `Option`'s `None` — the caller keeps walking ancestors — so "unbound" is not a
 /// variant here; the terminal unbound disposition (with its diagnostic) is materialized one level
 /// up on the resolution path ([`crate::machine::model::TypeResolution`] /
@@ -102,7 +103,7 @@ pub use crate::machine::model::BindKind;
 #[derive(Copy, Clone, Debug)]
 pub enum NameLookup<T> {
     Bound(T),
-    Parked(NodeId),
+    Parked(ProducerId),
 }
 
 impl<T> NameLookup<T> {
@@ -115,24 +116,27 @@ impl<T> NameLookup<T> {
         }
     }
 
-    /// Map the bound payload, threading a `Parked` producer through unchanged — the combinator the
+    /// Map the bound payload, threading a `Parked` edge through unchanged — the combinator the
     /// carrier ladder uses to re-wrap a hit without restating the two-arm match.
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> NameLookup<U> {
         match self {
             NameLookup::Bound(payload) => NameLookup::Bound(f(payload)),
-            NameLookup::Parked(id) => NameLookup::Parked(id),
+            NameLookup::Parked(edge) => NameLookup::Parked(edge),
         }
     }
 }
 
-/// A still-finalizing binder occupying its destination slot: the producer node a consumer parks
-/// on, tagged with the binder's lexical [`BindingIndex`] so the same visibility predicate gates a
-/// pending arm and the binding it becomes. Installed at statement submission
-/// ([`Bindings::install_placeholder`] / [`Bindings::install_pending_overload`]) and overwritten in
-/// place by the producer's write path.
+/// A still-finalizing binder occupying its destination slot: the [`ProducerId`] naming the binder's
+/// own submission, tagged with the binder's lexical [`BindingIndex`] so the
+/// same visibility predicate gates a pending arm and the binding it becomes. A consumer parks by
+/// wiring its **own** edge off this one, inheriting the destination — which is what makes a
+/// placeholder park deliver into the scope the name was claimed in. Installed at statement
+/// submission ([`Bindings::install_placeholder`] / [`Bindings::install_pending_overload`]) and
+/// overwritten in place by the producer's write path; the edge itself is released by the installing
+/// slot when it terminalizes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PendingBinding {
-    pub producer: NodeId,
+    pub producer: ProducerId,
     pub index: BindingIndex,
 }
 
@@ -152,7 +156,7 @@ impl<'a> ValueSlot<'a> {
         }
     }
 
-    /// The in-flight producer, or `None` once the slot is committed.
+    /// The in-flight claim, or `None` once the slot is committed.
     pub(crate) fn pending(&self) -> Option<PendingBinding> {
         match self {
             ValueSlot::Bound(_) => None,
@@ -163,7 +167,7 @@ impl<'a> ValueSlot<'a> {
 
 /// One `types` slot. Unlike [`ValueSlot`], bound and pending are **not** exclusive: a parallel
 /// nominal finalize pre-installs the name's external identity while its producer is still in
-/// flight, and the finalize gate parks on that producer
+/// flight, and the finalize gate parks on that binder's edge
 /// ([`Bindings::type_placeholder_producer`]). The third arm makes that coexistence — and the
 /// impossibility of an empty slot — type-level facts, so a reader cannot mistake the slot for an
 /// exclusive one. Reads go through [`Self::bound`] / [`Self::pending`]; only the three transition
@@ -185,7 +189,7 @@ impl TypeSlot {
         }
     }
 
-    /// The in-flight producer, if any — the `Pending` and `BoundWithPending` arms.
+    /// The in-flight claim, if any — the `Pending` and `BoundWithPending` arms.
     pub(crate) fn pending(&self) -> Option<PendingBinding> {
         match self {
             TypeSlot::Pending(p) | TypeSlot::BoundWithPending(_, _, p) => Some(*p),
@@ -211,7 +215,7 @@ impl<'a> OverloadSlot<'a> {
         }
     }
 
-    /// The in-flight producer, or `None` for a finalized overload.
+    /// The in-flight claim, or `None` for a finalized overload.
     pub(crate) fn pending(&self) -> Option<PendingBinding> {
         match self {
             OverloadSlot::Sealed(_) => None,
@@ -325,7 +329,7 @@ pub enum MemberResolution<'a> {
 ///
 /// `pending` names a visible [`OverloadSlot::Pending`] in the bucket — a sibling FN
 /// binder has dispatched a matching overload whose body hasn't finalized. The
-/// consumer parks on the earliest-index visible producer; on wake it
+/// consumer parks on the earliest-index visible claim's edge; on wake it
 /// re-dispatches and either picks from the now-live bucket or re-parks on the
 /// next-earliest pending sibling.
 pub struct FunctionLookup<'a> {
@@ -334,7 +338,7 @@ pub struct FunctionLookup<'a> {
     /// under a named pin. Copied out so no caller holds the `functions` borrow across a candidate
     /// walk.
     pub overloads: Vec<SealedFunction<'a>>,
-    pub pending: Option<NodeId>,
+    pub pending: Option<ProducerId>,
 }
 
 /// Lexical position of a binding's installing statement: a binding at `idx` is visible to a
@@ -367,45 +371,46 @@ impl BindingIndex {
 
 /// What installed a binding — the identity a same-declaration check compares.
 ///
-/// A scheduler-driven install names its slot, qualified by its run: [`NodeId`]s are
-/// scheduler-local and restart per runtime, so only the pair identifies a declaration
-/// statement across the lifetime of a persistent scope. An install that no slot drove
-/// carries no id at all rather than a reserved index, so it can never collide with a
-/// live slot — however many schedulers a run has.
+/// A statement-driven install names its statement, and nothing scheduler-shaped: a
+/// [`StatementId`] is minted by koan, never recycled, and stays unique for longer than the
+/// entry holding it lives. A slot or edge index could not stand in for it — both recycle, so
+/// a later declaration can be handed a freed index and compare equal to the entry it should
+/// be rebinding. An install no statement drove carries no id at all rather than a reserved
+/// counter value, so it can never collide with a live statement.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum NodeHandle {
-    /// Registered outside any scheduler — builtin installs, and bindings a scope takes on
-    /// at birth. All such installs share this one identity, so re-registering a name under
+pub enum Installer {
+    /// Registered by no statement — builtin installs, and bindings a scope takes on at
+    /// birth. All such installs share this one identity, so re-registering a name under
     /// [`TypeWritePolicy::UpsertEqual`] upserts rather than raising `Rebind`.
-    OffScheduler,
-    /// Installed by the slot `node` stepping in run `run`.
-    Slot { run: RunId, node: NodeId },
+    NoStatement,
+    /// Installed by the statement submitted as `statement`.
+    Statement(StatementId),
 }
 
-/// The identity of the declaration statement that installed a `types` entry: the installing
-/// slot (the identity signal — same-declaration checks compare only this) plus its lexical
-/// position (the visibility signal — `idx < cutoff` reads it; under a detached chain the
-/// index is 0 and deliberately names no statement).
+/// The identity of the declaration statement that installed a `types` entry: its
+/// [`Installer`] (the identity signal — same-declaration checks compare only this) plus its
+/// lexical position (the visibility signal — `idx < cutoff` reads it; under a detached chain
+/// the index is 0 and deliberately names no statement).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct DeclarationSite {
-    pub node: NodeHandle,
+    pub installer: Installer,
     pub index: BindingIndex,
 }
 
 impl DeclarationSite {
-    /// Off-scheduler builtin registration: no slot installed it.
+    /// Builtin registration: no statement installed it.
     pub const BUILTIN: DeclarationSite = DeclarationSite {
-        node: NodeHandle::OffScheduler,
+        installer: Installer::NoStatement,
         index: BindingIndex::BUILTIN,
     };
 
     /// A binding installed when its scope is **born**, rather than by a declaration statement
     /// running in it — a type-denoting FN parameter landing in the fresh per-call scope, an
-    /// ascription seeding the newborn view scope's type members. No slot installed it, so the
-    /// identity node is [`NodeHandle::OffScheduler`] and same-declaration checks never key on a
-    /// slot; the index is `value(0)`, the parameter position the visibility predicate admits.
+    /// ascription seeding the newborn view scope's type members. No statement installed it, so the
+    /// installer is [`Installer::NoStatement`] and same-declaration checks never key on a
+    /// statement; the index is `value(0)`, the parameter position the visibility predicate admits.
     pub const AT_CONSTRUCTION: DeclarationSite = DeclarationSite {
-        node: NodeHandle::OffScheduler,
+        installer: Installer::NoStatement,
         index: BindingIndex::value(0),
     };
 }
@@ -422,7 +427,7 @@ impl DeclarationSite {
 /// same O(1) hash probe a std map would run.
 struct Tables<'a> {
     /// Each bound type slot stores its type and its [`DeclarationSite`] — the installing
-    /// [`NodeHandle`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
+    /// [`Installer`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
     /// `KType` is a `Copy` handle into the run frame's registry, so a slot carries no reach: a
     /// read copies the handle under the home-frame pin alone, and the same handle names the same
     /// type in every region. A [`TypeSlot`] may carry an in-flight producer beside the bound
@@ -544,7 +549,7 @@ impl<'a> Bindings<'a> {
     }
 
     /// Per-scope value-side lookup. One probe of `data[name]`: a visible bound slot answers
-    /// `Bound`, a visible pending slot answers `Parked` on its producer. `cutoff = None` means the
+    /// `Bound`, a visible pending slot answers `Parked` on its claim's edge. `cutoff = None` means the
     /// scope is off-chain (or unfiltered) — everything is visible. `None` return
     /// means no visible entry at this scope; the caller keeps walking
     /// ancestors, and chain exhaustion stays `None` (the terminal unbound
@@ -602,14 +607,13 @@ impl<'a> Bindings<'a> {
         None
     }
 
-    /// The producer `NodeId` of a still-finalizing **type** binder named `name`, read straight from
+    /// The [`ProducerId`] of a still-finalizing **type** binder named `name`, read straight from
     /// the slot's pending arm — *not* through [`Self::lookup_type`], which prefers the (possibly
     /// seal-pre-installed, still-unsealed) bound arm. The finalize gate uses this to park the
-    /// type-identifier memo on an in-flight producer even when the seal has already pre-installed
+    /// type-identifier memo on an in-flight binder even when the seal has already pre-installed
     /// the name's external identity into `types` — the [`TypeSlot::BoundWithPending`] case.
-    /// Visibility-unfiltered: this is producer-dependency tracking, not consumer-visibility
-    /// enforcement.
-    pub fn type_placeholder_producer(&self, name: &str) -> Option<NodeId> {
+    /// Visibility-unfiltered: this is dependency tracking, not consumer-visibility enforcement.
+    pub fn type_placeholder_producer(&self, name: &str) -> Option<ProducerId> {
         self.tables
             .borrow()
             .types
@@ -655,7 +659,7 @@ impl<'a> Bindings<'a> {
             .filter(|entry| Self::visible(entry.index, cutoff))
             .map(|entry| entry.sealed.duplicate())
             .collect();
-        // Earliest-index visible producer: most likely to finalize first.
+        // Earliest-index visible claim: most likely to finalize first.
         let pending = bucket
             .iter()
             .filter_map(OverloadSlot::pending)
@@ -843,7 +847,7 @@ impl<'a> Bindings<'a> {
     /// Every pending name-keyed arm across `data` and `types`, tagged with the language it resolves
     /// in — the hygiene probe for "this declaration left no in-flight producer behind".
     #[cfg(test)]
-    pub fn pending_names(&self) -> Vec<(String, BindKind, NodeId)> {
+    pub fn pending_names(&self) -> Vec<(String, BindKind, ProducerId)> {
         let tables = self.tables.borrow();
         let values = tables
             .data
@@ -880,7 +884,7 @@ impl<'a> Bindings<'a> {
 
     /// Write `name` → `kt` into `types` under `policy`. [`TypeWritePolicy::Insert`] is strict
     /// insert-if-absent; [`TypeWritePolicy::UpsertEqual`] admits a re-entry of the *same*
-    /// declaration — declaration identity is the installing [`NodeHandle`], so an existing entry
+    /// declaration — declaration identity is the installing [`Installer`], so an existing entry
     /// whose handle differs from `site`'s is a different declaration of the name and `Rebind`s,
     /// while a same-handle hit is the same slot in the same run re-entering (a parallel nominal
     /// finalize), whose re-elaboration cannot differ, so it overwrites idempotently. Content plays
@@ -919,7 +923,9 @@ impl<'a> Bindings<'a> {
                     name: name.to_string(),
                 }));
             }
-            (TypeWritePolicy::UpsertEqual, Some(existing)) if existing.node != site.node => {
+            (TypeWritePolicy::UpsertEqual, Some(existing))
+                if existing.installer != site.installer =>
+            {
                 return Err(KError::new(KErrorKind::Rebind {
                     name: name.to_string(),
                 }));
@@ -940,14 +946,15 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
-    /// Claim `name`'s slot in its destination table for producer node `idx` — the dispatch-time
-    /// forward-reference stamp.
+    /// Claim `name`'s slot in its destination table for the binder edge `edge` — the dispatch-time
+    /// forward-reference stamp. `edge` is the slot's own installed edge, destined at this scope's
+    /// region, so a consumer parking on the claim inherits that destination.
     ///
     /// Errors `Rebind` if the claim collides: a committed `data[name]` (bindings are bind-once), or
-    /// an existing pending arm naming a different producer. Idempotent on same-producer re-entry.
+    /// an existing pending arm naming a different edge. Idempotent on same-edge re-entry.
     /// A `types` slot already carrying a bound identity keeps it and gains the pending arm
     /// ([`TypeSlot::BoundWithPending`]): a parallel nominal finalize pre-installs the external
-    /// identity while its producer is still in flight.
+    /// identity while its binder is still in flight.
     ///
     /// The eventual [`Self::write_value`] / [`Self::write_type`] call must carry the
     /// same `index` so the consumer's visibility test stays consistent across
@@ -957,16 +964,13 @@ impl<'a> Bindings<'a> {
     pub fn install_placeholder(
         &self,
         name: &str,
-        idx: NodeId,
+        producer: ProducerId,
         index: BindingIndex,
         kind: BindKind,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
-        let claim = PendingBinding {
-            producer: idx,
-            index,
-        };
+        let claim = PendingBinding { producer, index };
         let rebind = || {
             KError::new(KErrorKind::Rebind {
                 name: name.to_string(),
@@ -975,7 +979,7 @@ impl<'a> Bindings<'a> {
         match kind {
             BindKind::Value => match tables.data.get_mut(name) {
                 Some(ValueSlot::Bound(_)) => Err(rebind()),
-                Some(ValueSlot::Pending(existing)) if existing.producer == idx => Ok(()),
+                Some(ValueSlot::Pending(existing)) if existing.producer == producer => Ok(()),
                 Some(ValueSlot::Pending(_)) => Err(rebind()),
                 None => {
                     tables
@@ -986,7 +990,7 @@ impl<'a> Bindings<'a> {
             },
             BindKind::Type => match tables.types.get_mut(name) {
                 Some(slot) => match slot.pending() {
-                    Some(existing) if existing.producer == idx => Ok(()),
+                    Some(existing) if existing.producer == producer => Ok(()),
                     Some(_) => Err(rebind()),
                     None => {
                         let (kt, site) = slot
@@ -1023,15 +1027,12 @@ impl<'a> Bindings<'a> {
     pub fn install_pending_overload(
         &self,
         bucket: UntypedKey,
-        idx: NodeId,
+        producer: ProducerId,
         index: BindingIndex,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
-        let claim = OverloadSlot::Pending(PendingBinding {
-            producer: idx,
-            index,
-        });
+        let claim = OverloadSlot::Pending(PendingBinding { producer, index });
         // Probe-then-insert rather than an `entry` call: the key a miss inserts has to be re-homed
         // through the brand, which the entry API has no way to defer. The second hash is paid only
         // on the first claim of a shape.
@@ -1241,29 +1242,35 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
-    /// Drop every pending arm pointing at `producer`, in all three claim-bearing tables. The
-    /// success write paths finalize a binder's own claim in place; this is the error-path
-    /// companion, called when `producer`'s node finalizes with an error so a binder body
-    /// that failed before its write path does not leak a scheduler-local [`NodeId`] into
-    /// a later run on a persistent scope. A `types` slot that also holds a bound identity keeps
-    /// it — only the pending arm is dropped. One bucket-keyed binder claims a slot in every
-    /// inner-call bucket it declares, so the `functions` walk purges by producer across all of
-    /// them and drops a bucket the purge empties.
+    /// Drop every pending arm naming one of the given producers, in all three claim-bearing tables — the
+    /// retirement companion to the installs, run when the claiming slot terminalizes. The success
+    /// write paths finalize a binder's own claim in place, so this normally finds only what a
+    /// failed body left behind; running it on every terminal is what guarantees no arm survives
+    /// naming a [`ProducerId`] whose edge its owner is about to release. A `types` slot that also
+    /// holds a bound identity keeps it — only the pending arm is dropped. One bucket-keyed binder
+    /// claims a slot in every inner-call bucket it declares, so the `functions` walk purges across
+    /// all of them and drops a bucket the purge empties.
     ///
     /// The purge keys on the [`PendingBinding::producer`] each slot already carries; no table's
-    /// key participates.
+    /// key participates. The argument is a slot's own claim list, so it is short and a linear scan
+    /// of it per slot is the whole cost.
     ///
     /// This is the one path that strands bump bytes: a removed key's text and an emptied bucket's
     /// buffer are abandoned rather than freed. It is bounded by the number of binders that fail —
     /// every success path overwrites its claim where it sits — so a table's peak occupancy stays
     /// its final binding count plus that error tail.
-    pub fn clear_placeholders_for_producer(&self, producer: NodeId, _gate: &mut WriteGate) {
+    pub fn clear_placeholders_for_producers(
+        &self,
+        producers: &[ProducerId],
+        _gate: &mut WriteGate,
+    ) {
         let mut tables = self.tables.borrow_mut();
-        let claims = |slot: Option<PendingBinding>| slot.is_some_and(|p| p.producer == producer);
+        let named = |p: &PendingBinding| producers.contains(&p.producer);
+        let claims = |slot: Option<PendingBinding>| slot.as_ref().is_some_and(named);
         tables.data.retain(|_, slot| !claims(slot.pending()));
         tables.types.retain(|_, slot| match slot {
-            TypeSlot::Pending(p) => p.producer != producer,
-            TypeSlot::BoundWithPending(kt, site, p) if p.producer == producer => {
+            TypeSlot::Pending(p) => !named(p),
+            TypeSlot::BoundWithPending(kt, site, p) if named(p) => {
                 *slot = TypeSlot::Bound(*kt, *site);
                 true
             }

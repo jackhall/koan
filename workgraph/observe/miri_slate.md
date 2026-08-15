@@ -17,7 +17,7 @@ invariants the slate verifies live in
 
 ## The slate
 
-54 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+63 tests, grouped by the unsafe site (or the safe mint discipline routing it)
 each pins down. Names below are the exact test identifiers; pass them after
 `--` in the Miri command, or run the whole lib binary
 (`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
@@ -278,6 +278,45 @@ with none of the scheduler's own.
 
 - `parked_continuation_drops_under_its_own_pin`
 - `parked_continuation_opens_and_runs_after_its_handles_drop`
+
+**The edge slab's destination deref — the crate's one raw pointer**
+([src/scheduler/edge_slab.rs](../src/scheduler/edge_slab.rs)) — an edge names its destination region
+by `*const Region<P>`, dereferenced in `Destination::region_ref` whenever the delivery walk adopts
+into it or a reader opens the resident resting there. Nothing owns the destination: validity is the
+containment lattice (destination outlives owner outlives edge), so the deref is only as sound as the
+release discipline around it, and the debug-only weak shadow that asserts it is compiled out of a
+release build. These are *timelines* rather than value checks — what is alive when, and for how
+long — driving the real `Scheduler` so the pointer is dereferenced under Miri exactly where
+production dereferences it. They pin both verdicts of the delivery hook (a copy frees the producer
+region at its own finalize; a pin transfers it into the destination's union bundle and frees it with
+the destination), the released-edge skip that makes a consumer's death before its producer fires
+order-free (Inv-C: the walk, not `release`, returns a listed index to circulation — the case a
+release-build walk would deliver into a stranger's edge), the late wire that shares a resident
+rather than adopting twice, the root edge whose value stays readable until the drain releases it,
+and the error terminal that reaches every waiting edge and frees the producer region regardless.
+
+- `copy_verdict_frees_the_producer_region_at_finalize`
+- `pin_verdict_holds_the_producer_region_until_its_destination_dies`
+- `a_dead_consumers_edges_are_skipped_and_recycled`
+- `a_late_wire_onto_a_delivered_edge_shares_the_resident`
+- `a_root_edge_holds_its_value_until_the_drain_releases_it`
+- `an_error_terminal_reaches_every_waiting_edge`
+
+**Slot reinstallation — the replace boundary** ([src/scheduler.rs](../src/scheduler.rs)) — a slot
+replaced over a fresh anchor turns over its own memory, and the scheduler holds nothing across it:
+`replace` hands the displaced anchor straight back, so ordering the retiring region's free is a
+local variable in the embedder's apply path rather than a row field spanning a step. What makes
+that sound is that the relocation runs on the *deciding* side — whatever the next incarnation reads
+is moved into the incoming anchor's region before the install — and these two timelines drive the
+real `Scheduler` through it under both verdicts: a copy frees the retiring region where the
+displaced anchor falls, a pin transfers it into the incoming anchor's union bundle and frees it
+with that incarnation. Either way the reinstalled continuation reads its loop-carried argument back
+after every direct hold on the retiring region is gone, which is where tree borrows catches a free
+that reordered ahead of the relocation. The `unsafe` routed is the shared `retype` in
+`witnessed.rs`, through the relocation's envelope verbs and the reinstalled seal's own open.
+
+- `copy_verdict_frees_the_retiring_region_at_the_replace`
+- `pin_verdict_transfers_the_retiring_region_into_the_new_anchor_bundle`
 
 **`StepContext::alloc_with` — finish-surface fold** ([src/witnessed/step_ctx.rs](../src/witnessed/step_ctx.rs))
 — guarantee 5 made structural: every listed dep's envelope folds into the result's carrier by

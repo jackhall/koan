@@ -49,8 +49,9 @@ fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().expect("scheduler runs to completion");
-    assert!(runtime.result_error(id).is_err());
+    assert!(runtime.edge_result_error(edge).is_err());
 }
 
 /// Empty container through an annotated return boundary: the vacuous `matches_value`
@@ -129,8 +130,8 @@ fn fn_returning_typed_list_accepts_matching_value() {
     assert_eq!(bytes, b"[1, 2, 3]\n");
 }
 
-/// The scheduler stores the return-type-check error in the result slot rather than
-/// failing `execute`, so we read the slot via `result_error` to assert the failure.
+/// The scheduler stores the return-type-check error on the delivered edge rather than
+/// failing `execute`, so we read it via `edge_result_error` to assert the failure.
 #[test]
 fn fn_returning_typed_list_rejects_wrong_element_type() {
     let program = program_storage();
@@ -146,8 +147,9 @@ fn fn_returning_typed_list_rejects_wrong_element_type() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().expect("scheduler runs to completion");
-    let res = runtime.result_error(id);
+    let res = runtime.edge_result_error(edge);
     assert!(
         res.is_err(),
         "expected return-type mismatch when body produces :(LIST OF Any) for declared :(LIST OF Number)"
@@ -195,11 +197,12 @@ fn fn_with_typed_function_param_rejects_name_mismatch() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = runtime
-        .result_error(root)
+        .edge_result_error(edge)
         .expect_err("a function with param name `n` must not fill a `(x :Number)` slot");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
@@ -264,11 +267,12 @@ fn fn_with_typed_function_param_rejects_width_extra() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = runtime
-        .result_error(root)
+        .edge_result_error(edge)
         .expect_err("a value declaring an extra param `y` must not fill a `(x :Number)` slot");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
@@ -318,11 +322,12 @@ fn fn_typed_function_param_incomparable_is_ambiguous() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = runtime
-        .result_error(root)
+        .edge_result_error(edge)
         .expect_err("an `Any`-param value matching two incomparable slots must be ambiguous");
     assert!(
         matches!(error.kind, KErrorKind::AmbiguousDispatch { .. }),
@@ -431,11 +436,12 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = runtime
-        .result_error(root)
+        .edge_result_error(edge)
         .expect_err("an unbound name across tied overloads must error");
     assert!(
         matches!(error.kind, KErrorKind::UnboundName(ref n) if n == "nope"),
@@ -462,11 +468,12 @@ fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = runtime
-        .result_error(root)
+        .edge_result_error(edge)
         .expect_err("heterogeneous List<Any> must match no concrete-element overload");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
@@ -535,11 +542,12 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
         ),
         scope,
     );
+    let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = runtime
-        .result_error(root)
+        .edge_result_error(edge)
         .expect_err("List<Str> against a :(LIST OF Number)-only overload must fail to dispatch");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
