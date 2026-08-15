@@ -22,8 +22,8 @@ use crate::machine::model::Carried;
 #[cfg(test)]
 use crate::machine::Scope;
 use crate::machine::{KError, NodeId, TraceFrame};
+use crate::scheduler::Deps;
 use crate::scheduler::EdgeId;
-use crate::scheduler::{DepResults, Deps};
 use crate::witnessed::reattachable;
 
 use super::StepCarried;
@@ -47,7 +47,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// per-call cart; `chain` is the pre-decided lexical-chain reshape (decided at the construction
     /// site while the contract variant is still live) and `block_entry` names any overlay scope the
     /// tail installs. A body's non-tail (leading) statements are NOT carried here — a producer with
-    /// leading statements parks on them as owned deps (a [`DepRequest::BodyBlock`]) and emits this
+    /// leading statements waits on them as deps (a [`DepRequest::BodyBlock`]) and emits this
     /// `Continue` only from the resolving finish, restoring frame uniqueness for TCO reuse. The
     /// slot's declared-return obligation does not ride here — it is wrapped onto `work`'s
     /// continuation at the construction site (see
@@ -58,11 +58,10 @@ pub(in crate::machine::execute) enum Outcome<'step> {
         chain: ChainOp,
         block_entry: BlockEntry<'step>,
     },
-    /// Park the slot on `deps` and run `continuation` when they resolve. A dep is either a park (an
-    /// edge the door mints off a source this slot only reads) or an owned entry (realizes to a
-    /// harness-owned sub-slot, which reclaims at its own finalize); a [`Continuation::Resume`]'s
-    /// deps are all parks. `dep_error_frame` labels the
-    /// dep-error short-circuit that runs before the finish.
+    /// Park the slot on `deps` and run `continuation` when they resolve. Each dep is either named by
+    /// a source this slot only reads, or a request the harness realizes into a sub-slot that reclaims
+    /// at its own finalize; a [`Continuation::Resume`] declares only the former. `dep_error_frame`
+    /// labels the dep-error short-circuit that runs before the finish.
     ParkThenContinue {
         deps: Deps<DepRequest<'step>>,
         continuation: Continuation<'step>,
@@ -101,7 +100,7 @@ impl<'step> Outcome<'step> {
 ///   [`Outcome::Done(Ok)`](Outcome::Done). The decide-side twin of the apply-side
 ///   `submit_dep_finish_witnessed_in_own_scope`, used by a construction decide (newtype / tagged
 ///   union) building the wrapped value naming every region it reaches.
-/// - `Catch` watches the realized `watched` dep (harness-owned producer) and hands its terminal to a
+/// - `Catch` watches the realized `watched` dep (a producer the harness spawned) and hands it to a
 ///   [`CatchFinish`] without short-circuiting.
 /// - `Resume` re-runs the parked dispatch decide through the [`ResumeFn`] the parking decide
 ///   captured; `carrier` is the parked expression's rendered summary for the deadlock report (`None`
@@ -205,7 +204,7 @@ pub(in crate::machine::execute) use crate::machine::core::DepTerminal;
 pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
     dyn for<'view, 'd> FnOnce(
             &SchedulerView<'_, 'a, 'view>,
-            DepResults<'_, Result<DepTerminal<'d>, KError>>,
+            &[Result<DepTerminal<'d>, KError>],
             NodeId,
         ) -> Outcome<'a>
         + 'a,
@@ -232,11 +231,11 @@ reattachable!(droppable ContinuationFamily => NodeContinuation<'r>);
 /// Walk the resolved dep results in delivery order, short-circuiting on the first errored dep (its
 /// error propagated under `dep_error_frame`); on success return every terminal by reference in order.
 fn all_or_first_error<'r, 'd>(
-    results: &DepResults<'r, Result<DepTerminal<'d>, KError>>,
+    results: &'r [Result<DepTerminal<'d>, KError>],
     dep_error_frame: &Option<TraceFrame>,
 ) -> Result<Vec<&'r DepTerminal<'d>>, KError> {
     let mut terminals = Vec::with_capacity(results.len());
-    for r in results.all() {
+    for r in results {
         match r {
             Ok(t) => terminals.push(t),
             Err(e) => return Err(propagate_dep_error(e, dep_error_frame.clone())),
@@ -246,14 +245,11 @@ fn all_or_first_error<'r, 'd>(
 }
 
 /// The one delivery currency a resolved dep-finish runs against: resolved dep terminals (value +
-/// carrier, `[park..., owned...]` order) in, an [`Outcome`] out. A value-reading finish writes this
-/// shape directly; a [`WitnessedDepFinish`] projects onto it through [`seal_witnessed`] — so
-/// [`short_circuit`] is the single loop that runs either.
+/// carrier, in dep order) in, an [`Outcome`] out. A value-reading finish writes this shape directly;
+/// a [`WitnessedDepFinish`] projects onto it through [`seal_witnessed`] — so [`short_circuit`] is the
+/// single loop that runs either.
 pub(in crate::machine::execute) type TerminalDepFinish<'a> = Box<
-    dyn for<'view, 'd> FnOnce(
-            &SchedulerView<'_, 'a, 'view>,
-            DepResults<'_, &DepTerminal<'d>>,
-        ) -> Outcome<'a>
+    dyn for<'view, 'd> FnOnce(&SchedulerView<'_, 'a, 'view>, &[&DepTerminal<'d>]) -> Outcome<'a>
         + 'a,
 >;
 
@@ -265,12 +261,11 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
     finish: TerminalDepFinish<'a>,
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _id| {
-        let terminals = match all_or_first_error(&results, &dep_error_frame) {
+        let terminals = match all_or_first_error(results, &dep_error_frame) {
             Ok(terminals) => terminals,
             Err(e) => return Outcome::Done(Err(e)),
         };
-        // Re-wrap under the same park-prefix so the finish reads through one `[park..., owned...]` view.
-        finish(view, results.rewrap(&terminals))
+        finish(view, &terminals)
     })
 }
 
@@ -281,7 +276,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
 pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
     dyn for<'view, 'd> FnOnce(
             &SchedulerView<'_, 'a, 'view>,
-            DepResults<'_, &DepTerminal<'d>>,
+            &[&DepTerminal<'d>],
         ) -> Result<StepCarried<'a>, KError>
         + 'a,
 >;
@@ -305,7 +300,7 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
     finish: CatchFinish<'a>,
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _id| {
-        let result = match &results.all()[0] {
+        let result = match &results[0] {
             // The watched producer's delivered resident, lifted back into an envelope owning its
             // whole reach — the finish adopts or opens it at its own step brand.
             Ok(t) => Ok(view.current_scope().lift_spliced(&t.cell)),
@@ -317,7 +312,7 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
 }
 
 /// Dispatch-decide continuation: a [`ResumeFn`] takes no dep values (it reads the view and spawns /
-/// re-resolves), so its deps are park-only and the results slice is ignored.
+/// re-resolves), so the results slice is ignored.
 pub(in crate::machine::execute) fn ignore_results<'a>(
     resume: ResumeFn<'a>,
 ) -> NodeContinuation<'a> {

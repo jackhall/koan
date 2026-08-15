@@ -26,7 +26,6 @@ use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{
     BindingIndex, DeclarationSite, DeliveredCarried, Installer, KError, KErrorKind,
 };
-use crate::scheduler::DepResults;
 use crate::scheduler::Deps;
 use crate::source::Spanned;
 
@@ -381,8 +380,8 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
 /// A resolved dep terminal as a continuation receives it: the delivered value **already resident in
 /// the region this step reads it from**, as a [`SplicedCell`] re-branded once at step start under
 /// the step's own coverage. There is no envelope and no per-dep pin: the producer's finalize walk
-/// adopted the value into this edge's destination — the consumer's own region for an owned dep, the
-/// region a placeholder named for a park — and both are covered for the step's whole life by the
+/// adopted the value into this edge's destination — the region the dep's source named, which for
+/// spawned sub-work is the consumer's own — and it is covered for the step's whole life by the
 /// slot anchor's owner chain.
 ///
 /// So a value-reading finish (`resolve_or_await`, `fn_def`/`return_type`, dispatch constructors /
@@ -400,16 +399,15 @@ pub struct DepTerminal<'b> {
     pub cell: SplicedCell<'b>,
 }
 
-/// A `AwaitDeps` finish: re-entered at wake with the resolved dep terminals as a [`DepResults`] view
-/// (addressed by `park` / `owned` position) of [`DepTerminal`]s — each a resident cell of a region
-/// this step already covers — yielding another `Action` the harness recurses into. Reads only a
-/// `FinishCtx`, never the scheduler — exec's continuation pattern.
+/// A `AwaitDeps` finish: re-entered at wake with the resolved [`DepTerminal`]s — each a resident cell
+/// of a region this step already covers — as one slice **in dep order**, yielding another `Action`
+/// the harness recurses into. Reads only a `FinishCtx`, never the scheduler — exec's continuation
+/// pattern.
 ///
 /// Higher-ranked in the dep brand `'d` as well as the ctx borrow: the residents are branded against
 /// the step's coverage at step start, and a stored finish must accept whatever borrow that is.
-pub type AwaitContinue<'a> = Box<
-    dyn for<'r, 'd> FnOnce(&FinishCtx<'a, 'r>, DepResults<'_, &DepTerminal<'d>>) -> Action<'a> + 'a,
->;
+pub type AwaitContinue<'a> =
+    Box<dyn for<'r, 'd> FnOnce(&FinishCtx<'a, 'r>, &[&DepTerminal<'d>]) -> Action<'a> + 'a>;
 
 /// A `Catch` finish: re-entered with the watched slot's delivery envelope (value, reach, and
 /// retained producer pin as one unit, adopted or opened at the finish's own step brand) or the
@@ -472,7 +470,7 @@ impl<'a> Action<'a> {
     }
 
     /// Dispatch `deps`, then continue through `finish`. See [`ActionKind::AwaitDeps`].
-    pub fn await_deps(deps: Deps<OwnedDispatch<'a>>, finish: AwaitContinue<'a>) -> Self {
+    pub fn await_deps(deps: Deps<SubDispatch<'a>>, finish: AwaitContinue<'a>) -> Self {
         Action::from_kind(ActionKind::AwaitDeps { deps, finish })
     }
 
@@ -518,7 +516,7 @@ pub enum ActionKind<'a> {
     Done(Result<StepCarried<'a>, KError>),
     /// Tail-replace into `tail`, carrying `contract` (see [`TailContract`]), in a cart per
     /// `frame_placement`. When `leading` (the body's non-tail statements) is non-empty the slot
-    /// first parks on them as owned deps and tail-replaces only once they resolve — so they run,
+    /// first waits on them as deps and tail-replaces only once they resolve — so they run,
     /// and reclaim, before the tail continues. `block_entry` names the lexical block the tail
     /// enters (see [`BlockEntry`]); the harness derives the body-statement chains and the tail's
     /// `body_index` from it + `leading`.
@@ -531,7 +529,7 @@ pub enum ActionKind<'a> {
     },
     /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`.
     AwaitDeps {
-        deps: Deps<OwnedDispatch<'a>>,
+        deps: Deps<SubDispatch<'a>>,
         finish: AwaitContinue<'a>,
     },
     /// Watch `watched`, recover via `finish`.
@@ -553,22 +551,21 @@ impl<'a> Action<'a> {
     }
 }
 
-/// The one owned-dep shape a builtin declares in an [`Action::AwaitDeps`]:
-/// a sub-expression the harness dispatches on the consumer's behalf, whose
-/// slot reclaims at its own finalize. Parks live in the other half of the
-/// [`Deps`](crate::scheduler::Deps) builder, structurally, so a builtin cannot
-/// hand a producer it merely reads in as sub-work it owns — that shape is
-/// unrepresentable here.
-pub struct OwnedDispatch<'a> {
+/// The sub-work shape a builtin declares in an [`Action::AwaitDeps`]: a sub-expression the harness
+/// dispatches on the consumer's behalf, whose slot reclaims at its own finalize. It is the request
+/// arm of the [`Deps`](crate::scheduler::Deps) builder — a producer the builtin merely reads in goes
+/// in through the other arm, by the edge naming it, so the two are told apart by construction rather
+/// than by a role field.
+pub struct SubDispatch<'a> {
     pub expr: WorkingExpression<'a>,
     pub placement: DepPlacement<'a>,
 }
 
-impl<'a> OwnedDispatch<'a> {
+impl<'a> SubDispatch<'a> {
     /// Lower into the library dep currency — the crossing the harness (and
     /// the field-list bundle's Outcome finish) makes right before `Await::on`.
     pub fn into_request(self) -> DepRequest<'a> {
-        // A builtin-declared owned dispatch (module/sig/recursive/using bodies) enters a fresh
+        // A builtin-declared sub-dispatch (module/sig/recursive/using bodies) enters a fresh
         // block via `InScope`, which is a statement position.
         DepRequest::Dispatch {
             expr: self.expr,
@@ -581,15 +578,14 @@ impl<'a> OwnedDispatch<'a> {
 /// and a [`Action::Catch`] carries for its single watched dep — defined here in core so `Action` can
 /// carry it without core depending on the execute layer.
 ///
-/// The builtin `AwaitDeps` currency does not flow through `DepRequest`: parks are structural in the
-/// [`Deps`](crate::scheduler::Deps) builder and owned entries are [`OwnedDispatch`]. `DepRequest`'s
-/// roles are `Catch`'s single `watched` dep (a `Dispatch` of the watched sub-expression) and the
-/// dispatcher-side `Outcome` currency: `Dispatch`
-/// staged subs, the `ListLit` / `DictLit` / `RecordLit` literal lowerings that schedule an aggregate
-/// literal as one owned producer, and `BodyBlock` fanning a non-tail statement block out to one owned
-/// producer per statement (see [`BodyPlacement`] for where they bind). A finish addresses the realized
-/// deps through a [`DepResults`] view (`park` / `owned`), where an `InScope`-placed `Dispatch` and a
-/// `BodyBlock` each fan their multi-statement body out to one owned result per statement.
+/// The builtin `AwaitDeps` currency does not flow through `DepRequest`: its request entries are
+/// [`SubDispatch`]es, which lower to one of these. `DepRequest`'s roles are `Catch`'s single
+/// `watched` dep (a `Dispatch` of the watched sub-expression) and the dispatcher-side `Outcome`
+/// currency: `Dispatch` staged subs, the `ListLit` / `DictLit` / `RecordLit` literal lowerings that
+/// schedule an aggregate literal as one producer, and `BodyBlock` fanning a non-tail statement block
+/// out to one producer per statement (see [`BodyPlacement`] for where they bind). A finish reads its
+/// results in dep order, and a request that fans out — an `InScope`-placed `Dispatch`, a `BodyBlock`
+/// — contributes one result per statement, so it is the sole entry in its list.
 pub enum DepRequest<'a> {
     Dispatch {
         expr: WorkingExpression<'a>,
@@ -598,7 +594,7 @@ pub enum DepRequest<'a> {
     ListLit(&'a [ExpressionPart<'a>]),
     DictLit(&'a [(ExpressionPart<'a>, ExpressionPart<'a>)]),
     RecordLit(&'a [(&'a str, ExpressionPart<'a>)]),
-    /// A body's non-tail statements dispatched as a block, fanning out to one owned producer per
+    /// A body's non-tail statements dispatched as a block, fanning out to one producer per
     /// statement (the harness `extend`s them in declaration order). `placement` picks where they
     /// bind (see [`BodyPlacement`]): a deferred-return FN's first-call body and a leading-carrying
     /// arm bind into a fresh per-call frame's own scope; a leading-carrying USING binds into an

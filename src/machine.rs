@@ -20,7 +20,7 @@ pub use core::reach_audit;
 pub(crate) use core::{
     Action, ActionFn, AwaitContinue, BlockBody, BlockEntry, BlockScope, BlockSeed, BodyCtx,
     CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx, FoldingBrand, FramePlacement,
-    GroupSeal, OverloadSeal, OwnedDispatch, ReturnContract, StepAllocator, TailContract, arg_held,
+    GroupSeal, OverloadSeal, ReturnContract, StepAllocator, SubDispatch, TailContract, arg_held,
     arg_object, arg_type, arg_unresolved_type, block_tail, body_statement_refs, kerror_ktype,
     require_bare_type_name, require_identifier_name, require_kexpression, require_ktype,
     split_body_statements,

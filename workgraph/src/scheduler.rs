@@ -3,7 +3,7 @@
 //! error, scope, memory, or AST type.
 //!
 //! The execute loop drains via [`WorkQueues::pop_next`], which prioritizes in-flight slots
-//! (sub-work and delivery-walk wakeups) ahead of fresh top-level dispatches. An owned dep's edge
+//! (sub-work and delivery-walk wakeups) ahead of fresh top-level dispatches. A spawned dep's edge
 //! never cycles — a new node's slot is allocated after every node it owns. A park edge can point at
 //! an earlier producer, so a self-referential binding (`LET x = x`) forms a cycle that drains with
 //! both slots still `PreRun`; the driver detects the leftover parked slots (via
@@ -50,10 +50,9 @@ mod tests;
 // private `use`: `witnessed` is the one public path to these types, and a `pub use` here would
 // double it for every one of them.
 use crate::witnessed::{DropFree, Reattachable};
-pub use deps::{Deps, ResolvedDeps};
-// `pub` (not `pub(crate)`) like [`NodeId`]: it appears in the `pub` `AwaitContinue` builtin-finish
-// type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
-pub use deps::DepResults;
+// `pub` (not `pub(crate)`) like [`NodeId`]: `Deps` appears in the `pub` `Action::AwaitDeps` field,
+// so a narrower visibility would leak.
+pub use deps::{Dep, Deps, ResolvedDeps};
 pub use edge_slab::{EdgeId, InstalledEdge};
 pub use node_id::NodeId;
 pub use workload::{
@@ -177,34 +176,33 @@ impl<W: Workload> Scheduler<W> {
         false
     }
 
-    /// **The one door a consumer's dep list is wired through.** The embedder hands the park *sources*
-    /// it holds — edges its own bindings named — plus the producers it owns; the door mints the
-    /// consumer's own slab edge per dep and hands back the realized list for
-    /// [`NodeWork`](nodes::NodeWork) plus each park's **filled-or-parked** verdict. Producer
-    /// `NodeId`s never leave the scheduler: resolving a source edge to one is this door's job.
+    /// **The one door a consumer's dep list is wired through.** The embedder hands the dep *sources*
+    /// it holds — one edge per dep, in dep order; the door mints the consumer's own slab edge off
+    /// each and hands back the realized list for [`NodeWork`](nodes::NodeWork) plus each dep's
+    /// **filled-or-parked** verdict. Producer `NodeId`s never leave the scheduler: resolving a source
+    /// edge to one is this door's job.
     ///
-    /// A park's edge inherits its source's destination, so a park on a placeholder delivers into the
-    /// region that placeholder named; an owned dep's edge is destined at the consumer's own anchor
-    /// region, which is where its sub-work's result belongs.
+    /// Every dep's edge inherits its source's destination — one rule, applied uniformly. A dep on a
+    /// placeholder delivers into the region that placeholder named; a dep on sub-work the embedder
+    /// spawned delivers into the region that sub-work's source named, which the embedder minted at
+    /// the consumer's own anchor region.
     ///
-    /// The returned `Vec<InstalledEdge>` is index-aligned with `parks`. A *filled* verdict is the
+    /// The returned `Vec<InstalledEdge>` is index-aligned with `sources`. A *filled* verdict is the
     /// caller's to act on — its producer has already delivered, so an errored one propagates at once
     /// rather than waiting for a wake that will not come.
     ///
     /// It serves an already-allocated consumer slot, which is why it takes the dep list separately
-    /// from the work; the submit-time sibling is
-    /// [`alloc_node_with_parks`](Self::alloc_node_with_parks), which initializes a fresh row and its
-    /// wires as one atomic step. Two doors, one primitive — so no wiring path can skew a row's
-    /// invariants.
+    /// from the work; the submit-time sibling is [`alloc_node`](Self::alloc_node), which initializes
+    /// a fresh row and its wires as one atomic step. Two doors, one primitive — so no wiring path can
+    /// skew a row's invariants.
     pub fn install_deps(
         &mut self,
         consumer: NodeId,
-        parks: &[EdgeId],
-        owned: &[NodeId],
+        sources: &[EdgeId],
     ) -> (ResolvedDeps, Vec<InstalledEdge>) {
         let mut resolved = ResolvedDeps::new();
-        let mut installed = Vec::with_capacity(parks.len());
-        for &source in parks {
+        let mut installed = Vec::with_capacity(sources.len());
+        for &source in sources {
             let verdict = self.install_edge_from(source);
             self.edges.bind_consumer(verdict.edge_id(), consumer);
             // The mint already listed a parked edge on its producer, so only the pending half of
@@ -213,29 +211,10 @@ impl<W: Workload> Scheduler<W> {
             if matches!(verdict, InstalledEdge::Parked(_)) {
                 self.deps.count_pending(consumer);
             }
-            resolved.push_park(verdict.edge_id());
+            resolved.push(verdict.edge_id());
             installed.push(verdict);
         }
-        for &producer in owned {
-            resolved.push_owned(self.wire_owned(consumer, producer));
-        }
         (resolved, installed)
-    }
-
-    /// Mint one owned dep's edge: `producer` is freshly allocated sub-work of `consumer`, so it is
-    /// pre-terminal by construction and the edge always parks. Its destination is the consumer's own
-    /// anchor region — the sub-result lands where the consumer will read it.
-    fn wire_owned(&mut self, consumer: NodeId, producer: NodeId) -> EdgeId {
-        debug_assert!(
-            self.store.is_live(producer),
-            "an owned dep is freshly allocated sub-work, so it cannot have run yet",
-        );
-        let destination = Rc::clone(self.deps.anchor_clone(consumer).owner());
-        let edge = self
-            .edges
-            .install_parked(producer, Some(consumer), &destination);
-        self.deps.wire_parked(producer, edge, Some(consumer));
-        edge
     }
 
     /// Wire one edge from `producer` toward a destination region, named by its owner: holding

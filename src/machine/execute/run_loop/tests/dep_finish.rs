@@ -21,7 +21,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     let dep_a = runtime.dispatch_in_scope(let_expr(&program, "ca", 7.0), scope);
     let dep_b = runtime.dispatch_in_scope(let_expr(&program, "cb", 11.0), scope);
     let finish: TerminalDepFinish = Box::new(|_sched, terminals| {
-        let a = match terminals.owned(0).cell.open_at().value() {
+        let a = match terminals[0].cell.open_at().value() {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return Outcome::Done(Err(crate::machine::KError::new(
@@ -29,7 +29,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
                 )));
             }
         };
-        let b = match terminals.owned(1).cell.open_at().value() {
+        let b = match terminals[1].cell.open_at().value() {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return Outcome::Done(Err(crate::machine::KError::new(

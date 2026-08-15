@@ -43,12 +43,12 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
 pub(crate) enum ParamListOutcome<'a> {
     Done(Vec<SignatureElement<'a>>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules an
-    /// `AwaitDeps` over `park_producers` and any sub-Dispatches, then re-runs
+    /// `AwaitDeps` over `awaited_producers` and any sub-Dispatches, then re-runs
     /// `parse_fn_param_list` over the same (unmodified) `signature` with the resolved
     /// sub-Dispatch carriers fed back through its `resolved` parameter — `signature` is raw AST
     /// throughout and never carries a scheduler-written slot.
     Pending {
-        park_producers: Vec<ProducerId>,
+        awaited_producers: Vec<ProducerId>,
         /// `(slot_idx_in_signature_parts, sub_expr_to_dispatch)`.
         sub_dispatches: Vec<(usize, KExpression<'a>)>,
     },
@@ -189,7 +189,7 @@ pub(crate) fn parse_fn_param_list<'a>(
     }
     if !parks.is_empty() || !sub_dispatches.is_empty() {
         return ParamListOutcome::Pending {
-            park_producers: parks,
+            awaited_producers: parks,
             sub_dispatches,
         };
     }

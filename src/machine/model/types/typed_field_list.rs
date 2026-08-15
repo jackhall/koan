@@ -60,14 +60,14 @@ impl FieldListContext {
 pub enum FieldListOutcome<'a> {
     Done(Vec<(String, KType)>),
     /// `sub_dispatches` carries each sigil field's body as the scheduler's own node, in DFS walk
-    /// order — the currency an [`OwnedDispatch`](crate::machine::core::OwnedDispatch) takes. The
+    /// order — the currency an [`SubDispatch`](crate::machine::core::SubDispatch) takes. The
     /// caller schedules them in that order and, on the dep-finish re-walk, feeds the resolved
     /// `Carried::Type`s back through a [`ResultFeed`] — the walk re-descends in the same order, so
     /// no slot index is needed. A body naming a co-declared sibling carries that sibling's handle
     /// as a resolved cell ([`rewrite_threaded_self_refs`]), which is why the node is a
     /// [`WorkingExpression`] rather than raw AST.
     Pending {
-        park_producers: Vec<ProducerId>,
+        awaited_producers: Vec<ProducerId>,
         sub_dispatches: Vec<WorkingExpression<'a>>,
     },
     Err(String),
@@ -239,10 +239,10 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     FieldListOutcome::Done(pairs) => Ok(types.record(Record::from_pairs(pairs))),
                     FieldListOutcome::Err(msg) => Err(msg),
                     FieldListOutcome::Pending {
-                        park_producers,
+                        awaited_producers,
                         sub_dispatches: inner_subs,
                     } => {
-                        parks.extend(park_producers);
+                        parks.extend(awaited_producers);
                         sub_dispatches.extend(inner_subs);
                         Ok(KType::ANY)
                     }
@@ -318,10 +318,10 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     FieldListOutcome::Done(pairs) => Ok(types.record(Record::from_pairs(pairs))),
                     FieldListOutcome::Err(msg) => Err(msg),
                     FieldListOutcome::Pending {
-                        park_producers,
+                        awaited_producers,
                         sub_dispatches: inner_subs,
                     } => {
-                        parks.extend(park_producers);
+                        parks.extend(awaited_producers);
                         sub_dispatches.extend(inner_subs);
                         Ok(KType::ANY)
                     }
@@ -339,7 +339,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
         Ok(fields) => {
             if !parks.is_empty() || !sub_dispatches.is_empty() {
                 FieldListOutcome::Pending {
-                    park_producers: parks,
+                    awaited_producers: parks,
                     sub_dispatches,
                 }
             } else {

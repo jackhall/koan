@@ -14,7 +14,7 @@ use crate::machine::KFunction;
 use crate::machine::ProducerId;
 use crate::machine::StepCarried;
 use crate::machine::core::bindings::WriteOp;
-use crate::machine::execute::park_deps;
+use crate::machine::execute::deps_on;
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::KExpression;
@@ -52,7 +52,7 @@ pub(crate) enum FnKind<'a> {
 pub(crate) enum ParamListResult<'a> {
     Done(Vec<SignatureElement<'a>>),
     Pending {
-        park_producers: Vec<ProducerId>,
+        awaited_producers: Vec<ProducerId>,
         sub_dispatches: Vec<(usize, KExpression<'a>)>,
     },
 }
@@ -70,13 +70,13 @@ pub(crate) enum FnPlan<'a> {
 /// plus the two parking lists.
 pub(crate) struct DeferredInputs<'a> {
     pub capture: ReturnTypeCapture<'a>,
-    /// The binder claim edges this dep-finish reads at finish-time but does NOT
-    /// own. Entered as parks, never as owned deps: the door mints this slot's own
-    /// edge off each source, and nothing here retires the producer behind it.
-    pub park_producers: Vec<ProducerId>,
+    /// The binder claim edges this dep-finish waits on at finish-time but does NOT
+    /// own: it names each by the source it already holds, so the door mints this
+    /// slot's own edge off that source and nothing here retires the producer behind it.
+    pub awaited_producers: Vec<ProducerId>,
     /// `Some` only when the return-type slot is an `Expression(_)` carrier that
     /// doesn't reference any FN parameter (resolves once at FN-def time, not
-    /// per call). Scheduled ahead of `sub_dispatches` in the owned-sub region.
+    /// per call). Appended ahead of `sub_dispatches`.
     pub return_type_sub: Option<KExpression<'a>>,
     /// `(slot_idx, sub_expr)` — `slot_idx` tells the finish closure which
     /// `signature_expr.parts` slot to splice the result into.
@@ -105,10 +105,9 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
             return_type: ReturnType::Deferred(d),
         },
         (ReturnTypeState::ExprToSubDispatch(e), ParamListResult::Done(_)) => {
-            // Only the return-type sub, no parks: it is owned index 0.
             FnPlan::Deferred(DeferredInputs {
-                capture: ReturnTypeCapture::ReturnTypeExpr { owned_pos: 0 },
-                park_producers: Vec::new(),
+                capture: ReturnTypeCapture::ReturnTypeExpr,
+                awaited_producers: Vec::new(),
                 return_type_sub: Some(e),
                 sub_dispatches: Vec::new(),
                 prebuilt_elements: None,
@@ -117,12 +116,12 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
         (
             ReturnTypeState::Done(kt),
             ParamListResult::Pending {
-                park_producers,
+                awaited_producers,
                 sub_dispatches,
             },
         ) => FnPlan::Deferred(DeferredInputs {
             capture: ReturnTypeCapture::Resolved(kt),
-            park_producers,
+            awaited_producers,
             return_type_sub: None,
             sub_dispatches,
             prebuilt_elements: None,
@@ -130,14 +129,14 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
         (
             ReturnTypeState::Deferred(d),
             ParamListResult::Pending {
-                park_producers,
+                awaited_producers,
                 sub_dispatches,
             },
         ) => FnPlan::Deferred(DeferredInputs {
             // Return type is per-call-deferred: carry the carrier verbatim
             // through to `finalize_fn_with_kind` once params land.
             capture: ReturnTypeCapture::Deferred(d),
-            park_producers,
+            awaited_producers,
             return_type_sub: None,
             sub_dispatches,
             prebuilt_elements: None,
@@ -145,26 +144,22 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
         (
             ReturnTypeState::ExprToSubDispatch(e),
             ParamListResult::Pending {
-                park_producers,
+                awaited_producers,
                 sub_dispatches,
             },
-        ) => {
-            // The return-type sub is scheduled ahead of the signature subs, so it is owned index 0
-            // regardless of how many claims are parked.
-            FnPlan::Deferred(DeferredInputs {
-                capture: ReturnTypeCapture::ReturnTypeExpr { owned_pos: 0 },
-                park_producers,
-                return_type_sub: Some(e),
-                sub_dispatches,
-                prebuilt_elements: None,
-            })
-        }
+        ) => FnPlan::Deferred(DeferredInputs {
+            capture: ReturnTypeCapture::ReturnTypeExpr,
+            awaited_producers,
+            return_type_sub: Some(e),
+            sub_dispatches,
+            prebuilt_elements: None,
+        }),
         (ReturnTypeState::Pending { te, producers }, ParamListResult::Done(_)) => {
             // Synchronously elaborated `elements` are discarded; the wake
             // re-elaborates the param list against the spliced signature.
             FnPlan::Deferred(DeferredInputs {
                 capture: make_capture(te),
-                park_producers: producers,
+                awaited_producers: producers,
                 return_type_sub: None,
                 sub_dispatches: Vec::new(),
                 prebuilt_elements: None,
@@ -176,14 +171,14 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
                 producers: rt_producers,
             },
             ParamListResult::Pending {
-                mut park_producers,
+                mut awaited_producers,
                 sub_dispatches,
             },
         ) => {
-            park_producers.extend(rt_producers);
+            awaited_producers.extend(rt_producers);
             FnPlan::Deferred(DeferredInputs {
                 capture: make_capture(te),
-                park_producers,
+                awaited_producers,
                 return_type_sub: None,
                 sub_dispatches,
                 prebuilt_elements: None,
@@ -316,12 +311,12 @@ pub(crate) fn fn_action<'a>(
     }
 }
 
-/// Schedule an `AwaitDeps` over `park_producers` plus any newly scheduled
+/// Schedule an `AwaitDeps` over `awaited_producers` plus any newly scheduled
 /// sub-Dispatches for parens-wrapped parameter types, then re-run the signature
 /// elaboration in the finish closure.
 ///
-/// Dep order is `[park ++ rt? ++ subs]`, so the owned indices `splice_layout` and
-/// `ReturnTypeExpr` record stay stable regardless of how many claims are parked.
+/// Dep order is `[forward refs ++ rt? ++ subs]` and results come back in it, so each request's
+/// index is recorded as it is appended rather than derived from a layout rule.
 pub(crate) fn defer<'a>(
     scope: &'a Scope<'a>,
     signature_expr: KExpression<'a>,
@@ -331,35 +326,33 @@ pub(crate) fn defer<'a>(
     bind_index: BindingIndex,
 ) -> crate::machine::Action<'a> {
     use crate::machine::model::WorkingExpression;
-    use crate::machine::{Action, AwaitContinue, DepPlacement, OwnedDispatch};
+    use crate::machine::{Action, AwaitContinue, DepPlacement, SubDispatch};
     let DeferredInputs {
         capture,
-        park_producers,
+        awaited_producers,
         return_type_sub,
         sub_dispatches,
         prebuilt_elements,
     } = inputs;
     let brand = scope.brand();
-    // Builds the structural split directly: parks first, then owned `[rt?, subs...]`, so the
-    // return-type sub is owned index 0 and the signature subs follow. `splice_layout` records each
-    // sub's owned index (and its signature part-index) for the finish.
-    let mut deps = park_deps(park_producers.iter().copied());
-    let mut owned_count = 0usize;
-    if let Some(rt_expr) = return_type_sub {
-        deps.own(OwnedDispatch {
+    // The forward-ref producers this finalize merely waits on come first, then the return-type sub
+    // and the signature subs in declaration order. Each `request` hands back its dep index, which is
+    // the position its result comes back at; `splice_layout` pairs that with the signature
+    // part-index for the finish.
+    let mut deps = deps_on(awaited_producers.iter().copied());
+    let return_type_dep = return_type_sub.map(|rt_expr| {
+        deps.request(SubDispatch {
             expr: WorkingExpression::from_ast(brand, rt_expr),
             placement: DepPlacement::OwnScope,
-        });
-        owned_count += 1;
-    }
+        })
+    });
     let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
     for (slot_idx, sub_expr) in sub_dispatches {
-        deps.own(OwnedDispatch {
+        let dep_index = deps.request(SubDispatch {
             expr: WorkingExpression::from_ast(brand, sub_expr),
             placement: DepPlacement::OwnScope,
         });
-        splice_layout.push((slot_idx, owned_count));
-        owned_count += 1;
+        splice_layout.push((slot_idx, dep_index));
     }
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         // Extract each signature slot's resolved type: each dep is resident in a region this step
@@ -367,7 +360,7 @@ pub(crate) fn defer<'a>(
         // escapes the open guard's borrow and the re-walk below feeds on owned data alone.
         let mut resolved: Vec<(usize, KType)> = Vec::with_capacity(splice_layout.len());
         for &(slot_idx, owned_pos) in &splice_layout {
-            let terminal = results.owned(owned_pos);
+            let terminal = results[owned_pos];
             let opened = terminal.cell.open_at();
             match opened.value() {
                 Carried::Type(ktype) => resolved.push((slot_idx, ktype)),
@@ -381,7 +374,11 @@ pub(crate) fn defer<'a>(
             }
         }
         let return_type: ReturnType<'a> = crate::try_action!(resolve_capture_at_finish(
-            capture, fctx.scope, results, fctx.types
+            capture,
+            fctx.scope,
+            results,
+            return_type_dep,
+            fctx.types
         ));
         let elements = match prebuilt_elements {
             Some(es) => es,

@@ -154,10 +154,10 @@ fn install_edge_from_fills_on_a_delivered_source() {
     );
 }
 
-/// **The door reports filled-or-parked per park and wires each accordingly**: a pre-terminal
-/// producer takes a notify entry and counts against the consumer's pending, a delivered one takes
-/// neither — its resident is already on the minted edge. The realized list is index-aligned with the
-/// sources handed in.
+/// **The door reports filled-or-parked per dep and wires each accordingly**: a pre-terminal producer
+/// takes a notify entry and counts against the consumer's pending, a delivered one takes neither —
+/// its resident is already on the minted edge. The realized list is index-aligned with the sources
+/// handed in.
 #[test]
 fn install_deps_parks_and_fills() {
     let mut sched: Scheduler<TestWorkload> = Scheduler::new();
@@ -169,7 +169,7 @@ fn install_deps_parks_and_fills() {
     let on_delivered = sched.install_edge(delivered, destination.owner());
     finalize_in_place(&mut sched, delivered);
 
-    let (resolved, installed) = sched.install_deps(consumer, &[on_pending, on_delivered], &[]);
+    let (resolved, installed) = sched.install_deps(consumer, &[on_pending, on_delivered]);
 
     assert!(
         matches!(installed[0], InstalledEdge::Parked(_)),
@@ -180,9 +180,9 @@ fn install_deps_parks_and_fills() {
         "the delivered producer's park is already satisfied",
     );
     assert_eq!(
-        resolved.parks().len(),
+        resolved.len(),
         2,
-        "the realized parks line up with the sources, one entry each",
+        "the realized list lines up with the sources, one entry each",
     );
     assert_eq!(
         sched.pending_count(consumer),
@@ -191,37 +191,39 @@ fn install_deps_parks_and_fills() {
     );
 }
 
-/// **An owned dep's edge is destined at the consumer's own region.** The embedder names no
-/// destination for sub-work it spawned — the door reads the consumer's anchor, so a sub-result lands
-/// exactly where its consumer will read it.
+/// **Every dep inherits its source's destination — one rule, no second wiring form.** An embedder
+/// wanting sub-work's result in the consumer's own region says so by minting that sub-work's source
+/// there; the door then inherits, exactly as it does for a source the embedder was already holding.
 #[test]
-fn install_deps_destines_owned_edges_at_the_consumer() {
+fn install_deps_inherits_the_source_destination() {
     let mut sched: Scheduler<TestWorkload> = Scheduler::new();
     let sub = alloc_dep_free(&mut sched);
     let consumer_anchor = TestAnchor::fresh();
+    let source = sched.install_edge(sub, consumer_anchor.owner());
     let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
     let consumer = sched.alloc_node(
         NodeWork::new(ResolvedDeps::new(), continuation, None),
-        &[sub],
+        &[source],
         Rc::clone(&consumer_anchor),
         false,
     );
+    sched.release_edge(source);
 
     assert_eq!(
         sched.pending_count(consumer),
         1,
-        "the owned dep's edge is unfilled, so the consumer waits on it",
+        "the dep's edge is unfilled, so the consumer waits on it",
     );
-    let owned_edge = *sched
+    let dep_edge = sched
         .stored_deps(consumer)
-        .owned()
-        .first()
-        .expect("the door recorded the owned dep's edge");
+        .all_ids()
+        .next()
+        .expect("the door recorded the dep's edge");
     assert!(
-        sched.edge_destination_is(owned_edge, consumer_anchor.owner()),
-        "an owned dep delivers into its consumer's own region",
+        sched.edge_destination_is(dep_edge, consumer_anchor.owner()),
+        "the dep's edge names the region its source named",
     );
-    assert_eq!(sched.edge_producer(owned_edge), Some(sub));
+    assert_eq!(sched.edge_producer(dep_edge), Some(sub));
 }
 
 /// **A released listed edge withholds its index until the walk drops it** (Inv-C), then recycles.

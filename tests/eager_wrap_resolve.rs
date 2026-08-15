@@ -111,15 +111,13 @@ fn wrap_slot_parens_expression_still_sub_dispatches() {
     assert_eq!(out.trim(), "2", "expected printed `2`, got `{out}`");
 }
 
-/// `Slot::Park` literal arm — a forward Identifier inside a dict-value position. The
-/// dict planner's `classify_aggregate_part` (with `wrap_identifiers = true`)
-/// eager-resolves the bare name via `resolve_aggregate_bare_name`, hits a still-pending
-/// placeholder, and records the producer in `park_producers`. On the LET binder's
-/// terminalize, the dep-finish wakes and reads the value through the park-prefix
-/// `Slot::Park(i)` lookup. Pins the wake-graph path that integration coverage
-/// previously routed only through the dispatcher's wrap-slot path, not the literal
-/// planner. (List literals use `wrap_identifiers = false` — bare identifiers there
-/// stay `Static`, not eager-resolved — so the corresponding shape lives only in dict
+/// The literal planner's dep arm — a forward Identifier inside a dict-value position. The dict
+/// planner's `classify_aggregate_part` (with `wrap_identifiers = true`) eager-resolves the bare name
+/// via `resolve_aggregate_bare_name`, hits a still-pending placeholder, and names it as a dep. On
+/// the LET binder's terminalize, the dep-finish wakes and reads the value off the cell cursor. Pins
+/// the wake-graph path that integration coverage routes only through the dispatcher's wrap-slot
+/// path, not the literal planner. (List literals use `wrap_identifiers = false` — bare identifiers
+/// there stay `Static`, not eager-resolved — so the corresponding shape lives only in dict
 /// keys/values.)
 #[test]
 fn dict_literal_backward_identifier_value_resolves_through_real_wake() {
@@ -137,6 +135,27 @@ fn dict_literal_backward_identifier_value_resolves_through_real_wake() {
     assert!(
         out.trim().contains("\"a\""),
         "expected output to contain `\"a\"`, got `{out}`"
+    );
+}
+
+/// **One name, two cells, two deps.** The dep builder does not dedup a repeated source, so a literal
+/// naming the same still-finalizing binder in two value positions gets two deps — two edges off one
+/// producer. Both inherit that producer's destination, so the delivery walk's per-destination dedup
+/// collapses them to a single adopt, and each cell reads the same value off its own cursor position.
+/// Pins the behavior the dropped dedup rests on: without it the second cell would read the first's
+/// terminal or run off the end of the list.
+#[test]
+fn dict_literal_naming_one_pending_binder_twice_fills_both_cells() {
+    let out = run_capturing(
+        "LET fwd = 99\n\
+         LET m = {\"a\": fwd, \"b\": fwd}\n\
+         PRINT m",
+    )
+    .expect("a dict literal may name one pending binder in two cells");
+    assert_eq!(
+        out.matches("99").count(),
+        2,
+        "both cells resolve to the shared producer's value, got `{out}`"
     );
 }
 

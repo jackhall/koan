@@ -23,7 +23,7 @@ use super::ctx::{SchedulerView, current_dest_frame, with_current_node_scope};
 use super::stage_eager_part;
 use super::{BareCarrier, resolve_bare_carrier};
 use crate::machine::Scope;
-use crate::scheduler::{DepResults, Deps};
+use crate::scheduler::Deps;
 
 /// Build-time accumulator family for an aggregate fold: the destination region plus the cells folded
 /// in so far. Each cell carrier is `transfer_into`-folded in — relocating the value and unioning its
@@ -40,20 +40,40 @@ reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held
 
 /// One cell of a list / dict / record literal. A `Static` cell is wrapped into a delivery envelope
 /// **at its source** (when the literal is classified), so the layout is lifetime-free and every cell
-/// — static or dep — folds uniformly, each carrying the frame owner its value lives under. `Park(i)`
-/// / `Owned(j)` are the dep-finish's park / owned [`DepResults`] indices — the
-/// [`Deps`](crate::scheduler::Deps) builder hands them back at classify time and they read straight
-/// back through the view.
+/// — static or dep — folds uniformly, each carrying the frame owner its value lives under. A `Dep`
+/// cell carries no index: the classifier appends one dep per such cell as it walks the rows, so cell
+/// order *is* dep order and the finish's walk over those same rows reads results off a
+/// [`ResultFeed`] cursor.
 enum Slot {
     Static(DeliveredCarried),
-    Park(usize),
-    Owned(usize),
+    Dep,
 }
 
 impl Slot {
-    /// Add `id` as an owned sub-dependency and return the `Owned` slot that reads its result.
-    fn owned(deps: &mut Deps<NodeId>, id: NodeId) -> Self {
-        Slot::Owned(deps.own(id))
+    /// Add `id` as a sub-dependency and return the cell that reads its result.
+    fn spawned(deps: &mut Deps<NodeId>, id: NodeId) -> Self {
+        deps.request(id);
+        Slot::Dep
+    }
+}
+
+/// Pops resolved dep terminals in dep order — the cursor that replaces a stored per-cell index. The
+/// classify walk and the finish walk visit the rows in the same order (a dict row's key before its
+/// value), so popping in that walk is exactly the alignment a stored index used to assert.
+struct ResultFeed<'t, 'd> {
+    terminals: &'t [&'t DepTerminal<'d>],
+    next: usize,
+}
+
+impl<'t, 'd> ResultFeed<'t, 'd> {
+    fn new(terminals: &'t [&'t DepTerminal<'d>]) -> Self {
+        ResultFeed { terminals, next: 0 }
+    }
+
+    fn pop(&mut self) -> &'t DepTerminal<'d> {
+        let terminal = self.terminals[self.next];
+        self.next += 1;
+        terminal
     }
 }
 
@@ -65,13 +85,12 @@ impl Slot {
 /// separately-read reach.
 fn cell_carrier(
     slot: Slot,
-    terminals: DepResults<'_, &DepTerminal<'_>>,
+    terminals: &mut ResultFeed<'_, '_>,
     scope: &Scope<'_>,
 ) -> DeliveredCarried {
     match slot {
         Slot::Static(delivered) => delivered,
-        Slot::Park(i) => scope.lift_spliced(&terminals.park(i).cell),
-        Slot::Owned(j) => scope.lift_spliced(&terminals.owned(j).cell),
+        Slot::Dep => scope.lift_spliced(&terminals.pop().cell),
     }
 }
 
@@ -133,7 +152,7 @@ fn fold_cells(
 /// `Bool`, so the two together leave a borrow-carrying key unrepresentable downstream of here.
 fn scalar_key(
     slot: &Slot,
-    terminals: DepResults<'_, &DepTerminal<'_>>,
+    terminals: &mut ResultFeed<'_, '_>,
     types: &TypeRegistry,
 ) -> Result<PendingKey, String> {
     // The reach probe and the key read are the same two verbs on either carrier — a static cell's
@@ -143,15 +162,8 @@ fn scalar_key(
             delivered.open_at().has_reach_members(),
             delivered.open(|c| key_from_carried(c, types)),
         ),
-        Slot::Park(i) => {
-            let cell = &terminals.park(*i).cell;
-            (
-                cell.open_at().has_reach_members(),
-                cell.open(|c| key_from_carried(c, types)),
-            )
-        }
-        Slot::Owned(j) => {
-            let cell = &terminals.owned(*j).cell;
+        Slot::Dep => {
+            let cell = &terminals.pop().cell;
             (
                 cell.open_at().has_reach_members(),
                 cell.open(|c| key_from_carried(c, types)),
@@ -245,15 +257,16 @@ impl<'step> KoanRuntime<'step> {
             // The value cells fold into the witnessed accumulator, paired back with the keys at `map`.
             let mut keys: Vec<PendingKey> = Vec::new();
             let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(n);
+            let mut feed = ResultFeed::new(terminals);
             for row in rows {
                 if let Some(key_slot) = row.key {
-                    let kkey = scalar_key(&key_slot, terminals, view.types()).map_err(|msg| {
+                    let kkey = scalar_key(&key_slot, &mut feed, view.types()).map_err(|msg| {
                         KError::new(KErrorKind::ShapeError(msg))
                             .with_frame(TraceFrame::bare("<dict>", "dict literal"))
                     })?;
                     keys.push(kkey);
                 }
-                cells.push(cell_carrier(row.value, terminals, view.current_scope()));
+                cells.push(cell_carrier(row.value, &mut feed, view.current_scope()));
             }
             let acc = fold_cells(view, cells.into_iter());
             // The accumulated envelope's coverage carries every region the folded `Held` views point
@@ -375,7 +388,7 @@ impl<'step> KoanRuntime<'step> {
         deps: &mut Deps<NodeId>,
     ) -> Slot {
         let part = match stage_eager_part(brand, part) {
-            Ok(dep) => return Slot::owned(deps, self.realize_eager_dep(brand, dep)),
+            Ok(dep) => return Slot::spawned(deps, self.realize_eager_dep(brand, dep)),
             Err(part) => part,
         };
         match part {
@@ -386,7 +399,7 @@ impl<'step> KoanRuntime<'step> {
                 // rebuild, so `resolve_region_pure` cannot build it at the `yoke` brand below.
                 let wrapped =
                     WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]);
-                Slot::owned(
+                Slot::spawned(
                     deps,
                     self.dispatch_in_own_scope(wrapped, SubmitContext::SubDispatch {}),
                 )
@@ -428,13 +441,16 @@ impl<'step> KoanRuntime<'step> {
         });
         match resolved {
             BareCarrier::Sealed(cell) => Slot::Static(cell),
-            BareCarrier::Parked(source) => Slot::Park(deps.park_on(source.scheduler_edge())),
+            BareCarrier::Parked(source) => {
+                deps.on(source.scheduler_edge());
+                Slot::Dep
+            }
             // Unbound: fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path
             // surfaces it uniformly.
             BareCarrier::Unbound(_) => {
                 let expr =
                     WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(*part))]);
-                Slot::owned(
+                Slot::spawned(
                     deps,
                     self.dispatch_in_own_scope(expr, SubmitContext::SubDispatch {}),
                 )

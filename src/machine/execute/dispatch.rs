@@ -37,7 +37,7 @@ use crate::scheduler::{Deps, ResolvedDeps};
 // The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
 // dispatch-side view `Outcome` consumers reach through `super::dispatch`.
 pub(in crate::machine::execute) use crate::machine::core::{
-    BodyPlacement, DepPlacement, DepRequest, OwnedDispatch,
+    BodyPlacement, DepPlacement, DepRequest, SubDispatch,
 };
 
 pub(in crate::machine::execute) mod apply_callable;
@@ -327,7 +327,7 @@ pub(in crate::machine::execute) fn park_resume_labelled<'step>(
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
     Outcome::ParkThenContinue {
-        deps: Deps::from_parks(sources.into_iter().map(ProducerId::scheduler_edge)),
+        deps: Deps::from_producers(sources.into_iter().map(ProducerId::scheduler_edge)),
         continuation: Continuation::Resume { carrier, resume },
         dep_error_frame,
     }

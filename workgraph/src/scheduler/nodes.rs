@@ -13,8 +13,8 @@ use super::{Reattachable, ResolvedDeps, Workload};
 use crate::witnessed::SealedPinned;
 
 /// What a scheduler node will run: wait on `deps`, then run `continuation` over their delivered
-/// residents. `deps` is a [`ResolvedDeps`] — the slot's own `[parks..., owned...]` edges, written by
-/// an install door and never assembled by hand. A fresh slot's work therefore arrives with an
+/// residents. `deps` is a [`ResolvedDeps`] — the slot's own edges in dep order, written by an
+/// install door and never assembled by hand. A fresh slot's work therefore arrives with an
 /// **empty** list, which its allocator fills in once it has minted the slot's edges; a reinstalled
 /// slot's arrives with the list `install_deps` already wired. `carrier` is the deadlock-report
 /// sample (a workload-supplied expression summary, else `None`). The continuation is held opaquely

@@ -17,9 +17,9 @@
 //! what makes the confinement expressible at all — `pub(in crate::machine::execute)` names an
 //! ancestor of the drive loop and of nothing below it.
 //!
-//! A layer that cannot open a producer still needs to park on one, which is what
-//! [`park_deps`] is for: the single verb that turns producers into scheduler currency, so
-//! "where does an edge escape?" has one answer everywhere outside this layer.
+//! A layer that cannot open a producer still needs to wait on one, which is what [`deps_on`]
+//! is for: the single verb that turns producers into scheduler currency, so "where does an
+//! edge escape?" has one answer everywhere outside this layer.
 
 use crate::scheduler::{Deps, EdgeId};
 
@@ -51,10 +51,24 @@ impl ProducerId {
     }
 }
 
-/// Park on `producers`: the one act that spends a producer, and the only way to spend one from
-/// outside this layer. A builtin declaring an `AwaitDeps` builds its dep vector through here
-/// and then `own`s its sub-dispatches onto it, so parks stay first-occurrence-ordered ahead of
-/// the owned suffix exactly as the builder requires.
-pub(crate) fn park_deps<T>(producers: impl IntoIterator<Item = ProducerId>) -> Deps<T> {
-    Deps::from_parks(producers.into_iter().map(ProducerId::scheduler_edge))
+/// Depend on `producers`: the one act that spends a producer, and the only way to spend one
+/// from outside this layer. A builtin declaring an `AwaitDeps` builds its dep vector through
+/// here and then appends any sub-dispatch requests, so the list stays in the order its finish
+/// reads results back in.
+pub(crate) fn deps_on<T>(producers: impl IntoIterator<Item = ProducerId>) -> Deps<T> {
+    let mut deps = Deps::new();
+    extend_deps_on(&mut deps, producers);
+    deps
+}
+
+/// Append `producers` to a list already under construction — the same crossing as [`deps_on`], for a
+/// builder that interleaves producers it holds with sub-work it spawns and needs each entry's index
+/// as it goes.
+pub(crate) fn extend_deps_on<T>(
+    deps: &mut Deps<T>,
+    producers: impl IntoIterator<Item = ProducerId>,
+) {
+    for producer in producers {
+        deps.on(producer.scheduler_edge());
+    }
 }

@@ -73,7 +73,7 @@ pub(crate) fn nominal_schema_action<'a>(
         }
         FieldListOutcome::Err(msg) => Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
-            park_producers,
+            awaited_producers,
             sub_dispatches,
         } => {
             let finish_name = name.clone();
@@ -82,7 +82,7 @@ pub(crate) fn nominal_schema_action<'a>(
                 .collect();
             FieldListDeferral::new(
                 FieldParts::of(&schema_expr),
-                park_producers,
+                awaited_producers,
                 sub_dispatches,
                 context,
                 name_kind,

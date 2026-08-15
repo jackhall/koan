@@ -221,7 +221,7 @@ impl<'run> KoanRuntime<'run> {
                                 &step_effects,
                                 rt.program,
                             ),
-                            deps.results(&dep_sources),
+                            &dep_sources,
                             id,
                         );
                         // Apply the step's binding writes against the step scope, in the order the
@@ -246,7 +246,7 @@ impl<'run> KoanRuntime<'run> {
                         };
                         // Realize the outcome into a `NodeStep`; a ready `Outcome::Forward` becomes
                         // a `ForwardReady` relocated below into this same `dest`. The step scope's
-                        // brand rides along: an owned dep the outcome names may still have to bump
+                        // brand rides along: a dep the outcome names may still have to bump
                         // its own dispatch node (an aggregate literal's elements, a body block's
                         // statements) into this region as it is realized.
                         rt.apply_outcome(outcome, scope.brand(), id, &step_anchor)

@@ -39,7 +39,7 @@ pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub(crate) use kfunction::action::{
     Action, ActionKind, AwaitContinue, BlockEntry, BodyCtx, BodyPlacement, CatchContinue,
-    DepPlacement, DepRequest, DepTerminal, FinishCtx, FramePlacement, OwnedDispatch, TailContract,
+    DepPlacement, DepRequest, DepTerminal, FinishCtx, FramePlacement, SubDispatch, TailContract,
     arg_held, arg_object, arg_type, arg_unresolved_type, require_bare_type_name,
     require_identifier_name, require_kexpression, require_ktype, scope_frame,
 };

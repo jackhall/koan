@@ -27,7 +27,7 @@ use super::super::nodes::{NodeScope, NodeWork, SlotFrame};
 use super::super::outcome::dep_error_frame;
 use super::super::{WitnessedDepFinish, seal_witnessed, short_circuit};
 use super::{KoanRuntime, KoanWorkload};
-use crate::scheduler::{Deps, EdgeId, ResolvedDeps};
+use crate::scheduler::{Anchor, Dep, Deps, EdgeId, ResolvedDeps};
 
 /// A bare dep-finish node that waits on the resolved `deps`, short-circuits on the first errored dep
 /// under the [`dep_error_frame`] label, else hands the resolved values to a value-only `finish`.
@@ -115,15 +115,17 @@ impl<'run> KoanRuntime<'run> {
 
     /// Submit `work` against the executing slot's own [`NodeScope`] handle, read back from the
     /// ambient payload. Backs the re-dispatch-against-my-own-scope path.
-    /// `parks` are binder edges the classifier already resolved (an aggregate literal whose cell is
-    /// a still-finalizing name). They ride beside the work rather than inside it: the door resolves
-    /// each to its producer and writes the realized list into the stored work, so the slot's row
-    /// and its wires land as one step.
+    ///
+    /// `deps` rides beside the work rather than inside it: this door resolves the list to one source
+    /// per dep and hands it to the allocator, which writes the realized list into the stored work —
+    /// so the slot's row and its wires land as one step. A dep the caller already named (a binder
+    /// edge the classifier resolved, an aggregate literal's still-finalizing cell) passes its source
+    /// through; a spawned producer is named here by a source destined at this slot's own region, and
+    /// released once the allocator has minted the slot's real edge off it.
     pub(in crate::machine::execute) fn submit_in_own_scope(
         &mut self,
         work: NodeWork<KoanWorkload>,
-        parks: &[EdgeId],
-        owned: &[NodeId],
+        deps: Deps<NodeId>,
     ) -> NodeId {
         // Clone the payload off the ambient before taking `&mut self` for the submit.
         let payload = self
@@ -132,8 +134,42 @@ impl<'run> KoanRuntime<'run> {
             .clone();
         let (cart, framed) = self.submission_cart();
         let anchor = SlotFrame::new(cart, payload.scope, payload.chain);
-        self.sched
-            .alloc_node_with_parks(work, parks, owned, anchor, framed)
+        let (sources, minted) = self.name_deps(deps, &anchor);
+        let id = self.sched.alloc_node(work, &sources, anchor, framed);
+        self.release_minted(minted);
+        id
+    }
+
+    /// Resolve a dep list to one **source edge** per dep, plus the sources this call minted (which
+    /// the caller releases through [`release_minted`](Self::release_minted) once the door it feeds
+    /// has minted the consumer's own edges). Spawned sub-work is destined at `anchor`'s region,
+    /// which the install door then inherits — the one crossing where koan names a destination.
+    fn name_deps(
+        &mut self,
+        deps: Deps<NodeId>,
+        anchor: &Rc<SlotFrame>,
+    ) -> (Vec<EdgeId>, Vec<EdgeId>) {
+        let mut sources = Vec::with_capacity(deps.len());
+        let mut minted = Vec::new();
+        for entry in deps.into_entries() {
+            match entry {
+                Dep::Producer(source) => sources.push(source),
+                Dep::Request(producer) => {
+                    let source = self.sched.install_edge(producer, anchor.owner());
+                    sources.push(source);
+                    minted.push(source);
+                }
+            }
+        }
+        (sources, minted)
+    }
+
+    /// Let go of the sources [`name_deps`](Self::name_deps) minted: they carried producer and
+    /// destination into the install door and have no further job.
+    fn release_minted(&mut self, minted: Vec<EdgeId>) {
+        for source in minted {
+            self.sched.release_edge(source);
+        }
     }
 
     /// Submit each `statement` as a fresh lexical block over `scope`, minting a frame `(scope_id,
@@ -272,22 +308,18 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Schedule an `AwaitDeps` against the slot's own scope whose finish folds the resolved deps into
-    /// a witnessed aggregate carrier, naming every region the result reaches. `deps` carries park
-    /// *sources* (binder edges the cell classifier resolved — read, not owned) and owned subs
-    /// (whose slots reclaim at their own finalize); the finish addresses them through a
-    /// [`DepResults`](crate::scheduler::DepResults) view, at the very park indices the builder
-    /// handed back at classify time.
+    /// a witnessed aggregate carrier, naming every region the result reaches. `deps` mixes binder
+    /// edges the cell classifier resolved with sub-dispatches this slot spawned (whose slots reclaim
+    /// at their own finalize); the finish reads their results in dep order.
     ///
-    /// No apply-time inspect here: an already-errored park surfaces at the slot's first poll,
-    /// through the step-start pull and the short-circuit [`awaiting_witnessed`] bakes into the
-    /// continuation.
+    /// No apply-time inspect here: an already-errored dep surfaces at the slot's first poll, through
+    /// the step-start pull and the short-circuit [`awaiting_witnessed`] bakes into the continuation.
     pub(in crate::machine::execute) fn submit_dep_finish_witnessed_in_own_scope<'a>(
         &mut self,
         deps: Deps<NodeId>,
         finish: WitnessedDepFinish<'a>,
     ) -> NodeId {
-        let (parks, owned) = deps.into_parts();
-        self.submit_in_own_scope(awaiting_witnessed(finish), &parks, &owned)
+        self.submit_in_own_scope(awaiting_witnessed(finish), deps)
     }
 }
 
@@ -301,11 +333,11 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn add(
         &mut self,
         work: NodeWork<KoanWorkload>,
-        owned: &[NodeId],
+        sub_work: &[NodeId],
         scope: &'run Scope<'run>,
     ) -> NodeId {
         let explicit_chain = self.ambient_or_detached_chain();
-        self.add_with_chain(work, owned, scope, explicit_chain)
+        self.add_with_chain(work, sub_work, scope, explicit_chain)
     }
 
     /// Run-lifetime submission funnel: establish the run frame, decide the slot's [`NodeScope`]
@@ -313,7 +345,7 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn add_with_chain(
         &mut self,
         work: NodeWork<KoanWorkload>,
-        owned: &[NodeId],
+        sub_work: &[NodeId],
         scope: &'run Scope<'run>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
@@ -324,17 +356,22 @@ impl<'run> KoanRuntime<'run> {
             .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
         let (cart, framed) = self.submission_cart();
         let anchor = SlotFrame::new(cart, scope_handle, chain);
-        self.sched.alloc_node(work, owned, anchor, framed)
+        let (sources, minted) =
+            self.name_deps(Deps::from_requests(sub_work.iter().copied()), &anchor);
+        let id = self.sched.alloc_node(work, &sources, anchor, framed);
+        self.release_minted(minted);
+        id
     }
 
-    /// Schedule a dep-finish slot against an explicit `scope`. `owned` are the sub-Dispatches this
-    /// slot spawned; the door mints one edge apiece, destined at the slot's own region.
+    /// Schedule a dep-finish slot against an explicit `scope`. `sub_work` are the sub-Dispatches
+    /// this slot spawned; each is named by a source destined at the slot's own region, which the
+    /// install door inherits.
     pub(in crate::machine::execute) fn add_dep_finish(
         &mut self,
-        owned: &[NodeId],
+        sub_work: &[NodeId],
         scope: &'run Scope<'run>,
         finish: TerminalDepFinish<'run>,
     ) -> NodeId {
-        self.add(awaiting(finish), owned, scope)
+        self.add(awaiting(finish), sub_work, scope)
     }
 }

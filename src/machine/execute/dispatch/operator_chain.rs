@@ -283,7 +283,7 @@ fn reduce_unary<'step>(
 /// Reduces a `Pairwise`-mode run: `f x < g y < h z` must evaluate `g y` **once**, its value
 /// feeding both the `x<y` and `y<z` pairs, so — unlike the three modes above — this cannot be a
 /// pure syntactic rewrite (each operand there appears exactly once in the output tree; here a
-/// middle operand appears in two places). Every operand is staged as its own owned dep
+/// middle operand appears in two places). Every operand is staged as its own dep
 /// (whatever its part kind — a bare identifier, a literal, or a parenthesized sub-expression all
 /// dispatch through their normal lane via the one-part wrapper `install_pairwise_fold` builds);
 /// once every operand resolves, the finish splices each resolved cell into the up-to-two pair

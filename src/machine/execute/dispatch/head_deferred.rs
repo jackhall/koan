@@ -1,6 +1,6 @@
 //! Head-deferred dispatch shapes — `HeadDeferred` and `TypeHeadDeferred`.
 //!
-//! Both evaluate the head (`parts[0]`) first as an owned sub-dispatch and park the
+//! Both evaluate the head (`parts[0]`) first as a sub-dispatch and park the
 //! slot on it; once it resolves, the finish classifies the value and applies it to
 //! `parts[1..]` via the shared apply-a-callable tail. The `type_only` flag selects
 //! the admitted arm set (see [`classify_head`]):
@@ -73,7 +73,7 @@ fn park_on_head<'step>(
     type_only: bool,
 ) -> Outcome<'step> {
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
-        let head_terminal = terminals.owned(0);
+        let head_terminal = terminals[0];
         // The head dep is resident in a region this step already covers; lift it back to an
         // owned envelope so its reach can fold into the classified callable, which outlives this
         // finish. Adopt the head's carrier copy-free: fold its reach so a callable's captured
@@ -99,7 +99,7 @@ fn park_on_head<'step>(
         };
         apply_callable(ctx, callable, &expr)
     });
-    Await::on(Deps::from_owned([DepRequest::Dispatch {
+    Await::on(Deps::from_requests([DepRequest::Dispatch {
         expr: head,
         placement: DepPlacement::OwnScope,
     }]))

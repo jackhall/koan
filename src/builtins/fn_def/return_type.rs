@@ -11,7 +11,6 @@ use crate::machine::model::{DeferredReturn, ReturnType};
 use crate::machine::model::{Held, KExpression, Record, TypeIdentifier};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
-use crate::scheduler::DepResults;
 use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
@@ -45,11 +44,9 @@ pub(crate) enum ReturnTypeCapture<'a> {
     Resolved(KType),
     Unresolved(String),
     Deferred(DeferredReturn<'a>),
-    /// `owned_pos` is the return-type sub's index within the dep-finish's owned results — it is
-    /// always the first owned dep, scheduled ahead of any signature subs, so `owned_pos == 0`.
-    ReturnTypeExpr {
-        owned_pos: usize,
-    },
+    /// The return type is a `:(…)` expression the deferral sub-dispatches; its result comes back at
+    /// the dep index [`defer`](super::finalize::defer) recorded when it appended the request.
+    ReturnTypeExpr,
 }
 
 /// Read the `return_type` slot from a `BodyCtx::args` record into a `ReturnTypeRaw`.
@@ -131,7 +128,8 @@ pub(super) fn make_capture<'a>(te: TypeIdentifier<'_>) -> ReturnTypeCapture<'a> 
 pub(super) fn resolve_capture_at_finish<'a>(
     capture: ReturnTypeCapture<'a>,
     scope: &Scope<'a>,
-    results: DepResults<'_, &DepTerminal>,
+    results: &[&DepTerminal<'_>],
+    return_type_dep: Option<usize>,
     types: &TypeRegistry,
 ) -> Result<ReturnType<'a>, KError> {
     match capture {
@@ -144,11 +142,13 @@ pub(super) fn resolve_capture_at_finish<'a>(
             .map(ReturnType::Resolved)
         }
         ReturnTypeCapture::Deferred(d) => Ok(ReturnType::Deferred(d)),
-        ReturnTypeCapture::ReturnTypeExpr { owned_pos } => {
+        ReturnTypeCapture::ReturnTypeExpr => {
             // The resolved return type is owned content, cloned out of the sub-dispatch's terminal,
             // and is folded straight into the `KFunction` `finalize_fn_with_kind` builds (via
             // `user_sig`).
-            let kt = expect_type_terminal(&results, owned_pos, "FN return-type slot", types)?;
+            let dep_index = return_type_dep
+                .expect("a ReturnTypeExpr capture is built beside the request that carries it");
+            let kt = expect_type_terminal(results, dep_index, "FN return-type slot", types)?;
             Ok(ReturnType::Resolved(kt))
         }
     }

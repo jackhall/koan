@@ -218,7 +218,6 @@ fn apply_named_type_args<'step>(
         // Each argument is a type value cloned out as owned data, so the applied type embeds no
         // borrow of a producer's region and needs no carrier fold.
         let supplied: Result<Vec<(String, KType)>, KError> = terminals
-            .owned_slice()
             .iter()
             .zip(&names)
             .map(|(terminal, name)| match terminal.cell.open_at().value() {
@@ -240,7 +239,7 @@ fn apply_named_type_args<'step>(
                 .type_carried(view.types().constructor_apply(identity, args)))
         }))
     });
-    Await::on(Deps::from_owned(deps))
+    Await::on(Deps::from_requests(deps))
         .error_frame(dep_error_frame())
         .finish_terminal(finish)
 }

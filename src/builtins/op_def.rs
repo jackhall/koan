@@ -25,9 +25,10 @@
 //!
 //! Surface design: [design/operators.md](../../design/operators.md).
 
-use crate::machine::ProducerId;
 use crate::machine::WriteGate;
-use crate::machine::execute::park_deps;
+use crate::machine::core::RegionBrand;
+use crate::machine::execute::extend_deps_on;
+use crate::scheduler::Deps;
 
 use crate::machine::BindingIndex;
 use crate::machine::KFunction;
@@ -42,11 +43,10 @@ use crate::machine::model::{Held, KType, Record};
 use crate::machine::model::{KKind, SignatureDraft, SignatureElement};
 use crate::machine::model::{OperatorGroup, ReductionMode, binary_key, unary_key};
 use crate::machine::{
-    Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal, FinishCtx, OwnedDispatch, arg_held,
+    Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal, FinishCtx, SubDispatch, arg_held,
     require_kexpression,
 };
 use crate::machine::{Body, CarrierWitness, KError, KErrorKind, Scope};
-use crate::scheduler::DepResults;
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
@@ -99,34 +99,35 @@ pub(super) fn symbol_from_slot<'a>(
 
 // ---------- type slots ----------
 
-/// A type slot's state across the (possible) dep-finish boundary: resolved outright, parked on a
-/// still-finalizing type binder, or sub-dispatched as a `:(…)` expression at owned position
-/// `owned_pos`.
+/// A type slot's state across the (possible) dep-finish boundary: resolved outright, re-resolved
+/// against the wake-side scope, or sub-dispatched as a `:(…)` expression whose result comes back at
+/// dep index `dep_index`.
 enum TypeCapture<'a> {
     Done(KType),
-    Park(TypeIdentifier<'a>),
-    Sub { owned_pos: usize },
+    AtWake(TypeIdentifier<'a>),
+    Sub { dep_index: usize },
 }
 
-/// Route one classified type slot into a [`TypeCapture`], accumulating its park sources and its
-/// sub-dispatch — whose owned position the capture records — into the deferral lists.
+/// Route one classified type slot into a [`TypeCapture`], appending whatever it must wait on to the
+/// one dep list — the producers behind a still-finalizing type binder, or a sub-dispatch whose dep
+/// index the capture records so the finish can read its result back.
 fn capture_type_slot<'a>(
     state: ReturnTypeState<'a>,
-    parks: &mut Vec<ProducerId>,
-    subs: &mut Vec<KExpression<'a>>,
+    deps: &mut Deps<SubDispatch<'a>>,
+    brand: RegionBrand<'a>,
 ) -> Result<TypeCapture<'a>, KError> {
     match state {
         ReturnTypeState::Done(kt) => Ok(TypeCapture::Done(kt)),
         ReturnTypeState::Pending { te, producers } => {
-            parks.extend(producers);
-            Ok(TypeCapture::Park(te))
+            extend_deps_on(deps, producers);
+            Ok(TypeCapture::AtWake(te))
         }
-        ReturnTypeState::ExprToSubDispatch(expr) => {
-            subs.push(expr);
-            Ok(TypeCapture::Sub {
-                owned_pos: subs.len() - 1,
-            })
-        }
+        ReturnTypeState::ExprToSubDispatch(expr) => Ok(TypeCapture::Sub {
+            dep_index: deps.request(SubDispatch {
+                expr: crate::machine::model::WorkingExpression::from_ast(brand, expr),
+                placement: DepPlacement::OwnScope,
+            }),
+        }),
         // An operator's operands are named by the surface, not declared as parameters, so an `OP`
         // type slot can reference nothing that is unbound in the declaring scope: the per-call
         // deferral `FN` needs for `-> er` never arises here.
@@ -167,16 +168,16 @@ fn done_type(capture: TypeCapture<'_>, label: &str, types: &TypeRegistry) -> Res
 fn resolve_capture<'a>(
     capture: TypeCapture<'a>,
     fctx: &FinishCtx<'a, '_>,
-    results: &DepResults<'_, &DepTerminal>,
+    results: &[&DepTerminal<'_>],
     label: &str,
 ) -> Result<KType, KError> {
     let kt = match capture {
         TypeCapture::Done(kt) => kt,
-        TypeCapture::Park(te) => resolve_at_wake(fctx.scope, label, |s| {
+        TypeCapture::AtWake(te) => resolve_at_wake(fctx.scope, label, |s| {
             s.resolve_type_identifier(&te, None, fctx.types)
         })?,
-        TypeCapture::Sub { owned_pos } => {
-            expect_type_terminal(results, owned_pos, label, fctx.types)?
+        TypeCapture::Sub { dep_index } => {
+            expect_type_terminal(results, dep_index, label, fctx.types)?
         }
     };
     checked_value_type(kt, label, fctx.types)
@@ -218,13 +219,15 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
         None
     };
 
-    let mut parks: Vec<ProducerId> = Vec::new();
-    let mut subs: Vec<KExpression<'a>> = Vec::new();
-    let operand_capture =
-        crate::try_action!(capture_type_slot(operand_state, &mut parks, &mut subs));
+    // One dep list, built as the slots are classified: an operand's producers and a result's
+    // sub-dispatch interleave freely, since each capture records the dep index its own result
+    // arrives at.
+    let brand = ctx.scope.brand();
+    let mut deps: Deps<SubDispatch<'a>> = Deps::new();
+    let operand_capture = crate::try_action!(capture_type_slot(operand_state, &mut deps, brand));
     let result_capture = match result_state {
         Some(state) => Some(crate::try_action!(capture_type_slot(
-            state, &mut parks, &mut subs
+            state, &mut deps, brand
         ))),
         None => None,
     };
@@ -240,7 +243,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
         program: ctx.program,
         bound_name,
     };
-    if parks.is_empty() && subs.is_empty() {
+    if deps.is_empty() {
         let operand = crate::try_action!(done_type(operand_capture, OPERAND_SLOT, ctx.types));
         let result = match result_capture {
             Some(capture) => Some(crate::try_action!(done_type(
@@ -252,28 +255,18 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
         };
         return op_action(plan.finalize(ctx.scope, operand, result, ctx.types));
     }
-    // Builds the structural `[park… ++ sub…]` split directly: parks first, then the subs owned in
-    // declaration order — the order `capture_type_slot` recorded their positions in.
-    let brand = ctx.scope.brand();
-    let mut deps = park_deps(parks);
-    for expr in subs {
-        deps.own(OwnedDispatch {
-            expr: crate::machine::model::WorkingExpression::from_ast(brand, expr),
-            placement: DepPlacement::OwnScope,
-        });
-    }
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let operand = crate::try_action!(resolve_capture(
             operand_capture,
             fctx,
-            &results,
+            results,
             OPERAND_SLOT
         ));
         let result = match result_capture {
             Some(capture) => Some(crate::try_action!(resolve_capture(
                 capture,
                 fctx,
-                &results,
+                results,
                 RESULT_SLOT
             ))),
             None => None,

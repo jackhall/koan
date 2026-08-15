@@ -26,7 +26,7 @@ pub(in crate::machine::execute) use outcome::{
     ignore_results, seal_witnessed, short_circuit,
 };
 pub use producer_id::ProducerId;
-pub(crate) use producer_id::park_deps;
+pub(crate) use producer_id::{deps_on, extend_deps_on};
 pub(crate) use runtime::seed_run_root;
 pub use runtime::{KoanRuntime, interpret, interpret_with_writer, interpret_with_writer_path};
 pub use step_carried::{StepCarried, drive_step_allocator};

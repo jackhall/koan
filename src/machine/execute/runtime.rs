@@ -44,7 +44,7 @@ use super::{
     short_circuit,
 };
 use crate::machine::model::CarriedFamily;
-use crate::scheduler::{Deps, EdgeId, InstalledEdge, Scheduler, Workload};
+use crate::scheduler::{Anchor, Dep, Deps, EdgeId, InstalledEdge, Scheduler, Workload};
 use crate::witnessed::Delivered;
 
 mod interpret;
@@ -343,8 +343,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     // delivered into. The per-call type is re-homed into the captured-scope region —
                     // a strict ancestor the cart keeps live — like the `Type` form's `PerCall.ret`.
                     TailContract::FromLastResult { func } => {
-                        let owned = terminals.owned_slice();
-                        let terminal = owned[owned.len() - 1];
+                        let terminal = terminals[terminals.len() - 1];
                         let opened = terminal.cell.open_at();
                         let kt = match opened.value() {
                             Carried::Type(t) => t,
@@ -386,7 +385,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     block_entry,
                 }
             });
-            Await::on(Deps::from_owned([DepRequest::BodyBlock {
+            Await::on(Deps::from_requests([DepRequest::BodyBlock {
                 statements: leading,
                 placement,
             }]))
@@ -395,15 +394,18 @@ pub(in crate::machine::execute) fn run_action<'step>(
         }
 
         ActionKind::AwaitDeps { deps, finish } => {
-            // The builtin assembled the structural `[park..., owned...]` split itself: parks keep
-            // first-occurrence order, owned insertion order, and the builder delivers results
-            // `[park..., owned...]`. This arm maps each owned sub-dispatch into the library dep
-            // currency and rebuilds the `Deps` envelope `Await::on` consumes; the wrapped finish
-            // recurses `run_action` on the `AwaitContinue`.
-            let (parks, owned) = deps.into_parts();
-            let mut lowered: Deps<DepRequest<'step>> = Deps::from_parks(parks);
-            for sub in owned {
-                lowered.own(sub.into_request());
+            // The builtin assembled the dep list itself, and results come back in that order. This
+            // arm maps each sub-dispatch request into the library dep currency, leaving the entries
+            // the builtin already named alone, and rebuilds the `Deps` envelope `Await::on`
+            // consumes; the wrapped finish recurses `run_action` on the `AwaitContinue`.
+            let mut lowered: Deps<DepRequest<'step>> = Deps::new();
+            for entry in deps.into_entries() {
+                match entry {
+                    Dep::Producer(source) => lowered.on(source),
+                    Dep::Request(sub) => {
+                        lowered.request(sub.into_request());
+                    }
+                }
             }
             let wrapped: TerminalDepFinish<'step> = Box::new(move |view, results| {
                 let fctx = FinishCtx {
@@ -577,16 +579,23 @@ impl<'run> KoanRuntime<'run> {
                 continuation,
                 dep_error_frame,
             } => {
-                // Realize the builder's owned requests into producer ids; the park *sources* pass
-                // through untouched for the door below to resolve. An `InScope`-placed `Dispatch`
-                // and a `BodyBlock` each fan out to one owned producer per statement (so those arms
-                // extend, the rest push one). Parks keep their first-occurrence order, owned their
-                // realization order — the `[park..., owned...]` delivery order a finish addresses
-                // through [`DepResults`].
-                let (parks, owned_requests) = deps.into_parts();
-                let mut owned: Vec<NodeId> = Vec::new();
-                for dep in owned_requests {
-                    match dep {
+                // Realize the builder's dep list into one list of *sources*, in dep order — which is
+                // the order a finish reads its results back in. A dep the builtin could already name
+                // passes its source through untouched; a request is spawned here and then named the
+                // same way, by a source edge this arm mints.
+                let entries = deps.into_entries();
+                let entry_count = entries.len();
+                let mut sources: Vec<EdgeId> = Vec::with_capacity(entry_count);
+                let mut minted: Vec<EdgeId> = Vec::new();
+                for entry in entries {
+                    let request = match entry {
+                        Dep::Producer(source) => {
+                            sources.push(source);
+                            continue;
+                        }
+                        Dep::Request(request) => request,
+                    };
+                    let producers = match request {
                         // An `InScope` body fans out one producer per statement (multi-statement
                         // split); `OwnScope` realizes as a single producer via the shared
                         // [`Self::realize_dispatch`].
@@ -596,40 +605,53 @@ impl<'run> KoanRuntime<'run> {
                             ..
                         } => {
                             let statements = split_working_body(scope.brand(), expr);
-                            owned.extend(self.enter_block(scope.id, statements, scope));
+                            self.enter_block(scope.id, statements, scope)
                         }
-                        dep @ (DepRequest::Dispatch { .. }
+                        request @ (DepRequest::Dispatch { .. }
                         | DepRequest::ListLit(_)
                         | DepRequest::DictLit(_)
                         | DepRequest::RecordLit(_)) => {
-                            let id = self.realize_eager_dep(brand, dep);
-                            owned.push(id);
+                            vec![self.realize_eager_dep(brand, request)]
                         }
-                        // A body block fans out one owned producer per statement: into a fresh
-                        // per-call frame's own scope (`dispatch_body`), or — under `Inherit` — into a
+                        // A body block fans out one producer per statement: into a fresh per-call
+                        // frame's own scope (`dispatch_body`), or — under `Inherit` — into a
                         // caller-allocated overlay via the same `enter_block` fan-out the leading
                         // statements of an `InScope` body use (USING).
                         DepRequest::BodyBlock {
                             statements,
                             placement: BodyPlacement::Frame(frame),
-                        } => {
-                            owned.extend(self.dispatch_body(&frame, statements));
-                        }
+                        } => self.dispatch_body(&frame, statements),
                         DepRequest::BodyBlock {
                             statements,
                             placement: BodyPlacement::Overlay(overlay),
-                        } => {
-                            owned.extend(self.enter_block(overlay.id, statements, overlay));
-                        }
+                        } => self.enter_block(overlay.id, statements, overlay),
+                    };
+                    debug_assert!(
+                        producers.len() == 1 || entry_count == 1,
+                        "a request fanning out to several producers shifts every later dep's \
+                         position, so it may only be the sole entry in its list",
+                    );
+                    // Name each spawned producer by a source edge destined at this slot's own anchor
+                    // region — where a sub-result belongs. The door mints the slot's real dep edge
+                    // off it and inherits that destination, so sub-work needs no second wiring rule.
+                    for producer in producers {
+                        let source = self.sched.install_edge(producer, anchor.owner());
+                        sources.push(source);
+                        minted.push(source);
                     }
                 }
                 // Wire the whole dep list through the one door: it mints this slot's own edge per
-                // park source (inheriting the source's destination, so a park on a placeholder
-                // delivers into the scope that placeholder named), installs each owned dep's
-                // edge destined at this slot's own anchor region, and hands back the realized list plus
-                // each park's filled-or-parked verdict. (`Catch` declares no deps here — it
-                // realizes and owns its single watched dep in the `cont` match below.)
-                let (resolved, installed) = self.sched.install_deps(id, &parks, &owned);
+                // source, inheriting that source's destination — so a dep on a placeholder delivers
+                // into the scope that placeholder named, and a dep on sub-work into this slot's own
+                // region — and hands back the realized list plus each dep's filled-or-parked verdict.
+                // (`Catch` declares no deps here — it realizes its single watched dep in the `cont`
+                // match below.)
+                let (resolved, installed) = self.sched.install_deps(id, &sources);
+                // The sources minted just above carried producer + destination into the door and had
+                // no other job; this slot's own edges are installed, so let them go.
+                for source in minted {
+                    self.sched.release_edge(source);
+                }
                 // **Install-and-inspect**: a decide never probes a producer's standing, so a park
                 // whose producer had already finalized is classified here. An errored one is
                 // propagated now rather than waited on — a terminal slot never notifies again, so
@@ -666,16 +688,20 @@ impl<'run> KoanRuntime<'run> {
                         None,
                     ),
                     // The action-harness catch carries its single watched dep unrealized (its
-                    // placement differs from a dep-finish body's fan-out); realize and own it here.
-                    // `catch_continuation` runs the finish without short-circuiting on a dep error.
+                    // placement differs from a dep-finish body's fan-out); realize it here and name
+                    // it the same way sub-work is named above, by a source destined at this slot's
+                    // region. `catch_continuation` runs the finish without short-circuiting on a
+                    // dep error.
                     Continuation::Catch { watched, finish } => {
                         let from = self.realize_catch_dep(watched);
-                        let (watched_deps, _) = self.sched.install_deps(id, &[], &[from]);
+                        let source = self.sched.install_edge(from, anchor.owner());
+                        let (watched_deps, _) = self.sched.install_deps(id, &[source]);
+                        self.sched.release_edge(source);
                         (watched_deps, catch_continuation(finish), None)
                     }
                     // The resume closure carries the evolving `working_expr` from here on; the
                     // `carrier` it travels with is only the deadlock-summary sample. A decide takes
-                    // no dep values, so `ignore_results` drops the (park-only) results view.
+                    // no dep values, so `ignore_results` drops the results slice.
                     Continuation::Resume { carrier, resume } => {
                         (resolved, ignore_results(resume), carrier)
                     }
@@ -761,7 +787,7 @@ impl<'run> KoanRuntime<'run> {
                         let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
                             // The single parked dep is the producer behind `edge`, delivered
                             // un-relocated at index 0.
-                            let producer_terminal = terminals.all()[0];
+                            let producer_terminal = terminals[0];
                             let checked = producer_terminal.cell.open(|value| {
                                 check_spliced_return(&obligation, value, view.types())
                             });
@@ -771,7 +797,7 @@ impl<'run> KoanRuntime<'run> {
                             }
                         });
                         let park = Outcome::ParkThenContinue {
-                            deps: Deps::from_parks([edge]),
+                            deps: Deps::from_producers([edge]),
                             continuation: Continuation::FinishTerminal(finish),
                             dep_error_frame: Some(dep_error_frame()),
                         };

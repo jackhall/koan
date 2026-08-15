@@ -29,7 +29,7 @@ use super::super::outcome::DepTerminal;
 use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::SchedulerView;
 use super::{Await, DepRequest, Outcome};
-use crate::scheduler::{DepResults, Deps};
+use crate::scheduler::Deps;
 
 /// Schema-keyed selector for [`finish_witnessed`]'s match: which construction shape `launch`'s
 /// value subs feed once every slot resolves. `identity` / `constructor` is the sealed member's
@@ -381,7 +381,7 @@ fn launch<'step>(
     let combine_finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {
         finish_witnessed(view, &kind, terminals).map(StepCarried::born_delivered)
     });
-    Await::on(Deps::from_owned(deps)).finish_witnessed(combine_finish)
+    Await::on(Deps::from_requests(deps)).finish_witnessed(combine_finish)
 }
 
 /// Build the construction operand carrying `(dest brand, nominal identity)` across the build brand.
@@ -417,11 +417,10 @@ pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: KType) -> S
 fn finish_witnessed<'step>(
     view: &SchedulerView<'_, 'step, '_>,
     kind: &CtorKind,
-    terminals: DepResults<'_, &DepTerminal>,
+    terminals: &[&DepTerminal<'_>],
 ) -> Result<DeliveredCarried, KError> {
     // A constructor parks on its value subs only (all owned, no park producers), so its results are
-    // exactly the owned suffix — read them as one slice.
-    let terminals = terminals.owned_slice();
+    // exactly the whole dep list — read as one slice.
     match kind {
         CtorKind::NewType { identity } => {
             debug_assert_eq!(terminals.len(), 1);

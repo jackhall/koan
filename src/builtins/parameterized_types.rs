@@ -153,11 +153,11 @@ fn build_carrier<'a>(
         }
         FieldListOutcome::Err(msg) => Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
-            park_producers,
+            awaited_producers,
             sub_dispatches,
         } => FieldListDeferral::new(
             FieldParts::of(&sig_expr),
-            park_producers,
+            awaited_producers,
             sub_dispatches,
             FN_PARAMS_CONTEXT,
             FN_PARAM_NAME_KIND,

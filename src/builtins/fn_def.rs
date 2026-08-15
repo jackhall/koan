@@ -64,10 +64,10 @@ pub(crate) fn build_fn_like<'a>(
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))));
             }
             ParamListOutcome::Pending {
-                park_producers,
+                awaited_producers,
                 sub_dispatches,
             } => ParamListResult::Pending {
-                park_producers,
+                awaited_producers,
                 sub_dispatches,
             },
         };

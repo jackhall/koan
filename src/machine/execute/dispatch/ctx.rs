@@ -293,7 +293,7 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
             // Every dep resolved. Splice each value into its staged slot as the producer's own sealed
             // carrier — value and reach as one unit, adopted by the consuming bind at its own step
             // brand; `invoke` reads each cell back for the body-facing reach. Owned deps land in the
-            // owned suffix in staging order — 1:1 with `part_indices`.
+            // dep list in staging order — 1:1 with `part_indices`.
             //
             // A parts run is frozen once its door bumps it, so the whole batch lands in one rebuild:
             // the run is copied out, each staging hole overwritten with its cell, and the result
@@ -301,7 +301,7 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
             // refills the structural cache from the spliced run).
             let scope = ctx.current_scope();
             let mut parts: Vec<Spanned<WorkingPart<'step>>> = working_expr.parts.to_vec();
-            for (slot, terminal) in part_indices.iter().zip(terminals.owned_slice()) {
+            for (slot, terminal) in part_indices.iter().zip(terminals) {
                 // Lift the dep's resident cell back into a delivery envelope, then rest that envelope
                 // into this step's own region: the cell keeps the producer's carrier, the envelope's
                 // whole coverage moves into the region's union bundle. That is what keeps the value's
@@ -315,12 +315,12 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
             let spliced = working_expr.respliced(scope.brand(), parts);
             finish_eager_subs(ctx, spliced, picked)
         });
-        Await::on(Deps::from_owned(deps))
+        Await::on(Deps::from_requests(deps))
             .error_frame(dep_error_frame)
             .finish_terminal(finish)
     }
 
-    /// Stage every `Pairwise`-mode operand as its own owned dep, then — once all of them
+    /// Stage every `Pairwise`-mode operand as its own dep, then — once all of them
     /// resolve — build the run's pair-tree and dispatch it. Unlike [`Self::install_eager_subs`]
     /// (which splices each resolved cell back into the *original* expression's own slot, one
     /// destination apiece), a pairwise run's shared middle operands each feed **two** adjacent
@@ -362,20 +362,19 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
             // operand's resolved cell into both of the adjacent pairs it feeds — the splice that
             // makes evaluation once-only. The region's union bundle dedupes the repeated coverage,
             // so a middle operand costs one retention however many pairs read it.
-            let cells = terminals.owned_slice();
             let mut pairs = Vec::with_capacity(operators.len());
             let scope = ctx.current_scope();
             let brand = scope.brand();
             for (i, operator) in operators.into_iter().enumerate() {
                 let left = Spanned {
                     value: WorkingPart::Spliced {
-                        cell: scope.rest_delivered(&scope.lift_spliced(&cells[i].cell)),
+                        cell: scope.rest_delivered(&scope.lift_spliced(&terminals[i].cell)),
                     },
                     span: operand_spans[i],
                 };
                 let right = Spanned {
                     value: WorkingPart::Spliced {
-                        cell: scope.rest_delivered(&scope.lift_spliced(&cells[i + 1].cell)),
+                        cell: scope.rest_delivered(&scope.lift_spliced(&terminals[i + 1].cell)),
                     },
                     span: operand_spans[i + 1],
                 };
@@ -403,7 +402,7 @@ impl<'program: 'step, 'step, 'view> SchedulerView<'program, 'step, 'view> {
             };
             super::become_dispatch(ctx, acc)
         });
-        Await::on(Deps::from_owned(deps))
+        Await::on(Deps::from_requests(deps))
             .error_frame(dep_error_frame)
             .finish_terminal(finish)
     }
