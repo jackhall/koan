@@ -1,5 +1,5 @@
 //! The `Pairwise` reducer's combiner fold
-//! ([`operator_chain`](crate::machine::execute::dispatch::operator_chain)): a fixture-registered
+//! ([`operator_chain`](crate::machine::execute::decide::operator_chain)): a fixture-registered
 //! pairwise group folds its pair results through its combiner — an **operator**, synthesized infix
 //! and resolved at the use site — in either declared direction.
 //!

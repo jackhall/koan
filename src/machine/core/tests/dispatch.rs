@@ -451,7 +451,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
 #[test]
 fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     let types = TypeRegistry::new();
-    use crate::machine::NameOutcome;
+    use crate::machine::Resolution;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     // Outer `:Identifier` overload that owns the bare name (shape-only admit).
@@ -475,7 +475,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         &mut crate::machine::WriteGate::for_test(),
     );
     let expr = working(region.brand(), vec![ExpressionPart::Identifier("fwd")]);
-    let bare_outcomes = vec![Some(NameOutcome::Unbound("fwd".into()))];
+    let bare_outcomes = vec![Some(Resolution::Unbound("fwd".into()))];
     let chain = LexicalFrame::detached();
     match inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &types) {
         DispatchOutcome::Resolved(r) => assert!(

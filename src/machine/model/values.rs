@@ -3,7 +3,7 @@
 //! struct construction and first-class calls.
 //!
 //! Construction dispatch for `Struct` and `Tagged` lives in
-//! [`crate::machine::execute::dispatch::constructors`].
+//! [`crate::machine::execute::decide::constructors`].
 
 mod carried;
 mod container_substrate;

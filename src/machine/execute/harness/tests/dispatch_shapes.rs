@@ -4,7 +4,7 @@
 //! keyworded shapes do).
 //!
 //! Routing assertions use the test-only counter on
-//! [`crate::machine::execute::dispatch::resolve_dispatch_entry_count`]. The counter is
+//! [`crate::machine::execute::decide::resolve_dispatch_entry_count`]. The counter is
 //! thread-local so tests run independently under `cargo test`'s default thread
 //! pool.
 
@@ -12,7 +12,7 @@ use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::ProducerId;
 use crate::machine::core::{Action, BodyCtx, arg_object};
 use crate::machine::core::{program_storage, run_root_storage};
-use crate::machine::execute::dispatch::{
+use crate::machine::execute::decide::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
 use crate::machine::model::Held;
@@ -606,7 +606,7 @@ fn keyworded_unchanged() {
 /// body. Classifier must route to `TypeCall`, not `Keyworded`.
 #[test]
 fn classifier_struct_construct_routes_to_type_call() {
-    use crate::machine::execute::dispatch::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
     let program = program_storage();
     let expr = parse_one(&program, "MyStruct {x = 1, y = 2}");
     assert!(
@@ -619,7 +619,7 @@ fn classifier_struct_construct_routes_to_type_call() {
 /// holding `(Some 42)`. Must route to `TypeCall`.
 #[test]
 fn classifier_tagged_construct_routes_to_type_call() {
-    use crate::machine::execute::dispatch::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
     let program = program_storage();
     let expr = parse_one(&program, "Maybe (Some 42)");
     assert!(
@@ -632,7 +632,7 @@ fn classifier_tagged_construct_routes_to_type_call() {
 /// identifier (the newtype-construction shape). Routes to `TypeCall`.
 #[test]
 fn classifier_newtype_construct_routes_to_type_call() {
-    use crate::machine::execute::dispatch::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
     let program = program_storage();
     let expr = parse_one(&program, "Bar (x)");
     assert!(
@@ -646,7 +646,7 @@ fn classifier_newtype_construct_routes_to_type_call() {
 /// `LIST OF` overload is the supported way to elaborate `List<Number>`.
 #[test]
 fn classifier_legacy_positional_collapses_to_type_call() {
-    use crate::machine::execute::dispatch::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
     let program = program_storage();
     let expr = parse_one(&program, "(List Number)");
     assert!(
@@ -767,7 +767,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
 /// not `Keyworded`.
 #[test]
 fn classifier_operator_chain_routes_to_operator_chain() {
-    use crate::machine::execute::dispatch::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
     let program = program_storage();
     let expr = parse_one(&program, "a + b + c");
     assert_eq!(
@@ -782,7 +782,7 @@ fn classifier_operator_chain_routes_to_operator_chain() {
 /// `Keyworded` dispatch, not a chain.
 #[test]
 fn classifier_single_operator_stays_keyworded() {
-    use crate::machine::execute::dispatch::{DispatchShape, classify_dispatch_shape};
+    use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
     let program = program_storage();
     let expr = parse_one(&program, "a + b");
     assert_eq!(

@@ -96,7 +96,7 @@ pub use crate::machine::model::BindKind;
 /// enclosing `Option`'s `None` — the caller keeps walking ancestors — so "unbound" is not a
 /// variant here; the terminal unbound disposition (with its diagnostic) is materialized one level
 /// up on the resolution path ([`crate::machine::model::TypeResolution`] /
-/// [`crate::machine::NameOutcome`]).
+/// [`crate::machine::Resolution`]).
 ///
 /// Invariant: within one scope a value name is bound xor pending, never both — the two are arms of
 /// one [`ValueSlot`], so the exclusivity is a type-level fact rather than cross-map discipline.

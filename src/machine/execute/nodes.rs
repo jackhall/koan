@@ -1,21 +1,18 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::runtime::KoanWorkload;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{ScopeId, ScopeRefFamily, StatementId, assemble_body_chain};
-use crate::machine::{CallFrame, KError, LexicalFrame};
+use crate::machine::{CallFrame, LexicalFrame};
 use crate::scheduler::EdgeId;
 use crate::witnessed::SealedExtern;
 
-use super::StepCarried;
-
 /// The generic per-node work lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
-/// execute tree has a single `nodes` surface combining it with the Koan-side [`NodeStep`] /
-/// [`NodePayload`] / [`NodeScope`] / [`SlotFrame`]. `NodeWork` is the **live** construction-site
-/// currency every install path takes; `StoredWork` is what the scheduler hands back at run, with the
-/// continuation sealed on the owned tier against the slot's anchor.
-pub(super) use crate::scheduler::nodes::{NodeWork, StoredWork};
+/// execute tree has a single `nodes` surface combining it with the Koan-side [`NodePayload`] /
+/// [`NodeScope`] / [`SlotFrame`]. `NodeWork` is the **live** construction-site currency every
+/// install path takes; the scheduler seals its continuation on the owned tier against the slot's
+/// anchor and hands it back per step through the drain.
+pub(super) use crate::scheduler::nodes::NodeWork;
 
 /// Koan's `Workload::Frame` — the scheduler-held per-slot memory anchor. Wraps the shared
 /// per-call cart with the slot's own [`NodeScope`] handle and lexical [`chain`]. The scheduler
@@ -145,61 +142,13 @@ impl SlotFrame {
     }
 }
 
-/// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
-/// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
-/// memory across tail-call sequences. When `frame` is `Some`, its `scope()` becomes the
-/// slot's scope and its `region()` owns per-call allocations; `None` keeps the existing
-/// frame and scope. `chain` is the pre-decided lexical-chain reshape (see [`ChainOp`]). The
-/// slot's declared-return obligation rides the replacement's continuation as a capture (wrapped
-/// at the construction site), not a slot field.
-///
-/// The value terminal rides the step brand `'step` as a [`StepCarried`], confined to the step tail's
-/// rank-2 open (`run_loop.rs`) until it exits through
-/// [`StepCarried::seal_at_step`] into finalize; the other arms carry no value (an error, an
-/// [`EdgeId`], or a tail-replace payload), so `'step` names only the `DoneWitnessed` carrier's brand.
-// `Replace` is intrinsically the large variant (`NodeWork` plus the frame/chain tail-call
-// payload); boxing the hot tail-call path to balance the variants is the wrong trade.
-#[allow(clippy::large_enum_variant)]
-pub(super) enum NodeStep<'step> {
-    /// The finalized value terminal — a step-branded [`StepCarried`] wrapping the carrier that names
-    /// every region it reaches, sealed through
-    /// [`finalize_terminal`](super::finalize::NodeFinalize::finalize_terminal), which folds the
-    /// producing frame into the witness at close. The **sole** value terminal — object and type
-    /// both — so no terminal recomputes a witness beside its value.
-    DoneWitnessed(StepCarried<'step>),
-    /// The finalized **error** terminal. An error carries no value, so it needs no witness and
-    /// finalizes bare, labelled with the frame-gated contract's trace frame.
-    Error(KError),
-    /// A ready bare-name forward: this slot's terminal *is* the terminal behind `edge`. `run_step`
-    /// relocates it into this slot's region (carrying its own witness) and finalizes — no re-check,
-    /// the producer already enforced its own contract — then releases `edge`, the probe the harness
-    /// classified through. (`Alias` is the not-yet-ready twin.)
-    ForwardReady(EdgeId),
-    Replace {
-        work: NodeWork<'step, KoanWorkload>,
-        frame: Option<Rc<CallFrame>>,
-        chain: ChainOp,
-        /// A block overlay the tail slot runs in, erased to a cart-witnessed carrier (lifetime-free,
-        /// so `Replace` stays `'run`-free). `Some` only for a frameless tail entering a
-        /// caller-allocated overlay without a per-call frame (USING): the run loop installs it as the
-        /// slot's [`NodeScope::YokedChild`]. `None` keeps the slot's existing scope (every framed
-        /// tail re-projects `Yoked` from its own cart).
-        overlay_scope: Option<SealedExtern<ScopeRefFamily>>,
-    },
-    /// The slot is spliced out as an alias of the producer behind `edge` (a bare-name forward whose
-    /// producer was not yet ready). The splice re-points the slot's parked edges at that producer,
-    /// moves them onto its notify list, and reclaims the slot — nothing survives as a residual. See
-    /// [`Outcome::Forward`](super::outcome::Outcome::Forward).
-    Alias(EdgeId),
-}
-
-/// The lexical-chain reshape a [`NodeStep::Replace`] applies, decided at the
+/// The lexical-chain reshape the harness's `Continue` apply performs, decided at the
 /// [`Outcome::Continue`](super::outcome::Outcome::Continue) construction site from the tail's
 /// `block_entry` and the contract *variant* (while still live),
-/// then assembled in the run loop against the post-step frame. Splitting the decision
-/// (contract-reading, at the construction site) from the assembly (frame-reading, in the run loop) is
-/// what lets `Replace` shed its `'run`: the variant is read before erasure and frozen into this
-/// lifetime-free tag, which then rides [`Outcome::Continue`] to the harness.
+/// then assembled in the apply against the post-step frame. Splitting the decision
+/// (contract-reading, at the construction site) from the assembly (frame-reading, in the apply) is
+/// what keeps the replacement payload `'run`-free: the variant is read before erasure and frozen
+/// into this lifetime-free tag, which then rides [`Outcome::Continue`] to the harness.
 pub(super) enum ChainOp {
     /// TCO in the same lexical block — chain unchanged.
     Unchanged,
@@ -217,7 +166,7 @@ pub(super) enum ChainOp {
 
 impl ChainOp {
     /// Decide the reshape from a `Continue`'s `block_entry` and the still-live contract variant,
-    /// before the contract is erased onto the [`NodeStep::Replace`]. `Function`/`PerCall` (a deferred
+    /// before the contract is erased onto the replacement payload. `Function`/`PerCall` (a deferred
     /// FN body) both assemble the FN-body chain; any other contract under a block entry prepends.
     pub(super) fn decide(
         block_entry: Option<ScopeId>,

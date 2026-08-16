@@ -1,12 +1,12 @@
 //! The step-scoped brand for the Done-arm value carrier.
 //!
 //! A member-less resident carrier (a region-pure value under a description hosted in its own
-//! region) pins nothing: it is sound only as a within-step transient — the run loop's
+//! region) pins nothing: it is sound only as a within-step transient — the step's
 //! held frame set pins the producing region across the step, and [`finalize_terminal`] folds that
-//! frame into the carrier's reach before it is stored on a node. [`StepCarried`] makes that transient
-//! a type: the carrier crossing the Done arm ([`Outcome::Done`](super::outcome::Outcome) →
-//! [`NodeStep::DoneWitnessed`](super::nodes::NodeStep) → finalize) rides a brand lifetime `'step`
-//! that is the step tail's rank-2 open lifetime (`run_loop.rs`), unnameable outside that closure, so
+//! frame into the carrier's reach before it leaves the step. [`StepCarried`] makes that transient
+//! a type: the carrier crossing the Done arm ([`Outcome::Done`](super::outcome::Outcome) → the
+//! apply's `Done` verdict → finalize) rides a brand lifetime `'step` that is the step's rank-2 open
+//! lifetime ([`Host::step`](super::harness::Host)), unnameable outside that closure, so
 //! the borrow checker rejects any attempt to stash it past its construction step. The one exit to
 //! node storage is [`StepCarried::seal_at_step`], which pairs the carrier with its anchor's storage
 //! pin and hands it to finalize.
@@ -22,7 +22,7 @@ use crate::machine::model::CarriedFamily;
 use crate::witnessed::{Delivered, DropFree, Reattachable, Unhosted, Witnessed};
 
 /// A value carrier confined to the scheduler step that built it. The brand lifetime `'step` is the
-/// step tail's rank-2 open lifetime (`run_loop.rs`), unnameable outside that closure, so a
+/// step's rank-2 open lifetime ([`Host::step`](super::harness::Host)), unnameable outside that closure, so a
 /// `StepCarried` cannot be stored past its construction step: the within-step transient invariant,
 /// enforced by the borrow checker.
 ///
@@ -59,9 +59,8 @@ impl<'step, T: Reattachable + DropFree> StepCarried<'step, T> {
     /// own home, e.g. a fresh closure capturing its defining scope), whose owned pin bundle is
     /// therefore empty. Unrestricted in-crate: wrapping only
     /// ever *adds* confinement, so any construction site may brand a carrier it holds. `'step` is
-    /// inferred from the context the wrapper flows into — the Done-arm enums
-    /// ([`Outcome`](super::outcome::Outcome), [`NodeStep`](super::nodes::NodeStep)) carry it at the
-    /// step open's rank-2 brand.
+    /// inferred from the context the wrapper flows into — the Done arm of
+    /// [`Outcome`](super::outcome::Outcome) carries it at the step open's rank-2 brand.
     ///
     /// The premise is established at the doors that build such a carrier, not checked here: a
     /// carrier eligible for this wrapper comes from

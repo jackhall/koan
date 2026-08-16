@@ -15,7 +15,7 @@ use crate::machine::model::{Held, NamedPairs};
 use crate::witnessed::RegionHandleFamily;
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
-/// `machine::execute::runtime::run_action`.
+/// `machine::execute`'s `run_action`.
 pub mod action;
 pub mod block_tail;
 pub mod body;

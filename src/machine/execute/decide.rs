@@ -1,4 +1,4 @@
-//! Dispatch shape router, classifier, and shared spine.
+//! Dispatch shape router, classifier, and shared spine — the *decide* phase.
 //!
 //! [`classify_dispatch`] classifies the slot via [`classify_dispatch_shape`]
 //! and routes by shape:
@@ -15,33 +15,35 @@
 //! - **NonCallableHead** (a literal/empty/lazy head) → a direct
 //!   `DispatchFailed` raise carrying the offending head
 //!
-//! State and transitions live with their shape; this file keeps the cross-shape glue. Every
-//! per-shape handler *decides* against a read-only [`SchedulerView`] and returns a
-//! [`Outcome`] that [`KoanRuntime`](super::runtime::KoanRuntime) applies — the harness holds the
-//! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
-//! names).
+//! State and transitions live with their shape; this file keeps the cross-shape glue plus
+//! [`run_action`], the shared *action* harness (a pure `Action -> Outcome` lowering). Every
+//! per-shape handler *decides* against a read-only [`DecideCtx`] and returns an [`Outcome`] that
+//! the harness ([`super::harness`]) applies — the harness holds the only `&mut Scheduler`, so the
+//! shape modules never mutate the scheduler (nor spell its field names).
 
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::core::{
+    Action, ActionKind, BlockEntry, FinishCtx, FramePlacement, ReturnContract, TailContract,
+};
+use crate::machine::model::{Carried, ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
 use crate::source::Spanned;
 
+use super::harness::KoanWorkload;
 use super::ignore_results;
-use super::nodes::{ChainOp, NodeWork};
+use super::nodes::NodeWork;
 use super::obligation::{ReturnObligation, with_obligation};
-use super::runtime::KoanWorkload;
-use crate::machine::core::{BlockEntry, FramePlacement};
-use crate::scheduler::{Deps, ResolvedDeps};
+use super::outcome::{TerminalDepFinish, continue_inline, dep_error_frame, tail_continue};
+use crate::scheduler::{Dep, Deps};
 
 // The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
-// dispatch-side view `Outcome` consumers reach through `super::dispatch`.
+// decide-side view `Outcome` consumers reach through `super::decide`.
 pub(in crate::machine::execute) use crate::machine::core::{
     BodyPlacement, DepPlacement, DepRequest, SubDispatch,
 };
 
 pub(in crate::machine::execute) mod apply_callable;
-mod bare_name;
 mod constructors;
 mod ctx;
 mod exec;
@@ -51,6 +53,7 @@ pub(in crate::machine::execute) mod head_deferred;
 pub(in crate::machine::execute) mod keyworded;
 mod literal;
 pub(in crate::machine::execute) mod operator_chain;
+mod resolve;
 pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_identifier;
 pub(in crate::machine::execute) mod single_poll;
@@ -61,20 +64,19 @@ pub(in crate::machine::execute) use submit::SubmitContext;
 mod tests;
 
 pub(in crate::machine::execute) use super::outcome::{Await, Continuation, Outcome};
-pub(super) use bare_name::{
-    BareCarrier, TypeChannel, bare_name_of, resolve_bare_carrier, resolve_name_part, type_channel,
-};
 pub(crate) use constructors::{build_type_operand, seal_type_identity};
-pub(in crate::machine::execute) use ctx::{SchedulerView, with_node_scope};
+pub(in crate::machine::execute) use ctx::{DecideCtx, with_node_scope};
 pub(crate) use field_list::{BrandCompose, FieldListDeferral};
-pub use resolve_dispatch::{DispatchOutcome, NameOutcome, Resolved};
+pub(crate) use resolve::Resolution;
+pub(super) use resolve::{TypeChannel, bare_name_of, type_channel};
+pub use resolve_dispatch::{DispatchOutcome, Resolved};
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
-/// time); re-exported here so dispatch-internal call sites and tests keep the
-/// `dispatch::{DispatchShape, classify_dispatch_shape}` path.
+/// time); re-exported here so decide-internal call sites and tests keep the
+/// `decide::{DispatchShape, classify_dispatch_shape}` path.
 #[allow(unused_imports)]
 pub(crate) use crate::machine::model::{DispatchShape, classify_dispatch_shape};
 
@@ -195,17 +197,10 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
 }
 
 /// The [`WorkingPart::StagedSlot`] hole a staged slot leaves in `new_parts`, holding the
-/// slot's position/index until `install_eager_subs`'s finish rebuilds the run with the resolved
+/// slot's position/index until the eager-subs finish rebuilds the run with the resolved
 /// `Spliced` cell in its place.
 pub(in crate::machine::execute) fn staged_slot_placeholder<'a>() -> Spanned<WorkingPart<'a>> {
     Spanned::bare(WorkingPart::StagedSlot)
-}
-
-/// Result of a successful keyworded part walk.
-pub(in crate::machine::execute) struct PartWalkResult<'step> {
-    pub new_parts: Vec<Spanned<WorkingPart<'step>>>,
-    pub sources_to_wait: Vec<ProducerId>,
-    pub staged_subs: Vec<(usize, DepRequest<'step>)>,
 }
 
 /// The trace frame for a dispatch node — [`TraceFrame::from_expr`]'s peer for the scheduler's own
@@ -230,63 +225,6 @@ pub(in crate::machine::execute) fn working_frame(
             })
         }),
     }
-}
-
-/// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.
-///
-/// - `Named` — a `{x = 1}` record literal: the sole named-argument surface (function
-///   calls, struct construction).
-/// - `Positional` — a `(err "x")` paren group: positional construction (tagged unions,
-///   newtypes). The verb-carrier decides which shape it admits; the mismatched shape
-///   surfaces a loud `DispatchFailed`.
-pub(super) enum CallBody<'step> {
-    Named(&'step [(&'step str, ExpressionPart<'step>)]),
-    Positional(&'step [Spanned<ExpressionPart<'step>>]),
-}
-
-/// Classify the single body part of a `head (...)` / `head {...}` call from
-/// `expr.parts[1..]`. The body must be exactly one nested-parens (`Positional`) or one
-/// record literal (`Named`); anything else is a non-match. Both surfaces are raw syntax, so the
-/// body rides out as the AST run the parser froze.
-pub(super) fn extract_call_body<'step>(
-    expr: &WorkingExpression<'step>,
-) -> Result<CallBody<'step>, KError> {
-    match &expr.parts[1..] {
-        [
-            Spanned {
-                value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
-                ..
-            },
-        ] => Ok(CallBody::Named(fields)),
-        [
-            Spanned {
-                value: WorkingPart::Ast(ExpressionPart::Expression(inner)),
-                ..
-            },
-        ] => Ok(CallBody::Positional(inner.parts)),
-        _ => Err(KError::new(KErrorKind::DispatchFailed {
-            expr: expr.summarize(),
-            reason: "no matching function".to_string(),
-        })),
-    }
-}
-
-/// Reason strings for the loud `DispatchFailed` raised when a call body's surface shape
-/// doesn't match what the resolved verb-carrier admits.
-pub(super) const NAMED_ONLY: &str =
-    "named arguments use a record literal `{name = value}`, not a parenthesized group";
-pub(super) const POSITIONAL_ONLY: &str =
-    "positional construction takes `(value)`, not a record literal `{name = value}`";
-
-/// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
-pub(super) fn body_shape_err<'step>(
-    expr: &WorkingExpression<'step>,
-    reason: &str,
-) -> Outcome<'step> {
-    Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-        expr: expr.summarize(),
-        reason: reason.to_string(),
-    })))
 }
 
 /// Clone a dep's terminal error and attach a caller-chosen frame.
@@ -326,7 +264,7 @@ pub(in crate::machine::execute) fn park_resume_labelled<'step>(
     dep_error_frame: Option<TraceFrame>,
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
-    Outcome::ParkThenContinue {
+    Outcome::Park {
         deps: Deps::from_producers(sources.into_iter().map(ProducerId::scheduler_edge)),
         continuation: Continuation::Resume { carrier, resume },
         dep_error_frame,
@@ -348,18 +286,13 @@ pub(in crate::machine::execute) fn forward_to_producer<'step>(
 /// [`decide_tail`]), so the re-classified step re-deposits the checker rather than dropping it —
 /// this slot holds no contract of its own, so the ambient obligation is the whole winner.
 pub(in crate::machine::execute) fn become_dispatch<'step>(
-    view: &SchedulerView<'_, 'step, '_>,
+    view: &DecideCtx<'_, 'step, '_>,
     inner: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    Outcome::Continue {
-        work: decide_tail(inner, view.current_obligation_duplicate()),
-        frame: FramePlacement::Inherit,
-        chain: ChainOp::Unchanged,
-        block_entry: BlockEntry::None,
-    }
+    continue_inline(decide_tail(inner, view.current_obligation_duplicate()))
 }
 
-/// Walk raw parts emitting a [`StagedSlot`](ExpressionPart::StagedSlot) marker at every
+/// Walk raw parts emitting a [`StagedSlot`](WorkingPart::StagedSlot) marker at every
 /// eager slot and a parallel staged-subs Vec; non-eager parts pass
 /// through unchanged.
 ///
@@ -419,12 +352,13 @@ pub(super) fn stage_all_eager_parts<'step>(
 
 // ---------- Resume closure ----------
 
-/// A dispatch slot's decide — the `SchedulerView -> Outcome` closure a dispatch [`NodeWork`](super::nodes::NodeWork) runs.
+/// A dispatch slot's decide — the `DecideCtx -> Outcome` closure a dispatch
+/// [`NodeWork`](super::nodes::NodeWork) runs.
 /// A birth decide classifies the carried `expr` and routes; a park's resume re-runs
 /// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
-/// blind to which family it is — every `Wait` wakes through `run_step` uniformly.
+/// blind to which family it is — every park wakes through the drain's step uniformly.
 pub(in crate::machine::execute) type ResumeFn<'step> =
-    Box<dyn for<'view> FnOnce(&SchedulerView<'_, 'step, 'view>, NodeId) -> Outcome<'step> + 'step>;
+    Box<dyn for<'view> FnOnce(&DecideCtx<'_, 'step, 'view>, NodeId) -> Outcome<'step> + 'step>;
 
 // ---------- Cross-shape driver ----------
 
@@ -440,11 +374,7 @@ pub(in crate::machine::execute) fn decide_tail<'step>(
     let carrier = expr.summarize();
     // A birth decide waits on no deps: it runs on first poll, classifies, and routes.
     let continuation = ignore_results(Box::new(move |view, id| classify_dispatch(view, expr, id)));
-    let continuation = match obligation {
-        Some(obligation) => with_obligation(obligation, continuation),
-        None => continuation,
-    };
-    NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier))
+    NodeWork::new(with_obligation(obligation, continuation), Some(carrier))
 }
 
 /// Build a [`NodeWork`](super::nodes::NodeWork) that fails on its first poll with `error`. Used by
@@ -455,18 +385,18 @@ pub(in crate::machine::execute) fn decide_error<'step>(
     error: KError,
     carrier: String,
 ) -> NodeWork<'step, KoanWorkload> {
-    let continuation = ignore_results(Box::new(move |_view: &SchedulerView<'_, '_, '_>, _id| {
+    let continuation = ignore_results(Box::new(move |_view: &DecideCtx<'_, '_, '_>, _id| {
         Outcome::Done(Err(error))
     }));
-    NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier))
+    NodeWork::new(continuation, Some(carrier))
 }
 
 /// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide,
 /// returning the [`Outcome`] for the harness to apply. Fast-lane shapes terminalize or
-/// single-producer-park in one poll; a shape that parks returns a `ParkThenContinue` whose resume
-/// closure re-enters [`run_step`], never back through here.
+/// single-producer-park in one poll; a shape that parks returns a `Park` whose resume
+/// closure re-enters the drain's step, never back through here.
 fn classify_dispatch<'step>(
-    view: &SchedulerView<'_, 'step, '_>,
+    view: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
     id: NodeId,
 ) -> Outcome<'step> {
@@ -476,21 +406,21 @@ fn classify_dispatch<'step>(
                 WorkingPart::Ast(ExpressionPart::Type(t)) => t,
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            view.with_current_scope(|s| single_poll::bare_type_leaf(view, s, t))
+            single_poll::bare_type_leaf(view, view.current_scope(), t)
         }
         DispatchShape::BareIdentifier => {
             let name = match expr.parts[0].value {
                 WorkingPart::Ast(ExpressionPart::Identifier(n)) => n,
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            view.with_current_scope(|s| single_poll::bare_identifier(view, s, name))
+            single_poll::bare_identifier(view, view.current_scope(), name)
         }
         DispatchShape::FunctionValueCall => fn_value::initial(view, expr),
         DispatchShape::TypeCall => single_poll::type_call(view, expr),
         DispatchShape::HeadDeferred => head_deferred::initial_expr(view, expr),
         DispatchShape::TypeHeadDeferred => head_deferred::initial_type(view, expr),
         // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
-        // a non-callable head is a runtime error, not a fatal `execute()` abort.
+        // a non-callable head is a runtime error, not a fatal drive abort.
         DispatchShape::NonCallableHead => {
             Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
@@ -503,12 +433,187 @@ fn classify_dispatch<'step>(
                 ),
             })))
         }
-        DispatchShape::OperatorChain => {
-            view.with_current_scope(|s| operator_chain::run(view, s, &expr, id))
-        }
+        DispatchShape::OperatorChain => operator_chain::run(view, view.current_scope(), &expr, id),
         DispatchShape::Keyworded => keyworded::initial(view, expr, id),
         DispatchShape::SigiledTypeExpr => single_poll::sigiled_type_expr(view, expr),
         DispatchShape::RecordType => single_poll::record_type(view, expr),
         DispatchShape::LiteralPassThrough => single_poll::literal_pass_through(view, expr),
+    }
+}
+
+// ---------- The action harness ----------
+
+/// Lower an [`Action`] into the [`Outcome`] currency — an `Action -> Outcome` transform
+/// that issues no graph write: an `AwaitDeps`/`Catch` declares its deps (and a wrapped finish that
+/// recurses `run_action` on the `AwaitContinue`/`CatchContinue` it produces) as an
+/// [`Outcome::Park`], and the harness wires and applies. Every scheduler read the body needs is
+/// deferred into the finish, which sees a read-only [`DecideCtx`] at wake.
+///
+/// `view` is the executing step's read view: a tail `Action` reads its established
+/// declared-return obligation off it (the ambient slot-step state) to decide keep-first and wrap the
+/// replacement continuation. A finish that emits its `Continue` later reads its own wake-time view
+/// instead, so the obligation it sees is the one its park deposit re-installed.
+pub(in crate::machine::execute) fn run_action<'step>(
+    view: &DecideCtx<'_, 'step, '_>,
+    action: Action<'step>,
+) -> Outcome<'step> {
+    // The step's binding-table writes travel as outcome data: deposit them into the harness-owned
+    // sink in the order the bodies decided them, before interpreting what happens next. Every
+    // recursive arm below (a wake-time finish's `Action`) deposits through this same call, so a
+    // chain of finishes contributes its writes in program order.
+    view.deposit_effects(action.effects);
+    match action.next {
+        // Already a step-branded carrier (or error): `finalize` seals it as-is, no co-location
+        // bundle.
+        ActionKind::Done(result) => Outcome::Done(result),
+
+        ActionKind::Tail {
+            leading,
+            tail,
+            contract,
+            frame_placement,
+            block_entry,
+        } => {
+            // A block-entering tail sits above the params (`1`) or the leading siblings (`N`); a
+            // frameless continuation keeps the slot's block at index `0`.
+            let body_index = if matches!(block_entry, BlockEntry::None) {
+                0
+            } else {
+                leading.len() + 1
+            };
+            if leading.is_empty() {
+                // No leading statements: tail-replace directly into the tail body.
+                let contract = match contract {
+                    TailContract::Eager(contract) => contract,
+                    TailContract::FromLastResult { .. } => {
+                        unreachable!(
+                            "a from-last-result contract rides at least its type statement"
+                        )
+                    }
+                };
+                return tail_continue(
+                    view,
+                    tail,
+                    contract,
+                    frame_placement,
+                    block_entry,
+                    body_index,
+                );
+            }
+            // Leading statements become owned siblings in the block (one `BodyBlock` dep); the slot
+            // parks on them so they run — and reclaim — before the tail continues. Where they
+            // bind is what `block_entry` names: the block frame's own scope (MATCH / TRY arms via a
+            // pre-built `FreshChild` cart, FN-body tails re-entering the already-installed cart with
+            // `Inherit`), or a caller-allocated overlay under the inherited call-site cart (USING).
+            let placement = match &block_entry {
+                BlockEntry::FrameScope(frame) => BodyPlacement::Frame(std::rc::Rc::clone(frame)),
+                BlockEntry::Overlay(overlay) => BodyPlacement::Overlay(overlay),
+                BlockEntry::None => unreachable!("a leading-carrying tail enters a block"),
+            };
+            // `FreshTail` installs its cart only at apply time — after the leading statements would
+            // already have fanned out — so a leading-carrying tail cannot ride it.
+            debug_assert!(
+                !matches!(frame_placement, FramePlacement::FreshTail { .. }),
+                "a leading-carrying tail is a FreshChild frame, an Inherit cart, or an overlay"
+            );
+            let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
+                let contract = match contract {
+                    TailContract::Eager(contract) => contract,
+                    // The return-type expression is the last leading statement (all owned), so its
+                    // resolved value is the last owned terminal, read in place in the region it was
+                    // delivered into. The per-call type is re-homed into the captured-scope region —
+                    // a strict ancestor the cart keeps live — like the `Type` form's `PerCall.ret`.
+                    TailContract::FromLastResult { func } => {
+                        let terminal = terminals[terminals.len() - 1];
+                        let opened = terminal.cell.open_at();
+                        let kt = match opened.value() {
+                            Carried::Type(t) => t,
+                            Carried::Object(other) => {
+                                return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
+                                    format!(
+                                        "FN deferred return-type expression produced a non-type {} value",
+                                        other.ktype().name(view.types()),
+                                    ),
+                                ))));
+                            }
+                            Carried::UnresolvedType(ti) => {
+                                return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
+                                    ti.render(),
+                                ))));
+                            }
+                        };
+                        // The resolved type is a `Copy` handle, so the contract carries it directly
+                        // and outlives the sub-dispatch's terminal without naming any region.
+                        Some(ReturnContract::PerCall { func, ret: kt })
+                    }
+                };
+                // The same tail-replace as the leading-free path, against this finish's own
+                // wake-time view: the park that carried the leading statements re-deposited the
+                // established obligation, so a chain checks its first caller's declared return
+                // rather than this resolving tail's.
+                tail_continue(
+                    view,
+                    tail,
+                    contract,
+                    frame_placement,
+                    block_entry,
+                    body_index,
+                )
+            });
+            Await::on(Deps::from_requests([DepRequest::BodyBlock {
+                statements: leading,
+                placement,
+            }]))
+            .error_frame(dep_error_frame())
+            .finish_terminal(finish)
+        }
+
+        ActionKind::AwaitDeps { deps, finish } => {
+            // The builtin assembled the dep list itself, and results come back in that order. This
+            // arm maps each sub-dispatch request into the library dep currency, leaving the entries
+            // the builtin already named alone, and rebuilds the `Deps` envelope `Await::on`
+            // consumes; the wrapped finish recurses `run_action` on the `AwaitContinue`.
+            let mut lowered: Deps<DepRequest<'step>> = Deps::new();
+            for entry in deps.into_entries() {
+                match entry {
+                    Dep::Producer(source) => lowered.on(source),
+                    Dep::Request(sub) => {
+                        lowered.request(sub.into_request());
+                    }
+                }
+            }
+            let wrapped: TerminalDepFinish<'step> = Box::new(move |view, results| {
+                let fctx = FinishCtx {
+                    scope: view.current_scope(),
+                    ctx: view.step_ctx(),
+                    types: view.types(),
+                };
+                run_action(view, finish(&fctx, results))
+            });
+            Await::on(lowered)
+                .error_frame(dep_error_frame())
+                .finish_terminal(wrapped)
+        }
+
+        ActionKind::Catch { watched, finish } => {
+            // `watched` is realized (and owned) at apply time — an `InScope` watched enters a
+            // fresh single-statement block, distinct from a dep-finish body's fan-out.
+            let wrapped: super::CatchFinish<'step> = Box::new(move |view, result| {
+                let fctx = FinishCtx {
+                    scope: view.current_scope(),
+                    ctx: view.step_ctx(),
+                    types: view.types(),
+                };
+                run_action(view, finish(&fctx, result))
+            });
+            Outcome::Park {
+                deps: Deps::new(),
+                continuation: Continuation::Catch {
+                    watched,
+                    finish: wrapped,
+                },
+                dep_error_frame: None,
+            }
+        }
     }
 }

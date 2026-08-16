@@ -160,7 +160,7 @@ fn add_with_chain_without_chain_panics() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.runtime.add_with_chain(
-        crate::machine::execute::dispatch::decide_tail(
+        crate::machine::execute::decide::decide_tail(
             WorkingExpression::new(
                 program.brand().region(),
                 vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Literal(

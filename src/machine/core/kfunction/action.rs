@@ -3,7 +3,7 @@
 //! *unaware*), `Action` is what a builtin returns and what the harness interprets (scheduler-*aware*).
 //! These are the **types only** — they reference core/model types, never the scheduler. The
 //! interpreter that drives the scheduler from an `Action` lives one layer up in
-//! `machine::execute::runtime::run_action` (the peer of `dispatch/exec.rs::invoke`).
+//! `machine::execute`'s `run_action` (the peer of `decide/exec.rs::invoke`).
 
 use std::rc::Rc;
 
@@ -52,7 +52,7 @@ macro_rules! try_action {
 /// during a step (the slot's cart — or a cart ancestor via the `FrameStorage.outer` chain, for a
 /// `YokedChild` overlay scope — is held by the step machinery for the whole step); or the **run
 /// root** (the run storage is held by the interpreter for the whole run). The single owner of this
-/// invariant's assertion; step-scoped callers should route through `SchedulerView::dest_frame` or a
+/// invariant's assertion; step-scoped callers should route through `DecideCtx::dest_frame` or a
 /// finish's `ctx.frame()` instead of upgrading directly.
 pub fn scope_frame(scope: &Scope<'_>) -> Rc<FrameStorage> {
     scope.region_owner().upgrade().expect(
@@ -574,7 +574,7 @@ impl<'a> SubDispatch<'a> {
     }
 }
 
-/// The dependency currency a dispatch [`Outcome::ParkThenContinue`](crate::machine::execute) declares
+/// The dependency currency a dispatch [`Outcome::Park`](crate::machine::execute) declares
 /// and a [`Action::Catch`] carries for its single watched dep — defined here in core so `Action` can
 /// carry it without core depending on the execute layer.
 ///
@@ -669,4 +669,19 @@ pub enum FramePlacement {
     FreshChild { frame: Rc<CallFrame> },
     /// No new frame; continue in the slot's current cart. Frameless tails / `Done`.
     Inherit,
+}
+
+impl FramePlacement {
+    /// The cart a tail-replace installs: the decide-minted cart (a TCO tail-call cart or a
+    /// builtin's fresh child), or `None` to keep the current one. Both fresh placements arrive
+    /// already built — the deciding step is where a callee's arguments are relocated into the new
+    /// cart, so it holds the cart itself.
+    pub fn fresh_frame(self) -> Option<Rc<CallFrame>> {
+        match self {
+            FramePlacement::FreshTail { frame } | FramePlacement::FreshChild { frame } => {
+                Some(frame)
+            }
+            FramePlacement::Inherit => None,
+        }
+    }
 }

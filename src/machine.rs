@@ -38,7 +38,7 @@ pub use core::{
 pub use execute::ProducerId;
 pub(crate) use execute::seed_run_root;
 pub(crate) use execute::{
-    BrandCompose, DispatchOutcome, FieldListDeferral, NameOutcome, StepCarried, build_type_operand,
+    BrandCompose, DispatchOutcome, FieldListDeferral, Resolution, StepCarried, build_type_operand,
     seal_type_identity,
 };
 pub use execute::{KoanRuntime, interpret, interpret_with_writer, interpret_with_writer_path};

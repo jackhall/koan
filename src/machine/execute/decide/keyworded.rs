@@ -11,8 +11,8 @@ use super::super::nodes::{ChainOp, NodeWork};
 use super::super::obligation::with_obligation;
 use super::ctx::SchedulerView;
 use super::{
-    BareCarrier, DepRequest, Outcome, PartWalkResult, Resolved, bare_name_of, park_resume,
-    park_resume_labelled, stage_eager_part, staged_slot_placeholder, working_frame,
+    DepRequest, Outcome, Resolved, bare_name_of, park_resume, park_resume_labelled,
+    stage_eager_part, staged_slot_placeholder, working_frame,
 };
 use crate::scheduler::ResolvedDeps;
 
@@ -390,4 +390,11 @@ fn part_walk<'step>(
         sources_to_wait,
         staged_subs,
     })
+}
+
+/// Result of a successful keyworded part walk.
+pub(in crate::machine::execute) struct PartWalkResult<'step> {
+    pub new_parts: Vec<crate::source::Spanned<crate::machine::model::WorkingPart<'step>>>,
+    pub sources_to_wait: Vec<ProducerId>,
+    pub staged_subs: Vec<(usize, DepRequest<'step>)>,
 }

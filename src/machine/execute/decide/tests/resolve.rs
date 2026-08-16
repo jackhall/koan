@@ -1,16 +1,16 @@
 use crate::builtins::test_support::TestRun;
 use crate::machine::BindingIndex;
-use crate::machine::NameOutcome;
 use crate::machine::ProducerId;
+use crate::machine::Resolution;
 use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
-use crate::machine::execute::dispatch::resolve_name_part;
+use crate::machine::execute::decide::resolve::{TypeLeafChannels, resolve_name};
 use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
 use crate::source::Spanned;
 
 #[test]
-fn resolve_name_part_identifier_resolved() {
+fn resolve_name_identifier_resolved() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
@@ -25,30 +25,42 @@ fn resolve_name_part_identifier_resolved() {
         )
         .unwrap();
     let part = ExpressionPart::Identifier("x");
-    match resolve_name_part(scope, &part, None, &test_run.types) {
-        NameOutcome::Resolved(delivered) => assert!(
+    match resolve_name(
+        scope,
+        &part,
+        None,
+        &test_run.types,
+        TypeLeafChannels::ValueChannelFirst,
+    ) {
+        Resolution::Resolved(delivered) => assert!(
             matches!(delivered.open_at().value(), Carried::Object(KObject::Number(n)) if *n == 7.0),
-            "expected NameOutcome::Resolved(Number(7.0))",
+            "expected Resolution::Resolved(Number(7.0))",
         ),
-        _ => panic!("expected NameOutcome::Resolved(Number)"),
+        _ => panic!("expected Resolution::Resolved(Number)"),
     }
 }
 
 #[test]
-fn resolve_name_part_type_resolved() {
+fn resolve_name_type_resolved() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number"));
-    match resolve_name_part(scope, &part, None, &test_run.types) {
-        NameOutcome::Resolved(ref delivered)
+    match resolve_name(
+        scope,
+        &part,
+        None,
+        &test_run.types,
+        TypeLeafChannels::ValueChannelFirst,
+    ) {
+        Resolution::Resolved(ref delivered)
             if matches!(delivered.open_at().value(), Carried::Type(KType::NUMBER)) => {}
         other => {
             let kind = match other {
-                NameOutcome::Resolved(_) => "Resolved(other)",
-                NameOutcome::Parked(_) => "Parked",
-                NameOutcome::Unbound(_) => "Unbound",
+                Resolution::Resolved(_) => "Resolved(other)",
+                Resolution::Parked(_) => "Parked",
+                Resolution::Unbound(_) => "Unbound",
             };
             panic!("expected Resolved(Type(Number)), got {kind}");
         }
@@ -56,7 +68,7 @@ fn resolve_name_part_type_resolved() {
 }
 
 #[test]
-fn resolve_name_part_parked() {
+fn resolve_name_parked() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -82,47 +94,33 @@ fn resolve_name_part_parked() {
         )
         .unwrap();
     let part = ExpressionPart::Identifier("fwd");
-    match resolve_name_part(scope, &part, None, &test_run.types) {
-        NameOutcome::Parked(p) => assert_eq!(p, claim),
-        _ => panic!("expected NameOutcome::Parked(claim)"),
+    match resolve_name(
+        scope,
+        &part,
+        None,
+        &test_run.types,
+        TypeLeafChannels::ValueChannelFirst,
+    ) {
+        Resolution::Parked(p) => assert_eq!(p, claim),
+        _ => panic!("expected Resolution::Parked(claim)"),
     }
 }
 
 #[test]
-fn resolve_name_part_unbound() {
+fn resolve_name_unbound() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let part = ExpressionPart::Identifier("missing");
-    match resolve_name_part(scope, &part, None, &test_run.types) {
-        NameOutcome::Unbound(name) => assert_eq!(name, "missing"),
-        _ => panic!("expected NameOutcome::Unbound"),
-    }
-}
-
-/// The one pre-wiring question a decide still asks: parking a slot on its own claim edge would
-/// close a wake cycle, so the walk drops that source rather than proposing the edge.
-#[test]
-fn self_park_source_would_create_cycle() {
-    let program = program_storage();
-    let region = run_root_storage();
-    let mut test_run = TestRun::silent(&program, &region);
-    let scope = test_run.scope;
-    let slot = test_run.runtime.dispatch_in_scope(
-        WorkingExpression::new(
-            scope.brand(),
-            vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Identifier(
-                "self_ref",
-            )))],
-        ),
+    match resolve_name(
         scope,
-    );
-    let claim = test_run.runtime.install_edge_for_test(slot, scope);
-    assert!(
-        test_run
-            .runtime
-            .scheduler()
-            .would_create_cycle_from(claim, slot)
-    );
+        &part,
+        None,
+        &test_run.types,
+        TypeLeafChannels::ValueChannelFirst,
+    ) {
+        Resolution::Unbound(name) => assert_eq!(name, "missing"),
+        _ => panic!("expected Resolution::Unbound"),
+    }
 }

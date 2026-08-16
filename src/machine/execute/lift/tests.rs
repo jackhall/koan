@@ -11,7 +11,11 @@ use crate::machine::CallFrame;
 use crate::machine::core::{
     FoldingBrand, KoanRegion, KoanRegionExt, KoanStorageProfile, program_storage, run_root_storage,
 };
-use crate::machine::execute::run_loop::{DestHandleFamily, dest_brand};
+use crate::witnessed::RegionHandleFamily;
+
+/// Koan's destination-operand family, fixed to the storage profile — the `Delivered::destination`
+/// operand's handle family, named for the merge turbofish.
+type DestHandleFamily = RegionHandleFamily<KoanStorageProfile>;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::Held;
 use crate::machine::model::KType;
@@ -474,7 +478,7 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let born: DeliveredCarried = acc
         .merge_into::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
-            dest_brand(Rc::clone(&dest_storage)),
+            Delivered::destination(Rc::clone(&dest_storage)),
             move |(_region, _cells), _dest_handle, placement| {
                 let door = FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells);
                 let fields =
@@ -753,7 +757,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
                 "a priceable home-borrowing record must select the Pin verb at the value-level seam"
             );
             producers.push(producer);
-            relocate_seam(&dep, dest_brand(Rc::clone(&dest_storage)))
+            relocate_seam(&dep, Delivered::destination(Rc::clone(&dest_storage)))
         })
         .collect();
 

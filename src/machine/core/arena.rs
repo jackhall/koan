@@ -91,8 +91,8 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// The bare library allocation capability this brand wraps — the handle-headed construction
-    /// operand families (`RegionTypeFamily`, the aggregate accumulators, `execute::run_loop`'s
-    /// `DestHandleFamily`) cross the brand as this raw handle rather than the koan veneer, so the
+    /// operand families (`RegionTypeFamily`, the aggregate accumulators, the destination-operand
+    /// `RegionHandleFamily`) cross the brand as this raw handle rather than the koan veneer, so the
     /// library's own `HasRegionHandle` impls for `RegionHandle`/`(RegionHandle, T)` discharge their
     /// obligation with no koan-side impl. A closure that needs the koan-typed `alloc_*` veneer back
     /// rewraps locally: `RegionBrand(handle)`.

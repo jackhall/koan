@@ -13,17 +13,17 @@ use crate::machine::{
 use crate::source::Spanned;
 use crate::witnessed::{Delivered, RegionHandle, reattachable};
 
+use super::super::harness::{Host, KoanWorkload};
 use super::super::lift::{cell_still_borrows, copy_held_from_carried};
 use super::super::outcome::DepTerminal;
-use super::super::run_loop::{DestHandleFamily, dest_brand};
-use super::super::runtime::KoanRuntime;
 use super::super::{StepCarried, WitnessedDepFinish};
 use super::SubmitContext;
-use super::ctx::{SchedulerView, current_dest_frame, with_current_node_scope};
+use super::ctx::{DecideCtx, current_dest_frame, with_current_node_scope};
+use super::resolve::{Resolution, TypeLeafChannels, resolve_name};
 use super::stage_eager_part;
-use super::{BareCarrier, resolve_bare_carrier};
 use crate::machine::Scope;
-use crate::scheduler::Deps;
+use crate::scheduler::{Deps, Scheduler};
+use crate::witnessed::RegionHandleFamily;
 
 /// Build-time accumulator family for an aggregate fold: the destination region plus the cells folded
 /// in so far. Each cell carrier is `transfer_into`-folded in — relocating the value and unioning its
@@ -103,7 +103,7 @@ fn cell_carrier(
 /// materializes the host — the same copied-adoption rule the param binds apply. The final aggregate
 /// shape (`list_of_held` / `dict_of_held` / `record_of_held`) is built by the caller's pinned map.
 fn fold_cells(
-    view: &SchedulerView<'_, '_, '_>,
+    view: &DecideCtx<'_, '_, '_>,
     cells: impl Iterator<Item = DeliveredCarried>,
 ) -> Delivered<AggBuildFamily, CarrierWitness, FrameStorage> {
     let dest_frame = view.dest_frame();
@@ -239,7 +239,7 @@ type AggAssemble = Box<
     ) -> KObject<'r>,
 >;
 
-impl<'step> KoanRuntime<'step> {
+impl<'step> Host<'step> {
     /// The one scheduling path behind the three aggregate literals: park a witnessed dep-finish on
     /// `deps`; on resolve, read each row's key (a non-scalar dict key errors before the fold, under the
     /// dict-literal frame — only a dict row carries a key slot), fold the value cells into the consumer
@@ -247,6 +247,7 @@ impl<'step> KoanRuntime<'step> {
     /// reaches by construction.
     fn schedule_aggregate(
         &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
         deps: Deps<NodeId>,
         rows: Vec<AggRow>,
         assemble: AggAssemble,
@@ -281,8 +282,9 @@ impl<'step> KoanRuntime<'step> {
             // proof the substrate door reads their stored reach under, and the declared reach for a
             // cell that carries no stored description of its own (a spliced expression).
             let holder = acc.coverage().clone();
-            let built = acc.merge_into::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
-                dest_brand(dest_frame),
+            let built = acc
+                .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+                Delivered::destination(dest_frame),
                 move |(_region, value_helds), _dest_handle, placement| {
                     let region = FoldingBrand::in_fold_closure(placement);
                     Carried::Object(region.alloc_object_folded(assemble(
@@ -295,7 +297,7 @@ impl<'step> KoanRuntime<'step> {
             );
             Ok(StepCarried::born_delivered(built))
         });
-        self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
+        self.submit_dep_finish_witnessed_in_own_scope(sched, deps, finish)
     }
 
     /// Schedule a list-literal materialization as a witnessed dep-finish over its element producers.
@@ -303,16 +305,18 @@ impl<'step> KoanRuntime<'step> {
     /// value and the memoized element type joins the resolved values' types.
     pub(in crate::machine::execute) fn schedule_list_literal<'a>(
         &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
         brand: RegionBrand<'a>,
         items: &[ExpressionPart<'a>],
     ) -> NodeId {
         let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(items.len());
         for &part in items {
-            let value = self.classify_aggregate_part(brand, part, &mut deps);
+            let value = self.classify_aggregate_part(sched, brand, part, &mut deps);
             rows.push(AggRow { key: None, value });
         }
         self.schedule_aggregate(
+            sched,
             deps,
             rows,
             Box::new(|door, _keys, cells, types| KObject::list_of_held(door, cells, types)),
@@ -324,20 +328,22 @@ impl<'step> KoanRuntime<'step> {
     /// symbols). Non-scalar keys produce `KErrorKind::ShapeError`, raised before the value fold.
     pub(in crate::machine::execute) fn schedule_dict_literal<'a>(
         &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
         brand: RegionBrand<'a>,
         pairs: &[(ExpressionPart<'a>, ExpressionPart<'a>)],
     ) -> NodeId {
         let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(pairs.len());
         for &(k, v) in pairs {
-            let key = self.classify_aggregate_part(brand, k, &mut deps);
-            let value = self.classify_aggregate_part(brand, v, &mut deps);
+            let key = self.classify_aggregate_part(sched, brand, k, &mut deps);
+            let value = self.classify_aggregate_part(sched, brand, v, &mut deps);
             rows.push(AggRow {
                 key: Some(key),
                 value,
             });
         }
         self.schedule_aggregate(
+            sched,
             deps,
             rows,
             Box::new(|door, keys, value_helds, types| {
@@ -356,6 +362,7 @@ impl<'step> KoanRuntime<'step> {
     /// a `KObject::Record`, which memoizes the per-field type record at construction.
     pub(in crate::machine::execute) fn schedule_record_literal<'a>(
         &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
         brand: RegionBrand<'a>,
         fields: &[(&'a str, ExpressionPart<'a>)],
     ) -> NodeId {
@@ -363,11 +370,12 @@ impl<'step> KoanRuntime<'step> {
         let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(fields.len());
         for &(name, value) in fields {
-            let value = self.classify_aggregate_part(brand, value, &mut deps);
+            let value = self.classify_aggregate_part(sched, brand, value, &mut deps);
             names.push(name.to_string());
             rows.push(AggRow { key: None, value });
         }
         self.schedule_aggregate(
+            sched,
             deps,
             rows,
             Box::new(move |door, _keys, value_helds, types| {
@@ -383,12 +391,13 @@ impl<'step> KoanRuntime<'step> {
     /// post-submission against the dep-finish ID.
     fn classify_aggregate_part<'a>(
         &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
         brand: RegionBrand<'a>,
         part: ExpressionPart<'a>,
         deps: &mut Deps<NodeId>,
     ) -> Slot {
         let part = match stage_eager_part(brand, part) {
-            Ok(dep) => return Slot::spawned(deps, self.realize_eager_dep(brand, dep)),
+            Ok(dep) => return Slot::spawned(deps, self.realize_eager_dep(sched, brand, dep)),
             Err(part) => part,
         };
         match part {
@@ -401,13 +410,15 @@ impl<'step> KoanRuntime<'step> {
                     WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]);
                 Slot::spawned(
                     deps,
-                    self.dispatch_in_own_scope(wrapped, SubmitContext::SubDispatch {}),
+                    self.dispatch_in_own_scope(sched, wrapped, SubmitContext::SubDispatch),
                 )
             }
             ref p @ ExpressionPart::Identifier(_) => {
-                self.resolve_aggregate_bare_name(brand, p, deps)
+                self.resolve_aggregate_bare_name(sched, brand, p, deps)
             }
-            ref p @ ExpressionPart::Type(_) => self.resolve_aggregate_bare_name(brand, p, deps),
+            ref p @ ExpressionPart::Type(_) => {
+                self.resolve_aggregate_bare_name(sched, brand, p, deps)
+            }
             other => {
                 // A static literal (keyword / literal): region-pure — every borrow it carries
                 // points into the classify scope's own frame, a string literal's bumped bytes
@@ -429,30 +440,37 @@ impl<'step> KoanRuntime<'step> {
     /// (and the dep-finish's dep-error short-circuit) handles it uniformly.
     fn resolve_aggregate_bare_name<'a>(
         &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
         brand: RegionBrand<'a>,
         part: &ExpressionPart<'a>,
         deps: &mut Deps<NodeId>,
     ) -> Slot {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
-        // `BareCarrier` is lifetime-free, so the whole result escapes the branded-scope closure and
+        // `Resolution` is lifetime-free, so the whole result escapes the branded-scope closure and
         // the `&mut self` fallback runs after the read closes.
         let resolved = with_current_node_scope(&self.ambient, |s| {
-            resolve_bare_carrier(s, part, active_chain, self.ambient.type_registry())
+            resolve_name(
+                s,
+                part,
+                active_chain,
+                self.ambient.type_registry(),
+                TypeLeafChannels::TypeChannel,
+            )
         });
         match resolved {
-            BareCarrier::Sealed(cell) => Slot::Static(cell),
-            BareCarrier::Parked(source) => {
+            Resolution::Resolved(cell) => Slot::Static(cell),
+            Resolution::Parked(source) => {
                 deps.on(source.scheduler_edge());
                 Slot::Dep
             }
             // Unbound: fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path
             // surfaces it uniformly.
-            BareCarrier::Unbound(_) => {
+            Resolution::Unbound(_) => {
                 let expr =
                     WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(*part))]);
                 Slot::spawned(
                     deps,
-                    self.dispatch_in_own_scope(expr, SubmitContext::SubDispatch {}),
+                    self.dispatch_in_own_scope(sched, expr, SubmitContext::SubDispatch),
                 )
             }
         }

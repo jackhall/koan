@@ -16,7 +16,7 @@ use crate::machine::core::carrier_witness::SealedFunction;
 /// Sealed into a `ReturnObligation` — pure `Copy` data
 /// (the declared type plus a trace label) that rides the tail chain as a continuation capture. A
 /// tail chain keeps the **first** contract (the keep-first rule at the `Outcome::Continue`
-/// construction sites in `execute::runtime`, which wraps each replacement continuation with the
+/// construction sites in the execute harness, which wraps each replacement continuation with the
 /// established obligation), so the check fires against the original caller's declared return, not the
 /// tail-most callee's.
 ///
@@ -46,7 +46,7 @@ pub enum ReturnContract<'a> {
 /// Split an FN / MATCH-arm / TRY-arm body into top-level statements. The single source of
 /// truth for the all-`Expression` multi-statement detection: any non-`Expression` part or
 /// fewer than two parts leaves the body as a single statement. Always returns at least one
-/// element. The runtime's `InScope` body fan-out (`KoanRuntime::apply_outcome`) routes through
+/// element. The harness's `InScope` body fan-out (the park apply's dep realization) routes through
 /// here before `enter_block`, so the scheduler never inspects AST shape itself.
 pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {
     if body.is_statement_block() {
@@ -90,7 +90,7 @@ pub(crate) fn body_statement_refs<'ast, 'a>(
 pub enum Body<'a> {
     UserDefined(KExpression<'a>),
     /// A builtin authored against the `Action` harness. Runs through
-    /// `machine::execute::runtime::run_action`.
+    /// `machine::execute`'s `run_action`.
     Builtin(super::action::ActionFn),
 }
 

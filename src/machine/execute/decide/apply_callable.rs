@@ -31,15 +31,64 @@ use crate::source::Spanned;
 
 use super::super::TerminalDepFinish;
 use super::super::outcome::dep_error_frame;
-use super::ctx::SchedulerView;
+use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
-use super::{
-    CallBody, NAMED_ONLY, POSITIONAL_ONLY, body_shape_err, constructors, extract_call_body,
-    stage_all_eager_parts,
-};
+use super::{constructors, stage_all_eager_parts};
 
 #[cfg(test)]
 mod tests;
+
+/// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.
+///
+/// - `Named` — a `{x = 1}` record literal: the sole named-argument surface (function
+///   calls, struct construction).
+/// - `Positional` — a `(err "x")` paren group: positional construction (tagged unions,
+///   newtypes). The verb-carrier decides which shape it admits; the mismatched shape
+///   surfaces a loud `DispatchFailed`.
+enum CallBody<'step> {
+    Named(&'step [(&'step str, ExpressionPart<'step>)]),
+    Positional(&'step [Spanned<ExpressionPart<'step>>]),
+}
+
+/// Classify the single body part of a `head (...)` / `head {...}` call from
+/// `expr.parts[1..]`. The body must be exactly one nested-parens (`Positional`) or one
+/// record literal (`Named`); anything else is a non-match. Both surfaces are raw syntax, so the
+/// body rides out as the AST run the parser froze.
+fn extract_call_body<'step>(expr: &WorkingExpression<'step>) -> Result<CallBody<'step>, KError> {
+    match &expr.parts[1..] {
+        [
+            Spanned {
+                value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
+                ..
+            },
+        ] => Ok(CallBody::Named(fields)),
+        [
+            Spanned {
+                value: WorkingPart::Ast(ExpressionPart::Expression(inner)),
+                ..
+            },
+        ] => Ok(CallBody::Positional(inner.parts)),
+        _ => Err(KError::new(KErrorKind::DispatchFailed {
+            expr: expr.summarize(),
+            reason: "no matching function".to_string(),
+        })),
+    }
+}
+
+/// Reason strings for the loud `DispatchFailed` raised when a call body's surface shape
+/// doesn't match what the resolved verb-carrier admits.
+const NAMED_ONLY: &str =
+    "named arguments use a record literal `{name = value}`, not a parenthesized group";
+const POSITIONAL_ONLY: &str =
+    "positional construction takes `(value)`, not a record literal `{name = value}`";
+
+/// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
+fn body_shape_err<'step>(expr: &WorkingExpression<'step>, reason: &str) -> Outcome<'step> {
+    Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
+        expr: expr.summarize(),
+        reason: reason.to_string(),
+    })))
+}
 
 /// A head resolved to something callable. The lane decides which arm; the tail
 /// branches on the body surface and launches.

@@ -1,7 +1,7 @@
 //! Overload resolution for a [`WorkingExpression`] against the lexical scope chain.
 //!
 //! Read-only consumer of the dispatch table. The caller builds a
-//! `bare_outcomes` cache (one [`NameOutcome`] per bare-name part) consulted by
+//! `bare_outcomes` cache (one [`Resolution`] per bare-name part) consulted by
 //! admission instead of re-resolving each part per scope. Each scope is decided
 //! in walk order (innermost first): a visible in-flight pending overload parks
 //! the scope (it would shadow once finalized); a strict [`OverloadBucket::pick_strict`]
@@ -12,7 +12,6 @@
 //! dead lean must not pre-empt an outer scope that could strict-pick the bare
 //! name as an `:Identifier` / `:Any` slot.
 
-use crate::machine::DeliveredCarried;
 use crate::machine::ProducerId;
 use crate::machine::core::{ClassifiedSlots, OpenedFunction};
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
@@ -22,20 +21,12 @@ use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 
 use super::is_eager_working_part;
 
-/// Cached outcome of resolving a bare-name part (`Identifier` or leaf `Type`).
-/// Built once per dispatch into a slice paralleling `expr.parts` (`None` for
-/// non-bare-name parts) and consumed by strict admission and the relaxed pass.
-/// These three arms are exhaustive — the ladder that builds them is total, and a
-/// producer's error is not one of them: it reaches the consumer through the park
-/// the harness installs, never through a probe at cache-build time.
-pub enum NameOutcome {
-    /// The bound value lifted into a delivery envelope pinned by its binding scope — admission
-    /// opens it under those pins to classify the value, so a speculative probe re-anchors nothing
-    /// and retains nothing.
-    Resolved(DeliveredCarried),
-    Parked(ProducerId),
-    Unbound(String),
-}
+// The per-part cache entry is the one bare-name resolution currency, [`Resolution`] — built once
+// per dispatch into a slice paralleling `expr.parts` (`None` for non-bare-name parts) and consumed
+// by strict admission and the relaxed pass. Its three arms are exhaustive: the ladder that builds
+// them is total, and a producer's error is not one of them — it reaches the consumer through the
+// park the harness installs, never through a probe at cache-build time.
+use super::resolve::Resolution;
 
 // Test-only entry counter: fast-lane dispatch shapes must route around the
 // candidate machinery, so the counter must not advance for them.
@@ -97,7 +88,7 @@ impl<'step> Scope<'step> {
         &self,
         expr: &WorkingExpression<'e>,
         chain: Option<&LexicalFrame>,
-        bare_outcomes: &[Option<NameOutcome>],
+        bare_outcomes: &[Option<Resolution>],
         types: &TypeRegistry,
     ) -> DispatchOutcome<'step> {
         #[cfg(test)]
@@ -173,7 +164,7 @@ fn decide_scope<'step, 'e>(
     scope: &Scope<'step>,
     lookup: &FunctionLookup,
     expr: &WorkingExpression<'e>,
-    bare_outcomes: &[Option<NameOutcome>],
+    bare_outcomes: &[Option<Resolution>],
     types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
     let candidates: Vec<OpenedFunction<'_>> = lookup
@@ -223,7 +214,7 @@ fn decide_scope<'step, 'e>(
 fn decide_relaxed<'step, 'e>(
     bucket: &OverloadBucket<'_, '_>,
     expr: &WorkingExpression<'e>,
-    bare_outcomes: &[Option<NameOutcome>],
+    bare_outcomes: &[Option<Resolution>],
     types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
     let mut parked: Vec<ProducerId> = Vec::new();
@@ -273,7 +264,7 @@ impl OverloadBucket<'_, '_> {
     fn pick_strict<'e>(
         &self,
         expr: &WorkingExpression<'e>,
-        bare_outcomes: &[Option<NameOutcome>],
+        bare_outcomes: &[Option<Resolution>],
         types: &TypeRegistry,
     ) -> PickPass {
         let survivors: Vec<usize> = self
@@ -302,7 +293,7 @@ impl OverloadBucket<'_, '_> {
     fn relaxed_parked_producers<'e>(
         &self,
         expr: &WorkingExpression<'e>,
-        bare_outcomes: &[Option<NameOutcome>],
+        bare_outcomes: &[Option<Resolution>],
         types: &TypeRegistry,
     ) -> Vec<ProducerId> {
         let mut producers: Vec<ProducerId> = Vec::new();
@@ -347,7 +338,7 @@ enum Lean {
 fn signature_admits_strict<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &WorkingExpression<'e>,
-    bare_outcomes: &[Option<NameOutcome>],
+    bare_outcomes: &[Option<Resolution>],
     types: &TypeRegistry,
 ) -> bool {
     if sig.elements().len() != expr.parts.len() {
@@ -387,7 +378,7 @@ fn signature_admits_strict<'e>(
 fn relaxed_admits<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &WorkingExpression<'e>,
-    bare_outcomes: &[Option<NameOutcome>],
+    bare_outcomes: &[Option<Resolution>],
     types: &TypeRegistry,
 ) -> Option<Vec<Lean>> {
     if sig.elements().len() != expr.parts.len() {
@@ -415,8 +406,8 @@ fn relaxed_admits<'e>(
             continue;
         }
         match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
-            Some(NameOutcome::Parked(p)) => leans.push(Lean::Parked(*p)),
-            Some(NameOutcome::Unbound(name)) => leans.push(Lean::Dead(name.clone())),
+            Some(Resolution::Parked(p)) => leans.push(Lean::Parked(*p)),
+            Some(Resolution::Unbound(name)) => leans.push(Lean::Dead(name.clone())),
             // Resolved / keyword / literal mismatch: a hard reject no arriving
             // input or binding can flip.
             _ => return None,
@@ -449,7 +440,7 @@ fn slot_admits_strict<'e>(
     slot: &WorkingPart<'e>,
     i: usize,
     has_lazy_kexpr_slot: bool,
-    bare_outcomes: &[Option<NameOutcome>],
+    bare_outcomes: &[Option<Resolution>],
     types: &TypeRegistry,
 ) -> bool {
     match (el, slot.as_ast()) {
@@ -513,12 +504,12 @@ fn slot_admits_strict<'e>(
                 return true;
             }
             match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
-                Some(NameOutcome::Resolved(delivered)) => arg
+                Some(Resolution::Resolved(delivered)) => arg
                     .ktype
                     .accepts_carried(delivered.open_at().value(), types),
                 // Speculative admit so the splice/park walk can surface the
                 // precise per-slot diagnostic.
-                Some(NameOutcome::Parked(_)) | Some(NameOutcome::Unbound(_)) => {
+                Some(Resolution::Parked(_)) | Some(Resolution::Unbound(_)) => {
                     arg.matches(part_value, types)
                 }
                 None => arg.matches(part_value, types),

@@ -19,8 +19,9 @@ use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope, WriteGate};
 use crate::scheduler::EdgeId;
 
+use super::super::harness::{Host, KoanWorkload};
 use super::super::nodes::{NodeScope, SlotFrame};
-use super::super::runtime::KoanRuntime;
+use crate::scheduler::Scheduler;
 
 /// Where a [`KoanRuntime::submit_expression`] lands, deciding how its cached binder plan is
 /// treated.
@@ -35,7 +36,7 @@ pub(in crate::machine::execute) enum SubmitContext {
     SubDispatch,
 }
 
-impl<'run> KoanRuntime<'run> {
+impl<'run> Host<'run> {
     /// Submit `expr` as a dispatch slot against `scope` (with handle `node_scope` and
     /// `explicit_chain`, resolved by the calling submission wrapper). For a
     /// [`SubmitContext::Statement`] submission, installs the statement's own parse-time binder plan
@@ -44,6 +45,7 @@ impl<'run> KoanRuntime<'run> {
     /// [`SubmitContext::SubDispatch`] carrying a binder pre-errors the node.
     pub(in crate::machine::execute) fn submit_expression<'a, 'step>(
         &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
         expr: WorkingExpression<'a>,
         scope: &'step Scope<'step>,
         node_scope: NodeScope,
@@ -51,7 +53,7 @@ impl<'run> KoanRuntime<'run> {
         ctx: SubmitContext,
     ) -> NodeId {
         let chain = explicit_chain
-        .or_else(|| self.active_payload().map(|p| p.chain.clone()))
+        .or_else(|| self.ambient.active_payload().map(|p| p.chain.clone()))
         .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
 
         // Eager-position binder: pre-error the slot. Slot-terminal (TRY-catchable), propagates
@@ -71,11 +73,9 @@ impl<'run> KoanRuntime<'run> {
                 expr: carrier.clone(),
                 suggest_flat: !key.buckets.is_empty(),
             });
-            let (cart, framed) = self.submission_cart();
+            let (cart, framed) = self.ambient.submission_cart();
             let anchor = SlotFrame::new(cart, node_scope, chain);
-            return self
-                .sched
-                .alloc_node(super::decide_error(error, carrier), &[], anchor, framed);
+            return sched.alloc_node(super::decide_error(error, carrier), &[], anchor, framed);
         }
 
         // Only a statement installs; the plan read above also gates the sub-dispatch rejection.
@@ -84,9 +84,9 @@ impl<'run> KoanRuntime<'run> {
             SubmitContext::SubDispatch => None,
         };
 
-        let (cart, framed) = self.submission_cart();
+        let (cart, framed) = self.ambient.submission_cart();
         let anchor = SlotFrame::new(cart, node_scope, chain.clone());
-        let id = self.sched.alloc_node(
+        let id = sched.alloc_node(
             super::decide_tail(expr, None),
             &[],
             std::rc::Rc::clone(&anchor),
@@ -108,12 +108,12 @@ impl<'run> KoanRuntime<'run> {
                 .upgrade()
                 .expect("a live scope reference implies a live region owner");
             let mut edges: Vec<EdgeId> = Vec::new();
-            let claim = |rt: &mut Self| rt.sched.install_edge(id, &destination);
+            let claim = |sched: &mut Scheduler<KoanWorkload>| sched.install_edge(id, &destination);
             // The submission-channel stamp is run-loop-owned: dispatch submits the binder with no
             // koan frame on the stack, the same footing the apply loop writes on.
             let mut gate = WriteGate::for_run_loop();
             if let Some((name, kind)) = key.name {
-                let edge = claim(self);
+                let edge = claim(sched);
                 edges.push(edge);
                 let _ = scope.install_placeholder(
                     name,
@@ -124,7 +124,7 @@ impl<'run> KoanRuntime<'run> {
                 );
             }
             for bucket in key.buckets {
-                let edge = claim(self);
+                let edge = claim(sched);
                 edges.push(edge);
                 let _ = scope.install_pending_overload(
                     bucket,

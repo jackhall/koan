@@ -19,7 +19,7 @@ use crate::witnessed::{region_metrics, reset_region_metrics};
 /// mints as soon as the test scope is built) so the later peak reading is meaningful and no
 /// still-live region is zeroed out from under itself. The countdown is expressed as a `Nat`
 /// (`Zero | Succ Nat`) unwound one layer per hop through `MATCH` — the recursion lives entirely in
-/// the scheduler's `NodeStep::Replace` loop, not in Rust call-stack depth, so the depth-1000 value
+/// the scheduler's `Replace`-verdict loop, not in Rust call-stack depth, so the depth-1000 value
 /// is built beforehand as 1000 flat (no-mint, top-level) `LET`s rather than a 1000-deep parsed
 /// literal.
 #[test]
